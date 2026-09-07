@@ -327,13 +327,6 @@ def run_smoke(venv_dir: Path, port: int, expected_version: str | None) -> None:
         env["HOME"] = str(tmp_path)
         env["USERPROFILE"] = str(tmp_path)
         env.pop("PIXLSTASH_INSTALL_TYPE", None)
-        # This job also exports PIXLSTASH_TELEMETRY_DEV so any network the
-        # server reached WOULD arrive labelled dev (see
-        # Server.DEV_MACHINE_ENV_VAR), but this smoke test's whole point is to
-        # assert automatic detection reports "pip" for a plain install; strip
-        # it the same way as the override above so that assertion keeps
-        # exercising the real path instead of always reporting "dev".
-        env.pop("PIXLSTASH_TELEMETRY_DEV", None)
 
         creation_flags = (
             subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0  # type: ignore[attr-defined]

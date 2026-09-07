@@ -20,11 +20,6 @@ jobs:
   build:
     name: Build ${{ matrix.name }} image
     runs-on: ubuntu-latest
-    env:
-      # Declares the smoked container as ours (Server.DEV_MACHINE_ENV_VAR),
-      # forwarded into the container below with a bare `-e` so Docker reads
-      # the value from this job's environment. See issue #1213.
-      PIXLSTASH_TELEMETRY_DEV: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -94,7 +89,6 @@ jobs:
           # interface for the life of the job.
           docker run -d --name pixlstash-smoke \
             -e PIXLSTASH_HOST=0.0.0.0 \
-            -e PIXLSTASH_TELEMETRY_DEV \
             -p 127.0.0.1:19537:9537 \
             pixlstash:ci-smoke
 
@@ -134,6 +128,21 @@ jobs:
           # assertion is not hypothetical.
           if [ "$variant" != "cpu" ]; then
             echo "::error::Dockerfile produced docker_variant='${variant}', expected 'cpu'."
+            exit 1
+          fi
+          # The container is NOT labelled a dev machine, deliberately. This
+          # `/version` payload is the only place any workflow observes a real
+          # container's running_in_docker() result, and labelling it would
+          # replace that with "dev" and leave docker detection with no
+          # real-container coverage at all. Nothing can be sent from here:
+          # the install ping needs consent (telemetry_send_install_id on a
+          # user, and a first-run container has none) and there is no browser,
+          # so the frontend version check never runs either. Revisit if either
+          # of those two stops being true.
+          install_type=$(python3 -c "import json;print(json.load(open('/tmp/version.json')).get('install_type'))")
+          echo "install_type=${install_type}"
+          if [ "$install_type" != "docker" ]; then
+            echo "::error::Container reported install_type='${install_type}', expected 'docker'."
             exit 1
           fi
 
