@@ -984,7 +984,14 @@ def read_requirements(requirements: Path) -> list[str]:
 #: ``-r``/``-c`` and their long forms, with the file they name.  pip accepts
 #: ``-r f``, ``-rf``, ``--requirement f`` and ``--requirement=f``; all four
 #: pull the second file in, so all four have to be recognised here.
-_INCLUDE_RE = re.compile(r"^(?:(?:--requirement|--constraint)[=\s]+|(?:-r|-c)\s*)(\S+)")
+#: An ``-r``/``-c`` include and its target. The target is a quoted string OR a
+#: bare token, in that order: pip parses these lines with shlex, so
+#: ``-r "deps/with spaces/base.txt"`` is a legal include, and a bare ``\S+``
+#: stopped at the first space and silently failed to follow it.
+_INCLUDE_RE = re.compile(
+    r"^(?:(?:--requirement|--constraint)[=\s]+|(?:-r|-c)\s*)"
+    r"(\"[^\"]+\"|'[^']+'|\S+)"
+)
 
 
 def _include_target(line: str, parent: Path, root: Path) -> "Path | None":
@@ -1004,7 +1011,13 @@ def _include_target(line: str, parent: Path, root: Path) -> "Path | None":
     if match is None:
         return None
     target = match.group(1).strip("\"'")
-    if not target or urlparse(target).scheme:
+    # `urlparse(...).scheme` was too eager: it reads `base:1.txt` as scheme
+    # "base", so a legal relative filename containing a colon was refused and
+    # its options went unlisted -- the same incompleteness this is fixing.
+    # Containment below is what actually enforces safety (a URL resolves to
+    # nothing inside the plugin folder and is refused there), so this test only
+    # has to catch the obvious case early.
+    if not target or "://" in target:
         return None
     try:
         resolved = (parent.parent / target).resolve()

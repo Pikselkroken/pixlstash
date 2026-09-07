@@ -1953,6 +1953,42 @@ def test_the_listing_follows_includes_and_joins_continuations(tmp_path):
     ]
 
 
+def test_the_listing_follows_a_quoted_include_and_a_colon_in_a_name(tmp_path):
+    """Two ways the target was read wrong, both ending in a silent short list.
+
+    pip parses these lines with shlex, so a quoted target containing spaces is
+    a legal include; the pattern captured ``\\S+`` and stopped at the first
+    space, so the file was never opened. And the URL guard used
+    ``urlparse(...).scheme``, which reads ``base:1.txt`` as scheme "base" - a
+    legal relative filename refused for looking like a URL.
+
+    In both cases the include LINE was still listed, so nothing was hidden;
+    what went missing is the option inside the file it names, which is the
+    whole point of following it.
+    """
+    plugin = tmp_path / "plugin"
+    (plugin / "with space").mkdir(parents=True)
+    (plugin / "with space" / "base.txt").write_text(
+        "--index-url https://spaced.example.invalid/simple\n", encoding="utf-8"
+    )
+    (plugin / "odd:name.txt").write_text(
+        "--extra-index-url https://colon.example.invalid/simple\n", encoding="utf-8"
+    )
+    requirements = plugin / "requirements.txt"
+    requirements.write_text(
+        '-r "with space/base.txt"\n-r odd:name.txt\n', encoding="utf-8"
+    )
+
+    # Parent file's own lines first, then what each include brought in - the
+    # order `pip_options` already had, not something these cases change.
+    assert plugin_install.pip_options(requirements) == [
+        '-r "with space/base.txt"',
+        "-r odd:name.txt",
+        "--index-url https://spaced.example.invalid/simple   [in with space/base.txt]",
+        "--extra-index-url https://colon.example.invalid/simple   [in odd:name.txt]",
+    ]
+
+
 def test_the_listing_refuses_to_follow_an_include_out_of_the_plugin(tmp_path):
     """The include is author-written, so following it must not read the machine.
 

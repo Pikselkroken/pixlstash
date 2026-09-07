@@ -267,8 +267,8 @@ def register_routes(router, server):
                         "That folder is part of your library - PixlStash "
                         "reads it - so everything exported into it would be "
                         "imported straight back in. Choose a folder outside "
-                        "your libraries, their reference folders and their "
-                        "import folders."
+                        "this library, its reference folders and its import "
+                        "folders, and outside any other library's folder."
                     ),
                 )
         # A folder export writes plain files, unlike a ZIP: a name that
