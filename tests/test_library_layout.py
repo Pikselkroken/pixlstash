@@ -2956,9 +2956,7 @@ def test_a_file_the_owner_moved_back_is_queued_for_review_not_only_repointed(lib
     ]
     # And it reaches the review screen rather than being classified away.
     buckets = reconciliation.pending_summary_in_session(session, root)
-    offered = [
-        item for bucket in buckets.values() for item in bucket if bucket is not None
-    ]
+    offered = [item for bucket in buckets.values() for item in bucket]
     assert [item["picture_id"] for item in offered] == [picture_id]
 
 

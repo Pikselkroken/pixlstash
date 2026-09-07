@@ -280,7 +280,7 @@ class MissingFilePurgeTask(BaseTask):
         """
         repaired = 0
         came_back: list = []
-        for picture_id, new_path, from_our_destination in repairs:
+        for picture_id, new_path, came_back_to_our_source in repairs:
             picture = session.get(Picture, picture_id)
             if picture is None:
                 continue
@@ -291,7 +291,7 @@ class MissingFilePurgeTask(BaseTask):
                 picture.file_path,
                 new_path,
             )
-            if from_our_destination and picture.file_path:
+            if came_back_to_our_source and picture.file_path:
                 came_back.append((picture_id, picture.file_path, new_path))
             picture.file_path = new_path
             session.add(picture)
