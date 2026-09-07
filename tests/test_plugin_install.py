@@ -2029,6 +2029,57 @@ def test_the_listing_refuses_to_follow_an_include_out_of_the_plugin(tmp_path):
     assert not any("elsewhere.example.invalid" in line for line in options)
 
 
+def test_the_listing_refuses_to_follow_a_symlink_out_of_the_plugin(tmp_path):
+    """``_include_target``'s docstring names "a symlink out" as refused.
+
+    The absolute, ``..`` and URL spellings each had a case above; this one did
+    not, and it is the spelling that defeats a lexical containment check - the
+    include names a plain relative filename inside the plugin folder, and only
+    resolving it shows it landing elsewhere.
+    """
+    outside = tmp_path / "outside.txt"
+    outside.write_text("--index-url https://elsewhere.example.invalid\n", "utf-8")
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    try:
+        (plugin / "link.txt").symlink_to(outside)
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover - Windows
+        pytest.skip(f"symlinks unavailable here: {exc}")
+    requirements = plugin / "requirements.txt"
+    requirements.write_text("-r link.txt\n", encoding="utf-8")
+
+    options = plugin_install.pip_options(requirements)
+    assert options == ["-r link.txt"]
+    assert not any("elsewhere.example.invalid" in line for line in options)
+
+
+def test_one_file_reached_by_two_names_is_read_once(tmp_path):
+    """ "Each file is read once" must mean the file, not the spelling.
+
+    The read set was keyed on ``resolve()``, which does not case-canonicalise,
+    so on a case-insensitive filesystem ``base.txt`` and ``BASE.TXT`` were two
+    keys for one file and its options were listed twice. A hardlink is the same
+    bug reachable on every platform: two paths, one inode, ``resolve()``
+    canonicalises neither into the other.
+    """
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    (plugin / "base.txt").write_text("--no-index\n", encoding="utf-8")
+    try:
+        os.link(plugin / "base.txt", plugin / "alias.txt")
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover
+        pytest.skip(f"hardlinks unavailable here: {exc}")
+    requirements = plugin / "requirements.txt"
+    requirements.write_text("-r base.txt\n-r alias.txt\n", encoding="utf-8")
+
+    options = plugin_install.pip_options(requirements)
+    assert options == [
+        "-r base.txt",
+        "-r alias.txt",
+        "--no-index   [in base.txt]",
+    ], "the second name is one more file to read, not one more copy of its options"
+
+
 def test_the_listing_survives_an_include_cycle(tmp_path):
     """Two files naming each other must terminate, and say each option once."""
     plugin = tmp_path / "plugin"

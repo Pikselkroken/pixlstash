@@ -1057,20 +1057,33 @@ def pip_options(requirements: Path) -> list[str]:
     the include line left the ``--index-url`` behind it unlisted (#1206 item
     8).  A line from an included file is tagged with the file it came from.
     Only files inside the plugin's own folder are followed
-    (:func:`_include_target`), each is read once so a cycle terminates, and a
-    file that cannot be read contributes a line saying so rather than being
-    passed over in silence.
+    (:func:`_include_target`), each *file* is read once so a cycle terminates,
+    and a file that cannot be read contributes a line saying so rather than
+    being passed over in silence.
+
+    "Once" is per file, not per spelling: the read set is keyed on
+    ``(st_dev, st_ino)``.  ``resolve()`` does not case-canonicalise, so on a
+    case-insensitive filesystem ``-r base.txt`` and ``-r BASE.TXT`` are two
+    keys for one file, and a plugin listing the same file under many spellings
+    - or under a hardlink - had it read once per spelling (#1206 review).
     """
     root = requirements.parent.resolve()
     options: list[str] = []
-    seen: set[Path] = set()
+    seen: set[object] = set()
     pending: list[Path] = [requirements]
     while pending:
         current = pending.pop(0)
         resolved = current.resolve()
-        if resolved in seen:
+        try:
+            info = resolved.stat()
+            key: object = (info.st_dev, info.st_ino)
+        except OSError:
+            # Unreadable: `read_requirements` below reports it, and the path is
+            # the best identity available for not reporting it twice.
+            key = resolved
+        if key in seen:
             continue
-        seen.add(resolved)
+        seen.add(key)
         # Named relative to the plugin folder: two `base.txt` under different
         # subfolders must not read as the same file.
         where = (
