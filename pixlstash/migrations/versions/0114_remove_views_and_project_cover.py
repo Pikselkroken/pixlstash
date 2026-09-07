@@ -12,7 +12,9 @@ Electron code has ever read or written it, so every row holds NULL.
 Both drops are conditional: 0001_baseline builds a fresh database with
 ``SQLModel.metadata.create_all()`` from the *current* models, which no longer
 declare these columns, so a blind ``ALTER TABLE ... DROP COLUMN`` would fail
-there. Follows 0071_remove_tag_review_scoring_subsystem.
+there. Same inspector-guarded shape as the drops in
+0071_remove_tag_review_scoring_subsystem, which is the precedent for it - not
+this revision's predecessor, which is 0113 (see Revises below).
 
 Revision ID: 0114_remove_views_and_project_cover
 Revises: 0113_reset_size_bin_without_likeness_parameters
