@@ -1874,7 +1874,10 @@ relative to the folder the id names**, since the id already says where that
 folder is and spelling it out only put the owner's folder tree in the address
 bar (#1206 item 9); a folder root pushes no query. An absolute `?path=` is
 still read, which is what a link shared before that carries and the only shape
-available on `/`.
+available on `/`. **Either shape must name somewhere INSIDE the folder**: a
+`?path=` that climbs out — an absolute one under another folder, or either
+shape carrying a `.` or `..` segment — selects the folder root instead, the
+same refusal an out-of-tree absolute path has always got.
 
 **`?face=with_face|without_face`** is the face facet, additive like
 `?stack_state=` — an absent or unrecognised value leaves

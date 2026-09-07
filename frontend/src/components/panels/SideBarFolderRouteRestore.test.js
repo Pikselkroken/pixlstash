@@ -245,6 +245,54 @@ describe("restoring /ref-folder/:id", () => {
     wrapper.unmount();
   });
 
+  // A `?path=` that climbs out of the folder falls back to the folder root -
+  // the same refusal an absolute path naming somewhere else has always got.
+  // Reading the relative shape (#1206 item 9) made that refusal conditional on
+  // the string LOOKING absolute: `?path=../../..` was taken as the tail
+  // verbatim and built a pathPrefix outside the folder. Harmless today -
+  // `file_path_prefix` is a literal escaped LIKE and `reference_folder_id`
+  // still scopes the query, so it returns an empty grid - but it is the
+  // containment rule, and a rule that holds by accident downstream is one
+  // change away from not holding.
+  it.each([
+    ["a relative climb", "../../.."],
+    ["a climb inside a tail", "2024/../../etc"],
+    ["an absolute climb through the root", `${ROOT}/../../etc`],
+    ["a bare parent", ".."],
+    ["a same-directory segment", "2024/./summer"],
+  ])("refuses %s and falls back to the folder root", async (_name, path) => {
+    const wrapper = await mountSidebar();
+    routeToFolder(path);
+    await flushPromises();
+
+    expect(lastFolderPayload(wrapper)).toEqual({
+      referenceFolderId: 5,
+      pathPrefix: ROOT,
+      label: "Refs",
+    });
+
+    wrapper.unmount();
+  });
+
+  it("still reads a POSIX folder whose NAME contains a backslash", async () => {
+    // The containment check splits on `\` for a Windows root only. On POSIX a
+    // `\` is an ordinary character in a name, so `a\..\b` is one segment and
+    // must not be mistaken for a climb - the same rule `_subPathUnder` and the
+    // re-spelling already follow.
+    const wrapper = await mountSidebar();
+    routeToFolder(`${ODD_ROOT}/2024`, "rf-7");
+    await flushPromises();
+
+    expect(lastFolderPayload(wrapper)).toEqual({
+      referenceFolderId: 7,
+      pathPrefix: `${ODD_ROOT}/2024`,
+      subPath: "2024",
+      label: "2024",
+    });
+
+    wrapper.unmount();
+  });
+
   // The teardown at the top of the same watcher compares the sidebar's own
   // selection key against the route key it is leaving. Those two stopped being
   // the same string once a subfolder could be selected: the sidebar holds

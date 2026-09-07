@@ -680,6 +680,19 @@ function routeSubfolderUnder(root) {
   const raw = _normPath(filter.pathPrefix);
   const rootPath = _normPath(root);
   const sep = _pathSeparator(rootPath);
+  // Containment first, and for BOTH shapes. `?path=` is URL text - it survives
+  // being shared, edited and pasted - and a `..` segment in it builds a
+  // pathPrefix pointing outside the folder. The relative branch below took its
+  // tail verbatim, so `?path=../../..` went straight through; the absolute
+  // branch sliced against the root but `_subPathUnder` compares prefixes and
+  // does not collapse `..` either, so `/root/../etc` passed it as the tail
+  // `../etc`. Nothing sliced out of a real path carries a `.` or `..` segment,
+  // so refusing one costs no legitimate link and restores the containment this
+  // function exists to enforce. Split on what actually separates under this
+  // root: on POSIX a `\` is an ordinary character in a folder's NAME, the same
+  // rule `_subPathUnder` and the re-spelling below already follow.
+  if (raw.split(sep === "\\" ? /[\\/]/ : /\//).some((s) => s === "." || s === ".."))
+    return null;
   // An absolute `?path=` is sliced against the root (and refused when it names
   // somewhere else); a relative one already IS the tail. `_subPathUnder` folds
   // `\` into `/` for a WINDOWS root only, where both characters separate and a
