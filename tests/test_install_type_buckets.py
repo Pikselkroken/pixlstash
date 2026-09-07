@@ -42,6 +42,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 from pixlstash.server import Server
 
@@ -226,6 +227,18 @@ def test_e2e_suite_blocks_the_production_host():
     )
 
 
+def _declares_dev_machine(env) -> bool:
+    """True when *env* sets the marker to a value ``detect_install_type`` accepts.
+
+    Mirrors the server's own acceptance set rather than pinning the literal
+    ``'1'``: a workflow rewritten to ``true`` (or unquoted ``1``, which YAML
+    hands back as an int) still declares the machine, and this guardrail is
+    about the declaration, not its spelling.
+    """
+    value = (env or {}).get(Server.DEV_MACHINE_ENV_VAR)
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def test_app_booting_workflows_declare_themselves_dev():
     """Every workflow that boots the real server exports the dev marker.
 
@@ -234,29 +247,42 @@ def test_app_booting_workflows_declare_themselves_dev():
     cover (or, for the non-Playwright smoke jobs below, any future step that
     grows one) should still arrive labelled ``dev`` rather than a real
     install. See ``Server.DEV_MACHINE_ENV_VAR``.
+
+    Parsed rather than pattern-matched. ``tests/test_ci_shards.py`` already
+    reads these files with ``yaml.safe_load`` for the same kind of assertion,
+    and a parser is immune to the things that have nothing to do with the
+    guardrail: which job comes last in the file, how the value is quoted, and
+    how deeply the block is indented.
     """
     workflows_dir = REPO_ROOT / ".github" / "workflows"
 
-    ci_source = (workflows_dir / "ci.yml").read_text(encoding="utf-8")
-    # The job body, up to the next top-level (2-space-indented) job key -
-    # a plain substring split on "\n  " would cut at the job's own 4-space
-    # indented first line instead.
-    e2e_job_match = re.search(r"\n  e2e:\n(.*?)(?=\n  [A-Za-z_])", ci_source, re.DOTALL)
-    assert e2e_job_match, "ci.yml no longer has an `e2e:` job"
-    assert "PIXLSTASH_TELEMETRY_DEV: '1'" in e2e_job_match.group(1), (
-        "ci.yml's e2e job no longer exports PIXLSTASH_TELEMETRY_DEV=1"
+    def job(workflow: str, name: str) -> dict:
+        data = yaml.safe_load((workflows_dir / workflow).read_text(encoding="utf-8"))
+        jobs = data.get("jobs") or {}
+        assert name in jobs, f"{workflow} no longer has a `{name}:` job"
+        return jobs[name]
+
+    e2e = job("ci.yml", "e2e")
+    assert _declares_dev_machine(e2e.get("env")), (
+        "ci.yml's e2e job no longer declares PIXLSTASH_TELEMETRY_DEV"
     )
 
-    smoke_source = (workflows_dir / "install-smoke.yml").read_text(encoding="utf-8")
-    assert "PIXLSTASH_TELEMETRY_DEV: '1'" in smoke_source, (
-        "install-smoke.yml no longer exports PIXLSTASH_TELEMETRY_DEV=1"
+    smoke = job("install-smoke.yml", "smoke")
+    assert _declares_dev_machine(smoke.get("env")), (
+        "install-smoke.yml's smoke job no longer declares PIXLSTASH_TELEMETRY_DEV"
     )
 
-    docker_source = (workflows_dir / "docker-build.yml").read_text(encoding="utf-8")
-    assert "PIXLSTASH_TELEMETRY_DEV: '1'" in docker_source, (
-        "docker-build.yml no longer exports PIXLSTASH_TELEMETRY_DEV=1"
+    docker = job("docker-build.yml", "build")
+    assert _declares_dev_machine(docker.get("env")), (
+        "docker-build.yml's build job no longer declares PIXLSTASH_TELEMETRY_DEV"
     )
-    assert "-e PIXLSTASH_TELEMETRY_DEV" in docker_source, (
-        "docker-build.yml exports the marker but no longer forwards it into "
+    # A job-level env var means nothing to a container unless it is forwarded.
+    run_steps = " ".join(
+        step.get("run", "")
+        for step in (docker.get("steps") or [])
+        if isinstance(step, dict)
+    )
+    assert f"-e {Server.DEV_MACHINE_ENV_VAR}" in run_steps, (
+        "docker-build.yml declares the marker but no longer forwards it into "
         "the smoked container"
     )
