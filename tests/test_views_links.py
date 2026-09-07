@@ -912,18 +912,23 @@ def test_collecting_membership_reads_two_columns_and_no_orm_rows(_env, _seeded):
     emitted: list[str] = []
 
     def _collect(session: Session):
-        bind = session.get_bind()
+        # The session's own Connection, never the Engine. An engine-wide
+        # listener also hears every background worker holding one of the other
+        # pooled connections, and a finder selecting `Picture` then reads as
+        # this function doing it - which is exactly how this test first failed
+        # in the gate and passed here.
+        connection = session.connection()
 
         def _record(_conn, _cursor, statement, *_args):
             emitted.append(statement)
 
-        event.listen(bind, "before_cursor_execute", _record)
+        event.listen(connection, "before_cursor_execute", _record)
         try:
             return views_service.collect_in_session(
                 session, ["people", "sets", "projects"]
             )
         finally:
-            event.remove(bind, "before_cursor_execute", _record)
+            event.remove(connection, "before_cursor_execute", _record)
 
     collected = server.vault.db.run_immediate_read_task(_collect)
 
@@ -940,21 +945,25 @@ def test_collecting_membership_reads_two_columns_and_no_orm_rows(_env, _seeded):
     # Exactly the two fields publish reads, so a third one cannot arrive unnoticed.
     assert views_service.Member._fields == ("id", "file_path")
 
-    selects = [
-        statement.split("\nFROM")[0]
-        for statement in emitted
-        if statement.lstrip().upper().startswith("SELECT")
-        and "picture." in statement.split("\nFROM")[0]
-    ]
-    assert len(selects) == 3, f"expected one query per kind, got {len(selects)}"
-    for clause in selects:
-        picture_columns = sorted(
-            re.findall(r"\bpicture\.([A-Za-z_]+)", clause.replace("\n", " "))
-        )
+    # Identity, not a count: which kind each query is for, read off the entity
+    # table it joins, so a statement arriving or leaving cannot silently pass.
+    kinds_seen = set()
+    for statement in emitted:
+        flat = statement.replace("\n", " ")
+        clause, _, rest = flat.partition(" FROM ")
+        if not clause.lstrip().upper().startswith("SELECT") or "picture." not in clause:
+            continue
+        picture_columns = sorted(re.findall(r"\bpicture\.([A-Za-z_]+)", clause))
         assert picture_columns == ["file_path", "id"], (
             "the membership query is loading the whole Picture again: "
             f"{picture_columns}"
         )
+        kinds_seen |= {
+            table for table in ("character", "pictureset", "project") if table in rest
+        }
+    assert kinds_seen == {"character", "pictureset", "project"}, (
+        f"one query per kind was expected; saw {sorted(kinds_seen)}"
+    )
 
 
 def test_views_are_off_until_a_folder_is_named(_env):

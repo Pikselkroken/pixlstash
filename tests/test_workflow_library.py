@@ -617,7 +617,12 @@ def test_a_subgraph_nesting_bomb_is_refused_before_it_is_expanded():
     with pytest.raises(WorkflowGraphError, match="exceeded"):
         ui_topology_hash(workflow)
     elapsed = time.perf_counter() - start
-    assert elapsed < 2.0, (
+    # Ten seconds, not two: a shared CI runner is several times slower than the
+    # box this was measured on, and a wall-clock assertion with no headroom is a
+    # flake that costs a whole gate run. It still separates the two cases by an
+    # order of magnitude - 0.18 s guarded here against 15 s unguarded, and the
+    # unguarded figure scales up with the runner while the guarded one does not.
+    assert elapsed < 10.0, (
         f"refusing the graph took {elapsed:.1f} s, so the expansion ran before "
         "the guard did"
     )
