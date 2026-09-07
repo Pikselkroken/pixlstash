@@ -685,8 +685,15 @@ def test_tag_probe_is_served_by_the_tag_index(tmp_path):
 
         plan = _explain(vault, rec.only, rec.parameters[0])
         assert any("ix_tag_tag" in line for line in plan), plan
-        # The outer loop is a rowid lookup fed by the tag index, not a scan.
-        assert plan[0].startswith("SEARCH picture USING INTEGER PRIMARY KEY"), plan
+        # The outer loop is an index seek fed by the tag index, not a scan.
+        # It read ``USING INTEGER PRIMARY KEY`` until the finder started
+        # applying the same not-deleted/has-a-file clauses as
+        # ``TagTask.count_missing_tags`` (#1206 item 3); SQLite now reaches the
+        # row through ``ix_picture_deleted (deleted=? AND rowid=?)``, which
+        # pins the new predicate and the rowid in the same seek. The thing this
+        # test exists to catch is the outer loop degrading to ``SCAN picture``,
+        # which ``SEARCH`` still excludes.
+        assert plan[0].startswith("SEARCH picture"), plan
         assert not any("TEMP B-TREE" in line.upper() for line in plan), plan
 
 

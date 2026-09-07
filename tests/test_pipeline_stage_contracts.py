@@ -33,6 +33,7 @@ from pixlstash.tasks.missing_face_model_refresh_finder import (
 )
 from pixlstash.tasks.missing_tag_finder import MissingTagFinder
 from pixlstash.tasks.missing_tag_prediction_finder import MissingTagPredictionFinder
+from pixlstash.tasks.tag_task import TagTask
 from pixlstash.tasks.task_type import TaskType
 from pixlstash.vault import Vault
 
@@ -534,6 +535,34 @@ class _FailingWorkflow(_StubWorkflow):
 class _FailingTagEngine:
     tagger_settings = {"active_tag_plugin": "wd14"}
     tagging_workflow = _FailingWorkflow()
+
+
+def test_a_scrapheaped_picture_leaves_the_tag_window_and_the_tag_count(tmp_path):
+    """#1206 item 3: the count and the selection disagreed about the scrapheap.
+
+    ``TagTask.count_missing_tags`` excluded soft-deleted pictures; the query
+    the planner acts on did not. So "awaiting tagging" could read zero while
+    the GPU went on tagging pictures the owner had deleted. Both sides now come
+    from ``taggable_picture_clauses``, so they cannot drift apart again.
+    """
+    with Vault(image_root=str(tmp_path)) as vault:
+        live, scrapheaped = _seed_pending(vault, tmp_path, ["live.png", "gone.png"])
+
+        def add_faces_and_scrapheap(session: Session):
+            for pid in (live, scrapheaped):
+                session.add(Face(picture_id=pid, face_index=-1))
+            session.get(Picture, scrapheaped).deleted = True
+            session.commit()
+
+        vault.db.run_task(add_faces_and_scrapheap)
+
+        # Negative and positive control in one assertion: the deleted picture
+        # is gone from the window and the live one is still in it.
+        assert _tag_candidates(vault) == {live}
+        assert (
+            vault.db.run_immediate_read_task(lambda s: TagTask.count_missing_tags(s))
+            == 1
+        )
 
 
 def test_undecodable_pictures_do_not_crowd_the_tag_candidate_window(tmp_path):
