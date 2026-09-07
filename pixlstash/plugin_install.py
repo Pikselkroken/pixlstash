@@ -959,17 +959,64 @@ def resolve_requirements(requirements: Path) -> list[DependencyChange]:
     return sorted(changes, key=lambda change: change.name.lower())
 
 
+#: A trailing backslash and the whitespace either side of it: one option to
+#: pip, so one line here.  The surrounding whitespace goes with it, or the
+#: joined line carries the indent of the continuation into the middle of it.
+_CONTINUATION_RE = re.compile(r"[^\S\n]*\\\n[^\S\n]*")
+
+
 def read_requirements(requirements: Path) -> list[str]:
-    """Return the requirement lines, so the CLI can show them before running pip."""
+    """Return the requirement lines, so the CLI can show them before running pip.
+
+    A line ending in a backslash is joined to the next one first, because pip
+    does the same: ``--index-url \\`` on its own line and the URL on the next is
+    ONE option to pip, and reading them as two showed the option without what
+    it points at (#1206 item 8).
+    """
+    source = _CONTINUATION_RE.sub(" ", read_source(requirements).replace("\r\n", "\n"))
     return [
         line.strip()
-        for line in read_source(requirements).splitlines()
+        for line in source.splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
 
 
+#: ``-r``/``-c`` and their long forms, with the file they name.  pip accepts
+#: ``-r f``, ``-rf``, ``--requirement f`` and ``--requirement=f``; all four
+#: pull the second file in, so all four have to be recognised here.
+_INCLUDE_RE = re.compile(r"^(?:(?:--requirement|--constraint)[=\s]+|(?:-r|-c)\s*)(\S+)")
+
+
+def _include_target(line: str, parent: Path, root: Path) -> "Path | None":
+    """The file an ``-r``/``-c`` option line points at, if it is safe to read.
+
+    pip resolves the path relative to the file the option is written in, so
+    that is what is resolved here.
+
+    SECURITY: the line is written by the plugin author and nothing has been
+    installed yet, so following it must not become a way to read the machine.
+    Anything that leaves the plugin's own folder -- an absolute path, a ``..``
+    escape, a URL, a symlink out -- is refused rather than followed, and so is
+    anything that is not a regular file.  The include line itself is still
+    listed either way, so a refusal hides nothing from the reader.
+    """
+    match = _INCLUDE_RE.match(line)
+    if match is None:
+        return None
+    target = match.group(1).strip("\"'")
+    if not target or urlparse(target).scheme:
+        return None
+    try:
+        resolved = (parent.parent / target).resolve()
+    except OSError:
+        return None
+    if not resolved.is_relative_to(root) or not resolved.is_file():
+        return None
+    return resolved
+
+
 def pip_options(requirements: Path) -> list[str]:
-    """Return every option line in *requirements* -- each line starting ``-``.
+    """Return every option line *requirements* reaches -- each starting ``-``.
 
     SECURITY: a plugin's ``requirements.txt`` is written by the plugin author,
     and pip honours option lines in it.  Some of them decide where packages
@@ -986,14 +1033,45 @@ def pip_options(requirements: Path) -> list[str]:
     verbatim and lets the reader judge, rather than claiming per line what each
     one does.
 
-    Only **this file** is read.  ``-r``/``-c`` pull in further files that pip
-    also honours, and an option set in one of those is not listed here -- the
-    include line itself is, which is the visible trace of it.  This is
-    information for the reader rather than a gate, so it is described honestly
-    rather than made exhaustive: following includes is a containment problem of
-    its own and would not change what installs.
+    ``-r``/``-c`` includes are followed, because pip honours the options in the
+    file they name exactly as if they had been written here, and showing only
+    the include line left the ``--index-url`` behind it unlisted (#1206 item
+    8).  A line from an included file is tagged with the file it came from.
+    Only files inside the plugin's own folder are followed
+    (:func:`_include_target`), each is read once so a cycle terminates, and a
+    file that cannot be read contributes a line saying so rather than being
+    passed over in silence.
     """
-    return [line for line in read_requirements(requirements) if line.startswith("-")]
+    root = requirements.parent.resolve()
+    options: list[str] = []
+    seen: set[Path] = set()
+    pending: list[Path] = [requirements]
+    while pending:
+        current = pending.pop(0)
+        resolved = current.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        # Named relative to the plugin folder: two `base.txt` under different
+        # subfolders must not read as the same file.
+        where = (
+            ""
+            if resolved == requirements.resolve()
+            else f"   [in {resolved.relative_to(root).as_posix()}]"
+        )
+        try:
+            lines = read_requirements(current)
+        except PluginError as exc:
+            options.append(f"(could not read {current.name}: {exc})")
+            continue
+        for line in lines:
+            if not line.startswith("-"):
+                continue
+            options.append(f"{line}{where}")
+            included = _include_target(line, current, root)
+            if included is not None:
+                pending.append(included)
+    return options
 
 
 def install_requirements(changes: list[DependencyChange]) -> None:
