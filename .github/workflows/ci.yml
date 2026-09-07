@@ -728,6 +728,12 @@ jobs:
     # disabled, no ML models needed). The fixture is committed release input:
     # its absence is a coverage failure, never permission to skip the lane.
     runs-on: ubuntu-latest
+    env:
+      # Belt-and-braces with frontend/e2e/fixtures/test.js's production route
+      # block: declares this CI-booted backend as ours, so anything reaching
+      # the network by a path Playwright's route interception does not cover
+      # still arrives labelled dev rather than a real install. See #1213.
+      PIXLSTASH_TELEMETRY_DEV: '1'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 

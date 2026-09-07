@@ -387,11 +387,16 @@ class Server(
 
         # The same declaration, made durably: an env var is not inherited by a
         # packaged app launched from the OS shell, and does not survive a
-        # reinstall. `stat` rather than `exists`, because `exists` reports an
-        # unreadable app-data directory and an absent marker identically - and
-        # those mean opposite things here. An unreadable one silently turns a
-        # maintainer's install back into a counted one, which is the whole
-        # failure this check exists to prevent, so it is said out loud.
+        # reinstall.
+        #
+        # `stat` rather than `exists`, but for a narrower reason than it looks:
+        # `exists` re-raises a PermissionError, so that case was never silent.
+        # What it DOES swallow is ENOENT, ENOTDIR, EBADF and ELOOP
+        # (`pathlib._IGNORED_ERRNOS`) - so an app-data path that is a file, or
+        # a symlink loop, read as "no marker" and turned a maintainer's install
+        # back into a counted one without a word. Those are the cases said out
+        # loud below. The catch is also two specific handlers rather than a
+        # blanket `except Exception`, so a programming error still surfaces.
         marker_file = Path(user_data_dir("pixlstash")) / ".pixlstash-dev-machine"
         try:
             marker_file.stat()

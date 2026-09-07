@@ -37,19 +37,45 @@ too.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
-import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
+import yaml
 
 from pixlstash.server import Server
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VERSION_CHECK_JS = REPO_ROOT / "frontend" / "src" / "composables" / "useVersionCheck.js"
 WORKER_VALIDATE_JS = REPO_ROOT / "website" / "telemetry-worker" / "src" / "validate.js"
+
+
+@pytest.fixture(autouse=True)
+def isolate_the_machine(tmp_path, monkeypatch):
+    """Cut every test in this file off from the developer's own machine.
+
+    ``detect_install_type()`` reads the dev-machine marker out of
+    ``user_data_dir("pixlstash")`` at priority 0, ahead of the
+    ``PIXLSTASH_INSTALL_TYPE`` override - so on a machine that actually has
+    the marker, every channel assertion below returns ``"dev"`` and nine of
+    these tests fail. That machine is not hypothetical: it is precisely the
+    maintainer box the release checklist tells you to create the marker on.
+
+    CI cannot catch this - a runner has neither the marker nor the env var -
+    so the isolation has to be here. Points the probe at an empty per-test
+    directory and clears both declaring variables; a test that wants either
+    sets it itself afterwards.
+    """
+    monkeypatch.setattr(
+        "pixlstash.server.user_data_dir", lambda *args, **kwargs: str(tmp_path)
+    )
+    monkeypatch.delenv(Server.DEV_MACHINE_ENV_VAR, raising=False)
+    monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
+    return tmp_path
+
+
 MANIFEST_DIR = REPO_ROOT / "website" / "latest-version"
 
 
@@ -198,42 +224,167 @@ def test_the_shell_sets_the_marker_only_for_a_dev_backend():
     )
 
 
-def test_marker_file_declares_dev_machine(monkeypatch):
+def test_e2e_suite_blocks_the_production_host():
+    """The Playwright suite must never depend on pixlstash.dev being reachable.
+
+    ``useVersionCheck.js``'s 24h throttle lives in ``localStorage``, and every
+    fresh Playwright context starts with empty storage - so a context that
+    reaches the live version-check endpoint is a real check-in against
+    production, not just a latent flake (issue #1213). The fix is a route
+    block registered once, on the shared ``browser`` fixture that every spec's
+    context (including the handful minted by hand with
+    ``browser.newContext()``) is funnelled through, so a future spec author
+    does not have to remember to add it themselves.
+    """
+    source = (REPO_ROOT / "frontend" / "e2e" / "fixtures" / "test.js").read_text(
+        encoding="utf-8"
+    )
+    assert "https://pixlstash.dev/**" in source, (
+        "frontend/e2e/fixtures/test.js no longer names the production host to "
+        "block; the e2e suite can reach it again"
+    )
+    # `route.abort()`, not merely `.route(...)`. Asserting that a handler is
+    # registered says nothing about what it does: swapping the abort for a
+    # `continue()` (or a `fulfill()`, the likely reason anyone touches this
+    # line) restores live traffic to production with this test still green.
+    assert re.search(
+        r"\.route\(\s*PRODUCTION_HOST_PATTERN\s*,.*?route\.abort\(\)",
+        source,
+        re.DOTALL,
+    ), (
+        "frontend/e2e/fixtures/test.js no longer ABORTS requests to the "
+        "production host - a route that continues or fulfils still reaches it"
+    )
+    assert "browser.newContext = async" in source, (
+        "the route must be wired onto the browser fixture's newContext, or "
+        "specs that call browser.newContext() directly (auth.spec.js, "
+        "sharing.spec.js, read-only-features.spec.js) bypass the block"
+    )
+    # Both fixtures, because neither alone reaches every context. UI mode
+    # (`npm run test:e2e:ui`) reuses one context, which the built-in `context`
+    # fixture obtains from `_newContextForReuse()` rather than from the
+    # wrapped `newContext` - so the browser wrapper alone leaves the mode a
+    # developer iterates in unblocked.
+    assert re.search(r"\n  context: async \(\{ context \}", source), (
+        "the route is no longer wired onto the context fixture, so Playwright "
+        "UI mode's reused context can reach production again"
+    )
+
+
+def _job(workflow: str, name: str) -> dict:
+    """One job out of a workflow file, parsed rather than pattern-matched."""
+    path = REPO_ROOT / ".github" / "workflows" / workflow
+    jobs = yaml.safe_load(path.read_text(encoding="utf-8")).get("jobs") or {}
+    assert name in jobs, f"{workflow} no longer has a `{name}:` job"
+    return jobs[name]
+
+
+def test_the_e2e_job_declares_itself_dev():
+    """The one CI job that boots the app behind a browser says it is ours.
+
+    Belt and braces with the Playwright route block above: anything reaching
+    the network by a path the route interception does not cover still arrives
+    labelled ``dev`` rather than a real install. See
+    ``Server.DEV_MACHINE_ENV_VAR``.
+
+    Only this job. ``install-smoke.yml`` is covered by the ``CI`` suppression
+    in ``telemetry/sender.py`` and asserts that a plain install detects itself
+    as ``pip``, which a declaration would overwrite; ``docker-build.yml``
+    deliberately stays undeclared so its ``/version`` payload remains the only
+    real-container evidence that docker detection works (pinned below).
+
+    Parsed rather than pattern-matched. ``tests/test_ci_shards.py`` already
+    reads these files with ``yaml.safe_load`` for the same kind of assertion,
+    and a parser is immune to the things that have nothing to do with the
+    guardrail: which job comes last in the file, how the value is quoted, and
+    how deeply the block is indented.
+    """
+    e2e = _job("ci.yml", "e2e")
+    value = (e2e.get("env") or {}).get(Server.DEV_MACHINE_ENV_VAR)
+    # Mirrors the server's own acceptance set rather than pinning the literal
+    # `'1'`: a workflow rewritten to `true` (or unquoted `1`, which YAML hands
+    # back as an int) still declares the machine.
+    assert str(value).strip().lower() in {"1", "true", "yes", "on"}, (
+        "ci.yml's e2e job no longer declares PIXLSTASH_TELEMETRY_DEV"
+    )
+
+
+def test_the_docker_smoke_pins_real_container_detection():
+    """The smoked container must keep reporting ``docker``, and be checked.
+
+    This is the only place any workflow observes ``running_in_docker()``
+    against a real container. Labelling the container a dev machine would
+    replace that reading with ``dev`` and leave docker detection with no
+    real-container coverage at all - so the job must NOT declare the marker,
+    and must assert what ``/version`` says.
+    """
+    docker = _job("docker-build.yml", "build")
+    assert Server.DEV_MACHINE_ENV_VAR not in (docker.get("env") or {}), (
+        "docker-build.yml now declares the dev marker, which makes its "
+        "container report 'dev' and destroys the only real-container check "
+        "that docker detection works"
+    )
+    run_steps = " ".join(
+        step.get("run", "")
+        for step in (docker.get("steps") or [])
+        if isinstance(step, dict)
+    )
+    assert Server.DEV_MACHINE_ENV_VAR not in run_steps, (
+        "docker-build.yml forwards the dev marker into the smoked container"
+    )
+    assert 'install_type" != "docker"' in run_steps or (
+        "install_type" in run_steps and "docker" in run_steps
+    ), "docker-build.yml's smoke no longer asserts the container reports docker"
+
+
+def test_marker_file_declares_dev_machine(isolate_the_machine):
     """A marker file in the app-data directory declares a dev machine.
 
     Release-candidate testing and packaged desktop builds launched from the OS
     shell do not inherit the ``PIXLSTASH_TELEMETRY_DEV`` env var, so the marker
     file provides a durable declaration that survives reinstalling and repackaging.
     """
-    monkeypatch.delenv(Server.DEV_MACHINE_ENV_VAR, raising=False)
-    # PIXLSTASH_INSTALL_TYPE also short-circuits to a declared value, and a
-    # maintainer box may well export it as "dev". Without this the assertion
-    # passes on the override rather than on the marker - it did, and disabling
-    # the marker check entirely left the test green.
-    monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        marker_file = Path(tmpdir) / ".pixlstash-dev-machine"
-        marker_file.touch()
-        with patch("pixlstash.server.user_data_dir", return_value=tmpdir):
-            assert Server.detect_install_type() == "dev"
+    (isolate_the_machine / ".pixlstash-dev-machine").touch()
+    assert Server.detect_install_type() == "dev"
 
 
-def test_marker_file_absent_falls_back_to_detection(monkeypatch):
+def test_marker_file_absent_falls_back_to_detection(isolate_the_machine):
     """Without a marker file or env var, install type is detected normally.
 
     This ensures the marker file is truly optional and does not interfere with
     normal install-type detection when not present.
     """
-    monkeypatch.delenv(Server.DEV_MACHINE_ENV_VAR, raising=False)
-    monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Ensure marker file does not exist
-        assert not (Path(tmpdir) / ".pixlstash-dev-machine").exists()
-        with patch("pixlstash.server.user_data_dir", return_value=tmpdir):
-            # Falls through to channel detection. Assert on what this test
-            # is about - the marker did not fire - rather than on which
-            # channel the runner happens to look like: the same suite runs
-            # under Docker in CI, where "pip" would be the wrong answer.
-            result = Server.detect_install_type()
-            assert result in Server.INSTALL_TYPES
-            assert result != "dev"
+    assert not (isolate_the_machine / ".pixlstash-dev-machine").exists()
+    # Falls through to channel detection. Assert on what this test is about -
+    # the marker did not fire - rather than on which channel the runner
+    # happens to look like: the same suite runs under Docker in CI, where
+    # "pip" would be the wrong answer.
+    result = Server.detect_install_type()
+    assert result in Server.INSTALL_TYPES
+    assert result != "dev"
+
+
+def test_an_unreadable_app_data_path_is_said_out_loud(monkeypatch, tmp_path, caplog):
+    """A marker directory that cannot be read must warn, not read as "absent".
+
+    The errno matters, and it is not the obvious one: `Path.exists()` re-raises
+    a PermissionError, so an unreadable *directory* was never the silent case.
+    It swallows ENOENT, ENOTDIR, EBADF and ELOOP - so an app-data path that is
+    a FILE rather than a directory (or a symlink loop) reported "no marker" and
+    quietly turned a maintainer machine back into a counted install. That is
+    the case `stat()` surfaces and this pins.
+    """
+    not_a_directory = tmp_path / "app-data-is-a-file"
+    not_a_directory.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        "pixlstash.server.user_data_dir", lambda *a, **k: str(not_a_directory)
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = Server.detect_install_type()
+
+    assert result != "dev", "an unreadable path is not a declaration"
+    assert any("dev-machine marker" in r.message for r in caplog.records), (
+        "the fallback happened silently; a maintainer counted as a real "
+        "install is the cost, and nothing said so"
+    )
