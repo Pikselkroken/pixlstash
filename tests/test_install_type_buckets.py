@@ -206,6 +206,11 @@ def test_marker_file_declares_dev_machine(monkeypatch):
     file provides a durable declaration that survives reinstalling and repackaging.
     """
     monkeypatch.delenv(Server.DEV_MACHINE_ENV_VAR, raising=False)
+    # PIXLSTASH_INSTALL_TYPE also short-circuits to a declared value, and a
+    # maintainer box may well export it as "dev". Without this the assertion
+    # passes on the override rather than on the marker - it did, and disabling
+    # the marker check entirely left the test green.
+    monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
     with tempfile.TemporaryDirectory() as tmpdir:
         marker_file = Path(tmpdir) / ".pixlstash-dev-machine"
         marker_file.touch()
@@ -225,8 +230,10 @@ def test_marker_file_absent_falls_back_to_detection(monkeypatch):
         # Ensure marker file does not exist
         assert not (Path(tmpdir) / ".pixlstash-dev-machine").exists()
         with patch("pixlstash.server.user_data_dir", return_value=tmpdir):
-            # Should fall back to docker/pip detection
+            # Falls through to channel detection. Assert on what this test
+            # is about - the marker did not fire - rather than on which
+            # channel the runner happens to look like: the same suite runs
+            # under Docker in CI, where "pip" would be the wrong answer.
             result = Server.detect_install_type()
             assert result in Server.INSTALL_TYPES
-            # In this test context, it should be 'pip' (no docker signal)
-            assert result == "pip"
+            assert result != "dev"

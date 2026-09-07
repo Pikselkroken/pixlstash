@@ -61,8 +61,11 @@ the marker file in the app-data directory so the version-check data correctly
 excludes your installs from the real active-install count. The path is
 `~/.local/share/pixlstash/.pixlstash-dev-machine` on Linux,
 `~/Library/Application Support/pixlstash/.pixlstash-dev-machine` on macOS, and
-`%APPDATA%\pixlstash\.pixlstash-dev-machine` on Windows (adjust the home-directory
-reference for the user running the test).
+`%LOCALAPPDATA%\pixlstash\pixlstash\.pixlstash-dev-machine` on Windows (adjust
+the home-directory reference for the user running the test). The doubled
+`pixlstash\pixlstash` on Windows is not a typo: the server resolves the marker
+with `platformdirs.user_data_dir("pixlstash")`, which supplies the app name as
+the author segment when none is given.
 
 ### 1.1 pip + venv (PyPI)
 
