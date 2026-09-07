@@ -39,7 +39,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -194,3 +196,44 @@ def test_the_shell_sets_the_marker_only_for_a_dev_backend():
         "the shell must keep declaring the electron channel - it is a runtime "
         "switch for cookie_secure and the loopback listener"
     )
+
+
+def test_marker_file_declares_dev_machine(monkeypatch):
+    """A marker file in the app-data directory declares a dev machine.
+
+    Release-candidate testing and packaged desktop builds launched from the OS
+    shell do not inherit the ``PIXLSTASH_TELEMETRY_DEV`` env var, so the marker
+    file provides a durable declaration that survives reinstalling and repackaging.
+    """
+    monkeypatch.delenv(Server.DEV_MACHINE_ENV_VAR, raising=False)
+    # PIXLSTASH_INSTALL_TYPE also short-circuits to a declared value, and a
+    # maintainer box may well export it as "dev". Without this the assertion
+    # passes on the override rather than on the marker - it did, and disabling
+    # the marker check entirely left the test green.
+    monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        marker_file = Path(tmpdir) / ".pixlstash-dev-machine"
+        marker_file.touch()
+        with patch("pixlstash.server.user_data_dir", return_value=tmpdir):
+            assert Server.detect_install_type() == "dev"
+
+
+def test_marker_file_absent_falls_back_to_detection(monkeypatch):
+    """Without a marker file or env var, install type is detected normally.
+
+    This ensures the marker file is truly optional and does not interfere with
+    normal install-type detection when not present.
+    """
+    monkeypatch.delenv(Server.DEV_MACHINE_ENV_VAR, raising=False)
+    monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Ensure marker file does not exist
+        assert not (Path(tmpdir) / ".pixlstash-dev-machine").exists()
+        with patch("pixlstash.server.user_data_dir", return_value=tmpdir):
+            # Falls through to channel detection. Assert on what this test
+            # is about - the marker did not fire - rather than on which
+            # channel the runner happens to look like: the same suite runs
+            # under Docker in CI, where "pip" would be the wrong answer.
+            result = Server.detect_install_type()
+            assert result in Server.INSTALL_TYPES
+            assert result != "dev"
