@@ -1968,6 +1968,16 @@ def test_the_listing_follows_a_quoted_include_and_a_colon_in_a_name(tmp_path):
     """
     plugin = tmp_path / "plugin"
     (plugin / "with space").mkdir(parents=True)
+    # pip reads `-r "a"b.txt` as the single token `ab.txt`. A quoted-or-bare
+    # regex read it as `a`, so the listing showed one file's index URL while
+    # pip honoured another's - a defeat of the feature, not a gap in it. Both
+    # files exist here because the plugin author controls the folder.
+    (plugin / "a").write_text(
+        "--index-url https://wrong.example.invalid/simple\n", encoding="utf-8"
+    )
+    (plugin / "ab.txt").write_text(
+        "--index-url https://right.example.invalid/simple\n", encoding="utf-8"
+    )
     (plugin / "with space" / "base.txt").write_text(
         "--index-url https://spaced.example.invalid/simple\n", encoding="utf-8"
     )
@@ -1976,7 +1986,7 @@ def test_the_listing_follows_a_quoted_include_and_a_colon_in_a_name(tmp_path):
     )
     requirements = plugin / "requirements.txt"
     requirements.write_text(
-        '-r "with space/base.txt"\n-r odd:name.txt\n', encoding="utf-8"
+        '-r "with space/base.txt"\n-r odd:name.txt\n-r "a"b.txt\n', encoding="utf-8"
     )
 
     # Parent file's own lines first, then what each include brought in - the
@@ -1984,8 +1994,11 @@ def test_the_listing_follows_a_quoted_include_and_a_colon_in_a_name(tmp_path):
     assert plugin_install.pip_options(requirements) == [
         '-r "with space/base.txt"',
         "-r odd:name.txt",
+        '-r "a"b.txt',
         "--index-url https://spaced.example.invalid/simple   [in with space/base.txt]",
         "--extra-index-url https://colon.example.invalid/simple   [in odd:name.txt]",
+        # `ab.txt`, the file pip reads - not `a`, the file a regex saw.
+        "--index-url https://right.example.invalid/simple   [in ab.txt]",
     ]
 
 

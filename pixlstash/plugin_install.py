@@ -23,6 +23,7 @@ import ast
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -984,14 +985,13 @@ def read_requirements(requirements: Path) -> list[str]:
 #: ``-r``/``-c`` and their long forms, with the file they name.  pip accepts
 #: ``-r f``, ``-rf``, ``--requirement f`` and ``--requirement=f``; all four
 #: pull the second file in, so all four have to be recognised here.
-#: An ``-r``/``-c`` include and its target. The target is a quoted string OR a
-#: bare token, in that order: pip parses these lines with shlex, so
-#: ``-r "deps/with spaces/base.txt"`` is a legal include, and a bare ``\S+``
-#: stopped at the first space and silently failed to follow it.
-_INCLUDE_RE = re.compile(
-    r"^(?:(?:--requirement|--constraint)[=\s]+|(?:-r|-c)\s*)"
-    r"(\"[^\"]+\"|'[^']+'|\S+)"
-)
+#: The ``-r``/``-c`` option itself. The TARGET is not matched here: pip parses
+#: these lines with :mod:`shlex`, and hand-rolled quoting disagrees with it in
+#: a way that matters -- ``-r "a"b.txt`` is one token ``ab.txt`` to pip, but a
+#: quoted-or-bare alternation reads ``a``. Listing the options of one file
+#: while pip reads another defeats the whole point of showing them, so the
+#: target is taken from ``shlex.split`` in :func:`_include_target`.
+_INCLUDE_RE = re.compile(r"^(?:(?:--requirement|--constraint)[=\s]+|(?:-r|-c)\s*)")
 
 
 def _include_target(line: str, parent: Path, root: Path) -> "Path | None":
@@ -1010,7 +1010,13 @@ def _include_target(line: str, parent: Path, root: Path) -> "Path | None":
     match = _INCLUDE_RE.match(line)
     if match is None:
         return None
-    target = match.group(1).strip("\"'")
+    try:
+        words = shlex.split(line[match.end() :])
+    except ValueError:
+        # An unbalanced quote. pip will not read this line either; refuse
+        # rather than guess, and the line is still listed by the caller.
+        return None
+    target = words[0] if words else ""
     # `urlparse(...).scheme` was too eager: it reads `base:1.txt` as scheme
     # "base", so a legal relative filename containing a colon was refused and
     # its options went unlisted -- the same incompleteness this is fixing.
