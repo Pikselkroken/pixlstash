@@ -231,7 +231,6 @@ DEFERRED_FROM_GATE = frozenset(
         "test_quality_task_shutdown.py",
         "test_reference_folder_listing_count_parity.py",
         "test_reference_folder_sidecars.py",
-        "test_rocm_device_check.py",
         "test_server_external_listener.py",
         "test_server_simple.py",
         "test_smart_score_invalidation.py",
