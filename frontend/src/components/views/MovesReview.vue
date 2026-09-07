@@ -281,8 +281,9 @@ function changeShape(item) {
   };
 }
 
-/** The resolve button's label - always names what the owner ends up with,
- * never a generic verb, because this button applies a removal.
+/** The resolve button's label - always names either what the owner ends up
+ * with or what is being taken away, never a generic verb, because this
+ * button applies a removal.
  *
  * The canonical ambiguous case (the design mock's own example) has NO
  * addition: the picture already belongs to the folder it moved into, so
@@ -290,7 +291,12 @@ function changeShape(item) {
  * destination there is one of the picture's own `current` names for the
  * ambiguous facet - specifically the one that is not being removed - so it
  * is derived from `current`, never left to a fallback string that would say
- * nothing about what clicking the button actually does. */
+ * nothing about what clicking the button actually does.
+ *
+ * A removal that leaves no survivor (a lone membership) or several (three or
+ * more before the move) has no single name to land on, so it names what the
+ * click removes instead of what remains - shorter than listing every
+ * survivor, and still says exactly what happens. */
 function onlyNowLabel(item) {
   const addition = (item.additions || [])[0];
   if (addition) return `Only ${addition.name} now`;
@@ -300,6 +306,10 @@ function onlyNowLabel(item) {
       (name) => name !== removal.name,
     );
     if (remaining.length === 1) return `Only ${remaining[0]} now`;
+    // Leaving none or leaving several: naming the one survivor no longer
+    // works, and listing every survivor gets long fast. Name what the click
+    // actually removes instead - shorter, and honest either way.
+    return `Remove from ${removal.name}`;
   }
   return "Apply this move";
 }

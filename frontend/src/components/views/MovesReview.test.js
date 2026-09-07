@@ -120,6 +120,64 @@ describe("MovesReview - ambiguous", () => {
     expect(resolve.text()).toContain("Only Client · Nordvik now");
   });
 
+  it("names the addition when the ambiguous item gains one", async () => {
+    const item = {
+      review_id: 8,
+      picture_id: 80,
+      old_path: "/lib/2024 Shoots/mira.png",
+      new_path: "/lib/Client · Vex/mira.png",
+      removals: [{ facet: "project", name: "2024 Shoots" }],
+      additions: [{ facet: "project", name: "Client · Vex" }],
+      current: { project: ["2024 Shoots", "Old Client"] },
+    };
+    const wrapper = await mountScreen(summary({ ambiguous: [item] }));
+    const buttons = wrapper.findAll(".mv-row--ambiguous button");
+    const resolve = buttons.find((b) => !b.text().includes("Keep both"));
+
+    expect(resolve.text()).toContain("Only Client · Vex now");
+  });
+
+  it("names what it removes when the removal leaves no survivor", async () => {
+    // removals[0] is a lone membership (nothing left once it goes); a
+    // different removal is what actually made the item ambiguous.
+    const item = {
+      review_id: 9,
+      picture_id: 90,
+      old_path: "/lib/Solo/2024 Shoots/mira.png",
+      new_path: "/lib/Client · Nordvik/mira.png",
+      removals: [
+        { facet: "project", name: "Solo" },
+        { facet: "person", name: "Mira" },
+      ],
+      additions: [],
+      current: { project: ["Solo"], person: ["Mira", "Anya"] },
+    };
+    const wrapper = await mountScreen(summary({ ambiguous: [item] }));
+    const buttons = wrapper.findAll(".mv-row--ambiguous button");
+    const resolve = buttons.find((b) => !b.text().includes("Keep both"));
+
+    expect(resolve.text()).toContain("Remove from Solo");
+    expect(resolve.text()).not.toContain("Only");
+  });
+
+  it("names what it removes when the removal leaves several survivors", async () => {
+    const item = {
+      review_id: 10,
+      picture_id: 100,
+      old_path: "/lib/B/mira.png",
+      new_path: "/lib/Client · Nordvik/mira.png",
+      removals: [{ facet: "project", name: "B" }],
+      additions: [],
+      current: { project: ["A", "B", "C"] },
+    };
+    const wrapper = await mountScreen(summary({ ambiguous: [item] }));
+    const buttons = wrapper.findAll(".mv-row--ambiguous button");
+    const resolve = buttons.find((b) => !b.text().includes("Keep both"));
+
+    expect(resolve.text()).toContain("Remove from B");
+    expect(resolve.text()).not.toContain("Only");
+  });
+
   it("the resolve button applies only that one review_id", async () => {
     const wrapper = await mountScreen(summary({ ambiguous: [AMBIGUOUS_ITEM] }));
     const buttons = wrapper.findAll(".mv-row--ambiguous button");
