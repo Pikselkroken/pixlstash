@@ -515,6 +515,7 @@ jobs:
           tests/test_label_ledger.py
           tests/test_libraries_routes.py
           tests/test_library_backup.py
+          tests/test_library_destination_blocklist.py
           tests/test_library_generation_coordinator.py
           tests/test_library_insights.py
           tests/test_library_layout.py
