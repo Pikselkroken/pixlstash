@@ -1,6 +1,7 @@
 import { app } from 'electron';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, posix as pathPosix, resolve, win32 as pathWin32 } from 'node:path';
+import { pathKey } from './urlPolicy';
 
 /** Compute accelerators a PixlStash runtime can target. */
 export type Accel = 'cpu' | 'cu128' | 'rocm' | 'metal';
@@ -84,11 +85,12 @@ export type PathPurpose = 'library' | 'backends';
  * and `~/pictures` are two different directories, so folding there would let a
  * path that was never offered match one that was. Same rule, and the same
  * `process.platform` switch, as {@link normalizeBackendsRoot}.
+ *
+ * Defined in `urlPolicy.ts` and re-exported here: this file imports `electron`
+ * at module load and that one does not, so the renderer-page guards can share
+ * the definition rather than keep a second one that disagrees (#1206 item 2).
  */
-export function pathKey(path: string, platform: NodeJS.Platform = process.platform): string {
-  const resolved = resolve(path.trim());
-  return platform === 'win32' ? resolved.toLowerCase() : resolved;
-}
+export { pathKey };
 
 // Key -> the path as PixlStash actually offered it. A Map rather than a Set so
 // the value that flows on is the one the main process vouched for, never the

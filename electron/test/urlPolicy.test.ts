@@ -159,6 +159,37 @@ describe('isBundledRendererPage — the setup screen, and only it', () => {
       assert.equal(isSetup(bad), false, `${bad} must not pass as the setup screen`);
     }
   });
+
+  // #1206 item 2. `config.ts` folded case on Windows and this file did not, so
+  // a `file://` URL whose casing differed from RENDERER_DIR's answered false
+  // for the wizard page itself - and requireSetupRenderer then refused EVERY
+  // `setup:*` channel, leaving first-run setup with no way through. Windows is
+  // where a drive letter's case can differ between two APIs; POSIX is where
+  // folding would be the security bug, so both directions are pinned here.
+  //
+  // Exercised with POSIX-shaped paths and an explicit `platform`, because
+  // `resolve()` uses the HOST's semantics: a `C:\` literal would not normalise
+  // on the Linux runner. The casing rule is what is under test, not `resolve`.
+  describe('path casing follows the platform', () => {
+    const UPPER = resolve('/opt/PixlStash/dist/Renderer') + sep;
+    const page = pathToFileURL(UPPER + 'setup.html').href;
+
+    it('accepts a differently-cased spelling of the same Windows directory', () => {
+      assert.ok(isBundledRendererPage(page, RENDERER_DIR, 'setup.html', 'win32'));
+      assert.ok(isAllowedNavigation(page, BACKEND, RENDERER_DIR, 'win32'));
+    });
+
+    it('refuses it on POSIX, where that is a different directory', () => {
+      assert.equal(isBundledRendererPage(page, RENDERER_DIR, 'setup.html', 'linux'), false);
+      assert.equal(isAllowedNavigation(page, BACKEND, RENDERER_DIR, 'linux'), false);
+    });
+
+    it('still refuses a prefix-sharing sibling once case is folded', () => {
+      const sibling = pathToFileURL(resolve('/opt/pixlstash/dist/RENDERER-evil') + sep + 'setup.html').href;
+      assert.equal(isBundledRendererPage(sibling, RENDERER_DIR, 'setup.html', 'win32'), false);
+      assert.equal(isAllowedNavigation(sibling, BACKEND, RENDERER_DIR, 'win32'), false);
+    });
+  });
 });
 
 /**

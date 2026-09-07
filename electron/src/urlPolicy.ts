@@ -2,6 +2,28 @@ import { resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
+ * The lookup key for a path, matching the platform's own idea of path identity:
+ * resolved, and case-folded on Windows only.
+ *
+ * THE canonical rule, re-exported by `config.ts` (which cannot own it - it
+ * imports `electron` at module load, and this module is loaded by tests that
+ * have no Electron). Two copies of this rule is exactly the bug #1206 item 2
+ * describes: `config.ts` folded case and this file did not, so a `file://` URL
+ * whose drive letter came back in a different case than `RENDERER_DIR` spells
+ * it made {@link isBundledRendererPage} answer false for the wizard page
+ * itself - and `requireSetupRenderer` then refused every `setup:*` channel,
+ * with no way through first-run setup.
+ *
+ * Windows filesystems are case-insensitive, so `C:\\x` and `c:\\x` are one
+ * directory. POSIX is case-SENSITIVE, where folding would let `/opt/Renderer`
+ * pass as `/opt/renderer` - a different directory, and one we did not bundle.
+ */
+export function pathKey(path: string, platform: NodeJS.Platform = process.platform): string {
+  const resolved = resolve(path.trim());
+  return platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/**
  * A URL safe to write to the log: enough to identify what was blocked, never
  * the `user:password@` userinfo the URL may carry and never a page-authored
  * payload. Schemes with no origin report origin `null`; of those only `file:`
@@ -45,12 +67,15 @@ export function redactUrl(target: string): string {
  * file is the answer, so `index.html` and `permissions.html` are refused too.
  * The path is resolved and compared whole: a prefix test would accept a sibling
  * directory sharing the prefix, and `fileURLToPath` is what stops a percent-
- * encoded traversal reaching the comparison as text.
+ * encoded traversal reaching the comparison as text. Compared through
+ * {@link pathKey}, so the two halves may disagree about casing on Windows -
+ * where they name one directory - and never on POSIX, where they do not.
  */
 export function isBundledRendererPage(
   target: string,
   rendererDir: string,
   page: string,
+  platform: NodeJS.Platform = process.platform,
 ): boolean {
   let url: URL;
   try {
@@ -61,7 +86,7 @@ export function isBundledRendererPage(
   if (url.protocol !== 'file:') return false;
   try {
     const dir = rendererDir.endsWith(sep) ? rendererDir : rendererDir + sep;
-    return resolve(fileURLToPath(url)) === resolve(dir, page);
+    return pathKey(fileURLToPath(url), platform) === pathKey(resolve(dir, page), platform);
   } catch {
     return false;
   }
@@ -142,6 +167,7 @@ export function isAllowedNavigation(
   target: string,
   currentUrl: string | null,
   rendererDir: string,
+  platform: NodeJS.Platform = process.platform,
 ): boolean {
   let url: URL;
   try {
@@ -162,10 +188,13 @@ export function isAllowedNavigation(
   // Normalise the trailing separator here rather than trust the caller: without
   // it a sibling directory sharing the prefix (…/renderer-evil) would pass.
   if (url.protocol === 'file:') {
-    const dir = rendererDir.endsWith(sep) ? rendererDir : rendererDir + sep;
+    // Through pathKey for the same reason isBundledRendererPage is: on Windows
+    // a differently-cased drive letter names the same directory, and refusing
+    // it would block our own bundled pages from loading.
+    const base = pathKey(rendererDir, platform);
     try {
-      const path = resolve(fileURLToPath(url));
-      return path === dir.slice(0, -1) || path.startsWith(dir);
+      const path = pathKey(fileURLToPath(url), platform);
+      return path === base || path.startsWith(base + sep);
     } catch (e) {
       console.warn(`[nav] blocking unresolvable file:// URL ${redactUrl(target)}:`, e);
       return false;
