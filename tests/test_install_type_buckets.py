@@ -194,3 +194,69 @@ def test_the_shell_sets_the_marker_only_for_a_dev_backend():
         "the shell must keep declaring the electron channel - it is a runtime "
         "switch for cookie_secure and the loopback listener"
     )
+
+
+def test_e2e_suite_blocks_the_production_host():
+    """The Playwright suite must never depend on pixlstash.dev being reachable.
+
+    ``useVersionCheck.js``'s 24h throttle lives in ``localStorage``, and every
+    fresh Playwright context starts with empty storage - so a context that
+    reaches the live version-check endpoint is a real check-in against
+    production, not just a latent flake (issue #1213). The fix is a route
+    block registered once, on the shared ``browser`` fixture that every spec's
+    context (including the handful minted by hand with
+    ``browser.newContext()``) is funnelled through, so a future spec author
+    does not have to remember to add it themselves.
+    """
+    source = (REPO_ROOT / "frontend" / "e2e" / "fixtures" / "test.js").read_text(
+        encoding="utf-8"
+    )
+    assert "https://pixlstash.dev/**" in source, (
+        "frontend/e2e/fixtures/test.js no longer names the production host to "
+        "block; the e2e suite can reach it again"
+    )
+    assert re.search(r"\.route\(\s*PRODUCTION_HOST_PATTERN", source), (
+        "frontend/e2e/fixtures/test.js declares the production host pattern "
+        "but no longer registers a route to abort it"
+    )
+    assert "browser.newContext = async" in source, (
+        "the route must be wired onto the browser fixture's newContext, or "
+        "specs that call browser.newContext() directly (auth.spec.js, "
+        "sharing.spec.js, read-only-features.spec.js) bypass the block"
+    )
+
+
+def test_app_booting_workflows_declare_themselves_dev():
+    """Every workflow that boots the real server exports the dev marker.
+
+    Belt and braces with the Playwright route block above: anything that
+    reaches the network by a path Playwright's route interception does not
+    cover (or, for the non-Playwright smoke jobs below, any future step that
+    grows one) should still arrive labelled ``dev`` rather than a real
+    install. See ``Server.DEV_MACHINE_ENV_VAR``.
+    """
+    workflows_dir = REPO_ROOT / ".github" / "workflows"
+
+    ci_source = (workflows_dir / "ci.yml").read_text(encoding="utf-8")
+    # The job body, up to the next top-level (2-space-indented) job key -
+    # a plain substring split on "\n  " would cut at the job's own 4-space
+    # indented first line instead.
+    e2e_job_match = re.search(r"\n  e2e:\n(.*?)(?=\n  [A-Za-z_])", ci_source, re.DOTALL)
+    assert e2e_job_match, "ci.yml no longer has an `e2e:` job"
+    assert "PIXLSTASH_TELEMETRY_DEV: '1'" in e2e_job_match.group(1), (
+        "ci.yml's e2e job no longer exports PIXLSTASH_TELEMETRY_DEV=1"
+    )
+
+    smoke_source = (workflows_dir / "install-smoke.yml").read_text(encoding="utf-8")
+    assert "PIXLSTASH_TELEMETRY_DEV: '1'" in smoke_source, (
+        "install-smoke.yml no longer exports PIXLSTASH_TELEMETRY_DEV=1"
+    )
+
+    docker_source = (workflows_dir / "docker-build.yml").read_text(encoding="utf-8")
+    assert "PIXLSTASH_TELEMETRY_DEV: '1'" in docker_source, (
+        "docker-build.yml no longer exports PIXLSTASH_TELEMETRY_DEV=1"
+    )
+    assert "-e PIXLSTASH_TELEMETRY_DEV" in docker_source, (
+        "docker-build.yml exports the marker but no longer forwards it into "
+        "the smoked container"
+    )

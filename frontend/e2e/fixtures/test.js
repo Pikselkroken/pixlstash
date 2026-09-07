@@ -21,6 +21,19 @@ function readCredentials() {
   return JSON.parse(readFileSync(TOKEN_PATH, 'utf8'))
 }
 
+// The e2e suite must never depend on pixlstash.dev being reachable, and a
+// context that does reach it is a live check-in against production (see
+// issue #1213 and useVersionCheck.js's VERSION_CHECK_STORAGE_KEY — every
+// fresh Playwright context starts with empty localStorage, so its 24h
+// throttle never applies). Blocked at the `browser` fixture rather than the
+// `context` fixture because several specs (auth.spec.js, sharing.spec.js,
+// read-only-features.spec.js, loginToFreshSession below) mint their own
+// storage-less context via `browser.newContext()` directly, bypassing any
+// override of the built-in `context`/`page` fixtures. Wrapping the one
+// `newContext` every one of those calls through is the single choke point
+// that reaches all of them without relying on each spec to remember.
+const PRODUCTION_HOST_PATTERN = 'https://pixlstash.dev/**'
+
 /**
  * Read the SPA's per-tab client id from sessionStorage. This is the id
  * `apiClient` attaches as `X-Client-Id` on every mutating request, and the id
@@ -126,6 +139,21 @@ export async function loginToFreshSession(browser, baseURL) {
 }
 
 export const test = base.extend({
+  // Wrap the worker's single Browser so every context it ever mints - the
+  // built-in context/page fixtures AND the specs above that call
+  // browser.newContext() themselves - aborts any request to production.
+  // See PRODUCTION_HOST_PATTERN above for why this lives here rather than on
+  // the context fixture.
+  browser: async ({ browser }, use) => {
+    const newContext = browser.newContext.bind(browser)
+    browser.newContext = async (...args) => {
+      const context = await newContext(...args)
+      await context.route(PRODUCTION_HOST_PATTERN, (route) => route.abort())
+      return context
+    }
+    await use(browser)
+  },
+
   // The minted credentials object: { token, username, password }.
   // Playwright resolves a fixture's dependencies by parsing this destructuring
   // pattern, so a fixture that needs none must still be written `({}, use)`.

@@ -1,4 +1,7 @@
-import { test, expect } from "@playwright/test";
+// The shared fixture (not raw @playwright/test) so this context gets the
+// production-network block registered on the browser fixture (issue #1213),
+// even though the test itself uses no page objects from it.
+import { test, expect } from "../fixtures/test.js";
 
 // The dialog is a static table of key hints, so it has no unit coverage and
 // nothing else exercises it. This pins the two things that can actually

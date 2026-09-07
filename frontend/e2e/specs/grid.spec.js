@@ -1,4 +1,6 @@
-import { test, expect } from '@playwright/test'
+// The shared fixture (not raw @playwright/test) so this context gets the
+// production-network block registered on the browser fixture (issue #1213).
+import { test, expect } from '../fixtures/test.js'
 
 // Reference spec: drives the real app against the seeded test-data/ backend
 // through an authenticated owner session (minted in global-setup). Assertions
@@ -20,9 +22,10 @@ test.describe('image grid', () => {
     // The grid re-renders on picture websocket events (the e2e backend's
     // thumbnail-upgrade job emits a steady stream of them), which can swap the
     // card out between the actionability check and the click, swallowing it.
-    // Retry until the overlay is actually up. This spec stays on raw
-    // @playwright/test on purpose, so the retry is inline rather than borrowing
-    // the ImageOverlay page object.
+    // Retry until the overlay is actually up. This spec deliberately avoids
+    // page objects (the retry is inline rather than borrowing ImageOverlay),
+    // which is unrelated to importing `test` from the shared fixtures file
+    // above — that import is only for the production-network block.
     await expect(async () => {
       await page.locator('.thumbnail-card').first().click()
       await expect(overlay).toBeVisible({ timeout: 2_000 })

@@ -20,6 +20,11 @@ jobs:
   build:
     name: Build ${{ matrix.name }} image
     runs-on: ubuntu-latest
+    env:
+      # Declares the smoked container as ours (Server.DEV_MACHINE_ENV_VAR),
+      # forwarded into the container below with a bare `-e` so Docker reads
+      # the value from this job's environment. See issue #1213.
+      PIXLSTASH_TELEMETRY_DEV: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -89,6 +94,7 @@ jobs:
           # interface for the life of the job.
           docker run -d --name pixlstash-smoke \
             -e PIXLSTASH_HOST=0.0.0.0 \
+            -e PIXLSTASH_TELEMETRY_DEV \
             -p 127.0.0.1:19537:9537 \
             pixlstash:ci-smoke
 

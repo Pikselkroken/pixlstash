@@ -29,6 +29,12 @@ jobs:
   smoke:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    env:
+      # Declares this booted install as ours (see Server.DEV_MACHINE_ENV_VAR).
+      # scripts/smoke_install.py strips it before spawning the server, the
+      # same way it already strips PIXLSTASH_INSTALL_TYPE, so the assertion
+      # that a plain install reports install_type == "pip" stays exercised.
+      PIXLSTASH_TELEMETRY_DEV: '1'
     strategy:
       fail-fast: false
       matrix:
