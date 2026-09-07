@@ -1764,16 +1764,6 @@ The settings are per **library** rather than per user (`library_settings`,
 migration `0107`), because the tree holds *this* library's people and sets and
 two libraries publishing into one folder would overwrite each other.
 
-**The membership read selects two columns, not the `Picture` entity.**
-`collect_in_session` hands `publish` a list of `views_service.Member(id,
-file_path)` per entity, which is the whole of what naming and pointing a link
-needs. Loading the row instead costs the other ~50 columns *and* pins every
-picture in the session's identity map for the life of the read: measured on
-50,000 members of one set, 1.102 s and a 165.3 MB peak against 0.168 s and
-18.4 MB. `tests/test_views_links.py` asserts the emitted SQL's column list
-rather than the outcome, because selecting the entity back would still publish
-correctly.
-
 **The location decides everything, and it is validated before a byte is
 written.** The spike behind this is `docs/spikes/views-links.md`; the measured
 facts that shape the code:
