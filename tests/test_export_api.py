@@ -3,6 +3,7 @@
 import gc
 import json
 import os
+import sys
 import tempfile
 import time
 import unicodedata
@@ -155,6 +156,66 @@ def test_safe_archive_stem_preserves_legitimate_names():
     assert _safe_archive_stem("café shot", "fb") == "café shot"
     assert _safe_archive_stem("日本語", "fb") == "日本語"
     assert _safe_archive_stem("a-b_c.1", "fb") == "a-b_c.1"
+
+
+# The MS-DOS device names Win32 resolves ahead of the filesystem. Only the
+# ASCII spellings are here: the superscript ones the rewrite also covers
+# (``COM¹``) are defensive and are deliberately not claimed against the real OS.
+WINDOWS_DEVICE_NAMES = (
+    ["CON", "PRN", "AUX", "NUL"]
+    + [f"COM{digit}" for digit in range(1, 10)]
+    + [f"LPT{digit}" for digit in range(1, 10)]
+)
+
+
+@pytest.mark.parametrize("device", WINDOWS_DEVICE_NAMES)
+def test_safe_archive_stem_rewrites_windows_device_names(device):
+    """A picture called ``NUL`` must not export as a member Windows cannot hold.
+
+    Pure string behaviour, so it is checked on every platform: the rewrite is
+    what the Windows shards then prove is sufficient.
+    """
+    for spelling in (device, device.lower(), device.title()):
+        assert _safe_archive_stem(spelling, "fallback") == f"{spelling}_"
+        # An extension does not rescue the name - Win32 compares up to the
+        # first dot - so the rewrite has to land on that first segment.
+        assert _safe_archive_stem(f"{spelling}.tar", "fallback") == f"{spelling}_.tar"
+        # Trailing dots and spaces are stripped before the comparison.
+        assert _safe_archive_stem(f"{spelling}. ", "fallback") == f"{spelling}_"
+        assert _safe_archive_stem(f"{spelling} .tar", "fallback") == f"{spelling}_.tar"
+    # Not a device, and must not be mangled: the name only matches whole.
+    assert _safe_archive_stem(f"{device}sole", "fb") == f"{device}sole"
+    assert _safe_archive_stem(f"my {device}", "fb") == f"my {device}"
+    # An extension is never the reserved part: `report.aux` is an ordinary file.
+    assert _safe_archive_stem(device, "fb", is_extension=True) == device
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="Only Windows resolves these names as devices"
+)
+@pytest.mark.parametrize("device", WINDOWS_DEVICE_NAMES)
+def test_windows_really_loses_a_device_named_member_and_keeps_the_rewrite(
+    device, tmp_path
+):
+    """Ask the real OS rather than trusting the list above.
+
+    The un-rewritten name is the bug: on Windows the write is answered by the
+    device, so it succeeds (or raises) and no file appears in the folder - a
+    picture that left the export and never arrived. The rewritten name has to
+    be an ordinary file. The four Windows shards are what make this runnable.
+    """
+    try:
+        (tmp_path / f"{device}.jpg").write_bytes(b"picture")
+    except OSError:
+        pass
+    assert f"{device}.jpg" not in os.listdir(tmp_path), (
+        f"{device}.jpg became a real file on this Windows build, so it is not a "
+        "reserved device name here and does not belong in WINDOWS_DEVICE_NAMES."
+    )
+
+    rewritten = _safe_archive_stem(device, "fallback")
+    (tmp_path / f"{rewritten}.jpg").write_bytes(b"picture")
+    assert f"{rewritten}.jpg" in os.listdir(tmp_path)
 
 
 def test_unique_export_stem_never_hands_out_a_name_twice():
