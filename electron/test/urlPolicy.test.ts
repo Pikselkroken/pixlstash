@@ -202,13 +202,23 @@ describe('isBundledRendererPage — the setup screen, and only it', () => {
  * side closed by making "safe by omission" a machine fact
  * (`test_all_routes_declare_access_policy`). Deriving the set means a new
  * `setup:*` or `server:*` channel is covered the moment it exists.
+ *
+ * #1206 item 10: the pattern was `ipcMain.handle(\s*'`, which is three ways to
+ * be invisible to it - `handleOnce`, a double-quoted or backtick name, and a
+ * computed one. All three could be added at once and this file stayed green.
+ * The first two are read now; the third CANNOT be, so it is made loud rather
+ * than skipped (`every handler opener is read` below).
  */
+const NAMED_HANDLE = /ipcMain\.handle(?:Once)?\(\s*(['"`])([^'"`]+)\1/;
+/** The same opener with the channel name left unconstrained. */
+const ANY_HANDLE = /ipcMain\.handle(?:Once)?\(/;
+
 function ipcHandlers(main: string): Array<[string, string]> {
   const found: Array<[string, string]> = [];
-  const opener = /ipcMain\.handle\(\s*'([^']+)'/g;
+  const opener = new RegExp(NAMED_HANDLE.source, 'g');
   const starts: Array<[string, number]> = [];
   for (let m = opener.exec(main); m !== null; m = opener.exec(main)) {
-    starts.push([m[1], m.index]);
+    starts.push([m[2], m.index]);
   }
   starts.forEach(([channel, at], i) => {
     const end = i + 1 < starts.length ? starts[i + 1][1] : main.length;
@@ -264,6 +274,38 @@ describe('IPC gating is complete, not opt-in', () => {
   // __dirname is dist-test/test at run time; the sources are two levels up.
   const main = readFileSync(join(__dirname, '..', '..', 'src', 'main.ts'), 'utf8');
   const handlers = ipcHandlers(main);
+
+  // A channel name built at run time cannot be read out of the source, so it
+  // cannot be checked for a gate either. Refuse it here rather than let the
+  // sweep walk past it: this is the difference between a guardrail with a gap
+  // and one that says where the gap is.
+  it('every handler opener is read, so a computed channel name cannot hide', () => {
+    const total = main.match(new RegExp(ANY_HANDLE.source, 'g'))?.length ?? 0;
+    assert.equal(
+      handlers.length,
+      total,
+      `${total - handlers.length} ipcMain.handle call(s) name their channel with ` +
+        'something other than a plain string literal, so nothing here can tell ' +
+        'whether they are gated. Give the channel a literal name.',
+    );
+  });
+
+  it('reads handleOnce, double quotes and backticks', () => {
+    const synthetic = [
+      "ipcMain.handleOnce('once:channel', () => 1);",
+      'ipcMain.handle("double:quoted", () => 2);',
+      'ipcMain.handle(`backticked`, () => 3);',
+    ].join('\n');
+    assert.deepEqual(
+      ipcHandlers(synthetic).map(([c]) => c),
+      ['once:channel', 'double:quoted', 'backticked'],
+    );
+    // A computed name is an opener the sweep cannot name: zero handlers found,
+    // one opener present, which is exactly the discrepancy the count test reads.
+    const computed = 'ipcMain.handle(CHANNEL, () => 4);';
+    assert.equal(ipcHandlers(computed).length, 0);
+    assert.equal(computed.match(new RegExp(ANY_HANDLE.source, 'g'))?.length, 1);
+  });
 
   it('finds the handlers at all, so an empty sweep cannot pass vacuously', () => {
     const channels = handlers.map(([c]) => c);
