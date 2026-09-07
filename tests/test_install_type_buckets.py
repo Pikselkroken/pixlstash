@@ -37,6 +37,7 @@ too.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -259,6 +260,15 @@ def test_e2e_suite_blocks_the_production_host():
         "specs that call browser.newContext() directly (auth.spec.js, "
         "sharing.spec.js, read-only-features.spec.js) bypass the block"
     )
+    # Both fixtures, because neither alone reaches every context. UI mode
+    # (`npm run test:e2e:ui`) reuses one context, which the built-in `context`
+    # fixture obtains from `_newContextForReuse()` rather than from the
+    # wrapped `newContext` - so the browser wrapper alone leaves the mode a
+    # developer iterates in unblocked.
+    assert re.search(r"\n  context: async \(\{ context \}", source), (
+        "the route is no longer wired onto the context fixture, so Playwright "
+        "UI mode's reused context can reach production again"
+    )
 
 
 def _job(workflow: str, name: str) -> dict:
@@ -325,3 +335,56 @@ def test_the_docker_smoke_pins_real_container_detection():
     assert 'install_type" != "docker"' in run_steps or (
         "install_type" in run_steps and "docker" in run_steps
     ), "docker-build.yml's smoke no longer asserts the container reports docker"
+
+
+def test_marker_file_declares_dev_machine(isolate_the_machine):
+    """A marker file in the app-data directory declares a dev machine.
+
+    Release-candidate testing and packaged desktop builds launched from the OS
+    shell do not inherit the ``PIXLSTASH_TELEMETRY_DEV`` env var, so the marker
+    file provides a durable declaration that survives reinstalling and repackaging.
+    """
+    (isolate_the_machine / ".pixlstash-dev-machine").touch()
+    assert Server.detect_install_type() == "dev"
+
+
+def test_marker_file_absent_falls_back_to_detection(isolate_the_machine):
+    """Without a marker file or env var, install type is detected normally.
+
+    This ensures the marker file is truly optional and does not interfere with
+    normal install-type detection when not present.
+    """
+    assert not (isolate_the_machine / ".pixlstash-dev-machine").exists()
+    # Falls through to channel detection. Assert on what this test is about -
+    # the marker did not fire - rather than on which channel the runner
+    # happens to look like: the same suite runs under Docker in CI, where
+    # "pip" would be the wrong answer.
+    result = Server.detect_install_type()
+    assert result in Server.INSTALL_TYPES
+    assert result != "dev"
+
+
+def test_an_unreadable_app_data_path_is_said_out_loud(monkeypatch, tmp_path, caplog):
+    """A marker directory that cannot be read must warn, not read as "absent".
+
+    The errno matters, and it is not the obvious one: `Path.exists()` re-raises
+    a PermissionError, so an unreadable *directory* was never the silent case.
+    It swallows ENOENT, ENOTDIR, EBADF and ELOOP - so an app-data path that is
+    a FILE rather than a directory (or a symlink loop) reported "no marker" and
+    quietly turned a maintainer machine back into a counted install. That is
+    the case `stat()` surfaces and this pins.
+    """
+    not_a_directory = tmp_path / "app-data-is-a-file"
+    not_a_directory.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        "pixlstash.server.user_data_dir", lambda *a, **k: str(not_a_directory)
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = Server.detect_install_type()
+
+    assert result != "dev", "an unreadable path is not a declaration"
+    assert any("dev-machine marker" in r.message for r in caplog.records), (
+        "the fallback happened silently; a maintainer counted as a real "
+        "install is the cost, and nothing said so"
+    )
