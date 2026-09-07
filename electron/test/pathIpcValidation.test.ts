@@ -294,4 +294,34 @@ describe('the path-taking IPC handlers validate before they use the value', () =
       'validating the payload shape does not gate the capability',
     );
   });
+
+  /**
+   * `host` is written by `writeServerSettings` and read back by the *standalone*
+   * server, which binds `config["host"]` directly. The desktop backend ignores
+   * it unless `external_server_enabled` is set, so a one-way `if (enabled)
+   * cfg.host = '0.0.0.0'` left no visible trace here while leaving the shared
+   * config file saying "listen on every interface" after remote access was
+   * turned back off.
+   *
+   * Both directions, because writing the loopback default unconditionally would
+   * be the opposite regression - it would quietly stop remote access working.
+   */
+  it('writeServerSettings sets host both ways, not just on', () => {
+    const start = main.indexOf('async function writeServerSettings(');
+    assert.ok(start >= 0, 'writeServerSettings not found');
+    const body = main.slice(start, main.indexOf('\nfunction ', start));
+    assert.match(
+      body,
+      /cfg\.host = settings\.enabled \? '0\.0\.0\.0' : LOOPBACK_HOST;/,
+      'host must be assigned on both branches',
+    );
+    assert.doesNotMatch(
+      body,
+      /if \(settings\.enabled\) cfg\.host/,
+      'a one-way assignment leaves 0.0.0.0 in the config after remote access is turned off',
+    );
+    // And the off value is the one the backend itself writes into a fresh
+    // config, not a value invented in the desktop shell.
+    assert.match(main, /^const LOOPBACK_HOST = 'localhost';$/m);
+  });
 });
