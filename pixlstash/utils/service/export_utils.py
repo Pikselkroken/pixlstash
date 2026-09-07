@@ -37,23 +37,63 @@ logger = logging.getLogger(__name__)
 # export intact instead of being mangled into "caf_ shot.jpg".
 _UNSAFE_ARCNAME_CHARS_RE = re.compile(r'[\x00-\x1f\x7f<>:"|?*/\\]')
 
+# The MS-DOS device names Win32 still resolves ahead of the filesystem. A member
+# called ``NUL.jpg`` is not a file on Windows: the open succeeds and the bytes go
+# to the null device, so the picture leaves the export and never arrives - the
+# same silent loss as a name collision, from a picture whose only crime is being
+# called ``nul``. The rule, and why the match is shaped the way it is below:
+#
+# * case-insensitive, so ``nul`` and ``NuL`` are the device too;
+# * an extension does not help - ``NUL.jpg`` and ``NUL.tar.gz`` are both the
+#   device, because Win32 looks at the name up to the FIRST dot. That is why the
+#   rewrite goes on that first segment rather than on the end of the stem:
+#   ``NUL.tar`` -> ``NUL_.tar``, since ``NUL.tar_`` would still start ``NUL.``;
+# * trailing spaces and dots are stripped by path normalisation before the name
+#   is compared, so ``CON `` and ``CON.`` are the device as well. The caller's
+#   ``.strip(". ")`` below removes them from the whole candidate; the
+#   ``rstrip(" ")`` here covers the space that sits between the name and its
+#   extension, as in ``CON .tar``.
+#
+# The superscript spellings (``COM¹``) are here because Windows folds them onto
+# the digits; they are not asserted against the real OS in the gate, unlike the
+# ASCII names, so they are defensive rather than measured.
+_WINDOWS_DEVICE_NAME_RE = re.compile(
+    r"(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])\Z",
+    re.IGNORECASE,
+)
 
-def _safe_archive_stem(name: str, fallback: str) -> str:
+
+def _safe_archive_stem(name: str, fallback: str, *, is_extension: bool = False) -> str:
     """Reduce *name* to a single, safe zip member name component.
 
     Args:
         name: The candidate name, typically a stored ``original_file_name``.
         fallback: Component to use when *name* sanitises to nothing.
+        is_extension: The result is an extension rather than the leading
+            component. Skips the reserved-device rewrite, which applies only to
+            the name up to the first dot: ``report.aux`` is an ordinary file and
+            must not be exported as ``report.aux_``.
 
     Returns:
-        A bare filename component with no path separators, no leading dots and
-        no drive letter, safe to place in a zip member name.
+        A bare filename component with no path separators, no leading dots, no
+        drive letter and no MS-DOS device name, safe to place in a zip member
+        name and to write as a file on Windows.
     """
     # Take the last component under both separators: a Windows-style name
     # ("..\\..\\evil") keeps no basename on POSIX, so split on both.
     candidate = str(name or "").replace("\\", "/").rsplit("/", 1)[-1]
     candidate = _UNSAFE_ARCNAME_CHARS_RE.sub("_", candidate).strip(". ")
-    return candidate or fallback
+    candidate = candidate or fallback
+    if not is_extension:
+        head, dot, tail = candidate.partition(".")
+        head = head.rstrip(" ")
+        if _WINDOWS_DEVICE_NAME_RE.fullmatch(head):
+            # A trailing underscore can never itself be a device name, so the
+            # rewrite is stable and one-to-one; a picture genuinely called
+            # "NUL_" collides with it and is separated by _unique_export_stem,
+            # which every stem goes through next.
+            candidate = f"{head}_{dot}{tail}"
+    return candidate
 
 
 def _unique_export_stem(stem: str, claimed: dict) -> str:
@@ -641,7 +681,9 @@ class ExportUtils:
                         # cannot escape the extraction directory.
                         orig_stem = _safe_archive_stem(orig_stem, f"image_{idx:05d}")
                         file_ext = _safe_archive_stem(
-                            orig_ext or ext, ext.lstrip(".") or "bin"
+                            orig_ext or ext,
+                            ext.lstrip(".") or "bin",
+                            is_extension=True,
                         )
                         file_ext = f".{file_ext.lstrip('.')}"
                         name_stem = _unique_export_stem(orig_stem, used_names)

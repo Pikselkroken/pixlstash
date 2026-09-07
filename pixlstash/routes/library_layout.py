@@ -159,7 +159,9 @@ class MigrationFolder(BaseModel):
 
     A row is here when anything about it is non-zero, so a folder that only
     ever holds subfolders is absent rather than listed empty. The library root
-    itself is never a row: it is the thing every `path` is relative to.
+    is a row under that same rule (`path: ""`, #1161): pictures the layout
+    cannot place stay in it, and a tree that drew every folder but that one
+    read as "nothing stayed behind".
     """
 
     model_config = ConfigDict(
@@ -189,8 +191,9 @@ class MigrationFolder(BaseModel):
     depth: int = Field(
         description=(
             "How far below the library root this sits: `0` for a top-level "
-            "folder, `1` for one nested inside it. The root has no row of its "
-            "own, so a depth of `0` is the first level the owner sees."
+            "folder, `1` for one nested inside it, and `0` for the root's own "
+            'row (`path: ""`). It is the folder\'s true depth, not an indent - '
+            "see `tree`."
         )
     )
     have: int = Field(
@@ -257,9 +260,14 @@ class MigrationPreviewResponse(BaseModel):
             "not a sample: a library filed by date has hundreds of folders "
             "leaving, and each one is a row the owner may need to check. "
             "**Ordered by path**, so a parent listed here comes immediately "
-            "before its children and the tree can be drawn by indenting on "
-            "`depth`. A parent can be missing from it: a folder that only ever "
-            "holds subfolders has nothing to count and is not a row."
+            "before its children. A parent can be missing from it: a folder "
+            "that only ever holds subfolders has nothing to count and is not a "
+            "row - and under a multi-level layout most rows are such orphans. "
+            "`depth` is therefore the folder's true depth, not a drawing "
+            "instruction: a client that indents on it alone draws a tree whose "
+            "rows do not say whose they are. **`path` is what carries the "
+            'structure**; see `docs/frontend_architecture.md` ("The tree is '
+            'the argument") for how the dialog draws it.'
         ),
     )
 
@@ -433,8 +441,10 @@ def create_router(server) -> APIRouter:
             "that one included.\n\n"
             "`tree` is the same answer drawn rather than counted: one row per "
             "folder, with what it holds now, what would arrive, what would "
-            "leave, and whether it exists yet. Path-ordered so it can be drawn "
-            "by indenting on `depth`.\n\n"
+            "leave, and whether it exists yet. Path-ordered, and a folder with "
+            "nothing to count is not a row at all, so a row's parent is often "
+            "absent and `path` rather than `depth` is what says where the row "
+            "sits.\n\n"
             "A picture the layout cannot place, because nothing files it, is in "
             "none of those counts and does not move unless `sweep_unfiled` is "
             "true, which puts every one of them in the unfiled folder "
