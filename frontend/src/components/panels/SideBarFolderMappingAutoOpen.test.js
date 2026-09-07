@@ -100,7 +100,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   isReadOnly.value = false;
   sessionContext.value = null;
-  apiGet.mockReset().mockImplementation((url) => Promise.resolve(respond(url)));
+  apiGet.mockReset().mockImplementation(() => Promise.resolve(respond()));
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -260,7 +260,7 @@ describe("the loose-pictures offer for an empty library", () => {
         ? new Promise((resolve) => {
             answer = () => resolve({ data: { picture_count: 12 } });
           })
-        : Promise.resolve(respond(url)),
+        : Promise.resolve(respond()),
     );
     const wrapper = await mountSidebar();
 
@@ -335,7 +335,7 @@ describe("the loose-pictures offer for an empty library", () => {
     apiGet.mockImplementation((url) =>
       url.includes("inspect")
         ? Promise.resolve({ data: { picture_count: 12 } })
-        : Promise.resolve(respond(url)),
+        : Promise.resolve(respond()),
     );
     const wrapper = await mountSidebar();
 
@@ -373,7 +373,7 @@ describe("the loose-pictures offer for an empty library", () => {
     apiGet.mockImplementation((url) =>
       url.includes("inspect")
         ? Promise.resolve({ data: { picture_count: 12 } })
-        : Promise.resolve(respond(url)),
+        : Promise.resolve(respond()),
     );
     const wrapper = await mountSidebar();
 
@@ -406,7 +406,7 @@ describe("the loose-pictures offer for an empty library", () => {
         inspect();
         return Promise.resolve({ data: { picture_count: 12 } });
       }
-      return Promise.resolve(respond(url));
+      return Promise.resolve(respond());
     });
     const wrapper = await mountSidebar();
 
@@ -438,7 +438,7 @@ describe("the loose-pictures offer for an empty library", () => {
         inspect();
         return Promise.resolve({ data: { picture_count: 12 } });
       }
-      return Promise.resolve(respond(url));
+      return Promise.resolve(respond());
     });
     const wrapper = await mountSidebar();
 
@@ -470,7 +470,7 @@ describe("the loose-pictures offer for an empty library", () => {
     apiGet.mockImplementation((url) =>
       url.includes("inspect")
         ? Promise.resolve({ data: { picture_count: 12 } })
-        : Promise.resolve(respond(url)),
+        : Promise.resolve(respond()),
     );
     const wrapper = await mountSidebar();
 

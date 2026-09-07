@@ -385,20 +385,35 @@ class Server(
             )
             return "dev"
 
-        # Check for marker file in app-data directory
+        # The same declaration, made durably: an env var is not inherited by a
+        # packaged app launched from the OS shell, and does not survive a
+        # reinstall. `stat` rather than `exists`, because `exists` reports an
+        # unreadable app-data directory and an absent marker identically - and
+        # those mean opposite things here. An unreadable one silently turns a
+        # maintainer's install back into a counted one, which is the whole
+        # failure this check exists to prevent, so it is said out loud.
+        marker_file = Path(user_data_dir("pixlstash")) / ".pixlstash-dev-machine"
         try:
-            app_data_dir = user_data_dir("pixlstash")
-            marker_file = Path(app_data_dir) / ".pixlstash-dev-machine"
-            if marker_file.exists():
-                logger.info(
-                    "Found dev machine marker file at %s; reporting install_type='dev'.",
-                    marker_file,
-                )
-                return "dev"
-        except Exception as e:
+            marker_file.stat()
+            declared = True
+        except FileNotFoundError:
+            declared = False
+        except OSError as exc:
+            declared = False
             logger.warning(
-                "Could not check for dev machine marker file: %s", e, exc_info=True
+                "Could not read the dev-machine marker at %s (%s). Falling back "
+                "to automatic detection: if this IS a maintainer machine, its "
+                "check-ins will be counted as a real install until the "
+                "directory is readable again.",
+                marker_file,
+                exc,
             )
+        if declared:
+            logger.info(
+                "Found dev machine marker file at %s; reporting install_type='dev'.",
+                marker_file,
+            )
+            return "dev"
 
         override = os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower()
         if override:

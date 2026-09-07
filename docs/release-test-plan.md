@@ -56,9 +56,11 @@ Perform on a **clean machine/VM** (no prior PixlStash install, no existing
 `vault.db`). CI builds all of these artifacts but never runs them — this
 section is the only place they are executed.
 
-**For release-candidate testing:** on a machine you use to test RC builds, `touch`
-the marker file in the app-data directory so the version-check data correctly
-excludes your installs from the real active-install count. The path is
+**For release-candidate testing:** on a machine you use to test RC builds,
+create an empty marker file in the app-data directory so the version-check data
+correctly excludes your installs from the real active-install count. Its
+contents are never read, only its existence, so any way of making the file will
+do (`touch` on Linux and macOS, `type nul >` or New-Item on Windows). The path is
 `~/.local/share/pixlstash/.pixlstash-dev-machine` on Linux,
 `~/Library/Application Support/pixlstash/.pixlstash-dev-machine` on macOS, and
 `%LOCALAPPDATA%\pixlstash\pixlstash\.pixlstash-dev-machine` on Windows (adjust
