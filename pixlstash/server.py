@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from importlib.metadata import PackageNotFoundError, version as package_version
 from alembic.util.exc import CommandError as AlembicCommandError
-from platformdirs import user_config_dir
+from platformdirs import user_config_dir, user_data_dir
 from sqlalchemy.exc import SQLAlchemyError
 
 
@@ -360,9 +360,12 @@ class Server(
 
         Resolution order:
 
-        0. :data:`DEV_MACHINE_ENV_VAR` - declares the *machine* rather than the
-           channel, so it outranks everything below it. Reported as ``dev``,
-           which the metrics collector subtracts from active installs.
+        0. :data:`DEV_MACHINE_ENV_VAR` or dev marker file - declares the *machine*
+           rather than the channel, so it outranks everything below it. Reported
+           as ``dev``, which the metrics collector subtracts from active installs.
+           The machine is declared if either ``PIXLSTASH_TELEMETRY_DEV`` env var
+           is truthy or a ``.pixlstash-dev-machine`` marker file exists in the
+           app-data directory.
         1. ``PIXLSTASH_INSTALL_TYPE`` override - if set to one of the allowed
            values it wins outright, letting an installer declare its channel
            (e.g. ``other`` for the Windows build) without a code change. An
@@ -381,6 +384,21 @@ class Server(
                 dev_marker,
             )
             return "dev"
+
+        # Check for marker file in app-data directory
+        try:
+            app_data_dir = user_data_dir("pixlstash")
+            marker_file = Path(app_data_dir) / ".pixlstash-dev-machine"
+            if marker_file.exists():
+                logger.info(
+                    "Found dev machine marker file at %s; reporting install_type='dev'.",
+                    marker_file,
+                )
+                return "dev"
+        except Exception as e:
+            logger.warning(
+                "Could not check for dev machine marker file: %s", e, exc_info=True
+            )
 
         override = os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower()
         if override:

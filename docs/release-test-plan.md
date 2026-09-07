@@ -56,6 +56,14 @@ Perform on a **clean machine/VM** (no prior PixlStash install, no existing
 `vault.db`). CI builds all of these artifacts but never runs them — this
 section is the only place they are executed.
 
+**For release-candidate testing:** on a machine you use to test RC builds, `touch`
+the marker file in the app-data directory so the version-check data correctly
+excludes your installs from the real active-install count. The path is
+`~/.local/share/pixlstash/.pixlstash-dev-machine` on Linux,
+`~/Library/Application Support/pixlstash/.pixlstash-dev-machine` on macOS, and
+`%APPDATA%\pixlstash\.pixlstash-dev-machine` on Windows (adjust the home-directory
+reference for the user running the test).
+
 ### 1.1 pip + venv (PyPI)
 
 Requires Python 3.11+.
