@@ -572,8 +572,11 @@ def test_pictures_export_folder_refuses_when_the_watch_folders_are_unreadable():
         def _explode(_vault):
             raise LibraryRootsUnavailable("test-induced import folder read failure")
 
+        # Patched where the shared blocklist reads it (`utils.library_roots`),
+        # not in this route: the route stopped building its own list when the
+        # three partial copies were folded into one (#1206 item 1).
         with mock.patch(
-            "pixlstash.routes.pictures._export.get_import_folder_paths", _explode
+            "pixlstash.utils.library_roots.get_import_folder_paths", _explode
         ):
             resp = client.post(
                 "/pictures/export/folder", params={"destination": destination}

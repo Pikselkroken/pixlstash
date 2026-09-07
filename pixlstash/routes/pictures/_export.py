@@ -14,8 +14,7 @@ from pydantic import BaseModel, ConfigDict
 from typing import Optional
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.config_service import get_import_folder_paths
-from pixlstash.utils.path_utils import LibraryRootsUnavailable, path_is_within
+from pixlstash.utils.library_roots import refuse_path_inside_a_library
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 
 
@@ -200,77 +199,19 @@ def register_routes(router, server):
         # so it is not deduplicated, and a folder carrying
         # `delete_after_import` then os.remove()s the file it has just
         # imported - so the export destroys its own output.
+        #
+        # The roots are the shared list in `utils.library_roots`, not a copy:
+        # this route grew the complete one while `POST /import-folders` and the
+        # reference-folder routes kept partial ones, which is what #1206 item 1
+        # asked to be fixed by having one list.
         vault = request.state.library_lease.vault
-        library_roots = [getattr(vault, "image_root", None)]
-        # Both lists are a *blocklist* here, so a list that cannot be read must
-        # refuse. Treating either as empty turns the check off silently and
-        # lets the destination land in the very folder it exists to keep the
-        # export out of (#1177 item 59 and its import-folder sibling).
-        try:
-            library_roots.extend(vault.reference_folder_roots())
-            library_roots.extend(get_import_folder_paths(vault))
-            # Every OTHER registered library is the same hazard as this one.
-            # A library's folder IS its image_root (it is where `vault.db`
-            # lives), so an export written into one comes back as new pictures
-            # the moment that library is opened - and this route only ever sees
-            # the active lease's vault, so nothing above notices. Registered
-            # paths are all that is read: another library's reference and watch
-            # folders live in ITS vault, which is not open here, and opening
-            # someone else's vault to answer an export question is a worse
-            # trade than the narrower check. Attached libraries only - a
-            # detached one is not being read by anything, and the refusal below
-            # speaks of "your library".
-            library_roots.extend(
-                library.path for library in server.library_registry.list_libraries()
-            )
-        except LibraryRootsUnavailable as exc:
-            logger.warning(
-                "Refusing the folder export to %s: a library root list could "
-                "not be read, so the destination cannot be shown to be "
-                "outside the library: %s",
-                resolved_destination,
-                exc,
-            )
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "PixlStash could not check your reference folders and "
-                    "watched folders just now, so it cannot confirm this "
-                    "destination is outside your library. Try again in a "
-                    "moment."
-                ),
-            ) from exc
-        except Exception as exc:
-            # The registry read is the same blocklist discipline: a list that
-            # cannot be read must refuse, because an empty answer reads as
-            # "there are no other libraries to protect".
-            logger.warning(
-                "Refusing the folder export to %s: the library registry could "
-                "not be read, so the destination cannot be shown to be outside "
-                "every library: %s",
-                resolved_destination,
-                exc,
-            )
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "PixlStash could not check your libraries just now, so it "
-                    "cannot confirm this destination is outside them. Try "
-                    "again in a moment."
-                ),
-            ) from exc
-        for root in library_roots:
-            if root and path_is_within(resolved_destination, root):
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "That folder is part of your library - PixlStash "
-                        "reads it - so everything exported into it would be "
-                        "imported straight back in. Choose a folder outside "
-                        "this library, its reference folders and its import "
-                        "folders, and outside any other library's folder."
-                    ),
-                )
+        refuse_path_inside_a_library(
+            resolved_destination,
+            server,
+            vault,
+            # 400 since #1177; the sibling callers answer 409.
+            status_code=400,
+        )
         # A folder export writes plain files, unlike a ZIP: a name that
         # collides with something already in the destination is silently
         # overwritten (shutil.copy2 / open(..., "w") don't refuse). Requiring
