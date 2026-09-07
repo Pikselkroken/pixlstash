@@ -209,9 +209,20 @@ describe('isBundledRendererPage — the setup screen, and only it', () => {
  * The first two are read now; the third CANNOT be, so it is made loud rather
  * than skipped (`every handler opener is read` below).
  */
-const NAMED_HANDLE = /ipcMain\.handle(?:Once)?\(\s*(['"`])([^'"`]+)\1/;
+/**
+ * Whitespace or a comment. TypeScript allows either between the method name
+ * and its `(`, so a handler registered with a block or line comment sitting in
+ * that gap is invisible to BOTH patterns below - the opener count would agree
+ * with the named count and nothing would go red. Same silent bypass as item
+ * 10, one token further along. (Not written out as an example here: the
+ * example's own comment terminator would end this one.)
+ */
+const OPENER_GAP = '(?:\\s|/\\*[\\s\\S]*?\\*/|//[^\\n]*\\n)*';
+const NAMED_HANDLE = new RegExp(
+  `ipcMain\\.handle(?:Once)?${OPENER_GAP}\\(\\s*(['"\`])([^'"\`]+)\\1`,
+);
 /** The same opener with the channel name left unconstrained. */
-const ANY_HANDLE = /ipcMain\.handle(?:Once)?\(/;
+const ANY_HANDLE = new RegExp(`ipcMain\\.handle(?:Once)?${OPENER_GAP}\\(`);
 
 function ipcHandlers(main: string): Array<[string, string]> {
   const found: Array<[string, string]> = [];
@@ -305,6 +316,28 @@ describe('IPC gating is complete, not opt-in', () => {
     const computed = 'ipcMain.handle(CHANNEL, () => 4);';
     assert.equal(ipcHandlers(computed).length, 0);
     assert.equal(computed.match(new RegExp(ANY_HANDLE.source, 'g'))?.length, 1);
+  });
+
+  it('reads an opener with a comment before its paren', () => {
+    // TypeScript allows a comment between the method name and `(`. Before this
+    // it hid the handler from the named sweep AND from the opener count, so
+    // the two agreed and the "cannot hide" test above stayed green - a silent
+    // bypass rather than a loud one. Built from pieces so this file does not
+    // contain a comment terminator that would end its own.
+    const block = '/' + '* hidden *' + '/';
+    const commented = [
+      `ipcMain.handle${block}('block:commented', () => 1);`,
+      'ipcMain.handleOnce // trailing\n(\'line:commented\', () => 2);',
+    ].join('\n');
+    assert.deepEqual(
+      ipcHandlers(commented).map(([c]) => c),
+      ['block:commented', 'line:commented'],
+    );
+    // And a computed name hidden the same way is still counted as an opener,
+    // so it fails loudly instead of vanishing.
+    const hidden = `ipcMain.handle${block}(CHANNEL, () => 3);`;
+    assert.equal(ipcHandlers(hidden).length, 0);
+    assert.equal(hidden.match(new RegExp(ANY_HANDLE.source, 'g'))?.length, 1);
   });
 
   it('finds the handlers at all, so an empty sweep cannot pass vacuously', () => {

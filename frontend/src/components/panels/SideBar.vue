@@ -994,9 +994,9 @@ async function referenceFolderSaved(savedFolder = null) {
 
 async function referenceFolderDeleted() {
   closeReferenceFolderEditor();
-  // If we were browsing this folder, clear the selection
-  selectedFolderKey.value = null;
-  selectedFolderReferenceId.value = null;
+  // If we were browsing this folder, clear the selection. The editor's delete
+  // button is the other way into #1206 item 12 - same leak, different entry.
+  clearFolderSelection();
   emit("select-folder", null);
   sidebarStore.folderScanning = false;
   await fetchReferenceFolders();
@@ -1036,8 +1036,7 @@ async function importFolderSaved() {
     (entry) => Number(entry.id) === selectedId,
   );
   if (!selectedImportFolder) {
-    selectedFolderKey.value = null;
-    selectedFolderReferenceId.value = null;
+    clearFolderSelection();
     emit("select-folder", null);
     sidebarStore.folderScanning = false;
     return;
@@ -1056,8 +1055,7 @@ async function importFolderDeleted() {
     Number.isFinite(deletedId) &&
     selectedFolderKey.value === `if-${deletedId}`
   ) {
-    selectedFolderKey.value = null;
-    selectedFolderReferenceId.value = null;
+    clearFolderSelection();
     emit("select-folder", null);
     sidebarStore.folderScanning = false;
   }
@@ -2561,6 +2559,22 @@ async function deleteSetsByIds(ids) {
   }
 }
 
+/** Forget the sidebar's folder selection - all four pieces of it.
+ *
+ * They are written together by `handleFolderNodeSelect` and must be cleared
+ * together. Clearing a subset leaves state the UI cannot show but the route
+ * watcher still reads: after a delete, `selectedFolderRouteKey` has already
+ * changed, so the watcher's `=== oldKey` guard never matches and a leftover
+ * `selectedFolderPath` / `selectedFolderSubPath` is never collected. Both
+ * delete branches used to clear two of the four (#1206 item 12).
+ */
+function clearFolderSelection() {
+  selectedFolderKey.value = null;
+  selectedFolderReferenceId.value = null;
+  selectedFolderPath.value = null;
+  selectedFolderSubPath.value = null;
+}
+
 async function deleteReferenceFolderById(id) {
   const folder = referenceFolders.value.find((rf) => rf.id === id);
   if (!folder) return;
@@ -2576,8 +2590,7 @@ async function deleteReferenceFolderById(id) {
     // import-folder branch below is the shape this now copies - all four
     // pieces of the selection, not just the key.
     if (_folderId(selectedFolderReferenceId.value) === id) {
-      selectedFolderKey.value = null;
-      selectedFolderReferenceId.value = null;
+      clearFolderSelection();
       emit("select-folder", null);
       sidebarStore.folderScanning = false;
     }
@@ -2599,8 +2612,7 @@ async function deleteImportFolderById(id) {
   try {
     await deleteFolder("import", id);
     if (selectedFolderKey.value === `if-${id}`) {
-      selectedFolderKey.value = null;
-      selectedFolderReferenceId.value = null;
+      clearFolderSelection();
       emit("select-folder", null);
       sidebarStore.folderScanning = false;
     }
@@ -4165,10 +4177,7 @@ watch(
     if (!newKey) {
       // Route left a folder view - clear the sidebar's folder highlight.
       if (oldKey && selectedFolderRouteKey.value === oldKey) {
-        selectedFolderKey.value = null;
-        selectedFolderReferenceId.value = null;
-        selectedFolderPath.value = null;
-        selectedFolderSubPath.value = null;
+        clearFolderSelection();
       }
       return;
     }
