@@ -49,6 +49,32 @@ from pixlstash.server import Server
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VERSION_CHECK_JS = REPO_ROOT / "frontend" / "src" / "composables" / "useVersionCheck.js"
 WORKER_VALIDATE_JS = REPO_ROOT / "website" / "telemetry-worker" / "src" / "validate.js"
+
+
+@pytest.fixture(autouse=True)
+def isolate_the_machine(tmp_path, monkeypatch):
+    """Cut every test in this file off from the developer's own machine.
+
+    ``detect_install_type()`` reads the dev-machine marker out of
+    ``user_data_dir("pixlstash")`` at priority 0, ahead of the
+    ``PIXLSTASH_INSTALL_TYPE`` override - so on a machine that actually has
+    the marker, every channel assertion below returns ``"dev"`` and nine of
+    these tests fail. That machine is not hypothetical: it is precisely the
+    maintainer box the release checklist tells you to create the marker on.
+
+    CI cannot catch this - a runner has neither the marker nor the env var -
+    so the isolation has to be here. Points the probe at an empty per-test
+    directory and clears both declaring variables; a test that wants either
+    sets it itself afterwards.
+    """
+    monkeypatch.setattr(
+        "pixlstash.server.user_data_dir", lambda *args, **kwargs: str(tmp_path)
+    )
+    monkeypatch.delenv(Server.DEV_MACHINE_ENV_VAR, raising=False)
+    monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
+    return tmp_path
+
+
 MANIFEST_DIR = REPO_ROOT / "website" / "latest-version"
 
 
@@ -286,3 +312,30 @@ def test_app_booting_workflows_declare_themselves_dev():
         "docker-build.yml declares the marker but no longer forwards it into "
         "the smoked container"
     )
+
+
+def test_marker_file_declares_dev_machine(isolate_the_machine):
+    """A marker file in the app-data directory declares a dev machine.
+
+    Release-candidate testing and packaged desktop builds launched from the OS
+    shell do not inherit the ``PIXLSTASH_TELEMETRY_DEV`` env var, so the marker
+    file provides a durable declaration that survives reinstalling and repackaging.
+    """
+    (isolate_the_machine / ".pixlstash-dev-machine").touch()
+    assert Server.detect_install_type() == "dev"
+
+
+def test_marker_file_absent_falls_back_to_detection(isolate_the_machine):
+    """Without a marker file or env var, install type is detected normally.
+
+    This ensures the marker file is truly optional and does not interfere with
+    normal install-type detection when not present.
+    """
+    assert not (isolate_the_machine / ".pixlstash-dev-machine").exists()
+    # Falls through to channel detection. Assert on what this test is about -
+    # the marker did not fire - rather than on which channel the runner
+    # happens to look like: the same suite runs under Docker in CI, where
+    # "pip" would be the wrong answer.
+    result = Server.detect_install_type()
+    assert result in Server.INSTALL_TYPES
+    assert result != "dev"
