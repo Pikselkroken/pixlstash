@@ -516,9 +516,9 @@ class Vault:
         this list is used for want opposite behaviour from the same value:
         :func:`~pixlstash.services.scrapheap_service.remove_picture_files`
         treats it as an *allowlist* of places a purge may delete from, where
-        empty is safe, while the folder-export destination check and
-        ``views_service`` treat it as a *blocklist* of places nothing may be
-        written to, where empty silently permits what it exists to refuse
+        empty is safe, while the folder-export destination check treats it as
+        a *blocklist* of places nothing may be written to, where empty silently
+        permits what it exists to refuse
         (#1177 item 59). Returning ``()`` on error therefore fails closed for
         one caller and open for the other. Only the caller knows which
         direction is safe, so the error is made distinguishable from "no

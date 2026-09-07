@@ -60,14 +60,12 @@ _DEFAULT_MAX_ATTACHMENT_MB = 50
 class ProjectCreateRequest(BaseModel):
     name: str
     description: Optional[str] = None
-    cover_image_path: Optional[str] = None
     extra_metadata: Optional[str] = None
 
 
 class ProjectUpdateRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    cover_image_path: Optional[str] = None
     extra_metadata: Optional[str] = None
 
 
@@ -77,7 +75,6 @@ class ProjectResponse(BaseModel):
     id: int
     name: str
     description: Optional[str] = None
-    cover_image_path: Optional[str] = None
     extra_metadata: Optional[str] = None
     created_at: Optional[datetime] = None
     image_count: Optional[int] = PydanticField(
@@ -278,7 +275,6 @@ def create_router(server) -> APIRouter:
                     "id": p.id,
                     "name": p.name,
                     "description": p.description,
-                    "cover_image_path": p.cover_image_path,
                     "extra_metadata": p.extra_metadata,
                     "created_at": p.created_at,
                     "image_count": (
@@ -371,7 +367,6 @@ def create_router(server) -> APIRouter:
             project = Project(
                 name=normalized_name,
                 description=payload.description,
-                cover_image_path=payload.cover_image_path,
                 extra_metadata=payload.extra_metadata,
                 created_at=datetime.utcnow(),
             )
@@ -527,8 +522,6 @@ def create_router(server) -> APIRouter:
                 project.name = normalized_name
             if payload.description is not None:
                 project.description = payload.description
-            if payload.cover_image_path is not None:
-                project.cover_image_path = payload.cover_image_path
             if payload.extra_metadata is not None:
                 project.extra_metadata = payload.extra_metadata
             session.add(project)

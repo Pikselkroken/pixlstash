@@ -1,5 +1,15 @@
 # Spike: can PixlStash Views be built out of links?
 
+> **The feature this was written for is gone (PixlStash Views, withdrawn
+> 2026-09-07: it was never wired into the app). The measurements are not.**
+> Everything below is a property of the filesystems, not of Views — exFAT and
+> VFAT have neither symlinks nor hard links, a hard link never crosses a device,
+> Windows symlink creation needs Developer Mode or administrator — and any future
+> feature that wants to link rather than copy meets the same four walls. Kept so
+> nobody has to reformat a volume to learn them again. `pixlstash/services/
+> views_service.py`, the code this describes, no longer exists; read the numbers,
+> not the API.
+
 > **Verdict: yes, with one constraint that changes the design — the *view root's*
 > filesystem decides everything, and it is the owner's choice, so a location that
 > cannot hold the tree is refused by name instead of being half-written.**

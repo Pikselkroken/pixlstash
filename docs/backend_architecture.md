@@ -1745,108 +1745,6 @@ the sentence above as covering them.
   `_validated_destination`, and contains every pack relpath with
   `resolve_path_within` against both roots before it removes a source tree.
 
-### PixlStash Views: the library as folders of links (v1.11 Phase 7)
-
-`pixlstash/services/views_service.py` publishes the library's sets, people and
-projects as a folder tree whose every file is a **link** to the picture where the
-owner already keeps it. Nothing is copied, no original is moved, and deleting the
-whole tree loses nothing — a picture in three projects appears in three view
-folders and its one real file never moves. **Views are additional to the owner's
-tree, never a replacement for it.** Off by default: `LibrarySettings.views_root`
-is NULL until the owner names a folder, and nothing is written until then.
-
-Two routes, both `LOCAL_OWNER_ONLY` (§16.3): `GET /server-config/views` reports
-the folder and kinds, `PATCH /server-config/views` records them and rebuilds.
-Saving *is* rebuilding — a full re-derive of 50,000 links measures 0.46 s to
-create and 0.34 s to remove, so an incremental path would be a correctness risk
-bought for nothing, and "Rebuild now" is the same PATCH with the current values.
-The settings are per **library** rather than per user (`library_settings`,
-migration `0107`), because the tree holds *this* library's people and sets and
-two libraries publishing into one folder would overwrite each other.
-
-**The location decides everything, and it is validated before a byte is
-written.** The spike behind this is `docs/spikes/views-links.md`; the measured
-facts that shape the code:
-
-- Link support belongs to the **view root's** filesystem, not the library's. A
-  symlink is a stored path and crosses devices happily (measured ext4 → a
-  separate NVMe), so a library on a NAS or an external drive is fine as long as
-  the tree lands somewhere with links.
-- **exFAT and VFAT have neither** symlinks nor hard links (`EPERM` on both,
-  measured on freshly formatted volumes). A hard link is therefore *not* the
-  fallback for the external-drive case.
-- A hard link never crosses a device (`EXDEV`, measured against three real
-  drives) and keeps a deleted original's bytes alive under the views folder. It
-  is used only same-device, only when symlinks are unavailable — the
-  Windows-without-Developer-Mode case.
-- Windows symlink creation needs `SeCreateSymbolicLinkPrivilege`. `probe_link_support`
-  **asks** the chosen directory by attempting one link rather than predicting it,
-  and `tests/test_views_links.py::test_this_filesystem_offers_a_link_mode` is
-  that probe running under the gate, so the Windows shards report the real answer
-  on every run.
-
-`check_views_root` refuses four locations by name rather than half-writing a
-tree, and each refusal is a measured failure:
-
-| Refused location | Why |
-|---|---|
-| Inside the library root | `library_backup_service._validate_regular_file` raises `Refusing symlinked library payload`, so backups would fail outright |
-| Overlapping any **other registered** library | The same failure in a library that is not open. Since v1.11 the owner registers several from Settings, so the active `image_root` is no longer the whole answer; the roots come from the hub registry via the route, because this vault cannot see them |
-| Inside a reference folder | `os.walk` lists symlinked *files* (only symlinked *directories* are skipped), so the scan would index every link as a second copy of the picture |
-| Containing the library or a reference folder | The same two problems from the other side |
-| A cloud-sync folder | The client follows a link and uploads the file's content, duplicating the library into the owner's quota. **A precaution, not a measurement** — no sync client was available to the spike, and the refusal exists so the answer never has to be known. Detected by the client's in-tree marker (`.dropbox.cache`, `.tmp.driveupload`, …) or the sync folder's name, and the ancestor walk stops **below** `$HOME`: `~/.dropbox` is the client's *config*, not a sync root, and treating it as one refused every path a Dropbox user could pick |
-
-`reference_folder_scan_task` additionally prunes any directory carrying the
-`.pixlstash-views` marker, because a folder can be registered as a reference
-folder *after* a tree was published inside it. **It remembers the pruned roots
-rather than merely skipping them**, and subtracts them from `removed_paths`:
-"absent from `disk_paths`" is what that task **hard-deletes** a `Picture` row
-for — tags, scores and memberships with it — so pruning alone would have turned a
-marker file appearing over an indexed folder into a silent library deletion, a
-far worse failure than the double-indexing the prune exists to prevent.
-
-**The rebuild deletes links, never last copies.** `shutil.rmtree` is not
-link-aware — it removes a regular file as happily as a symlink — so a rebuild
-built on it would destroy anything the owner dropped into a view folder, which is
-precisely the gesture every line of this feature's copy invites. `_prune`
-therefore decides per entry, on an exact test rather than a heuristic: a symlink
-goes (it is a path), a regular file with `st_nlink > 1` goes (another name for
-those bytes exists, which is what a hard link into the library is), and
-**anything else stays** and is reported to the owner as `kept_by_owner`. A
-directory is `rmdir`-ed bottom-up, so it survives exactly when something inside
-it did. Nothing descends a symlinked directory: a symlink standing where a kind
-folder goes is removed *as a link*, which is what stops one planted in the views
-root from steering the whole rebuild out of it.
-
-**The `.pixlstash-views` marker is the second guard, and it is about adoption
-rather than deletion.** The service writes it when it claims a folder and refuses
-a folder that already has content and no marker, so a views root aimed at
-somebody's pictures folder is never adopted in the first place. `remove()` runs
-the same prune and **keeps the marker whenever anything survived** — dropping it
-over a partial removal would hand every remaining link to the next
-reference-folder scan as a new picture. It never removes the root the owner
-chose.
-
-Every destination path is built with `resolve_path_within` against its kind
-folder, and the kind folder itself against the root; names are reduced to one
-path component, truncated to 80 characters (a component over `NAME_MAX` is
-`ENAMETOOLONG`, and a views path clears Windows' `MAX_PATH` sooner than that) and
-disambiguated by row id, because two characters really can be called the same
-thing.
-
-**A rebuild clears every kind folder, not only the requested ones.** Publishing
-`people` after publishing `people,sets` must not leave `Sets/` behind full of
-links nothing will refresh, and that is also what makes an empty `kinds` mean an
-empty tree. The probe runs *before* the prune, so a folder that turns out not to
-hold links does not cost the owner the tree they already had.
-
-Symlinks are stored **relative** when the view root and the file share a device,
-so a library and its views survive being moved together, and absolute otherwise —
-across drive letters a relative path is impossible. A link that cannot be made is
-counted and its folder named in the publish report rather than failing the whole
-run, which is what a library split across two disks looks like when only hard
-links are available.
-
 ### The shelf's five verbs (shelf plan F3)
 
 **Five verbs, two new routes.** Assign was already `PUT /adapters/{sha256}/attachments`. Rename, Set base model and Set kind write one curated hub column each and differ in nothing else, so they share `PATCH /models`; Forget is `POST /models/forget`. Adding three routes that ran the same UPDATE with a different column name would have been three sets of guards to keep in step.
@@ -3757,6 +3655,7 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
   - **Updated 2026-08-23 (v1.11 Phase 7, PixlStash Views) — the locality total is now `43 = 37 local + 6 loopback`.** Re-derived from `ROUTE_POLICIES` after merging the library-lifecycle block, not carried forward: those four routes and these two landed independently, so the figure this paragraph would have named alone (`39 = 33 + 6`) was never true of a merged tree. `GET` and `PATCH /api/v1/server-config/views` publish the library's sets, people and projects as folders of **links** to the files the owner already keeps. The PATCH is the **third** route on this tier for both reasons at once: it takes a caller-supplied host path like `POST /model-folders`, and it writes a folder tree into it like `POST /model-moves`. It is here for the authority and **not** for destruction — it creates only links, and the one thing it unlinks is a name that is not the last one: a symlink, or a regular file with `st_nlink > 1`. `shutil.rmtree` is deliberately not used, because it is not link-aware and would delete a file the owner had dropped into a view folder; anything that is not a link is reported back as `kept_by_owner` and left standing. A folder that already has content and no `.pixlstash-views` marker is refused rather than adopted, so a views root aimed at somebody's pictures folder never becomes one in the first place. Every destination is built with `resolve_path_within` against its kind folder and each kind folder against the root, and a symlink standing where a kind folder goes is unlinked *as a link* rather than descended, so neither a vault-supplied name nor a planted symlink can take the rebuild outside the views root; and five location classes are refused outright before a byte is written — inside the library, inside **any other registered** library (the same broken backup in one that is not open), inside a reference folder (the scan lists symlinked *files*, so every link would be indexed as a second copy), the containing cases of each, and a cloud-sync folder (the client uploads what the link points at). **The GET is the control-surface argument that put `GET /model-moves` here rather than one tier down**: it names the host folder the tree went to, and the tier that alone may publish it is the tier that may see where it landed. It is also on `READ_BLOCKED_GET_PATHS`, so the documented `AUTHZ_GATE_ENFORCING = False` rollback does not hand that path back to every share token. The loopback count is unchanged: neither route spawns anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_37_local_6_loopback`. Arithmetic, not judgement.
   - **Updated 2026-08-24 (v1.11 Phase 4b, the move engine) — the locality total is now `48 = 42 local + 6 loopback`.** Re-derived from `ROUTE_POLICIES` rather than added to the line above, which is one branch behind: Phase 2's three folder-structure routes landed in between and took the local tier to 40 without a bullet of their own. This change adds **+2**: `GET` and `PATCH /api/v1/server-config/layout`. **Neither takes a host path at all** — the root is the library's own, and there is no field in which a caller could name another — and the PATCH moves nothing when it is called, because the release's rule is that every path already in the library is true the moment it is written, so choosing a layout reorganises no folder that exists. What puts the pair on this tier is the authority the PATCH *hands out*: from then on a background task (`LayoutMoveTask`) renames the owner's own files into the folder names the layout renders, so the tier that may decide those names is the tier that holds host-filesystem authority. The GET is its control surface by the `GET /model-moves` argument, and is on `READ_BLOCKED_GET_PATHS` so the documented `AUTHZ_GATE_ENFORCING = False` rollback does not hand the shape of the owner's folder tree to every share token. **The move itself is deliberately NOT on this tier.** `POST /api/v1/pictures/layout/move-to-match` is `picture_scoped`, on the `POST /api/v1/pictures/rotate` line: the caller names pictures, the server derives the root from each picture's own row and the destination from a layout only this tier could have set, so what a caller exercises is authority over pictures it already reaches. Its planner refuses a source that resolves outside its root and refuses a symlink outright — `publish_no_clobber` links the *target*, so moving a link would pull a file from anywhere on the machine into the library under the link's name, the #1024 shape one sink over — and a destination whose name is taken is declined rather than overwritten. The loopback count is unchanged: neither route spawns anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_42_local_6_loopback`. Arithmetic, not judgement.
+  - **Updated 2026-09-07 (PixlStash Views withdrawn) — the locality total is now `52 = 45 local + 7 loopback`.** Re-derived from `ROUTE_POLICIES`, not subtracted from the line above, which had itself gone stale twice in between (`POST /api/v1/pictures/export/folder` and `DELETE /api/v1/folder-structure/commit` both landed without re-deriving it). `GET` and `PATCH /api/v1/server-config/views` are **removed**, along with the feature behind them: the settings section was never wired into the app, so the routes were reachable only by a direct API call and nothing in the product ever set `library_settings.views_root`. Neither route was the *subject* of any assertion in `tests/test_authz_host_capability_16_3.py` — the behavioural §16.3 tests drive `GET /filesystem/browse` and `POST /pictures/{id}/open-location`, and `READ_BLOCKED_GET_PATHS` membership is **derived** from `ROUTE_POLICIES` by `test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt` rather than written down — so the removal costs two counted routes and no coverage. One thing survives the feature: `ReferenceFolderScanTask` still refuses to descend a directory holding a `.pixlstash-views` marker, because the API shipped in v1.11 and a tree it published is still on disk; without the prune every link under one would be indexed as a second copy of a picture. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_45_local_7_loopback`. Arithmetic, not judgement.
 
 **Correction to the historical claim.** The compensating-control line above ("remote `ALL` blocked by `require_local_for_write`") overstates the protection for this class as it stood. The `_require_local_for_write` **method** runs only at `/login` (`auth.py` — password-login path), not per-request on these handlers; the genuine per-request control was the middleware's separate remote-`ALL`-**token** block. A remote **cookie** owner session was therefore *not* locality-gated on these endpoints at all — the exact gap the `LOCAL_OWNER_ONLY` retarget closes (a remote cookie owner is now locality-checked, and the 3 red-line routes are loopback-only).
 
