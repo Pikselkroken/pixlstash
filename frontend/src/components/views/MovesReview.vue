@@ -296,7 +296,13 @@ function changeShape(item) {
  * A removal that leaves no survivor (a lone membership) or several (three or
  * more before the move) has no single name to land on, so it names what the
  * click removes instead of what remains - shorter than listing every
- * survivor, and still says exactly what happens. */
+ * survivor, and still says exactly what happens.
+ *
+ * The trailing "Apply this move" is unreachable, not a third case: a review
+ * is only ambiguous when one of its removals names a facet the picture has
+ * more than one of (`reconcile_move` in `pixlstash/utils/library_layout.py`),
+ * so every item this renders has at least one removal. It is here so the
+ * button never renders blank if that ever stops being true. */
 function onlyNowLabel(item) {
   const addition = (item.additions || [])[0];
   if (addition) return `Only ${addition.name} now`;

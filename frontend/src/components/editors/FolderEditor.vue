@@ -328,8 +328,10 @@
             </div>
           </div>
 
-          <!-- Reference-only: caption file sync (edit) -->
-          <div v-if="!isImport" class="editor-sync-section">
+          <!-- Reference-only: caption file sync (edit mode). Gated on edit
+               like the allow-delete row below: create is import-only now, and
+               a control the create submit does not read must not be shown. -->
+          <div v-if="!isImport && isEditMode" class="editor-sync-section">
             <button
               type="button"
               class="editor-sync-header"
