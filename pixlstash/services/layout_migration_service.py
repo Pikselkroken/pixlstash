@@ -405,10 +405,14 @@ def _folder_tree(
     not.
 
     Sorted by path, so a parent that is in the list always comes immediately
-    before its children and the screen can indent by ``depth`` without
-    re-sorting. A parent can still be absent - a layout whose first segment
-    only ever holds subfolders puts no pictures in it and moves none into it -
-    and that is the inclusion rule, not a cap.
+    before its children. A parent can still be absent - a layout whose first
+    segment only ever holds subfolders puts no pictures in it and moves none
+    into it - and that is the inclusion rule, not a cap. Under a multi-level
+    layout that absence is the common case rather than the edge one, so
+    ``depth`` is the folder's true depth and not an indent: the screen reads
+    the structure off ``path``, indenting under the nearest ancestor that is
+    actually present. ``docs/frontend_architecture.md`` ("The tree is the
+    argument") has the measurement that settled it.
     """
     paths = set(have) | set(arriving) | set(leaving)
     return [
