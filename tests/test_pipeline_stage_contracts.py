@@ -636,7 +636,7 @@ def test_undecodable_pictures_do_not_crowd_the_tag_candidate_window(tmp_path):
             )
         good = ids[-1]
 
-        finder = MissingTagFinder(vault.db, lambda: _TagEngine())
+        finder = MissingTagFinder(vault.db, _TagEngine)
         task = finder.find_task()
 
         assert task is not None, (
@@ -693,7 +693,7 @@ def test_an_unreachable_picture_is_held_out_of_the_window_not_retired(tmp_path):
         gone.rmdir()
         good = ids[-1]
 
-        finder = MissingTagFinder(vault.db, lambda: _TagEngine())
+        finder = MissingTagFinder(vault.db, _TagEngine)
         offered = set()
         for _sweep in range(6):
             task = finder.find_task()
@@ -801,7 +801,7 @@ def test_transient_batch_failures_keep_pending_tag_sentinels_for_retry(tmp_path)
 
         vault.db.run_task(add_face_row)
 
-        finder = MissingTagFinder(vault.db, lambda: _FailingTagEngine())
+        finder = MissingTagFinder(vault.db, _FailingTagEngine)
         task = finder.find_task()
         assert task is not None
         assert task.params["picture_ids"] == [pid]
