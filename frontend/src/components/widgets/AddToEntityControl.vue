@@ -1087,7 +1087,7 @@ async function toggleSet(item) {
         pictureIds: idsToRemove,
         action: "removed",
       });
-      if (members) idsToRemove.forEach((id) => members.delete(String(id)));
+      applyOptimisticSetUpdate(item, "removed", idsToRemove);
     } else {
       await Promise.all(
         idsToAdd.map((id) => addPictureToSet(item.id, id, apiOpts.value)),
@@ -1095,7 +1095,7 @@ async function toggleSet(item) {
       statusMessage.value = `Added to ${item.name}`;
       emit("added", { setId: item.id, pictureIds: idsToAdd, action: "added" });
       lastUsedItem.value = { id: item.id, name: item.name };
-      if (members) idsToAdd.forEach((id) => members.add(String(id)));
+      applyOptimisticSetUpdate(item, "added", idsToAdd);
     }
     // The membership just moved, so the list's picture counts did too: ask the
     // server again rather than patching the shared cache from here.
@@ -1138,6 +1138,24 @@ function toggleProject(item) {
         ? "Set to unassigned"
         : `Added to ${item.name}`;
   scheduleStatusClear(1600);
+}
+
+/**
+ * Fold a just-written set membership back into `membersById`.
+ *
+ * Replacing the map rather than mutating the Set in place matches
+ * `applyOptimisticProjectUpdate`; either one re-renders the row.
+ */
+function applyOptimisticSetUpdate(item, action, ids) {
+  if (!ids?.length) return;
+  const next = { ...membersById.value };
+  const bucket = new Set(next[item.key] ?? []);
+  for (const id of ids) {
+    if (action === "removed") bucket.delete(String(id));
+    else bucket.add(String(id));
+  }
+  next[item.key] = bucket;
+  membersById.value = next;
 }
 
 function applyOptimisticProjectUpdate(item, action, ids) {

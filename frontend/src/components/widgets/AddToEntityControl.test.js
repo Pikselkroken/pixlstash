@@ -1,4 +1,4 @@
-// AddToEntityControl.vue - two suites, kept together deliberately.
+// AddToEntityControl.vue - the suites below are kept together deliberately.
 //
 // * **#646, the shared entity-list cache.** The menu is `v-if`-mounted, so every
 //   open destroys and recreates these controls. These cases pin render-from-cache
@@ -7,9 +7,12 @@
 //   `allowCreate`, the pinned "New person…" row, the no-match Create "query"… row,
 //   the single-select face mode that performs no writes, and the menu escaping a
 //   clipping / scrolling host.
+// * **Membership after a write.** `/picture_sets/membership` answers only for
+//   sets that already contain one of the pictures, so the map has no entry for
+//   the set you are adding to.
 //
 // The mocks below are bare `vi.fn()`s and each suite states its own fixtures, so
-// neither can silently inherit the other's people or sets.
+// none can silently inherit another's people or sets.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
@@ -42,6 +45,7 @@ import {
   listPictureSets,
   getPictureSetMembership,
   addPictureToSet,
+  removePictureFromSet,
 } from "../../api/pictureSets";
 import { listProjects, getProjectMembership } from "../../api/projects";
 import { listCharacters, getCharacterMembership } from "../../api/characters";
@@ -1096,5 +1100,55 @@ describe("host-driven mode", () => {
     const alice = rowFor(wrapper, "Alice");
     expect(alice.classes()).toContain("ate-item--checked");
     expect(alice.attributes("aria-selected")).toBe("true");
+  });
+});
+
+describe("membership after a write", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pinia = createPinia();
+    setActivePinia(pinia);
+    listPictureSets.mockResolvedValue([
+      { id: 1, name: "Empty Set" },
+      { id: 2, name: "Other Set" },
+    ]);
+    // Picture 101 is in set 2 only, so set 1 has no entry at all -- the shape
+    // the real endpoint returns, and the whole reason for these cases.
+    getPictureSetMembership.mockResolvedValue({ 2: [101] });
+    addPictureToSet.mockResolvedValue({});
+    removePictureFromSet.mockResolvedValue({});
+  });
+
+  /** `mountControl` already defaults to a set over picture 101; this opens it. */
+  async function openMenu() {
+    const w = mountControl();
+    await w.find(".ate-btn").trigger("click");
+    await flushPromises();
+    await nextTick();
+    return w;
+  }
+
+  it("ticks the row for a set the picture was not in", async () => {
+    const w = await openMenu();
+    const row = rowByName(w, "Empty Set");
+    expect(row.classes()).not.toContain("ate-item--checked");
+
+    await row.trigger("click");
+    await flushPromises();
+    await nextTick();
+
+    expect(addPictureToSet).toHaveBeenCalled();
+    expect(rowByName(w, "Empty Set").classes()).toContain("ate-item--checked");
+    w.unmount();
+  });
+
+  it("still ticks the row for a set that already had other members", async () => {
+    getPictureSetMembership.mockResolvedValue({ 1: [999], 2: [101] });
+    const w = await openMenu();
+    await rowByName(w, "Empty Set").trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(rowByName(w, "Empty Set").classes()).toContain("ate-item--checked");
+    w.unmount();
   });
 });
