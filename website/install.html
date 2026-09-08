@@ -77,6 +77,19 @@
         display: block;
       }
 
+      /* docker-mark-black.svg is a fixed near-black (#0f121b) mark loaded as an
+         <img>, so currentColor cannot reach it and it all but vanishes on the
+         dark ground. Inverting gives #f0ede4, near the theme's own --text.
+         Dark is the default here (light is the one that sets data-theme), so
+         the invert is the default and light opts out. */
+      .tab-icon-invert {
+        filter: invert(1);
+      }
+
+      [data-theme="light"] .tab-icon-invert {
+        filter: none;
+      }
+
       /* ── Tab panels ── */
       .tab-panels {
         background: var(--panel);
@@ -168,6 +181,199 @@
         font-size: 0.78rem;
         color: var(--muted);
         margin-top: 8px;
+      }
+
+      /* ── Desktop direct-download buttons ── */
+      .dl-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 12px;
+        margin: 14px 0 0;
+      }
+
+      /* One brand fill per platform, from the unified palette in
+         pixlstash.css. Amber is deliberately not among them: it is the page's
+         single "the thing to do" accent and stays reserved for that. */
+      .dl-btn {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 16px 18px;
+        background: var(--dl-fill);
+        border: 1px solid transparent;
+        border-radius: var(--radius-lg);
+        color: var(--on-accent);
+        text-decoration: none;
+        transition:
+          background 0.15s ease,
+          transform 0.15s ease;
+      }
+
+      .dl-btn[data-dl="win"] {
+        --dl-fill: var(--primary); /* olive */
+      }
+
+      .dl-btn[data-dl="mac"] {
+        --dl-fill: var(--secondary); /* raspberry */
+      }
+
+      .dl-btn[data-dl="linux"] {
+        --dl-fill: var(--tertiary); /* teal */
+      }
+
+      /* Darken rather than lighten: all three fills sit just above the 4.5:1
+         floor against --on-accent, so lightening would drop the label under it.
+         Darkening takes them to ~6.1:1. */
+      .dl-btn:hover {
+        background: color-mix(in srgb, var(--dl-fill) 86%, #000);
+        transform: translateY(-2px);
+      }
+
+      .dl-btn:focus-visible {
+        outline: 2px solid var(--text);
+        outline-offset: 2px;
+      }
+
+      /* Material Design Icons 7.4.47 (mdi-microsoft-windows / mdi-apple /
+         mdi-linux), inlined as paths: the website does not load @mdi/font. */
+      .dl-icon {
+        flex: 0 0 auto;
+        width: 28px;
+        height: 28px;
+        color: var(--on-accent);
+      }
+
+      .dl-text {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .dl-main {
+        font-size: 1.05rem;
+        font-weight: 700;
+        line-height: 1.2;
+      }
+
+      .dl-meta {
+        font-family: var(--mono);
+        font-size: 0.73rem;
+        /* Full strength, not dimmed: at 0.73rem on these fills anything below
+           100% falls under the 4.5:1 AA floor (90% measures 4.27:1). */
+        color: var(--on-accent);
+      }
+
+      .dl-footer-note {
+        font-family: var(--mono);
+        font-size: 0.73rem;
+        color: var(--muted);
+      }
+
+      .dl-footer {
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .dl-version {
+        font-family: var(--mono);
+        font-size: 0.73rem;
+        color: var(--muted);
+      }
+
+      /* ── "If you still see a warning" popup + screenshot carousel ── */
+      .warn-link {
+        background: none;
+        border: none;
+        padding: 0;
+        font: inherit;
+        color: var(--accent-2);
+        text-decoration: underline;
+        cursor: pointer;
+      }
+
+      .warn-dialog {
+        max-width: 620px;
+        width: calc(100% - 32px);
+        /* The two screenshots are tall, so the panel has to be allowed to
+           scroll rather than run off the bottom of a short window. */
+        max-height: 85vh;
+        overflow-y: auto;
+        padding: 20px;
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        box-shadow: 0 12px 40px var(--shadow);
+      }
+
+      /* A neutral scrim in both themes: keying it to --bg made the light
+         theme a near-invisible white wash. */
+      .warn-dialog::backdrop {
+        background: color-mix(in srgb, #000 55%, transparent);
+      }
+
+      .warn-close {
+        float: right;
+        background: none;
+        border: none;
+        padding: 0 4px;
+        font-size: 1.4rem;
+        line-height: 1;
+        color: var(--muted);
+        cursor: pointer;
+      }
+
+      .carousel-track {
+        display: flex;
+        overflow-x: auto;
+        scroll-snap-type: x mandatory;
+        scrollbar-width: none;
+        margin-top: 10px;
+      }
+
+      .carousel-track::-webkit-scrollbar {
+        display: none;
+      }
+
+      .carousel-track .smartscreen-fig {
+        flex: 0 0 100%;
+        scroll-snap-align: start;
+      }
+
+      /* Keep a portrait screenshot from filling the whole panel. */
+      .carousel-track .smartscreen-img {
+        max-height: 48vh;
+        object-fit: contain;
+        object-position: top;
+      }
+
+      .carousel-nav {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        margin-top: 8px;
+      }
+
+      .carousel-btn {
+        background: var(--panel-strong);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: 4px 12px;
+        font-size: 1.1rem;
+        line-height: 1;
+        color: var(--text);
+        cursor: pointer;
+      }
+
+      .carousel-count {
+        font-size: 0.78rem;
+        color: var(--muted);
       }
 
       .publisher-line {
@@ -263,7 +469,7 @@
           data-tab="docker"
         >
           <img
-            class="tab-icon"
+            class="tab-icon tab-icon-invert"
             src="assets/docker-mark-black.svg"
             alt=""
             aria-hidden="true"
@@ -350,17 +556,88 @@
           <div class="method-steps">
             <div class="step">
               <span class="step-label">1. Download the app</span>
-              <p class="step-note">
-                Grab the installer for your platform from the
+              <div class="dl-grid">
                 <a
+                  class="dl-btn"
+                  data-dl="win"
                   href="https://github.com/pikselkroken/pixlstash/releases/latest"
                   target="_blank"
                   rel="noopener"
-                  >latest release on GitHub</a
-                >: <code>.exe</code> (Windows), <code>.dmg</code> (macOS, Apple
-                Silicon), or <code>.AppImage</code>/<code>.deb</code>
-                (Linux).
-              </p>
+                >
+                  <span class="dl-text">
+                    <span class="dl-main">Windows</span>
+                    <span class="dl-meta">.exe installer &middot; x64</span>
+                  </span>
+                  <svg
+                    class="dl-icon"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M3,12V6.75L9,5.43V11.91L3,12M20,3V11.75L10,11.9V5.21L20,3M3,13L9,13.09V19.9L3,18.75V13M20,13.25V22L10,20.09V13.1L20,13.25Z"
+                    />
+                  </svg>
+                </a>
+                <a
+                  class="dl-btn"
+                  data-dl="mac"
+                  href="https://github.com/pikselkroken/pixlstash/releases/latest"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  <span class="dl-text">
+                    <span class="dl-main">macOS</span>
+                    <span class="dl-meta">.dmg &middot; Apple Silicon</span>
+                  </span>
+                  <svg
+                    class="dl-icon"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M18.71,19.5C17.88,20.74 17,21.95 15.66,21.97C14.32,22 13.89,21.18 12.37,21.18C10.84,21.18 10.37,21.95 9.1,22C7.79,22.05 6.8,20.68 5.96,19.47C4.25,17 2.94,12.45 4.7,9.39C5.57,7.87 7.13,6.91 8.82,6.88C10.1,6.86 11.32,7.75 12.11,7.75C12.89,7.75 14.37,6.68 15.92,6.84C16.57,6.87 18.39,7.1 19.56,8.82C19.47,8.88 17.39,10.1 17.41,12.63C17.44,15.65 20.06,16.66 20.09,16.67C20.06,16.74 19.67,18.11 18.71,19.5M13,3.5C13.73,2.67 14.94,2.04 15.94,2C16.07,3.17 15.6,4.35 14.9,5.19C14.21,6.04 13.07,6.7 11.95,6.61C11.8,5.46 12.36,4.26 13,3.5Z"
+                    />
+                  </svg>
+                </a>
+                <a
+                  class="dl-btn"
+                  data-dl="linux"
+                  href="https://github.com/pikselkroken/pixlstash/releases/latest"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  <span class="dl-text">
+                    <span class="dl-main">Linux</span>
+                    <span class="dl-meta">.AppImage &middot; x86_64</span>
+                  </span>
+                  <svg
+                    class="dl-icon"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M14.62,8.35C14.2,8.63 12.87,9.39 12.67,9.54C12.28,9.85 11.92,9.83 11.53,9.53C11.33,9.37 10,8.61 9.58,8.34C9.1,8.03 9.13,7.64 9.66,7.42C11.3,6.73 12.94,6.78 14.57,7.45C15.06,7.66 15.08,8.05 14.62,8.35M21.84,15.63C20.91,13.54 19.64,11.64 18,9.97C17.47,9.42 17.14,8.8 16.94,8.09C16.84,7.76 16.77,7.42 16.7,7.08C16.5,6.2 16.41,5.3 16,4.47C15.27,2.89 14,2.07 12.16,2C10.35,2.05 9,2.81 8.21,4.4C8,4.83 7.85,5.28 7.75,5.74C7.58,6.5 7.43,7.29 7.25,8.06C7.1,8.71 6.8,9.27 6.29,9.77C4.68,11.34 3.39,13.14 2.41,15.12C2.27,15.41 2.13,15.7 2.04,16C1.85,16.66 2.33,17.12 3.03,16.96C3.47,16.87 3.91,16.78 4.33,16.65C4.74,16.5 4.9,16.6 5,17C5.65,19.15 7.07,20.66 9.24,21.5C13.36,23.06 18.17,20.84 19.21,16.92C19.28,16.65 19.38,16.55 19.68,16.65C20.14,16.79 20.61,16.89 21.08,17C21.57,17.09 21.93,16.84 22,16.36C22.03,16.1 21.94,15.87 21.84,15.63"
+                    />
+                  </svg>
+                </a>
+              </div>
+              <div class="dl-footer">
+                <a
+                  class="step-note"
+                  href="https://github.com/pikselkroken/pixlstash/releases/latest"
+                  target="_blank"
+                  rel="noopener"
+                  >Other downloads</a
+                >
+                <span class="dl-footer-note"
+                  >&mdash; the Linux <code>.deb</code>, the Windows server
+                  installer, checksums and release notes.</span
+                >
+                <span class="dl-version" hidden></span>
+              </div>
             </div>
 
             <div class="step">
@@ -425,53 +702,87 @@
               </p>
             </div>
             <div class="step">
-              <p class="sub-heading">⚠️ Windows SmartScreen warning</p>
+              <p class="sub-heading">Windows</p>
               <p class="step-note">
-                Because the installer has only recently been signed with a
-                code-signing certificate, Windows SmartScreen may show a red
-                <em>"Windows protected your PC"</em> dialog. This is expected.
-                Click <strong>More info</strong> and then
-                <strong>Run anyway</strong> to proceed.
-              </p>
-              <div class="smartscreen-figs">
-                <figure class="smartscreen-fig">
-                  <img
-                    class="smartscreen-img"
-                    src="assets/SmartScreen.jpg"
-                    alt="The Windows protected your PC dialog as it first appears, with a More info link"
-                  />
-                  <figcaption class="smartscreen-caption">
-                    1. What you see first. Click <strong>More info</strong>.
-                  </figcaption>
-                </figure>
-                <figure class="smartscreen-fig">
-                  <img
-                    class="smartscreen-img"
-                    src="assets/SmartScreen2.jpg"
-                    alt="The expanded dialog showing the app filename and the publisher, with a Run anyway button"
-                  />
-                  <figcaption class="smartscreen-caption">
-                    2. Expanded: check the publisher, then click
-                    <strong>Run anyway</strong>.
-                  </figcaption>
-                </figure>
-              </div>
-              <p class="step-note">
-                Before you click <strong>Run anyway</strong>, check the
-                <strong>Publisher</strong> line. It should read:
-              </p>
-              <p class="publisher-line">
-                NO, Trøndelag, Trondheim, Open Source Developer, Open Source
-                Developer Gaute Lindkvist
+                The installer is signed and should now pass Microsoft
+                SmartScreen checks.
               </p>
               <p class="step-note">
-                Windows can't render the <strong>ø</strong> in
-                <em>Trøndelag</em> in this dialog, so it shows up as a black
-                diamond or box: <code>Tr&#xFFFD;ndelag</code>. That's a font
-                quirk in the SmartScreen dialog, not a sign the download was
-                tampered with. If the publisher says anything else, don't run
-                the file.
+                <button class="warn-link" data-dialog="warn-desktop">
+                  If you still see a warning
+                </button>
               </p>
+              <dialog class="warn-dialog" id="warn-desktop">
+                <form method="dialog">
+                  <button class="warn-close" aria-label="Close">&times;</button>
+                </form>
+                <p class="sub-heading">Windows SmartScreen warning</p>
+                <p class="step-note">
+                  SmartScreen may still show a red
+                  <em>"Windows protected your PC"</em> dialog on a machine that
+                  has not seen the signed installer before. Click
+                  <strong>More info</strong> and then
+                  <strong>Run anyway</strong> to proceed.
+                </p>
+                <div class="carousel">
+                  <div class="carousel-track">
+                    <figure class="smartscreen-fig">
+                      <img
+                        class="smartscreen-img"
+                        src="assets/SmartScreen.jpg"
+                        alt="The Windows protected your PC dialog as it first appears, with a More info link"
+                      />
+                      <figcaption class="smartscreen-caption">
+                        1. What you see first. Click <strong>More info</strong>.
+                      </figcaption>
+                    </figure>
+                    <figure class="smartscreen-fig">
+                      <img
+                        class="smartscreen-img"
+                        src="assets/SmartScreen2.jpg"
+                        alt="The expanded dialog showing the app filename and the publisher, with a Run anyway button"
+                      />
+                      <figcaption class="smartscreen-caption">
+                        2. Expanded: check the publisher, then click
+                        <strong>Run anyway</strong>.
+                      </figcaption>
+                    </figure>
+                  </div>
+                  <div class="carousel-nav">
+                    <button
+                      class="carousel-btn"
+                      data-step="-1"
+                      aria-label="Previous screenshot"
+                    >
+                      &lsaquo;
+                    </button>
+                    <span class="carousel-count">1 / 2</span>
+                    <button
+                      class="carousel-btn"
+                      data-step="1"
+                      aria-label="Next screenshot"
+                    >
+                      &rsaquo;
+                    </button>
+                  </div>
+                </div>
+                <p class="step-note">
+                  Before you click <strong>Run anyway</strong>, check the
+                  <strong>Publisher</strong> line. It should read:
+                </p>
+                <p class="publisher-line">
+                  NO, Trøndelag, Trondheim, Open Source Developer, Open Source
+                  Developer Gaute Lindkvist
+                </p>
+                <p class="step-note">
+                  Windows can't render the <strong>ø</strong> in
+                  <em>Trøndelag</em> in this dialog, so it shows up as a black
+                  diamond or box: <code>Tr&#xFFFD;ndelag</code>. That's a font
+                  quirk in the SmartScreen dialog, not a sign the download was
+                  tampered with. If the publisher says anything else, don't run
+                  the file.
+                </p>
+              </dialog>
             </div>
           </div>
         </div>
@@ -481,7 +792,7 @@
           <p class="section-title">Server Installer for Windows</p>
           <p class="section-subtitle">
             The easiest way to get started with the server on Windows. No Python
-            or Node.js required.
+            or Node.js required. Linux and macOS users should just use pip.
           </p>
 
           <div class="method-steps">
@@ -524,55 +835,89 @@
             <div class="divider"></div>
 
             <div class="step">
-              <p class="sub-heading">⚠️ Windows SmartScreen warning</p>
+              <p class="sub-heading">Windows SmartScreen</p>
               <p class="step-note">
-                Because the installer has only recently been signed with a
-                code-signing certificate, Windows SmartScreen may show a red
-                <em>"Windows protected your PC"</em> dialog. This is expected.
-                Click <strong>More info</strong> and then
-                <strong>Run anyway</strong> to proceed.
-              </p>
-              <div class="smartscreen-figs">
-                <figure class="smartscreen-fig">
-                  <img
-                    class="smartscreen-img"
-                    src="assets/SmartScreen.jpg"
-                    alt="The Windows protected your PC dialog as it first appears, with a More info link"
-                  />
-                  <figcaption class="smartscreen-caption">
-                    1. What you see first. Click <strong>More info</strong>.
-                  </figcaption>
-                </figure>
-                <figure class="smartscreen-fig">
-                  <img
-                    class="smartscreen-img"
-                    src="assets/SmartScreen2.jpg"
-                    alt="The expanded dialog showing the app filename and the publisher, with a Run anyway button"
-                  />
-                  <figcaption class="smartscreen-caption">
-                    2. Expanded: check the publisher, then click
-                    <strong>Run anyway</strong>.
-                  </figcaption>
-                </figure>
-              </div>
-              <p class="step-note">
-                Before you click <strong>Run anyway</strong>, check the
-                <strong>Publisher</strong> line. It should read:
-              </p>
-              <p class="publisher-line">
-                NO, Trøndelag, Trondheim, Open Source Developer, Open Source
-                Developer Gaute Lindkvist
+                The installer is signed and should now pass Microsoft
+                SmartScreen checks.
               </p>
               <p class="step-note">
-                Windows can't render the <strong>ø</strong> in
-                <em>Trøndelag</em> in this dialog, so it shows up as a black
-                diamond or box: <code>Tr&#xFFFD;ndelag</code>. That's a font
-                quirk in the SmartScreen dialog, not a sign the download was
-                tampered with. If the publisher says anything else, don't run
-                the file. The screenshot above is from a desktop build, so the
-                <strong>App</strong> filename differs for the server installer;
-                the publisher is the same.
+                <button class="warn-link" data-dialog="warn-server">
+                  If you still see a warning
+                </button>
               </p>
+              <dialog class="warn-dialog" id="warn-server">
+                <form method="dialog">
+                  <button class="warn-close" aria-label="Close">&times;</button>
+                </form>
+                <p class="sub-heading">Windows SmartScreen warning</p>
+                <p class="step-note">
+                  SmartScreen may still show a red
+                  <em>"Windows protected your PC"</em> dialog on a machine that
+                  has not seen the signed installer before. Click
+                  <strong>More info</strong> and then
+                  <strong>Run anyway</strong> to proceed.
+                </p>
+                <div class="carousel">
+                  <div class="carousel-track">
+                    <figure class="smartscreen-fig">
+                      <img
+                        class="smartscreen-img"
+                        src="assets/SmartScreen.jpg"
+                        alt="The Windows protected your PC dialog as it first appears, with a More info link"
+                      />
+                      <figcaption class="smartscreen-caption">
+                        1. What you see first. Click <strong>More info</strong>.
+                      </figcaption>
+                    </figure>
+                    <figure class="smartscreen-fig">
+                      <img
+                        class="smartscreen-img"
+                        src="assets/SmartScreen2.jpg"
+                        alt="The expanded dialog showing the app filename and the publisher, with a Run anyway button"
+                      />
+                      <figcaption class="smartscreen-caption">
+                        2. Expanded: check the publisher, then click
+                        <strong>Run anyway</strong>.
+                      </figcaption>
+                    </figure>
+                  </div>
+                  <div class="carousel-nav">
+                    <button
+                      class="carousel-btn"
+                      data-step="-1"
+                      aria-label="Previous screenshot"
+                    >
+                      &lsaquo;
+                    </button>
+                    <span class="carousel-count">1 / 2</span>
+                    <button
+                      class="carousel-btn"
+                      data-step="1"
+                      aria-label="Next screenshot"
+                    >
+                      &rsaquo;
+                    </button>
+                  </div>
+                </div>
+                <p class="step-note">
+                  Before you click <strong>Run anyway</strong>, check the
+                  <strong>Publisher</strong> line. It should read:
+                </p>
+                <p class="publisher-line">
+                  NO, Trøndelag, Trondheim, Open Source Developer, Open Source
+                  Developer Gaute Lindkvist
+                </p>
+                <p class="step-note">
+                  Windows can't render the <strong>ø</strong> in
+                  <em>Trøndelag</em> in this dialog, so it shows up as a black
+                  diamond or box: <code>Tr&#xFFFD;ndelag</code>. That's a font
+                  quirk in the SmartScreen dialog, not a sign the download was
+                  tampered with. If the publisher says anything else, don't run
+                  the file. The screenshot above is from a desktop build, so the
+                  <strong>App</strong> filename differs for the server
+                  installer; the publisher is the same.
+                </p>
+              </dialog>
             </div>
           </div>
         </div>
@@ -1358,6 +1703,79 @@ EOF"
             }, 2000);
           });
         });
+      });
+
+      // Direct download links. Each button ships with the releases page as its
+      // href; this upgrades it to the exact asset once the published desktop
+      // version is known. The filename template is electron/package.json's
+      // artifactName, so it changes only when that does.
+      const DESKTOP_ASSETS = {
+        win: "win-x64.exe",
+        mac: "mac-arm64.dmg",
+        linux: "linux-x86_64.AppImage",
+      };
+      fetch("latest-version/electron.json")
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
+        .then(({ version }) => {
+          if (!version) throw new Error("no version field");
+          document.querySelectorAll(".dl-btn[data-dl]").forEach((a) => {
+            const asset = DESKTOP_ASSETS[a.dataset.dl];
+            if (!asset) return;
+            a.href =
+              "https://github.com/pikselkroken/pixlstash/releases/download/v" +
+              version +
+              "/PixlStash-desktop-" +
+              version +
+              "-" +
+              asset;
+          });
+          document.querySelectorAll(".dl-version").forEach((el) => {
+            el.textContent = "v" + version;
+            el.hidden = false;
+          });
+        })
+        .catch((err) => {
+          // Not fatal: the buttons still point at the releases page, which is
+          // where they pointed before this ran. Log it so a broken or missing
+          // latest-version/electron.json is visible rather than silent.
+          console.warn(
+            "Could not resolve the latest desktop version; download buttons " +
+              "fall back to the releases page.",
+            err,
+          );
+        });
+
+      // "If you still see a warning" popups
+      document.querySelectorAll(".warn-link[data-dialog]").forEach((btn) => {
+        const dlg = document.getElementById(btn.dataset.dialog);
+        btn.addEventListener("click", () => dlg.showModal());
+        // Click outside the panel closes it; <dialog> already handles Esc.
+        dlg.addEventListener("click", (e) => {
+          if (e.target === dlg) dlg.close();
+        });
+      });
+
+      // Screenshot carousels
+      document.querySelectorAll(".carousel").forEach((car) => {
+        const track = car.querySelector(".carousel-track");
+        const count = car.querySelector(".carousel-count");
+        const total = track.children.length;
+        const update = () => {
+          const i = track.clientWidth
+            ? Math.round(track.scrollLeft / track.clientWidth)
+            : 0;
+          count.textContent = i + 1 + " / " + total;
+        };
+        car.querySelectorAll(".carousel-btn[data-step]").forEach((btn) => {
+          btn.addEventListener("click", () =>
+            track.scrollBy({
+              left: track.clientWidth * Number(btn.dataset.step),
+              behavior: "smooth",
+            }),
+          );
+        });
+        track.addEventListener("scroll", update);
+        update();
       });
 
       // Activate tab from URL hash, e.g. install.html#docker or install.html#docker-gpu
