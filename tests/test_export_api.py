@@ -3,6 +3,7 @@
 import gc
 import json
 import os
+import sys
 import tempfile
 import time
 import unicodedata
@@ -155,6 +156,66 @@ def test_safe_archive_stem_preserves_legitimate_names():
     assert _safe_archive_stem("café shot", "fb") == "café shot"
     assert _safe_archive_stem("日本語", "fb") == "日本語"
     assert _safe_archive_stem("a-b_c.1", "fb") == "a-b_c.1"
+
+
+# The MS-DOS device names Win32 resolves ahead of the filesystem. Only the
+# ASCII spellings are here: the superscript ones the rewrite also covers
+# (``COM¹``) are defensive and are deliberately not claimed against the real OS.
+WINDOWS_DEVICE_NAMES = (
+    ["CON", "PRN", "AUX", "NUL"]
+    + [f"COM{digit}" for digit in range(1, 10)]
+    + [f"LPT{digit}" for digit in range(1, 10)]
+)
+
+
+@pytest.mark.parametrize("device", WINDOWS_DEVICE_NAMES)
+def test_safe_archive_stem_rewrites_windows_device_names(device):
+    """A picture called ``NUL`` must not export as a member Windows cannot hold.
+
+    Pure string behaviour, so it is checked on every platform: the rewrite is
+    what the Windows shards then prove is sufficient.
+    """
+    for spelling in (device, device.lower(), device.title()):
+        assert _safe_archive_stem(spelling, "fallback") == f"{spelling}_"
+        # An extension does not rescue the name - Win32 compares up to the
+        # first dot - so the rewrite has to land on that first segment.
+        assert _safe_archive_stem(f"{spelling}.tar", "fallback") == f"{spelling}_.tar"
+        # Trailing dots and spaces are stripped before the comparison.
+        assert _safe_archive_stem(f"{spelling}. ", "fallback") == f"{spelling}_"
+        assert _safe_archive_stem(f"{spelling} .tar", "fallback") == f"{spelling}_.tar"
+    # Not a device, and must not be mangled: the name only matches whole.
+    assert _safe_archive_stem(f"{device}sole", "fb") == f"{device}sole"
+    assert _safe_archive_stem(f"my {device}", "fb") == f"my {device}"
+    # An extension is never the reserved part: `report.aux` is an ordinary file.
+    assert _safe_archive_stem(device, "fb", is_extension=True) == device
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="Only Windows resolves these names as devices"
+)
+@pytest.mark.parametrize("device", WINDOWS_DEVICE_NAMES)
+def test_windows_really_loses_a_device_named_member_and_keeps_the_rewrite(
+    device, tmp_path
+):
+    """Ask the real OS rather than trusting the list above.
+
+    The un-rewritten name is the bug: on Windows the write is answered by the
+    device, so it succeeds (or raises) and no file appears in the folder - a
+    picture that left the export and never arrived. The rewritten name has to
+    be an ordinary file. The four Windows shards are what make this runnable.
+    """
+    try:
+        (tmp_path / f"{device}.jpg").write_bytes(b"picture")
+    except OSError:
+        pass
+    assert f"{device}.jpg" not in os.listdir(tmp_path), (
+        f"{device}.jpg became a real file on this Windows build, so it is not a "
+        "reserved device name here and does not belong in WINDOWS_DEVICE_NAMES."
+    )
+
+    rewritten = _safe_archive_stem(device, "fallback")
+    (tmp_path / f"{rewritten}.jpg").write_bytes(b"picture")
+    assert f"{rewritten}.jpg" in os.listdir(tmp_path)
 
 
 def test_unique_export_stem_never_hands_out_a_name_twice():
@@ -385,6 +446,150 @@ def test_pictures_export_folder_rejects_a_destination_inside_the_library():
         ):
             accepted = client.post(
                 "/pictures/export/folder", params={"destination": outside}
+            )
+            assert accepted.status_code == 200, accepted.text
+            _wait_for_export(client, accepted.json()["task_id"])
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_pictures_export_folder_rejects_a_destination_inside_another_library():
+    """#1206 item 1: the blocklist knew only the library holding the lease.
+
+    A library's folder *is* its image_root, so an export written into a second
+    registered library comes back as a fresh set of pictures the moment that
+    library is opened - and this route never opens it, so nothing downstream
+    notices either.
+    """
+    from unittest import mock
+
+    temp_dir, client, server = _setup()
+    try:
+        _upload_picture(client)
+        other = server.library_registry.create(
+            os.path.join(temp_dir.name, "second-library"), "Second"
+        )
+        inside_other = os.path.join(other.path, "exported")
+        os.makedirs(inside_other, exist_ok=True)
+
+        resp = client.post(
+            "/pictures/export/folder", params={"destination": inside_other}
+        )
+        assert resp.status_code == 400, resp.text
+        assert "part of your library" in resp.json().get("detail", "")
+
+        # The positive control, in the same environment: a folder that is in no
+        # registered library is still accepted. Refusing every empty folder
+        # would satisfy the assertion above and break the feature.
+        outside = os.path.join(temp_dir.name, "outside-every-library")
+        os.makedirs(outside, exist_ok=True)
+        with mock.patch(
+            "pixlstash.utils.service.export_utils.open_in_file_manager",
+            return_value=True,
+        ):
+            accepted = client.post(
+                "/pictures/export/folder", params={"destination": outside}
+            )
+            assert accepted.status_code == 200, accepted.text
+            _wait_for_export(client, accepted.json()["task_id"])
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_pictures_export_folder_refuses_when_the_reference_folders_are_unreadable():
+    """#1177 item 59: an unknown blocklist must refuse, not permit.
+
+    The roots the check above compares against were previously reported as an
+    empty tuple when the folder table could not be read, which is exactly what
+    "no reference folders are configured" looks like - so a read failure turned
+    the destination check off silently, and an export into a reference folder
+    was accepted.
+    """
+    from unittest import mock
+
+    temp_dir, client, server = _setup()
+    try:
+        _upload_picture(client)
+        destination = os.path.join(temp_dir.name, "unreadable-refs-destination")
+        os.makedirs(destination, exist_ok=True)
+
+        # Broken at the DB read, not at the vault method, so this exercises the
+        # whole chain: replacing the raise with `return ()` again turns this
+        # test green-to-red rather than leaving it passing on a stubbed vault.
+        def _explode(_task, *args, **kwargs):
+            raise RuntimeError("test-induced reference folder read failure")
+
+        with mock.patch.object(server.vault.db, "run_immediate_read_task", _explode):
+            resp = client.post(
+                "/pictures/export/folder", params={"destination": destination}
+            )
+        assert resp.status_code == 503, resp.text
+        assert "reference folders" in resp.json().get("detail", "")
+        assert not os.listdir(destination), "nothing may be written on a refusal"
+
+        # The positive control: the same destination is accepted once the
+        # folder table reads normally again.
+        with mock.patch(
+            "pixlstash.utils.service.export_utils.open_in_file_manager",
+            return_value=True,
+        ):
+            accepted = client.post(
+                "/pictures/export/folder", params={"destination": destination}
+            )
+            assert accepted.status_code == 200, accepted.text
+            _wait_for_export(client, accepted.json()["task_id"])
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_pictures_export_folder_refuses_when_the_watch_folders_are_unreadable():
+    """The import-folder half of item 59, found in its adversarial review.
+
+    `get_import_folder_paths` logged at DEBUG and returned `[]`, which is what
+    "no watch folders are configured" looks like - so a read failure turned off
+    the worst refusal in this route. A watch folder imports whatever appears in
+    it, and one carrying `delete_after_import` then removes the file it has
+    just imported, so an export into one destroys its own output.
+    """
+    from unittest import mock
+
+    from pixlstash.utils.path_utils import LibraryRootsUnavailable
+
+    temp_dir, client, server = _setup()
+    try:
+        _upload_picture(client)
+        destination = os.path.join(temp_dir.name, "unreadable-watch-destination")
+        os.makedirs(destination, exist_ok=True)
+
+        # Only the import-folder read fails, so this cannot pass on the
+        # reference-folder refusal that lands one line above it.
+        def _explode(_vault):
+            raise LibraryRootsUnavailable("test-induced import folder read failure")
+
+        # Patched where the shared blocklist reads it (`utils.library_roots`),
+        # not in this route: the route stopped building its own list when the
+        # three partial copies were folded into one (#1206 item 1).
+        with mock.patch(
+            "pixlstash.utils.library_roots.get_import_folder_paths", _explode
+        ):
+            resp = client.post(
+                "/pictures/export/folder", params={"destination": destination}
+            )
+        assert resp.status_code == 503, resp.text
+        assert not os.listdir(destination), "nothing may be written on a refusal"
+
+        with mock.patch(
+            "pixlstash.utils.service.export_utils.open_in_file_manager",
+            return_value=True,
+        ):
+            accepted = client.post(
+                "/pictures/export/folder", params={"destination": destination}
             )
             assert accepted.status_code == 200, accepted.text
             _wait_for_export(client, accepted.json()["task_id"])

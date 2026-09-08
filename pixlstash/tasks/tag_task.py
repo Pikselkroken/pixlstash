@@ -93,6 +93,22 @@ def _file_is_readable(file_path: str) -> bool:
         return False
 
 
+def taggable_picture_clauses() -> tuple:
+    """The picture rows tagging may touch: not soft-deleted, and with a file.
+
+    One definition, because two queries have to answer identically: the
+    "awaiting tagging" number (:meth:`TagTask.count_missing_tags`) and the
+    selection the work planner actually runs
+    (``MissingTagFinder._fetch_missing_tags``). They did not (#1206 item 3) -
+    the count applied both clauses and the selection applied neither, so the
+    number read zero while the GPU went on tagging pictures the owner had put
+    in the scrapheap. A picture restored from the scrapheap keeps its pending
+    sentinel and is picked up again on the next sweep, so nothing is lost by
+    holding it out while it is deleted.
+    """
+    return (Picture.deleted.is_(False), Picture.file_path.is_not(None))
+
+
 class TagTask(BaseTask):
     """Task that tags a batch of pictures and persists tag updates."""
 
@@ -319,6 +335,12 @@ class TagTask(BaseTask):
                 if img is None:
                     if undecodable:
                         self._mark_unprocessable(pic, file_path)
+                    else:
+                        # Not undecodable, so either the machine failed
+                        # (retry it, mark nothing) or the file's whole
+                        # location is gone - the one case neither the
+                        # registry nor the missing-file purge would take.
+                        self._hold_unreachable(pic, file_path)
                     return None
                 preloaded_images[file_path] = img
             w, h = img.size
@@ -354,6 +376,39 @@ class TagTask(BaseTask):
                 exc,
             )
             return None
+
+    def _hold_unreachable(self, pic, file_path) -> None:
+        """Hold *pic* out of the finders while its file's location is gone.
+
+        The counterpart to :meth:`_mark_unprocessable`, and deliberately NOT a
+        sentinel deletion. Everything `_is_transient_load_error` classes as
+        "the machine failed, not the file" is un-suppressed, so retiring an
+        unresolved picture would also retire the whole batch behind one
+        stalled DataLoader (`wd14.tag_images` returns ``{}`` for all of them)
+        or one swallowed ONNX error - and a deleted sentinel never comes back,
+        because only import and an explicit retag write one.
+
+        Suppression is reversible where deletion is not: the registry entry
+        lifts by itself when the directory returns, so a remounted drive hands
+        the picture back to every stage with its pending tag work intact.
+        `MissingFilePurgeTask` will not clean up after us either - it
+        explicitly skips a picture whose location is unreachable, because
+        purging would write ``file_removed=True`` and block a later restore.
+        """
+        registry = getattr(self._db, "unprocessable_images", None)
+        if registry is None:
+            logger.warning(
+                "TagTask: picture %s (%s) is unreachable and there is no "
+                "registry to hold it; it will be re-selected every sweep.",
+                getattr(pic, "id", None),
+                str(file_path),
+            )
+            return
+        registry.mark_unreachable(
+            getattr(pic, "id", None),
+            str(file_path),
+            reason="tag source location is not mounted",
+        )
 
     def _mark_unprocessable(self, pic, file_path) -> None:
         """Record *pic* as undecodable so the finders stop re-selecting it (#585).
@@ -754,7 +809,26 @@ class TagTask(BaseTask):
                 # anomaly score by ``feeds_anomaly_score`` because raw
                 # confidences are not comparable between models.
                 full_scores_by_path: dict = {}
-                use_pixlstash_tagger = active_workflow.is_pixlstash_tagger_enabled
+                full_pass = active_workflow.active_plugin_name(self._engine_override)
+                # `tag_quality_crops` ALWAYS runs the built-in PixlStash
+                # tagger, whichever plugin ran the full-image pass, but the
+                # prediction rows are stamped with the full pass's
+                # `active_model_version`. Merging crop confidences under
+                # another model's version records model A's numbers as model
+                # B's, and `model_version` is the sole staleness key - so
+                # invalidation, comparison and re-tagging would all act on a
+                # provenance that never existed. Only merge when the two
+                # passes are the same model; the crop's *tags* are unversioned
+                # and still apply either way.
+                #
+                # `full_pass` alone, NOT `is_pixlstash_tagger_enabled`: that
+                # property reads the *configured* plugin and ignores the
+                # override, so a retag stamped `__tag:pixlstash_tagger` while
+                # WD14 is configured would be treated as cross-model and lose
+                # its crop confidences even though both passes are the same
+                # model. The crop pass is always the built-in tagger, so the
+                # full pass's identity is the whole question.
+                crop_is_full_pass_model = full_pass == "pixlstash_tagger"
                 inference_start = time.perf_counter()
                 tag_results = active_workflow.tag_images(
                     image_paths,
@@ -764,6 +838,15 @@ class TagTask(BaseTask):
                 )
                 inference_s = time.perf_counter() - inference_start
                 logger.debug("Got tag results for %s images.", len(tag_results))
+                # What the FULL PASS said, before the crop pass rewrites
+                # `tag_results` below. The prediction rows are stamped with the
+                # full pass's `active_model_version`, so they must be built
+                # from this and never from the rewritten set: a crop tag
+                # merged in would be written as the full pass's own call,
+                # which is the same false provenance as a crop confidence.
+                full_pass_tags_by_path = {
+                    path: list(tags or []) for path, tags in tag_results.items()
+                }
 
                 # --- Quality crop pass ---
                 # Fetch face bboxes and run the custom tagger on expanded crops so
@@ -813,7 +896,7 @@ class TagTask(BaseTask):
                         quality_results = active_workflow.tag_quality_crops(
                             quality_items,
                             out_raw_scores=crop_raw_scores
-                            if use_pixlstash_tagger
+                            if crop_is_full_pass_model
                             else None,
                         )
                         crop_inference_s = time.perf_counter() - crop_inf_start
@@ -843,14 +926,34 @@ class TagTask(BaseTask):
                         # crop confirmed.  Applies to every picture that produced a crop -
                         # the largest face when one was found, otherwise the centre-crop
                         # fallback (which leaves face tags from the full-image pass alone).
+                        #
+                        # "Ground truth" is an argument about RESOLUTION and it
+                        # stands on its own - a 448 px crop really does judge
+                        # "blocky" better than a downscaled full image, whatever
+                        # model ran the full pass. What it must not do is orphan
+                        # another model's prediction row: strip a tag the full
+                        # pass emitted a CONFIDENCE for, and
+                        # `_resolve_pending_predictions` reads the applied set
+                        # back and flips that model's own call to REJECTED.
+                        #
+                        # So the precondition is "there are no rows to orphan",
+                        # not "same model". WD14 reports no confidences at all,
+                        # so its full pass writes no prediction rows and the
+                        # strip stays exactly as shipped; a plugin that does
+                        # report them keeps its output.
                         for path, crop_quality in quality_tags_by_path.items():
                             if path not in tag_results:
                                 continue
                             allowed = whitelist_by_path[path]
-                            stripped = [
-                                t for t in tag_results[path] if t not in allowed
-                            ]
-                            tag_results[path] = stripped + list(crop_quality)
+                            if crop_is_full_pass_model or not full_scores_by_path:
+                                kept = [
+                                    t for t in tag_results[path] if t not in allowed
+                                ]
+                            else:
+                                kept = list(tag_results[path])
+                            tag_results[path] = list(
+                                dict.fromkeys(kept + list(crop_quality))
+                            )
                             if crop_quality:
                                 logger.debug(
                                     "Quality crop tags for %s: %s", path, crop_quality
@@ -925,10 +1028,15 @@ class TagTask(BaseTask):
                             if pic is not None and scores:
                                 label_scores_by_pic_id[pic.id] = scores
                         if label_scores_by_pic_id:
-                            tags_by_pic_id = {
-                                u["pic_id"]: set(u.get("tags") or [])
-                                for u in update_payloads
-                            }
+                            # The full pass's own tags, not the applied set:
+                            # these rows are stamped with the full pass's
+                            # model_version, and the applied set may carry a
+                            # quality tag the built-in crop model contributed.
+                            tags_by_pic_id = {}
+                            for path, tags in full_pass_tags_by_path.items():
+                                pic = pic_by_path.get(path)
+                                if pic is not None:
+                                    tags_by_pic_id[pic.id] = set(tags)
                             model_version = active_workflow.active_model_version(
                                 self._engine_override
                             )
@@ -957,9 +1065,6 @@ class TagTask(BaseTask):
                     # `inference_s` is all WD14 or all PixlStash tagger; the
                     # crop pass is always the PixlStash tagger. Split so the
                     # two models and the CPU crop build are separate numbers.
-                    full_pass = active_workflow.active_plugin_name(
-                        self._engine_override
-                    )
                     wd14_s = inference_s if full_pass == "wd14" else 0.0
                     pixlstash_tagger_s = (
                         inference_s if full_pass == "pixlstash_tagger" else 0.0
@@ -1232,8 +1337,7 @@ class TagTask(BaseTask):
             select(func.count())
             .select_from(Picture)
             .where(Picture.tags.any(has_sentinel))
-            .where(Picture.deleted.is_(False))
-            .where(Picture.file_path.is_not(None))
+            .where(*taggable_picture_clauses())
         ).one()
         if isinstance(result, (tuple, list)):
             return result[0]

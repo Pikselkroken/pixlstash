@@ -2,6 +2,40 @@ import { resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
+ * The lookup key for a path, matching the platform's own idea of path identity:
+ * resolved, and case-folded on Windows only.
+ *
+ * THE canonical rule, re-exported by `config.ts` (which cannot own it - it
+ * imports `electron` at module load, and this module is loaded by tests that
+ * have no Electron). Two copies of this rule is exactly the bug #1206 item 2
+ * describes: `config.ts` folded case and this file did not, so a `file://` URL
+ * whose drive letter came back in a different case than `RENDERER_DIR` spells
+ * it made {@link isBundledRendererPage} answer false for the wizard page
+ * itself - and `requireSetupRenderer` then refused every `setup:*` channel,
+ * with no way through first-run setup.
+ *
+ * Windows filesystems are case-insensitive, so `C:\\x` and `c:\\x` are one
+ * directory. POSIX is case-SENSITIVE, where folding would let `/opt/Renderer`
+ * pass as `/opt/renderer` - a different directory, and one we did not bundle.
+ *
+ * It does NOT trim, on either platform, and `config.ts`'s two callers trim their
+ * own input instead. Trimming a path someone TYPED is that file's job - its
+ * readonly wizard field arrives trimmed by the renderer, so padding has to be
+ * forgiven there. Here the path was parsed out of a `file://` URL, where
+ * forgiving it only widens an equality boundary: on POSIX `setup.html%20`,
+ * `%0A` and `%09` are three different files that would each answer true for the
+ * bundled wizard page. Win32 does strip a component's trailing spaces, so
+ * trimming would be *defensible* there - but nothing we load is padded
+ * (`RENDERER_DIR` comes from `__dirname`, the sender URL from Chromium), so
+ * refusing a padded spelling costs nothing and one rule is easier to keep right
+ * than two. Two different jobs; the one only `config.ts` needs stays there.
+ */
+export function pathKey(path: string, platform: NodeJS.Platform = process.platform): string {
+  const resolved = resolve(path);
+  return platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/**
  * A URL safe to write to the log: enough to identify what was blocked, never
  * the `user:password@` userinfo the URL may carry and never a page-authored
  * payload. Schemes with no origin report origin `null`; of those only `file:`
@@ -27,6 +61,89 @@ export function redactUrl(target: string): string {
     rendered = `${url.protocol}<redacted>`;
   }
   return rendered.length > 200 ? `${rendered.slice(0, 200)}…` : rendered;
+}
+
+/**
+ * True only when `target` is exactly the bundled renderer file `page`.
+ *
+ * SECURITY: the first-run wizard and the app share one window and one preload,
+ * so `setup.html` and the library page reach the same `ipcMain` handlers and a
+ * `webContents` binding cannot tell them apart - the only thing that differs is
+ * the document currently loaded in the sender. This answers that question for
+ * the `setup:*` channels, which are the wizard's alone: `setup:commit` rewrites
+ * the server config (dropping `external_server_enabled` and `port`, setting
+ * `require_ssl: false`), repoints the library and restarts the backend.
+ *
+ * Deliberately stricter than {@link isAllowedNavigation}, which allows the whole
+ * renderer directory because every file in it is ours to load. Here one named
+ * file is the answer, so `index.html` and `permissions.html` are refused too.
+ * The path is resolved and compared whole: a prefix test would accept a sibling
+ * directory sharing the prefix, and `fileURLToPath` is what stops a percent-
+ * encoded traversal reaching the comparison as text. Compared through
+ * {@link pathKey}, so the two halves may disagree about casing on Windows -
+ * where they name one directory - and never on POSIX, where they do not.
+ */
+export function isBundledRendererPage(
+  target: string,
+  rendererDir: string,
+  page: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  let url: URL;
+  try {
+    url = new URL(target);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'file:') return false;
+  try {
+    const dir = rendererDir.endsWith(sep) ? rendererDir : rendererDir + sep;
+    return pathKey(fileURLToPath(url), platform) === pathKey(resolve(dir, page), platform);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True only when `target` is a page served by the running backend itself.
+ *
+ * SECURITY: the counterpart to {@link isBundledRendererPage}, for the channels
+ * that belong to the *app* rather than to the wizard. `server:setSettings`
+ * flips `external_server_enabled` on, sets `host` to `0.0.0.0`, can clear
+ * `require_ssl`, and restarts the backend - turning a local photo application
+ * into a network service. That is the app's Settings dialog's job and nothing
+ * else's, so a bundled `file://` page (the wizard, the splash, the permission
+ * repair screen) is refused here even though the navigation guard is happy to
+ * load it.
+ *
+ * Stricter than {@link isAllowedNavigation} in the other direction: only the
+ * exact origin of the page actually loaded counts, never a `file://` URL and
+ * never the pre-backend loopback fallback. Before the backend is up there is no
+ * app, so `currentUrl` being null refuses everything.
+ *
+ * **What this does not do:** it does not defend against hostile JavaScript
+ * running *inside* the app's own origin, which would pass. Nothing at this
+ * boundary can - the app is the legitimate caller. It removes the other
+ * renderer surfaces, and the backend's own refusal to expose an external
+ * listener without an owner password (`listeners.py`) is what stands behind it.
+ */
+export function isBackendOrigin(target: string, currentUrl: string | null): boolean {
+  if (!currentUrl) return false;
+  let url: URL;
+  let current: URL;
+  try {
+    url = new URL(target);
+    current = new URL(currentUrl);
+  } catch {
+    return false;
+  }
+  // Same three rules isAllowedNavigation applies, for the same reasons: an
+  // embedded credential is never part of anything we loaded, and an opaque
+  // scheme can carry a matching origin (`blob:http://127.0.0.1:1234/x`) while
+  // being a document the page authored rather than one the backend served.
+  if (url.username || url.password) return false;
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+  return url.origin === current.origin;
 }
 
 /**
@@ -62,6 +179,7 @@ export function isAllowedNavigation(
   target: string,
   currentUrl: string | null,
   rendererDir: string,
+  platform: NodeJS.Platform = process.platform,
 ): boolean {
   let url: URL;
   try {
@@ -82,10 +200,13 @@ export function isAllowedNavigation(
   // Normalise the trailing separator here rather than trust the caller: without
   // it a sibling directory sharing the prefix (…/renderer-evil) would pass.
   if (url.protocol === 'file:') {
-    const dir = rendererDir.endsWith(sep) ? rendererDir : rendererDir + sep;
+    // Through pathKey for the same reason isBundledRendererPage is: on Windows
+    // a differently-cased drive letter names the same directory, and refusing
+    // it would block our own bundled pages from loading.
+    const base = pathKey(rendererDir, platform);
     try {
-      const path = resolve(fileURLToPath(url));
-      return path === dir.slice(0, -1) || path.startsWith(dir);
+      const path = pathKey(fileURLToPath(url), platform);
+      return path === base || path.startsWith(base + sep);
     } catch (e) {
       console.warn(`[nav] blocking unresolvable file:// URL ${redactUrl(target)}:`, e);
       return false;

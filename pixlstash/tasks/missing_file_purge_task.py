@@ -6,6 +6,9 @@ from sqlmodel import Session, select
 from pixlstash.db_models import DeletedFileLog, Picture
 from pixlstash.db_models.picture_move import RETENTION_S, PictureMove
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.move_reconciliation_service import (
+    record_pending_reviews_in_laid_out_roots,
+)
 from pixlstash.services.scrapheap_service import file_location_is_unreachable
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -100,7 +103,9 @@ class MissingFilePurgeTask(BaseTask):
 
         repaired = 0
         if repairs:
-            repaired = self._db.run_task(self._repair_moved_pictures, repairs)
+            repaired = self._db.run_task(
+                self._repair_moved_pictures, repairs, image_root
+            )
             logger.info(
                 "MissingFilePurgeTask: repaired %s picture(s) the layout engine "
                 "had moved but not finished recording; none were purged.",
@@ -149,7 +154,11 @@ class MissingFilePurgeTask(BaseTask):
           exempts;
         * no journal row at all - a genuine deletion, purged as before.
 
-        Returns ``(repairs, deferred_count, still_missing)``.
+        Returns ``(repairs, deferred_count, still_missing)``, each repair a
+        ``(picture_id, landed_path, came_back_to_our_source)`` triple - the flag
+        says which end of the journal row the file turned up at, which is what
+        :meth:`_repair_moved_pictures` needs to know whether Phase 5 is owed a
+        review as well as a repoint.
         """
         by_id: dict = {pic.id: pic for pic in candidates if pic.file_path}
         if not by_id:
@@ -164,6 +173,7 @@ class MissingFilePurgeTask(BaseTask):
         # ``RETENTION_S``, and a later picture that reuses the path must not be
         # repointed at wherever the earlier one went.
         other_end: dict = {}
+        came_back: set = set()
         stamped: dict = {}
         for row in rows:
             pic = by_id.get(row.picture_id)
@@ -179,6 +189,13 @@ class MissingFilePurgeTask(BaseTask):
                     continue
                 stamped[pic.id] = row.moved_at
                 other_end[pic.id] = there
+                # Which end the file is at decides who moved it. At new_path it
+                # is our own move finishing; at old_path the file has come back
+                # to where we took it from, which the scan would have read as
+                # the owner's doing. See _repair_moved_pictures.
+                came_back.discard(pic.id)
+                if there == row.old_path:
+                    came_back.add(pic.id)
 
         image_root = self._db.image_root
         repairs: list = []
@@ -204,7 +221,7 @@ class MissingFilePurgeTask(BaseTask):
                 deferred += 1
                 continue
             if os.path.isfile(landed):
-                repairs.append((pic.id, landed_path))
+                repairs.append((pic.id, landed_path, pic.id in came_back))
                 continue
             deferred += 1
             logger.warning(
@@ -237,10 +254,33 @@ class MissingFilePurgeTask(BaseTask):
         return rows
 
     @staticmethod
-    def _repair_moved_pictures(session: Session, repairs: list) -> int:
-        """Repoint each row at the path its file actually reached."""
+    def _repair_moved_pictures(session: Session, repairs: list, image_root=None) -> int:
+        """Repoint each row at the path its file actually reached.
+
+        **Repointing is only half of what the discovery is worth**, and which
+        half depends on the direction. A file found at the journal row's
+        ``new_path`` is our own move landing, and the reference-folder scan
+        would have claimed that pair as ours and queued nothing - repointing is
+        the whole of it.
+
+        A file found back at the row's ``old_path`` is the other case, and the
+        journal cannot tell its two causes apart: an undo whose rename landed
+        and whose transaction did not, or the owner dragging the file back out
+        of the folder PixlStash filed it in. The scan can: ``claim_own_moves``
+        matches a pair in one direction only, so it would find the reversed pair
+        unclaimed, read it as the owner's, and queue an ``ExternalMoveReview``
+        (v1.11 Phase 5). Whichever of the two sweeps notices first used to
+        decide whether that ever happened - and once this one has repointed the
+        row, the file is where the row says it is, so the next scan sees no move
+        to follow and the reconciliation is lost for good. So it is queued here
+        too, from the same fact and through the same recorder. A crashed undo
+        queues one as well, which is the safe direction: the row is a question
+        for the owner, never an applied change, and finishing the undo is what
+        it would have asked anyway.
+        """
         repaired = 0
-        for picture_id, new_path in repairs:
+        came_back: list = []
+        for picture_id, new_path, came_back_to_our_source in repairs:
             picture = session.get(Picture, picture_id)
             if picture is None:
                 continue
@@ -251,9 +291,22 @@ class MissingFilePurgeTask(BaseTask):
                 picture.file_path,
                 new_path,
             )
+            if came_back_to_our_source and picture.file_path:
+                came_back.append((picture_id, picture.file_path, new_path))
             picture.file_path = new_path
             session.add(picture)
             repaired += 1
+        if came_back:
+            queued = record_pending_reviews_in_laid_out_roots(
+                session, came_back, image_root
+            )
+            if queued:
+                logger.info(
+                    "MissingFilePurgeTask: queued %s move(s) for reconciliation - "
+                    "the file is back at the path PixlStash moved it from, which "
+                    "the folder scan would have read as the owner's own move.",
+                    len(queued),
+                )
         session.commit()
         return repaired
 

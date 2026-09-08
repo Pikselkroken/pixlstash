@@ -132,9 +132,10 @@ is public knowledge:
 3. **Prepare the fix** — use the temporary private fork GitHub can create for you
    from within the advisory, or work locally. Do not push to a public branch until
    the release is ready.
-4. **Land the fix and tag the release** — merge the fix, update `CHANGELOG.md`
-   with a `[Security: LEVEL]` tag on the version header (see the Changelog
-   Convention section below), and publish the release on GitHub/PyPI.
+4. **Land the fix and tag the release** — merge the fix, cut the changelog with
+   `python scripts/assemble_changelog.py <version> --security LEVEL` so the
+   version header carries the tag (see the Changelog Convention section below),
+   and publish the release on GitHub/PyPI.
 5. **Publish the advisory** — only after the fixed release is live. This makes the
    GHSA public, activates the CVE, triggers Dependabot alerts for downstream
    users, and pushes the advisory to osv.dev and the PyPI advisory feeds.
@@ -146,7 +147,20 @@ is public knowledge:
 
 ## Changelog Convention
 
-When adding a new entry to `CHANGELOG.md`, use this format for the version header:
+**Do not edit `CHANGELOG.md` in a feature branch.** Every branch appending to
+the same lines at the top of the same file made it a conflict magnet, on PRs
+that had nothing else in common. A change that deserves a changelog line drops
+a file in `changelog.d/` instead, and the release folds them all in with
+`scripts/assemble_changelog.py`. See `changelog.d/README.md` for the format.
+
+Write a fragment only for a **user-visible** change — something worth reading in
+the release notes of an app you use. A bug introduced and fixed inside the same
+development cycle never reached a user, so it gets no entry; neither do
+refactors, test fixes, CI repairs or doc edits. Most PRs need no fragment.
+
+The rest of this section is the release's job, not a branch's.
+
+The version header written by the release uses this format:
 
 ```
 # [VERSION]

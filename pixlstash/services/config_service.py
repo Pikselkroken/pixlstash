@@ -13,6 +13,7 @@ from sqlmodel import select
 
 from pixlstash.db_models import ImportFolder
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.path_utils import LibraryRootsUnavailable
 
 if TYPE_CHECKING:
     from pixlstash.vault import Vault
@@ -41,8 +42,21 @@ def get_import_folder_paths(vault: "Vault") -> list[str]:
     Args:
         vault: Application vault, used for DB task dispatch.
 
+    **A read failure raises; it is never an empty list.** The folder-export
+    destination check reads this as a blocklist, and a watch folder is the
+    worst member of it: the watcher imports whatever appears there, and a
+    folder carrying ``delete_after_import`` then removes the file it has just
+    imported, so an export into one destroys its own output. An empty list is
+    indistinguishable from "no watch folders are configured", so returning it
+    on error turned that check off silently. See
+    :class:`~pixlstash.utils.path_utils.LibraryRootsUnavailable`.
+
     Returns:
-        List of import folder path strings, in ID order.
+        List of import folder path strings, in ID order; empty only when no
+        import folder is configured.
+
+    Raises:
+        LibraryRootsUnavailable: The import folder list could not be read.
     """
     try:
         db_folders = vault.db.run_immediate_read_task(
@@ -50,14 +64,21 @@ def get_import_folder_paths(vault: "Vault") -> list[str]:
                 select(ImportFolder).order_by(ImportFolder.id)
             ).all()
         )
-        return [
-            folder.folder
-            for folder in (db_folders or [])
-            if getattr(folder, "folder", None)
-        ]
     except Exception as exc:
-        logger.debug("Failed to read import folders from DB: %s", exc)
-        return []
+        logger.warning(
+            "Could not read the import folders; refusing to answer rather "
+            "than reporting none, because an empty answer reads as 'nothing "
+            "to protect' to the export destination check: %s",
+            exc,
+        )
+        raise LibraryRootsUnavailable(
+            f"Could not read the configured import folders: {exc}"
+        ) from exc
+    return [
+        folder.folder
+        for folder in (db_folders or [])
+        if getattr(folder, "folder", None)
+    ]
 
 
 # ---------------------------------------------------------------------------

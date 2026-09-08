@@ -21,7 +21,6 @@ class Project(SQLModel, table=True):
         id: Primary key.
         name: Human-readable project name.
         description: Optional markdown/text description.
-        cover_image_path: Optional path to a vault picture used as cover art.
         extra_metadata: JSON blob for arbitrary future metadata.
         created_at: UTC timestamp set on insert.
     """
@@ -29,7 +28,6 @@ class Project(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
     name: str = Field(index=True, nullable=False, unique=True)
     description: Optional[str] = Field(default=None)
-    cover_image_path: Optional[str] = Field(default=None)
     extra_metadata: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 

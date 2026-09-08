@@ -527,7 +527,13 @@ class StartupChecks:
         explicit_gpu_failure: str,
     ) -> None:
         if is_explicit_gpu and not is_auto_mode:
-            outcome.hard_failures.append(explicit_gpu_failure)
+            # Refusing rather than silently downgrading is deliberate: the owner
+            # named a device, so booting on a different one is a lie. But a
+            # refusal that does not say how to boot strands them, so the failure
+            # carries the config path and the two values that start the server.
+            outcome.hard_failures.append(
+                f"{explicit_gpu_failure}\n{self._device_config_hint()}"
+            )
             return
         self._force_cpu_with_warning(
             outcome, fallback_warning, is_auto_mode=is_auto_mode
@@ -570,13 +576,17 @@ class StartupChecks:
                 continue
         return "unknown"
 
-    def _onnx_cuda_remediation_hint(
-        self, onnx_package: str, gpu_arch_note: str = ""
-    ) -> str:
-        config_hint = (
+    def _device_config_hint(self) -> str:
+        """How to change the device, named exactly enough to act on."""
+        return (
             f"Server config path: {self._server_config_path}.\n"
             "Set `default_device` to `cpu` or `auto` there to avoid strict CUDA startup checks."
         )
+
+    def _onnx_cuda_remediation_hint(
+        self, onnx_package: str, gpu_arch_note: str = ""
+    ) -> str:
+        config_hint = self._device_config_hint()
         if onnx_package.startswith("onnxruntime "):
             return (
                 "Detected CPU-only ONNX Runtime.\nInstall GPU support with "

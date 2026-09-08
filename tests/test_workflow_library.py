@@ -20,6 +20,7 @@ because a rule shipped without them was found broken by measurement:
 import copy
 import json
 import sqlite3
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -561,6 +562,79 @@ def test_inlining_recurses_through_two_levels():
     assert ui_topology_hash(nested_subgraph_ui_workflow()) == ui_topology_hash(
         ui_workflow(TXT2IMG)
     )
+
+
+def _nesting_bomb_workflow(levels: int, fanout: int = 2) -> dict:
+    """A UI workflow whose inlined node count is ``fanout ** levels``.
+
+    Every definition holds ``fanout`` instances of the next one down, so the
+    document stays a few kilobytes while the expansion of it does not. Nothing
+    here is deeper than ``levels``, which is a fraction of the depth guard.
+    """
+    definitions = [
+        {
+            "id": f"d{level}",
+            "name": f"d{level}",
+            "inputNode": {"id": -10},
+            "outputNode": {"id": -20},
+            "inputs": [],
+            "outputs": [{"name": "IMAGE"}],
+            "nodes": (
+                [ui_node(1, "PreviewImage", [], outputs=["IMAGE"])]
+                if level == levels - 1
+                else [
+                    ui_node(index, f"d{level + 1}", [], outputs=["IMAGE"])
+                    for index in range(1, fanout + 1)
+                ]
+            ),
+            "links": [],
+        }
+        for level in range(levels)
+    ]
+    return {
+        "nodes": [
+            ui_node(100, "d0", [], outputs=["IMAGE"]),
+            ui_node(101, "SaveImage", []),
+        ],
+        "links": [],
+        "definitions": {"subgraphs": definitions},
+    }
+
+
+def test_a_subgraph_nesting_bomb_is_refused_before_it_is_expanded():
+    """The depth guard bounds depth; only a size ceiling bounds the work.
+
+    Inlining multiplies rather than adds, so a document nesting 20 levels deep
+    - a fraction of the 256-hop depth guard, which therefore never fires -
+    expands to 3,670,014 nodes. Measured before the ceiling existed: 15 s and
+    1.1 GB of resident node table for a few kilobytes of JSON, quadrupling per
+    level after that. This has to be refused, and refused cheaply, so the test
+    asserts on the clock as well as on the exception: a run that raises after
+    doing the expansion anyway is still the bug.
+    """
+    workflow = _nesting_bomb_workflow(20)
+    start = time.perf_counter()
+    with pytest.raises(WorkflowGraphError, match="exceeded"):
+        ui_topology_hash(workflow)
+    elapsed = time.perf_counter() - start
+    # Ten seconds, not two: a shared CI runner is several times slower than the
+    # box this was measured on, and a wall-clock assertion with no headroom is a
+    # flake that costs a whole gate run. It still separates the two cases by an
+    # order of magnitude - 0.18 s guarded here against 15 s unguarded, and the
+    # unguarded figure scales up with the runner while the guarded one does not.
+    assert elapsed < 10.0, (
+        f"refusing the graph took {elapsed:.1f} s, so the expansion ran before "
+        "the guard did"
+    )
+
+
+def test_a_graph_the_ceiling_does_not_reach_still_keys():
+    """The ceiling is a bomb guard, not a size limit anyone can trip by hand.
+
+    An eight-level bomb is 894 nodes - larger than any real workflow and still
+    nowhere near the ceiling - so it must key rather than raise.
+    """
+    assert ui_topology_hash(_nesting_bomb_workflow(8))
 
 
 def test_a_missing_subgraph_definition_is_reported():

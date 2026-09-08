@@ -323,7 +323,17 @@ def _before_flush_layout_tracker(session, flush_context, instances) -> None:
             if obj.picture_id is not None:
                 dirty_pids.add(obj.picture_id)
         elif isinstance(obj, Face) and obj.picture_id is not None:
-            if _attribute_changed(obj, "character_id"):
+            # A row on its way out has no attribute history, so the narrowing
+            # below reads False for it and deleting the face that carried the
+            # only person naming the folder would never stamp its picture. Ask
+            # what the face CARRIED instead. New and dirty rows keep the
+            # narrowing, so face *detection* does not stamp the library.
+            changed = (
+                obj.character_id is not None
+                if obj in session.deleted
+                else _attribute_changed(obj, "character_id")
+            )
+            if changed:
                 dirty_pids.add(obj.picture_id)
         elif isinstance(obj, Picture) and obj.id is not None:
             # Deliberately NOT session.new: a picture that has just been created

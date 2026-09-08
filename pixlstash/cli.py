@@ -1504,6 +1504,11 @@ def _report_dependencies(
     for change in changes:
         note = f"replaces {change.installed}" if change.moves else "new"
         print(f"  {change.name:<{width}}  {change.version:<12}  {note}")
+        # Named, because it is the one line that changes what agreeing means:
+        # this package does not come from PyPI, so the name above says nothing
+        # about who wrote it. The URL is what actually gets installed.
+        if change.url:
+            print(f"  {'':<{width}}  from {change.url}")
 
     moved = [change for change in changes if change.moves]
     if not moved:
@@ -1553,6 +1558,29 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
             # Resolved before anything is copied. pip is asked what it would
             # do, and it is asked first, so a plugin whose dependencies cannot
             # be had leaves nothing behind to clean up.
+            # Named BEFORE the resolution, because these lines are the cause of
+            # anything surprising in the listing below: pip honours them, so a
+            # plainly-named requirement can resolve from the plugin author's
+            # own server rather than from PyPI.
+            options = plugin_install.pip_options(plan.requirements)
+            if options:
+                # The lines are shown verbatim and described as what they are.
+                # Saying they "change where pip downloads from" would be a
+                # claim about each one, and the list is deliberately every
+                # option line rather than a curated download-source subset.
+                print(
+                    f"\nwarning: {plan.requirements.name} passes options to pip:",
+                    file=sys.stderr,
+                )
+                for option in options:
+                    print(f"  {option}", file=sys.stderr)
+                print(
+                    "  Options like --index-url and --find-links change where "
+                    "packages come from, so the ones below may not be the PyPI "
+                    "projects their names suggest; check the source shown "
+                    "against each.",
+                    file=sys.stderr,
+                )
             print(f"\nResolving {plan.requirements.name}...")
             changes = plugin_install.resolve_requirements(plan.requirements)
             if not _report_dependencies(changes, force=args.force_deps):
@@ -1564,7 +1592,7 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
             )
 
         if args.dry_run:
-            print("Dry run: nothing was written.")
+            print("Dry run: nothing was installed.")
             return EXIT_OK
         # Default yes only when the packages have just been listed one by one.
         question, default = ("Is this OK", True) if changes else ("Install it?", False)

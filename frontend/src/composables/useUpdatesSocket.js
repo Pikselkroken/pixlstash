@@ -585,24 +585,40 @@ export function useUpdatesSocket({
   // A Set, so a long pass costs one insert per id rather than a rebuild of
   // everything held so far on every eight-picture batch.
   const heldSortChangedIds = new Set();
+
+  /** Queue the pill's ids on the store, minus anything the import pill owns. */
+  function publishSortChangedIds(ids) {
+    const pending = new Set(wsStore.pendingExternalImportIds);
+    const fresh = ids.filter((id) => !pending.has(id));
+    if (fresh.length) wsStore.addSortChangedExternalIds(fresh);
+  }
+
+  /** Hand whatever is held to the store. Bypasses the hold test on purpose:
+   *  the two callers below release BECAUSE the reason to hold has gone (the
+   *  pass ended) or is about to stop being observable (this composable is
+   *  being torn down), and re-testing `taggingActive` would re-hold them into
+   *  a Set nothing will read again. */
+  function releaseHeldSortChangedIds() {
+    if (!heldSortChangedIds.size) return;
+    const ids = Array.from(heldSortChangedIds);
+    heldSortChangedIds.clear();
+    publishSortChangedIds(ids);
+  }
+
   function onFlagSortChanged(ids) {
     if (!Array.isArray(ids) || !ids.length) return;
     if (tasksStore.taggingActive) {
       for (const id of ids) heldSortChangedIds.add(id);
       return;
     }
-    const pending = new Set(wsStore.pendingExternalImportIds);
-    const fresh = ids.filter((id) => !pending.has(id));
-    if (fresh.length) wsStore.addSortChangedExternalIds(fresh);
+    publishSortChangedIds(ids);
   }
 
   watch(
     () => tasksStore.taggingActive,
     (active) => {
-      if (active || !heldSortChangedIds.size) return;
-      const ids = Array.from(heldSortChangedIds);
-      heldSortChangedIds.clear();
-      onFlagSortChanged(ids);
+      if (active) return;
+      releaseHeldSortChangedIds();
     },
   );
 
@@ -632,6 +648,18 @@ export function useUpdatesSocket({
   );
 
   onUnmounted(() => {
+    // The held ids are the one piece of state here the store does not already
+    // hold: a tag pass still running when this composable goes away would
+    // otherwise take the whole batch with it and the next view would never be
+    // told it had changed. Hand them over rather than dropping them.
+    //
+    // The one production unmount is the session ending (`Root.vue` swaps App
+    // out when `isAuthenticated` goes false) - route changes reuse this
+    // instance. `logout()` notifies its reset BEFORE flipping that flag, so
+    // this hand-over lands AFTER the reset; `useWsStore` subscribes to the
+    // same reset and clears both pills, which is what keeps the outgoing
+    // session's picture ids from being offered to the next login in this tab.
+    releaseHeldSortChangedIds();
     disconnectUpdatesSocket();
     gridWsScheduler.cancel();
     if (externalMovesPendingTimer) {

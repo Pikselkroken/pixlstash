@@ -1,4 +1,12 @@
-from pixlstash.inference.vram_budget import ORT_ARENA_SHARE, VramBudget
+import pytest
+
+from pixlstash.inference.vram_budget import (
+    MAX_CONCURRENT_GPU_IMAGES,
+    ORT_ARENA_SHARE,
+    VramBudget,
+    WD14_BASE_MB,
+    WD14_PER_ITEM_MB,
+)
 from pixlstash.inference.workflows.tagging import TaggingWorkflow
 from pixlstash.tasks.missing_tag_finder import MissingTagFinder
 
@@ -112,9 +120,17 @@ def test_missing_tags_finder_uses_suggested_task_size():
         tagging_workflow = FakeTaggingWorkflow()
         tagger_settings = {"active_tag_plugin": "wd14"}
 
+    class FakeRegistry:
+        def active_suppressed_ids(self):
+            return set()
+
+        def is_suppressed(self, _picture_id):
+            return False
+
     class FakeDB:
         def __init__(self):
             self.image_root = "/tmp"
+            self.unprocessable_images = FakeRegistry()
 
         def run_immediate_read_task(self, callback):
             class FakeTag:
@@ -182,3 +198,135 @@ def test_ort_session_options_cap_the_arena_only_when_a_budget_is_set():
         "an uncapped session gets neither a limit nor a strategy that only "
         "pays off against one"
     )
+
+
+def _wd14_limit_mb(budget) -> int:
+    """The ``gpu_mem_limit`` WD14's session is actually built with, in MiB."""
+    options = budget.ort_cuda_provider_options(
+        ORT_ARENA_SHARE["wd14"], min_limit_mb=budget.wd14_arena_limit_mb()
+    )
+    return options["gpu_mem_limit"] // 1024**2
+
+
+def _budget(budget_mb: int) -> VramBudget:
+    budget = VramBudget.__new__(VramBudget)
+    budget._device = "cuda"
+    budget._max_vram_usage_mb = budget_mb
+    return budget
+
+
+#: WD14's ORT arena as measured against the real model (RTX 5090, ORT 1.28 CUDA
+#: EP): ``385 + 111·n`` MiB. Independent of the constants the code derives its
+#: floor from, which is what lets these assertions fail for the right reason.
+def _measured_arena_mb(batch: int) -> int:
+    return 385 + 111 * batch
+
+
+@pytest.mark.parametrize("budget_mb", [512, 1024, 2048, 4096, 8192, 16384, 32768])
+def test_the_wd14_arena_holds_the_batch_measured_against_the_arena_model(budget_mb):
+    """The cap must cover the batch's ARENA cost, not its process cost.
+
+    Asserting against the same pair the floor is built from would be a
+    tautology - ``max(share, f(x)) >= f(x)`` holds for any ``f`` - so this
+    asserts against the independent measurement the constants carry headroom
+    over. That is what the runtime actually enforces.
+    """
+    workflow = _build_workflow_for_budget_tests(budget_mb=budget_mb, onnx_capacity=64)
+    budget = workflow._engine.vram_budget
+
+    batch = workflow.effective_wd14_batch_size()
+    limit_mb = _wd14_limit_mb(budget)
+
+    assert limit_mb >= _measured_arena_mb(batch), (
+        f"WD14's arena is capped at {limit_mb} MiB but running the {batch} "
+        f"images this budget hands it measures {_measured_arena_mb(batch)} MiB"
+    )
+    assert limit_mb <= budget_mb, "the configured budget is still the ceiling"
+
+
+@pytest.mark.parametrize(
+    "budget_mb,share_wins",
+    [
+        (1024, False),  # share 409, batch 1 needs 496 - the share cannot run it
+        (2048, True),  # share 819, batch 3 needs 718 - the shipped default
+        (8192, False),  # share 3276, batch 25 needs 3160 - only 3.6 % of margin
+        (32768, True),  # share 13107, batch 64 needs 7489 - ample
+    ],
+)
+def test_where_the_configured_share_decides_and_where_the_floor_takes_over(
+    budget_mb, share_wins
+):
+    """Pin the actual crossover, not the two budgets that flatter the fix.
+
+    ``ORT_ARENA_SHARE`` must stay a knob the code honours *somewhere*: flooring
+    the cap with WD14's process VRAM (900 + 220·n) instead of its arena cost -
+    roughly twice the figure - made the floor beat the share at every budget
+    from 0.5 GB to 32 GB, and 0.40 applied nowhere. It applies at the shipped
+    default and at large budgets.
+
+    It does NOT apply across 3-16 GB, and that is deliberate rather than
+    overshoot: there the share lands within a few per cent of the measured
+    need, which is thinner than the ~10 % headroom the constants carry, so the
+    floor keeps the margin. Asserting only 2048 and 32768 would hide that.
+    """
+    share_mb = int(budget_mb * ORT_ARENA_SHARE["wd14"])
+    limit_mb = _wd14_limit_mb(_budget(budget_mb))
+
+    if share_wins:
+        assert limit_mb == share_mb, (
+            "the arena floor has displaced the configured share at a budget "
+            "where the share already covers the batch with margin"
+        )
+    else:
+        assert limit_mb > share_mb, (
+            "the share is being trusted at a budget where it does not leave "
+            "the measured batch enough room"
+        )
+
+
+def test_the_arena_floor_rescues_a_budget_too_small_for_one_image():
+    """The real defect the floor exists for, and it is at the bottom end.
+
+    WD14's 40 % of a 1 GB budget is 409 MiB: measured, that loads the model
+    (409 MiB) and cannot run a single image (496 MiB). The share alone is a
+    guaranteed allocation failure there, so the floor has to take over.
+    """
+    limit_mb = _wd14_limit_mb(_budget(1024))
+
+    assert limit_mb > int(1024 * ORT_ARENA_SHARE["wd14"])
+    assert limit_mb >= _measured_arena_mb(1), "cannot run even one image"
+
+
+def test_the_batch_sizer_is_untouched_by_the_arena_work():
+    """The arena pair must never leak into batch sizing.
+
+    ``limited_batch_cap`` is calibrated against process VRAM and feeds the
+    scheduler's admission model; costing the arena is a separate question, and
+    conflating them again is exactly the regression to catch.
+    """
+    for budget_mb in (2048, 4096, 8192):
+        workflow = _build_workflow_for_budget_tests(
+            budget_mb=budget_mb, onnx_capacity=64
+        )
+        budget = workflow._engine.vram_budget
+        assert workflow.effective_wd14_batch_size() == min(
+            MAX_CONCURRENT_GPU_IMAGES,
+            budget.limited_batch_cap(WD14_BASE_MB, WD14_PER_ITEM_MB),
+        )
+
+
+def test_the_arena_floor_never_shrinks_the_share_or_survives_an_unset_budget():
+    """The floor only ever raises the cap, and only when there is one."""
+    budgeted = _budget(8192)
+
+    share_only = budgeted.ort_cuda_provider_options(ORT_ARENA_SHARE["wd14"])
+    with_tiny_floor = budgeted.ort_cuda_provider_options(
+        ORT_ARENA_SHARE["wd14"], min_limit_mb=1
+    )
+    assert with_tiny_floor["gpu_mem_limit"] == share_only["gpu_mem_limit"]
+
+    unlimited = VramBudget("cuda")
+    assert unlimited.wd14_arena_limit_mb() == 0
+    assert "gpu_mem_limit" not in unlimited.ort_cuda_provider_options(
+        ORT_ARENA_SHARE["wd14"], min_limit_mb=99_999
+    ), "no budget, no invented cap - not even from the floor"

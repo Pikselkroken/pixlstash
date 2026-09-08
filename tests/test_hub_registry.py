@@ -373,6 +373,46 @@ class TestAttachAndList:
             assert mode == 0o700, f"{directory} is {oct(mode)}, expected 0o700"
         TrustedSQLiteLocation.open(os.path.join(library.path, "vault.db")).close()
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_create_leaves_an_existing_folders_permissions_alone(
+        self, registry, tmp_path
+    ):
+        """`POST /libraries` over a folder of pictures must not narrow it.
+
+        The `pictures` verdict lands here, so the folder is one the owner has
+        had for years with whatever mode they gave it. Chmodding it 0700 takes
+        read access away from every other account and program that had it, and
+        buys nothing: the vault file itself is created 0600, and the guarded
+        open refuses only a group/world-*writable* directory.
+        """
+        folder = tmp_path / "already-mine"
+        folder.mkdir()
+        os.chmod(folder, 0o755)
+        (folder / "holiday.jpg").write_bytes(b"not really a jpeg")
+
+        registry.create(str(folder))
+
+        assert stat.S_IMODE(os.lstat(folder).st_mode) == 0o755
+        vault_db = folder / "vault.db"
+        assert stat.S_IMODE(os.lstat(vault_db).st_mode) == 0o600
+
+    def test_attach_can_be_asked_not_to_enforce_a_unique_name(self, registry, tmp_path):
+        """Start-up's own opt-out: a name collision must not refuse a library.
+
+        `bootstrap._register_first_library` reaches `attach` with a hardcoded
+        "Library 1", and a hub that already holds that name is a nuisance, not a
+        reason to refuse to bring an existing library back.
+        """
+        registry.attach(make_vault_folder(tmp_path, "first"), "Library 1")
+        second = make_vault_folder(tmp_path, "second")
+
+        with pytest.raises(LibraryExistsError):
+            registry.attach(second, "Library 1")
+
+        library = registry.attach(second, "Library 1", unique_name=False)
+        assert library.name == "Library 1"
+        assert library.path == os.path.realpath(second)
+
     def test_unreachable_library_is_listed_and_flagged(self, registry, tmp_path):
         folder = make_vault_folder(tmp_path, "removable")
         library = registry.attach(folder)

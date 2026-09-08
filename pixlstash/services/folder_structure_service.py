@@ -66,6 +66,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.library_layout import Facet
 from pixlstash.utils.media_files import (
     SUPPORTED_IMAGE_EXTS,
+    is_hidden_entry,
     is_pixlstash_thumbnail,
     is_supported_media_file,
 )
@@ -197,6 +198,18 @@ _INFERENCE_MAX_SIDE = 512
 
 #: I/O + decode threads feeding the (sequential) detection batch.
 _PRELOAD_WORKERS = 4
+
+#: Sampled pictures per detection call, so several folders share one trip
+#: through the GPU queue. `detect_faces` blocks until the task runner reaches
+#: it, and an URGENT task only jumps the QUEUE - it does not stop the batch
+#: already running - so one call per folder paid one background batch's latency
+#: 153 times over on a real library: minutes of work, an hour and a half of
+#: waiting. Matches FaceExtractionTask's own batch, which is what the runner
+#: and its VRAM gate are sized for.
+_DETECT_BATCH_IMAGES = 100
+
+#: Folders per detection call, from the batch above.
+_FOLDERS_PER_DETECT = max(1, _DETECT_BATCH_IMAGES // SAMPLED_PER_FOLDER)
 
 #: An entity type as the vault stores it -> the `kind` this API speaks. The two
 #: vocabularies differ in exactly one place and that place is deliberate:
@@ -453,7 +466,7 @@ class FolderStructureRead:
             self._checkpoint()
             kept = []
             for name in sorted(dirnames):
-                if name.startswith("."):
+                if is_hidden_entry(name):
                     # `.pixlstash` sidecars and a vault's own thumbnail cache.
                     # Counted, because §24's whole argument against `os.walk`'s
                     # default is that a silently omitted subtree reads as a
@@ -510,13 +523,13 @@ class FolderStructureRead:
             folder.direct_media = sum(
                 1
                 for f in filenames
-                if not f.startswith(".") and is_supported_media_file(f)
+                if not is_hidden_entry(f) and is_supported_media_file(f)
             )
             folder.direct_pictures = sorted(
                 f
                 for f in filenames
                 if os.path.splitext(f)[1].lower() in _IMAGE_EXTS
-                and not f.startswith(".")
+                and not is_hidden_entry(f)
                 and not is_pixlstash_thumbnail(f)
             )
             for picture in folder.direct_pictures:
@@ -567,44 +580,77 @@ class FolderStructureRead:
         # One pool for the whole read, not one per folder: a fresh pool per
         # folder is 20,000 thread-pool creations for the same four threads.
         with ThreadPoolExecutor(max_workers=_PRELOAD_WORKERS) as pool:
-            for done, folder in enumerate(candidates, start=1):
+            done = 0
+            for at in range(0, total, _FOLDERS_PER_DETECT):
+                group = candidates[at : at + _FOLDERS_PER_DETECT]
                 self._checkpoint()
-                self._sample_folder(folder, pool)
+                self._sample_group(group, pool)
+                done += len(group)
                 self._progress("faces", done, total)
 
-    def _sample_folder(self, folder: _Folder, pool: ThreadPoolExecutor) -> None:
-        paths = [
-            os.path.join(folder.abs_path, name)
-            for name in _evenly_spaced(folder.direct_pictures, SAMPLED_PER_FOLDER)
-        ]
+    def _sample_group(self, group: list[_Folder], pool: ThreadPoolExecutor) -> None:
+        """Sample every folder in *group* and detect over all of it in one call.
+
+        The grouping is latency, not throughput: see ``_DETECT_BATCH_IMAGES``.
+        Each folder still gets its own ``SAMPLED_PER_FOLDER`` pictures and its
+        own verdict; only the trip through the task runner is shared.
+        """
         decode = self._detect_faces is not None
-        samples = list(pool.map(partial(_load_sample, decode=decode), paths))
-        days = [day for _image, day in samples if day]
-        folder.capture_sampled = len(paths)
-        folder.capture_dated = len(days)
-        folder.capture_days = len(set(days))
+        paths_by_folder = [
+            [
+                os.path.join(folder.abs_path, name)
+                for name in _evenly_spaced(folder.direct_pictures, SAMPLED_PER_FOLDER)
+            ]
+            for folder in group
+        ]
+        samples = list(
+            pool.map(
+                partial(_load_sample, decode=decode),
+                [path for paths in paths_by_folder for path in paths],
+            )
+        )
+
+        spans: list[tuple[_Folder, list]] = []
+        at = 0
+        for folder, paths in zip(group, paths_by_folder):
+            span = samples[at : at + len(paths)]
+            at += len(paths)
+            days = [day for _image, day in span if day]
+            folder.capture_sampled = len(paths)
+            folder.capture_dated = len(days)
+            folder.capture_days = len(set(days))
+            spans.append((folder, span))
         if not decode:
             return
-        images = [image for image, _day in samples]
+
+        per_image = self._detect([image for image, _day in samples], group)
+        if per_image is None:
+            # A shared batch must not turn one folder's bad picture into five
+            # folders with no face evidence, so the group's failure is retried
+            # one folder at a time - the granularity the read had before.
+            for folder, span in spans:
+                faces = self._detect([image for image, _day in span], [folder])
+                if faces is not None:
+                    _score_faces(folder, faces)
+            return
+        at = 0
+        for folder, span in spans:
+            _score_faces(folder, per_image[at : at + len(span)])
+            at += len(span)
+
+    def _detect(self, images: list, folders: list[_Folder]) -> Optional[list]:
+        """Faces per image, or ``None`` when detection failed for *folders*."""
         try:
-            per_image = self._detect_faces(images)
-        except Exception as exc:  # noqa: BLE001 - one folder must not kill the read
+            return self._detect_faces(images)
+        except Exception as exc:  # noqa: BLE001 - one batch must not kill the read
             logger.warning(
-                "Folder-structure read: face detection failed for %r (%s: %s) - "
-                "the folder gets no face evidence and the read continues",
-                folder.rel_path or ".",
+                "Folder-structure read: face detection failed for %s (%s: %s) - "
+                "those folders get no face evidence and the read continues",
+                ", ".join(folder.rel_path or "." for folder in folders),
                 type(exc).__name__,
                 exc,
             )
-            return
-
-        embeddings = []
-        for faces in per_image:
-            biggest = _largest_face(faces)
-            if biggest is not None:
-                embeddings.append(biggest)
-        folder.face_sampled = len(paths)
-        folder.face_matched = _dominant_identity_count(embeddings)
+            return None
 
     # ── assembling the answer ───────────────────────────────────────────
 
@@ -1260,6 +1306,17 @@ def _load_sample(path: str, decode: bool):
             exc,
         )
         return None, None
+
+
+def _score_faces(folder: _Folder, per_image: list) -> None:
+    """Record one folder's face evidence from its slice of a detection batch."""
+    embeddings = []
+    for faces in per_image:
+        biggest = _largest_face(faces)
+        if biggest is not None:
+            embeddings.append(biggest)
+    folder.face_sampled = len(per_image)
+    folder.face_matched = _dominant_identity_count(embeddings)
 
 
 def _largest_face(faces) -> Optional[np.ndarray]:

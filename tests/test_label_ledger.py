@@ -423,3 +423,52 @@ def test_retag_updates_live_confidence_on_rejected_human_row():
         server.close()
         temp_dir.cleanup()
         gc.collect()
+
+
+def test_record_human_labels_never_binds_more_parameters_than_sqlite_takes():
+    """Both lists go into one statement, so both have to be chunked.
+
+    The picture ids were chunked against a budget the tag list was subtracted
+    from, which bounds nothing once there are more distinct tags than the budget
+    itself: the id chunk floors at 1 and the tag list carries the statement past
+    the cap on its own. A folder-structure commit's tags are one per tag-mapped
+    folder, so it is the library that decides how many there are.
+
+    Asserted on the parameter count rather than on a raised error: the cap is a
+    build-time SQLite constant (999 on older builds, 32766 since 3.32), so
+    whether the overrun actually raises depends on the machine.
+    """
+    from sqlalchemy import create_engine, event
+    from sqlmodel import Session, SQLModel
+
+    from pixlstash.utils.service.label_ledger import POS, record_human_labels
+    from pixlstash.utils.sql_chunking import SQLITE_ID_CHUNK
+
+    engine = create_engine("sqlite://")
+    SQLModel.metadata.create_all(engine)
+    widest = 0
+
+    def watch(conn, cursor, statement, parameters, context, executemany):
+        nonlocal widest
+        if not executemany:
+            widest = max(widest, len(parameters or ()))
+
+    event.listen(engine, "before_cursor_execute", watch)
+    try:
+        with Session(engine) as session:
+            pairs = [
+                (picture_id, f"tag-{index}")
+                for picture_id in range(1, 4)
+                for index in range(SQLITE_ID_CHUNK + 50)
+            ]
+            record_human_labels(session, pairs, POS)
+            session.commit()
+    finally:
+        # The listener outlives the engine otherwise, and this file shares a
+        # process with the rest of a gate shard.
+        event.remove(engine, "before_cursor_execute", watch)
+        engine.dispose()
+
+    assert widest <= SQLITE_ID_CHUNK, (
+        f"a statement bound {widest} parameters, over the {SQLITE_ID_CHUNK} cap"
+    )

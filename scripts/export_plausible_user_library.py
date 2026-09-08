@@ -42,11 +42,12 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import re
 import shutil
 import sys
 from datetime import timedelta
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 from sqlmodel import Session, create_engine, select
 
@@ -54,17 +55,81 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from pixlstash.db_models.character import Character  # noqa: E402
 from pixlstash.db_models.entity_project import (  # noqa: E402
     CharacterProjectMember,
     PictureSetProjectMember,
 )
+from pixlstash.db_models.face import Face  # noqa: E402
 from pixlstash.db_models.picture import Picture  # noqa: E402
+from pixlstash.db_models.picture_set import (  # noqa: E402
+    PictureSet,
+    PictureSetMember,
+)
 from pixlstash.db_models.project import Project  # noqa: E402
-from pixlstash.services import views_service  # noqa: E402
-from pixlstash.services.views_service import safe_component  # noqa: E402
 from pixlstash.utils.image_processing.image_utils import ImageUtils  # noqa: E402
 
-#: Which project-membership join table backs each collect_in_session() kind.
+_UNSAFE_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_TRAILING = " ."
+#: Longest path component written. A component over NAME_MAX is ENAMETOOLONG on
+#: Linux, and Windows' MAX_PATH is reached quickly by a nested export tree.
+_MAX_COMPONENT = 80
+
+
+def safe_component(name: str, fallback: str) -> str:
+    """Return *name* as one filesystem path component.
+
+    Entity names are free text and routinely contain ``/``, ``:`` or a trailing
+    dot, all of which are either a path separator or illegal on Windows. The
+    replacement is deliberately lossy and deliberately not unique - two
+    characters really can be called the same thing; disambiguation is the
+    caller's job.
+    """
+    cleaned = _UNSAFE_NAME.sub("_", (name or "").strip()).rstrip(_TRAILING).strip()
+    if len(cleaned) > _MAX_COMPONENT:
+        cleaned = cleaned[:_MAX_COMPONENT].rstrip(_TRAILING).strip()
+    return cleaned or fallback
+
+
+def _collect_entities(session: Session, kinds: Iterable[str]) -> dict[str, list[tuple]]:
+    """Return ``{kind: [(entity_id, name, [pictures])]}`` for *kinds*.
+
+    A picture with two faces of the same character appears twice in the join, so
+    membership is deduplicated by picture id here rather than in SQL - the query
+    stays one readable join and the set is small.
+    """
+    wanted = set(kinds)
+    joins = {
+        "people": (
+            select(Character.id, Character.name, Picture)
+            .join(Face, Face.character_id == Character.id)
+            .join(Picture, Picture.id == Face.picture_id)
+        ),
+        "sets": (
+            select(PictureSet.id, PictureSet.name, Picture)
+            .join(PictureSetMember, PictureSetMember.set_id == PictureSet.id)
+            .join(Picture, Picture.id == PictureSetMember.picture_id)
+        ),
+    }
+
+    collected: dict[str, list[tuple]] = {}
+    for kind, statement in joins.items():
+        if kind not in wanted:
+            continue
+        grouped: dict[int, tuple[str, dict[int, Picture]]] = {}
+        rows = session.exec(
+            statement.where(Picture.deleted == False)  # noqa: E712 - SQL, not Python
+        ).all()
+        for entity_id, name, picture in rows:
+            grouped.setdefault(entity_id, (name, {}))[1][picture.id] = picture
+        collected[kind] = [
+            (entity_id, name, list(pictures.values()))
+            for entity_id, (name, pictures) in grouped.items()
+        ]
+    return collected
+
+
+#: Which project-membership join table backs each _collect_entities() kind.
 _PROJECT_MEMBER_BY_KIND = {
     "people": (CharacterProjectMember, CharacterProjectMember.character_id),
     "sets": (PictureSetProjectMember, PictureSetProjectMember.set_id),
@@ -152,12 +217,10 @@ def _entity_folders(
     """Return ``{picture_id: folder_parts}`` for every picture an entity of
     *kinds* claims, nested under that entity's Project when it has one.
 
-    Reuses ``views_service.collect_in_session`` - the same grouping the Views
-    feature already does - rather than re-deriving it. First kind, then first
-    entity within it, wins a picture that belongs to more than one; the
-    fallback for everything unclaimed is the caller's job.
+    First kind, then first entity within it, wins a picture that belongs to more
+    than one; the fallback for everything unclaimed is the caller's job.
     """
-    collected = views_service.collect_in_session(session, kinds)
+    collected = _collect_entities(session, kinds)
     project_by_entity: dict[tuple[str, int], Optional[str]] = {}
     claimed: dict[int, tuple[str, ...]] = {}
     for kind in kinds:

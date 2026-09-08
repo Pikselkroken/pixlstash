@@ -38,9 +38,11 @@ from pixlstash.utils.reference_folder_validator import validate_reference_folder
 
 logger = get_logger(__name__)
 
-#: How long one folder's sampled face batch may wait. Generous enough that the
-#: first batch of a read can also pay for loading InsightFace, and short enough
-#: that a wedged GPU queue is noticed rather than waited on 20,000 times.
+#: How long one sampled face batch may wait - `_DETECT_BATCH_IMAGES` pictures
+#: from several folders, not one folder's twenty. Generous enough that the first
+#: batch of a read can also pay for loading InsightFace, and short enough that a
+#: wedged GPU queue is noticed rather than waited on 20,000 times. Still ten
+#: times the measured cost of a hundred-picture batch on a CPU-only box.
 _FACE_BATCH_TIMEOUT_S = 180.0
 
 # Matches any non-empty string with no null bytes or newlines. Applied with
@@ -565,8 +567,11 @@ def create_router(server) -> APIRouter:
                     server, picture_ids, assignments, root_path, task_id=task_id
                 )
             else:
+                # task_id, so a resume can tell the folder THIS commit
+                # registered (adopt it and finish the mapping) from one that
+                # was already there (refuse).
                 rf = commit_service.register_reference_folder(
-                    server, root_path, label=label
+                    server, root_path, label=label, task_id=task_id
                 )
                 _commit_progress(task_id, "indexing", 0, expected_pictures)
                 commit_service.record_commit_stage(server, task_id, "indexing")

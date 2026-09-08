@@ -773,11 +773,11 @@ api.onPhase((p) => {
       });
       return;
     }
-    // The read counts folders while it walks them and pictures while it looks
-    // for faces, so the line names what it is counting. Calling both "folders"
-    // is how a count of 153 pictures ended up labelled as folders.
-    const noun = p.stage === 'faces' ? 'pictures' : 'folders';
-    const counted = p.total ? `${count(p.processed)} of ${count(p.total)} ${noun}` : '';
+    // BOTH stages count folders: the walk counts them as it finds them, the
+    // face pass counts the ones it samples (`total = len(candidates)` in
+    // `_sample_folders`, candidates being folders). Calling the face stage
+    // "pictures" is how 153 folders were shown to the owner as 153 pictures.
+    const counted = p.total ? `${count(p.processed)} of ${count(p.total)} folders` : '';
     setLine('server', {
       name: 'Reading your pictures',
       state: 'running',

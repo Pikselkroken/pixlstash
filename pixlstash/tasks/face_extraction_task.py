@@ -685,7 +685,7 @@ class FaceExtractionTask(BaseTask):
         # (batched - all crops from all images in one ONNX call) up front.
         # This replaces N×(detector + recogniser + landmark + genderage) calls
         # with N detector calls + 1 recogniser call.
-        runner = BatchedFaceRunner(self._insightface_app)
+        #
         # Build the set of resolved paths for the current chunk only.  The
         # preloaded dict contains ALL task images; without this filter, every
         # chunk would run run_batch() on the full task and get_feat() on all
@@ -834,7 +834,15 @@ class FaceExtractionTask(BaseTask):
                     first_bboxes = []
                     if frames:
                         _infer_start = time.time()
-                        per_frame_faces = runner.run_batch([f for _, f in frames])
+                        # Same entry point as the still path: a frame below
+                        # _MIN_DETECTION_DIM is skipped rather than crashing
+                        # RetinaFace's internal cv2.resize, and a VRAM OOM is
+                        # re-raised instead of being written as "no faces".
+                        # A clip is exactly as able to be tiny, or to arrive
+                        # while the card is full, as a still is.
+                        per_frame_faces = FaceExtractionTask.detect_faces_in_images(
+                            self._insightface_app, [f for _, f in frames]
+                        )
                         inference_s += time.time() - _infer_start
                     else:
                         per_frame_faces = []

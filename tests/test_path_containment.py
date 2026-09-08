@@ -31,11 +31,17 @@ from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolde
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
 from pixlstash.services.operation_log_service import apply_orientation
-from pixlstash.services.scrapheap_service import remove_picture_files
+from pixlstash.services.scrapheap_service import (
+    remove_picture_files,
+    remove_picture_files_and_reconcile_ledger,
+)
+from pixlstash.utils.path_utils import LibraryRootsUnavailable
 from pixlstash.utils.caption_file_utils import SIDECAR_TYPE_TAGS, writeback_path
 from pixlstash.utils.image_processing.orientation import read_orientation
+from pixlstash.utils.media_files import has_hidden_component
 from pixlstash.utils.path_utils import path_is_within
 from pixlstash.utils.reference_folder_validator import (
+    canonical_path,
     validate_reference_folder_path,
 )
 
@@ -197,6 +203,87 @@ def test_blocklist_still_accepts_an_ordinary_folder_and_a_benign_symlink(tmp_pat
     assert validate_reference_folder_path("pictures") is not None
 
 
+class _CaseFoldingOsPath:
+    """``os.path`` with ``normcase`` folding, as it does on Windows and macOS."""
+
+    normcase = staticmethod(str.lower)
+
+    def __getattr__(self, name):
+        return getattr(os.path, name)
+
+
+class _CaseFoldingOs:
+    """``os`` carrying the folding ``path`` above; everything else falls through.
+
+    The validator module's own ``os`` name is swapped for this, rather than
+    ``os.path.normcase`` being patched in place. ``os.path`` is one object for
+    the whole process, and the gate's servers run background workers that walk
+    paths, so folding it globally would change their behaviour for as long as
+    the patch was up. Falling through by ``__getattr__`` rather than listing the
+    attributes keeps a validator function this test does not call from dying on
+    a missing name if one runs concurrently.
+    """
+
+    path = _CaseFoldingOsPath()
+
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+
+def test_has_hidden_component_answers_for_the_root_and_for_outside_it():
+    """#1194 review. The helper decides which picture rows a reference-folder
+    scan *keeps* instead of hard-deleting, so both of `relpath`'s non-name
+    answers have to be deliberate rather than fall through `is_hidden_entry`.
+
+    `path == root` gives `"."`, which is dot-prefixed: the helper called its own
+    root hidden, contradicting the one thing its docstring promises. A path
+    outside root gives `".."`, also dot-prefixed, and that one stays `True` on
+    purpose - the caller subtracts this set from the rows it is about to
+    delete, so it is the answer that keeps a row the walk never covered.
+    """
+    # The root is not examined, however it is spelled.
+    assert has_hidden_component("/a/b", "/a/b") is False
+    assert has_hidden_component("/a/b", "/a/b/") is False
+    # ...including a library whose own folder is dotted, which is the sentence
+    # the docstring makes and the case the "." answer used to break.
+    assert has_hidden_component("/a/.hidden", "/a/.hidden") is False
+    assert has_hidden_component("/a/.hidden/pics/x.jpg", "/a/.hidden") is False
+
+    # Ordinary containment, both directions.
+    assert has_hidden_component("/a/b/pics/x.jpg", "/a/b") is False
+    assert has_hidden_component("/a/b/.cache/x.jpg", "/a/b") is True
+
+    # Outside the root: kept, not deleted. Asserted so that flipping it to
+    # False - which reads like a tidy-up - has to be a deliberate choice about
+    # a hard-delete rather than a quiet consequence.
+    assert has_hidden_component("/a/c/x.jpg", "/a/b") is True
+
+
+def test_canonical_path_folds_case_where_the_filesystem_does(tmp_path, monkeypatch):
+    """#1194 review. `canonical_path` is how two reference folder roots are
+    compared, and Windows and macOS spell one directory in several cases. Left
+    case-sensitive, a registered root matches nothing under another spelling:
+    the path is accepted as free and two scans then index the same files.
+
+    `normcase` is identity on this POSIX gate - `CaseRoot` and `CASEROOT` really
+    are two directories here - so the folding platform is simulated. Without
+    that the assertion passes with or without the fix and pins nothing.
+    """
+    from pixlstash.utils import reference_folder_validator
+
+    real = tmp_path / "CaseRoot"
+    real.mkdir()
+    shouted = str(tmp_path / "CASEROOT")
+
+    # Identity on POSIX, which is the over-refusal control: two directories that
+    # differ only in case are two directories here, and must stay distinct.
+    assert canonical_path(str(real)) != canonical_path(shouted)
+
+    monkeypatch.setattr(reference_folder_validator, "os", _CaseFoldingOs())
+
+    assert canonical_path(str(real)) == canonical_path(shouted)
+
+
 # ---------------------------------------------------------------------------
 # Snapshot retention + delete
 # ---------------------------------------------------------------------------
@@ -355,6 +442,54 @@ def test_vault_supplies_the_reference_roots_the_purge_needs(server, tmp_path):
     os.makedirs(ref_root)
     _add_reference_folder(server, ref_root)
     assert ref_root in server.vault.reference_folder_roots()
+
+
+def test_an_unreadable_reference_folder_table_raises_rather_than_reporting_none(
+    server, monkeypatch
+):
+    """#1177 item 59. ``()`` means "none are configured" and nothing else.
+
+    The same list is an allowlist for the purge (empty is safe) and a blocklist
+    for the export destination and views roots (empty permits). One value
+    cannot be safe in both directions, so a read failure is made distinguishable
+    and each caller decides.
+    """
+
+    def _explode(_task, *args, **kwargs):
+        raise RuntimeError("test-induced reference folder read failure")
+
+    monkeypatch.setattr(server.vault.db, "run_immediate_read_task", _explode)
+    with pytest.raises(LibraryRootsUnavailable):
+        server.vault.reference_folder_roots()
+
+
+def test_a_purge_whose_reference_roots_are_unreadable_deletes_only_in_root(
+    server, tmp_path, monkeypatch
+):
+    """The allowlist direction, both ways at once.
+
+    Not knowing the roots must not widen what the unattended ``os.remove`` may
+    follow a stored path to (the negative), and must not stop it clearing the
+    image root either, or a failed read strands every file (the over-blocking
+    regression).
+    """
+    image_root = server.vault.image_root
+    doomed = os.path.join(image_root, "purge-in-root.png")
+    _write_png(doomed)
+    spared = str(tmp_path / "unreadable-refs" / "ref.png")
+    _write_png(spared)
+
+    def _explode():
+        raise LibraryRootsUnavailable("test-induced read failure")
+
+    monkeypatch.setattr(server.vault, "reference_folder_roots", _explode)
+    remove_picture_files_and_reconcile_ledger(
+        server.vault,
+        [(1, "purge-in-root.png", False), (2, spared, True)],
+        set(),
+    )
+    assert not os.path.exists(doomed), "an in-root file must still be deleted"
+    assert os.path.exists(spared), "an unprovable root must not be deleted from"
 
 
 # ---------------------------------------------------------------------------

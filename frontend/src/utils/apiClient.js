@@ -312,6 +312,14 @@ apiClient.interceptors.request.use((config) => {
 async function login(username, password) {
   try {
     const response = await apiClient.post('/login', {username, password});
+    // Reset BEFORE the flag, and the order is load-bearing. Flipping
+    // `isAuthenticated` is what mounts App.vue, and a store cleared after that
+    // would be cleared out from under the new session's first writes. It is
+    // also what makes the reset the sweep for anything the OUTGOING session
+    // wrote on its way down: `logout` notifies before its own flag flip, so
+    // App.vue's teardown runs after that reset, and only this one catches what
+    // the teardown left behind (see `useWsStore`'s pill ids). Pinned by
+    // `apiClientSessionResetOrder.test.js`.
     notifySessionReset('login');
     isAuthenticated.value = true;  // Update authentication state
     if (typeof window !== 'undefined' && 'credentials' in navigator &&

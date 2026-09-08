@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 
 from pixlstash.server import Server
+from pixlstash.tasks.face_extraction_task import FaceExtractionTask
 from pixlstash.services.folder_structure_service import (
     DEFAULT_DEADLINE_S,
     FolderStructureRead,
@@ -35,7 +36,9 @@ from pixlstash.services.folder_structure_service import (
     _CAPTURE_MAX_DAYS,
     _CAPTURE_MIN_DATED_PCT,
     _CONTAINER_MAX_DIRECT_PCT,
+    _DETECT_BATCH_IMAGES,
     _ENTITY_KIND,
+    _FOLDERS_PER_DETECT,
     _LEVEL_VOTE_SHARE_PCT,
     _clears_share,
     _NON_TAG_KINDS,
@@ -434,6 +437,71 @@ def test_no_more_than_the_sample_is_ever_decoded():
         FolderStructureRead(root, detect_faces=detect).run()
 
     assert batches == [SAMPLED_PER_FOLDER], batches
+
+
+def test_several_folders_share_one_trip_through_the_detector():
+    """One call per folder is what made the read take an hour and a half.
+
+    ``detect_faces`` blocks until the task runner reaches it, and URGENT only
+    jumps the queue - it does not stop the batch already running - so a
+    one-folder call paid a whole background batch's latency, 153 times over.
+    """
+    batches = []
+
+    def detect(images):
+        batches.append(len(images))
+        return [[_FakeFace(_unit(1))] for _ in images]
+
+    files = [f"{i:03d}.jpg" for i in range(SAMPLED_PER_FOLDER)]
+    spec = {"": [], **{f"f{i:02d}": files for i in range(_FOLDERS_PER_DETECT + 1)}}
+    with _tree(spec) as root:
+        FolderStructureRead(root, detect_faces=detect).run()
+
+    assert batches == [_DETECT_BATCH_IMAGES, SAMPLED_PER_FOLDER], batches
+
+
+def test_an_unreadable_picture_does_not_cost_its_batch_mates_their_faces():
+    """A ``None`` sample is a no-face POSITION, not a failed batch.
+
+    ``_load_sample`` returns ``None`` for a file it cannot open, and the other
+    end of the call skips those positions rather than raising - so a corrupt
+    picture costs its own slot and nothing else. Sharing one call across
+    folders has to keep that per-position, which is what a review doubted.
+    """
+    # The contract itself: no app is touched, because nothing is detectable.
+    assert FaceExtractionTask.detect_faces_in_images(None, [None, None]) == [[], []]
+
+    files = [f"{i:03d}.jpg" for i in range(SAMPLED_PER_FOLDER)]
+    with _tree({"": [], "mira": files, "zoo": files}) as root:
+        with open(os.path.join(root, "mira", "000.jpg"), "wb") as fh:
+            fh.write(b"not a jpeg at all")
+        result = FolderStructureRead(
+            root, detect_faces=_detector_from_identity(lambda i: 1)
+        ).run()
+
+    rows = _rows(result, 2)
+    assert "person" in _offered(rows["zoo"]["proposal"]), "the batch mate is untouched"
+    assert "person" in _offered(rows["mira"]["proposal"]), "19 of 20 is still a person"
+
+
+def test_folders_sharing_a_batch_keep_their_own_verdicts():
+    """The split back out of the shared batch, which nothing else would catch:
+    a slice off by one folder reads one folder's faces as another's."""
+    files = [f"{i:03d}.jpg" for i in range(SAMPLED_PER_FOLDER)]
+    with _tree({"": [], "mira": files, "zoo": files}) as root:
+        # Walk order is sorted, so the batch is mira's 20 then zoo's 20: one
+        # person, then twenty different people.
+        result = FolderStructureRead(
+            root,
+            detect_faces=_detector_from_identity(
+                lambda i: 1 if i < SAMPLED_PER_FOLDER else i
+            ),
+        ).run()
+
+    rows = _rows(result, 2)
+    assert "person" in _offered(rows["mira"]["proposal"]), "one person, all 20"
+    assert "faces" in _signals(rows["mira"]["proposal"])
+    assert "faces" not in _signals(rows["zoo"]["proposal"]), "20 different people"
 
 
 def test_a_folder_whose_detection_fails_costs_that_folder_and_not_the_read():

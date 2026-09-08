@@ -328,6 +328,51 @@ class TestFreshInstall:
         TrustedSQLiteLocation.open(str(image_root / "vault.db")).close()
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_bootstrap_keeps_an_existing_image_roots_mode(self, tmp_path):
+        """The same creation-only rule, at the registration that runs first.
+
+        `Vault.__init__` has left an existing image_root alone for releases
+        (see the test above); `_register_first_library` runs before it and was
+        still chmodding the folder 0700, so pointing a first run at a picture
+        folder the owner already had took read access to it away from the rest
+        of their machine.
+        """
+        image_root = tmp_path / "my-pictures"
+        image_root.mkdir()
+        os.chmod(image_root, 0o755)
+
+        result = bootstrap_hub(str(image_root), str(tmp_path / "hub.db"))
+        result.hub.close()
+
+        assert stat.S_IMODE(os.lstat(image_root).st_mode) == 0o755
+
+    def test_a_hub_already_holding_library_1_still_starts(self, tmp_path):
+        """A name collision is not a reason to refuse to bring a library back.
+
+        `_register_first_library` passes its own hardcoded label, so the hub
+        deciding it is taken is a nuisance the owner cannot even see, and used
+        to be a server that would not boot.
+        """
+        hub_path = str(tmp_path / "hub.db")
+        occupied = make_vault(str(tmp_path / "occupied"))
+        wanted = make_vault(str(tmp_path / "wanted"))
+        hub = HubDatabase(hub_path)
+        LibraryRegistry(hub).attach(occupied, "Library 1")
+        # The state this needs is "attached rows, none of them active": a hub
+        # restored or edited outside PixlStash, since `detach` refuses the
+        # active library and nothing else clears the flag.
+        with hub.transaction() as conn:
+            conn.execute("UPDATE library SET is_active = 0")
+        hub.close()
+
+        result = bootstrap_hub(wanted, hub_path)
+        try:
+            assert result.library.path == os.path.realpath(wanted)
+            assert result.library.name == "Library 1"
+        finally:
+            result.hub.close()
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
     def test_a_loose_existing_ancestor_is_kept_and_still_reported(
         self, tmp_path, caplog
     ):
@@ -1918,6 +1963,83 @@ class TestAVaultThatWillNotOpen:
         finally:
             result.engine.close()
             result.hub.close()
+
+
+unreadable_files_work = pytest.mark.skipif(
+    os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="needs POSIX mode bits and an account they apply to",
+)
+
+
+class TestAVaultThisMachineCannotRead:
+    """A vault that will not open because of the machine, not its content.
+
+    `validate_vault_folder` reports "not a PixlStash vault" and "this account
+    cannot read the file" as the same `NotAVaultError`, so a vault left mode
+    0000 by a bad restore - or held by another process, or on a full disk -
+    used to be offered the one recovery that renames it away.
+    """
+
+    @staticmethod
+    def _stamped(folder, fingerprint):
+        make_vault(folder)
+        vault = os.path.join(folder, "vault.db")
+        conn = sqlite3.connect(vault)
+        conn.execute("UPDATE library_settings SET library_uuid = ?", (fingerprint,))
+        conn.commit()
+        conn.close()
+        return vault
+
+    @unreadable_files_work
+    def test_the_first_run_reports_it_instead_of_offering_to_start_over(self, tmp_path):
+        folder = str(tmp_path / "library")
+        make_vault(folder)
+        vault = os.path.join(folder, "vault.db")
+        os.chmod(vault, 0o000)
+
+        try:
+            with pytest.raises(HubBootstrapError) as raised:
+                bootstrap_hub(folder, str(tmp_path / "hub.db"))
+
+            assert not isinstance(raised.value, UnusableVaultError), (
+                "a locked or unreadable vault must never be offered 'start over'"
+            )
+            assert "could not be read" in str(raised.value)
+            assert sorted(os.listdir(folder)) == ["vault.db"], (
+                "nothing may be moved aside"
+            )
+        finally:
+            # In the `finally` because a failing assertion above would otherwise
+            # leave a 0000 file behind for whatever runs next in this shard.
+            os.chmod(vault, 0o600)
+
+    @unreadable_files_work
+    def test_a_later_run_does_not_rename_it_even_once_authorised(
+        self, tmp_path, monkeypatch
+    ):
+        """The authorisation was given for a *different* diagnosis.
+
+        `PIXLSTASH_RECREATE_VAULT=1` says yes to the question about a file this
+        build cannot make sense of. A vault nobody could read was never that
+        question, so the yes must not reach `set_aside_unusable_vault`.
+        """
+        folder = str(tmp_path / "library")
+        hub_path = str(tmp_path / "hub.db")
+        vault = self._stamped(folder, "00000000-0000-4000-8000-0000000000aa")
+        hub = HubDatabase(hub_path)
+        LibraryRegistry(hub).attach(folder, "Library 1")
+        hub.close()
+        os.chmod(vault, 0o000)
+        monkeypatch.setenv("PIXLSTASH_RECREATE_VAULT", "1")
+
+        try:
+            with pytest.raises(HubBootstrapError) as raised:
+                bootstrap_hub(folder, hub_path)
+
+            assert not isinstance(raised.value, UnusableVaultError)
+            assert sorted(os.listdir(folder)) == ["vault.db"]
+        finally:
+            os.chmod(vault, 0o600)
 
 
 def sqlalchemy_operational_error(message):

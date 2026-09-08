@@ -290,15 +290,41 @@ It is split in two so the URL contract is testable on its own:
 **`?path=<absolute folder>` is the folder facet for folders that have no id.** A
 reference folder and an import folder each have a route (`/ref-folder/:id`,
 `/import-folder/:id`) and the sidebar owns their payload — which is why those
-two routes do not clear `selectedFolderFilter`, and why `?path=` is ignored on
-them (`applyView` guards on `folderKey`). The folder an "About your library"
-finding points at (§9.3) has no id of any kind, which is what this param is
-for. **The sidebar's subfolder selection is still not in the URL:**
+two routes do not clear `selectedFolderFilter`, and why `applyView` refuses to
+apply `?path=` on them (it guards on `folderKey`). The folder an "About your
+library" finding points at (§9.3) has no id of any kind, which is what this
+param is for. **It also carries the sidebar's subfolder selection.**
 `FolderTreeNode.vue` requires `rfId`, so a subfolder click takes
-`pushRouteForCurrentSelection`'s ref-folder branch and the path is dropped as
-before — closing that means teaching the sidebar's `activeFolderKey` watcher to
-restore a subfolder rather than the folder root, which is a change to the
-folder tree. `parseFolderPath`
+`pushRouteForCurrentSelection`'s ref-folder branch; the branch pushes `?path=`
+alongside the id, and `SideBar.routeSubfolderUnder` reads it back once the
+folder listing is in, selecting the subfolder rather than the folder root.
+**On an id-carrying route that query is RELATIVE to the folder the id names**
+(`SideBar._subPathUnder` builds it, and it reaches the branch as the payload's
+`subPath`). The id already says where the folder is, so repeating the absolute
+path only put the owner's folder tree in the address bar and in browser history
+(#1206 item 9); a folder ROOT is therefore `/ref-folder/:id` with no query at
+all. `routeSubfolderUnder` still accepts an ABSOLUTE `?path=`, because links
+shared and history entries made before that carry one — and because `/`, the
+only folder-facet route with no id, has nothing to be relative to. The id still
+owns `referenceFolderId`, so
+`reference_folder_id` stays in the grid query — the query only says which
+folder *inside* it is open. **The sidebar watcher watches `?path=` alongside
+`activeFolderKey`, and has to.** Two sibling subfolders of one folder push
+routes that differ only in the query, so the key alone cannot tell them apart;
+watching only the key meant every subfolder click created a history entry
+(`/ref-folder/5` used to be pushed identically each time, which vue-router
+deduplicates, so there was none) whose Back moved the address bar and nothing
+else. The watcher's "already in sync" test therefore compares the folder *and*
+the path, or a click would re-fetch both listings and re-emit the payload it
+had just set — **through `_urlPath`, not `_samePath`**, because
+`routeSubfolderUnder` re-spells the path into the folder's own separators and
+`parseFolderPath` keeps the URL's, so the two are in different spaces. Compared
+in the wrong one they never match, the sidebar stops recognising its own work,
+and the re-emit pushes a URL that differs from the one that arrived — the
+inert-Back bug again, in a loop. `SideBarFolderRouteRestore.test.js` pins the
+whole class with one property, "a route arriving twice is inert",
+parameterised over the separator-changing inputs; the POSIX-only version of it
+was green while the Windows case looped. `parseFolderPath`
 resolves it to the same `{pathPrefix, label}` payload the sidebar emits, and so
 to the listing API's existing `file_path_prefix` param — there is no new backend
 filter behind it. Read on every grid route rather than only on `/`, the same
@@ -781,7 +807,20 @@ is spent on the one thing that needs it. One pane, no steps:
   only part that shrinks (`flex: 0 1 auto` + ellipsis); the leaf identifies the
   row and always shows in full, and `title` carries the whole stored path.
   `have` renders a dash off `is_new`, not off `have == 0`, because a real folder
-  can legitimately hold nothing.
+  can legitimately hold nothing. **The library root is one of the rows** since
+  #1161 — `path: ""`, drawn as *Library root* at indent 0 with no breadcrumb.
+  It is in the list under the same non-zero rule as every other row, so it
+  appears only while pictures are actually in it, which with the unfiled sweep
+  off is exactly where the pictures the layout cannot place stay. Drawing every
+  folder except that one read as "nothing was left behind".
+- **The pane says what files a picture.** `filingHint` is derived from
+  `segments`, never written down, so it cannot drift from the builder above it:
+  it names the facets that are in the layout, the ones that are not ("a Tag does
+  not"), that an unfilled level becomes `Global`, and that a picture nothing
+  files at all has no folder and stays in the library root unless the sweep box
+  is ticked. The builder showed which facets were *in* the layout and nothing
+  said which were not, so an owner whose pictures were all tagged and none of
+  them in a project read the empty tree as a bug (#1161).
 - **The layout is frozen for the duration of a move**, in `scheduleSave`, every
   edit routes through it, so one guard covers the model, the debounce and the
   write. Editing mid-run makes later passes re-plan against a new layout, so

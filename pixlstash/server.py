@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from importlib.metadata import PackageNotFoundError, version as package_version
 from alembic.util.exc import CommandError as AlembicCommandError
-from platformdirs import user_config_dir
+from platformdirs import user_config_dir, user_data_dir
 from sqlalchemy.exc import SQLAlchemyError
 
 
@@ -360,9 +360,12 @@ class Server(
 
         Resolution order:
 
-        0. :data:`DEV_MACHINE_ENV_VAR` - declares the *machine* rather than the
-           channel, so it outranks everything below it. Reported as ``dev``,
-           which the metrics collector subtracts from active installs.
+        0. :data:`DEV_MACHINE_ENV_VAR` or dev marker file - declares the *machine*
+           rather than the channel, so it outranks everything below it. Reported
+           as ``dev``, which the metrics collector subtracts from active installs.
+           The machine is declared if either ``PIXLSTASH_TELEMETRY_DEV`` env var
+           is truthy or a ``.pixlstash-dev-machine`` marker file exists in the
+           app-data directory.
         1. ``PIXLSTASH_INSTALL_TYPE`` override - if set to one of the allowed
            values it wins outright, letting an installer declare its channel
            (e.g. ``other`` for the Windows build) without a code change. An
@@ -379,6 +382,41 @@ class Server(
                 "%s=%r declares a development machine; reporting install_type='dev'.",
                 Server.DEV_MACHINE_ENV_VAR,
                 dev_marker,
+            )
+            return "dev"
+
+        # The same declaration, made durably: an env var is not inherited by a
+        # packaged app launched from the OS shell, and does not survive a
+        # reinstall.
+        #
+        # `stat` rather than `exists`, but for a narrower reason than it looks:
+        # `exists` re-raises a PermissionError, so that case was never silent.
+        # What it DOES swallow is ENOENT, ENOTDIR, EBADF and ELOOP
+        # (`pathlib._IGNORED_ERRNOS`) - so an app-data path that is a file, or
+        # a symlink loop, read as "no marker" and turned a maintainer's install
+        # back into a counted one without a word. Those are the cases said out
+        # loud below. The catch is also two specific handlers rather than a
+        # blanket `except Exception`, so a programming error still surfaces.
+        marker_file = Path(user_data_dir("pixlstash")) / ".pixlstash-dev-machine"
+        try:
+            marker_file.stat()
+            declared = True
+        except FileNotFoundError:
+            declared = False
+        except OSError as exc:
+            declared = False
+            logger.warning(
+                "Could not read the dev-machine marker at %s (%s). Falling back "
+                "to automatic detection: if this IS a maintainer machine, its "
+                "check-ins will be counted as a real install until the "
+                "directory is readable again.",
+                marker_file,
+                exc,
+            )
+        if declared:
+            logger.info(
+                "Found dev machine marker file at %s; reporting install_type='dev'.",
+                marker_file,
             )
             return "dev"
 

@@ -3,6 +3,27 @@
 import os
 
 
+class LibraryRootsUnavailable(RuntimeError):
+    """A list of the library's own roots could not be read.
+
+    Raised by the helpers that answer "which directories belong to this
+    library" - :meth:`pixlstash.vault.Vault.reference_folder_roots` and
+    :func:`pixlstash.services.config_service.get_import_folder_paths` - instead
+    of returning an empty collection, because "there are none" and "we do not
+    know" are the same value with opposite safety (#1177 items 59, and the
+    import-folder sibling found in its review).
+
+    Each list is read as an **allowlist** in one place and a **blocklist** in
+    another. The scrapheap purge asks which roots its unattended ``os.remove``
+    may follow a stored path into, where empty means "only ``image_root``" and
+    is safe. The folder-export destination check asks which roots nothing may
+    be written into, where empty means "nothing to avoid" and permits exactly
+    what the check exists to refuse. No single value
+    is safe in both directions, so the failure is made distinguishable and the
+    caller picks the direction.
+    """
+
+
 def resolve_path_within(base_dir: str, *segments: str) -> str:
     """Resolve a path and confirm it remains strictly within *base_dir*.
 

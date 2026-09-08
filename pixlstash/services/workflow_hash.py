@@ -64,6 +64,20 @@ REFINEMENT_ROUNDS = 4
 # would build, while still bounded well under CPython's own recursion limit.
 _MAX_RESOLVE_DEPTH = 256
 
+# Ceiling on the node table subgraph inlining may build. The depth guard does
+# not bound the work: inlining multiplies rather than adds, so a definition
+# holding two instances of the next definition down doubles the node count per
+# level and reaches millions of nodes at depth 20 - a fraction of the depth
+# guard, from a JSON document of a few kilobytes. Measured on this shape before
+# the ceiling existed: 14,334 nodes at depth 12, 917,502 at 18, 3,670,014 at 20
+# (15 s, 1.1 GB), quadrupling per level after that. Bounding the table is what
+# refuses such a file cheaply; the depth guard stays for the self-recursive
+# case, which grows linearly and would never trip a size ceiling.
+#
+# 50,000 is far above anything real: the largest UI graph in the 28,069-file
+# corpus this module was measured against is orders of magnitude smaller.
+_MAX_INLINED_NODES = 50_000
+
 MODEL_EXTENSIONS = (".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".gguf", ".sft")
 IMAGE_EXTENSIONS = (
     ".png",
@@ -607,6 +621,14 @@ class _UiGraph:
         for node in node_list or ():
             if not isinstance(node, dict) or node.get("id") is None:
                 continue
+            if len(self.nodes) >= _MAX_INLINED_NODES:
+                # Checked while the table is being built, not after: the point
+                # of the ceiling is that the expansion never runs to completion.
+                raise WorkflowGraphError(
+                    f"inlining subgraphs exceeded {_MAX_INLINED_NODES} nodes; "
+                    "the definitions nest so that each level multiplies the "
+                    "node count"
+                )
             key = f"{prefix}{node['id']}"
             self.nodes[key] = node
             node_type = str(node.get("type", "?"))

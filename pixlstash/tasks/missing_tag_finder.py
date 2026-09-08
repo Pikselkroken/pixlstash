@@ -13,7 +13,7 @@ from pixlstash.db_models import (
 from pixlstash.services.set_lock_service import locked_picture_id_subquery
 from pixlstash.worker_config import TAGGER_MAX_INFLIGHT
 from .base_task_finder import BaseTaskFinder
-from .tag_task import TagTask
+from .tag_task import TagTask, taggable_picture_clauses
 
 # Every sentinel value starts with TAG_PENDING_SENTINEL (``__tag`` or
 # ``__tag:<engine>``), so the half-open range [``__tag``, ``__tah``) is the
@@ -63,9 +63,23 @@ class MissingTagFinder(BaseTaskFinder):
         # Fetch enough candidates that _filter_and_claim can always fill one
         # additional task even when all max_inflight slots are already in-flight.
         max_inflight = max(1, self.max_inflight_tasks())
+        # Exclude undecodable pictures at the query, as the face, thumbnail and
+        # embedding finders already do. `_filter_and_claim` drops them anyway,
+        # but only after they have taken up room in the candidate window - and
+        # an undecodable picture keeps its pending-tag sentinel for ever
+        # (TagTask marks it unprocessable and writes nothing, so nothing
+        # clears the sentinel). They therefore accumulate permanently, and
+        # this window is ordered by `Picture.id`: once as few as
+        # `batch_limit * (max_inflight + 1)` of them sit below the pictures
+        # that still need tagging, every sweep reads the same corrupt rows,
+        # claims none of them and returns None - which the planner reads as
+        # "no work" and answers with a growing backoff. That is tagging
+        # starving library-wide on a handful of bad files, the same shape
+        # `MissingFaceExtractionFinder` documents on its own query.
+        suppressed_ids = self._db.unprocessable_images.active_suppressed_ids()
         pictures = self._db.run_immediate_read_task(
             lambda session: self._fetch_missing_tags(
-                session, batch_limit * (max_inflight + 1)
+                session, batch_limit * (max_inflight + 1), suppressed_ids
             )
         )
         if not pictures:
@@ -95,7 +109,7 @@ class MissingTagFinder(BaseTaskFinder):
         )
 
     @staticmethod
-    def _fetch_missing_tags(session: Session, limit: int):
+    def _fetch_missing_tags(session: Session, limit: int, suppressed_ids=None):
         pending = select(Tag.picture_id).where(
             Tag.tag >= TAG_PENDING_SENTINEL, Tag.tag < _SENTINEL_RANGE_END
         )
@@ -106,6 +120,13 @@ class MissingTagFinder(BaseTaskFinder):
         # quality crop in TagTask only *prefers* a face (it centre-crops
         # without one), but cropping on the face is the shipped behaviour, so
         # the picture waits for it.
+        #
+        # The wait is bounded because `MissingFaceExtractionFinder` selects on
+        # the exact complement, `~Picture.faces.any()`: a picture with no row
+        # is by definition still face-stage work, so a cancelled or failed
+        # batch is re-offered rather than stranded. The one predicate the two
+        # finders did not share was the suppressed set, which is why it is
+        # applied above.
         faces_known = Picture.faces.any()
         # A picture frozen by a locked set keeps its confirmed tags: never re-queue
         # it for tagging (the write-side skip in TagTask is the belt; this is the
@@ -120,10 +141,20 @@ class MissingTagFinder(BaseTaskFinder):
         # selected again on the very next sweep - an unbounded inference loop.
         # One definition on both sides is what closes it.
         locked_member = ~Picture.id.in_(locked_picture_id_subquery())
+        # `taggable_picture_clauses` is the predicate `TagTask.count_missing_tags`
+        # applies, imported rather than repeated: the two disagreed (#1206 item
+        # 3), so the "awaiting tagging" number excluded scrapheaped pictures
+        # while this query kept selecting them and spending the GPU on them.
+        stmt = select(Picture).where(
+            Picture.id.in_(pending),
+            faces_known,
+            locked_member,
+            *taggable_picture_clauses(),
+        )
+        if suppressed_ids:
+            stmt = stmt.where(Picture.id.notin_(tuple(suppressed_ids)))
         return session.exec(
-            select(Picture)
-            .where(Picture.id.in_(pending), faces_known, locked_member)
-            .options(
+            stmt.options(
                 selectinload(Picture.tags),
             )
             .order_by(Picture.id)

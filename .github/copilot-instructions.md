@@ -4,9 +4,8 @@
 
 Several agent sessions may run against one clone at once and cannot see each
 other. Before touching anything: `git status && git branch --show-current`. If
-the tree holds uncommitted changes you did not make, or the current branch is
-another session's work in progress, say so and stop rather than switching under
-it.
+the tree holds changes you did not make, or the branch is another session's work
+in progress, say so and stop rather than switching under it.
 
 Start work on its own branch with the base set explicitly: feature work on
 `develop`, bugfixes on `main` (see the PR base rules):
@@ -16,17 +15,17 @@ git fetch origin && git checkout -b <branch> origin/<base>
 ```
 
 **Do not create a worktree on your own.** When every session made one, the cost
-was fifty-odd checkouts and nothing where the person testing expected it. If
-one is genuinely necessary (a second lane at the same time, a long bisect) say
-so and let the person decide.
+was fifty-odd checkouts and nothing where the tester expected it. If one is
+genuinely necessary (a second lane at once, a long bisect) say so and let the
+person decide.
 
 **The hub and the vault live outside the repo** (platformdirs user data dir), so
-every checkout runs against the same library. Do not "fix" it into per-checkout
-data.
+every checkout runs against the same library. Do not "fix" that into
+per-checkout data.
 
 Commit and push from the checkout you are in, open the PR, and when it merges
-`git checkout <base> && git pull`. Stage by name, never `git add -A`: never
-stage a file you did not write in this session.
+`git checkout <base> && git pull`. Stage by name, never `git add -A`, and never
+stage a file you did not write this session.
 
 Sessions that only read (questions, reviewing pushed code) can stay put.
 
@@ -46,48 +45,45 @@ not a test path.
 
 ### Say what to test, in the session, never in the PR
 
-A path is not a handoff. Only the session that wrote the change knows which
-screen it lands on, what number should appear, and which of its own steps it is
-least sure of; "test at `<path>`" makes the tester reverse-engineer all three.
+A path is not a handoff: only the session that wrote the change knows the screen
+it lands on, the number that should appear, and which of its own steps it trusts
+least.
 
-**The handoff goes to the person, in the session. It does not go in the PR.** A
-test plan is made of this machine's absolute paths, its library, its folder
-names and its disk figures. A PR is public and permanent. **Never put a test
-plan, a path under `$HOME`, a listing of the owner's library, or their disk
-usage into a PR body, a commit message or a PR comment.** A `## Test this`
-section carrying the owner's home directory and private model inventory has
-already had to be edited back out of one. Aggregate engineering figures that
-justify a decision are fine: "0.01 s to read the index", "a 339 MB tagger". The
-line is between what a mechanism costs and what is on that person's disk.
+**The handoff goes to the person, in the session. It does not go in the PR.**
+**Never put a test plan, a path under `$HOME`, a listing of the owner's library,
+or their disk usage into a PR body, a commit message or a PR comment** - a PR is
+public and permanent, and a `## Test this` section carrying a home directory and
+a private model inventory has already had to be edited back out of one.
+Aggregate engineering figures are fine ("0.01 s to read the index", "a 339 MB
+tagger"): the line is what a mechanism costs versus what is on that person's
+disk.
 
-End the session with the plan, five parts, the last two being the ones that get
-skipped:
+Five parts, the last two being the ones that get skipped:
 
-1. **Where**: the test-at block above, always, plus any step that has to happen
-   first ("restart the backend, the declaration runs at start-up").
-2. **What to look at**, as numbered checks against a named screen or control:
-   "Model folders dialog, toolbar folder icon", not "the folders UI".
+1. **Where**: the test-at block, plus any step that must happen first
+   ("restart the backend, the declaration runs at start-up").
+2. **What to look at**, numbered, against a named screen or control: "Model
+   folders dialog, toolbar folder icon", not "the folders UI".
 3. **The expected values, concretely**: the row count, the size, "no size at
-   all rather than `0 B`". A tester cannot confirm a number nobody stated, and a
-   wrong one is invisible next to a vague one. This is exactly the part that
-   must not be published.
+   all rather than `0 B`". Nobody can confirm a number you did not state, and a
+   wrong one is invisible beside a vague one. This is the part that must not be
+   published.
 4. **What "wrong" looks like**, per check: "wrong if a locked row offers scan
-   or forget". That lets someone who does not know the design spot a regression
-   rather than assume the screen is meant to look that way.
-5. **What you could not test yourself**, named and separated: cold-boot cost,
-   whether a long list is pleasant, anything needing hardware or a judgement
-   call. This is the part actually being handed off; the rest is verification.
+   or forget" - so a reader who does not know the design can spot a regression
+   instead of assuming the screen is meant to look that way.
+5. **What you could not test yourself**: cold-boot cost, whether a long list is
+   pleasant, anything needing hardware or judgement. This is the part actually
+   being handed off; the rest is verification.
 
-Order the checks by risk and say which one matters. A check that could destroy
-data goes near the top and tells the tester to stop rather than complete the
-gesture: "the drag must never start; if the row picks up, say so and do not
-drop it." If a suite already proves something, say so in a line and spend the
-human's attention on what the suite cannot see.
+Order by risk and say which check matters. One that could destroy data goes near
+the top and says to stop rather than complete the gesture: "the drag must never
+start; if the row picks up, say so and do not drop it." If a suite already
+proves something, say so in a line and spend the human's attention elsewhere.
 
 ## Patch Reliability Policy
 
-- **Read before you edit.** Read enough surrounding context (at least 50 lines before and after the target) to understand structure, logic, and dependencies before generating a patch. If placement is ambiguous, read more until it is certain.
-- **Don't assess what you haven't read.** Never critique, judge, or make claims about the adequacy of a file, document, or module you have not actually read. Read it first, or explicitly scope your statement to what you did read and flag the gap.
+- **Read before you edit.** At least 50 lines each side of the target, enough to see structure, logic and dependencies. If placement is ambiguous, read more until it is not.
+- **Don't assess what you haven't read.** Never judge a file, document or module you have not opened. Read it, or scope the claim to what you did read and flag the gap.
 - **Reject illogical edits.** Check every patch for abrupt changes that don't fit the surrounding code, e.g. a method placed outside its class, code inserted above the top imports, or a missing blank line between top-level definitions.
 - **Class member order:** imports → class definition → Google-style docstring → class-level variables → `__init__` (including property initialisation) → properties (getters/setters) → public methods → private methods. Keep everything correctly indented within the class block.
 
@@ -174,9 +170,13 @@ Decompose by domain first, then fan out. **Independent** sub-tasks run concurren
 - **Honour the built-in escalation chains:** seniors spawn juniors for mechanical sub-work; `ci-expert` must clear any workflow/CI change with `chief-security-officer` before it is pushed; `chief-executive-officer` drives the execution skills (`ci-expert` for metrics/pipelines, `chief-marketing-officer` for growth).
 - **Gate, don't parallelize, the safety steps.** Anything touching auth, secrets, external exposure, dependencies, deploys, or CI must pass `chief-security-officer` review (or `/security-review`) **before merge/push**: a barrier after the implementation work, not a concurrent lane.
 - Give each skill a tightly-scoped brief and reconcile their outputs yourself. Don't let parallel agents edit the same files; split by file/area or sequence the overlap.
+- **Brief the invariant, not the ticket.** "Make the listing agree with what pip
+  actually reads" gets the stdlib parser; "fix item 8" gets item 8 and leaves
+  its siblings. Name the property that must hold, and make the class sweep and
+  the mutation check entry criteria rather than review findings.
 
 ## Imports
-- Mostly use imports at the top of the file. Local imports within functions are only acceptable if they are necessary to avoid circular dependencies, to reduce startup time for rarely used modules or if the import is *clearly* optional.
+- Imports go at the top of the file. A local import inside a function is only acceptable to break a circular dependency, to keep a rarely-used heavy module out of start-up, or when the import is *clearly* optional.
 - Do not use local imports for libraries that are commonly used in the code base, like torch, numpy, PIL, cv2, etc. These should be imported at the top of the file for clarity and consistency.
 
 ## Exception handling
@@ -192,13 +192,22 @@ Decompose by domain first, then fan out. **Independent** sub-tasks run concurren
 - The TaskRunner continuously processes tasks from the queue, executing the associated work function, reporting progress and handling results.
 
 ## Fixing bugs and default error resolution approach
-- NEVER assume a fix without understanding the root cause.
-- ALWAYS read error messages carefully and check stack traces to identify the source of the error.
-- NEVER apply fallback-based fixes unless I explicitly approve them in this conversation.
-- REQUIRED debugging sequence: reproduce issue → isolate root cause → implement direct fix → validate with tests/log evidence.
-- Fallbacks are LAST RESORT only, not a default strategy.
-- If a fallback is approved and necessary, implement it so it does not mask the underlying issue and includes clear logging for future resolution.
-- If you cannot resolve the root cause, document findings, blockers, and attempted fixes, then ask for direction instead of applying an unverified workaround.
+
+- **Root cause, never assumption.** Read the stack trace, then reproduce →
+  isolate → fix where every caller routes through → validate with tests or log
+  evidence.
+- **Fix the class, not the reported instance.** A report names one site; grep
+  for the population and state the count before editing. A bot has flagged 4 of
+  7 identical call sites here, and a reviewer 1 of 4 identical clears; the
+  reported one is a sample.
+- **Show every new assertion failing.** Break what it guards, watch it go red,
+  restore. Tests have shipped here passing on a stray environment variable, on
+  the wrong errno, and on asserting a handler was *registered* rather than that
+  it blocked. Mutation caught each one; nothing else did.
+- **No fallbacks unless approved in the conversation** - a last resort, not a
+  strategy. An approved one must not mask the cause, and must log it.
+- If the root cause will not come, document findings, blockers and attempts,
+  then ask rather than ship an unverified workaround.
 
 ## Alembic migrations
 - Give every migration a descriptive name. The baseline rule is one new migration file per schema change, but **the branch decides how strictly to apply it:**
@@ -243,27 +252,25 @@ shard it locally the same way CI does.
 **A PR's base must be a long-lived branch: `develop`, `main`, a release branch.
 Never another PR's branch.** Stacking reads as tidy and loses work.
 
-It lost work on 2026-08-11: #873 had #871's branch as its base; #871 merged to
-`develop`, then #873 merged **into #871's branch** (GitHub only auto-retargets
-a PR when its base branch is *deleted*). The badge said merged, the content was
-not in the product, and the PR list could not show it.
+It lost work on 2026-08-11: #873 based on #871's branch; #871 merged to
+`develop`, then #873 merged **into #871's branch** (GitHub auto-retargets only
+when a base branch is *deleted*). The badge said merged; the content was not in
+the product and the PR list could not show it.
 
-**This rule is about the BASE, not about waiting.** Depending on unmerged work
-is fine and normal; *targeting its branch* is what is banned. There are exactly
-two ways:
+**This is about the BASE, not about waiting.** Depending on unmerged work is
+normal; *targeting its branch* is banned. Two ways:
 
-1. **Push the commits onto that PR's own branch**, when the new work belongs to
-   that PR (a review fix, a test it was missing).
-2. **Branch off the open PR to get its content, and target `develop` anyway**,
-   when the new work is its own step that merely needs the other's code. The
-   new PR carries the old one's commits in its diff until the old PR merges, at
-   which point they become common ancestors and drop out by themselves. Nothing
-   has to be rebased and nothing has to wait. The same shape *replaces* a PR:
-   carry its full history, target the base it targeted, close the old one.
+1. **Push onto that PR's own branch**, when the work belongs to that PR (a
+   review fix, a test it was missing).
+2. **Branch off the open PR for its content, and target `develop` anyway**,
+   when the work is its own step that merely needs the other's code. The new PR
+   carries the old commits in its diff until the old PR merges, when they become
+   common ancestors and drop out by themselves - nothing to rebase, nothing to
+   wait for. The same shape *replaces* a PR: carry its history, target the base
+   it targeted, close the old one.
 
-The misreading to guard against: treating option 2 as "open a PR only once the
-other has landed". That serialises every dependent piece of work behind a
-review queue and buys nothing.
+Do not misread option 2 as "open a PR only once the other has landed": that
+serialises every dependent piece behind a review queue and buys nothing.
 
 **Corollary: verify the merge, not the badge.** After a PR you care about is
 merged, confirm its content actually reached the target:
@@ -274,29 +281,28 @@ about the branch you are going to build on next.
 ## Fixing a CI failure: update the existing PR, do not open another
 
 **One full gate run costs ~200 runner-minutes** (8 Linux shards, 4 Windows, e2e,
-checks), and every push to a PR runs the whole gate again. This repo once had
-13 PRs open at once and opened 47 in a day. Runner time is a budget.
+checks), and every push re-runs the whole gate. This repo once had 13 PRs open
+at once and opened 47 in a day. Runner time is a budget.
 
-1. **A CI failure on a PR is fixed on that PR's branch**, even when the cause is
-   somewhere else entirely (a stale map, another PR's merge, an unrelated
-   flake). Pushing the fix to the red PR turns it green in the run it was
-   already going to spend; a second PR spends a second run and leaves the first
-   red until the second lands.
+1. **A CI failure on a PR is fixed on that PR's branch**, whatever the cause (a
+   stale map, another PR's merge, an unrelated flake). The fix turns it green in
+   the run it was already spending; a second PR spends a second run and leaves
+   the first red until it lands.
 2. **Check `gh pr list --state open` before opening anything.** Sessions cannot
    see each other; two once fixed the same red guardrail independently (#848
    and #851), ~400 runner-minutes for one change.
 3. **Fold the unblock into the fix.** If the guardrail is wrong *and* its data is
    stale, that is one PR, not two; the reviewer reads the same diff either way.
 4. **Close a superseded PR the moment it is superseded**, not at merge time. Left
-   open it keeps drawing runs from every push to its base, and merging it can
-   reintroduce exactly the code a later fix corrected.
+   open it keeps drawing runs, and merging it can reintroduce the very code a
+   later fix corrected.
 5. **Prefer one PR per work step, with clean separated commits.** Split into a
    stack only when the pieces can genuinely **merge independently**, not merely
    because the diff is large. Review granularity comes from commits.
 
-For anyone orchestrating parallel agents: per-agent instructions bound each
-agent's diff, and nothing bounds the aggregate. Counting the PRs across all
-in-flight lanes is the orchestrator's job.
+Orchestrating parallel agents: per-agent instructions bound each agent's diff
+and nothing bounds the aggregate. Counting PRs across in-flight lanes is the
+orchestrator's job.
 
 ## Answering a review: reply and resolve, don't just push a fix
 
@@ -313,15 +319,19 @@ thread and a changed file, reconstructing whether the two are related.
   as answered. Never resolve a thread you did not act on.
 - **Disagreeing is a reply, not a silence.** If the comment is wrong, or the fix
   is deliberately different, say so on the thread and leave it for a human.
+- **A reviewer's observation is usually right; the mechanism they give for it is
+  a hypothesis.** Check it before building a fix, a code comment or a reply on
+  top of it. One accepted verbatim here produced all three, confidently wrong.
+  Answering a review earns the same rigour as writing the code did.
 - **Collapsed "suppressed comments" have no thread**, so nothing tracks them.
   Pick them up in a top-level PR comment or they are lost. A Copilot review
   hides them in a `<details>` block below the per-file summary.
 
-**Verify the fix is on the PR head before calling the review answered**, by
-grepping the *remote* branch for a symbol the fix introduces:
-`git grep -q '<symbol>' origin/<branch>`. Do not use `headRefOid`: for a merged
-PR that value *is* the merged commit, so comparing against it is a tautology,
-and two review fixes went missing behind exactly that.
+**Verify the fix is on the PR head before calling a review answered**: grep the
+*remote* branch for a symbol the fix introduces,
+`git grep -q '<symbol>' origin/<branch>`. Not `headRefOid` - for a merged PR
+that value *is* the merged commit, so the comparison is a tautology, and two
+review fixes went missing behind exactly that.
 
 ## New test files must be gated in CI
 
@@ -484,7 +494,7 @@ Mandatory for any change touching authentication, authorization, or access-scope
 
 ## Conventions & Patterns
 
-- **Throughput & batching:** Always think about throughput and concurrency. Evaluate whether a piece of work is best handled as a batch following ML best practices; for images this usually means sorting and grouping by size so each batch is composed of equally-sized tensors (e.g. image and face-crop quality calculation).
+- **Throughput & batching:** Think about throughput and concurrency. Ask whether work is better batched; for images that usually means sorting and grouping by size so each batch is equally-sized tensors (e.g. image and face-crop quality).
 - **Error Handling:** Always set metrics to -1.0 if calculation fails; log detailed warnings for OpenCV errors (file path, bbox, crop shape, error).
 - **Database Updates:** Log before updating metrics; ensure all metrics are set to avoid repeated selection.
 - **Bounding Boxes:** Clamp to image edges before cropping/resizing.
@@ -493,6 +503,23 @@ Mandatory for any change touching authentication, authorization, or access-scope
 
 - **External:** Uses OpenCV, NumPy, PIL, FastAPI, rapidfuzz, and Vue 3.
 - **Cross-component:** Backend serves REST API; frontend consumes API and displays images/metrics.
+
+## Never edit `CHANGELOG.md` on a branch
+
+Every branch appended to the same few lines at the top of the same file, so any
+two open PRs conflicted there even when they touched nothing else in common, and
+the conflict came back on every re-merge of `develop`. **A branch writes a file
+under `changelog.d/` instead**, named for its branch or PR number and containing
+the changelog lines themselves. `scripts/assemble_changelog.py <version>` folds
+them into one version section when the release is cut; that script is the only
+thing that writes `CHANGELOG.md`. Full format in `changelog.d/README.md`.
+
+**Write a fragment only for a user-visible change** — what someone would want to
+read in the release notes of an app they use. A bug introduced and fixed inside
+the same development cycle never reached anybody, so it gets no entry, and
+neither does a refactor, a test fix, a CI repair or a doc edit. Most branches
+need no fragment and nothing fails when one is missing; a wrong entry is worse
+than a missing one, because it makes the release notes longer and less true.
 
 ## Always Run Ruff on Python code before considering the job complete
 

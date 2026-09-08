@@ -2,8 +2,10 @@
 
 A layout is an ordered list of segments, one folder level each. A segment holds
 one or more facets and the first that applies wins; a segment with nothing to
-fill it is skipped rather than left as an empty folder. A new library starts on
-``DEFAULT_LAYOUT``, ``Project`` then ``Person or Set``.
+fill it becomes ``Global`` when a later segment is filled and is dropped when
+none is, so ``Project`` then ``Person or Set`` puts a picture with only a person
+in ``Global/Mira`` and one with only a project in ``Nordvik``. A new library
+starts on ``DEFAULT_LAYOUT``, ``Project`` then ``Person or Set``.
 
 ``render`` gives the folder a picture should be in. ``is_true`` says whether the
 folder it *is* in still describes it, and that one is the release: **a path that
@@ -48,6 +50,15 @@ _WINDOWS_RESERVED = frozenset(
 
 # What a name collapses to when sanitising leaves nothing of it at all.
 _EMPTY_FOLDER_NAME = "_unnamed"
+
+# The folder a segment gets when nothing fills it but a later segment is filled.
+# `Project / Person or Set` without the project is `Global/Mira`, not `Mira`, so
+# every person folder sits at one depth and a picture that gains a project has a
+# folder to move out of. Part of the layout's language rather than a decoration:
+# `_walk` reads it at every segment, which is what lets `Global/Mira` stop being
+# true. The cost is that a folder of the owner's own literally named `Global` is
+# adopted by the layout instead of being a permanent override.
+GLOBAL_FOLDER = "Global"
 
 
 class Facet(str, Enum):
@@ -200,17 +211,30 @@ def render(facets: FacetValues, layout: Layout) -> str:
             that is missing or empty simply does not fill a segment.
         layout: The layout to place it under.
 
+    A segment nothing fills is written as :data:`GLOBAL_FOLDER` when a later
+    segment is filled, and dropped when none is. So under ``Project`` then
+    ``Person or Set`` a picture with only a person lands in ``Global/Mira``
+    rather than ``Mira`` - every person folder at one depth, and a folder for
+    the picture to move *out of* when it gains a project. Trailing empties are
+    still dropped, so a project with no person is ``Nordvik``, not
+    ``Nordvik/Global``, and a picture nothing files at all still answers
+    ``layout.unfiled`` - which is what keeps the migration's unfiled sweep an
+    opt-in rather than something ``Global`` quietly does anyway.
+
     Returns:
         A ``/``-separated relative folder path, never absolute and never empty:
         a picture that fills no segment at all gets ``layout.unfiled``.
         Components never contain ``/`` themselves, so splitting is safe.
     """
-    parts = []
-    for segment in layout.segments:
-        value = _segment_value(segment, facets)
-        if value is not None:
-            parts.append(folder_name(value))
-    return "/".join(parts) if parts else layout.unfiled
+    parts: list[str | None] = [
+        None if value is None else folder_name(value)
+        for value in (_segment_value(segment, facets) for segment in layout.segments)
+    ]
+    while parts and parts[-1] is None:
+        parts.pop()
+    if not parts:
+        return layout.unfiled
+    return "/".join(part if part is not None else GLOBAL_FOLDER for part in parts)
 
 
 def _components(folder: str) -> tuple[str, ...]:
@@ -306,8 +330,20 @@ def _walk(
         Everything from ``owned`` on is the owner's own and travels with the
         picture unchanged.
     """
-    vocab = [_segment_keys(segment, known_names) for segment in layout.segments]
-    mine = [_segment_keys(segment, facets) for segment in layout.segments]
+    # ``Global`` is readable at every segment, whatever the picture is, because
+    # that is what lets ``Global/Mira`` stop being true when a project arrives:
+    # reading it only where the picture has nothing would make it unparseable
+    # exactly in the case that has to move. It is the picture's own only where
+    # nothing fills the segment - which is exactly where ``render`` writes it.
+    global_key = _match_key(GLOBAL_FOLDER)
+    vocab = [
+        _segment_keys(segment, known_names) | {global_key}
+        for segment in layout.segments
+    ]
+    mine = []
+    for segment in layout.segments:
+        keys = _segment_keys(segment, facets)
+        mine.append(keys or {global_key})
 
     still_true = True
     owned = 0
@@ -584,6 +620,7 @@ def read_named_components(
             key: name for key, name in keyed.items() if name is not _AMBIGUOUS
         }
     result: list[tuple[Facet, str]] = []
+    global_key = _match_key(GLOBAL_FOLDER)
     next_segment = 0
     for component in components:
         key = _match_key(component)
@@ -596,6 +633,15 @@ def read_named_components(
                     break
             if found is not None:
                 break
+        if found is None and key == global_key and next_segment < len(layout.segments):
+            # ``Global`` consumes its segment and names nothing. An owner who
+            # drags a picture into ``Global/Mira`` is saying "no project, and
+            # Mira's", so the segment has to be consumed for ``Mira`` to be read
+            # one level down - and the project the picture left then falls out
+            # of this read as a removal, which is the whole point. A real entity
+            # named ``Global`` wins: the facet search above runs first.
+            next_segment += 1
+            continue
         if found is None:
             break
         index, facet, name = found
@@ -648,7 +694,12 @@ def reconcile_move(
         new_read: list[tuple[Facet, str]] = []
     else:
         new_read = read_named_components(new_components, layout, known_names)
-        if not new_read:
+        # A bare ``Global/`` names nothing and is still an arrival the layout
+        # understands - "no project" - exactly as the unfiled folder is. Without
+        # this it would read as off-layout and the project the picture just left
+        # would never come off.
+        leads_with_global = _match_key(new_components[0]) == _match_key(GLOBAL_FOLDER)
+        if not new_read and not leads_with_global:
             # Names nothing the layout's vocabulary knows. The path was
             # already followed by the scan; nothing here is an override to
             # correct, so nothing is touched.

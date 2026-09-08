@@ -437,6 +437,52 @@ describe("LibraryLayoutDialog", () => {
     );
   });
 
+  it("draws the library root as a row of its own (#1161)", async () => {
+    getLayoutMigrationPreview.mockResolvedValue({
+      ...WOULD_MOVE,
+      tree: [
+        {
+          path: "",
+          name: "",
+          depth: 0,
+          have: 903,
+          arriving: 0,
+          leaving: 0,
+          is_new: false,
+        },
+        ...WOULD_MOVE.tree,
+      ],
+    });
+
+    const wrapper = mountDialog();
+    await flushPromises();
+
+    const rows = wrapper.findAll(".layout-tree__row");
+    // Named, not blank: the pictures the layout cannot place stay here with
+    // the sweep off, and a nameless row is what made them invisible.
+    expect(rows[0].find(".layout-tree__label").text()).toBe("Library root");
+    expect(rows[0].find(".layout-tree__have").text()).toBe("903");
+    expect(rows[0].find(".layout-tree__crumbs").exists()).toBe(false);
+    expect(rows[0].find(".layout-tree__name").attributes("style")).toContain(
+      "0 * var(--indent-step)",
+    );
+    // Everything else still says what it said.
+    expect(rows[1].find(".layout-tree__label").text()).toBe("Harbour Nights");
+  });
+
+  it("says what files a picture, and what does not (#1161)", async () => {
+    const wrapper = mountDialog();
+    await flushPromises();
+
+    const hint = wrapper.find(".layout-filing").text();
+    // Derived from the layout on screen (`project/person,set`), so the facet
+    // it leaves out is named rather than left for the owner to infer.
+    expect(hint).toContain("Only a Project, Person or Set files a picture");
+    expect(hint).toContain("a Tag does not");
+    expect(hint).toContain("no Project is filed under Global");
+    expect(hint).toContain("stays in the library root");
+  });
+
   it("lists every folder rather than a count of the ones it left out", async () => {
     const wrapper = mountDialog();
     await flushPromises();

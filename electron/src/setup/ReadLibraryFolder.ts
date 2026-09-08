@@ -17,10 +17,10 @@ export type ReadProgress = {
   total: number;
   fraction: number;
   /**
-   * `walking` counts folders, `faces` counts pictures, and a read with no
-   * inference engine never reaches `faces` at all. The two are separate counts,
-   * not two halves of one, so the screen names what it is counting rather than
-   * pretending a single number ran from 0 to 100.
+   * Both stages count FOLDERS: `walking` counts them as it finds them,
+   * `faces` counts the ones it samples (`_sample_folders`). They are separate
+   * counts, not two halves of one, and neither is a count of pictures - reading
+   * `faces` as pictures put "7 of 153 pictures" under a folder count.
    */
   stage: string;
 };
@@ -100,7 +100,12 @@ export async function readLibraryFolder(
     return null;
   }
 
-  const deadline = now() + SILENCE_LIMIT_MS;
+  // Bumped on every count the read moves, or this is not a silence limit at
+  // all but a cap on the whole read: a library whose face pass legitimately
+  // runs longer than this was abandoned mid-progress, its work thrown away and
+  // the line left frozen on the last number it had.
+  let deadline = now() + SILENCE_LIMIT_MS;
+  let last = '';
   for (;;) {
     if (now() > deadline) {
       console.warn('[startup] gave up waiting for the folder read; the app will read it itself');
@@ -132,6 +137,11 @@ export async function readLibraryFolder(
 
     const processed = Number(status.processed) || 0;
     const total = Number(status.total) || 0;
+    const moved = `${status.stage ?? ''}:${processed}:${total}`;
+    if (moved !== last) {
+      last = moved;
+      deadline = now() + SILENCE_LIMIT_MS;
+    }
     onProgress({
       processed,
       total,

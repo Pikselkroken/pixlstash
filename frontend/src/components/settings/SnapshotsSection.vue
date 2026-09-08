@@ -299,7 +299,7 @@ function handleRestore(cp) {
             title="Double-click to rename"
             @dblclick="!activeJob && startEditing(cp)"
           >
-            {{ cp.label || " - " }}
+            {{ cp.label || "—" }}
           </span>
         </div>
 

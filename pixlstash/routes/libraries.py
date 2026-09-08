@@ -307,7 +307,7 @@ def create_router(server) -> APIRouter:
         **Resolved first, then validated.** ``validate_reference_folder_path``
         compares against a literal blocklist, so checking the string the caller
         sent would let ``/home/me/link-to-etc`` through and hand ``/etc`` to a
-        route that chmods the folder 0700 and writes a database into it. The
+        route that writes a database into the folder it names. The
         sibling that gets this right is
         ``validate_reference_folder_accessible``, which realpaths before it
         checks; this follows it, not ``filesystem/browse``'s ordering.
@@ -549,11 +549,11 @@ def create_router(server) -> APIRouter:
             "fresh library in it when it does not. No file is moved, renamed or "
             "copied either way. The folder must already exist - the picker's "
             "`New folder` button makes one, so this route never creates a "
-            "directory the owner did not point at - and starting a fresh "
-            "library there restricts it to the owner (0700), because it is "
-            "about to hold the vault database. The folder is re-inspected here "
-            "rather than trusted from the picker's answer, so one that became "
-            "covered in between is still refused."
+            "directory the owner did not point at - and its permissions are "
+            "left exactly as they are: the vault database inside it is created "
+            "owner-only whatever the folder allows. The folder is re-inspected "
+            "here rather than trusted from the picker's answer, so one that "
+            "became covered in between is still refused."
         ),
         tags=["libraries"],
         response_model=LibraryResponse,

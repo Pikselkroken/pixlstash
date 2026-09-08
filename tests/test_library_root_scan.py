@@ -413,6 +413,87 @@ def test_a_move_pixlstash_recorded_is_repointed_not_deleted(server):
     )
     assert next(p for p in after if p.file_path == "jrn/a2.png").id == moving.id
     assert _tags(server, moving.id) == ["keepme"]
+    # Our own move landing. Queueing a review here would have Phase 5 undo
+    # Phase 4b's own write, which is what the journal exists to prevent.
+    reviews = server.vault.db.run_task(
+        lambda s: s.exec(
+            select(ExternalMoveReview).where(ExternalMoveReview.picture_id == moving.id)
+        ).all()
+    )
+    assert reviews == []
+
+
+def test_an_owner_move_back_the_journal_catches_is_still_queued_for_review(server):
+    """The same journal fallback, entered from the other end.
+
+    Hash pairing refuses (a twin), so the move-pairing block queues nothing and
+    the vanished path falls through to the journal check this scan shares with
+    ``MissingFilePurgeTask``. The file is back at the row's ``old_path``, which
+    is the owner undoing what PixlStash filed - repointing it and stopping is
+    what loses the reconciliation for good, because the next scan then sees no
+    move to follow.
+    """
+    root = server.vault.image_root
+
+    def _lay_out(session: Session):
+        settings = session.exec(select(LibrarySettings)).first()
+        if settings is None:
+            settings = LibrarySettings()
+        settings.layout = format_layout(DEFAULT_LAYOUT)
+        session.add(settings)
+        if (
+            session.exec(select(Character).where(Character.name == "Mira")).first()
+            is None
+        ):
+            session.add(Character(name="Mira"))
+        session.commit()
+
+    server.vault.db.run_task(_lay_out)
+    filed = _make_image(os.path.join(root, "Mira", "back.png"), (51, 52, 53))
+    twin = os.path.join(root, "Mira", "back_twin.png")
+    with open(filed, "rb") as fh:
+        payload = fh.read()
+    with open(twin, "wb") as fh:
+        fh.write(payload)
+    old = time.time() - 600
+    os.utime(twin, (old, old))
+    _run_root_scan(server)
+    moved = next(p for p in _managed(server, "Mira/") if p.file_path == "Mira/back.png")
+
+    # PixlStash filed it there itself; the owner drags it back out.
+    def _journal(session: Session):
+        session.add(
+            PictureMove(
+                picture_id=moved.id,
+                old_path="Unassigned/back.png",
+                new_path="Mira/back.png",
+                moved_at=datetime.utcnow(),
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(_journal)
+    os.makedirs(os.path.join(root, "Unassigned"), exist_ok=True)
+    os.rename(filed, os.path.join(root, "Unassigned", "back.png"))
+    _settle_root(root)
+
+    result = _run_root_scan(server)
+
+    assert moved.id not in result["moved_picture_ids"], (
+        "the twin makes hash pairing refuse, so this reaches the journal check"
+    )
+    assert (
+        server.vault.db.run_task(lambda s: s.get(Picture, moved.id)).file_path
+        == "Unassigned/back.png"
+    ), "repointed rather than deleted and re-imported"
+    reviews = server.vault.db.run_task(
+        lambda s: s.exec(
+            select(ExternalMoveReview).where(ExternalMoveReview.picture_id == moved.id)
+        ).all()
+    )
+    assert [(r.old_path, r.new_path) for r in reviews] == [
+        ("Mira/back.png", "Unassigned/back.png")
+    ], "the owner's move must reach the review queue, not only the repoint"
 
 
 def test_one_unhashed_scrapheap_row_does_not_block_every_rename(server):

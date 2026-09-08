@@ -13,6 +13,7 @@ from pixlstash.db_models.import_folder import ImportFolder
 from pixlstash.db_models.picture import Picture
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
+from pixlstash.utils.library_roots import refuse_path_inside_a_library
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 
 logger = get_logger(__name__)
@@ -158,6 +159,21 @@ def create_router(server) -> APIRouter:
                 status_code=400,
                 detail="Host path is required in Docker mode.",
             )
+
+        # The `image_root` check inside `insert` below knew only that one root,
+        # and compared it lexically. A watch folder pointed at a reference
+        # folder, at an existing watch folder, or at another registered library
+        # imports that folder's contents into the active library - and one
+        # carrying `delete_after_import` then unlinks each source file
+        # (`tasks/watch_folder_import_task.py`), so the library that owns those
+        # pictures is left with rows pointing at files that are gone. Same list
+        # the folder export refuses against, shared rather than copied a third
+        # time (#1206 item 1).
+        #
+        # Outside the DB task on purpose: this reads the folder tables itself,
+        # and a read nested inside `run_task` would be a session inside a
+        # session.
+        refuse_path_inside_a_library(folder, server, server.vault)
 
         label = payload.label if payload.label is not None else os.path.basename(folder)
 

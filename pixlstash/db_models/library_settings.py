@@ -49,12 +49,6 @@ class LibrarySettings(SQLModel, table=True):
             recoverable from it by dictionary attack. The hash is therefore keyed
             by a per-library random salt that lives in the hub and never travels
             with the library.
-        views_root: Where this library publishes its PixlStash Views tree, or
-            None when views are off. A host path, and a property of the library
-            rather than of the person: two libraries publishing their people and
-            sets into the same folder would overwrite each other.
-        views_kinds: Which kinds are published, as a comma-separated subset of
-            ``people,sets,projects``. Empty or None means none of them.
         layout: How this library's own picture root is laid out, in the stored
             form ``utils/library_layout.format_layout`` writes
             (``"project/person,set"``). NULL means the root has no layout, which
@@ -83,12 +77,6 @@ class LibrarySettings(SQLModel, table=True):
         default=None, sa_column=Column(Integer, nullable=True)
     )
     settings_fingerprint: Optional[str] = Field(
-        default=None, sa_column=Column(String, nullable=True)
-    )
-    views_root: Optional[str] = Field(
-        default=None, sa_column=Column(String, nullable=True)
-    )
-    views_kinds: Optional[str] = Field(
         default=None, sa_column=Column(String, nullable=True)
     )
     layout: Optional[str] = Field(default=None, sa_column=Column(String, nullable=True))

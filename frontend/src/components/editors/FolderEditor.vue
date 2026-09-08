@@ -46,9 +46,7 @@
               ref="pathInputRef"
               v-model="localHostPath"
               label="Local folder (host path)"
-              :placeholder="
-                isImport ? '/home/you/Pictures/import' : '/home/you/Pictures'
-              "
+              placeholder="/home/you/Pictures/import"
               density="comfortable"
               variant="filled"
               hide-details
@@ -72,212 +70,94 @@
               >
                 {{ dockerSuggestedPath }}
               </div>
+            </div>
+
+            <div class="editor-docker-format-row">
+              <div class="editor-docker-title">Docker mount line</div>
+              <v-btn-toggle
+                v-model="shellFormat"
+                mandatory
+                density="compact"
+                class="editor-docker-shell-btns"
+              >
+                <v-btn value="linux" size="small">Linux / Mac</v-btn>
+                <v-btn value="windows" size="small">Windows</v-btn>
+              </v-btn-toggle>
+            </div>
+            <div class="editor-docker-note">
+              Add this <code>-v</code> mount to your
+              <code>docker run</code> command:
+            </div>
+            <div class="editor-docker-snippet-wrap">
+              <code class="editor-docker-snippet">{{
+                dockerMountSnippet
+              }}</code>
               <v-btn
-                v-if="!isImport"
                 variant="outlined"
                 size="small"
                 icon
                 class="editor-copy-btn"
-                title="Copy container path"
+                title="Copy mount line"
                 @click="
-                  copyToClipboard(dockerSuggestedPath, 'Container path copied.')
+                  copyToClipboard(dockerMountSnippet, 'Mount line copied.')
                 "
               >
                 <v-icon size="16">mdi-content-copy</v-icon>
               </v-btn>
             </div>
-
-            <!-- Import: flat docker instructions -->
-            <template v-if="isImport">
-              <div class="editor-docker-format-row">
-                <div class="editor-docker-title">Docker mount line</div>
-                <v-btn-toggle
-                  v-model="shellFormat"
-                  mandatory
-                  density="compact"
-                  class="editor-docker-shell-btns"
-                >
-                  <v-btn value="linux" size="small">Linux / Mac</v-btn>
-                  <v-btn value="windows" size="small">Windows</v-btn>
-                </v-btn-toggle>
-              </div>
-              <div class="editor-docker-note">
-                Add this <code>-v</code> mount to your
-                <code>docker run</code> command:
-              </div>
-              <div class="editor-docker-snippet-wrap">
-                <code class="editor-docker-snippet">{{
-                  dockerMountSnippet
-                }}</code>
-                <v-btn
-                  variant="outlined"
-                  size="small"
-                  icon
-                  class="editor-copy-btn"
-                  title="Copy mount line"
-                  @click="
-                    copyToClipboard(dockerMountSnippet, 'Mount line copied.')
-                  "
-                >
-                  <v-icon size="16">mdi-content-copy</v-icon>
-                </v-btn>
-              </div>
-              <div class="editor-docker-title">Container restart helpers</div>
-              <div class="editor-docker-note editor-docker-note--muted">
-                This removes the old container, not the image.
-              </div>
-              <div class="editor-docker-snippet-wrap">
-                <code class="editor-docker-snippet">{{
-                  dockerRemoveContainerSnippet
-                }}</code>
-                <v-btn
-                  variant="outlined"
-                  size="small"
-                  icon
-                  class="editor-copy-btn"
-                  title="Copy remove-container command"
-                  @click="
-                    copyToClipboard(
-                      dockerRemoveContainerSnippet,
-                      'Remove-container command copied.',
-                    )
-                  "
-                >
-                  <v-icon size="16">mdi-content-copy</v-icon>
-                </v-btn>
-              </div>
-              <div class="editor-docker-note">
-                Full restart command (uses your local folder mapping):
-              </div>
-              <div
-                v-if="hasExistingMounts"
-                class="editor-docker-note editor-docker-note--muted"
+            <div class="editor-docker-title">Container restart helpers</div>
+            <div class="editor-docker-note editor-docker-note--muted">
+              This removes the old container, not the image.
+            </div>
+            <div class="editor-docker-snippet-wrap">
+              <code class="editor-docker-snippet">{{
+                dockerRemoveContainerSnippet
+              }}</code>
+              <v-btn
+                variant="outlined"
+                size="small"
+                icon
+                class="editor-copy-btn"
+                title="Copy remove-container command"
+                @click="
+                  copyToClipboard(
+                    dockerRemoveContainerSnippet,
+                    'Remove-container command copied.',
+                  )
+                "
               >
-                Existing reference and import folder mounts are included.
-              </div>
-              <div class="editor-docker-snippet-wrap">
-                <code
-                  class="editor-docker-snippet editor-docker-snippet--full"
-                  >{{ dockerRestartCommandSnippet }}</code
-                >
-                <v-btn
-                  variant="outlined"
-                  size="small"
-                  icon
-                  class="editor-copy-btn"
-                  title="Copy full restart command"
-                  @click="
-                    copyToClipboard(
-                      dockerRestartCommandSnippet,
-                      'Restart command copied.',
-                    )
-                  "
-                >
-                  <v-icon size="16">mdi-content-copy</v-icon>
-                </v-btn>
-              </div>
-            </template>
-
-            <!-- Reference: boxed docker instructions with numbered steps -->
-            <div v-else class="editor-docker-instructions">
-              <div class="editor-docker-format-row">
-                <div class="editor-docker-title">Docker setup</div>
-                <v-btn-toggle
-                  v-model="shellFormat"
-                  mandatory
-                  density="compact"
-                  class="editor-docker-shell-btns"
-                >
-                  <v-btn value="linux" size="small">Linux / Mac</v-btn>
-                  <v-btn value="windows" size="small">Windows</v-btn>
-                </v-btn-toggle>
-              </div>
-              <ol>
-                <li>Add a mount to your docker run command:</li>
-              </ol>
-              <div class="editor-docker-snippet-wrap">
-                <code class="editor-docker-snippet">{{
-                  dockerMountSnippet
-                }}</code>
-                <v-btn
-                  variant="outlined"
-                  size="small"
-                  icon
-                  class="editor-copy-btn"
-                  title="Copy mount snippet"
-                  @click="
-                    copyToClipboard(dockerMountSnippet, 'Mount snippet copied.')
-                  "
-                >
-                  <v-icon size="16">mdi-content-copy</v-icon>
-                </v-btn>
-              </div>
-              <div class="editor-docker-note">
-                If restart fails because the container name already exists,
-                remove the old container first:
-              </div>
-              <div class="editor-docker-note editor-docker-note--muted">
-                This removes the old container, not the image.
-              </div>
-              <div class="editor-docker-snippet-wrap">
-                <code class="editor-docker-snippet">{{
-                  dockerRemoveContainerSnippet
-                }}</code>
-                <v-btn
-                  variant="outlined"
-                  size="small"
-                  icon
-                  class="editor-copy-btn"
-                  title="Copy remove-container command"
-                  @click="
-                    copyToClipboard(
-                      dockerRemoveContainerSnippet,
-                      'Remove-container command copied.',
-                    )
-                  "
-                >
-                  <v-icon size="16">mdi-content-copy</v-icon>
-                </v-btn>
-              </div>
-              <div class="editor-docker-note">
-                Full restart command (uses your local folder mapping):
-              </div>
-              <div
-                v-if="hasExistingMounts"
-                class="editor-docker-note editor-docker-note--muted"
+                <v-icon size="16">mdi-content-copy</v-icon>
+              </v-btn>
+            </div>
+            <div class="editor-docker-note">
+              Full restart command (uses your local folder mapping):
+            </div>
+            <div
+              v-if="hasExistingMounts"
+              class="editor-docker-note editor-docker-note--muted"
+            >
+              Existing reference and import folder mounts are included.
+            </div>
+            <div class="editor-docker-snippet-wrap">
+              <code
+                class="editor-docker-snippet editor-docker-snippet--full"
+                >{{ dockerRestartCommandSnippet }}</code
               >
-                Existing reference and import folder mounts are included from
-                configured container paths and use stored host paths when
-                available. Replace any remaining
-                <code>/absolute/host/path/for-*</code> placeholder values.
-              </div>
-              <div class="editor-docker-snippet-wrap">
-                <code
-                  class="editor-docker-snippet editor-docker-snippet--full"
-                  >{{ dockerRestartCommandSnippet }}</code
-                >
-                <v-btn
-                  variant="outlined"
-                  size="small"
-                  icon
-                  class="editor-copy-btn"
-                  title="Copy full restart command"
-                  @click="
-                    copyToClipboard(
-                      dockerRestartCommandSnippet,
-                      'Restart command copied.',
-                    )
-                  "
-                >
-                  <v-icon size="16">mdi-content-copy</v-icon>
-                </v-btn>
-              </div>
-              <ol start="2">
-                <li>Restart the container.</li>
-                <li>
-                  Add this folder in PixlStash using the container path above.
-                </li>
-              </ol>
+              <v-btn
+                variant="outlined"
+                size="small"
+                icon
+                class="editor-copy-btn"
+                title="Copy full restart command"
+                @click="
+                  copyToClipboard(
+                    dockerRestartCommandSnippet,
+                    'Restart command copied.',
+                  )
+                "
+              >
+                <v-icon size="16">mdi-content-copy</v-icon>
+              </v-btn>
             </div>
 
             <div v-if="copyStatus" class="editor-copy-status">
@@ -448,8 +328,10 @@
             </div>
           </div>
 
-          <!-- Reference-only: caption file sync (create + edit) -->
-          <div v-if="!isImport" class="editor-sync-section">
+          <!-- Reference-only: caption file sync (edit mode). Gated on edit
+               like the allow-delete row below: create is import-only now, and
+               a control the create submit does not read must not be shown. -->
+          <div v-if="!isImport && isEditMode" class="editor-sync-section">
             <button
               type="button"
               class="editor-sync-header"
@@ -515,10 +397,6 @@
                       e.g. <code>{{ descriptionExample }}</code>
                     </div>
                   </div>
-                </div>
-
-                <div v-if="detectInfo" class="editor-sync-detected">
-                  {{ detectInfo }}
                 </div>
               </div>
             </v-expand-transition>
@@ -637,13 +515,7 @@
 
 <script setup>
 import { computed, nextTick, ref, watch, onUnmounted } from "vue";
-import {
-  createFolder,
-  patchFolder,
-  deleteFolder,
-  // Aliased: this component wraps it in its own debounced detectSidecars().
-  detectSidecars as fetchSidecarConvention,
-} from "../../api/folders";
+import { createFolder, patchFolder, deleteFolder } from "../../api/folders";
 import { useSubmitGuard } from "../../composables/useSubmitGuard";
 import { copyText } from "../../utils/clipboard";
 import {
@@ -712,7 +584,6 @@ const localSyncTags = ref(false);
 const localDescriptionSuffix = ref(DEFAULT_DESCRIPTION_SUFFIX);
 const localTagsSuffix = ref(DEFAULT_TAGS_SUFFIX);
 const syncSectionOpen = ref(false);
-const detectInfo = ref("");
 const localAllowDelete = ref(false);
 const saveError = ref("");
 const deleteLoading = ref(false);
@@ -750,18 +621,6 @@ const isValid = computed(() => {
 const suggestedDisplayLabel = computed(() =>
   deriveLabelFromHostPath(localHostPath.value),
 );
-
-// The most recently added reference folder, used to inherit sync defaults when
-// adding a new one (so a user who switched to e.g. ".txt"/".caption" keeps it).
-const lastAddedReferenceFolder = computed(() => {
-  if (isImport.value) return null;
-  const folders = props.registeredFolders || [];
-  let best = null;
-  for (const folder of folders) {
-    if (best === null || Number(folder.id) > Number(best.id)) best = folder;
-  }
-  return best;
-});
 
 const syncSummary = computed(() => {
   const parts = [];
@@ -1020,7 +879,6 @@ watch(
     shellFormat.value = defaultShellFormat;
     confirmingDelete.value = false;
     saveError.value = "";
-    detectInfo.value = "";
     const editingFolder = activeFolder.value;
     if (editingFolder) {
       localLabel.value = editingFolder.label || "";
@@ -1046,16 +904,11 @@ watch(
       setLabelWithoutTouch("");
     }
     localDeleteAfterImport.value = false;
-    // Seed sync defaults from the most recently added reference folder, falling
-    // back to the hardcoded defaults. Folder-content detection (non-Docker) may
-    // override these once a path is entered.
-    const last = lastAddedReferenceFolder.value;
-    localSyncTags.value = last ? Boolean(last.sync_tags) : false;
-    localSyncDescriptions.value = last ? Boolean(last.sync_descriptions) : false;
-    localTagsSuffix.value = (last && last.tags_suffix) || DEFAULT_TAGS_SUFFIX;
-    localDescriptionSuffix.value =
-      (last && last.description_suffix) || DEFAULT_DESCRIPTION_SUFFIX;
-    syncSectionOpen.value = localSyncTags.value || localSyncDescriptions.value;
+    localSyncTags.value = false;
+    localSyncDescriptions.value = false;
+    localTagsSuffix.value = DEFAULT_TAGS_SUFFIX;
+    localDescriptionSuffix.value = DEFAULT_DESCRIPTION_SUFFIX;
+    syncSectionOpen.value = false;
     localAllowDelete.value = false;
     copyStatus.value = "";
     nextTick(() => {
@@ -1094,47 +947,6 @@ watch(
   { immediate: true },
 );
 
-// --- Sidecar convention detection (reference folders, non-Docker create) ---
-
-let detectTimer = null;
-
-async function detectSidecars(path) {
-  const trimmed = String(path || "").trim();
-  if (!trimmed) return;
-  try {
-    const data = await fetchSidecarConvention(trimmed);
-    // Ignore a stale response if the path changed while the request was in flight.
-    if (String(localPath.value || "").trim() !== trimmed) return;
-    const found = [];
-    if (data?.found_tags) {
-      localSyncTags.value = true;
-      if (data.tags_suffix) localTagsSuffix.value = data.tags_suffix;
-      found.push("tags");
-    }
-    if (data?.found_descriptions) {
-      localSyncDescriptions.value = true;
-      if (data.description_suffix)
-        localDescriptionSuffix.value = data.description_suffix;
-      found.push("descriptions");
-    }
-    if (found.length) {
-      syncSectionOpen.value = true;
-      detectInfo.value = `Found existing ${found.join(" and ")} sidecars in this folder.`;
-    } else {
-      detectInfo.value = "";
-    }
-  } catch {
-    // Detection is best-effort - ignore errors (e.g. an inaccessible path).
-  }
-}
-
-watch([() => props.open, localPath], ([isOpen]) => {
-  if (!isOpen || isEditMode.value || isImport.value || props.inDocker) return;
-  if (detectTimer) clearTimeout(detectTimer);
-  const path = localPath.value;
-  detectTimer = setTimeout(() => detectSidecars(path), 400);
-});
-
 function handleKeydown(event) {
   if (event.key === "Escape") emit("close");
 }
@@ -1149,10 +961,6 @@ watch(
       if (copyStatusTimer) {
         clearTimeout(copyStatusTimer);
         copyStatusTimer = null;
-      }
-      if (detectTimer) {
-        clearTimeout(detectTimer);
-        detectTimer = null;
       }
       copyStatus.value = "";
     }
@@ -1221,20 +1029,10 @@ async function submitFolder() {
             ? hostPathToSave
             : undefined,
       };
-      if (isImport.value) {
-        createData.delete_after_import = localDeleteAfterImport.value;
-      } else {
-        createData.sync_descriptions = localSyncDescriptions.value;
-        createData.sync_tags = localSyncTags.value;
-        createData.tags_suffix = suffixForSubmit(
-          localTagsSuffix.value,
-          DEFAULT_TAGS_SUFFIX,
-        );
-        createData.description_suffix = suffixForSubmit(
-          localDescriptionSuffix.value,
-          DEFAULT_DESCRIPTION_SUFFIX,
-        );
-      }
+      // Creating is only ever reachable for import folders now - see
+      // `openReferenceFolderEditor()` in SideBar.vue, which routes reference
+      // create through the mapping wizard instead of this dialog.
+      createData.delete_after_import = localDeleteAfterImport.value;
       savedResponse = await createFolder(folderKind.value, createData);
     }
     emit("saved", savedResponse || null);

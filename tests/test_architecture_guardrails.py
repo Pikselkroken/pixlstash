@@ -2675,3 +2675,252 @@ def test_frontend_import_extensions_match_the_staging_allowlist():
         "A client-only extension uploads the whole file and then fails the "
         "commit; a server-only one is refused before it is ever offered."
     )
+
+
+def _assemble_changelog_module():
+    """The release's changelog assembler, loaded from ``scripts/`` by path.
+
+    By path rather than by ``sys.path`` insertion: this file shares a process
+    with the rest of a gate shard, and a leftover entry pointing at ``scripts/``
+    would silently change what every later test imports.
+    """
+    import importlib.util
+
+    path = REPO_ROOT / "scripts" / "assemble_changelog.py"
+    spec = importlib.util.spec_from_file_location("assemble_changelog", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_every_changelog_fragment_is_a_markdown_list():
+    """A fragment is pasted verbatim under the release's version heading.
+
+    Nothing reads it before then, so a fragment carrying its own heading, a
+    version, or a stray paragraph is only discovered when the release notes are
+    already written. The parser that will consume it runs here instead.
+    """
+    assemble_changelog = _assemble_changelog_module()
+
+    try:
+        assemble_changelog.read_entries(assemble_changelog.fragments())
+    except ValueError as exc:
+        pytest.fail(str(exc))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "# [1.2.3]\n\n- something\n",
+        "- something\n\n# [1.2.3]\n",
+        "not a list item at all\n",
+        "  - something\n",
+        "\n\n- something\n",
+        "- something\n  # [1.2.3]\n",
+        "- something\n    ## still a heading\n",
+    ],
+    ids=[
+        "leading heading",
+        "trailing heading",
+        "bare prose",
+        "opens indented",
+        "opens blank",
+        "indented heading",
+        "deeply indented heading",
+    ],
+)
+def test_a_fragment_that_is_not_a_list_is_refused(tmp_path, body):
+    """The check above can still fail - the mutation that proves it is alive.
+
+    The trailing case is the one a first-line-only check misses: pasted under
+    the release's heading, that stray `# [1.2.3]` becomes a version section of
+    its own and every entry below it moves into the wrong release.
+
+    The `opens` pair are the ones a leading `strip()` masks: both open on
+    something that is not a top-level list item, and stripping the front turns
+    each into a fragment that passes and is then pasted in edited form.
+
+    The indented pair are the ones the continuation rule masks. Two spaces is a
+    legal continuation of a list item and `  # [1.2.3]` is still a heading -
+    to CommonMark, and to `release-version.yml`, which strips each line before
+    testing it for `#`. Indenting the heading was all it took to put a version
+    section nobody released into the middle of the file.
+    """
+    assemble_changelog = _assemble_changelog_module()
+
+    bad = tmp_path / "bad.md"
+    bad.write_text(body, encoding="utf-8")
+    with pytest.raises(ValueError):
+        assemble_changelog.read_entries([bad])
+
+
+def test_a_continuation_line_may_cite_an_issue_number(tmp_path):
+    """The over-refusal control for the heading check above.
+
+    `#1234` is not a heading - CommonMark wants whitespace after the hashes -
+    and citing an issue on a wrapped line is the obvious thing a fragment does.
+    A heading rule that refused it would be found here rather than by whoever
+    is cutting the release.
+    """
+    assemble_changelog = _assemble_changelog_module()
+
+    good = tmp_path / "good.md"
+    good.write_text("- Fixed the thing\n  #1234 was the culprit.\n", encoding="utf-8")
+
+    assert assemble_changelog.read_entries([good]) == [
+        "- Fixed the thing\n  #1234 was the culprit."
+    ]
+
+
+def test_the_changelog_opens_on_a_released_version_heading():
+    """`.github/workflows/release-version.yml` reads `[Security: LEVEL]` off the
+    first heading in the released tag's CHANGELOG.md to publish
+    latest-version.json. Only ``scripts/assemble_changelog.py`` writes that file;
+    an unreleased section left at the top by hand would hand the workflow the
+    wrong version's security level."""
+    first = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8").lstrip()
+    assert re.match(r"# \[\d+\.\d+\.\d+[^\]]*\]", first), (
+        "CHANGELOG.md does not open on a version heading: "
+        f"{first.splitlines()[0] if first else '(empty)'}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: every third-party Action reference is pinned to a full commit SHA
+# ---------------------------------------------------------------------------
+
+
+# Anchored to the start of the line (leading whitespace and an optional list
+# dash only): PR #1203 review noted an unanchored ``search`` would also match
+# "uses:" appearing inside a string or comment elsewhere on the line, and flag
+# or silently pass whatever floating ref happened to follow it. Hex is
+# case-insensitive - Git SHAs are usually printed lowercase but are valid
+# either way, and a genuinely pinned uppercase SHA is not a floating tag.
+_ACTION_REF_RE = re.compile(r'\s*(?:-\s*)?uses:\s*["\']?([^"\'\s#]+)')
+_FULL_SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
+
+
+def _action_scan_targets(root: Path) -> tuple[list[Path], list[Path]]:
+    """Every workflow and composite-action file GitHub will read ``uses:`` from.
+
+    Returns ``(workflow_files, action_files)``. A workflow may be named
+    ``*.yml`` or ``*.yaml`` - GitHub accepts both - and a composite action can
+    live at any depth under ``.github/actions/``, not only the one level down
+    the original ``*/action.yml`` glob assumed (PR #1203 review, thread 2).
+    """
+    workflows = root / ".github" / "workflows"
+    actions = root / ".github" / "actions"
+    workflow_files = sorted(
+        p for pattern in ("*.yml", "*.yaml") for p in workflows.glob(pattern)
+    )
+    action_files = sorted(
+        p for pattern in ("action.yml", "action.yaml") for p in actions.rglob(pattern)
+    )
+    return workflow_files, action_files
+
+
+def _floating_action_refs(paths: list[Path]) -> list[str]:
+    """Return ``"<path>:<lineno>: <line>"`` for every un-pinned ``uses:``.
+
+    A local composite action (``./.github/actions/...``) and a Docker-image
+    reference (``docker://...``) name no upstream tag to float, so both are
+    skipped. Everything else naming a third-party action must pin ``@<ref>``
+    to a full 40-character commit SHA - a moving tag like ``@v4`` or
+    ``@main`` can be repointed by whoever controls that repository.
+
+    Ceiling: this proves the ref has the *shape* of a commit SHA, not that it
+    is genuinely the commit the trailing comment claims - confirming that
+    needs a live call to the action's own repository, which a unit test
+    should not make. Spot-check the claim by hand (or in review) whenever a
+    pin changes.
+    """
+    offenders: list[str] = []
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            match = _ACTION_REF_RE.match(line)
+            if not match:
+                continue
+            ref = match.group(1)
+            if ref.startswith("./") or ref.startswith("docker://"):
+                continue
+            if "@" not in ref:
+                offenders.append(f"{path}:{lineno}: {line.strip()}")
+                continue
+            sha = ref.rsplit("@", 1)[1]
+            if not _FULL_SHA_RE.fullmatch(sha):
+                offenders.append(f"{path}:{lineno}: {line.strip()}")
+    return offenders
+
+
+def test_every_action_reference_is_pinned_to_a_sha():
+    """A floating tag on a workflow action is a supply-chain hole (#1177 item 60).
+
+    #1192 pinned ``ci.yml`` and ``docker-build.yml``; this closes the sweep
+    over every remaining workflow and composite action so a *new* floating
+    tag fails the build instead of quietly shipping.
+    """
+    workflow_files, action_files = _action_scan_targets(REPO_ROOT)
+    assert workflow_files, "no workflow files found - the scan target moved"
+
+    offenders = _floating_action_refs([*workflow_files, *action_files])
+    assert not offenders, (
+        "these Action references are not pinned to a full commit SHA:\n  "
+        + "\n  ".join(offenders)
+        + "\n\nFix: pin to the commit SHA the tag currently resolves to, with "
+        "the human-readable version in a trailing comment, e.g. "
+        "`uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0`."
+    )
+
+
+def test_action_pin_guardrail_has_teeth(tmp_path):
+    """Both directions, or the guardrail can pass by being broken.
+
+    Also covers PR #1203's review of this guardrail: a ``.yaml`` workflow and
+    a composite action nested two directories deep (thread 2's discovery
+    gap), an uppercase-hex SHA and a ``uses:`` mention that is not the step
+    key itself (thread 1's false positive and false negative). Routed through
+    ``_action_scan_targets`` rather than a hand-built file list, so a future
+    change that narrows the glob back to ``*.yml`` / one-level actions is
+    caught here too.
+    """
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    shallow_action_dir = tmp_path / ".github" / "actions" / "example"
+    shallow_action_dir.mkdir(parents=True)
+    nested_action_dir = tmp_path / ".github" / "actions" / "group" / "nested"
+    nested_action_dir.mkdir(parents=True)
+
+    bad = workflows / "bad.yml"
+    bad.write_text(
+        "steps:\n  - uses: actions/checkout@v4\n  - uses: actions/checkout@main\n"
+    )
+    bad_yaml = workflows / "bad.yaml"
+    bad_yaml.write_text("steps:\n  - uses: actions/setup-node@v4\n")
+    good = workflows / "good.yml"
+    good.write_text(
+        "steps:\n"
+        "  - uses: ./.github/actions/setup-backend\n"
+        "  - uses: docker://alpine:3\n"
+        "  - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0\n"
+        # Uppercase hex is still a genuine pin.
+        "  - uses: actions/setup-python@ECE7CB06CAEFA5FFF74198D8649806C4678C61A1 # v6.3.0\n"
+        # "uses:" here names a step, not a mapping key - must not be read as one.
+        '  - name: "mentions uses: actions/checkout@v4 in prose"\n'
+    )
+    action = shallow_action_dir / "action.yml"
+    action.write_text("runs:\n  steps:\n    - uses: actions/cache@v5\n")
+    nested_action = nested_action_dir / "action.yaml"
+    nested_action.write_text("runs:\n  steps:\n    - uses: actions/cache@v4\n")
+
+    workflow_files, action_files = _action_scan_targets(tmp_path)
+    offenders = _floating_action_refs([*workflow_files, *action_files])
+    # Not a plain split(":", 1): a Windows path starts "C:\...", so the first
+    # colon in the string belongs to the drive letter, not the path/line
+    # separator. Anchor on the "<path>:<lineno>: " shape instead - greedy
+    # ``.*`` eats the drive-letter colon too before backtracking to the real
+    # split point.
+    caught = {re.match(r"^(.*):\d+: ", o).group(1) for o in offenders}
+    assert caught == {str(bad), str(bad_yaml), str(action), str(nested_action)}, (
+        f"the guardrail reported the wrong set of files: {offenders}"
+    )

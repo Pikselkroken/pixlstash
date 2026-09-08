@@ -515,6 +515,7 @@ jobs:
           tests/test_label_ledger.py
           tests/test_libraries_routes.py
           tests/test_library_backup.py
+          tests/test_library_destination_blocklist.py
           tests/test_library_generation_coordinator.py
           tests/test_library_insights.py
           tests/test_library_layout.py
@@ -566,6 +567,7 @@ jobs:
           tests/test_repair_copied_face_rows.py
           tests/test_restore.py
           tests/test_reviews_api.py
+          tests/test_rocm_device_check.py
           tests/test_scope_table.py
           tests/test_score_agreement_stats.py
           tests/test_scrapheap_retention.py
@@ -596,7 +598,6 @@ jobs:
           tests/test_telemetry_install_id.py
           tests/test_telemetry_install_id_authz.py
           tests/test_telemetry_sender.py
-          tests/test_views_links.py
           tests/test_vram_batch_budget.py
           tests/test_vram_oom_retry.py
           tests/test_watch_folder_worker.py
@@ -728,6 +729,12 @@ jobs:
     # disabled, no ML models needed). The fixture is committed release input:
     # its absence is a coverage failure, never permission to skip the lane.
     runs-on: ubuntu-latest
+    env:
+      # Belt-and-braces with frontend/e2e/fixtures/test.js's production route
+      # block: declares this CI-booted backend as ours, so anything reaching
+      # the network by a path Playwright's route interception does not cover
+      # still arrives labelled dev rather than a real install. See #1213.
+      PIXLSTASH_TELEMETRY_DEV: '1'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 

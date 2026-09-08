@@ -195,9 +195,9 @@ async function clearWatermark() {
 }
 
 function formatTokenTimestamp(value) {
-  if (!value) return " - ";
+  if (!value) return "—";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return " - ";
+  if (Number.isNaN(date.getTime())) return "—";
   // Date-only keeps the table columns compact (a full locale datetime is far
   // too wide for the dense token table).
   return date.toLocaleDateString();

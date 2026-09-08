@@ -21,6 +21,27 @@ function readCredentials() {
   return JSON.parse(readFileSync(TOKEN_PATH, 'utf8'))
 }
 
+// The e2e suite must never depend on pixlstash.dev being reachable, and a
+// context that does reach it is a live check-in against production (see
+// issue #1213 and useVersionCheck.js's VERSION_CHECK_STORAGE_KEY — every
+// fresh Playwright context starts with empty localStorage, so its 24h
+// throttle never applies). Blocked in BOTH fixtures, because neither alone
+// reaches every context:
+//
+//   * `browser` - several specs (auth.spec.js, sharing.spec.js,
+//     read-only-features.spec.js, loginToFreshSession below) mint their own
+//     storage-less context via `browser.newContext()` directly, which no
+//     override of the built-in `context`/`page` fixtures ever sees.
+//   * `context` - under `npm run test:e2e:ui` Playwright reuses one context,
+//     and the built-in `context` fixture then calls
+//     `browserImpl._newContextForReuse()` instead of `browser.newContext()`
+//     (playwright/lib/index.js), so the wrapper below never runs. That is the
+//     mode a developer iterates in, so it is the worst one to leave open.
+//
+// The two overlap in the ordinary case and a context gets the route twice,
+// which costs nothing: both handlers abort.
+const PRODUCTION_HOST_PATTERN = 'https://pixlstash.dev/**'
+
 /**
  * Read the SPA's per-tab client id from sessionStorage. This is the id
  * `apiClient` attaches as `X-Client-Id` on every mutating request, and the id
@@ -126,6 +147,25 @@ export async function loginToFreshSession(browser, baseURL) {
 }
 
 export const test = base.extend({
+  // Wrap the worker's single Browser so every context minted through
+  // `newContext` - including the ones specs mint by hand - aborts production.
+  browser: async ({ browser }, use) => {
+    const newContext = browser.newContext.bind(browser)
+    browser.newContext = async (...args) => {
+      const context = await newContext(...args)
+      await context.route(PRODUCTION_HOST_PATTERN, (route) => route.abort())
+      return context
+    }
+    await use(browser)
+  },
+
+  // And the context the built-in fixture hands out, which in UI mode is a
+  // reused one that never passed through `newContext` above.
+  context: async ({ context }, use) => {
+    await context.route(PRODUCTION_HOST_PATTERN, (route) => route.abort())
+    await use(context)
+  },
+
   // The minted credentials object: { token, username, password }.
   // Playwright resolves a fixture's dependencies by parsing this destructuring
   // pattern, so a fixture that needs none must still be written `({}, use)`.

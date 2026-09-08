@@ -167,6 +167,7 @@ pixlstash/
 │   ├── face_tags.py
 │   ├── path_mapper.py
 │   ├── path_utils.py                    # resolve_path_within (moved out of service/)
+│   ├── library_roots.py                 # The one blocklist of directories a library owns
 │   ├── serialization_utils.py           # safe_model_dict (moved out of service/)
 │   ├── system_utils.py                  # default_max_vram_gb (moved out of service/)
 │   ├── host_path_utils.py
@@ -1479,6 +1480,7 @@ This rule is enforced by **`tests/test_architecture_guardrails.py::test_services
 | [utils/caption_file_utils.py](../pixlstash/utils/caption_file_utils.py) | Sidecar `.txt` caption I/O |
 | [utils/face_tags.py](../pixlstash/utils/face_tags.py) | Face-derived tag helpers |
 | [utils/library_layout.py](../pixlstash/utils/library_layout.py) | The library layout model — `render` / `is_true` (§13) |
+| [utils/library_roots.py](../pixlstash/utils/library_roots.py) | The single list of directories this installation reads or writes as library content, and the refusal every route that writes or moves files into a caller-named folder shares (#1206 item 1) |
 | [utils/path_mapper.py](../pixlstash/utils/path_mapper.py) | Host↔container path translation |
 | [utils/host_path_utils.py](../pixlstash/utils/host_path_utils.py) | Host-aware path resolution |
 | [utils/reference_folder_watcher.py](../pixlstash/utils/reference_folder_watcher.py) | watchdog-based folder monitoring |
@@ -1744,108 +1746,6 @@ the sentence above as covering them.
   InsightFace branch runs the *same* guard on the same input, through the shared
   `_validated_destination`, and contains every pack relpath with
   `resolve_path_within` against both roots before it removes a source tree.
-
-### PixlStash Views: the library as folders of links (v1.11 Phase 7)
-
-`pixlstash/services/views_service.py` publishes the library's sets, people and
-projects as a folder tree whose every file is a **link** to the picture where the
-owner already keeps it. Nothing is copied, no original is moved, and deleting the
-whole tree loses nothing — a picture in three projects appears in three view
-folders and its one real file never moves. **Views are additional to the owner's
-tree, never a replacement for it.** Off by default: `LibrarySettings.views_root`
-is NULL until the owner names a folder, and nothing is written until then.
-
-Two routes, both `LOCAL_OWNER_ONLY` (§16.3): `GET /server-config/views` reports
-the folder and kinds, `PATCH /server-config/views` records them and rebuilds.
-Saving *is* rebuilding — a full re-derive of 50,000 links measures 0.46 s to
-create and 0.34 s to remove, so an incremental path would be a correctness risk
-bought for nothing, and "Rebuild now" is the same PATCH with the current values.
-The settings are per **library** rather than per user (`library_settings`,
-migration `0107`), because the tree holds *this* library's people and sets and
-two libraries publishing into one folder would overwrite each other.
-
-**The location decides everything, and it is validated before a byte is
-written.** The spike behind this is `docs/spikes/views-links.md`; the measured
-facts that shape the code:
-
-- Link support belongs to the **view root's** filesystem, not the library's. A
-  symlink is a stored path and crosses devices happily (measured ext4 → a
-  separate NVMe), so a library on a NAS or an external drive is fine as long as
-  the tree lands somewhere with links.
-- **exFAT and VFAT have neither** symlinks nor hard links (`EPERM` on both,
-  measured on freshly formatted volumes). A hard link is therefore *not* the
-  fallback for the external-drive case.
-- A hard link never crosses a device (`EXDEV`, measured against three real
-  drives) and keeps a deleted original's bytes alive under the views folder. It
-  is used only same-device, only when symlinks are unavailable — the
-  Windows-without-Developer-Mode case.
-- Windows symlink creation needs `SeCreateSymbolicLinkPrivilege`. `probe_link_support`
-  **asks** the chosen directory by attempting one link rather than predicting it,
-  and `tests/test_views_links.py::test_this_filesystem_offers_a_link_mode` is
-  that probe running under the gate, so the Windows shards report the real answer
-  on every run.
-
-`check_views_root` refuses four locations by name rather than half-writing a
-tree, and each refusal is a measured failure:
-
-| Refused location | Why |
-|---|---|
-| Inside the library root | `library_backup_service._validate_regular_file` raises `Refusing symlinked library payload`, so backups would fail outright |
-| Overlapping any **other registered** library | The same failure in a library that is not open. Since v1.11 the owner registers several from Settings, so the active `image_root` is no longer the whole answer; the roots come from the hub registry via the route, because this vault cannot see them |
-| Inside a reference folder | `os.walk` lists symlinked *files* (only symlinked *directories* are skipped), so the scan would index every link as a second copy of the picture |
-| Containing the library or a reference folder | The same two problems from the other side |
-| A cloud-sync folder | The client follows a link and uploads the file's content, duplicating the library into the owner's quota. **A precaution, not a measurement** — no sync client was available to the spike, and the refusal exists so the answer never has to be known. Detected by the client's in-tree marker (`.dropbox.cache`, `.tmp.driveupload`, …) or the sync folder's name, and the ancestor walk stops **below** `$HOME`: `~/.dropbox` is the client's *config*, not a sync root, and treating it as one refused every path a Dropbox user could pick |
-
-`reference_folder_scan_task` additionally prunes any directory carrying the
-`.pixlstash-views` marker, because a folder can be registered as a reference
-folder *after* a tree was published inside it. **It remembers the pruned roots
-rather than merely skipping them**, and subtracts them from `removed_paths`:
-"absent from `disk_paths`" is what that task **hard-deletes** a `Picture` row
-for — tags, scores and memberships with it — so pruning alone would have turned a
-marker file appearing over an indexed folder into a silent library deletion, a
-far worse failure than the double-indexing the prune exists to prevent.
-
-**The rebuild deletes links, never last copies.** `shutil.rmtree` is not
-link-aware — it removes a regular file as happily as a symlink — so a rebuild
-built on it would destroy anything the owner dropped into a view folder, which is
-precisely the gesture every line of this feature's copy invites. `_prune`
-therefore decides per entry, on an exact test rather than a heuristic: a symlink
-goes (it is a path), a regular file with `st_nlink > 1` goes (another name for
-those bytes exists, which is what a hard link into the library is), and
-**anything else stays** and is reported to the owner as `kept_by_owner`. A
-directory is `rmdir`-ed bottom-up, so it survives exactly when something inside
-it did. Nothing descends a symlinked directory: a symlink standing where a kind
-folder goes is removed *as a link*, which is what stops one planted in the views
-root from steering the whole rebuild out of it.
-
-**The `.pixlstash-views` marker is the second guard, and it is about adoption
-rather than deletion.** The service writes it when it claims a folder and refuses
-a folder that already has content and no marker, so a views root aimed at
-somebody's pictures folder is never adopted in the first place. `remove()` runs
-the same prune and **keeps the marker whenever anything survived** — dropping it
-over a partial removal would hand every remaining link to the next
-reference-folder scan as a new picture. It never removes the root the owner
-chose.
-
-Every destination path is built with `resolve_path_within` against its kind
-folder, and the kind folder itself against the root; names are reduced to one
-path component, truncated to 80 characters (a component over `NAME_MAX` is
-`ENAMETOOLONG`, and a views path clears Windows' `MAX_PATH` sooner than that) and
-disambiguated by row id, because two characters really can be called the same
-thing.
-
-**A rebuild clears every kind folder, not only the requested ones.** Publishing
-`people` after publishing `people,sets` must not leave `Sets/` behind full of
-links nothing will refresh, and that is also what makes an empty `kinds` mean an
-empty tree. The probe runs *before* the prune, so a folder that turns out not to
-hold links does not cost the owner the tree they already had.
-
-Symlinks are stored **relative** when the view root and the file share a device,
-so a library and its views survive being moved together, and absolute otherwise —
-across drive letters a relative path is impossible. A link that cannot be made is
-counted and its folder named in the publish report rather than failing the whole
-run, which is what a library split across two disks looks like when only hard
-links are available.
 
 ### The shelf's five verbs (shelf plan F3)
 
@@ -2792,6 +2692,26 @@ instead of an offer deletes the file by hand to get the app started. A
 *fingerprint conflict* is not this case — that vault loads fine, and the answer
 is to put the right one back.
 
+**A failure about the machine is never turned into that offer**
+(release-review item 27). `_ENVIRONMENTAL_SQLITE_FAILURES` — `database is
+locked`, `disk I/O error`, `unable to open database file`, `database or disk is
+full`, `readonly database`, `permission denied`, `database disk image is
+malformed`, `out of memory`, all in SQLite's own wording (the "image" in the
+last one is the database file, nothing to do with a picture) — names the
+findings that say nothing about what the file contains, and
+`_is_environmental_failure` is the one classifier all three paths to the offer
+now ask: `unusable_vault_from_open_failure` (a migration that raised),
+`_vault_is_loadable` (the recovery in `_offer_a_usable_library`, reached on
+*every* start-up after the first) and the first-run `attach`. Before v1.11.1
+only the first of the three asked it, and `validate_vault_folder` reports "not
+a vault" and "this machine could not read it" as the same `NotAVaultError`, so a
+vault left mode 0000 by a bad restore, or held by another process, was offered
+"start over with an empty library database" — and `PIXLSTASH_RECREATE_VAULT=1`
+would then rename a perfectly good catalogue aside. The environmental cases now
+raise a plain `HubBootstrapError` saying what to fix; `SQLITE_NOTADB` is
+deliberately not in the list, because "this file is not a database" is exactly
+what the offer is for.
+
 Hub loss therefore does not re-import the blank legacy identity or deadlock
 registration. A recreated hub mints a fresh immutable registry UUID, records
 the vault fingerprint only as advisory evidence, creates an unclaimed hub
@@ -3000,6 +2920,68 @@ module docstring is the design record: which actor each check is for, why the
 earlier DACL refusal was removed (it stopped the server starting on Windows,
 W6/W7/W18), and what a `private=True` open verifies instead.
 
+**Accepted risk W20 — mode bits warn, they no longer refuse.** Until #1152
+(commit `a26f765`, 2026-09-04) a group- or world-writable directory on the path
+to the hub, the vault or the library, and a credential file wider than `0600`,
+refused the open and exited the server 1. They now log a WARNING carrying the
+`chmod` that fixes them and the open proceeds. Ownership, symlink/junction and
+file-type checks still refuse. An unresolvable group does **not** refuse: it
+only stops the private-group tolerance applying, and the loose mode is then
+warned about like any other.
+
+*Risk and who is affected:* a POSIX user whose library or config path is
+group- or world-writable and who shares that group or machine with another
+account. That account can substitute `vault.db`, `hub.db` or pre-position a
+`-wal`/`-shm` sidecar between boots. The vault is authorization-bearing
+(`authz/membership.py` answers scope questions out of it), so the blast radius
+is the whole library plus the scope decisions taken from it — the same radius
+W17 states for Windows, now reachable on POSIX too when the owner has loosened
+the path.
+
+*Why it is accepted rather than reverted:* refusing on mode alone took the
+product down twice for nobody's benefit — a `0775` directory under a stock
+Ubuntu umask 002, then a `0755` library made by the Docker entrypoint — and in
+both cases the actor the bit implied did not exist. The precondition is that
+the *owner's own* path is already loose, which on the single-owner product this
+ships as means the machine has no second principal at all. A control that stops
+the application starting on the common case, on evidence that is a proxy rather
+than an observation, is a control that gets removed by the user (`chmod`) or by
+the maintainer; a warning that names the fix survives.
+
+*Compensating controls, and what they do not cover.* `startup_permissions.py`
+finds the same paths and offers a bounded, explicit repair, but **only a
+terminal is actually offered it**: `app.py` prompts inline on a TTY and
+otherwise prints `chmod` lines to stderr, which for the desktop app is the
+server log and for Docker is the container log. The Electron repair dialog is
+**dead code today** — it is armed only by a `PIXLSTASH_PERMISSION_REPAIR=`
+marker parsed out of a backend that *exited* (`ServerProcess.ts`,
+`StartupPermissions.ts`), and #1152 removed the Python side that emitted it, so
+a backend that now warns and continues never arms it. `permissions:request` /
+`permissions:resolve` and the `PIXLSTASH_REPAIR_PERMISSIONS=1` retry are
+unreachable from the shell until something re-emits that marker from the
+*running* server. The controls that do apply everywhere: new directories are
+created `0700` and new credential files `0600` by `mkdir_private`, so nothing
+PixlStash creates today needs the repair at all; the `(st_dev, st_ino)` identity
+match still catches a swap inside the open→verify window; and the ownership,
+symlink/junction and regular-file refusals are untouched.
+
+*Blast radius, in full.* Substitution of `vault.db` / `hub.db` or a
+pre-positioned `-wal`/`-shm`, as above. Also **deletion**: on a world-writable
+directory without the sticky bit another account can remove `vault.db-wal`
+(dropping committed transactions) or the database itself, which no ownership
+check catches because there is no file left to inspect. And the repair sweep is
+narrower than the risk — `find_startup_permission_issues` walks the config root
+and the active library, not reference-folder roots and not registered libraries
+that are not currently attached.
+
+*What would reopen it:* multi-user, a shared or multi-tenant host, or any
+deployment where a second local principal is expected. In any of those the mode
+test stops being a proxy and becomes an observation, and this reverts to a
+refusal.
+
+Owner: lindkvis. Revisit with W17 (2026-11-08), and **immediately** if
+multi-user work starts. CSO sign-off: accepted 2026-09-06 (#1177 item 16).
+
 **Group-write is not automatically an exposure.** `mode & 0o022` is a *proxy*
 for "another principal can write here", and for the group bit that proxy is
 wrong wherever the group is the owner's own. Debian, Ubuntu and every other
@@ -3011,16 +2993,18 @@ server 1 during startup on a stock Linux box with a library from an earlier
 release, with no recovery short of a manual `chmod`. `_is_private_group` names
 the actor instead of the bit: group-write is tolerated only when the group is the
 directory owner's own, same-named, and has no other member; any lookup failure
-is reported as shared, so the open is refused. World-write is refused exactly as
-before, and the file-level checks are unchanged — a `0664` database cannot come
-from a umask, since SQLite requests `0644`.
+is reported as shared, so the tolerance does not apply and the loose mode is
+warned about (W20: since #1152 that is a warning, not a refusal). The file-level
+checks are unchanged in *what* they inspect — a `0664` database cannot come from
+a umask, since SQLite requests `0644` — but they too now warn rather than
+refuse.
 
 A root-owned ancestor is **not** covered by this: the ownership check above
 admits `st_uid in (uid, 0)`, but the group tolerance additionally requires
 `st_uid == uid`, because for gid 0 the "owner's own group" is the administrators'
 group rather than one single owner's. `root:root 0775` directories exist in the
-wild (`/var/lib/AccountsService` on a stock Ubuntu box) and keep the blanket
-refusal.
+wild (`/var/lib/AccountsService` on a stock Ubuntu box) and are warned about
+without the tolerance ever being considered.
 
 **Accepted risk, group membership (same record as W17).** Two things the group
 answer cannot see, both stated rather than fixed:
@@ -3045,8 +3029,8 @@ process's name service.
 
 An NSS lookup on the startup path is the cost, and only for a directory that is
 already group-writable — a tightened install performs none. A lookup that fails
-is reported as shared, so the worst case is the refusal this whole section
-exists to remove, never a weaker check.
+is reported as shared, so the worst case is a warning the directory did not
+need, never a weaker check.
 
 **Accepted risk W17.** Python exposes neither owner SID nor directory DACL
 portably, so the POSIX `mode & 0o022` test — "another principal cannot write
@@ -3135,13 +3119,28 @@ detail, so this section is the map rather than a second copy of it.
 
 A `Layout` is an ordered list of segments, one folder level each. A segment
 holds one or more `Facet`s (`PROJECT`, `PERSON`, `SET`, `TAG`) and the first the
-picture has a value for wins; a segment nothing fills is **skipped rather than
-left as an empty folder**, which keeps the tree two deep instead of five. A new
-library starts on `DEFAULT_LAYOUT`, `Project` then `Person or Set`.
+picture has a value for wins. A segment nothing fills becomes `GLOBAL_FOLDER`
+(`Global`) **when a later segment is filled**, and is dropped when none is: under
+`Project` then `Person or Set` a picture with only a person is `Global/Mira` and
+one with only a project is `Nordvik`, never `Nordvik/Global`. That keeps the
+tree two deep instead of five while putting every person folder at one depth,
+and — the reason `Global` is in the layout's *language* rather than being
+decoration — it gives an unprojected picture a folder to move **out of** when a
+project arrives (#1161). A new library starts on `DEFAULT_LAYOUT`, `Project`
+then `Person or Set`.
+
+`_walk` therefore reads `Global` at every segment whatever the picture is, and
+treats it as the picture's own only where nothing fills that segment. Reading it
+only where the picture has nothing would make it unparseable in exactly the case
+that has to move. The cost, stated once: a folder of the owner's own literally
+named `Global` at a layout level is adopted by the layout instead of being the
+permanent override an unreadable name would be. A picture that fills no segment
+at all still answers `layout.unfiled`, not `Global`, which is what keeps the
+migration's unfiled sweep an opt-in rather than something `Global` does anyway.
 
 | Function | Answers |
 |---|---|
-| `render(facets, layout)` | The folder the picture should be in, relative to the library root. A picture nothing files goes to `layout.unfiled`, defaulting to `Unassigned` — never the library root, which is where an unmigrated flat library lives. |
+| `render(facets, layout)` | The folder the picture should be in, relative to the library root. An unfilled segment with a filled one after it becomes `Global`; trailing ones are dropped. A picture nothing files goes to `layout.unfiled`, defaulting to `Unassigned` — never the library root, which is where an unmigrated flat library lives. |
 | `is_true(folder, facets, layout, known_names)` | Whether the folder it is *actually* in still describes it. Takes the **folder**, not the file path: guessing which trailing component was a file name would silently flip the answer for a path written with a trailing separator. A path carrying `.` or `..` is refused whole rather than normalised — tidying one would fabricate a level the path does not have. |
 
 The release rests on `is_true`, and on one property of it: **a path that does
@@ -3272,7 +3271,7 @@ indexing the same pictures.
 **The two routes that take a path resolve it before they validate it.**
 `validate_reference_folder_path` compares against a literal blocklist, so
 checking the string the caller sent lets `~/link-to-etc` through — and `POST
-/libraries` then chmods that folder 0700 and writes a database into it. The
+/libraries` then writes a database into whatever folder that names. The
 sibling that gets this right is `validate_reference_folder_accessible`, which
 realpaths first; `_safe_folder` follows it, not `GET /filesystem/browse`'s
 ordering. A relative path is refused explicitly before resolution, because
@@ -3340,14 +3339,19 @@ Two placements in it are load-bearing:
   adds of one name both pass. `create`'s early call is the deliberate exception
   and is advisory — its job is to fail before a vault is built.
 
-**`register_pending` opts out** (`unique_name=False`). Its caller is start-up:
-`bootstrap._register_first_library` passes the hardcoded `"Library 1"` and does
-not catch `LibraryExistsError`, so refusing there would turn a duplicate label —
-a nuisance — into a server that will not boot. `record_legacy_preparation`
-writes its row directly and is outside the check for the same reason. The rule
-is *verbs a person types a name at refuse; start-up records what it was given*,
-and the ceiling that leaves is the pre-existing one: a hub can still hold a
-duplicate, and `get` by name still refuses both.
+**Start-up opts out** (`unique_name=False`). Its caller is
+`bootstrap._register_first_library`, which passes the hardcoded `"Library 1"`
+and does not catch `LibraryExistsError`, so refusing there would turn a
+duplicate label — a nuisance — into a server that will not boot. That function
+has **two** registration calls, one per branch, and the flag belongs on both:
+`register_pending` when the folder holds no vault yet, and `attach` when it
+already does. `attach` carried the check until v1.11.1 (release-review item 28),
+which meant the same hardcoded label refused to boot a hub that already held it
+— the branch where the library *exists* being the one that failed.
+`record_legacy_preparation` writes its row directly and is outside the check for
+the same reason. The rule is *verbs a person types a name at refuse; start-up
+records what it was given*, and the ceiling that leaves is the pre-existing one:
+a hub can still hold a duplicate, and `get` by name still refuses both.
 
 `GET /libraries` returns an `active_share_links` count on every library entry.
 It is owner metadata with no host path sensitivity and is available before the
@@ -3653,6 +3657,7 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
   - **Updated 2026-08-23 (v1.11 Phase 7, PixlStash Views) — the locality total is now `43 = 37 local + 6 loopback`.** Re-derived from `ROUTE_POLICIES` after merging the library-lifecycle block, not carried forward: those four routes and these two landed independently, so the figure this paragraph would have named alone (`39 = 33 + 6`) was never true of a merged tree. `GET` and `PATCH /api/v1/server-config/views` publish the library's sets, people and projects as folders of **links** to the files the owner already keeps. The PATCH is the **third** route on this tier for both reasons at once: it takes a caller-supplied host path like `POST /model-folders`, and it writes a folder tree into it like `POST /model-moves`. It is here for the authority and **not** for destruction — it creates only links, and the one thing it unlinks is a name that is not the last one: a symlink, or a regular file with `st_nlink > 1`. `shutil.rmtree` is deliberately not used, because it is not link-aware and would delete a file the owner had dropped into a view folder; anything that is not a link is reported back as `kept_by_owner` and left standing. A folder that already has content and no `.pixlstash-views` marker is refused rather than adopted, so a views root aimed at somebody's pictures folder never becomes one in the first place. Every destination is built with `resolve_path_within` against its kind folder and each kind folder against the root, and a symlink standing where a kind folder goes is unlinked *as a link* rather than descended, so neither a vault-supplied name nor a planted symlink can take the rebuild outside the views root; and five location classes are refused outright before a byte is written — inside the library, inside **any other registered** library (the same broken backup in one that is not open), inside a reference folder (the scan lists symlinked *files*, so every link would be indexed as a second copy), the containing cases of each, and a cloud-sync folder (the client uploads what the link points at). **The GET is the control-surface argument that put `GET /model-moves` here rather than one tier down**: it names the host folder the tree went to, and the tier that alone may publish it is the tier that may see where it landed. It is also on `READ_BLOCKED_GET_PATHS`, so the documented `AUTHZ_GATE_ENFORCING = False` rollback does not hand that path back to every share token. The loopback count is unchanged: neither route spawns anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_37_local_6_loopback`. Arithmetic, not judgement.
   - **Updated 2026-08-24 (v1.11 Phase 4b, the move engine) — the locality total is now `48 = 42 local + 6 loopback`.** Re-derived from `ROUTE_POLICIES` rather than added to the line above, which is one branch behind: Phase 2's three folder-structure routes landed in between and took the local tier to 40 without a bullet of their own. This change adds **+2**: `GET` and `PATCH /api/v1/server-config/layout`. **Neither takes a host path at all** — the root is the library's own, and there is no field in which a caller could name another — and the PATCH moves nothing when it is called, because the release's rule is that every path already in the library is true the moment it is written, so choosing a layout reorganises no folder that exists. What puts the pair on this tier is the authority the PATCH *hands out*: from then on a background task (`LayoutMoveTask`) renames the owner's own files into the folder names the layout renders, so the tier that may decide those names is the tier that holds host-filesystem authority. The GET is its control surface by the `GET /model-moves` argument, and is on `READ_BLOCKED_GET_PATHS` so the documented `AUTHZ_GATE_ENFORCING = False` rollback does not hand the shape of the owner's folder tree to every share token. **The move itself is deliberately NOT on this tier.** `POST /api/v1/pictures/layout/move-to-match` is `picture_scoped`, on the `POST /api/v1/pictures/rotate` line: the caller names pictures, the server derives the root from each picture's own row and the destination from a layout only this tier could have set, so what a caller exercises is authority over pictures it already reaches. Its planner refuses a source that resolves outside its root and refuses a symlink outright — `publish_no_clobber` links the *target*, so moving a link would pull a file from anywhere on the machine into the library under the link's name, the #1024 shape one sink over — and a destination whose name is taken is declined rather than overwritten. The loopback count is unchanged: neither route spawns anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_42_local_6_loopback`. Arithmetic, not judgement.
+  - **Updated 2026-09-07 (PixlStash Views withdrawn) — the locality total is now `52 = 45 local + 7 loopback`.** Re-derived from `ROUTE_POLICIES`, not subtracted from the line above, which had itself gone stale twice in between (`POST /api/v1/pictures/export/folder` and `DELETE /api/v1/folder-structure/commit` both landed without re-deriving it). `GET` and `PATCH /api/v1/server-config/views` are **removed**, along with the feature behind them: the settings section was never wired into the app, so the routes were reachable only by a direct API call and nothing in the product ever set `library_settings.views_root`. Neither route was the *subject* of any assertion in `tests/test_authz_host_capability_16_3.py` — the behavioural §16.3 tests drive `GET /filesystem/browse` and `POST /pictures/{id}/open-location`, and `READ_BLOCKED_GET_PATHS` membership is **derived** from `ROUTE_POLICIES` by `test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt` rather than written down — so the removal costs two counted routes and no coverage. One thing survives the feature: `ReferenceFolderScanTask` still refuses to descend a directory holding a `.pixlstash-views` marker, because the API shipped in v1.11 and a tree it published is still on disk; without the prune every link under one would be indexed as a second copy of a picture. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_45_local_7_loopback`. Arithmetic, not judgement.
 
 **Correction to the historical claim.** The compensating-control line above ("remote `ALL` blocked by `require_local_for_write`") overstates the protection for this class as it stood. The `_require_local_for_write` **method** runs only at `/login` (`auth.py` — password-login path), not per-request on these handlers; the genuine per-request control was the middleware's separate remote-`ALL`-**token** block. A remote **cookie** owner session was therefore *not* locality-gated on these endpoints at all — the exact gap the `LOCAL_OWNER_ONLY` retarget closes (a remote cookie owner is now locality-checked, and the 3 red-line routes are loopback-only).
 
@@ -6192,26 +6197,71 @@ does the only filesystem *read* left: indexing every file into a `Picture`
 row, in place, exactly as it does for any other reference folder.
 `register_reference_folder` is deliberately **not** the same function as
 `routes.reference_folders.create_reference_folder` — it is a smaller,
-one-directional insert kept separate because the two entry points validate
-different things upstream (that route re-derives accessibility from a
-caller-supplied path and checks conflicts against every other registered
-folder, and accepts `host_path`/sidecar-suffix/Docker-mode fields this one has
-no UI for; this one starts from a path a settled read already walked) — and
-because their **conflict answers differ**. `create_reference_folder` 409s
-outright on an existing path. `register_reference_folder`'s `fetch_or_create`
-is narrower: it reuses an existing row **only** when that row has never
-completed a scan (`last_scanned is None`) — the shape of a commit that
-registered the folder and then crashed before the first scan finished, safe to
-resume because nothing has been indexed under it yet that a fresh wait could
-miss. A row that **has** completed a scan — an unrelated pre-existing
-reference folder, or an earlier commit of this same path from a since-cancelled
-read run again — is refused with a `CommitError` rather than silently reused,
-because reusing it would apply this mapping to whatever happens to be indexed
-under it already, not to what the read the owner just accepted actually found.
-"Cancel and organise later" during `Main` or `MapTree` therefore leaves
-nothing committed and nothing registered at all — there is no reference folder
-row yet at that point for a resumed commit to collide with — and the narrow
-crash-recovery case above is the only path re-use is safe.
+one-directional insert kept separate because the two entry points start from
+different places (that route re-derives accessibility from a caller-supplied
+path, and accepts `host_path`/sidecar-suffix/Docker-mode fields this one has no
+UI for; this one starts from a path a settled read already walked).
+
+**The conflict rule is not one of those differences.** Both call
+`utils.reference_folder_validator.validate_reference_folder_conflicts` — a root
+may not equal, contain, or sit inside `image_root` or any other registered
+reference folder. This path used to check *nothing*, so a root that contained
+`image_root` (the commit route's own guard only refuses one equal to or inside
+it) or that swallowed another reference folder was accepted, and two scan tasks
+then each indexed the same files believing they owned them.
+
+What does still differ is the answer to **an existing row at the same path**.
+`create_reference_folder` 409s outright. `register_reference_folder` reuses one
+in exactly two shapes, and refuses every other:
+
+- the row has never completed a scan (`last_scanned is None`) — a commit that
+  registered the folder and crashed before the first scan finished; nothing has
+  been indexed under it that a fresh wait could miss;
+- the row is **this commit's own**, which `_commit_owns_this_root` decides from
+  the durable record rather than from the path: the `FolderMappingCommit` for
+  this `task_id` is still `pending` and its `stage` has left `registering`,
+  which it does only once `register_reference_folder` has already returned once.
+  The mapping provably did not run — assigning settles the record inside its own
+  transaction — so this is a commit interrupted *after* its scan completed, and
+  finishing it is the entire purpose of the record. Refusing it (which is what
+  the `last_scanned` test alone did) wedged the record `pending` for ever:
+  every start-up resumed it and failed identically.
+
+Anything else — an unrelated pre-existing reference folder, or an earlier
+*settled* commit of this same path from a since-cancelled read run again — is
+refused with a `CommitError` rather than silently reused, because reusing it
+would apply this mapping to whatever happens to be indexed under it already,
+not to what the read the owner just accepted actually found. "Cancel and
+organise later" during `Main` or `MapTree` leaves nothing committed and nothing
+registered at all, so there is no row at that point for a resumed commit to
+collide with.
+
+### The newest accepted mapping is the only resumable one
+
+`FolderMappingCommit` promises "at most one row is `pending`", and the endpoint's
+in-memory single-slot rule is not enough to keep it: a commit that *fails*
+deliberately leaves its record pending (the failure is usually transient and
+losing the intent is what the record exists to prevent) while clearing the
+in-memory slot, so the owner can legitimately accept a second mapping over the
+first. `record_pending_commit` therefore marks every older pending row
+`STATE_SUPERSEDED` as it writes the new one. Without it both rows are pending:
+the next start-up resumes the newest, and the start-up *after that* resumes the
+older one and re-applies a mapping the owner has already replaced.
+
+### One pruning rule for every walk of a tree
+
+§24's read prunes dot-folders (a vault's own `.pixlstash-thumbnails/`, the older
+`.ref_thumbs/`, `.pixlstash` sidecar stores, anything the owner hid) and so does
+`local_import_pictures`; `ReferenceFolderScanTask` did not. Since a
+reference-mode commit is precisely the read and that scan looking at one root,
+the two disagreed about what was in it — the read's `picture_count` excluded the
+cache and the scan indexed every file in it as a picture, which the mapping then
+filed. The rule is `utils.media_files.is_hidden_entry`, now called by all three.
+The scan additionally keeps rows under a newly-pruned dot-folder out of
+`removed_paths` (`has_hidden_component`), for the reason the views-tree prune
+beside it spells out: "absent from `disk_paths`" is what that task hard-deletes a
+`Picture` for, and a path it never looked for says nothing about whether the file
+is still there.
 
 `wait_for_first_scan` polls `ReferenceFolder.last_scanned`, which is exactly
 the field the model's own docstring names as "unix timestamp of the last
@@ -6231,6 +6281,21 @@ workers started the same second the commit reported `done`. A `vault.wake()`
 per chunk (`_BUILD_CHUNK_SIZE` = 128 pictures) has faces, quality and the rest
 running on the first chunk while the walk continues; it is a scheduler poke,
 not an event, so the SPA is still told about the import once, at the end.
+
+### The assigning step costs a bounded number of statements
+
+`_link_pictures` resolves every folder first and only then links, because with
+the answers in hand the human-label ledger can be written in **one batched
+pass** (`label_ledger.record_human_labels`) rather than one indexed `SELECT` per
+`(picture, tag)`. On a fresh `local_import` no predictions exist yet, so the
+per-pair shape was a round trip per picture per tag-mapped folder. The `IN`
+lists either side of it — `local_import_pictures`'s existing-`file_path` load
+and `apply_local_mapping`'s id load — are chunked through
+`utils.sql_chunking.chunked` for the separate reason that unchunked they are the
+whole import and cross SQLite's bound-parameter cap.
+`tests/test_folder_structure_commit.py::test_linking_a_large_import_costs_a_bounded_number_of_statements`
+pins it by counting statements at two import sizes: twenty times the pictures
+must not cost more statements.
 
 ### A read commits once, enforced
 
@@ -6508,10 +6573,28 @@ collide the same way. `_name_is_ambiguous` declines those. The cost is that
 those folders drop out of the layout's language; the alternative costs the owner
 moved files, and this design errs the other way every time.
 
+Two entities of the same name are told apart by **primary key**, not by name.
+`rename_entity_folders` takes the id of the entity being renamed and
+`_name_is_ambiguous` skips only that row: excluding every row still holding the
+old name would exclude the *other* Mira as well, so renaming one would read as
+unambiguous and rename the other's folder.
+
+**The directory is found by scanning, not by joining the path.** `_entry_matching`
+resolves the real on-disk entry with the same fold `is_true` compares under, so
+the name is read as it is actually spelled. Joining `parent/<layout name>` and
+asking `os.path.isdir` is what a case-insensitive filesystem answers yes to for a
+directory really called `summer`; the rename would then move that directory while
+every row underneath still carried the real spelling, `_repoint_under` would match
+none of them, and the purge sweep would delete those pictures. The same match
+decides whether the destination is taken, so a rename that only changes case is
+made rather than refused, and a sibling spelled differently blocks it even where
+`os.path.exists` cannot see it.
+
 The renames and the `file_path` rewrites that describe them commit **together**,
 inside `rename_entity_folders` itself, and the directories are renamed back if
 that commit fails. A half-applied rename would leave every picture under the
-folder naming a path that does not exist, which is the purge sweep's input.
+folder naming a path that does not exist, which is the purge sweep's input. That
+is why every caller renames **before** its own `session.commit()`, not after.
 
 ### What Phase 6 sees once a layout is on
 
@@ -6725,6 +6808,26 @@ library root is found under `None`. The task's result carries
 for exactly this reason — the two differ whenever the move happened in a root
 with no layout.
 
+**The scan is not the only thing that discovers an owner move.**
+`MissingFilePurgeTask` reads the same journal to tell a deletion from a move it
+must not purge (§26), and it reads it in both directions — so a file found back
+at a row's `old_path` is repaired there too. That direction has two causes the
+journal cannot tell apart: an undo whose rename landed and whose transaction did
+not, and the owner dragging the file out of the folder PixlStash filed it in.
+The scan *can* tell, because `claim_own_moves` matches a pair in one direction
+only and would find the reversed pair unclaimed — so it would queue a review
+where the sweep repointed `file_path` and stopped. Whichever noticed first
+decided, and once `file_path` is repointed the file is where the row says it is,
+so the next scan sees no move to follow and the reconciliation is lost for good.
+The sweep therefore queues it as well, through
+`record_pending_reviews_in_laid_out_roots` — the same recorder with the layout
+gate the scan applies inline, since the sweep has a picture id and two paths but
+has read no root. Only the backwards direction: a file at the row's `new_path`
+is our own move landing, the scan would have claimed that pair, and a review
+there is Phase 5 undoing Phase 4b's write. A crashed undo queues one too, which
+is the safe side of a distinction that cannot be made: the row is a question for
+the owner and never an applied change.
+
 **Classification never touches the row it reads until it deletes it.**
 `pending_summary_in_session` reclassifies every row against the picture's
 *current* facets and the root's *current* layout on every call — there is no
@@ -6773,6 +6876,14 @@ returns a `ReconciledMove(outcome, removals, additions)`:
    deliberate "nothing files this" signal, not as an unreadable destination —
    the one component check `reconcile_move` makes before the general
    off-layout test.
+5. **Arriving under `Global`** is the same signal for one segment rather than
+   for the whole path. `read_named_components` consumes a `Global` component,
+   names nothing for it and carries on, so dragging a picture from
+   `Nordvik/Mira` to `Global/Mira` reads as "leave the project, still Mira" and
+   comes back as a removal; a real entity actually named `Global` wins, because
+   the facet lookup runs first. A bare `Global/` names nothing at all, so it
+   skips the off-layout test the same way the unfiled folder does — otherwise
+   the project the owner just dragged the picture out of would never come off.
 
 Measured on the owner's four real libraries (~59,000 pictures, DECISIONS.md):
 91–100% of assigned pictures have exactly one project or set, so `AMBIGUOUS`
