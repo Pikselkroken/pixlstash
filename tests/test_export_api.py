@@ -207,6 +207,9 @@ def test_windows_really_loses_a_device_named_member_and_keeps_the_rewrite(
     try:
         (tmp_path / f"{device}.jpg").write_bytes(b"picture")
     except OSError:
+        # Either outcome is the bug being asserted: the device may refuse the
+        # write, or answer it and report success. What matters is the assert
+        # below - no file of that name appears in the folder.
         pass
     assert f"{device}.jpg" not in os.listdir(tmp_path), (
         f"{device}.jpg became a real file on this Windows build, so it is not a "

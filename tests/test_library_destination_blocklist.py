@@ -55,16 +55,13 @@ def _env():
         server_config_path = os.path.join(temp_dir.name, "server-config.json")
         with open(server_config_path, "w") as fh:
             fh.write(json.dumps({"port": 8000}))
-        server = Server(server_config_path)
-        try:
+        with Server(server_config_path) as server:
             client = TestClient(server.api)
             resp = client.post(
                 "/login", json={"username": "testuser", "password": "testpassword"}
             )
             assert resp.status_code == 200
             yield client, server, temp_dir.name
-        finally:
-            server.close()
     finally:
         temp_dir.cleanup()
         gc.collect()
