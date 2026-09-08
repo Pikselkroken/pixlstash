@@ -38,9 +38,11 @@ from pixlstash.utils.reference_folder_validator import validate_reference_folder
 
 logger = get_logger(__name__)
 
-#: How long one folder's sampled face batch may wait. Generous enough that the
-#: first batch of a read can also pay for loading InsightFace, and short enough
-#: that a wedged GPU queue is noticed rather than waited on 20,000 times.
+#: How long one sampled face batch may wait - `_DETECT_BATCH_IMAGES` pictures
+#: from several folders, not one folder's twenty. Generous enough that the first
+#: batch of a read can also pay for loading InsightFace, and short enough that a
+#: wedged GPU queue is noticed rather than waited on 20,000 times. Still ten
+#: times the measured cost of a hundred-picture batch on a CPU-only box.
 _FACE_BATCH_TIMEOUT_S = 180.0
 
 # Matches any non-empty string with no null bytes or newlines. Applied with

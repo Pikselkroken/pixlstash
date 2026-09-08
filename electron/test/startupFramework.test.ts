@@ -101,7 +101,11 @@ describe('the startup framework', () => {
   it('states the number each row is about', () => {
     // The widest object on the screen was also the least informative: the read
     // knows its folder counts and pip names every wheel's size.
-    assert.match(script, /of \$\{count\(p\.total\)\} \$\{noun\}/);
+    // Folders in both stages: the face pass counts the folders it samples, not
+    // the pictures inside them, and naming it "pictures" showed 153 folders as
+    // 153 pictures.
+    assert.match(script, /of \$\{count\(p\.total\)\} folders/);
+    assert.doesNotMatch(script, /\} pictures`/);
     assert.match(script, /humanBytes\(done\)\} of \$\{humanBytes\(total\)/);
     assert.match(mainSrc.replace(/\s+/g, ' '), /bytesDone|install:progress/);
   });
