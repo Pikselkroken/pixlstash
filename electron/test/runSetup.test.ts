@@ -4,11 +4,12 @@ import { describe, it, beforeEach } from 'node:test';
 import { runFirstRunSetup, type SetupChoices, type SetupDeps } from '../src/setup/RunSetup';
 
 /**
- * First run has more outcomes than it looks like it does. The download and the
- * folder read run at the same time, so EITHER can finish first; the read can
- * fail, return nothing, or throw; the identity import can refuse; the backend
- * can refuse to start; and a machine with no GPU skips half of it. This is the
- * whole matrix, driven through fakes that record the order of what happened.
+ * First run has more outcomes than it looks like it does. The download has to
+ * finish before the backend starts, or the read it feeds runs on the CPU
+ * runtime; the read can fail, return nothing, or throw; the identity import can
+ * refuse; the backend can refuse to start; and a machine with no GPU skips half
+ * of it. This is the whole matrix, driven through fakes that record the order
+ * of what happened.
  */
 
 type Accel = 'cu128';
@@ -62,7 +63,9 @@ function makeDeps(overrides: Partial<SetupDeps<Accel>> = {}): SetupDeps<Accel> {
       return READ_RESULT;
     },
     announceReading: () => log.push('announceReading'),
-    announceInstallFailed: (message) => log.push(`installFailed:${message}`),
+    navigateToApp: async () => {
+      log.push('navigate');
+    },
     ...overrides,
   };
 }
@@ -77,29 +80,39 @@ beforeEach(() => {
 });
 
 describe('first-run setup, with a GPU runtime to install', () => {
-  it('starts the backend before the download, or nothing overlaps', async () => {
+  it('downloads before the backend starts, or the read runs on the CPU runtime', async () => {
+    // The device is fixed when the backend process is spawned. A backend
+    // started before the overlay lands reads the whole library on the CPU, and
+    // nothing can move it afterwards - which is what this order exists for.
     await runFirstRunSetup(CHOICES, makeDeps());
 
-    const startedAt = log.indexOf('start:bundled:stay');
     const installedAt = log.indexOf('install:cu128');
-    assert.ok(startedAt >= 0 && installedAt > startedAt, log.join(' → '));
+    const startedAt = log.indexOf('start:cu128:stay');
+    const readAt = log.indexOf('read');
+    assert.ok(installedAt >= 0 && installedAt < startedAt, log.join(' → '));
+    assert.ok(startedAt < readAt, log.join(' → '));
   });
 
-  it('reads and downloads at the same time, then restarts onto the GPU', async () => {
+  it('starts the backend exactly once, on the GPU', async () => {
+    await runFirstRunSetup(CHOICES, makeDeps());
+
+    assert.deepEqual(started, [{ accel: 'cu128', navigate: false }]);
+  });
+
+  it('downloads, starts on the GPU, reads on it, then hands the window over', async () => {
     await runFirstRunSetup(CHOICES, makeDeps());
 
     assert.deepEqual(log, [
       'config:/home/me/Pictures',
       'parkTelemetry',
-      'activeAccel:none',
-      'start:bundled:stay',
+      'install:cu128',
+      'activeAccel:cu128',
+      'start:cu128:stay',
       'announceReading',
       'clearMapping',
       'read',
-      'install:cu128',
       'parkMapping',
-      'activeAccel:cu128',
-      'start:cu128:navigate',
+      'navigate',
     ]);
     assert.deepEqual(parkedMapping.at(-1), {
       path: '/home/me/Pictures',
@@ -107,51 +120,31 @@ describe('first-run setup, with a GPU runtime to install', () => {
     });
   });
 
-  it('waits for a read that is still going when the download finishes first', async () => {
+  it('does not hand the window over until the read has finished', async () => {
+    // The app collects the parked mapping as it loads, so a window handed over
+    // mid-read opens on a progress bar with nothing parked for it.
     const read = deferred<Record<string, unknown> | null>();
-    const setup = runFirstRunSetup(
-      CHOICES,
-      makeDeps({
-        readFolder: () => read.promise,
-        installOverlay: async (accel) => log.push(`install:${accel}`),
-      }),
-    );
-    // Let the install finish while the read is still outstanding.
+    const setup = runFirstRunSetup(CHOICES, makeDeps({ readFolder: () => read.promise }));
     await new Promise((r) => setImmediate(r));
-    assert.ok(log.includes('install:cu128'), 'the download got there first');
-    assert.ok(!started.some((s) => s.navigate), 'nothing may navigate yet');
+
+    assert.ok(log.includes('start:cu128:stay'), 'the GPU backend is up');
+    assert.ok(!log.includes('navigate'), 'nothing may navigate yet');
 
     read.resolve(READ_RESULT);
     await setup;
 
+    assert.equal(log.at(-1), 'navigate');
     assert.deepEqual(parkedMapping.at(-1), {
       path: '/home/me/Pictures',
       result: READ_RESULT,
     });
-    assert.deepEqual(started.at(-1), { accel: 'cu128', navigate: true });
-  });
-
-  it('does not restart early when the read finishes first', async () => {
-    const install = deferred<void>();
-    const setup = runFirstRunSetup(
-      CHOICES,
-      makeDeps({ installOverlay: async () => install.promise }),
-    );
-    await new Promise((r) => setImmediate(r));
-    assert.ok(log.includes('read'), 'the read got there first');
-    assert.equal(started.length, 1, 'the GPU restart must wait for the download');
-
-    install.resolve();
-    await setup;
-
-    assert.deepEqual(started.at(-1), { accel: 'cu128', navigate: true });
   });
 
   it('parks nothing when the read finds nothing, and still finishes setup', async () => {
     await runFirstRunSetup(CHOICES, makeDeps({ readFolder: async () => null }));
 
     assert.deepEqual(parkedMapping, [null], 'only the clear at the start');
-    assert.deepEqual(started.at(-1), { accel: 'cu128', navigate: true });
+    assert.equal(log.at(-1), 'navigate');
   });
 
   it('survives a read that throws, because the app can read the folder itself', async () => {
@@ -164,11 +157,13 @@ describe('first-run setup, with a GPU runtime to install', () => {
       }),
     );
 
-    assert.deepEqual(started.at(-1), { accel: 'cu128', navigate: true });
+    assert.equal(log.at(-1), 'navigate');
     assert.deepEqual(parkedMapping, [null]);
   });
 
-  it('lets a failed download reach the screen, and does not restart onto a GPU it has not got', async () => {
+  it('starts nothing at all when the download fails', async () => {
+    // The download is now the first thing that happens, so its failure reaches
+    // the screen before a backend, a read or an activated overlay exists.
     const setup = runFirstRunSetup(
       CHOICES,
       makeDeps({
@@ -179,35 +174,10 @@ describe('first-run setup, with a GPU runtime to install', () => {
     );
 
     await assert.rejects(setup, /no wheels/);
-    assert.ok(
-      !started.some((s) => s.accel === 'cu128'),
-      'a failed install must not be activated',
-    );
-    assert.ok(log.includes('read'), 'the read still ran, and still got to finish');
-  });
-
-  it('says the download failed before waiting the read out', async () => {
-    // The read can have minutes left in it. Announcing after it is announcing
-    // when the wait ends, which is not when the thing failed.
-    const read = deferred<Record<string, unknown> | null>();
-    const setup = runFirstRunSetup(
-      CHOICES,
-      makeDeps({
-        readFolder: () => read.promise,
-        installOverlay: async () => {
-          throw new Error('no wheels for this CUDA generation');
-        },
-      }),
-    );
-    await new Promise((r) => setImmediate(r));
-
-    assert.ok(
-      log.includes('installFailed:no wheels for this CUDA generation'),
-      `said nothing while the read was still going: ${log.join(' → ')}`,
-    );
-
-    read.resolve(null);
-    await assert.rejects(setup, /no wheels/);
+    assert.deepEqual(started, [], 'no backend was started');
+    assert.ok(!log.includes('activeAccel:cu128'), 'a failed install must not be activated');
+    assert.ok(!log.includes('read'), 'nothing was read on a runtime that never arrived');
+    assert.ok(!log.includes('navigate'), 'the setup screen keeps the message');
   });
 
   it('records the install location before anything downloads into it', async () => {

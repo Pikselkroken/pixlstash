@@ -4,12 +4,12 @@
  *
  * This lives outside `main.ts` because the interesting part is the ORDER, and
  * the order has more outcomes than anyone can hold in their head: the download
- * and the folder read run at the same time, so either can finish first; the
- * read can fail, stall, or return nothing; the identity import can refuse; the
- * backend can demand a permission repair the user may decline; and a machine
- * with no GPU skips half of it. Every one of those is a real first run for
- * somebody, and none of them can be exercised through an IPC handler that needs
- * Electron, a window and a real 2.5 GB download.
+ * has to finish before the backend starts, or the read it feeds runs on the CPU
+ * runtime; the read can fail, stall, or return nothing; the identity import can
+ * refuse; the backend can demand a permission repair the user may decline; and
+ * a machine with no GPU skips half of it. Every one of those is a real first
+ * run for somebody, and none of them can be exercised through an IPC handler
+ * that needs Electron, a window and a real 2.5 GB download.
  */
 
 export type SetupChoices = {
@@ -61,13 +61,13 @@ export type SetupDeps<Accel> = {
   /** Tell the setup screen the reading has begun. */
   announceReading: () => void;
   /**
-   * Tell the setup screen the download failed, at the moment it failed.
+   * Point the window at the running backend: the end of setup.
    *
-   * The read still has to finish before anything restarts, and on a large
-   * library that is minutes - minutes the screen otherwise spent drawing a
-   * download that was already over.
+   * Separate from `startBackend` because the read has to finish first. The
+   * mapping it parks is collected by the app as it loads, so a window handed
+   * over before the read ends is a window that opens on a progress bar.
    */
-  announceInstallFailed: (message: string) => void;
+  navigateToApp: () => Promise<void>;
 };
 
 /**
@@ -137,50 +137,38 @@ async function afterConfig<Accel>(
 
   const gpu = deps.gpu;
   if (!choices?.useGpu || !gpu) {
-    // Nothing to download, so nothing to overlap with: start, and go.
+    // Nothing to download, so nothing to wait for: start, and go.
     await deps.setActiveAccel(null);
     await deps.startBackend(await deps.activeOverlayAccel(), true);
     return;
   }
 
-  // A ~2.5 GB download and the first read of the library have nothing to say to
-  // each other: one is network, the other disk, and none of the reading wants a
-  // GPU. The backend starts on the bundled runtime FIRST - without navigating,
-  // so the setup screen keeps reporting - and reads while the overlay
-  // downloads. The restart at the end is the only thing the GPU is needed for,
-  // and the work done in the meantime survives it.
-  await deps.setActiveAccel(null);
-  await deps.startBackend(null, false);
+  // The download and the read used to run AT THE SAME TIME, the read on the
+  // bundled CPU runtime, and on most machines that was a loss. Nothing can move
+  // a running backend onto the GPU - the device is fixed when the process is
+  // spawned and InsightFace picks its providers on first use - so overlapping
+  // meant the whole face pass ran on CPU. Waiting is quicker whenever the CPU
+  // read is more than one download slower than the GPU read, which on a real
+  // library it is by minutes: the overlap saved the download and paid for it
+  // several times over.
+  //
+  // So: download, start once, on the GPU, and read on it. The read still ends
+  // before the window becomes the library, which is what keeps the wizard
+  // opening on its questions instead of on a progress bar.
+  await deps.installOverlay(gpu);
+  await deps.setActiveAccel(gpu);
+  await deps.startBackend(gpu, false);
+
   deps.announceReading();
   deps.parkMapping(null);
-
-  const read = deps
-    .readFolder(imageRoot)
-    .then((result) => {
-      if (result) deps.parkMapping({ path: imageRoot, result });
-    })
-    .catch((e) => {
-      // A read that throws costs the overlap and nothing else: the app reads
-      // the folder itself, exactly as it did before any of this existed.
-      console.warn('[startup] the folder read failed:', e);
-    });
-
   try {
-    await deps.installOverlay(gpu);
-  } catch (error) {
-    // Say it now. The read still has to finish (below), and on a big library
-    // that is minutes; without this the screen spent them drawing a download
-    // that had already failed, and the message arrived with the wait's end
-    // rather than with the failure.
-    deps.announceInstallFailed(error instanceof Error ? error.message : String(error));
-    await read;
-    throw error;
+    const result = await deps.readFolder(imageRoot);
+    if (result) deps.parkMapping({ path: imageRoot, result });
+  } catch (e) {
+    // A read that throws costs the wizard its head start and nothing else: the
+    // app reads the folder itself, exactly as it did before any of this existed.
+    console.warn('[startup] the folder read failed:', e);
   }
-  // Whichever finished first, the read gets to end before the restart takes its
-  // server away - and on the failure path above too, because the retry the
-  // screen offers starts a new backend over this one.
-  await read;
 
-  await deps.setActiveAccel(gpu);
-  await deps.startBackend(gpu, true);
+  await deps.navigateToApp();
 }

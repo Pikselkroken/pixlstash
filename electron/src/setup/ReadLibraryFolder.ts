@@ -1,12 +1,14 @@
 /**
- * Read the chosen library folder while the GPU runtime downloads.
+ * Read the chosen library folder before the window becomes the library.
  *
  * The read is the app's own `/folder-structure/read` - the same work the "Add a
  * library" wizard starts when it opens over a fresh library. Doing it here is
- * what turns two waits into one: the download is network, the read is disk, and
- * the setup screen is already on screen with a progress line and a tour to fill
- * it. By the time the window becomes the library, the folders are read and the
- * wizard opens on its questions instead of on a progress bar.
+ * what lets the wizard open on its questions instead of on a progress bar: the
+ * setup screen already has a progress line and a tour to spend the wait on.
+ *
+ * It runs AFTER the GPU runtime is installed and the backend has started on it,
+ * not alongside the download. The face pass is inference, and a backend cannot
+ * change device once it is running - see `RunSetup`.
  *
  * Nothing here writes: the read proposes what each folder level looks like and
  * the owner still answers, in the app, before a single file is touched.
@@ -44,8 +46,8 @@ const POLL_MS = 700;
 /**
  * A read of a big library takes minutes; one that has said nothing for this
  * long has not "not finished yet", it has stopped answering. Giving up here
- * costs the overlap and nothing else: the app starts its own read as it always
- * did.
+ * costs the wizard its head start and nothing else: the app starts its own read
+ * as it always did.
  */
 const SILENCE_LIMIT_MS = 10 * 60 * 1000;
 
@@ -57,11 +59,13 @@ function cookieHeader(sessionToken: string): Record<string, string> {
  * Start the read and follow it to the end.
  *
  * @returns the read's own RESULT when it completed, or null when it could not
- *   be started or did not finish. The result rather than the task id, because
- *   the task lives in the server's memory and the backend restarts onto the GPU
- *   runtime before the app ever loads: a parked task id resolved to "Task not
- *   found" every time. A null is not an error the user has to see - the app
- *   reads the folder itself, as it always did.
+ *   be started or did not finish. The result rather than the task id: the task
+ *   lives in the server's memory, and parking an id made the app ask a server
+ *   that had been restarted onto the GPU runtime, which answered "Task not
+ *   found" every time. The restart is gone - the read runs on the GPU backend
+ *   now - but the result is still the thing worth keeping, since the app wants
+ *   what was read, not who read it. A null is not an error the user has to see
+ *   - the app reads the folder itself, as it always did.
  */
 export async function readLibraryFolder(
   fetcher: Fetcher,
