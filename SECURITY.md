@@ -4,11 +4,11 @@
 
 PixlStash does not currently support older releases with security updates. Only the very latest version will be updated to patch vulnerabilities. This may and should change in the future as the project matures.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 1.10.x  | :white_check_mark: |
-| 1.9.x   | :x:                |
-| < 1.9.x | :x:                |
+| Version  | Supported          |
+| -------- | ------------------ |
+| 1.11.x   | :white_check_mark: |
+| 1.10.x   | :x:                |
+| < 1.10.x | :x:                |
 
 ## Reporting a Vulnerability
 
