@@ -158,4 +158,34 @@ describe('reading the library folder during the runtime download', () => {
 
     assert.equal(result, null, 'a read that never ends must not hold up the app');
   });
+
+  it('keeps waiting while the counts still move, however long the read takes', async () => {
+    // The limit is on SILENCE, not on the read: a face pass that legitimately
+    // runs longer than it used to be abandoned here, its work thrown away and
+    // the progress line frozen on its last count.
+    let clock = 0;
+    let processed = 0;
+    const fetcher = async (url: string) => {
+      if (url.endsWith('/folder-structure/read')) return jsonResponse({ task_id: 'slow' });
+      processed += 1;
+      return processed > 60
+        ? jsonResponse({ status: 'completed', result: { slow: true } })
+        : jsonResponse({ status: 'running', stage: 'faces', processed, total: 153 });
+    };
+
+    const result = await readLibraryFolder(
+      fetcher,
+      'http://127.0.0.1:9999',
+      's',
+      '/p',
+      () => {},
+      async () => {
+        // Well past the silence limit in total: an hour of steady progress.
+        clock += 60_000;
+      },
+      () => clock,
+    );
+
+    assert.deepEqual(result, { slow: true });
+  });
 });
