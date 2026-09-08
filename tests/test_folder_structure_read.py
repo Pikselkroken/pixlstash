@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 
 from pixlstash.server import Server
+from pixlstash.tasks.face_extraction_task import FaceExtractionTask
 from pixlstash.services.folder_structure_service import (
     DEFAULT_DEADLINE_S,
     FolderStructureRead,
@@ -457,6 +458,30 @@ def test_several_folders_share_one_trip_through_the_detector():
         FolderStructureRead(root, detect_faces=detect).run()
 
     assert batches == [_DETECT_BATCH_IMAGES, SAMPLED_PER_FOLDER], batches
+
+
+def test_an_unreadable_picture_does_not_cost_its_batch_mates_their_faces():
+    """A ``None`` sample is a no-face POSITION, not a failed batch.
+
+    ``_load_sample`` returns ``None`` for a file it cannot open, and the other
+    end of the call skips those positions rather than raising - so a corrupt
+    picture costs its own slot and nothing else. Sharing one call across
+    folders has to keep that per-position, which is what a review doubted.
+    """
+    # The contract itself: no app is touched, because nothing is detectable.
+    assert FaceExtractionTask.detect_faces_in_images(None, [None, None]) == [[], []]
+
+    files = [f"{i:03d}.jpg" for i in range(SAMPLED_PER_FOLDER)]
+    with _tree({"": [], "mira": files, "zoo": files}) as root:
+        with open(os.path.join(root, "mira", "000.jpg"), "wb") as fh:
+            fh.write(b"not a jpeg at all")
+        result = FolderStructureRead(
+            root, detect_faces=_detector_from_identity(lambda i: 1)
+        ).run()
+
+    rows = _rows(result, 2)
+    assert "person" in _offered(rows["zoo"]["proposal"]), "the batch mate is untouched"
+    assert "person" in _offered(rows["mira"]["proposal"]), "19 of 20 is still a person"
 
 
 def test_folders_sharing_a_batch_keep_their_own_verdicts():
