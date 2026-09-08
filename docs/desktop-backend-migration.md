@@ -242,33 +242,45 @@ window never changes size** as you move through it.
 
 **The order of a first run is `src/setup/RunSetup.ts`, and it is tested there.**
 `setup:commit` is the wiring that hands it the real collaborators; the function
-itself takes them as arguments, so every outcome can be driven in a unit test:
-either of the two concurrent jobs finishing first, a read that returns nothing,
-throws, or never starts, a download that fails, a machine with no GPU, an
-identity import that refuses, and a backend that will not start.
-`electron/test/runSetup.test.ts` is that matrix, and it asserts the ORDER rather
-than the outcome, because the order is the part with more cases than anyone can
-hold in their head.
+itself takes them as arguments, so every outcome can be driven in a unit test: a
+read that returns nothing, throws, or never starts, a download that fails, a
+machine with no GPU, an identity import that refuses, and a backend that will
+not start. `electron/test/runSetup.test.ts` is that matrix, and it asserts the
+ORDER rather than the outcome, because the order is the part with more cases
+than anyone can hold in their head.
 
 `setup:commit` writes the desktop config, parks the privacy answer, then — when
-a GPU runtime was chosen — **starts the backend on the bundled runtime before
-downloading it**. The ~2.5 GB download is network; the first read of the library
-is disk and CPU, and none of it wants a GPU, so `startAndLoad(accel, repair,
-navigate = false)` brings the server up without taking the window off the setup
-screen, and the library is hashed and thumbnailed through the download. **The chosen folder is read at the same time**, through the app's own
+a GPU runtime was chosen — **downloads it before starting the backend at all**,
+activates it, and starts once on it (`startAndLoad(accel, repair, navigate =
+false)`, which brings the server up without taking the window off the setup
+screen). **Then** the chosen folder is read, through the app's own
 `/folder-structure/read` (`src/setup/ReadLibraryFolder.ts`, with the loopback
-session cookie): the read is disk work, the download is network, and the setup
-screen shows a line for each with a four-slide tour of the app between them. A
-completed read's **result** is parked in `userData/pending-mapping.json` -
-the result, not its task id, because the task lives in the server process's
-memory and the backend restarts onto the GPU runtime before the app loads, so a
-parked id answers "Task not found". `SideBar`'s loose-picture offer takes the
-result and opens the wizard straight on the mapping questions, which asks the
-server nothing at all. A read that fails, stalls or cannot start costs the overlap and
-nothing else — the app reads the folder itself, exactly as before. When the
-overlay lands it is activated and the backend restarts onto it — the planner
-picks up whatever is still outstanding — and that start is the one that
-navigates the window into the library.
+session cookie), and only when the read is done does
+`navigateToRunningServer()` hand the window over. One backend process per
+setup, and it is the GPU one.
+
+**The download and the read used to run at the same time, and that was a loss.**
+A backend's device is fixed when the process is spawned — `deviceFor(accel)`
+becomes an env var, the overlay is a `PYTHONPATH` prefix, and InsightFace picks
+its execution providers the first time it initialises — so a server started
+before the overlay lands runs the *whole* read's face pass on CPU, and nothing
+can move it afterwards. The read is on setup's critical path: the window is not
+handed over until it finishes. Overlapping therefore bought one download's worth
+of time and paid for it with a CPU face pass, which on a real library is minutes
+slower than the GPU one. Waiting is quicker whenever the CPU read is more than
+one download slower than the GPU read.
+
+A completed read's **result** is parked in `userData/pending-mapping.json` — the
+result, not its task id, because the task lives in the server process's memory
+and a parked id answered "Task not found" back when a restart came between the
+read and the app. `SideBar`'s loose-picture offer takes the result and opens the
+wizard straight on the mapping questions, which asks the server nothing at all.
+A read that fails, stalls or cannot start costs the wizard its head start and
+nothing else — the app reads the folder itself, exactly as before, and setup
+still hands the window over. The setup screen shows a line for the download and
+a line for the server, with a four-slide tour of the app between them; because
+the backend now starts only after the download, a `starting` phase is also the
+news that the download is finished, which is what marks its line Installed.
 
 **A start that fails during setup is handled here, not thrown at the screen.**
 The backend refuses to run against a group-writable library folder (mode 775),

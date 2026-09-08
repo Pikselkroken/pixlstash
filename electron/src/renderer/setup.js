@@ -128,9 +128,6 @@ let inspection = null;
 let inspectSeq = 0;
 let privacyVariant = 'fresh';
 let privacyChoice = null;
-// True once the runtime install has reported anything, which is also when the
-// backend is already up reading the library behind it.
-let reading = false;
 // A step that came back with an error. The install step keeps it on screen
 // rather than dropping the user at the first question with nothing to read.
 let failed = false;
@@ -737,8 +734,8 @@ els.next.addEventListener('click', () => {
 });
 
 // The installer's own last word, on the runtime's line only. It must never
-// touch the reading line: the whole point of starting the server first is that
-// the two run at once, and one line overwriting the other hides that.
+// touch the server line: each row is one thing's progress, and a downloader
+// writing over the row that reports the backend hides both.
 api.onProgress((p) => {
   if (!busy) return;
   // pip names each wheel's size as it starts it and says nothing more until the
@@ -755,12 +752,11 @@ api.onProgress((p) => {
   });
 });
 
-// The shell's own phases. 'starting' before the reading has begun is the first
-// backend coming up; after it, the restart onto the GPU runtime.
+// The shell's own phases. The backend starts ONCE, after any runtime download,
+// so a 'starting' is also the news that the download is over.
 api.onPhase((p) => {
   if (!busy) return;
   if (p.phase === 'reading') {
-    reading = true;
     if (p.failed) {
       // The read could not start. Say so on its own line rather than leaving a
       // bar moving forever over work that is not happening: the app reads the
@@ -785,25 +781,17 @@ api.onPhase((p) => {
       fraction: typeof p.fraction === 'number' && p.fraction >= 0 ? p.fraction : -1,
     });
   } else if (p.phase === 'starting') {
-    if (reading) {
-      setLine('runtime', { state: 'done', note: '', value: 'Installed', fraction: 1 });
-      setLine('server', {
-        name: 'Starting PixlStash on your GPU',
-        state: 'running',
-        note: '',
-        value: '',
-        fraction: -1,
-      });
-    } else {
-      setLine('server', { name: 'Starting PixlStash', state: 'running' });
-    }
-  } else if (p.phase === 'installFailed' && p.message) {
-    // The download is over and the read is not: setup will not settle until the
-    // read finishes, which on a big library is minutes. Stop the runtime bar and
-    // say why NOW rather than letting it draw a download that already failed;
-    // the controls come back with the rejection, as for any other failure.
-    setLine('runtime', { state: 'todo', note: '', value: 'Failed', fraction: -1 });
-    showError(String(p.message));
+    // A runtime line means this setup downloaded one, and nothing starts until
+    // that download is done - so the line is finished, whatever it last drew.
+    const onGpu = lines.some((line) => line.id === 'runtime');
+    setLine('runtime', { state: 'done', note: '', value: 'Installed', fraction: 1 });
+    setLine('server', {
+      name: onGpu ? 'Starting PixlStash on your GPU' : 'Starting PixlStash',
+      state: 'running',
+      note: '',
+      value: '',
+      fraction: -1,
+    });
   } else if (p.phase === 'error' && p.message) {
     showError(String(p.message));
   }

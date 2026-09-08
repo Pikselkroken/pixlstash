@@ -835,9 +835,9 @@ function deviceFor(accel: Accel | null): string | undefined {
  * session, load the UI.
  *
  * `navigate: false` starts the server and leaves the window where it is. That
- * is what lets first-run setup read the library while a GPU runtime downloads:
- * the reading is disk and CPU work with nothing to wait for, the download is
- * network, and the window stays on the setup screen until both are done.
+ * is what lets first-run setup read the library on the backend it just started
+ * - on the GPU runtime, once one is installed - and hand the window over only
+ * when the read is done, with `navigateToRunningServer`.
  */
 async function startAndLoad(
   accel: Accel | null,
@@ -857,8 +857,9 @@ async function startAndLoad(
     }
   });
   const running = await serverProcess.start(overlayFor(accel), deviceFor(accel), recovery);
-  // Setup talks to this server while the GPU runtime downloads, so where it is
-  // and how to authenticate to it outlive this function.
+  // Setup reads the library folder through this server after the launch
+  // returns, so where it is and how to authenticate to it outlive this
+  // function.
   runningServer = { url: running.url, sessionToken: running.sessionToken };
 
   // Inject the pre-authenticated loopback session cookie so the window opens
@@ -874,8 +875,22 @@ async function startAndLoad(
 
   currentUrl = running.url;
   if (!navigate) return;
-  sendPhase({ phase: 'ready', url: running.url });
-  await mainWindow?.loadURL(running.url);
+  await navigateToRunningServer();
+}
+
+/**
+ * Hand the window over to the running backend: the last act of a launch, and
+ * the last act of first-run setup.
+ *
+ * Setup needs it separately from {@link startAndLoad} because it starts the
+ * backend without navigating (`navigate: false`) and then reads the library
+ * folder on it. The mapping that read parks is collected by the app as it
+ * loads, so the window may only be handed over once the read has finished.
+ */
+async function navigateToRunningServer(): Promise<void> {
+  if (!runningServer) return;
+  sendPhase({ phase: 'ready', url: runningServer.url });
+  await mainWindow?.loadURL(runningServer.url);
 }
 
 /** Which accelerator overlay (if any) should we launch with right now? */
@@ -1502,7 +1517,7 @@ function registerIpc(): void {
               )
             : null,
         announceReading: () => sendPhase({ phase: 'reading' }),
-        announceInstallFailed: (message) => sendPhase({ phase: 'installFailed', message }),
+        navigateToApp: () => navigateToRunningServer(),
       });
     },
   );
