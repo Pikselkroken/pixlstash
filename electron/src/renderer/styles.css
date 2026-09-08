@@ -399,9 +399,12 @@ input[type="text"]:focus-visible,
   overflow-y: auto;
 }
 
+/* Wide enough for the rail's longest answer - the accelerator name, up to
+   "AMD GPU (ROCm, experimental)" - to sit beside its step rather than be cut
+   in half. */
 .setup-header {
   flex: 0 0 auto;
-  width: 300px;
+  width: 340px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -546,11 +549,21 @@ input[type="text"]:focus-visible,
   display: flex;
   align-items: center;
   gap: 6px;
-  max-width: 150px;
+  max-width: 200px;
   font-size: 12px;
   font-weight: 600;
   color: var(--fg);
   white-space: nowrap;
+  overflow: hidden;
+}
+
+/* The ellipsis has to live on the element holding the text. This is a flex
+   row (icon + label), so `text-overflow` on the row itself does nothing and an
+   over-long answer was simply sliced: "NVIDIA GPU (CUDA 12.8" without its
+   closing bracket, which reads as a rendering fault rather than as a long
+   name. */
+.step-value > span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
