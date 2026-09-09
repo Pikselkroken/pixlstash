@@ -189,6 +189,10 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # LOCAL_OWNER_ONLY at the gate; here as well for the same rollback
         # reason as the entries above.
         "/api/v1/server-config/layout",
+        # Same belt for the root's caption-file sync settings: the read side
+        # of the control that decides whether files get written beside every
+        # picture in the library root, and under what name.
+        "/api/v1/server-config/captions",
         # The migration preview (v1.11 Phase 4c) is the same belt one route
         # further: it counts what moving the whole library onto that layout
         # would do, and the sample paths and mount-point findings it returns

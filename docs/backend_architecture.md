@@ -1674,7 +1674,11 @@ never on the read path:
 - **Sidecar write-backs** funnel through `caption_file_utils.writeback_path`,
   which only honours a recorded `tags_file`/`description_file` value that is
   exactly the image stem plus a safe suffix, so a fabricated column cannot
-  redirect a write.
+  redirect a write. The same helper serves managed pictures since the root
+  gained caption sync: `caption_utils.sync_picture_sidecar` reads the toggles
+  and suffixes from the picture's `ReferenceFolder` when it has one and from
+  `LibrarySettings` otherwise, resolving a root-relative `file_path` through
+  `ImageUtils.resolve_picture_path` first.
 
 **Reads are deliberately not contained.** `resolve_picture_path` does not
 police where a picture lives. Whoever can write the vault DB can read those
@@ -6317,9 +6321,27 @@ record beside the assignments (`captions`, migration 0115) for the same reason
 the assignments are: a commit resumed after a crash must not re-probe and
 import a file the owner said to leave alone. In reference mode the first
 `tags` and `description` suffixes become the new `ReferenceFolder`'s configured
-ones. It reads at import only: the root scan's reconcile pass still skips
-sidecars, per its own comment, so a caption edited on disk after the import is
-not picked up for a managed picture.
+ones.
+
+**The root syncs like a folder once the owner says so.** `LibrarySettings`
+carries the same four fields a `ReferenceFolder` does - `sync_tags`,
+`sync_descriptions`, `tags_suffix`, `description_suffix` (migration 0116) -
+read and written by `GET`/`PATCH /server-config/captions`
+(`routes/library_captions.py`, `library_settings_service.get_caption_sync` /
+`set_caption_sync`). Both toggles start off; the local import seeds only the
+suffixes (`seed_caption_suffixes`, first `tags` and first `description`
+answer, never overwriting a set value), so the day the owner turns sync on it
+writes to the files they already have. Turning a type on calls
+`Vault.rescan_library_root`, and `ReferenceFolderScanTask` with
+`folder_id=None` then does for the root exactly what it does for a folder:
+`fetch_folder_config` returns the settings' four fields, an unset suffix is
+detected on disk and persisted (`_persist_suffixes` writes `LibrarySettings`
+for the root), `_fetch_folder_tags` reads the `reference_folder_id IS NULL`
+pictures, and the reconcile pass runs over every existing root picture -
+sidecar changed on disk since its recorded mtime → read in; content with no
+sidecar → exported. With both toggles off the root still skips that pass, for
+the reason the older comment gave: a stray `.txt` beside a managed picture is
+not a caption until the owner has said what the convention is.
 
 `wait_for_first_scan` polls `ReferenceFolder.last_scanned`, which is exactly
 the field the model's own docstring names as "unix timestamp of the last

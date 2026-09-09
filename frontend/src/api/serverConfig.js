@@ -100,6 +100,48 @@ export async function getScrapheapRetentionImpact(days) {
   }));
 }
 
+/** Caption-file sync for the library's own picture root. */
+const CAPTIONS_URL = "/server-config/captions";
+
+/**
+ * Read whether tag and description edits are kept in sync with caption files
+ * beside the pictures in the library's own root, and under what filename.
+ *
+ * @returns {Promise<Object>} `{sync_tags, sync_descriptions, tags_suffix,
+ *   description_suffix, default_tags_suffix, default_description_suffix}`.
+ *   A `null` suffix means none confirmed or detected yet; the default is then
+ *   used for new files.
+ */
+export async function getCaptionSettings() {
+  return unwrap(apiClient.get(CAPTIONS_URL));
+}
+
+/**
+ * Save the caption sync toggles and suffixes. A PATCH: a field left
+ * `undefined` keeps its stored value. An empty suffix clears it.
+ *
+ * Turning a type on asks the server for a root rescan, which reads existing
+ * caption files in and writes one beside every picture that has content but
+ * no file yet. Rejects with a 400 when a suffix is not a bare filename
+ * fragment; nothing is stored in that case.
+ *
+ * @param {{syncTags?: boolean, syncDescriptions?: boolean, tagsSuffix?: string|null, descriptionSuffix?: string|null}} patch
+ * @returns {Promise<Object>} the updated settings.
+ */
+export async function setCaptionSettings({
+  syncTags,
+  syncDescriptions,
+  tagsSuffix,
+  descriptionSuffix,
+} = {}) {
+  const body = {};
+  if (syncTags !== undefined) body.sync_tags = syncTags;
+  if (syncDescriptions !== undefined) body.sync_descriptions = syncDescriptions;
+  if (tagsSuffix !== undefined) body.tags_suffix = tagsSuffix;
+  if (descriptionSuffix !== undefined) body.description_suffix = descriptionSuffix;
+  return unwrap(apiClient.patch(CAPTIONS_URL, body));
+}
+
 /** The folder-layout topic of the server config (v1.11 Phases 4b and 4c). */
 const LAYOUT_URL = "/server-config/layout";
 

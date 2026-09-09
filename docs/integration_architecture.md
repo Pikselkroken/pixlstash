@@ -2188,6 +2188,8 @@ even when there is no layout to parse beside it.
 | `POST` | `/api/v1/pictures/layout/move-to-match` | `picture_scoped` | `{moved_count, moved_picture_ids, skipped, operation_id}` |
 | `GET` | `/api/v1/server-config/layout/migration` | `local_owner_only` | what moving the whole library onto its layout would do. Moves nothing |
 | `POST` | `/api/v1/server-config/layout/migration` | `local_owner_only` | one pass of that move: `{batch_id, moved_count, moved_picture_ids, examined, next_after_id, done, skipped, operation_id}` |
+| `GET` | `/api/v1/server-config/captions` | `local_owner_only` | `{sync_tags, sync_descriptions, tags_suffix, description_suffix, default_tags_suffix, default_description_suffix}`: the root's caption-file sync, the four fields `PATCH /reference-folders/{folder_id}` carries for a folder |
+| `PATCH` | `/api/v1/server-config/captions` | `local_owner_only` | the same, after recording. A field not sent keeps its value; an empty suffix clears it; a suffix that is not a bare filename fragment is `400`. Turning a type on asks for a root rescan, which reads existing sidecars in and writes the missing ones out |
 
 `GET /pictures/{id}/layout` answers `{"layout": null, "current_folder": null,
 "suggested_folder": null}` — **not** a 404 — for a picture in a root with no

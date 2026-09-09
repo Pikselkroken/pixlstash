@@ -173,7 +173,9 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
     - The new mtime is persisted so the next folder scan does not re-import the
       write-back as an external change.
 
-    Early-exits for non-reference pictures and folders with both toggles off.
+    A reference picture follows its folder's toggles and suffixes; a managed
+    picture follows the library's own (`LibrarySettings`). Early-exits when
+    both toggles of the owner are off.
 
     Args:
         server: The Server instance providing vault/db access.
@@ -184,7 +186,9 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
     """
     # Import here to avoid circular imports between db_models and utils.
     from pixlstash.db_models import Picture, Tag
+    from pixlstash.db_models.library_settings import LibrarySettings
     from pixlstash.db_models.reference_folder import ReferenceFolder
+    from pixlstash.utils.image_processing.image_utils import ImageUtils
 
     def _do_sync(session: Session, _pic_id: int) -> list[dict]:
         pic_db = session.get(Picture, _pic_id)
@@ -200,14 +204,24 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
             if t.tag and not is_tag_sentinel(t.tag)
         ]
 
-        if not pic_db.reference_folder_id or not pic_db.file_path:
+        if not pic_db.file_path:
             return fresh_tags
-        rf = session.get(ReferenceFolder, pic_db.reference_folder_id)
+        if pic_db.reference_folder_id:
+            rf = session.get(ReferenceFolder, pic_db.reference_folder_id)
+            image_path = pic_db.file_path
+        else:
+            # A managed picture syncs by the library's own settings, and its
+            # stored path is root-relative.
+            rf = session.exec(select(LibrarySettings)).first()
+            image_path = ImageUtils.resolve_picture_path(
+                server.vault.image_root, pic_db.file_path
+            )
         if rf is None or not (rf.sync_tags or rf.sync_descriptions):
+            return fresh_tags
+        if not image_path:
             return fresh_tags
 
         dirty = False
-        image_path = pic_db.file_path
 
         if rf.sync_tags:
             existing = resolve_typed_sidecar(

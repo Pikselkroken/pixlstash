@@ -168,7 +168,7 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_45_local_7_loopback():
+def test_host_capability_tier_split_is_47_local_7_loopback():
     """The loopback tier is the 5 file-manager spawns, the process restart and
     the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 52
     routes carry a locality tier = 45 local + 7 loopback.
@@ -414,6 +414,22 @@ def test_host_capability_tier_split_is_45_local_7_loopback():
     /server-config/layout`` for the same rollback reason. The loopback count is
     unchanged: neither route spawns anything.
 
+    52 = 45 + 7 again from 2026-09-07, when PixlStash Views was withdrawn and
+    ``GET``/``PATCH /server-config/views`` left the local tier with it.
+
+    54 = 47 + 7 with the root's caption-file sync pair: ``GET`` and ``PATCH
+    /server-config/captions``. They are the four sidecar fields of ``PATCH
+    /reference-folders/{folder_id}`` - a toggle and a filename suffix per type
+    - for the library's own root, so the pictures imported in place get the
+    two-way sync a reference folder has. The PATCH decides whether a file is
+    written beside every picture in the root from here on and under what
+    suffix, and stores a fragment that is appended to picture paths on every
+    later write (validated to a bare filename fragment at the boundary, as the
+    folder route's is); the GET is its control surface, on
+    ``READ_BLOCKED_GET_PATHS`` beside ``GET /server-config/layout``. Neither
+    takes a host path - the root is the library's own. The loopback count is
+    unchanged: neither route spawns anything.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -427,7 +443,7 @@ def test_host_capability_tier_split_is_45_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 7, sorted(loopback)
-    assert len(local) == 45, sorted(local)
+    assert len(local) == 47, sorted(local)
 
 
 # ===========================================================================

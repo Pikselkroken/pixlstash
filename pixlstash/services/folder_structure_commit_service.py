@@ -74,6 +74,7 @@ from pixlstash.db_models.project import Project
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.library_settings_service import seed_caption_suffixes
 from pixlstash.services.project_membership_service import (
     set_character_projects,
     set_picture_set_projects,
@@ -934,6 +935,16 @@ def local_import_pictures(
     # workers' preload pools), `insert_s` is the wait for the single DB writer
     # (contended by the workers' own write transactions). Same spirit as the
     # planner's [PIPELINE_PASS] line, and meant to be read next to it.
+    # The confirmed conventions become the root's own, so the sync toggles in
+    # Settings write to the files the owner already has rather than to the
+    # module defaults beside them. Fills only what is unset; sync stays off.
+    tags_suffixes, description_suffixes = caption_suffixes(captions)
+    seed_caption_suffixes(
+        server.vault.db,
+        (tags_suffixes or [None])[0],
+        (description_suffixes or [None])[0],
+    )
+
     wall_s = time.monotonic() - pass_started
     built_count = len(to_build)
     logger.info(

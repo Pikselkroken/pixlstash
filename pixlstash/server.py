@@ -116,6 +116,9 @@ from pixlstash.routes.folder_structure import (
     create_router as create_folder_structure_router,
 )
 from pixlstash.routes.libraries import create_router as create_libraries_router
+from pixlstash.routes.library_captions import (
+    create_router as create_library_captions_router,
+)
 from pixlstash.routes.library_layout import (
     create_router as create_library_layout_router,
 )
@@ -1805,6 +1808,12 @@ class Server(
         )
         self.api.include_router(
             create_library_layout_router(self),
+            prefix=API_V1_PREFIX,
+            include_in_schema=False,
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_library_captions_router(self),
             prefix=API_V1_PREFIX,
             include_in_schema=False,
             dependencies=gate,

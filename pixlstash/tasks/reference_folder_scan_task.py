@@ -113,10 +113,11 @@ class ReferenceFolderScanTask(BaseTask):
     purge sweep deletes an hour later. The root differs from a reference folder
     in exactly the ways ``layout_move_service.LayoutRoot`` names: pictures are
     the ``reference_folder_id IS NULL`` rows, ``Picture.file_path`` is stored
-    relative to the root (:meth:`_stored`), the layout comes from
-    ``LibrarySettings`` and there is no status, sidecar sync or suffix
-    detection. Everything else - move following by pixel hash, the move
-    journal, the review queue, the thumbnail carry - is shared unchanged.
+    relative to the root (:meth:`_stored`), the layout and the caption-file
+    sync settings come from ``LibrarySettings`` and there is no status.
+    Everything else - move following by pixel hash, the move journal, the
+    review queue, the thumbnail carry, the sidecar reconcile - is shared
+    unchanged.
     """
 
     def __init__(
@@ -180,9 +181,17 @@ class ReferenceFolderScanTask(BaseTask):
         def fetch_folder_config(session: Session):
             if self._is_root:
                 settings = session.exec(select(LibrarySettings)).first()
-                layout = settings.layout if settings is not None else None
-                unfiled = settings.layout_unfiled if settings is not None else None
-                return (None, None, False, False, False, layout, unfiled)
+                if settings is None:
+                    return (None, None, False, False, False, None, None)
+                return (
+                    settings.tags_suffix,
+                    settings.description_suffix,
+                    bool(settings.sync_tags),
+                    bool(settings.sync_descriptions),
+                    False,
+                    settings.layout,
+                    settings.layout_unfiled,
+                )
             rf = session.get(ReferenceFolder, folder_id)
             if rf is None:
                 return None
@@ -736,9 +745,16 @@ class ReferenceFolderScanTask(BaseTask):
             tags_by_pic = self._fetch_folder_tags(folder_id)
 
         caption_updates: list[dict] = []
-        # The root has no sidecar convention: a stray .txt beside a managed
-        # picture is not a caption, and reading it as one would tag the picture.
-        sidecar_candidates = () if self._is_root else existing_by_path.items()
+        # The root reconciles only once the owner turned sync on: with it off a
+        # stray .txt beside a managed picture is not a caption, and reading it
+        # as one would tag the picture. On, it has a suffix to go by - the
+        # wizard's confirmed convention, or one detected above - exactly as a
+        # reference folder does.
+        sidecar_candidates = (
+            ()
+            if self._is_root and not (sync_tags or sync_descriptions)
+            else existing_by_path.items()
+        )
         for file_path, pic in sidecar_candidates:
             if file_path in removed_paths or pic.deleted:
                 # Don't touch sidecar data for removed/scrapheap pictures.
@@ -878,10 +894,15 @@ class ReferenceFolderScanTask(BaseTask):
         """
 
         def fetch(session: Session) -> dict[int, list[str]]:
+            owner = (
+                Picture.reference_folder_id.is_(None)
+                if folder_id is None
+                else Picture.reference_folder_id == folder_id
+            )
             rows = session.exec(
                 select(Tag.picture_id, Tag.tag)
                 .join(Picture, Tag.picture_id == Picture.id)
-                .where(Picture.reference_folder_id == folder_id)
+                .where(owner)
             ).all()
             out: dict[int, list[str]] = {}
             for pic_id, tag in rows:
@@ -1356,11 +1377,15 @@ class ReferenceFolderScanTask(BaseTask):
 
         tags_suffix = _accepted("tags_suffix")
         description_suffix = _accepted("description_suffix")
-        if self._is_root or (tags_suffix is None and description_suffix is None):
+        if tags_suffix is None and description_suffix is None:
             return
 
         def update(session: Session) -> None:
-            rf = session.get(ReferenceFolder, self._folder_id)
+            rf = (
+                session.exec(select(LibrarySettings)).first()
+                if self._is_root
+                else session.get(ReferenceFolder, self._folder_id)
+            )
             if rf is None:
                 return
             if tags_suffix and rf.tags_suffix is None:

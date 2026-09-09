@@ -177,6 +177,66 @@ def reconcile_settings_fingerprint(vault_db, salt: str, penalised_tags: dict) ->
 # ---------------------------------------------------------------------------
 
 
+CAPTION_SYNC_FIELDS = (
+    "sync_tags",
+    "sync_descriptions",
+    "tags_suffix",
+    "description_suffix",
+)
+
+
+def get_caption_sync(vault_db) -> dict:
+    """The root's caption-file sync settings: the four `CAPTION_SYNC_FIELDS`."""
+
+    def read(session: Session) -> dict:
+        row = _row(session)
+        return {name: getattr(row, name) for name in CAPTION_SYNC_FIELDS}
+
+    return vault_db.run_immediate_read_task(read)
+
+
+def set_caption_sync(vault_db, **fields) -> dict:
+    """Store the given `CAPTION_SYNC_FIELDS`; a field not passed keeps its value.
+
+    Returns the settings as stored. The suffixes are trusted here: the route
+    validates them at its boundary and `sidecar_path` refuses an unsafe one at
+    the point of use, the same two doors a reference folder's go through.
+    """
+    unknown = set(fields) - set(CAPTION_SYNC_FIELDS)
+    if unknown:
+        raise ValueError(f"unknown caption sync fields: {sorted(unknown)}")
+
+    def write(session: Session) -> dict:
+        row = _row(session)
+        for name, value in fields.items():
+            setattr(row, name, value)
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return {name: getattr(row, name) for name in CAPTION_SYNC_FIELDS}
+
+    return vault_db.run_task(write, priority=DBPriority.IMMEDIATE)
+
+
+def seed_caption_suffixes(
+    vault_db, tags_suffix: Optional[str], description_suffix: Optional[str]
+) -> None:
+    """Fill an unset root suffix from the owner's caption answers; never overwrite."""
+    if not tags_suffix and not description_suffix:
+        return
+
+    def write(session: Session) -> None:
+        row = _row(session)
+        if tags_suffix and row.tags_suffix is None:
+            row.tags_suffix = tags_suffix
+        if description_suffix and row.description_suffix is None:
+            row.description_suffix = description_suffix
+        session.add(row)
+        session.commit()
+
+    vault_db.run_task(write, priority=DBPriority.IMMEDIATE)
+
+
 def get_layout(vault_db) -> tuple[Optional[str], Optional[str]]:
     """Return ``(layout, unfiled)`` for this library's own picture root.
 

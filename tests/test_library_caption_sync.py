@@ -1,0 +1,266 @@
+"""Caption-file sync for the library's own picture root.
+
+A reference folder has had two-way sidecar sync since the split-caption work;
+pictures imported in place got none of it. The same four fields now live on
+``LibrarySettings`` and the same code paths serve them: the root scan's
+reconcile pass, ``sync_picture_sidecar``'s write-back, and a settings route
+that mirrors ``PATCH /reference-folders/{folder_id}``.
+"""
+
+import json
+import os
+import tempfile
+import time
+
+import pytest
+from PIL import Image
+from sqlmodel import Session, select
+
+from pixlstash.db_models import Picture, Tag
+from pixlstash.db_models.library_settings import LibrarySettings
+from pixlstash.server import Server
+from pixlstash.tasks import TaskType
+from pixlstash.tasks.reference_folder_scan_task import ReferenceFolderScanTask
+from pixlstash.utils.service.caption_utils import sync_picture_sidecar
+from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
+
+API = "/api/v1"
+_CAPTIONS = f"{API}/server-config/captions"
+_CONFLICTING_FINDERS = (
+    TaskType.THUMBNAIL_GENERATION,
+    TaskType.REFERENCE_FOLDER_SCAN,
+    TaskType.MISSING_FILE_PURGE,
+    TaskType.TAGGER,
+)
+
+pytestmark = pytest.mark.usefixtures("no_spa_fallback")
+
+
+@pytest.fixture(scope="module")
+def env():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        config_path = os.path.join(temp_dir, "server-config.json")
+        with open(config_path, "w") as fh:
+            json.dump({"port": 8000, "trusted_proxies": ["testclient"]}, fh)
+        with Server(config_path) as srv:
+            for task_type in _CONFLICTING_FINDERS:
+                srv.vault._planner_work_finders.pop(task_type)
+            srv.vault._work_planner.detach_finders(_CONFLICTING_FINDERS)
+            from starlette.testclient import TestClient
+
+            owner = TestClient(srv.api, raise_server_exceptions=True)
+            login = owner.post(
+                f"{API}/login",
+                json={"username": "owner", "password": "example-owner-password"},
+            )
+            assert login.status_code == 200, login.text
+            yield {"server": srv, "owner": owner}
+
+
+def _settle(path):
+    old = time.time() - 600
+    os.utime(path, (old, old))
+
+
+def _make_image(path, color):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    Image.new("RGB", (8, 8), color=color).save(path, format="PNG")
+    _settle(path)
+    return path
+
+
+def _write(path, text):
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    _settle(path)
+
+
+def _run_root_scan(server):
+    root = server.vault.image_root
+    return ReferenceFolderScanTask(
+        database=server.vault.db, folder_id=None, folder_path=root, resolved_path=root
+    )._run_task()
+
+
+def _set_sync(server, **fields):
+    def write(session: Session):
+        row = session.exec(select(LibrarySettings)).first()
+        for name, value in fields.items():
+            setattr(row, name, value)
+        session.add(row)
+        session.commit()
+
+    server.vault.db.run_task(write)
+
+
+def _picture(server, rel):
+    def read(session: Session):
+        pic = session.exec(select(Picture).where(Picture.file_path == rel)).first()
+        tags = sorted(
+            session.exec(select(Tag.tag).where(Tag.picture_id == pic.id)).all()
+        )
+        return pic.id, pic.description, pic.tags_file, tags
+
+    return server.vault.db.run_immediate_read_task(read)
+
+
+def test_every_route_this_file_names_is_a_real_route(env):
+    assert_real_route(env["server"].api, "GET", _CAPTIONS)
+    assert_real_route(env["server"].api, "PATCH", _CAPTIONS)
+
+
+def test_the_root_scan_reads_and_exports_sidecars_once_sync_is_on(env):
+    """With sync on and a suffix set, the root gets the reference folder's
+    reconcile pass: a sidecar edited on disk is read in, a picture with tags
+    and no sidecar gets one written, and the write is under the confirmed
+    suffix rather than the module default."""
+    server = env["server"]
+    root = server.vault.image_root
+    _make_image(os.path.join(root, "sync", "edited.png"), (10, 20, 30))
+    _make_image(os.path.join(root, "sync", "exported.png"), (40, 50, 60))
+    _write(os.path.join(root, "sync", "edited.txt"), "cat, calm")
+
+    # Sync off: the scan indexes both and reads the .txt beside `edited` at
+    # import (the local-import read), but nothing is exported.
+    _set_sync(server, sync_tags=False, sync_descriptions=False, tags_suffix=None)
+    _run_root_scan(server)
+    edited_id, _, _, edited_tags = _picture(server, "sync/edited.png")
+    exported_id, _, _, _ = _picture(server, "sync/exported.png")
+    assert edited_tags == ["calm", "cat"]
+    assert not os.path.exists(os.path.join(root, "sync", "exported.txt"))
+
+    def give_tags(session: Session):
+        session.exec(Tag.__table__.delete().where(Tag.picture_id == exported_id))
+        session.add(Tag(picture_id=exported_id, tag="dog"))
+        session.add(Tag(picture_id=exported_id, tag="beach"))
+        session.commit()
+
+    server.vault.db.run_task(give_tags)
+    _write(os.path.join(root, "sync", "edited.txt"), "cat, calm, sleeping")
+    # A later mtime than the recorded one is what "edited on disk" means.
+    later = time.time() + 5
+    os.utime(os.path.join(root, "sync", "edited.txt"), (later, later))
+
+    _set_sync(server, sync_tags=True, tags_suffix=".txt")
+    result = _run_root_scan(server)
+    assert result["caption_updated_count"] >= 2, result
+
+    _, _, edited_file, edited_tags = _picture(server, "sync/edited.png")
+    assert edited_tags == ["calm", "cat", "sleeping"], "the on-disk edit is read in"
+    assert edited_file == os.path.join(root, "sync", "edited.txt")
+    exported = os.path.join(root, "sync", "exported.txt")
+    assert os.path.isfile(exported), "a picture with tags and no sidecar gets one"
+    with open(exported, encoding="utf-8") as fh:
+        assert fh.read().strip() == "beach, dog"
+    assert not os.path.exists(os.path.join(root, "sync", "exported_tags.txt")), (
+        "written under the confirmed suffix, not the module default"
+    )
+
+
+def test_the_root_scan_leaves_sidecars_alone_while_sync_is_off(env):
+    server = env["server"]
+    root = server.vault.image_root
+    _make_image(os.path.join(root, "quiet", "a.png"), (1, 2, 3))
+    _set_sync(server, sync_tags=False, sync_descriptions=False)
+    _run_root_scan(server)
+    pic_id, _, _, _ = _picture(server, "quiet/a.png")
+
+    def give_tags(session: Session):
+        session.exec(Tag.__table__.delete().where(Tag.picture_id == pic_id))
+        session.add(Tag(picture_id=pic_id, tag="quiet"))
+        session.commit()
+
+    server.vault.db.run_task(give_tags)
+    _run_root_scan(server)
+    assert not os.path.exists(os.path.join(root, "quiet", "a.txt"))
+    assert not os.path.exists(os.path.join(root, "quiet", "a_tags.txt"))
+
+
+def test_an_edit_in_pixlstash_is_written_beside_the_managed_picture(env):
+    """The write-back helper used to return early for any picture without a
+    reference folder. A managed picture now follows the library's settings."""
+    server = env["server"]
+    root = server.vault.image_root
+    _make_image(os.path.join(root, "writeback", "b.png"), (7, 8, 9))
+    _set_sync(server, sync_tags=False, sync_descriptions=False)
+    _run_root_scan(server)
+    pic_id, _, _, _ = _picture(server, "writeback/b.png")
+
+    def give_description(session: Session):
+        pic = session.get(Picture, pic_id)
+        pic.description = "A small blue square."
+        session.exec(Tag.__table__.delete().where(Tag.picture_id == pic_id))
+        session.add(Tag(picture_id=pic_id, tag="square"))
+        session.commit()
+
+    server.vault.db.run_task(give_description)
+
+    sync_picture_sidecar(server, pic_id)
+    assert not os.path.exists(os.path.join(root, "writeback", "b_tags.txt")), (
+        "both toggles off: nothing is written"
+    )
+
+    _set_sync(
+        server,
+        sync_tags=True,
+        sync_descriptions=True,
+        tags_suffix="_tags.txt",
+        description_suffix="_caption.txt",
+    )
+    tags = sync_picture_sidecar(server, pic_id)
+    assert [t["tag"] for t in tags] == ["square"]
+    with open(os.path.join(root, "writeback", "b_tags.txt"), encoding="utf-8") as fh:
+        assert fh.read().strip() == "square"
+    with open(os.path.join(root, "writeback", "b_caption.txt"), encoding="utf-8") as fh:
+        assert fh.read().strip() == "A small blue square."
+    _, _, tags_file, _ = _picture(server, "writeback/b.png")
+    assert tags_file == os.path.join(root, "writeback", "b_tags.txt")
+
+
+def test_the_settings_route_reads_patches_and_refuses_an_unsafe_suffix(env):
+    owner = env["owner"]
+    server = env["server"]
+    _set_sync(
+        server,
+        sync_tags=False,
+        sync_descriptions=False,
+        tags_suffix=None,
+        description_suffix=None,
+    )
+    body = owner.get(_CAPTIONS).json()
+    assert body["sync_tags"] is False and body["tags_suffix"] is None
+    assert body["default_tags_suffix"] == "_tags.txt"
+
+    patched = owner.patch(
+        _CAPTIONS, json={"sync_descriptions": True, "description_suffix": ".caption"}
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["sync_descriptions"] is True
+    assert patched.json()["description_suffix"] == ".caption"
+    assert patched.json()["sync_tags"] is False, "a field not sent keeps its value"
+
+    refused = owner.patch(_CAPTIONS, json={"tags_suffix": "../escape.txt"})
+    assert refused.status_code == 400, refused.text
+    assert owner.get(_CAPTIONS).json()["tags_suffix"] is None, "nothing stored"
+
+    cleared = owner.patch(_CAPTIONS, json={"description_suffix": ""})
+    assert cleared.json()["description_suffix"] is None
+
+
+def test_the_route_is_refused_to_a_remote_owner(env):
+    """§16.3: the locality tier, in the negative direction. A remote owner is
+    refused both verbs unless allow_remote_host_ops is on, and a local one is
+    not - the same two directions the locality suite checks for every route."""
+    from tests.test_authz_host_capability_16_3 import _enforcing, _remote_host_ops
+
+    owner = env["owner"]
+    server = env["server"]
+    remote = {"X-Forwarded-For": "8.8.8.8"}
+    with _enforcing(server), _remote_host_ops(server, False):
+        refused = owner.get(_CAPTIONS, headers=remote)
+        assert refused.status_code == 403 and "restricted to local" in refused.text
+        refused = owner.patch(_CAPTIONS, json={"sync_tags": False}, headers=remote)
+        assert refused.status_code == 403 and "restricted to local" in refused.text
+        assert owner.get(_CAPTIONS).status_code == 200, "loopback owner: allowed"
+    with _enforcing(server), _remote_host_ops(server, True):
+        assert owner.get(_CAPTIONS, headers=remote).status_code == 200

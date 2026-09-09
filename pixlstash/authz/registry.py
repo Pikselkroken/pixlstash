@@ -302,6 +302,31 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "allow_remote_host_ops=true (§16.3.1)."
         ),
     ),
+    ("GET", "/api/v1/server-config/captions"): RoutePolicy(
+        _LOCAL,
+        justification=(
+            "§16.3 reads back whether PixlStash writes caption files beside "
+            "the pictures in the library's own root and under what filename "
+            "suffix, and is the control surface of the PATCH beside it - the "
+            "same argument as GET /server-config/layout. Returns no per-object "
+            "data and no path; owner + loopback/LAN/Tailscale, or remote owner "
+            "iff allow_remote_host_ops=true (§16.3.1)."
+        ),
+    ),
+    ("PATCH", "/api/v1/server-config/captions"): RoutePolicy(
+        _LOCAL,
+        justification=(
+            "§16.3 decides whether, and under what filename, PixlStash writes "
+            "a file beside every picture in the library root from here on, and "
+            "asks for the root scan that does the first export. The suffix it "
+            "stores is appended to picture paths on every later write, so it "
+            "is validated to a bare filename fragment here, as PATCH "
+            "/reference-folders/{folder_id}'s is. That route is local_owner_only "
+            "for these same fields; the root's copy cannot sit lower. Owner + "
+            "loopback/LAN/Tailscale, or remote owner iff "
+            "allow_remote_host_ops=true (§16.3.1)."
+        ),
+    ),
     ("GET", "/api/v1/server-config/layout/migration"): RoutePolicy(
         _LOCAL,
         justification=(
