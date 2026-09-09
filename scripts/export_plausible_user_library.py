@@ -30,6 +30,21 @@ under the wrong month, renamed to something generic like "IMG_0001.jpg",
 nested inside a stray "New folder", or copied a second time as an accidental
 duplicate. ``--seed`` makes a given ``--messiness`` reproducible.
 
+``--captions`` writes the pictures' real tags and descriptions out as caption
+files beside them, the way a dataset exporter or a captioning tool would have
+left them, so the folder read's caption-pattern detection has something true
+to find. ``--caption-style`` picks the convention:
+
+* ``wd14``: ``<stem>.txt`` holding comma-separated tags.
+* ``florence``: ``<stem>_caption.txt`` holding the description as prose.
+* ``split``: ``<stem>_tags.txt`` and ``<stem>_description.txt``, PixlStash's
+  own defaults.
+* ``mixed`` (default): each top-level folder keeps one of the three, chosen
+  by name, which is what a library assembled from several tools looks like.
+  A few pictures also get a ``<stem>_notes.txt`` sentence that is not a
+  caption at all, and a ``<stem>.json`` metadata sidecar, so the read has
+  something to leave out and something to offer as Ignore.
+
 Usage:
     python scripts/export_plausible_user_library.py \\
         ~/.config/pixlstash/images /tmp/messy-user-library --messiness 0.15
@@ -67,6 +82,11 @@ from pixlstash.db_models.picture_set import (  # noqa: E402
     PictureSetMember,
 )
 from pixlstash.db_models.project import Project  # noqa: E402
+from pixlstash.db_models.tag import (  # noqa: E402
+    Tag,
+    is_description_sentinel,
+    is_tag_sentinel,
+)
 from pixlstash.utils.image_processing.image_utils import ImageUtils  # noqa: E402
 
 _UNSAFE_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -196,6 +216,54 @@ _QUIRKS: list[Callable] = [
 ]
 
 
+_CAPTION_STYLES = ("wd14", "florence", "split")
+_NOTES = (
+    "reshoot with the blue backdrop, client wants a tighter crop.",
+    "Second pass needed, the left edge is soft.",
+    "Keep for the portfolio, ask before publishing.",
+)
+
+
+def _write_captions(
+    dest_root: Path,
+    dest_path: Path,
+    style: str,
+    tags: list[str],
+    description: Optional[str],
+    rng: random.Random,
+) -> int:
+    """Write caption files beside *dest_path* in *style*; return how many."""
+    stem = dest_path.with_suffix("")
+    written = 0
+    if style == "mixed":
+        # One convention per top-level folder, picked by its name so a rerun
+        # with the same seed and tree lands the same files.
+        parts = dest_path.relative_to(dest_root).parts
+        top = parts[0] if len(parts) > 1 else ""
+        style = _CAPTION_STYLES[sum(top.encode()) % len(_CAPTION_STYLES)]
+        if rng.random() < 0.05:
+            Path(f"{stem}_notes.txt").write_text(rng.choice(_NOTES) + "\n", "utf-8")
+        if rng.random() < 0.1:
+            Path(f"{stem}.json").write_text(
+                '{"prompt": "%s", "steps": 28}\n' % ", ".join(tags[:4]), "utf-8"
+            )
+    tag_line = ", ".join(tags)
+    if style == "wd14" and tag_line:
+        Path(f"{stem}.txt").write_text(tag_line + "\n", "utf-8")
+        written += 1
+    elif style == "florence" and description:
+        Path(f"{stem}_caption.txt").write_text(description + "\n", "utf-8")
+        written += 1
+    elif style == "split":
+        if tag_line:
+            Path(f"{stem}_tags.txt").write_text(tag_line + "\n", "utf-8")
+            written += 1
+        if description:
+            Path(f"{stem}_description.txt").write_text(description + "\n", "utf-8")
+            written += 1
+    return written
+
+
 def _fallback_name(picture_id: int, source: str) -> str:
     return f"IMG_{picture_id:05d}{os.path.splitext(source)[1]}"
 
@@ -252,6 +320,8 @@ def export_library(
     seed: int,
     limit: Optional[int],
     organize_by: str = "date",
+    captions: float = 0.0,
+    caption_style: str = "mixed",
 ) -> dict:
     db_path = source_root / "vault.db"
     if not db_path.is_file():
@@ -259,7 +329,13 @@ def export_library(
 
     rng = random.Random(seed)
     engine = create_engine(f"sqlite:///{db_path}")
-    stats = {"copied": 0, "duplicated": 0, "messy": 0, "skipped_missing": 0}
+    stats = {
+        "copied": 0,
+        "duplicated": 0,
+        "messy": 0,
+        "skipped_missing": 0,
+        "captions": 0,
+    }
     taken_by_dir: dict[Path, set[str]] = {}
 
     with Session(engine) as session:
@@ -268,6 +344,18 @@ def export_library(
             query = query.limit(limit)
         pictures = session.exec(query).all()
         entity_folders = _entity_folders(session, _ORGANIZE_KINDS[organize_by])
+        tags_by_picture: dict[int, list[str]] = {}
+        descriptions: dict[int, Optional[str]] = {}
+        if captions > 0:
+            for picture_id, tag in session.exec(select(Tag.picture_id, Tag.tag)):
+                if not is_tag_sentinel(tag):
+                    tags_by_picture.setdefault(picture_id, []).append(tag)
+            descriptions = {
+                p.id: (
+                    None if is_description_sentinel(p.description) else p.description
+                )
+                for p in pictures
+            }
 
     for picture in pictures:
         source = ImageUtils.resolve_picture_path(str(source_root), picture.file_path)
@@ -291,6 +379,15 @@ def export_library(
         dest_path = _unique_path(dest_dir, name, taken)
         shutil.copy2(source, dest_path)
         stats["copied"] += 1
+        if captions > 0 and rng.random() < captions:
+            stats["captions"] += _write_captions(
+                dest_root,
+                dest_path,
+                caption_style,
+                sorted(tags_by_picture.get(picture.id, [])),
+                descriptions.get(picture.id),
+                rng,
+            )
 
         # A real duplicate import: the same file, copied again under a second
         # plausible name. Independent of, and rarer than, the other quirks.
@@ -329,18 +426,40 @@ def main(argv: Optional[list[str]] = None) -> int:
         default="date",
         help="Folder scheme: date (default), people, sets, or mixed.",
     )
+    parser.add_argument(
+        "--captions",
+        type=float,
+        default=0.0,
+        help="Probability [0-1] per picture of caption files beside it. Default 0 (none).",
+    )
+    parser.add_argument(
+        "--caption-style",
+        choices=("mixed", *_CAPTION_STYLES),
+        default="mixed",
+        help="Caption convention: mixed (default, one per top-level folder), wd14, florence, or split.",
+    )
     args = parser.parse_args(argv)
 
     if not 0.0 <= args.messiness <= 1.0:
         parser.error("--messiness must be between 0 and 1")
+    if not 0.0 <= args.captions <= 1.0:
+        parser.error("--captions must be between 0 and 1")
 
     stats = export_library(
-        args.source, args.dest, args.messiness, args.seed, args.limit, args.organize_by
+        args.source,
+        args.dest,
+        args.messiness,
+        args.seed,
+        args.limit,
+        args.organize_by,
+        args.captions,
+        args.caption_style,
     )
     print(f"copied:           {stats['copied']}")
     print(f"  with a mistake: {stats['messy']}")
     print(f"  duplicated:     {stats['duplicated']}")
     print(f"  skipped (missing on disk): {stats['skipped_missing']}")
+    print(f"caption files:    {stats['captions']}")
     return 0
 
 
