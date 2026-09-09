@@ -1,5 +1,5 @@
 # ── Stage 1: Build the Vue frontend ──────────────────────────────────────────
-FROM node:22-slim AS frontend-builder
+FROM node:24-slim AS frontend-builder
 
 WORKDIR /build/frontend
 COPY frontend/package*.json ./
