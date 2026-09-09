@@ -91,7 +91,7 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\windows\PixlStash.iss"
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pixlstash-server-windows-${{ steps.version.outputs.version }}
           path: installer/windows/installer-output/*.exe
@@ -144,13 +144,13 @@ jobs:
           CERTUM_CERT_FINGERPRINT: ${{ secrets.CERTUM_CERT_FINGERPRINT }}
         with:
           files: "signing/*.exe"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pixlstash-server-windows-${{ needs.build-installer.outputs.version }}-signed
           path: signing/*.exe
       - name: Upload signing diagnostics
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-signing-diagnostics-server
           path: |
