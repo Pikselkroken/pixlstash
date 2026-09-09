@@ -161,7 +161,16 @@ watch(
     @close="dialogOpen = false"
   >
     <template #header-right>
-      <AppButton variant="ghost" size="sm" icon-left="logout" @click="logout">
+      <!-- The desktop app runs on loopback and auto-logs the owner back in, so
+           logging out there does nothing. A browser session against the same
+           app's included server has no bridge and keeps the button. -->
+      <AppButton
+        v-if="!isDesktop"
+        variant="ghost"
+        size="sm"
+        icon-left="logout"
+        @click="logout"
+      >
         Log out
       </AppButton>
     </template>

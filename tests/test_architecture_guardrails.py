@@ -2924,3 +2924,67 @@ def test_action_pin_guardrail_has_teeth(tmp_path):
     assert caught == {str(bad), str(bad_yaml), str(action), str(nested_action)}, (
         f"the guardrail reported the wrong set of files: {offenders}"
     )
+
+
+# install.html's download buttons build a GitHub asset URL by hand, so the
+# filename they assemble has to stay in step with the template electron-builder
+# actually names the artifacts with. Nothing else couples the two: a rename in
+# electron/package.json leaves the buttons pointing at a 404 that only a human
+# clicking them would notice.
+INSTALL_HTML = REPO_ROOT / "website" / "install.html"
+ELECTRON_PACKAGE_JSON = REPO_ROOT / "electron" / "package.json"
+
+# electron-builder's ${ext} for a target, where the two differ.
+_TARGET_EXTENSIONS = {"nsis": "exe"}
+
+
+def test_desktop_download_links_match_the_electron_artifact_name():
+    """The URLs install.html builds must match electron-builder's artifactName.
+
+    Asserts three couplings, each of which has its own way of going wrong:
+
+    * the literal filename prefix (``PixlStash-desktop-``) against
+      ``productName`` and the ``artifactName`` template, so renaming either
+      reds this test instead of 404ing the buttons;
+    * the ``${version}`` placeholder still sitting between the prefix and the
+      ``os-arch.ext`` tail, since that is the only part install.html
+      substitutes at runtime;
+    * each button's extension against the targets configured for its platform,
+      so dropping (say) the AppImage target is caught here too.
+    """
+    build = json.loads(ELECTRON_PACKAGE_JSON.read_text(encoding="utf-8"))["build"]
+    template = build["artifactName"]
+    product = build["productName"]
+    html = INSTALL_HTML.read_text(encoding="utf-8")
+
+    expected_prefix = template.split("${version}")[0].replace("${productName}", product)
+    # Matched as a quoted string literal rather than a whole line: prettier
+    # decides where the concatenation wraps, and that is not this test's
+    # business.
+    assert f'{expected_prefix}"' in html, (
+        f"install.html does not build the {expected_prefix!r} prefix that "
+        f"artifactName {template!r} produces; the download buttons would 404"
+    )
+    assert template.endswith("${version}-${os}-${arch}.${ext}"), (
+        f"artifactName {template!r} no longer ends with the "
+        "'<version>-<os>-<arch>.<ext>' tail install.html appends"
+    )
+
+    # The DESKTOP_ASSETS object literal: {win: "win-x64.exe", ...}
+    assets_block = re.search(r"const DESKTOP_ASSETS = \{(.*?)\};", html, re.DOTALL)
+    assert assets_block, "install.html no longer declares DESKTOP_ASSETS"
+    assets = dict(re.findall(r'(\w+):\s*"([^"]+)"', assets_block.group(1)))
+    assert set(assets) == {"win", "mac", "linux"}, (
+        f"expected a download button per platform, got {sorted(assets)}"
+    )
+
+    for platform, asset in sorted(assets.items()):
+        extension = asset.rsplit(".", 1)[1]
+        configured = {
+            _TARGET_EXTENSIONS.get(target, target)
+            for target in build[platform]["target"]
+        }
+        assert extension in configured, (
+            f"install.html offers a .{extension} download for {platform}, but "
+            f"electron/package.json builds {sorted(configured)} there"
+        )
