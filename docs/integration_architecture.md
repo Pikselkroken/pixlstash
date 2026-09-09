@@ -1612,9 +1612,26 @@ indeterminate bar rather than 0%.
     "restricted": 0             //   below the root and on the system blocklist
   },
   "face_signal_ran": true,      // false = no inference engine; nobody is a Person
+  "captions": [                 // caption-file conventions found beside the
+    {"suffix": ".txt",          //   pictures, most files first; [] when none
+     "kind": "tags",            //   tags | description - the read's guess
+     "files": 27931, "folders": 340,
+     "sample": "1girl, solo, long hair, looking at viewer"}
+  ],
   "levels": [ /* one per depth, ascending, level 1 = the root itself */ ]
 }
 ```
+
+**`captions`** is the owner's captions as they actually are on disk. Every
+non-media file whose name starts with a picture's stem in the same folder is a
+caption file, grouped by the `suffix` after that stem — `a.txt`, `a_tags.txt`
+and `a.jpg.caption` beside `a.jpg` are `.txt`, `_tags.txt` and `.jpg.caption` —
+so nothing depends on the convention being one PixlStash already knows. A few
+files of each pattern are read to say whether it holds tag lists or prose
+(`kind`), and `sample` is an excerpt of one so the owner can check that guess
+without opening a file. Binary and JSON sidecars are not captions and are not
+listed. The screen offers each row as *Tags / Description / Ignore*, pre-filled
+with `kind`, and sends the answers back as `captions` on the commit (§22).
 
 Two fields the screen must not ignore, because both mean *this map is not the
 whole library*:
@@ -1946,6 +1963,14 @@ newly-indexed picture gets, exactly as any other import produces.
     {"relative_path": "2024 Shoots/mira", "kind": "person", "match_id": 41},
     {"relative_path": "Datasets/mira-lora-v3", "kind": "set"},
     {"relative_path": "final", "kind": "tag"}
+  ],
+  "captions": [
+    // One entry per pattern in the read's `captions` (§20), saying what to
+    // read it as. Optional: absent or empty, the import probes the known
+    // conventions instead (`_tags.txt`, `.caption`, a content-sniffed `.txt`).
+    {"suffix": ".txt", "kind": "tags"},
+    {"suffix": "_caption.txt", "kind": "description"},
+    {"suffix": "_notes.txt", "kind": "ignore"}
   ]
 }
 ```
@@ -1968,6 +1993,18 @@ omitted, not sent as `folder`). `match_id` names an existing entity to attach
 to, exactly as `name_match`'s `match.id` proposed or as the owner picked from
 `candidates`; omitted, a new one is created named after the folder.
 
+`captions` is the owner's answer to §20's `captions`, one row per `suffix`, and
+it is an answer, not a hint: with any row present only the suffixes said to be
+`tags` are read as tags and only those said to be `description` as
+descriptions, and an `ignore`d pattern is never opened, however caption-like
+its content. A picture with a tags file gets those tags and is not queued for
+the tagger; one with a description file gets that description and is not
+captioned; the rest are handled as before. In `mode: "reference"` the folder
+holds one suffix per kind, so the first `tags` and the first `description` row
+become its configured suffixes. `suffix` must be a bare filename fragment (the
+same rule as `PATCH /reference-folders` enforces): it is appended to a picture
+path to find the file to read.
+
 **A folder's nearest accepted ancestor of each exclusive kind wins** — a
 picture is filed under the *closest* Project, Person or Set above it, not
 every one along the path, mirroring `library_layout`'s first-match-wins
@@ -1981,7 +2018,7 @@ this route is the write that follows from it.
 
 | Status | When |
 |---|---|
-| **400** | an `assignments` row is malformed or names an unknown `kind` |
+| **400** | an `assignments` row is malformed or names an unknown `kind`; a `captions` row names an unknown `kind` or a `suffix` that is not a bare filename fragment |
 | **404** | `task_id` does not name a read this session holds |
 | **409** | the named read has not settled yet, a commit is already running (against any read), the named read has **already been committed**, or the read's root path is already a reference folder that has completed a scan (§25 — the reuse-vs-refuse rule) |
 

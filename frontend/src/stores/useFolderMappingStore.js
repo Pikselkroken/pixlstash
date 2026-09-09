@@ -66,7 +66,7 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
     wizardOpen.value = false;
   }
 
-  /** @param {{taskId: string, path: string, label?: string, mode?: "reference"|"local_import", autoCommit?: boolean, assignments?: Array, pictureCount?: number}} entry */
+  /** @param {{taskId: string, path: string, label?: string, mode?: "reference"|"local_import", autoCommit?: boolean, assignments?: Array, captions?: Array, pictureCount?: number}} entry */
   function save(entry) {
     pending.value = entry;
     try {

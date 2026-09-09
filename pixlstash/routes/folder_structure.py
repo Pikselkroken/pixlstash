@@ -98,6 +98,13 @@ class FolderStructureAssignmentPayload(BaseModel):
     match_id: Optional[int] = None
 
 
+class FolderStructureCaptionPayload(BaseModel):
+    """The owner's answer for one caption-file pattern the read reported."""
+
+    suffix: str
+    kind: Literal["tags", "description", "ignore"]
+
+
 class FolderStructureCommitRequest(BaseModel):
     task_id: Optional[str] = None
     """The read to commit, when this server is the one that performed it."""
@@ -119,6 +126,10 @@ class FolderStructureCommitRequest(BaseModel):
     """
 
     assignments: list[FolderStructureAssignmentPayload] = []
+    captions: list[FolderStructureCaptionPayload] = []
+    """One row per caption pattern from the read's ``captions``, saying what
+    to read it as. Absent or empty: the import probes the known conventions
+    (``_tags.txt``, ``.caption``, a content-sniffed ``.txt`` …) instead."""
     label: Optional[str] = None
     mode: Literal["reference", "local_import"] = "reference"
     """``reference`` (default): register the scanned root as an ordinary
@@ -488,6 +499,7 @@ def create_router(server) -> APIRouter:
         assignments: list,
         label: Optional[str],
         mode: str,
+        captions: list = (),
     ) -> None:
         """Hold a library read lease for the whole commit, then run it.
 
@@ -520,7 +532,13 @@ def create_router(server) -> APIRouter:
             return
         try:
             _run_commit_holding_the_library(
-                task_id, root_path, expected_pictures, assignments, label, mode
+                task_id,
+                root_path,
+                expected_pictures,
+                assignments,
+                label,
+                mode,
+                captions,
             )
         finally:
             server.library_coordinator.release_read(lease)
@@ -532,6 +550,7 @@ def create_router(server) -> APIRouter:
         assignments: list,
         label: Optional[str],
         mode: str,
+        captions: list = (),
     ) -> None:
         with server.folder_structure_commit_lock:
             state = server.folder_structure_commit
@@ -552,6 +571,7 @@ def create_router(server) -> APIRouter:
                         task_id, "indexing", processed, total
                     ),
                     should_stop=should_stop,
+                    captions=captions,
                 )
                 _commit_progress(
                     task_id, "assigning", expected_pictures, expected_pictures
@@ -571,7 +591,7 @@ def create_router(server) -> APIRouter:
                 # registered (adopt it and finish the mapping) from one that
                 # was already there (refuse).
                 rf = commit_service.register_reference_folder(
-                    server, root_path, label=label, task_id=task_id
+                    server, root_path, label=label, task_id=task_id, captions=captions
                 )
                 _commit_progress(task_id, "indexing", 0, expected_pictures)
                 commit_service.record_commit_stage(server, task_id, "indexing")
@@ -717,6 +737,7 @@ def create_router(server) -> APIRouter:
                 record["assignments"],
                 record["label"],
                 record["mode"],
+                record["captions"],
             ),
             daemon=True,
             name="folder-structure-commit-resume",
@@ -818,6 +839,9 @@ def create_router(server) -> APIRouter:
             assignments = commit_service.parse_assignments(
                 [a.model_dump() for a in payload.assignments]
             )
+            captions = commit_service.parse_captions(
+                [c.model_dump() for c in payload.captions]
+            )
         except commit_service.CommitError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -880,6 +904,7 @@ def create_router(server) -> APIRouter:
             label=payload.label,
             expected_pictures=expected_pictures,
             assignments=assignments,
+            captions=captions,
         )
 
         threading.Thread(
@@ -891,6 +916,7 @@ def create_router(server) -> APIRouter:
                 assignments,
                 payload.label,
                 payload.mode,
+                captions,
             ),
             daemon=True,
             name="folder-structure-commit",

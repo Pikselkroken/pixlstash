@@ -108,6 +108,7 @@ describe("FolderMappingPreviewStep", () => {
       "",
       "reference",
       null,
+      [],
     );
   });
 
@@ -220,5 +221,96 @@ describe("FolderMappingPreviewStep", () => {
         expect(text).toContain(noun);
       }
     });
+  });
+});
+
+describe("caption files beside the pictures", () => {
+  const READ_RESULT = {
+    root: { path: "/home/me/pictures" },
+    picture_count: 3,
+    captions: [
+      { suffix: ".txt", kind: "tags", files: 120, folders: 4, sample: "1girl, solo" },
+      { suffix: "_caption.txt", kind: "description", files: 40, folders: 1, sample: "A woman in a field." },
+    ],
+    levels: [],
+  };
+
+  function selects(wrapper) {
+    return wrapper.findAll("select");
+  }
+
+  it("offers each pattern the read found, pre-filled with the read's guess", () => {
+    const wrapper = mountStep({ commitOnMount: false, readResult: READ_RESULT });
+    expect(wrapper.text()).toContain("*.txt");
+    expect(wrapper.text()).toContain("120 files in 4 folders");
+    expect(wrapper.text()).toContain("1girl, solo");
+    expect(selects(wrapper).map((s) => s.element.value)).toEqual([
+      "tags",
+      "description",
+    ]);
+    expect(wrapper.text()).toContain("160 caption files are read");
+  });
+
+  it("sends the owner's answers with the commit, ignore included", async () => {
+    startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
+    const wrapper = mountStep({ commitOnMount: false, readResult: READ_RESULT });
+    await selects(wrapper)[0].setValue("ignore");
+    expect(wrapper.text()).toContain("40 caption files are read");
+    await buttonWith(wrapper, "Yes, build this library").trigger("click");
+    await flushPromises();
+    expect(startFolderStructureCommit).toHaveBeenCalledWith(
+      "read-1",
+      expect.any(Array),
+      "",
+      "reference",
+      READ_RESULT,
+      [
+        { suffix: ".txt", kind: "ignore" },
+        { suffix: "_caption.txt", kind: "description" },
+      ],
+    );
+  });
+
+  it("hands the answers to `build` when the library does not exist yet", async () => {
+    const wrapper = mountStep({
+      commitOnMount: false,
+      libraryExists: false,
+      readResult: READ_RESULT,
+    });
+    await buttonWith(wrapper, "Yes, build this library").trigger("click");
+    expect(wrapper.emitted("build")[0]).toEqual([
+      [{ kind: "project", relative_path: "2024 Shoots" }],
+      [
+        { suffix: ".txt", kind: "tags" },
+        { suffix: "_caption.txt", kind: "description" },
+      ],
+    ]);
+  });
+
+  it("prefers saved answers over the read's guess, and sends them when the read is gone", async () => {
+    startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
+    const saved = [{ suffix: ".txt", kind: "description" }];
+    const wrapper = mountStep({
+      commitOnMount: false,
+      readResult: READ_RESULT,
+      captions: saved,
+    });
+    expect(selects(wrapper)[0].element.value).toBe("description");
+
+    // A resumed commit after the library switch: no read result to list the
+    // patterns from, only what was saved.
+    const resumed = mountStep({ commitOnMount: true, readResult: null, captions: saved });
+    await flushPromises();
+    expect(resumed.text()).not.toContain("Caption files beside");
+    expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual(saved);
+  });
+
+  it("asks nothing when the read found no caption files", () => {
+    const wrapper = mountStep({
+      commitOnMount: false,
+      readResult: { ...READ_RESULT, captions: [] },
+    });
+    expect(wrapper.text()).not.toContain("Caption files beside");
+    expect(selects(wrapper)).toHaveLength(0);
   });
 });

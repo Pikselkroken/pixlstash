@@ -36,6 +36,13 @@ language reading of names:
     (``IMG_0412``, ``DSC01234``) → Set. Additional evidence: it proposes only
     where nothing else spoke and never contradicts another signal.
 
+Beside the signals the read reports the **caption files** it walked past:
+every text file that pairs with a picture by name (``a.txt``, ``a_tags.txt``,
+``a.jpg.caption`` …) grouped by the suffix that follows the picture's stem, a
+few of each read to say whether the pattern holds tag lists or prose. The
+owner answers per pattern - tags, description, ignore - and the commit reads
+the files that way instead of the tagger guessing (``captions`` in the result).
+
 Every proposal carries the evidence that produced it; a signal that cannot state
 its reason proposes nothing. Where the signals only narrow the answer the
 remaining ``candidates`` are returned rather than one of them being picked.
@@ -63,6 +70,7 @@ import numpy as np
 from PIL import Image
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.caption_file_utils import is_safe_sidecar_suffix, sniff_caption
 from pixlstash.utils.library_layout import Facet
 from pixlstash.utils.media_files import (
     SUPPORTED_IMAGE_EXTS,
@@ -92,6 +100,14 @@ MIN_FACE_SAMPLE = 5
 #: matters at level scope too: a level of one-picture folders would otherwise
 #: clear the 60% vote and be proposed as Set entire.
 MIN_SIDECAR_PICTURES = 3
+
+#: Caption files read per detected suffix pattern to say what it holds. A
+#: pattern is one convention - a dataset exporter writes every file the same
+#: way - so a handful settles it, and each read is one small file.
+CAPTION_SAMPLES = 8
+#: Distinct caption patterns reported, most files first. A tree with more
+#: distinct suffixes than this has stray notes, not conventions.
+MAX_CAPTION_PATTERNS = 12
 
 #: Below this many direct pictures the leaf and batch-numbering signals stay
 #: silent, for the reason `MIN_SIDECAR_PICTURES` does: two pictures and nothing
@@ -363,6 +379,9 @@ class FolderStructureRead:
         self._progress = progress or (lambda stage, processed, total: None)
         self._cancel = threading.Event()
         self._folders: list[_Folder] = []
+        #: suffix -> {"files", "folders", "samples"}: every caption file the
+        #: walk passed, grouped by the suffix after its picture's stem.
+        self._captions: dict[str, dict[str, Any]] = {}
         self._truncated = False
         self._unreadable = 0
         self._skipped_hidden = 0
@@ -541,9 +560,84 @@ class FolderStructureRead:
                     for ext in _SIDECAR_EXTS
                 ):
                     folder.with_sidecar += 1
+            self._collect_captions(dirpath, filenames, folder)
             by_path[dirpath] = folder.index
             self._folders.append(folder)
             self._progress("walking", len(self._folders), 0)
+
+    def _collect_captions(
+        self, dirpath: str, filenames: list[str], folder: _Folder
+    ) -> None:
+        """Group this folder's caption files by the suffix after the picture stem.
+
+        A caption file is any non-media file whose name starts with the stem
+        of a picture in the same folder: ``a.txt``, ``a_tags.txt`` and
+        ``a.jpg.caption`` beside ``a.jpg`` are the suffixes ``.txt``,
+        ``_tags.txt`` and ``.jpg.caption``. Not the extension list the Set
+        signal uses - the point is to find the convention the owner actually
+        has, whatever it is called. Longest stem wins, so ``foo_tags.txt``
+        beside both ``foo.png`` and ``foo_tags.png`` belongs to the latter.
+        """
+        stems = {os.path.splitext(f)[0] for f in folder.direct_pictures}
+        if not stems:
+            return
+        for name in filenames:
+            if (
+                is_hidden_entry(name)
+                or is_supported_media_file(name)
+                or is_pixlstash_thumbnail(name)
+            ):
+                continue
+            # Longest prefix that is a picture stem: one set lookup per
+            # character rather than one comparison per picture.
+            suffix = None
+            for cut in range(len(name) - 1, 0, -1):
+                if name[:cut] in stems:
+                    suffix = name[cut:]
+                    break
+            if suffix is None or not is_safe_sidecar_suffix(suffix):
+                continue
+            entry = self._captions.setdefault(
+                suffix, {"files": 0, "folders": set(), "samples": []}
+            )
+            entry["files"] += 1
+            entry["folders"].add(folder.index)
+            if len(entry["samples"]) < CAPTION_SAMPLES:
+                entry["samples"].append(os.path.join(dirpath, name))
+
+    def _caption_patterns(self) -> list[dict[str, Any]]:
+        """The caption conventions found, each read enough to say what it holds.
+
+        One row per suffix, most files first, ``kind`` the majority of the
+        sampled files (``tags`` or ``description``) and ``sample`` an excerpt
+        of one, so the owner can check the guess without opening a file. A
+        suffix none of whose samples read as a caption (binary, JSON metadata)
+        is not a convention worth asking about and is left out.
+        """
+        rows = []
+        for suffix, entry in self._captions.items():
+            votes: Counter = Counter()
+            excerpt = ""
+            for path in entry["samples"]:
+                sniffed = sniff_caption(path)
+                if sniffed is None:
+                    continue
+                kind, text = sniffed
+                votes[kind] += 1
+                excerpt = excerpt or text
+            if not votes:
+                continue
+            rows.append(
+                {
+                    "suffix": suffix,
+                    "kind": votes.most_common(1)[0][0],
+                    "files": entry["files"],
+                    "folders": len(entry["folders"]),
+                    "sample": excerpt,
+                }
+            )
+        rows.sort(key=lambda row: (-row["files"], row["suffix"]))
+        return rows[:MAX_CAPTION_PATTERNS]
 
     def _total_picture_counts(self) -> None:
         """Fill every folder's recursive count, deepest first.
@@ -735,6 +829,10 @@ class FolderStructureRead:
             # answers differently depending on whether models had loaded, and
             # the client cannot tell that from a library with nobody in it.
             "face_signal_ran": self._faces_ran,
+            # The caption-file conventions beside the pictures, for the owner
+            # to confirm as tags, descriptions or nothing before the commit
+            # reads them. Empty when there are none.
+            "captions": self._caption_patterns(),
             "levels": level_docs,
         }
 

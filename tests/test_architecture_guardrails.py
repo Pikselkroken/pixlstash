@@ -395,6 +395,9 @@ def test_event_types_fully_classified():
 # ---------------------------------------------------------------------------
 
 VAULT_PY = REPO_ROOT / "pixlstash" / "vault.py"
+# The one utils module that writes a label onto a picture: the sidecar read the
+# reference-folder scan and the local import both build new rows through.
+CAPTION_UTILS_PY = REPO_ROOT / "pixlstash" / "utils" / "caption_file_utils.py"
 
 # Label/curation write sinks. Matching one of these on a source line means that
 # line mutates a picture's frozen-when-locked data.
@@ -456,8 +459,11 @@ _LABEL_SINK_EXEMPT = {
     ("pixlstash/tasks/watch_folder_import_task.py", "_run_task"): (
         "watch-folder import of NEW pictures (sidecar description)"
     ),
-    ("pixlstash/tasks/reference_folder_scan_task.py", "_build_picture"): (
-        "builds NEW picture rows during a reference-folder scan"
+    ("pixlstash/utils/caption_file_utils.py", "attach_sidecars"): (
+        "sidecar description onto a NEW, unsaved picture row; called only by "
+        "ReferenceFolderScanTask._build_picture and "
+        "folder_structure_commit_service._build_managed_picture while they "
+        "build rows that are not yet in any set"
     ),
     ("pixlstash/vault.py", "import_default_data"): (
         "logo / default-data import (new pictures)"
@@ -515,6 +521,7 @@ def _iter_sink_files():
     for directory in _SINK_SCAN_FILES:
         yield from sorted(directory.rglob("*.py"))
     yield VAULT_PY
+    yield CAPTION_UTILS_PY
 
 
 def _scan_label_sinks():

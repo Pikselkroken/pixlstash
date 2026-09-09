@@ -242,11 +242,24 @@ def read_description_sidecar(path: str) -> str | None:
     return text or None
 
 
+def _first_sidecar(image_path: str, suffixes) -> str | None:
+    """The first of *suffixes* that names an existing file beside *image_path*."""
+    for suffix in suffixes:
+        try:
+            candidate = sidecar_path(image_path, suffix)
+        except ValueError as exc:
+            logger.warning("Cannot resolve sidecar for %s: %s", image_path, exc)
+            continue
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def attach_sidecars(
     pic,
     file_path: str,
-    tags_suffix: str | None = None,
-    description_suffix: str | None = None,
+    tags_suffixes=None,
+    description_suffixes=None,
 ) -> list[str]:
     """Record the sidecars beside *file_path* on an unsaved picture.
 
@@ -255,20 +268,29 @@ def attach_sidecars(
     picture has none, and returns the tags read from the tags sidecar (empty
     when there is no tags sidecar). The caller decides what an empty list
     means - the scan and the local import both fall back to the pending-tag
-    sentinel so the tagger runs instead. With no configured suffix the known
-    conventions are probed, so a bare ``a.txt`` beside ``a.jpg`` is read the
-    way it classifies.
+    sentinel so the tagger runs instead.
+
+    *tags_suffixes* / *description_suffixes* are the suffixes the owner (or a
+    folder's configuration) said hold that kind, tried in order. ``None``
+    probes the known conventions instead, content-sniffing a bare ``.txt``;
+    an empty list reads nothing of that kind - the owner's "ignore".
     """
     tags: list[str] = []
-    tags_path = resolve_typed_sidecar(file_path, SIDECAR_TYPE_TAGS, tags_suffix)
+    if tags_suffixes is None:
+        tags_path = resolve_typed_sidecar(file_path, SIDECAR_TYPE_TAGS, None)
+    else:
+        tags_path = _first_sidecar(file_path, tags_suffixes)
     if tags_path:
         pic.tags_file = tags_path
         pic.tags_file_mtime = get_sidecar_mtime(tags_path)
         tags = read_tags_sidecar(tags_path)
 
-    description_path = resolve_typed_sidecar(
-        file_path, SIDECAR_TYPE_DESCRIPTION, description_suffix
-    )
+    if description_suffixes is None:
+        description_path = resolve_typed_sidecar(
+            file_path, SIDECAR_TYPE_DESCRIPTION, None
+        )
+    else:
+        description_path = _first_sidecar(file_path, description_suffixes)
     if description_path:
         pic.description_file = description_path
         pic.description_file_mtime = get_sidecar_mtime(description_path)
@@ -276,6 +298,38 @@ def attach_sidecars(
         if description and not pic.description:
             pic.description = description
     return tags
+
+
+#: How much of a caption file the sniff reads. A caption is a line or a
+#: paragraph; anything that needs more than this to classify is not one.
+_SNIFF_BYTES = 4096
+_EXCERPT_CHARS = 100
+
+
+def sniff_caption(path: str) -> tuple[str, str] | None:
+    """Classify one caption file by content, without trusting its name.
+
+    Returns ``(kind, excerpt)`` with *kind* ``"tags"`` or ``"description"``
+    and *excerpt* the first line or so, whitespace collapsed, for a screen to
+    show beside the choice. ``None`` when the file is not a caption at all:
+    unreadable, binary (a NUL byte in the head), or JSON - the metadata
+    sidecars some generators write beside every image, which no reading turns
+    into a tag list or a description.
+    """
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(_SNIFF_BYTES)
+    except OSError as exc:
+        logger.warning("Could not read caption file %s: %s", path, exc)
+        return None
+    if b"\x00" in head:
+        return None
+    text = head.decode("utf-8", errors="replace").strip()
+    if not text or text[0] in "{[":
+        return None
+    excerpt = " ".join(text.split())[:_EXCERPT_CHARS]
+    kind = SIDECAR_TYPE_TAGS if _looks_like_tags(text) else SIDECAR_TYPE_DESCRIPTION
+    return kind, excerpt
 
 
 def write_sidecar(path: str, content: str) -> float | None:

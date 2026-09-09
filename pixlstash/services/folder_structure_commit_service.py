@@ -80,7 +80,12 @@ from pixlstash.services.project_membership_service import (
 )
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.utils.service.label_ledger import POS, record_human_labels
-from pixlstash.utils.caption_file_utils import attach_sidecars
+from pixlstash.utils.caption_file_utils import (
+    SIDECAR_TYPE_DESCRIPTION,
+    SIDECAR_TYPE_TAGS,
+    attach_sidecars,
+    is_safe_sidecar_suffix,
+)
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -112,6 +117,13 @@ _POLL_INTERVAL_S = 0.25
 #: The facets a folder can be accepted as, plus "tag" which is a `Facet` value
 #: too - every accepted `kind` the mapping screen sends is one of these.
 _ACCEPTED_KINDS = frozenset(f.value for f in Facet)
+
+
+#: What the owner can say a caption pattern is. ``ignore`` is a real answer
+#: and not the absence of one: a `.txt` the owner ignores is never read, while
+#: a commit that carries no answer at all probes the known conventions.
+CAPTION_IGNORE = "ignore"
+CAPTION_KINDS = frozenset({SIDECAR_TYPE_TAGS, SIDECAR_TYPE_DESCRIPTION, CAPTION_IGNORE})
 
 
 class CommitError(Exception):
@@ -160,6 +172,71 @@ class Assignment:
             "kind": self.kind,
             "match_id": self.match_id,
         }
+
+
+@dataclass(frozen=True)
+class CaptionPattern:
+    """The owner's answer for one caption-file pattern the read found.
+
+    Attributes:
+        suffix: What follows the picture's stem (``_tags.txt``, ``.caption``,
+            ``.jpg.txt``), exactly as the read reported it.
+        kind: ``tags``, ``description`` or ``ignore``.
+    """
+
+    suffix: str
+    kind: str
+
+    def as_dict(self) -> dict:
+        return {"suffix": self.suffix, "kind": self.kind}
+
+
+def caption_suffixes(captions) -> tuple[Optional[list[str]], Optional[list[str]]]:
+    """``(tags_suffixes, description_suffixes)`` for `attach_sidecars`.
+
+    ``(None, None)`` when the owner gave no answer, which probes the known
+    conventions. With an answer, each list holds exactly the suffixes said to
+    be that kind, so an ignored pattern is read as nothing.
+    """
+    captions = list(captions or ())
+    if not captions:
+        return None, None
+    return (
+        [c.suffix for c in captions if c.kind == SIDECAR_TYPE_TAGS],
+        [c.suffix for c in captions if c.kind == SIDECAR_TYPE_DESCRIPTION],
+    )
+
+
+def parse_captions(raw: list) -> list[CaptionPattern]:
+    """Validate the wire form of ``captions`` into `CaptionPattern` rows.
+
+    Raises:
+        CommitError: A row is malformed, names an unknown kind, or carries a
+            suffix that is not a bare filename fragment - the same rule the
+            reference-folder API enforces, because the suffix is appended to
+            a picture path to find the file to read.
+    """
+    parsed: list[CaptionPattern] = []
+    seen: set[str] = set()
+    for index, row in enumerate(raw or []):
+        if not isinstance(row, dict):
+            raise CommitError(f"captions[{index}] must be an object")
+        suffix = row.get("suffix")
+        kind = row.get("kind")
+        if not isinstance(suffix, str) or not is_safe_sidecar_suffix(suffix):
+            raise CommitError(
+                f"captions[{index}].suffix must be a bare filename fragment"
+            )
+        if suffix in seen:
+            raise CommitError(f"captions[{index}] repeats suffix {suffix!r}")
+        if kind not in CAPTION_KINDS:
+            raise CommitError(
+                f"captions[{index}].kind must be one of "
+                f"{sorted(CAPTION_KINDS)}, got {kind!r}"
+            )
+        seen.add(suffix)
+        parsed.append(CaptionPattern(suffix, kind))
+    return parsed
 
 
 @dataclass
@@ -229,6 +306,7 @@ def record_pending_commit(
     label: Optional[str],
     expected_pictures: int,
     assignments: list[Assignment],
+    captions=(),
 ) -> None:
     """Write the accepted mapping down before the commit thread starts.
 
@@ -267,6 +345,7 @@ def record_pending_commit(
                 label=label,
                 expected_pictures=expected_pictures,
                 assignments=json.dumps([a.as_dict() for a in assignments]),
+                captions=json.dumps([c.as_dict() for c in captions]),
                 stage="registering",
                 state=STATE_PENDING,
             )
@@ -303,6 +382,7 @@ def pending_commit(server) -> Optional[dict]:
             "label": row.label,
             "expected_pictures": row.expected_pictures,
             "assignments": row.assignments,
+            "captions": row.captions,
             "stage": row.stage,
         }
 
@@ -311,6 +391,7 @@ def pending_commit(server) -> Optional[dict]:
         return None
     try:
         record["assignments"] = parse_assignments(json.loads(record["assignments"]))
+        record["captions"] = parse_captions(json.loads(record["captions"]))
     except (ValueError, CommitError) as exc:
         # Unreadable is not resumable, and a start-up that raises here would
         # be a library that cannot open at all. Say so and leave the row for
@@ -455,6 +536,7 @@ def register_reference_folder(
     *,
     label: Optional[str] = None,
     task_id: Optional[str] = None,
+    captions=(),
 ) -> ReferenceFolder:
     """Register *root_path* for in-place indexing, or return it if it already is.
 
@@ -473,6 +555,10 @@ def register_reference_folder(
         task_id: The durable record this registration belongs to, when there is
             one. It is what lets a resumed commit adopt the row it registered
             itself - see `_commit_owns_this_root`.
+        captions: The owner's caption-pattern answers. A reference folder
+            holds one suffix per kind, so the first ``tags`` and the first
+            ``description`` pattern become its configured suffixes and the
+            scan reads exactly those.
     """
     # Resolved, not merely normalised, for the reason
     # `routes.reference_folders.create_reference_folder` gives where it does the
@@ -484,6 +570,7 @@ def register_reference_folder(
     # but a row stored under an alias would still read back wrong everywhere
     # else.
     root_path = os.path.realpath(os.path.normpath(root_path))
+    tags_suffixes, description_suffixes = caption_suffixes(captions)
     error = validate_reference_folder_path(root_path)
     if error:
         raise CommitError(error)
@@ -527,6 +614,10 @@ def register_reference_folder(
             label=label or os.path.basename(root_path) or root_path,
             status=status,
             pending_reimport=True,
+            # ponytail: one suffix per kind is all the row holds; a second
+            # tags pattern in the same tree is read only by a local import.
+            tags_suffix=(tags_suffixes or [None])[0],
+            description_suffix=(description_suffixes or [None])[0],
         )
         session.add(rf)
         session.commit()
@@ -582,7 +673,7 @@ def validate_local_import_root(server, root_path: str) -> None:
 
 
 def _build_managed_picture(
-    abs_path: str, relative_path: str, image_root: str
+    abs_path: str, relative_path: str, image_root: str, captions=()
 ) -> Picture:
     """Build a managed Picture for a file already sitting under *image_root*.
 
@@ -654,8 +745,9 @@ def _build_managed_picture(
     if created_at:
         pic.created_at = created_at
     # A caption file the owner already has beside the picture beats the
-    # tagger's guess - the same read the reference-folder scan does.
-    sidecar_tags = attach_sidecars(pic, abs_path)
+    # tagger's guess - the same read the reference-folder scan does, at the
+    # suffixes the owner confirmed (or the known conventions, unanswered).
+    sidecar_tags = attach_sidecars(pic, abs_path, *caption_suffixes(captions))
     if sidecar_tags:
         pic._sidecar_tags = sidecar_tags  # type: ignore[attr-defined]
     return pic
@@ -668,6 +760,7 @@ def local_import_pictures(
     expected_pictures: int,
     on_progress=None,
     should_stop=None,
+    captions=(),
 ) -> list[int]:
     """Import every supported file under *root_path* as a managed Picture.
 
@@ -692,6 +785,9 @@ def local_import_pictures(
             Checked *between* chunks and never inside one, so a stop can never
             tear a half-written chunk: every picture already inserted is
             complete and stays indexed.
+        captions: The owner's answers to the read's caption patterns
+            (`CaptionPattern` rows), read into tags and descriptions as each
+            picture is built.
 
     Returns:
         Every matching file's Picture id, existing and newly-created alike.
@@ -750,7 +846,9 @@ def local_import_pictures(
 
     def _build(abs_path: str) -> Optional[Picture]:
         try:
-            return _build_managed_picture(abs_path, rel_by_abs[abs_path], image_root)
+            return _build_managed_picture(
+                abs_path, rel_by_abs[abs_path], image_root, captions
+            )
         except Exception as exc:
             logger.warning(
                 "Local import: failed to build picture for %s: %s", abs_path, exc

@@ -337,6 +337,62 @@ def test_a_caption_beside_every_picture_reads_as_set():
     assert "all 3 pictures" in evidence["text"]
 
 
+def _write(root, rel, text):
+    with open(os.path.join(root, *rel.split("/")), "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def test_the_read_reports_every_caption_convention_beside_the_pictures():
+    """The owner's captions are whatever they are called. The read groups
+    every text file that pairs with a picture by the suffix after the stem,
+    reads a few of each, and says whether the pattern holds tag lists or
+    prose - so the commit can read them that way instead of the tagger
+    redoing work the owner already did. Binary and JSON sidecars are not
+    captions and are not offered."""
+    spec = {
+        "": [],
+        "wd14": ["a.jpg", "a.txt", "b.jpg", "b.txt", "c.jpg", "c.txt"],
+        "florence": ["d.jpg", "d_caption.txt", "e.png", "e_caption.txt"],
+        "mixed": ["f.jpg", "f.jpg.caption", "f.json", "f.npz", "f_thumb.webp"],
+    }
+    with _tree(spec) as root:
+        for name in ("a", "b", "c"):
+            _write(root, f"wd14/{name}.txt", "1girl, solo, long hair, smile")
+        for name in ("d", "e"):
+            _write(
+                root,
+                f"florence/{name}_caption.txt",
+                "A woman with long hair stands in a sunlit field, smiling.",
+            )
+        _write(root, "mixed/f.jpg.caption", "A cat asleep on a warm windowsill.")
+        _write(root, "mixed/f.json", '{"prompt": "1girl, solo"}')
+        with open(os.path.join(root, "mixed", "f.npz"), "wb") as fh:
+            fh.write(b"\x93NUMPY\x00\x00binary")
+        result = FolderStructureRead(root).run()
+
+    by_suffix = {row["suffix"]: row for row in result["captions"]}
+    assert [row["suffix"] for row in result["captions"]] == [
+        ".txt",
+        "_caption.txt",
+        ".jpg.caption",
+    ], "most files first"
+    assert by_suffix[".txt"]["kind"] == "tags"
+    assert by_suffix[".txt"]["files"] == 3 and by_suffix[".txt"]["folders"] == 1
+    assert by_suffix[".txt"]["sample"].startswith("1girl, solo")
+    assert by_suffix["_caption.txt"]["kind"] == "description"
+    assert by_suffix[".jpg.caption"]["kind"] == "description"
+    assert ".json" not in by_suffix and ".npz" not in by_suffix, (
+        "metadata and binary sidecars are not captions to ask about"
+    )
+    assert "_thumb.webp" not in by_suffix
+
+
+def test_a_tree_without_captions_reports_none():
+    with _tree({"": [], "shoot": ["a.jpg", "b.jpg", "c.jpg"]}) as root:
+        result = FolderStructureRead(root).run()
+    assert result["captions"] == []
+
+
 def test_a_caption_beside_most_pictures_says_nothing_at_all():
     """`every` picture, not `most`. A signal that cannot state its reason does
     not propose - and 'a caption beside 2 of 3' is not the Set fact. The folder

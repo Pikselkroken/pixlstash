@@ -6,7 +6,7 @@
  * either way - committing registers the folder for in-place indexing and
  * writes database rows only.
  */
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 
 import {
   getFolderStructureCommitStatus,
@@ -16,6 +16,7 @@ import {
 import { errorDetail } from "../../utils/apiError";
 import { FACET_KINDS, kindStyle } from "../../utils/folderMappingKinds";
 import AppButton from "../widgets/AppButton.vue";
+import AppSelect from "../widgets/AppSelect.vue";
 
 const props = defineProps({
   path: { type: String, required: true },
@@ -28,6 +29,12 @@ const props = defineProps({
    */
   readResult: { type: Object, default: null },
   assignments: { type: Array, required: true },
+  /**
+   * The owner's saved answers for the read's caption-file patterns, for a
+   * resumed commit: `[{suffix, kind}]`. Seeds the choices below when it
+   * names a pattern; otherwise the read's own guess does.
+   */
+  captions: { type: Array, default: () => [] },
   label: { type: String, default: "" },
   pictureCount: { type: Number, default: 0 },
   // "reference" registers the scanned root as an external reference folder;
@@ -72,6 +79,47 @@ const total = ref(0);
 
 let pollTimer = null;
 let disposed = false;
+
+/**
+ * The caption-file conventions the read found beside the pictures, each with
+ * the read's guess at what it holds. The owner confirms or corrects per
+ * pattern - a wrongly read convention would tag every picture in the library
+ * with a description's words, so this is asked, not assumed.
+ */
+const CAPTION_CHOICES = [
+  { value: "tags", label: "Tags" },
+  { value: "description", label: "Description" },
+  { value: "ignore", label: "Ignore" },
+];
+const patterns = computed(() => props.readResult?.captions ?? []);
+// suffix -> the owner's answer. Seeded from the saved answers, then the read.
+const answers = reactive({});
+watch(
+  patterns,
+  (rows) => {
+    for (const row of rows) {
+      if (answers[row.suffix]) continue;
+      answers[row.suffix] =
+        props.captions.find((c) => c.suffix === row.suffix)?.kind ?? row.kind;
+    }
+  },
+  { immediate: true },
+);
+/** The answers to send: one per reported pattern, or the saved ones when the
+ *  read is gone (a resumed commit with no result to list them from). */
+function chosenCaptions() {
+  if (!patterns.value.length) return props.captions;
+  return patterns.value.map((row) => ({
+    suffix: row.suffix,
+    kind: answers[row.suffix] ?? row.kind,
+  }));
+}
+const captionFilesRead = computed(() =>
+  patterns.value.reduce(
+    (sum, row) => sum + (answers[row.suffix] === "ignore" ? 0 : row.files),
+    0,
+  ),
+);
 
 const grouped = computed(() => {
   const byKind = new Map(FACET_KINDS.map((k) => [k.value, new Map()]));
@@ -170,8 +218,9 @@ async function poll(taskId) {
 }
 
 async function commit(assignments = props.assignments) {
+  const captions = chosenCaptions();
   if (!props.libraryExists) {
-    emit("build", assignments);
+    emit("build", assignments, captions);
     return;
   }
   committing.value = true;
@@ -183,6 +232,7 @@ async function commit(assignments = props.assignments) {
       props.label,
       props.mode,
       props.readResult,
+      captions,
     );
     commitTaskId.value = started.task_id;
     emit("commit-started", started.task_id);
@@ -284,6 +334,43 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <div v-if="patterns.length" class="preview-step__card">
+      <div class="preview-step__card-title">Caption files beside your pictures</div>
+      <p class="preview-step__card-lead">
+        Text files named after a picture are read as that picture's tags or
+        description instead of PixlStash writing its own. Check each pattern.
+      </p>
+      <ul class="preview-step__captions">
+        <li
+          v-for="row in patterns"
+          :key="row.suffix"
+          class="preview-step__caption"
+          :class="{ 'preview-step__caption--ignored': answers[row.suffix] === 'ignore' }"
+        >
+          <div class="preview-step__caption-what">
+            <code class="preview-step__caption-suffix">*{{ row.suffix }}</code>
+            <span class="preview-step__caption-count">
+              {{ row.files.toLocaleString() }}
+              {{ row.files === 1 ? "file" : "files" }} in
+              {{ row.folders.toLocaleString() }}
+              {{ row.folders === 1 ? "folder" : "folders" }}
+            </span>
+            <span class="preview-step__caption-sample" :title="row.sample">
+              {{ row.sample }}
+            </span>
+          </div>
+          <AppSelect
+            v-model="answers[row.suffix]"
+            :options="CAPTION_CHOICES"
+            :label="`Read *${row.suffix} as`"
+            compact
+            :disabled="committing"
+            class="preview-step__caption-choice"
+          />
+        </li>
+      </ul>
+    </div>
+
     <div class="preview-step__card">
       <div class="preview-step__card-title">
         What happens when you press the button
@@ -302,6 +389,14 @@ onUnmounted(() => {
           >
           {{ entityCount.toLocaleString() }} {{ entityKinds }}
           {{ entityCount === 1 ? "is" : "are" }} created or matched
+        </div>
+        <div v-if="captionFilesRead" class="preview-step__fact">
+          <span class="preview-step__fact-mark preview-step__fact-mark--yes"
+            >✓</span
+          >
+          {{ captionFilesRead.toLocaleString() }} caption
+          {{ captionFilesRead === 1 ? "file is" : "files are" }} read as tags
+          and descriptions; only pictures without one are tagged from scratch
         </div>
         <div class="preview-step__fact">
           <span class="preview-step__fact-mark">—</span>
@@ -459,6 +554,67 @@ onUnmounted(() => {
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   margin-bottom: var(--space-4);
+}
+
+.preview-step__card-lead {
+  margin: calc(-1 * var(--space-2)) 0 var(--space-4);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-background), 0.65);
+}
+
+.preview-step__captions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.preview-step__caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.preview-step__caption--ignored .preview-step__caption-what {
+  opacity: 0.55;
+}
+
+.preview-step__caption-what {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  font-size: var(--text-sm);
+}
+
+.preview-step__caption-suffix {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-panel));
+}
+
+.preview-step__caption-count {
+  color: rgba(var(--v-theme-on-background), 0.72);
+}
+
+.preview-step__caption-sample {
+  flex-basis: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-background), 0.55);
+}
+
+.preview-step__caption-choice {
+  flex-shrink: 0;
+  width: 10rem;
 }
 
 .preview-step__facts {

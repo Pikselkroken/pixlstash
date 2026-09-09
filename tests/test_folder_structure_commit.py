@@ -550,6 +550,99 @@ def test_local_import_reads_the_caption_files_beside_the_pictures(owner_env):
     assert _snapshot(root) == before, "reading a caption must not write anything"
 
 
+def test_the_owners_caption_answers_decide_what_is_read(owner_env):
+    """`captions` on the commit: each pattern the read reported is read as
+    the owner said - tags, description or ignore - and nothing else is probed.
+    A `.txt` the owner ignores stays on disk unread, and the picture waits for
+    the tagger like any other."""
+    server = owner_env["server"]
+    owner = owner_env["owner"]
+    root = os.path.join(server.vault.image_root, "local-import-answers")
+    _make_tree(root, {"": ["one.jpg", "two.jpg"]})
+    with open(os.path.join(root, "one.txt"), "w", encoding="utf-8") as fh:
+        fh.write("1girl, solo, smile")
+    with open(os.path.join(root, "one_desc.txt"), "w", encoding="utf-8") as fh:
+        fh.write("cat, dog, tree")  # named like a description, reads like tags
+    with open(os.path.join(root, "two.txt"), "w", encoding="utf-8") as fh:
+        fh.write("A dog on a beach.")
+
+    started = owner.post(_READ, json={"path": root})
+    assert started.status_code == 200, started.text
+    read_task_id = started.json()["task_id"]
+    read = _drain_read(owner, read_task_id)
+    assert {c["suffix"] for c in read["result"]["captions"]} == {".txt", "_desc.txt"}
+
+    commit_started = owner.post(
+        _COMMIT,
+        json={
+            "task_id": read_task_id,
+            "mode": "local_import",
+            "assignments": [],
+            # The owner overrules the sniff: `_desc.txt` is the description,
+            # whatever its content looks like, and `.txt` is left alone.
+            "captions": [
+                {"suffix": ".txt", "kind": "ignore"},
+                {"suffix": "_desc.txt", "kind": "description"},
+            ],
+        },
+    )
+    assert commit_started.status_code == 200, commit_started.text
+    body = _drain_commit(owner, commit_started.json()["task_id"], timeout_s=60.0)
+    assert body["status"] == "completed", body
+
+    from pixlstash.db_models.picture import Picture
+    from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
+    from sqlmodel import select
+
+    def fetch(session):
+        pics = session.exec(
+            select(Picture).where(Picture.file_path.like("local-import-answers/%"))
+        ).all()
+        return {
+            p.original_file_name: (
+                p.description,
+                p.tags_file,
+                sorted(
+                    session.exec(select(Tag.tag).where(Tag.picture_id == p.id)).all()
+                ),
+            )
+            for p in pics
+        }
+
+    got = server.vault.db.run_immediate_read_task(fetch)
+    assert got["one.jpg"] == ("cat, dog, tree", None, [TAG_PENDING_SENTINEL])
+    assert got["two.jpg"] == (None, None, [TAG_PENDING_SENTINEL]), (
+        "an ignored pattern is never read, however caption-like its content"
+    )
+
+
+def test_a_caption_answer_with_an_unsafe_suffix_is_refused(owner_env):
+    """The suffix is appended to a picture path to find the file to read, so
+    the commit enforces the same bare-fragment rule the reference-folder API
+    does (#776)."""
+    server = owner_env["server"]
+    owner = owner_env["owner"]
+    root = os.path.join(server.vault.image_root, "local-import-unsafe")
+    _make_tree(root, {"": ["one.jpg"]})
+    started = owner.post(_READ, json={"path": root})
+    read_task_id = started.json()["task_id"]
+    _drain_read(owner, read_task_id)
+    refused = owner.post(
+        _COMMIT,
+        json={
+            "task_id": read_task_id,
+            "mode": "local_import",
+            "captions": [{"suffix": "/../../etc/passwd", "kind": "tags"}],
+        },
+    )
+    assert refused.status_code == 400, refused.text
+    assert "captions[0].suffix" in refused.json()["detail"]
+    # The refusal burned nothing: the read is still committable.
+    ok = owner.post(_COMMIT, json={"task_id": read_task_id, "mode": "local_import"})
+    assert ok.status_code == 200, ok.text
+    assert _drain_commit(owner, ok.json()["task_id"])["status"] == "completed"
+
+
 def test_local_import_wakes_the_planner_as_each_chunk_lands(
     owner_env, monkeypatch, caplog
 ):

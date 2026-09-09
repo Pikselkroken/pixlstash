@@ -286,6 +286,7 @@ describe("building the library", () => {
       label: "Generations",
       mode: "local_import",
       assignments: ASSIGNMENTS,
+      captions: [],
       pictureCount: 5,
       autoCommit: true,
     });
@@ -356,6 +357,7 @@ describe("resuming after the switch", () => {
       "Generations",
       "local_import",
       null,
+      [],
     );
     expect(addLibrary).not.toHaveBeenCalled();
     expect(startFolderStructureRead).not.toHaveBeenCalled();
@@ -429,6 +431,7 @@ describe("the empty library's own folder", () => {
       "",
       "local_import",
       READ_RESULT,
+      [],
     );
   });
 });
@@ -664,6 +667,7 @@ describe("the branches nobody walks on purpose", () => {
       "",
       "local_import",
       READ_RESULT,
+      [],
     );
     expect(addLibrary).not.toHaveBeenCalled();
 

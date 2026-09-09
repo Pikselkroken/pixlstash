@@ -68,6 +68,9 @@ class FolderMappingCommit(SQLModel, table=True):
             take the same one.
         label: The reference folder's label, when the owner gave one.
         expected_pictures: The read's own count, the progress total.
+        captions: The owner's answer to the read's caption-file patterns as
+            JSON, in the wire form ``parse_captions`` reads. ``"[]"`` means no
+            answer: the import probes the known conventions instead.
         assignments: The accepted mapping as JSON, in the wire form
             ``folder_structure_commit_service.parse_assignments`` reads. Stored
             rather than re-derived: the read that produced it is gone after a
@@ -94,6 +97,7 @@ class FolderMappingCommit(SQLModel, table=True):
     label: Optional[str] = None
     expected_pictures: int = 0
     assignments: str = "[]"
+    captions: str = "[]"
     stage: str = "registering"
     state: str = Field(default=STATE_PENDING, index=True)
     started_at: datetime = Field(default_factory=_now)

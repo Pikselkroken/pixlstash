@@ -5920,6 +5920,33 @@ every batch of the read jumps ahead of background work. That is arguably right
 assuming, and it is the reason the read has a deadline: an URGENT task that
 cannot finish starves the queue it jumped.
 
+### The caption files, read for what they are
+
+Beside the eight signals the walk collects the **caption files**: every
+non-media, non-hidden file whose name starts with the stem of a picture in the
+same folder, grouped by the suffix after that stem (`_collect_captions`). The
+match is the longest stem that is a prefix of the name — one set lookup per
+character, not one comparison per picture, because a dataset folder has ten
+thousand of each — and a suffix that is not a bare filename fragment
+(`is_safe_sidecar_suffix`) is dropped there and then, since the commit will
+append it to a picture path. This is deliberately *not* the `_SIDECAR_EXTS`
+list the Set signal counts against: that signal asks "is there a caption beside
+every picture", this asks "what is the owner's convention", and the answer to
+the second cannot be a list PixlStash wrote in advance.
+
+After the walk `_caption_patterns` reads `CAPTION_SAMPLES` (8) files of each
+suffix through `caption_file_utils.sniff_caption`, which refuses binary (a NUL
+in the first 4 KB) and JSON (a generator's metadata sidecar) outright and
+otherwise votes tags-or-prose with the same `_looks_like_tags` heuristic the
+reference-folder scan uses on a bare `.txt`. A suffix none of whose samples is
+a caption is not listed; the rest go out as `captions` on the result, most
+files first, capped at `MAX_CAPTION_PATTERNS` (12), each with an excerpt so the
+owner can check the guess on the screen. The read still proposes nothing
+here: the guess is pre-filled and the owner confirms it per pattern — a
+description convention read as tags would put a sentence's words on every
+picture in the library, which is exactly the kind of error §24's "refusal to
+guess" exists to keep off the screen.
+
 ### The shape signals: what a photo library looks like
 
 The first four signals leave a photo library — no captions, no existing
@@ -6275,10 +6302,22 @@ under the pending-tag sentinel. The read is now one helper,
 `_build_managed_picture` here. It records `tags_file`/`description_file`, fills
 `description` from the description sidecar, and returns the tags sidecar's
 tags; both inserters write those as `Tag` rows and put only a picture *without*
-a tags sidecar under the sentinel. The local import has no configured suffix
-(there is no `ReferenceFolder` row to hold one), so it probes the known
-conventions the way an unconfigured folder does, content-sniffing a bare
-`.txt`. It reads at import only: the root scan's reconcile pass still skips
+a tags sidecar under the sentinel.
+
+Which files are read is the owner's answer to the read's `captions` (§24),
+carried on the commit as `CaptionPattern` rows (`parse_captions`, the same
+bare-fragment rule on the suffix as the reference-folder API) and turned into
+the two suffix lists `attach_sidecars` takes by `caption_suffixes`. The
+distinction that matters is *no answer* versus *ignore*: an empty list means
+the client never asked (an older client, or a tree with no caption files) and
+the import probes the known conventions as an unconfigured reference folder
+does; an answer means only the named suffixes are read, and an `ignore`d one is
+never opened. The answers are written into the durable `FolderMappingCommit`
+record beside the assignments (`captions`, migration 0115) for the same reason
+the assignments are: a commit resumed after a crash must not re-probe and
+import a file the owner said to leave alone. In reference mode the first
+`tags` and `description` suffixes become the new `ReferenceFolder`'s configured
+ones. It reads at import only: the root scan's reconcile pass still skips
 sidecars, per its own comment, so a caption edited on disk after the import is
 not picked up for a managed picture.
 
