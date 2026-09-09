@@ -4,7 +4,7 @@ import subprocess
 import sys
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.device_utils import empty_device_cache
+from pixlstash.utils.device_utils import empty_device_cache, is_accelerator
 
 logger = get_logger(__name__)
 
@@ -123,6 +123,60 @@ def is_vram_oom(error: BaseException) -> bool:
             return True
         current = current.__cause__ or current.__context__
     return False
+
+
+def is_device_error(error: BaseException, device) -> bool:
+    """True when *error* is an accelerator failure worth retrying on the CPU.
+
+    Broader than :func:`is_vram_oom`, which answers only "the device ran out of
+    memory". This also covers a card the installed build cannot drive and a
+    driver-level fault - conditions that are not OOM but have the same remedy,
+    which is to reload on the CPU and carry on.
+
+    The *device* guard is what keeps that remedy sane: without it an ordinary
+    CPU-side failure whose text happens to name a backend would trigger a
+    reload onto the CPU the model is already running on. ``None`` and ``"cpu"``
+    are therefore never device errors.
+
+    Args:
+        error: The exception raised by the failed inference.
+        device: The device the model was running on when it raised; a string
+            or a ``torch.device``.
+
+    Returns:
+        ``True`` when the caller should move to the CPU and retry.
+    """
+    if not is_accelerator(device):
+        return False
+
+    # A driver-level fault carries no reliable words at all: CudaError renders
+    # whatever cudaGetErrorString returns, so type identity is the only stable
+    # signal for it. torch.OutOfMemoryError is deliberately NOT listed here -
+    # is_vram_oom already matches it by type, and a second copy would be a
+    # branch no test could ever isolate.
+    torch = sys.modules.get("torch")
+    cuda_error = getattr(getattr(torch, "cuda", None), "CudaError", None)
+    if isinstance(cuda_error, type) and isinstance(error, cuda_error):
+        return True
+
+    # Everything that is an out-of-memory condition, in any of its spellings:
+    # torch's typed OOM, the CUDA and Metal texts, and onnxruntime's arena
+    # message, which names neither a device nor "out of memory".
+    if is_vram_oom(error):
+        return True
+
+    message = str(error).lower()
+    # What is left is a GPU that failed for a reason other than memory, which
+    # has the same remedy. "not compatible" is a build/architecture mismatch
+    # (a wheel that cannot drive the installed card); "mps backend" prefixes
+    # Metal's non-memory failures the way "cuda" does NVIDIA's. Each service
+    # sharing this predicate matched some of these separately before, and
+    # dropping one would stop it retrying on a machine where the GPU never
+    # works at all.
+    return any(
+        word in message
+        for word in ("cuda", "cudnn", "cublas", "not compatible", "mps backend")
+    )
 
 
 def empty_cuda_cache() -> bool:

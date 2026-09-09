@@ -13,6 +13,7 @@ from PIL import Image
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
+from pixlstash.utils.device_utils import detect_device, empty_device_cache
 from pixlstash.utils.model_utils import from_pretrained_local_first
 from pixlstash.utils.service.caption_utils import sanitise_tag
 
@@ -89,15 +90,14 @@ class JoyCaptionService:
         """Release model and processor from memory.
 
         Blocks while a load is in flight rather than freeing underneath it.
-        Waiting costs a few seconds on shutdown; the alternative is
-        ``torch.cuda.empty_cache()`` releasing memory that ``from_pretrained``
-        is still writing into, which takes the whole process down.
+        Waiting costs a few seconds on shutdown; the alternative is the cache
+        flush releasing memory that ``from_pretrained`` is still writing into,
+        which takes the whole process down.
         """
         with self._load_lock:
             self._model = None
             self._processor = None
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            empty_device_cache()
 
     def generate_caption(
         self,
@@ -438,10 +438,13 @@ class JoyCaptionService:
                     _proj.to(dtype=_vision_dtype)
 
             self._model = model
+            # ``device_map="auto"`` puts the weights on whichever accelerator
+            # the machine has, so this has to name the same one. Deriving it
+            # from torch.cuda alone recorded "cpu" on Apple Silicon while
+            # Accelerate had placed the model on Metal, and every input was
+            # then moved to the CPU to meet a model that was not there.
             self._model_device = (
-                torch.device("cpu")
-                if use_cpu
-                else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                torch.device("cpu") if use_cpu else torch.device(detect_device())
             )
             logger.info(
                 "[JoyCaption] Model loaded successfully on %s (precision=%s) - total load time %.1fs",
@@ -452,7 +455,8 @@ class JoyCaptionService:
             if str(self._model_device) == "cpu":
                 logger.warning(
                     "[JoyCaption] Running on CPU - inference will be very slow (~100s/image). "
-                    "Set default_device=cuda in server-config.json to use the GPU."
+                    "Set default_device in server-config.json to your GPU "
+                    "(cuda, or mps on Apple Silicon) to use it."
                 )
 
         except Exception as exc:

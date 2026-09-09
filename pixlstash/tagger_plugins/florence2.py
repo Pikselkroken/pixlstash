@@ -15,9 +15,9 @@ if TYPE_CHECKING:  # annotations only - see the function-local import note below
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TaggerPlugin
-from pixlstash.utils.device_utils import empty_device_cache, is_accelerator
+from pixlstash.utils.device_utils import empty_device_cache
 from pixlstash.utils.model_utils import from_pretrained_local_first
-from pixlstash.utils.vram_utils import is_vram_oom
+from pixlstash.utils.vram_utils import is_device_error
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 
 # ML imports (torch / torchvision) are deliberately FUNCTION-LOCAL throughout
@@ -314,7 +314,7 @@ class Florence2Service:
             return caption
 
         except Exception as e:
-            if _retry_on_cpu and self._is_cuda_error(e):
+            if _retry_on_cpu and is_device_error(e, self._model_device):
                 logger.warning(
                     "Florence-2 captioning failed on GPU (%s); retrying on CPU.", e
                 )
@@ -409,7 +409,7 @@ class Florence2Service:
             return captions
 
         except Exception as e:
-            if _retry_on_cpu and self._is_cuda_error(e):
+            if _retry_on_cpu and is_device_error(e, self._model_device):
                 logger.warning(
                     "Florence-2 batch captioning failed on GPU (%s); retrying on CPU.",
                     e,
@@ -543,7 +543,7 @@ class Florence2Service:
             return detections
 
         except Exception as e:
-            if _retry_on_cpu and self._is_cuda_error(e):
+            if _retry_on_cpu and is_device_error(e, self._model_device):
                 logger.warning(
                     "Florence-2 detection failed on GPU (%s); retrying on CPU.", e
                 )
@@ -805,38 +805,6 @@ class Florence2Service:
                     score = None
             detections.append((str(label).strip(), [x1, y1, x2, y2], score))
         return detections
-
-    def _is_cuda_error(self, error: Exception) -> bool:
-        """True when *error* is a GPU failure worth retrying on the CPU.
-
-        Named for CUDA because that was the only GPU when it was written; it
-        answers for Metal too. The device guard matters: without it a genuine
-        CPU-side error would trigger a pointless reload onto the CPU it is
-        already running on.
-        """
-        import torch
-
-        if not is_accelerator(self._model_device):
-            return False
-        # PyTorch's typed OOM deliberately does not promise the word "cuda" in
-        # its message. Type identity is the stable signal; the string fallback
-        # retains compatibility with provider/runtime errors raised outside
-        # PyTorch's own exception hierarchy.
-        oom_type = getattr(torch, "OutOfMemoryError", None)
-        cuda_error_type = getattr(torch.cuda, "CudaError", None)
-        typed_cuda_errors = tuple(
-            error_type
-            for error_type in (oom_type, cuda_error_type)
-            if isinstance(error_type, type)
-        )
-        if typed_cuda_errors and isinstance(error, typed_cuda_errors):
-            return True
-        # Metal reports OOM as a bare RuntimeError naming the backend rather
-        # than any of the CUDA spellings below, so is_vram_oom carries that case.
-        if is_vram_oom(error):
-            return True
-        message = str(error).lower()
-        return "cuda" in message or "cudnn" in message or "cublas" in message
 
 
 class Florence2Plugin(TaggerPlugin):

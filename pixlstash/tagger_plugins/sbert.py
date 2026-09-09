@@ -12,6 +12,7 @@ import threading
 import numpy as np
 
 from pixlstash.utils.model_utils import load_sentence_transformer
+from pixlstash.utils.vram_utils import is_device_error
 
 logger = logging.getLogger(__name__)
 
@@ -22,10 +23,11 @@ SBERT_MODEL_REVISION = "c9745ed1d9f207416be6d2e6f8de32d1f16199bf"
 class SBertService:
     """Manages the SentenceTransformer model for semantic text embedding.
 
-    Lazy-loads the model on first use and falls back to CPU on CUDA errors.
+    Lazy-loads the model on first use and falls back to CPU when the
+    accelerator fails.
 
     Args:
-        device: Initial inference device (``"cuda"`` or ``"cpu"``).
+        device: Initial inference device (``"cuda"``, ``"mps"`` or ``"cpu"``).
     """
 
     def __init__(self, device: str) -> None:
@@ -85,11 +87,13 @@ class SBertService:
             raw = self._model.encode(texts, show_progress_bar=False)
             logger.debug("Done generating SBERT embeddings.")
         except RuntimeError as exc:
-            if "CUDA" not in str(exc):
+            if not is_device_error(exc, self._device):
                 logger.error("Failed to generate text embedding: %s", exc)
                 raise
             logger.warning(
-                "SBERT embedding failed on CUDA: %s. Falling back to CPU.", exc
+                "SBERT embedding failed on %s: %s. Falling back to CPU.",
+                self._device,
+                exc,
             )
             try:
                 self._model = load_sentence_transformer(
