@@ -4071,7 +4071,20 @@ and updates `file_path` on the existing row instead.
   deleted within the hour. `ReferenceFolderScanFinder` keeps the root's schedule
   itself (no `ReferenceFolder` row to stamp): due at boot, then every
   `_RESCAN_INTERVAL_S`, and immediately when `ReferenceFolderWatcher` — which
-  watches `image_root` under the id `None` — reports a change. Root mode differs
+  watches `image_root` under the id `None` — reports a change. **Due at boot
+  has one exception** (`first_import_answered`): a library that holds no
+  picture and has no folder-mapping commit record other than an abandoned one
+  is not scanned. That is a library whose owner has not been asked what the
+  pictures in its folder are — the app asks when it loads an *empty* library
+  over a folder holding pictures (the first-run offer, "Add a library"), and
+  the boot scan used to answer first: a small library was indexed, tags read
+  by convention and all, before the screen came up, so the grid was no longer
+  empty and the mapping questions and the caption card never appeared. The
+  gate lifts on the first picture row or the first commit record (done,
+  deferred, pending) and is then remembered for the process. An existing
+  library is unaffected; the one behaviour that changes is that an empty
+  library's first pictures arrive through the import offer rather than by
+  the watcher, which is the offer's whole purpose. Root mode differs
   from a reference folder exactly where `layout_move_service.LayoutRoot` says it
   does: pictures are the `reference_folder_id IS NULL` rows, `file_path` is
   written root-relative (`_stored`), the layout comes from `LibrarySettings`,

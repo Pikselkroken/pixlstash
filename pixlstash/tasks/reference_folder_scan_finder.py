@@ -13,6 +13,11 @@ import time
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
+from pixlstash.db_models.folder_mapping_commit import (
+    STATE_ABANDONED,
+    FolderMappingCommit,
+)
+from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
@@ -68,6 +73,9 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         # owner renamed while the app was closed.
         self._root_last_scanned: float | None = None
         self._root_scanned_once = False
+        # Once the library holds a picture or the owner has answered the
+        # import offer it stays answered; the two queries run until then.
+        self._first_import_answered = False
 
     def mark_root_due(self) -> None:
         """Ask for the library root to be rescanned on the next planning cycle."""
@@ -164,10 +172,45 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
 
         return self._root_task(folders, now)
 
+    def first_import_answered(self) -> bool:
+        """Whether the root may be indexed yet.
+
+        A library that holds no picture and has never had a folder-mapping
+        commit is one whose owner has not been asked what the pictures in its
+        folder are. The app asks when it loads an empty library over a folder
+        that holds pictures - the first-run offer, and "Add a library" - and
+        the boot-time root scan used to answer first: a small library was
+        indexed, tags and all, before the screen came up, so the grid was no
+        longer empty and the questions never appeared. The root scan waits
+        for the answer. Any commit record counts - done, deferred ("organise
+        later"), pending - except an abandoned one, which is "bring nothing
+        in". A library with a picture in it was imported into some other way
+        and is scanned as before, so nothing changes for an existing library.
+        """
+        if self._first_import_answered:
+            return True
+
+        def read(session: Session) -> bool:
+            if session.exec(select(Picture.id).limit(1)).first() is not None:
+                return True
+            return (
+                session.exec(
+                    select(FolderMappingCommit.id)
+                    .where(FolderMappingCommit.state != STATE_ABANDONED)
+                    .limit(1)
+                ).first()
+                is not None
+            )
+
+        self._first_import_answered = bool(self._db.run_immediate_read_task(read))
+        return self._first_import_answered
+
     def _root_task(self, folders: list[ReferenceFolder], now: float):
         """The library-root scan, when it is due. Folders go first: a root scan
         walks the whole library, so it must not push a pending mount back."""
         if self._image_root is None or not os.path.isdir(self._image_root):
+            return None
+        if not self.first_import_answered():
             return None
         last = self._root_last_scanned
         if last is not None and (now - last) < _RESCAN_INTERVAL_S:

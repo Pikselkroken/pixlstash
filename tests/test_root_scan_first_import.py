@@ -1,0 +1,113 @@
+"""The boot-time root scan waits for the first import offer to be answered.
+
+A fresh library whose folder already holds pictures is asked what those
+pictures are - the first-run offer, and "Add a library" - and the app makes
+the offer only while the library is empty. The root scan is due the moment
+the backend boots, so on a small library it indexed everything before the
+screen came up and the questions never appeared. It now waits until the
+library holds a picture or a folder-mapping commit has been recorded.
+"""
+
+import os
+import tempfile
+import time
+
+import pytest
+from PIL import Image
+from sqlmodel import Session
+
+from pixlstash.db_models.folder_mapping_commit import (
+    STATE_ABANDONED,
+    STATE_DEFERRED,
+    FolderMappingCommit,
+)
+from pixlstash.server import Server
+from pixlstash.tasks import TaskType
+from pixlstash.tasks.reference_folder_scan_finder import ReferenceFolderScanFinder
+from pixlstash.utils.path_mapper import PathMapper
+
+_CONFLICTING_FINDERS = (
+    TaskType.THUMBNAIL_GENERATION,
+    TaskType.REFERENCE_FOLDER_SCAN,
+    TaskType.MISSING_FILE_PURGE,
+    TaskType.TAGGER,
+)
+
+
+@pytest.fixture
+def server():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(config_path) as srv:
+            for task_type in _CONFLICTING_FINDERS:
+                srv.vault._planner_work_finders.pop(task_type)
+            srv.vault._work_planner.detach_finders(_CONFLICTING_FINDERS)
+            yield srv
+
+
+def _drop_picture(root, name):
+    path = os.path.join(root, name)
+    Image.new("RGB", (8, 8), color=(3, 4, 5)).save(path, format="PNG")
+    old = time.time() - 600
+    os.utime(path, (old, old))
+
+
+def _record(server, state):
+    def write(session: Session):
+        session.add(
+            FolderMappingCommit(
+                task_id=f"t-{state}",
+                root_path=server.vault.image_root,
+                mode="local_import",
+                expected_pictures=1,
+                state=state,
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(write)
+
+
+def _finder(server):
+    return ReferenceFolderScanFinder(
+        database=server.vault.db,
+        path_mapper=PathMapper(),
+        image_root=server.vault.image_root,
+    )
+
+
+def test_a_fresh_library_over_pictures_is_not_scanned_until_the_offer_is_answered(
+    server,
+):
+    _drop_picture(server.vault.image_root, "loose.png")
+    finder = _finder(server)
+    assert finder.first_import_answered() is False
+    assert finder.find_task() is None, "the owner has not been asked yet"
+
+    _record(server, STATE_ABANDONED)
+    assert finder.find_task() is None, "an abort is not an answer to import"
+
+    _record(server, STATE_DEFERRED)
+    task = finder.find_task()
+    assert task is not None and task.params["folder_id"] is None, (
+        "organise later is an answer: index everything, map nothing"
+    )
+    assert finder.first_import_answered() is True
+
+
+def test_a_library_that_holds_a_picture_is_scanned_as_before(server):
+    """Nothing changes for an existing library: a picture row, however it got
+    there, is the answer."""
+    _drop_picture(server.vault.image_root, "first.png")
+    finder = _finder(server)
+    assert finder.find_task() is None
+
+    from pixlstash.db_models.picture import Picture
+
+    def add(session: Session):
+        session.add(Picture(file_path="first.png", pixel_sha="x" * 64))
+        session.commit()
+
+    server.vault.db.run_task(add)
+    task = finder.find_task()
+    assert task is not None and task.params["folder_id"] is None
