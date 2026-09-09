@@ -40,6 +40,10 @@ from urllib.parse import urlparse
 import requests
 from platformdirs import user_data_dir
 
+from pixlstash.pixl_logging import get_logger
+
+logger = get_logger(__name__)
+
 CAPTIONING = "captioning"
 IMAGE = "image"
 
@@ -846,6 +850,16 @@ class DependencyChange:
         info = self.download_info or {}
         url = info.get("url")
         if not url:
+            # The fallback path is the pre-#1177 behaviour and therefore the
+            # vulnerable one. Issue #1223 wants a single log line here so an
+            # operator can tell the safe path from the unsafe path at install
+            # time; the docstring above already names this branch explicitly.
+            logger.warning(
+                "plugin_install: planned dependency %s==%s fell back to "
+                "name==version pinning — no download_info.url (issue #1223)",
+                self.name,
+                self.version,
+            )
             return f"{self.name}=={self.version}"
 
         fragments = []
