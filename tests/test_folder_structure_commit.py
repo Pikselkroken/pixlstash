@@ -495,6 +495,61 @@ def test_local_import_mode_imports_as_managed_pictures_and_assigns(owner_env):
         assert os.path.isfile(thumb), f"{relative} should have a thumbnail at {thumb}"
 
 
+def test_local_import_reads_the_caption_files_beside_the_pictures(owner_env):
+    """A caption file the owner already has beside a picture is its tags or
+    description, not something the tagger gets to redo. The reference-folder
+    scan has read them for a long time; the in-place import skipped them and
+    put every picture under the pending-tag sentinel."""
+    server = owner_env["server"]
+    root = os.path.join(server.vault.image_root, "local-import-sidecars")
+    _make_tree(root, {"": ["tagged.jpg", "captioned.jpg", "bare.jpg"]})
+    with open(os.path.join(root, "tagged.txt"), "w", encoding="utf-8") as fh:
+        fh.write("1girl, solo, long hair, looking at viewer, smile")
+    with open(
+        os.path.join(root, "captioned_description.txt"), "w", encoding="utf-8"
+    ) as fh:
+        fh.write("A woman in a sunlit field.\n")
+    before = _snapshot(root)
+
+    from pixlstash.db_models.picture import Picture
+    from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
+    from pixlstash.services import folder_structure_commit_service as commit_service
+    from sqlmodel import select
+
+    ids = commit_service.local_import_pictures(server, root, expected_pictures=3)
+    assert len(ids) == 3
+
+    def fetch(session):
+        pics = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
+        by_name = {p.original_file_name: p for p in pics}
+        tags = {
+            name: sorted(
+                session.exec(select(Tag.tag).where(Tag.picture_id == pic.id)).all()
+            )
+            for name, pic in by_name.items()
+        }
+        return by_name, tags
+
+    by_name, tags = server.vault.db.run_immediate_read_task(fetch)
+    assert tags["tagged.jpg"] == [
+        "1girl",
+        "long hair",
+        "looking at viewer",
+        "smile",
+        "solo",
+    ]
+    assert by_name["tagged.jpg"].tags_file == os.path.join(root, "tagged.txt")
+    assert by_name["captioned.jpg"].description == "A woman in a sunlit field."
+    assert by_name["captioned.jpg"].description_file == os.path.join(
+        root, "captioned_description.txt"
+    )
+    # No tags sidecar: the tagger still gets these two.
+    assert tags["captioned.jpg"] == [TAG_PENDING_SENTINEL]
+    assert tags["bare.jpg"] == [TAG_PENDING_SENTINEL]
+    assert by_name["bare.jpg"].description is None
+    assert _snapshot(root) == before, "reading a caption must not write anything"
+
+
 def test_local_import_wakes_the_planner_as_each_chunk_lands(
     owner_env, monkeypatch, caplog
 ):

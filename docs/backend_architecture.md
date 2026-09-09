@@ -6263,6 +6263,25 @@ beside it spells out: "absent from `disk_paths`" is what that task hard-deletes 
 `Picture` for, and a path it never looked for says nothing about whether the file
 is still there.
 
+### One sidecar read for every import of a tree
+
+A caption file beside a picture (`a.txt`, `a_tags.txt`, `a_description.txt`,
+`a.caption`) is the owner's label, and an import that ignores it and tags the
+picture from scratch is throwing that away. `ReferenceFolderScanTask` has read
+them since sidecars existed; `local_import_pictures` did not, so the first-run
+offer and "Add a library" over a folder of captioned pictures filed every one
+under the pending-tag sentinel. The read is now one helper,
+`caption_file_utils.attach_sidecars`, called by `_build_picture` in the scan and
+`_build_managed_picture` here. It records `tags_file`/`description_file`, fills
+`description` from the description sidecar, and returns the tags sidecar's
+tags; both inserters write those as `Tag` rows and put only a picture *without*
+a tags sidecar under the sentinel. The local import has no configured suffix
+(there is no `ReferenceFolder` row to hold one), so it probes the known
+conventions the way an unconfigured folder does, content-sniffing a bare
+`.txt`. It reads at import only: the root scan's reconcile pass still skips
+sidecars, per its own comment, so a caption edited on disk after the import is
+not picked up for a managed picture.
+
 `wait_for_first_scan` polls `ReferenceFolder.last_scanned`, which is exactly
 the field the model's own docstring names as "unix timestamp of the last
 **completed** scan pass" — not a picture count, because a count can plateau

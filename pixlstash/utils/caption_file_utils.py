@@ -242,6 +242,42 @@ def read_description_sidecar(path: str) -> str | None:
     return text or None
 
 
+def attach_sidecars(
+    pic,
+    file_path: str,
+    tags_suffix: str | None = None,
+    description_suffix: str | None = None,
+) -> list[str]:
+    """Record the sidecars beside *file_path* on an unsaved picture.
+
+    Sets ``tags_file``/``description_file`` (and their mtimes) when a sidecar
+    exists, fills ``description`` from the description sidecar when the
+    picture has none, and returns the tags read from the tags sidecar (empty
+    when there is no tags sidecar). The caller decides what an empty list
+    means - the scan and the local import both fall back to the pending-tag
+    sentinel so the tagger runs instead. With no configured suffix the known
+    conventions are probed, so a bare ``a.txt`` beside ``a.jpg`` is read the
+    way it classifies.
+    """
+    tags: list[str] = []
+    tags_path = resolve_typed_sidecar(file_path, SIDECAR_TYPE_TAGS, tags_suffix)
+    if tags_path:
+        pic.tags_file = tags_path
+        pic.tags_file_mtime = get_sidecar_mtime(tags_path)
+        tags = read_tags_sidecar(tags_path)
+
+    description_path = resolve_typed_sidecar(
+        file_path, SIDECAR_TYPE_DESCRIPTION, description_suffix
+    )
+    if description_path:
+        pic.description_file = description_path
+        pic.description_file_mtime = get_sidecar_mtime(description_path)
+        description = read_description_sidecar(description_path)
+        if description and not pic.description:
+            pic.description = description
+    return tags
+
+
 def write_sidecar(path: str, content: str) -> float | None:
     """Write *content* to *path* atomically (temp file + rename).
 

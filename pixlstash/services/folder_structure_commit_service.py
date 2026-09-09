@@ -80,6 +80,7 @@ from pixlstash.services.project_membership_service import (
 )
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.utils.service.label_ledger import POS, record_human_labels
+from pixlstash.utils.caption_file_utils import attach_sidecars
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -652,6 +653,11 @@ def _build_managed_picture(
     )
     if created_at:
         pic.created_at = created_at
+    # A caption file the owner already has beside the picture beats the
+    # tagger's guess - the same read the reference-folder scan does.
+    sidecar_tags = attach_sidecars(pic, abs_path)
+    if sidecar_tags:
+        pic._sidecar_tags = sidecar_tags  # type: ignore[attr-defined]
     return pic
 
 
@@ -798,8 +804,14 @@ def local_import_pictures(
             session.commit()
             for pic in built:
                 session.refresh(pic)
+            # Sidecar tags land as real tags; a picture without any waits for
+            # the tagger under the sentinel, as the scan's `_insert_pictures` does.
             session.add_all(
-                Tag(picture_id=pic.id, tag=TAG_PENDING_SENTINEL) for pic in built
+                Tag(picture_id=pic.id, tag=tag)
+                for pic in built
+                for tag in (
+                    getattr(pic, "_sidecar_tags", None) or [TAG_PENDING_SENTINEL]
+                )
             )
             session.commit()
             return [pic.id for pic in built] + list(taken.values())

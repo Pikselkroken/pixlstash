@@ -23,6 +23,7 @@ from pixlstash.utils.caption_file_utils import (
     DEFAULT_TAGS_SUFFIX,
     SIDECAR_TYPE_DESCRIPTION,
     SIDECAR_TYPE_TAGS,
+    attach_sidecars,
     detect_folder_suffixes,
     get_sidecar_mtime,
     is_safe_sidecar_suffix,
@@ -1314,30 +1315,14 @@ class ReferenceFolderScanTask(BaseTask):
         if created_at:
             pic.created_at = created_at
 
-        # Detect and read the tags and description sidecars independently, using
-        # the folder's configured suffixes (falling back to known conventions).
-        tags_path = resolve_typed_sidecar(
-            file_path, SIDECAR_TYPE_TAGS, self._tags_suffix
+        # Tags are stored via the Tag relationship and cannot be set on the
+        # unsaved Picture directly; stash them as a transient attribute so
+        # the caller can persist them after the Picture is inserted.
+        sidecar_tags = attach_sidecars(
+            pic, file_path, self._tags_suffix, self._description_suffix
         )
-        if tags_path:
-            pic.tags_file = tags_path
-            pic.tags_file_mtime = get_sidecar_mtime(tags_path)
-            sidecar_tags = read_tags_sidecar(tags_path)
-            # Tags are stored via the Tag relationship and cannot be set on the
-            # unsaved Picture directly; stash them as a transient attribute so
-            # the caller can persist them after the Picture is inserted.
-            if sidecar_tags:
-                pic._sidecar_tags = sidecar_tags  # type: ignore[attr-defined]
-
-        description_path = resolve_typed_sidecar(
-            file_path, SIDECAR_TYPE_DESCRIPTION, self._description_suffix
-        )
-        if description_path:
-            pic.description_file = description_path
-            pic.description_file_mtime = get_sidecar_mtime(description_path)
-            sidecar_description = read_description_sidecar(description_path)
-            if sidecar_description and not pic.description:
-                pic.description = sidecar_description
+        if sidecar_tags:
+            pic._sidecar_tags = sidecar_tags  # type: ignore[attr-defined]
 
         return pic
 
