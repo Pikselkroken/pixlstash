@@ -251,6 +251,27 @@ def test_an_owner_move_in_a_laid_out_root_is_queued_for_review(server):
 
 
 def test_the_finder_hands_out_the_root_scan_once_per_interval(server):
+    # The root is only scanned once the first import offer is answered (see
+    # test_root_scan_first_import.py). On a shard where this test runs first
+    # the module vault is empty, so answer it here rather than rely on order.
+    from pixlstash.db_models.folder_mapping_commit import (
+        STATE_DEFERRED,
+        FolderMappingCommit,
+    )
+
+    def answer(session):
+        session.add(
+            FolderMappingCommit(
+                task_id="answered-by-test",
+                root_path=server.vault.image_root,
+                mode="local_import",
+                expected_pictures=0,
+                state=STATE_DEFERRED,
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(answer)
     finder = ReferenceFolderScanFinder(
         database=server.vault.db,
         path_mapper=PathMapper(),
