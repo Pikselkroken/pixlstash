@@ -120,6 +120,14 @@ const captionFilesRead = computed(() =>
     0,
   ),
 );
+// Named beside the read count so Ignore is seen to cost something: every
+// ignored file is a picture the tagger does from scratch.
+const captionFilesIgnored = computed(() =>
+  patterns.value.reduce(
+    (sum, row) => sum + (answers[row.suffix] === "ignore" ? row.files : 0),
+    0,
+  ),
+);
 
 const grouped = computed(() => {
   const byKind = new Map(FACET_KINDS.map((k) => [k.value, new Map()]));
@@ -363,6 +371,7 @@ onUnmounted(() => {
             v-model="answers[row.suffix]"
             :options="CAPTION_CHOICES"
             :label="`Read *${row.suffix} as`"
+            hide-label
             compact
             :disabled="committing"
             class="preview-step__caption-choice"
@@ -397,6 +406,13 @@ onUnmounted(() => {
           {{ captionFilesRead.toLocaleString() }} caption
           {{ captionFilesRead === 1 ? "file is" : "files are" }} read as tags
           and descriptions; only pictures without one are tagged from scratch
+        </div>
+        <div v-if="captionFilesIgnored" class="preview-step__fact">
+          <span class="preview-step__fact-mark">—</span>
+          {{ captionFilesIgnored.toLocaleString() }} caption
+          {{ captionFilesIgnored === 1 ? "file is" : "files are" }} left
+          unread; {{ captionFilesIgnored === 1 ? "that picture is" : "those pictures are" }}
+          tagged from scratch
         </div>
         <div class="preview-step__fact">
           <span class="preview-step__fact-mark">—</span>

@@ -249,6 +249,10 @@ describe("caption files beside the pictures", () => {
       "description",
     ]);
     expect(wrapper.text()).toContain("160 caption files are read");
+    expect(wrapper.text()).not.toContain("left unread");
+    // The suffix is the row's label; the select carries the name for AT only.
+    expect(wrapper.text()).not.toContain("Read *.txt as");
+    expect(selects(wrapper)[0].attributes("aria-label")).toBe("Read *.txt as");
   });
 
   it("sends the owner's answers with the commit, ignore included", async () => {
@@ -256,6 +260,7 @@ describe("caption files beside the pictures", () => {
     const wrapper = mountStep({ commitOnMount: false, readResult: READ_RESULT });
     await selects(wrapper)[0].setValue("ignore");
     expect(wrapper.text()).toContain("40 caption files are read");
+    expect(wrapper.text()).toContain("120 caption files are left unread");
     await buttonWith(wrapper, "Yes, build this library").trigger("click");
     await flushPromises();
     expect(startFolderStructureCommit).toHaveBeenCalledWith(
