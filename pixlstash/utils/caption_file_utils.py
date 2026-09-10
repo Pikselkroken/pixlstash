@@ -312,6 +312,48 @@ def writeback_path(
         return None
 
 
+def writeback_target(
+    image_path: str,
+    sidecar_type: str,
+    configured_suffix: str | None,
+    stored_path: str | None,
+    has_content: bool,
+) -> str | None:
+    """The file an edit may write *sidecar_type* back to, or ``None`` to skip.
+
+    The write-side twin of `recorded_sidecar`'s read rule. The picture's own
+    recorded file is the one an edit replaces; a file that exists beside the
+    picture but is **not** recorded is one nothing has read in yet, and
+    replacing it would destroy a caption before the promised read-in. Sync
+    turning on (`PATCH /server-config/captions`, `seed_caption_suffixes`) only
+    queues the scan that records those files, so between the toggle and the
+    scan every sidecar on disk is in exactly that state.
+
+    A brand-new file is still created, from *configured_suffix* or the module
+    default, but only when *has_content* says there is something to put in it
+    and nothing is already there. ``None`` also comes back for a suffix that
+    is not a usable filename fragment, as `writeback_path` documents.
+    """
+    recorded = recorded_sidecar(image_path, stored_path)
+    if recorded:
+        return recorded
+    target = resolve_typed_sidecar(image_path, sidecar_type, configured_suffix)
+    if target is None:
+        if not has_content:
+            return None
+        target = writeback_path(image_path, sidecar_type, configured_suffix, None)
+        if target is None or not os.path.isfile(target):
+            return target
+    logger.info(
+        "Skipping the %s write-back for %s: %s exists but is not this picture's "
+        "recorded sidecar; a scan reads it in before an edit replaces it.",
+        sidecar_type,
+        image_path,
+        target,
+    )
+    return None
+
+
 def read_tags_sidecar(path: str) -> list[str]:
     """Read a tags sidecar into a normalised, de-duplicated list of tags."""
     raw = _read_text(path)

@@ -588,3 +588,84 @@ def test_a_recorded_path_that_is_the_picture_itself_is_never_a_sidecar(tmp_path)
     sidecar = tmp_path / "photo.txt"
     sidecar.write_text("cat")
     assert recorded_sidecar(str(image), str(sidecar)) == str(sidecar)
+
+
+def test_an_edit_before_the_first_scan_leaves_an_unrecorded_sidecar_alone(env):
+    """The window both `PATCH /server-config/captions` and
+    `seed_caption_suffixes` open: the toggle is stored and the rescan is only
+    *queued*, so every caption file on disk is still unrecorded. An edit
+    landing in it used to resolve the configured file and truncate it with the
+    database value, before the promised read-in."""
+    server = env["server"]
+    root = server.vault.image_root
+    _make_image(os.path.join(root, "unrecorded", "c.png"), (21, 22, 23))
+    _set_sync(
+        server,
+        sync_tags=False,
+        sync_descriptions=False,
+        tags_suffix=None,
+        description_suffix=None,
+    )
+    _run_root_scan(server)
+    pic_id, _, tags_file, _ = _picture(server, "unrecorded/c.png")
+    assert tags_file is None, "indexed with no caption file beside it"
+
+    tags_path = os.path.join(root, "unrecorded", "c_tags.txt")
+    caption_path = os.path.join(root, "unrecorded", "c_caption.txt")
+    _write(tags_path, "harbour, dusk")
+    _write(caption_path, "A quiet harbour.")
+    _set_tags(server, pic_id, "boat")
+
+    def give_description(session: Session):
+        session.get(Picture, pic_id).description = "Typed in PixlStash."
+        session.commit()
+
+    server.vault.db.run_task(give_description)
+    # Sync on, scan not run yet: exactly what the toggle leaves behind.
+    _set_sync(
+        server,
+        sync_tags=True,
+        sync_descriptions=True,
+        tags_suffix="_tags.txt",
+        description_suffix="_caption.txt",
+    )
+
+    sync_picture_sidecar(server, pic_id)
+    with open(tags_path, encoding="utf-8") as fh:
+        assert fh.read().strip() == "harbour, dusk", "the owner's file is untouched"
+    with open(caption_path, encoding="utf-8") as fh:
+        assert fh.read().strip() == "A quiet harbour."
+    _, _, tags_file, _ = _picture(server, "unrecorded/c.png")
+    assert tags_file is None, "a skipped write records nothing"
+
+    _run_root_scan(server)
+    _, description, tags_file, tags = _picture(server, "unrecorded/c.png")
+    assert tags == ["dusk", "harbour"], "the scan reads the file in, as promised"
+    assert description == "A quiet harbour."
+    assert tags_file == tags_path
+
+
+def test_a_picture_with_no_caption_file_still_gets_one_written(env):
+    """The skip is about replacing somebody else's file, not about writing:
+    with nothing on disk the suffix-derived file is still created."""
+    server = env["server"]
+    root = server.vault.image_root
+    _make_image(os.path.join(root, "fresh", "d.png"), (24, 25, 26))
+    _set_sync(
+        server,
+        sync_tags=True,
+        sync_descriptions=False,
+        tags_suffix="_tags.txt",
+        description_suffix="_caption.txt",
+    )
+    _run_root_scan(server)
+    pic_id, _, tags_file, _ = _picture(server, "fresh/d.png")
+    assert tags_file is None, "no tags and no file: nothing was created"
+
+    _set_tags(server, pic_id, "kite")
+    sync_picture_sidecar(server, pic_id)
+    written = os.path.join(root, "fresh", "d_tags.txt")
+    with open(written, encoding="utf-8") as fh:
+        assert fh.read().strip() == "kite"
+    _, _, tags_file, _ = _picture(server, "fresh/d.png")
+    assert tags_file == written, "and the row records it"

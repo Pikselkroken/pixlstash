@@ -13,10 +13,8 @@ from pixlstash.utils.caption_file_utils import (
     DEFAULT_TAGS_SUFFIX,
     SIDECAR_TYPE_DESCRIPTION,
     SIDECAR_TYPE_TAGS,
-    recorded_sidecar,
-    resolve_typed_sidecar,
     write_sidecar,
-    writeback_path,
+    writeback_target,
 )
 
 _logger = get_logger(__name__)
@@ -172,6 +170,9 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
     - A new sidecar is **created** for content that has none yet, but an empty
       sidecar is never created (clearing content only empties a file that
       already exists).
+    - A file that exists beside the picture but is not the picture's *recorded*
+      sidecar is never replaced: nothing has read it in yet, so the write-back
+      skips it and leaves it to the scan (`writeback_target`).
     - The new mtime is persisted so the next folder scan does not re-import the
       write-back as an external change.
 
@@ -238,48 +239,43 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
         dirty = False
 
         # The picture's recorded file wins while it exists; the configured
-        # suffix only names a file that has to be created.
+        # suffix only names a file that has to be created, and a file on disk
+        # this picture never recorded is left for the scan to read in
+        # (`writeback_target`).
         if rf.sync_tags:
-            existing = recorded_sidecar(
-                image_path, pic_db.tags_file
-            ) or resolve_typed_sidecar(image_path, SIDECAR_TYPE_TAGS, tags_suffix)
-            # Create a new file only when there is content; always update an
-            # existing one (so clearing tags empties it).
-            if existing or current_tags:
-                target = writeback_path(
-                    image_path, SIDECAR_TYPE_TAGS, tags_suffix, existing
-                )
-                new_mtime = (
-                    write_sidecar(target, ", ".join(current_tags))
-                    if target is not None
-                    else None
-                )
-                if new_mtime is not None:
-                    pic_db.tags_file = target
-                    pic_db.tags_file_mtime = new_mtime
-                    dirty = True
+            target = writeback_target(
+                image_path,
+                SIDECAR_TYPE_TAGS,
+                tags_suffix,
+                pic_db.tags_file,
+                bool(current_tags),
+            )
+            new_mtime = (
+                write_sidecar(target, ", ".join(current_tags))
+                if target is not None
+                else None
+            )
+            if new_mtime is not None:
+                pic_db.tags_file = target
+                pic_db.tags_file_mtime = new_mtime
+                dirty = True
 
         if rf.sync_descriptions:
             description = (pic_db.description or "").strip()
-            existing = recorded_sidecar(
-                image_path, pic_db.description_file
-            ) or resolve_typed_sidecar(
-                image_path, SIDECAR_TYPE_DESCRIPTION, description_suffix
+            target = writeback_target(
+                image_path,
+                SIDECAR_TYPE_DESCRIPTION,
+                description_suffix,
+                pic_db.description_file,
+                bool(description),
             )
-            if existing or description:
-                target = writeback_path(
-                    image_path,
-                    SIDECAR_TYPE_DESCRIPTION,
-                    description_suffix,
-                    existing,
-                )
-                new_mtime = (
-                    write_sidecar(target, description) if target is not None else None
-                )
-                if new_mtime is not None:
-                    pic_db.description_file = target
-                    pic_db.description_file_mtime = new_mtime
-                    dirty = True
+            new_mtime = (
+                write_sidecar(target, description) if target is not None else None
+            )
+            if new_mtime is not None:
+                pic_db.description_file = target
+                pic_db.description_file_mtime = new_mtime
+                dirty = True
 
         if dirty:
             session.add(pic_db)

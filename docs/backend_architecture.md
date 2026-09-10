@@ -6383,6 +6383,16 @@ ones the owner already had, so a `photo.txt` recorded at import under a
 `_tags.txt` setting is read and written as `photo.txt` and no second file
 appears beside it. The settings copy says the same.
 
+**The write-back never replaces a file the picture has not recorded**
+(`caption_file_utils.writeback_target`, the write-side twin of the same rule).
+Both the settings PATCH and `seed_caption_suffixes` store the toggle and then
+*queue* the rescan, so between the two every sidecar on disk is unrecorded; a
+tag or description edit landing in that window used to resolve the configured
+file and truncate it with the database value before anything had read it. The
+write-back now skips such a file (logged at info) and leaves it to the scan,
+which is the pass that records it. Creating a file is unaffected: with nothing
+on disk and content to write, the suffix-derived path is still created.
+
 **The root's read direction is gated per type, not per root.** A type that is
 off is skipped in `_reconcile_sidecar` itself, so with descriptions on and tags
 off a prompt `.txt` beside a managed picture becomes the description and never
