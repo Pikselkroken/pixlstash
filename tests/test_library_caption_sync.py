@@ -458,3 +458,77 @@ def test_the_settings_route_refuses_one_suffix_for_both_kinds(env):
 
     ok = owner.patch(_CAPTIONS, json={"description_suffix": "_notes.txt"})
     assert ok.status_code == 200, ok.text
+
+
+def test_the_shared_suffix_rule_runs_inside_the_writer(env):
+    """A cross-field rule checked against a separately read snapshot is a
+    race: two partial PATCHes can each pass against the old row and serialise
+    into the state the rule forbids. The rule runs on the merged row inside
+    the writer task, so the second writer sees the first's write."""
+    from pixlstash.services.library_settings_service import (
+        get_caption_sync,
+        set_caption_sync,
+    )
+
+    server = env["server"]
+    owner = env["owner"]
+    _set_sync(server, tags_suffix="_a.txt", description_suffix="_b.txt")
+    seen = {}
+
+    def refuse(merged):
+        seen.update(merged)
+        raise ValueError("refused on the merged row")
+
+    with pytest.raises(ValueError):
+        set_caption_sync(server.vault.db, validate=refuse, tags_suffix="_b.txt")
+    assert seen["tags_suffix"] == "_b.txt" and seen["description_suffix"] == "_b.txt", (
+        "the validator sees the stored row with the patch applied"
+    )
+    assert get_caption_sync(server.vault.db)["tags_suffix"] == "_a.txt", (
+        "nothing stored"
+    )
+
+    refused = owner.patch(_CAPTIONS, json={"description_suffix": "_a.txt"})
+    assert refused.status_code == 400 and "share" in refused.text
+    refused = owner.patch(
+        _CAPTIONS, json={"tags_suffix": "", "description_suffix": "_tags.txt"}
+    )
+    assert refused.status_code == 400, "the default takes part in the comparison"
+
+
+def test_a_reference_folder_cannot_be_created_with_one_suffix_for_both(env):
+    """The rule update enforces applies to create too, through one validator."""
+    owner = env["owner"]
+    with tempfile.TemporaryDirectory() as folder:
+        body = {
+            "folder": folder,
+            "tags_suffix": "_c.txt",
+            "description_suffix": "_c.txt",
+        }
+        refused = owner.post(f"{API}/reference-folders", json=body)
+        assert refused.status_code == 400, refused.text
+        assert "share" in refused.text
+        body = {"folder": folder, "tags_suffix": "", "description_suffix": "_tags.txt"}
+        refused = owner.post(f"{API}/reference-folders", json=body)
+        assert refused.status_code == 400, "the default takes part on create too"
+
+
+def test_a_recorded_path_that_is_the_picture_itself_is_never_a_sidecar(tmp_path):
+    """A row from before `sidecar_path` refused image-extension suffixes can
+    carry the picture as its own sidecar; a write-back through it would
+    overwrite the original. Both helpers refuse it, read and write."""
+    from pixlstash.utils.caption_file_utils import (
+        SIDECAR_TYPE_TAGS,
+        recorded_sidecar,
+        writeback_path,
+    )
+
+    image = tmp_path / "photo.png"
+    image.write_bytes(b"png")
+    assert recorded_sidecar(str(image), str(image)) is None
+    assert writeback_path(str(image), SIDECAR_TYPE_TAGS, None, str(image)) == str(
+        tmp_path / "photo_tags.txt"
+    )
+    sidecar = tmp_path / "photo.txt"
+    sidecar.write_text("cat")
+    assert recorded_sidecar(str(image), str(sidecar)) == str(sidecar)

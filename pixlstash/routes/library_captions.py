@@ -52,6 +52,23 @@ class CaptionSyncPatch(BaseModel):
     description_suffix: Optional[str] = None
 
 
+def _reject_shared_suffix(merged: dict) -> None:
+    """One suffix for both kinds is one file for both: the two write-backs
+    overwrite each other and the next scan reads the survivor back in as the
+    other kind. Compared on the effective values, because an unset suffix is
+    the default rather than "no file". Runs inside the writer, on the merged
+    row, so two concurrent partial PATCHes cannot each pass against the old
+    row and serialise into the shared state.
+    """
+    if (merged["tags_suffix"] or DEFAULT_TAGS_SUFFIX) == (
+        merged["description_suffix"] or DEFAULT_DESCRIPTION_SUFFIX
+    ):
+        raise ValueError(
+            "Tags and descriptions cannot share a suffix; they would share one "
+            "file and overwrite each other."
+        )
+
+
 def _response(stored: dict) -> CaptionSyncResponse:
     return CaptionSyncResponse(
         **stored,
@@ -141,22 +158,16 @@ def create_router(server) -> APIRouter:
             fields["tags_suffix"] = _suffix(body.tags_suffix)
         if "description_suffix" in body.model_fields_set:
             fields["description_suffix"] = _suffix(body.description_suffix)
-        # One suffix for both kinds means one file for both: the two write-backs
-        # overwrite each other and the next scan reads the survivor back in as
-        # the other kind. Compared on the effective values, because an unset
-        # suffix is the default rather than "no file".
-        effective = {**current, **fields}
-        if (effective["tags_suffix"] or DEFAULT_TAGS_SUFFIX) == (
-            effective["description_suffix"] or DEFAULT_DESCRIPTION_SUFFIX
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Tags and descriptions cannot share a suffix; they would "
-                    "share one file and overwrite each other."
-                ),
+        try:
+            stored = (
+                set_caption_sync(
+                    server.vault.db, validate=_reject_shared_suffix, **fields
+                )
+                if fields
+                else current
             )
-        stored = set_caption_sync(server.vault.db, **fields) if fields else current
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         # The scan is what reads the existing files in and exports the missing
         # ones, as PATCH /reference-folders does for a folder. A type that just
         # came on is due for one, and so is a type whose suffix changed while

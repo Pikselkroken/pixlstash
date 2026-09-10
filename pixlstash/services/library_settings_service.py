@@ -195,12 +195,18 @@ def get_caption_sync(vault_db) -> dict:
     return vault_db.run_immediate_read_task(read)
 
 
-def set_caption_sync(vault_db, **fields) -> dict:
+def set_caption_sync(vault_db, validate=None, **fields) -> dict:
     """Store the given `CAPTION_SYNC_FIELDS`; a field not passed keeps its value.
 
     Returns the settings as stored. The suffixes are trusted here: the route
     validates them at its boundary and `sidecar_path` refuses an unsafe one at
     the point of use, the same two doors a reference folder's go through.
+
+    *validate*, when given, is called with the MERGED row - the stored values
+    with *fields* applied - inside the writer task, before anything is set,
+    and raises ``ValueError`` to refuse. A cross-field rule checked against a
+    separately read snapshot is a race: two partial PATCHes can each pass
+    against the old row and serialise into the state the rule forbids.
     """
     unknown = set(fields) - set(CAPTION_SYNC_FIELDS)
     if unknown:
@@ -208,6 +214,10 @@ def set_caption_sync(vault_db, **fields) -> dict:
 
     def write(session: Session) -> dict:
         row = _row(session)
+        merged = {name: getattr(row, name) for name in CAPTION_SYNC_FIELDS}
+        merged.update(fields)
+        if validate is not None:
+            validate(merged)
         for name, value in fields.items():
             setattr(row, name, value)
         session.add(row)

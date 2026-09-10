@@ -73,6 +73,29 @@ def _validate_sidecar_suffix(suffix: str) -> None:
         )
 
 
+def _validate_suffix_pair(
+    tags_suffix: Optional[str], description_suffix: Optional[str]
+) -> None:
+    """Refuse one suffix for both kinds, on the effective values.
+
+    One suffix for both is one file for both: the two write-backs overwrite
+    each other and the next scan reads the survivor back in as the other
+    kind. An unset suffix is the default rather than "no file", so the
+    defaults take part. Shared by create and update so a new folder cannot
+    start in the state update refuses.
+    """
+    if (tags_suffix or DEFAULT_TAGS_SUFFIX) == (
+        description_suffix or DEFAULT_DESCRIPTION_SUFFIX
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Tags and descriptions cannot share a suffix; they would share "
+                "one file and overwrite each other."
+            ),
+        )
+
+
 def _rollback_relocation(
     rollback_moves: list[tuple[str, str]],
     destination_existed: bool,
@@ -695,6 +718,9 @@ def create_router(server) -> APIRouter:
                     detail="A reference folder with this path already exists.",
                 )
             _validate_reference_folder_conflicts(session, folder)
+            tags_suffix = _normalize_suffix(payload.tags_suffix)
+            description_suffix = _normalize_suffix(payload.description_suffix)
+            _validate_suffix_pair(tags_suffix, description_suffix)
             rf = ReferenceFolder(
                 folder=folder,
                 host_path=host_path,
@@ -702,8 +728,8 @@ def create_router(server) -> APIRouter:
                 allow_delete_file=False,
                 sync_descriptions=bool(payload.sync_descriptions),
                 sync_tags=bool(payload.sync_tags),
-                description_suffix=_normalize_suffix(payload.description_suffix),
-                tags_suffix=_normalize_suffix(payload.tags_suffix),
+                description_suffix=description_suffix,
+                tags_suffix=tags_suffix,
                 status=initial_status,
                 # This is the sole deliberate folder (re-)add path, so mark it
                 # for an explicit re-import: the first scan to complete will
@@ -906,19 +932,8 @@ def create_router(server) -> APIRouter:
                 rf.description_suffix = _normalize_suffix(payload.description_suffix)
             if "tags_suffix" in payload.model_fields_set:
                 rf.tags_suffix = _normalize_suffix(payload.tags_suffix)
-            if {"description_suffix", "tags_suffix"} & payload.model_fields_set and (
-                rf.tags_suffix or DEFAULT_TAGS_SUFFIX
-            ) == (rf.description_suffix or DEFAULT_DESCRIPTION_SUFFIX):
-                # One suffix for both kinds is one file for both: the two
-                # write-backs overwrite each other and the next scan reads the
-                # survivor back in as the other kind.
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "Tags and descriptions cannot share a suffix; they "
-                        "would share one file and overwrite each other."
-                    ),
-                )
+            if {"description_suffix", "tags_suffix"} & payload.model_fields_set:
+                _validate_suffix_pair(rf.tags_suffix, rf.description_suffix)
             if "host_path" in payload.model_fields_set:
                 rf.host_path = _normalize_optional_host_path(payload.host_path)
             if {"layout", "layout_unfiled"} & payload.model_fields_set:

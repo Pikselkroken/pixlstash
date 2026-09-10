@@ -152,19 +152,34 @@ def classify_sidecar(path: str) -> str | None:
     return SIDECAR_TYPE_TAGS if _looks_like_tags(raw) else SIDECAR_TYPE_DESCRIPTION
 
 
+def is_recorded_sidecar_shape(image_path: str, path: str | None) -> bool:
+    """Whether *path* is a sidecar a legitimate row could have recorded.
+
+    Exactly the image stem plus a safe suffix (#776), and not the image
+    itself: a suffix equal to the picture's own extension names the picture,
+    which `sidecar_path` refuses for new files and a recorded value from
+    before that guard must not smuggle back in - a write-back through it
+    would overwrite the original image. One rule for every recorded or
+    already-resolved path, read or write.
+    """
+    if not path:
+        return False
+    stem = os.path.splitext(image_path)[0]
+    tail = path[len(stem) :] if path.startswith(stem) else ""
+    if not tail or not is_safe_sidecar_suffix(tail):
+        return False
+    return os.path.normcase(path) != os.path.normcase(image_path)
+
+
 def recorded_sidecar(image_path: str, stored_path: str | None) -> str | None:
     """The picture's own recorded sidecar, when it is still there.
 
     A configured suffix names the files PixlStash *creates*; a picture whose
     file was found under another name keeps that file. Honoured only when the
-    recorded value is exactly the image stem plus a safe suffix - the one
-    shape a legitimately recorded path can have (#776) - and the file exists.
+    recorded value has the shape `is_recorded_sidecar_shape` allows and the
+    file exists.
     """
-    if not stored_path:
-        return None
-    stem = os.path.splitext(image_path)[0]
-    tail = stored_path[len(stem) :] if stored_path.startswith(stem) else ""
-    if not tail or not is_safe_sidecar_suffix(tail):
+    if not is_recorded_sidecar_shape(image_path, stored_path):
         return None
     return stored_path if os.path.isfile(stored_path) else None
 
@@ -236,13 +251,12 @@ def writeback_path(
     the caller and wedging a scan or returning a 500. Callers must handle it.
     """
     if existing_path:
-        stem = os.path.splitext(image_path)[0]
-        tail = existing_path[len(stem) :] if existing_path.startswith(stem) else ""
-        if tail and is_safe_sidecar_suffix(tail):
+        if is_recorded_sidecar_shape(image_path, existing_path):
             return existing_path
         logger.warning(
             "Ignoring recorded %s sidecar path %r for %s: not the image "
-            "stem plus a safe suffix; using the configured suffix instead",
+            "stem plus a safe suffix, or the image itself; using the "
+            "configured suffix instead",
             sidecar_type,
             existing_path,
             image_path,
@@ -294,6 +308,8 @@ def attach_sidecars(
     file_path: str,
     tags_suffixes=None,
     description_suffixes=None,
+    *,
+    overwrite_description: bool = False,
 ) -> list[str]:
     """Record the sidecars beside *file_path* on an unsaved picture.
 
@@ -310,6 +326,8 @@ def attach_sidecars(
     folder's configuration) said hold that kind, tried in order. ``None``
     probes the known conventions instead, content-sniffing a bare ``.txt``;
     an empty list reads nothing of that kind - the owner's "ignore".
+    *overwrite_description* is for a row that already exists: the owner has
+    just confirmed the file is the caption, so it replaces what the row had.
     """
     tags: list[str] = []
     if tags_suffixes is None:
@@ -331,7 +349,7 @@ def attach_sidecars(
         pic.description_file = description_path
         pic.description_file_mtime = get_sidecar_mtime(description_path)
         description = read_description_sidecar(description_path)
-        if description and not pic.description:
+        if description and (overwrite_description or not pic.description):
             pic.description = description
     return tags
 

@@ -666,27 +666,55 @@ def test_attach_sidecars_is_called_only_by_the_two_row_builders():
     """The rule-4 exemption above rests on WHO calls ``attach_sidecars``.
 
     It writes a sidecar description onto a picture row, which is exempt only
-    while the row is new and unsaved and so cannot be in a locked set. A third
-    caller reaching it with an already-indexed picture would carry a file's
-    text onto frozen label data with no guard anywhere.
+    while the row is new and unsaved and so cannot be in a locked set. The
+    one caller that reaches it with already-indexed pictures,
+    ``_apply_captions_to_existing`` (the owner's confirmed captions applied to
+    rows the import did not build), must therefore carry a lock guard of its
+    own, and this test checks that it does.
     """
     callers = set()
+    guarded_sources: dict[str, str] = {}
     for path in PIXLSTASH_DIR.rglob("*.py"):
         source = path.read_text(encoding="utf-8")
         if "attach_sidecars(" not in source:
             continue
         rel = path.relative_to(REPO_ROOT).as_posix()
-        for node in ast.walk(ast.parse(source, filename=str(path))):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        tree = ast.parse(source, filename=str(path))
+        for node in ast.walk(tree):
+            # Each call site, attributed to its OUTERMOST enclosing function:
+            # a caller that does its work inside a DB-task closure is that
+            # function, not its `write`, and its guard is in that function's
+            # source as a whole.
+            if not isinstance(node, ast.Call):
                 continue
-            if node.name == "attach_sidecars":
-                continue  # the definition itself, not a call
-            if "attach_sidecars(" in (ast.get_source_segment(source, node) or ""):
-                callers.add(f"{rel}::{node.name}")
+            func = node.func
+            name = (
+                func.attr
+                if isinstance(func, ast.Attribute)
+                else getattr(func, "id", None)
+            )
+            if name != "attach_sidecars":
+                continue
+            chain = _innermost_enclosing_functions(tree, node.lineno)
+            if not chain:
+                continue
+            outer = chain[0]
+            callers.add(f"{rel}::{outer.name}")
+            guarded_sources[f"{rel}::{outer.name}"] = (
+                ast.get_source_segment(source, outer) or ""
+            )
+    existing_rows_caller = (
+        "pixlstash/services/folder_structure_commit_service.py"
+        "::_apply_captions_to_existing"
+    )
     assert callers == {
         "pixlstash/tasks/reference_folder_scan_task.py::_build_picture",
         "pixlstash/services/folder_structure_commit_service.py::_build_managed_picture",
+        existing_rows_caller,
     }, f"unexpected attach_sidecars caller(s): {sorted(callers)}"
+    assert any(
+        token in guarded_sources[existing_rows_caller] for token in _LOCK_GUARD_TOKENS
+    ), "the caller that reaches existing rows must skip locked pictures"
 
 
 def test_workers_not_started_at_vault_init():

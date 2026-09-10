@@ -85,8 +85,10 @@ class LibrarySettings(SQLModel, table=True):
     )
     # Caption-file sync for the library's own picture root, the same four
     # fields a ReferenceFolder carries: each type has its own toggle and
-    # filename suffix. Off by default; the folder-mapping commit seeds the
-    # suffixes from the owner's caption answers without turning sync on.
+    # filename suffix. Off on a library never imported through the wizard;
+    # the folder-mapping commit turns each kind the owner confirmed on, with
+    # its suffix, because confirming a pattern is the owner saying the folder
+    # stores its captions there. Settings turns either off again.
     sync_tags: bool = Field(
         default=False,
         sa_column=Column(Boolean, nullable=False, server_default="0"),

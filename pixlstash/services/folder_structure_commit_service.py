@@ -771,6 +771,55 @@ def _build_managed_picture(
     return pic
 
 
+def _apply_captions_to_existing(
+    server, picture_ids: list[int], image_root: str, captions
+) -> int:
+    """Read the confirmed caption files onto rows the import did not build.
+
+    A row already indexed before the wizard ran, or won by the concurrent root
+    scan while this commit built it, never went through
+    `_build_managed_picture`, so the owner's answers - including a custom
+    suffix the root scan's one-per-kind seed cannot carry - were not applied
+    to it. The owner has just said these files are the captions, so the
+    file's tags replace the row's and its description replaces the row's. A
+    picture frozen by a locked set is skipped, as `_link_pictures` skips it.
+
+    Returns how many rows changed.
+    """
+    tags_suffixes, description_suffixes = caption_suffixes(captions)
+    if not picture_ids or (tags_suffixes is None and description_suffixes is None):
+        return 0
+
+    def write(session: Session, ids) -> int:
+        frozen = locked_picture_ids(session, list(ids))
+        changed = 0
+        for pic in session.exec(select(Picture).where(Picture.id.in_(list(ids)))):
+            if pic.id in frozen or pic.reference_folder_id is not None:
+                continue
+            abs_path = ImageUtils.resolve_picture_path(image_root, pic.file_path)
+            if not abs_path:
+                continue
+            tags = attach_sidecars(
+                pic,
+                abs_path,
+                tags_suffixes,
+                description_suffixes,
+                overwrite_description=True,
+            )
+            if tags:
+                session.exec(Tag.__table__.delete().where(Tag.picture_id == pic.id))
+                session.add_all(Tag(picture_id=pic.id, tag=t) for t in tags)
+            session.add(pic)
+            changed += 1
+        session.commit()
+        return changed
+
+    return sum(
+        server.vault.db.run_task(write, chunk, priority=DBPriority.IMMEDIATE)
+        for chunk in chunked(picture_ids)
+    )
+
+
 def local_import_pictures(
     server,
     root_path: str,
@@ -857,6 +906,10 @@ def local_import_pictures(
     existing_by_rel = server.vault.db.run_immediate_read_task(load_existing)
 
     picture_ids: list[int] = list(existing_by_rel.values())
+    # Rows this commit did not build: indexed before the wizard, or won by the
+    # root scan while a chunk was being built. The caption answers reach them
+    # through `_apply_captions_to_existing` below.
+    reused_ids: list[int] = list(existing_by_rel.values())
     to_build = [path for path in file_paths if rel_by_abs[path] not in existing_by_rel]
     processed = len(picture_ids)
     if on_progress is not None:
@@ -916,6 +969,7 @@ def local_import_pictures(
                     len(taken),
                 )
                 built = [p for p in built if p.file_path not in taken]
+                reused_ids.extend(taken.values())
             session.add_all(built)
             session.commit()
             for pic in built:
@@ -946,6 +1000,15 @@ def local_import_pictures(
         processed += len(chunk)
         if on_progress is not None:
             on_progress(processed, total)
+
+    if captions and reused_ids:
+        applied = _apply_captions_to_existing(server, reused_ids, image_root, captions)
+        logger.info(
+            "Local import: applied the confirmed caption files to %d of %d "
+            "already-indexed picture(s).",
+            applied,
+            len(reused_ids),
+        )
 
     # A confirmed convention is the owner saying the folder stores its captions
     # there: it becomes the root's own suffix and sync of that kind goes on, so

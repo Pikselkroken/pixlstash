@@ -690,6 +690,62 @@ def test_caption_answers_are_refused_in_reference_mode(owner_env):
     )
 
 
+def test_caption_answers_reach_pictures_the_import_did_not_build(owner_env):
+    """A row indexed before the wizard ran, or won by the root scan while the
+    commit built it, never went through the row builder. The owner has just
+    said which files are the captions, so those rows get them too - under a
+    custom suffix the known conventions would never have probed."""
+    server = owner_env["server"]
+    root = os.path.join(server.vault.image_root, "local-import-reused")
+    _make_tree(root, {"": ["one.jpg", "two.jpg"]})
+    with open(os.path.join(root, "one_labels.txt"), "w", encoding="utf-8") as fh:
+        fh.write("harbour, dusk, boats")
+    with open(os.path.join(root, "two_words.txt"), "w", encoding="utf-8") as fh:
+        fh.write("A red boat at dusk.")
+
+    from pixlstash.db_models.picture import Picture
+    from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
+    from pixlstash.services import folder_structure_commit_service as commit_service
+    from sqlmodel import select
+
+    # First import: no answers, and neither file is a known convention, so
+    # both rows are built blind and wait for the tagger.
+    first = commit_service.local_import_pictures(server, root, expected_pictures=2)
+    assert len(first) == 2
+
+    def fetch(session):
+        pics = session.exec(select(Picture).where(Picture.id.in_(first))).all()
+        return {
+            p.original_file_name: (
+                p.description,
+                sorted(
+                    session.exec(select(Tag.tag).where(Tag.picture_id == p.id)).all()
+                ),
+            )
+            for p in pics
+        }
+
+    got = server.vault.db.run_immediate_read_task(fetch)
+    assert got["one.jpg"] == (None, [TAG_PENDING_SENTINEL])
+
+    # Second import with the answers: the same rows, reused, now carry them.
+    second = commit_service.local_import_pictures(
+        server,
+        root,
+        expected_pictures=2,
+        captions=commit_service.parse_captions(
+            [
+                {"suffix": "_labels.txt", "kind": "tags"},
+                {"suffix": "_words.txt", "kind": "description"},
+            ]
+        ),
+    )
+    assert sorted(second) == sorted(first), "reused, not re-imported"
+    got = server.vault.db.run_immediate_read_task(fetch)
+    assert got["one.jpg"] == (None, ["boats", "dusk", "harbour"])
+    assert got["two.jpg"] == ("A red boat at dusk.", [TAG_PENDING_SENTINEL])
+
+
 def test_a_caption_answer_with_an_unsafe_suffix_is_refused(owner_env):
     """The suffix is appended to a picture path to find the file to read, so
     the commit enforces the same bare-fragment rule the reference-folder API
