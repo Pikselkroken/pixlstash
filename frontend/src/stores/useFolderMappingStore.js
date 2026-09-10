@@ -70,6 +70,21 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
    * exact number the folder does not hold.
    */
   const rootPictureCountCapped = ref(false);
+  /**
+   * Bumped by `resetForSession`, so an inspect the outgoing owner started
+   * cannot land after the reset and repopulate the next session with the
+   * previous library's count. Same shape as `useLibrariesStore`, in a ref
+   * because the reads that write the count live in SideBar.
+   */
+  const rootCountEpoch = ref(0);
+
+  /** Record what the library's own folder holds, unless the session changed
+   *  since the read that counted it started. */
+  function setRootPictureCount(count, capped, epoch) {
+    if (epoch !== rootCountEpoch.value) return;
+    rootPictureCount.value = count;
+    rootPictureCountCapped.value = capped;
+  }
 
   /** Open the one wizard; `resume` is a saved entry, or null for a fresh add. */
   function openWizard(resume = null) {
@@ -106,6 +121,7 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
    *  import pictures that are not there. */
   function resetForSession() {
     clear();
+    rootCountEpoch.value += 1;
     rootPictureCount.value = null;
     rootPictureCountCapped.value = false;
   }
@@ -121,6 +137,9 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
     wizardResume,
     rootPictureCount,
     rootPictureCountCapped,
+    rootCountEpoch,
+    setRootPictureCount,
+    resetForSession,
     openWizard,
     closeWizard,
   };

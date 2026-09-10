@@ -759,6 +759,9 @@ function chooseFolderType(type) {
  * dismissed offer therefore has a way back. Otherwise the ordinary add.
  */
 async function chooseLibraryFolder() {
+  // Captured before the awaits below: a session change while the inspect is on
+  // the wire must not write the outgoing owner's count into the new session.
+  const epoch = mappingStore.rootCountEpoch;
   const entry = pendingForThisLibrary.value;
   if (entry?.mode === "local_import") {
     openFolderMappingWizard(entry);
@@ -773,9 +776,11 @@ async function chooseLibraryFolder() {
     // inspect leaves the cached count alone.
     try {
       const verdict = await inspectLibraryPath(path);
-      mappingStore.rootPictureCount = verdict?.picture_count ?? 0;
-      mappingStore.rootPictureCountCapped =
-        verdict?.picture_count_capped ?? false;
+      mappingStore.setRootPictureCount(
+        verdict?.picture_count ?? 0,
+        verdict?.picture_count_capped ?? false,
+        epoch,
+      );
     } catch (error) {
       console.warn("Could not check the library folder for pictures", {
         path,
@@ -883,19 +888,22 @@ function offerLoosePictures() {
 /** The count for the wording above, from the entry's own read if it carries
  *  one - an entry saved before the read finished does not - else the server. */
 async function _fillRootPictureCount(entry) {
+  const epoch = mappingStore.rootCountEpoch;
   if (mappingStore.rootPictureCount !== null) return;
   const counted = entry.pictureCount ?? entry.result?.picture_count;
   if (counted != null) {
-    mappingStore.rootPictureCount = counted;
-    mappingStore.rootPictureCountCapped = false;
+    mappingStore.setRootPictureCount(counted, false, epoch);
     return;
   }
   const path = entry.path;
   if (!path) return;
   try {
     const verdict = await inspectLibraryPath(path);
-    mappingStore.rootPictureCount = verdict?.picture_count ?? 0;
-    mappingStore.rootPictureCountCapped = verdict?.picture_count_capped ?? false;
+    mappingStore.setRootPictureCount(
+      verdict?.picture_count ?? 0,
+      verdict?.picture_count_capped ?? false,
+      epoch,
+    );
   } catch (error) {
     console.warn("Could not check the library folder for pictures", {
       path,
@@ -924,6 +932,7 @@ async function takeParkedFolderRead() {
 }
 
 async function _offerLoosePictures() {
+  const epoch = mappingStore.rootCountEpoch;
   if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
   const path = librariesStore.activeLibrary?.path;
   if (!path || !librariesStore.canManage) return;
@@ -933,8 +942,11 @@ async function _offerLoosePictures() {
   // progress bar over an empty grid.
   const parked = await takeParkedFolderRead();
   if (parked?.result && _samePath(parked.path, path)) {
-    mappingStore.rootPictureCount = parked.result.picture_count ?? null;
-    mappingStore.rootPictureCountCapped = false;
+    mappingStore.setRootPictureCount(
+      parked.result.picture_count ?? null,
+      false,
+      epoch,
+    );
     autoOpenedPendingMapping = true;
     openFolderMappingWizard({
       path,
@@ -945,8 +957,11 @@ async function _offerLoosePictures() {
   }
   try {
     const verdict = await inspectLibraryPath(path);
-    mappingStore.rootPictureCount = verdict?.picture_count ?? 0;
-    mappingStore.rootPictureCountCapped = verdict?.picture_count_capped ?? false;
+    mappingStore.setRootPictureCount(
+      verdict?.picture_count ?? 0,
+      verdict?.picture_count_capped ?? false,
+      epoch,
+    );
     if (verdict?.picture_count > 0) {
       // The read the wizard starts saves a pending entry, which the watch
       // above would otherwise take as its cue to open the wizard again.

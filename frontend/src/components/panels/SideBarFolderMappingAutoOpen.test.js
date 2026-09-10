@@ -580,4 +580,32 @@ describe("the empty library's Choose a folder button", () => {
 
     wrapper.unmount();
   });
+
+  it("drops a count from an inspect that resolves after the session changed", async () => {
+    // Logout notifies the reset before App.vue unmounts, so an inspect the
+    // outgoing owner started can still resolve; its count belongs to the
+    // previous library and must not repopulate the next session.
+    const path = "/home/me/Pictures";
+    const wrapper = await mountWithManageableLibrary(path);
+    const mapping = useFolderMappingStore();
+    let resolveInspect;
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? new Promise((resolve) => {
+            resolveInspect = resolve;
+          })
+        : Promise.resolve(respond()),
+    );
+
+    const click = wrapper.vm.chooseLibraryFolder();
+    await flushPromises();
+    mapping.resetForSession();
+    resolveInspect({ data: { picture_count: 42 } });
+    await click;
+
+    expect(mapping.rootPictureCount).toBe(null);
+    expect(mapping.wizardResume).toBe(null);
+
+    wrapper.unmount();
+  });
 });
