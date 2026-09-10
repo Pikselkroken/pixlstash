@@ -14,7 +14,8 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models.folder_mapping_commit import (
-    STATE_ABANDONED,
+    STATE_DEFERRED,
+    STATE_DONE,
     FolderMappingCommit,
 )
 from pixlstash.db_models.picture import Picture
@@ -182,13 +183,21 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         the boot-time root scan used to answer first: a small library was
         indexed, tags and all, before the screen came up, so the grid was no
         longer empty and the questions never appeared. The root scan waits
-        for the answer. Any ``local_import`` commit record counts - done,
-        deferred ("organise later"), pending - except an abandoned one, which
-        is "bring nothing in". A ``reference`` commit is not an answer: it
-        registers some other folder and says nothing about the root's own
-        pictures. A library with a picture in it was imported into some other
-        way and is scanned as before, so nothing changes for an existing
-        library.
+        for the answer.
+
+        A ``local_import`` commit record counts only once it has **settled**:
+        ``done``, or ``deferred`` ("organise later", which is an answer -
+        index everything, map nothing). A ``pending`` one is the commit still
+        running, so it is the question being answered rather than the answer,
+        and treating it as one puts the 300-second root scan into a race with
+        it: the scan builds its own rows with the sidecar probe, wins, and the
+        commit's ``insert()`` reuses them without ever applying the owner's
+        caption choices. ``abandoned`` is "bring nothing in" and ``superseded``
+        was replaced by a newer record, so neither is an answer either. A
+        ``reference`` commit is not one at all: it registers some other folder
+        and says nothing about the root's own pictures. A library with a
+        picture in it was imported into some other way and is scanned as
+        before, so nothing changes for an existing library.
         """
         if self._first_import_answered:
             return True
@@ -200,7 +209,7 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
                 session.exec(
                     select(FolderMappingCommit.id)
                     .where(FolderMappingCommit.mode == "local_import")
-                    .where(FolderMappingCommit.state != STATE_ABANDONED)
+                    .where(FolderMappingCommit.state.in_((STATE_DONE, STATE_DEFERRED)))
                     .limit(1)
                 ).first()
                 is not None

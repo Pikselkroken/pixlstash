@@ -4073,15 +4073,22 @@ and updates `file_path` on the existing row instead.
   `_RESCAN_INTERVAL_S`, and immediately when `ReferenceFolderWatcher` — which
   watches `image_root` under the id `None` — reports a change. **Due at boot
   has one exception** (`first_import_answered`): a library that holds no
-  picture and has no folder-mapping commit record other than an abandoned one
-  is not scanned. That is a library whose owner has not been asked what the
+  picture and has no *settled* `local_import` folder-mapping commit record is
+  not scanned. That is a library whose owner has not been asked what the
   pictures in its folder are — the app asks when it loads an *empty* library
   over a folder holding pictures (the first-run offer, "Add a library"), and
   the boot scan used to answer first: a small library was indexed, tags read
   by convention and all, before the screen came up, so the grid was no longer
   empty and the mapping questions and the caption card never appeared. The
-  gate lifts on the first picture row or the first commit record (done,
-  deferred, pending) and is then remembered for the process. An existing
+  gate lifts on the first picture row, or on a `local_import` record that has
+  settled as `done` or `deferred` ("organise later" is an answer: index
+  everything, map nothing), and is then remembered for the process. A
+  `pending` record is the commit still running, so it is the question rather
+  than the answer; counting it puts the 300-second root scan into a race with
+  it, where the scan builds its own rows with the sidecar probe, wins, and the
+  commit's `insert()` reuses them without ever applying the owner's caption
+  choices. `abandoned` is "bring nothing in" and `superseded` was replaced by
+  a newer record, so neither is an answer either. An existing
   library is unaffected; the one behaviour that changes is that an empty
   library's first pictures arrive through the import offer rather than by
   the watcher, which is the offer's whole purpose. Root mode differs

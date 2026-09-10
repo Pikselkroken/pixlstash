@@ -5,7 +5,9 @@ pictures are - the first-run offer, and "Add a library" - and the app makes
 the offer only while the library is empty. The root scan is due the moment
 the backend boots, so on a small library it indexed everything before the
 screen came up and the questions never appeared. It now waits until the
-library holds a picture or a folder-mapping commit has been recorded.
+library holds a picture or a local_import commit has SETTLED - done or
+deferred. A pending one is the commit still running, and treating it as an
+answer puts the root scan into a race with it.
 """
 
 import os
@@ -19,6 +21,7 @@ from sqlmodel import Session
 from pixlstash.db_models.folder_mapping_commit import (
     STATE_ABANDONED,
     STATE_DEFERRED,
+    STATE_PENDING,
     FolderMappingCommit,
 )
 from pixlstash.server import Server
@@ -86,6 +89,14 @@ def test_a_fresh_library_over_pictures_is_not_scanned_until_the_offer_is_answere
 
     _record(server, STATE_ABANDONED)
     assert finder.find_task() is None, "an abort is not an answer to import"
+
+    _record(server, STATE_PENDING)
+    assert finder.find_task() is None, (
+        "a pending record is the commit still running - the question, not the "
+        "answer. Counting it lets the 300 s root scan race the commit: it "
+        "builds its own rows with the sidecar probe and insert() reuses them "
+        "without applying the owner's caption choices"
+    )
 
     _record(server, STATE_DEFERRED, mode="reference")
     assert finder.find_task() is None, (
