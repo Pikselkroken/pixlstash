@@ -392,10 +392,15 @@ class FolderStructureRead:
         self._cancel = threading.Event()
         self._folders: list[_Folder] = []
         #: suffix -> {"files", "folders", "samples"}: every caption file the
-        #: walk passed, grouped by the suffix after its picture's stem.
+        #: walk passed, grouped by the suffix after its picture's stem, keyed
+        #: by the exact spelling the row is reported with.
         #: ``samples`` is folder -> that folder's candidate paths; which of
         #: them are read is decided across folders once the walk is over.
         self._captions: dict[str, dict[str, Any]] = {}
+        #: lower-cased suffix -> the first spelling of it the walk saw, which
+        #: is the row every other spelling of it folds into where the
+        #: filesystem names one file by both.
+        self._caption_spellings: dict[str, str] = {}
         self._truncated = False
         self._unreadable = 0
         self._skipped_hidden = 0
@@ -663,28 +668,28 @@ class FolderStructureRead:
                 continue
             # Grouped case-insensitively for the same reason the stems are:
             # `.txt` and `.TXT` are one file on Windows and macOS, and offering
-            # them as two rows lets the owner answer one file twice. The first
-            # casing seen is the one reported.
-            key = suffix.lower()
+            # them as two rows there lets the owner answer one file twice. The
+            # first casing seen is the one reported.
+            key = self._caption_spellings.setdefault(suffix.lower(), suffix)
+            # Only where the filesystem really does name one file by both,
+            # which it does not on Linux: the import joins the picture's own
+            # spelling with the *reported* suffix, so folding `a.TXT` into an
+            # `.txt` row there would have it read `a.txt` and never open the
+            # second, real file. A spelling that names a file of its own gets
+            # a row of its own, under its own spelling, so both are reported,
+            # answered and read. `b.TXT` beside no `b.txt` at all is the same
+            # question with the same answer.
+            if key != suffix and not _one_file(
+                os.path.join(dirpath, name), os.path.join(dirpath, matched_stem + key)
+            ):
+                key = suffix
             entry = self._captions.setdefault(
                 key, {"suffix": suffix, "files": 0, "folders": set(), "samples": {}}
             )
-            # Same rule as the stems above, for the same reason: the import
-            # joins the picture's own spelling with the *reported* suffix, so
-            # `b.TXT` counts towards a `.txt` row only where `b.txt` names it -
-            # true on a case-insensitive filesystem, false on Linux, where the
-            # import would otherwise silently miss the file the row promised.
-            if suffix != entry["suffix"] and not os.path.isfile(
-                os.path.join(dirpath, matched_stem + entry["suffix"])
-            ):
-                continue
             # A caption file the import can actually read was found for this
-            # picture - the Set signal's evidence, counted once per stem. Below
-            # the casing check, not above it: a `b.TXT` the `.txt` row had to
-            # drop is not a sidecar the import will read either, and counting
-            # it here made `with_sidecar` promise a file no row offers. Kept
-            # by exact spelling: `A.jpg` and `a.jpg` are two pictures on Linux
-            # and a caption for one is not a caption for the other.
+            # picture - the Set signal's evidence, counted once per stem, and
+            # kept by exact spelling: `A.jpg` and `a.jpg` are two pictures on
+            # Linux and a caption for one is not a caption for the other.
             captioned.add(matched_stem)
             entry["files"] += 1
             entry["folders"].add(folder.index)
@@ -940,6 +945,7 @@ class FolderStructureRead:
         for folder in self._folders:
             folder.direct_pictures = []
         self._captions = {}
+        self._caption_spellings = {}
         return {
             "root": {
                 "path": self._root,
@@ -1475,6 +1481,21 @@ def _evenly_spaced(items: list[str], count: int) -> list[str]:
         return list(items)
     step = len(items) / count
     return [items[int(i * step)] for i in range(count)]
+
+
+def _one_file(path: str, other: str) -> bool:
+    """Whether two paths name a single file.
+
+    True where the filesystem folds case, so `a.txt` and `a.TXT` are one file
+    and one caption convention. False on Linux, where they are two real files
+    the owner has to answer separately, and false when `other` does not exist
+    at all, which is the same answer for the same reason.
+    """
+    try:
+        return os.path.samefile(path, other)
+    except OSError:
+        # `other` is missing, or unreadable: either way it is not this file.
+        return False
 
 
 def _spread_samples(per_folder: dict[str, list[str]]) -> list[str]:

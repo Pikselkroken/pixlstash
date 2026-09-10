@@ -750,6 +750,16 @@ def test_caption_answers_are_refused_in_reference_mode(owner_env):
         json={"task_id": read_task_id, "mode": "reference", "captions": []},
     )
     assert empty.status_code == 400, empty.text
+    # And an explicit `null`: §22 refuses the field being *present*, and a
+    # client that sends one has asked for captions and been given a mapping
+    # that cannot carry them. Only an omitted field is the older client that
+    # never asked, which the commit below is.
+    explicit_null = owner.post(
+        _COMMIT,
+        json={"task_id": read_task_id, "mode": "reference", "captions": None},
+    )
+    assert explicit_null.status_code == 400, explicit_null.text
+    assert "local_import" in explicit_null.json()["detail"]
     # The refusal burned nothing: the read is still committable without them.
     ok = owner.post(_COMMIT, json={"task_id": read_task_id, "mode": "reference"})
     assert ok.status_code == 200, ok.text
@@ -2395,3 +2405,41 @@ def test_an_accepted_caption_answer_takes_the_read_s_spelling():
     )
     assert pattern.suffix == ".txt"
     assert pattern.kind == "description"
+
+
+def test_two_reported_casings_can_each_be_answered():
+    """A repeat is two answers claiming one *reported* row, not two answers
+    that merely look alike case-folded. On Linux `a.txt` and `a.TXT` are two
+    files, the read reports a row for each, and each is answered on its own.
+    Where the read reported a single row for them, two answers still name one
+    file and `attach_sidecars` would read it as two kinds, so it is still a
+    400 - as it is with no reported rows to compare against at all."""
+    import pytest
+
+    from pixlstash.services.folder_structure_commit_service import (
+        CommitError,
+        parse_captions,
+    )
+
+    both = [{"suffix": ".txt", "kind": "tags"}, {"suffix": ".TXT", "kind": "tags"}]
+    answered = parse_captions(
+        [
+            {"suffix": ".TXT", "kind": "description"},
+            {"suffix": ".txt", "kind": "tags"},
+        ],
+        reported=both,
+    )
+    assert [(row.suffix, row.kind) for row in answered] == [
+        (".TXT", "description"),
+        (".txt", "tags"),
+    ], "an exact spelling answers its own row"
+
+    for reported in ([{"suffix": ".txt", "kind": "tags"}], None):
+        with pytest.raises(CommitError, match=r"captions\[1\] repeats suffix"):
+            parse_captions(
+                [
+                    {"suffix": ".txt", "kind": "tags"},
+                    {"suffix": ".TXT", "kind": "description"},
+                ],
+                reported=reported,
+            )

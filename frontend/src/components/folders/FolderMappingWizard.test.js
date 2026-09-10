@@ -74,8 +74,12 @@ const PICTURES = {
 const READ_RESULT = { picture_count: 5, folder_count: 2, levels: [] };
 const ASSIGNMENTS = [{ relative_path: "Alice", kind: "person" }];
 
-/** A settled read that found one caption pattern, so the Preview asks. */
-function readFoundCaptions() {
+/**
+ * A settled read that found one caption pattern, so the Preview asks. `extra`
+ * overrides the result - `{ captions_complete: false }` for a walk that
+ * stopped early.
+ */
+function readFoundCaptions(extra = {}) {
   getFolderStructureReadStatus.mockResolvedValue({
     status: "completed",
     stage: "done",
@@ -86,6 +90,7 @@ function readFoundCaptions() {
       captions: [
         { suffix: ".txt", kind: "tags", files: 9, folders: 1, sample: "1girl" },
       ],
+      ...extra,
     },
   });
 }
@@ -393,6 +398,34 @@ describe("building the library", () => {
     });
   });
 
+  it("'Drop this, organise later' after a partial read leaves the import to probe", async () => {
+    // The same gesture, but the walk stopped before the folders that hold the
+    // rest of the caption files. Nobody could have been asked about those, so
+    // `[]` would answer "read nothing" on their behalf; `null` omits the key
+    // and the import probes, as `chosenCaptions` already does for the same
+    // read.
+    readFoundCaptions({ captions_complete: false });
+    const wrapper = mountWizard();
+    await settle();
+    await bringThemIn(wrapper);
+    await button(wrapper, "Set up my library").trigger("click");
+    await settle();
+    await wrapper.find(".tree-stub .emit-next").trigger("click");
+    await settle();
+    await wrapper.find("select").setValue("description");
+    await button(wrapper, "Back to the mapping").trigger("click");
+    await settle();
+
+    await wrapper.find(".tree-stub .emit-later").trigger("click");
+    await settle();
+
+    expect(useFolderMappingStore().pending).toMatchObject({
+      assignments: [],
+      captions: null,
+      autoCommit: true,
+    });
+  });
+
   it("keeps the caption answers when the create fails", async () => {
     addLibrary.mockRejectedValue({
       response: { data: { detail: '"Generations" covers this folder.' } },
@@ -607,6 +640,22 @@ describe("the empty library's own folder", () => {
     await settle();
 
     expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual([]);
+  });
+
+  it("organising later after a partial read commits no answer at all", async () => {
+    // A complete read means everything beside the pictures was sniffed, so
+    // declining to confirm it is a real "read nothing". A partial one never
+    // reached the rest of the tree, so there is nothing to decline there and
+    // the import probes instead - key omitted (§22).
+    readFoundCaptions({ captions_complete: false });
+    const wrapper = mountWizard({ resume: own });
+    await settle();
+    await button(wrapper, "Set up my library").trigger("click");
+    await settle();
+    await wrapper.find(".tree-stub .emit-later").trigger("click");
+    await settle();
+
+    expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toBeNull();
   });
 });
 

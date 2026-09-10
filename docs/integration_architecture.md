@@ -1637,9 +1637,12 @@ the import builds the sidecar name from the picture's own spelling, so a stem
 that differs in case is reported when that path exists, which it does on a
 case-insensitive filesystem and does not on Linux. Suffixes group the same way
 and by the same rule: `a.txt` and `b.TXT` are one row, reported with the first
-spelling walked, and `b.TXT` counts towards that row's `files` only where
-`b.txt` names it, again true on a case-insensitive filesystem and false on
-Linux. A few files of each pattern are read to
+spelling walked, exactly where `b.txt` and `b.TXT` name one file: true on a
+case-insensitive filesystem, false on Linux. There they are two real files, so
+each spelling gets a row of its own under its own spelling and both are
+reported, answered and read; folding them would have the import build `b.txt`
+from the reported `.txt` and never open the `b.TXT` beside it.
+A few files of each pattern are read to
 say whether it holds tag lists or prose (`kind`), and `sample` is an excerpt of
 one *of that kind* so the owner can check the guess without opening a file.
 Those files are taken round-robin across the folders that hold the pattern, in
@@ -2041,15 +2044,17 @@ pattern past the twelfth) and probing one of those anyway is how a metadata
 blob becomes a picture's tags.
 
 `captions` is `local_import` only: with `mode: "reference"` the field being
-present at all, `[]` included, is `400`, because a reference folder holds one
+present at all, `[]` and an explicit `null` included, is `400`, because a
+reference folder holds one
 suffix per kind and its scan probes the known conventions for an unset one, so
 it cannot express "read nothing of this kind" and an answer with every tags
 pattern ignored would still open a bare `.txt`. A reference folder's sidecar
 fields on `PATCH /reference-folders/{folder_id}` are its contract. `suffix`
 must be a bare filename fragment (the same rule as `PATCH /reference-folders`
 enforces): it is appended to a picture path to find the file to read, and no
-two rows may repeat one. It must also name a pattern §20's `captions` reported
-(compared case-insensitively, since that is how the read groups them), because
+two rows may claim the same reported pattern. It must also name a pattern §20's
+`captions` reported (matched exactly first and then case-insensitively, since
+that is how the read groups its own rows), because
 this is an answer to the read's questions and not a free-form instruction: a
 suffix the read deliberately left out, a `.json` of metadata among them, would
 otherwise be opened and stored as tags. A caller-supplied `read_result` that
@@ -2068,7 +2073,7 @@ this route is the write that follows from it.
 
 | Status | When |
 |---|---|
-| **400** | an `assignments` row is malformed or names an unknown `kind`; a `captions` row names an unknown `kind`, carries a `suffix` that is not a bare filename fragment, repeats a `suffix` an earlier row already claimed (compared case-insensitively, since `_notes.txt` and `_NOTES.TXT` are one file on Windows and macOS), or names a `suffix` §20's `captions` never reported (same case-insensitive comparison); `captions` is present at all (`[]` included) with `mode: "reference"` |
+| **400** | an `assignments` row is malformed or names an unknown `kind`; a `captions` row names an unknown `kind`, carries a `suffix` that is not a bare filename fragment, claims a reported pattern an earlier row already claimed (each answer is matched to §20's rows exactly first and then case-insensitively, so `_notes.txt` and `_NOTES.TXT` repeat each other where the read reported one row for them, and answer one row each where it reported both; with no reported `captions` to compare against, case-insensitively), or names a `suffix` §20's `captions` never reported (same matching); `captions` is present at all (`[]` included, and an explicit `null` too) with `mode: "reference"` |
 | **404** | `task_id` does not name a read this session holds |
 | **409** | the named read has not settled yet, a commit is already running (against any read), the named read has **already been committed**, or the read's root path is already a reference folder that has completed a scan (§25 — the reuse-vs-refuse rule) |
 

@@ -642,31 +642,77 @@ def test_a_caption_stem_matches_the_picture_regardless_of_case():
     assert by_suffix[".TXT"]["kind"] == "tags"
 
 
-def test_one_convention_in_two_casings_is_one_row():
-    """`a.txt` beside `b.TXT` is one convention, not two. On Windows and macOS
-    the two suffixes name the same file, so offering both would ask the owner
-    to answer one file twice - and the commit refuses the pair as a repeat.
-    The first casing walked is the one reported.
+def test_two_casings_are_one_row_only_where_they_are_one_file():
+    """`a.txt` beside `b.TXT` is one convention on Windows and macOS: the two
+    suffixes name the same file there, so offering both would ask the owner to
+    answer one file twice - and the commit refuses the pair as a repeat. The
+    first casing walked is the one reported.
 
-    Its count follows the same rule the stems do: the import joins the
-    picture's spelling with the *reported* suffix, so `b.TXT` counts under the
-    `.txt` row exactly where `b.txt` names that file. It does on a
-    case-insensitive filesystem, and does not on Linux."""
+    On Linux they are two real files, and the import joins the picture's
+    spelling with the *reported* suffix, so folding `b.TXT` under a `.txt` row
+    would build `b.txt` and never open it. It gets its own row under its own
+    spelling instead, so the owner can answer it and the import reads it."""
     spec = {"": [], "shoot": ["a.jpg", "a.txt", "b.jpg", "b.TXT", "c.jpg", "c.txt"]}
     with _tree(spec) as root:
         for rel in ("shoot/a.txt", "shoot/b.TXT", "shoot/c.txt"):
             _write(root, rel, "1girl, solo, long hair, smile")
         # The path `sidecar_path("…/b.jpg", ".txt")` builds.
-        importable = os.path.isfile(os.path.join(root, "shoot", "b.txt"))
+        aliased = os.path.isfile(os.path.join(root, "shoot", "b.txt"))
         result = FolderStructureRead(root).run()
 
-    assert [row["suffix"] for row in result["captions"]] == [".txt"], (
-        "one row, reported with the first casing the walk saw"
+    by_suffix = {row["suffix"]: row for row in result["captions"]}
+    if aliased:
+        assert list(by_suffix) == [".txt"], (
+            "one row, reported with the first casing the walk saw"
+        )
+        assert by_suffix[".txt"]["files"] == 3
+    else:
+        assert list(by_suffix) == [".txt", ".TXT"], (
+            "two real files, so two rows, each under its own spelling"
+        )
+        assert by_suffix[".txt"]["files"] == 2
+        assert by_suffix[".TXT"]["files"] == 1
+    assert by_suffix[".txt"]["kind"] == "tags"
+
+
+def test_two_caption_files_for_one_picture_are_two_rows():
+    """`a.txt` and `a.TXT` beside `a.jpg` are two real files on Linux, holding
+    two different things the owner may want read as two different kinds. One
+    row for both would name a single spelling, the import would build that one
+    path from `a.jpg`, and the other file would be neither reported nor read -
+    with nothing on the screen to say a file had been passed over.
+
+    Where the filesystem folds case the two names are one file, and one row is
+    the whole truth."""
+    spec = {"": [], "shoot": ["a.jpg", "a.txt", "b.jpg", "b.txt", "c.jpg", "c.txt"]}
+    with _tree(spec) as root:
+        for rel in ("shoot/a.txt", "shoot/b.txt", "shoot/c.txt"):
+            _write(root, rel, "1girl, solo, long hair, smile")
+        # The path `sidecar_path("…/a.jpg", ".TXT")` builds. It already names
+        # the `a.txt` just written where the filesystem folds case, and names
+        # nothing at all on Linux, where the next line makes a second file.
+        aliased = os.path.isfile(os.path.join(root, "shoot", "a.TXT"))
+        _write(
+            root,
+            "shoot/a.TXT",
+            "She stands by the window of a quiet room while the afternoon "
+            "light comes in from one side and nobody else is home.",
+        )
+        result = FolderStructureRead(root).run()
+
+    by_suffix = {row["suffix"]: row for row in result["captions"]}
+    if aliased:
+        assert list(by_suffix) == [".txt"], "one file is one row"
+        return
+    assert set(by_suffix) == {".txt", ".TXT"}, (
+        "two files for one picture are two rows, each under its own spelling"
     )
-    assert result["captions"][0]["files"] == (3 if importable else 2), (
-        "`b.TXT` counts under the `.txt` row only where the import can read it"
+    assert by_suffix[".txt"]["files"] == 3
+    assert by_suffix[".TXT"]["files"] == 1
+    assert by_suffix[".txt"]["kind"] == "tags"
+    assert by_suffix[".TXT"]["kind"] == "description", (
+        "each row is read on its own, so each is classified on its own"
     )
-    assert result["captions"][0]["kind"] == "tags"
 
 
 def test_a_suffix_that_sniffs_as_metadata_still_spends_a_slot_of_the_cap(monkeypatch):
@@ -1626,27 +1672,29 @@ def test_a_sidecar_in_capitals_still_counts():
     """A dataset exported on Windows is the obvious victim of a case-sensitive
     extension match, and it would fail by the Set signal never firing.
 
-    It counts exactly as far as the import can read it back. `b.Txt` lands
-    under the `.TXT` row, whose *reported* casing is what the import joins to
-    `b.jpg`, so it is evidence where `b.TXT` names that file - on a
-    case-insensitive filesystem, and not on Linux. Asserted on the sidecar
-    evidence rather than on `kind`: three pictures with nothing below already
-    read as a Set off the leaf signal, so the old assertion held whatever the
-    caption files did."""
+    Each of the three is readable: `b.Txt` joins the `.TXT` row where the
+    filesystem names one file by both, and takes a row of its own where it does
+    not, so the signal's promise - a caption file beside all three - holds
+    either way. Asserted on the sidecar evidence rather than on `kind`: three
+    pictures with nothing below already read as a Set off the leaf signal, so
+    the old assertion held whatever the caption files did."""
     spec = {"": [], "shoot": ["a.jpg", "a.TXT", "b.jpg", "b.Txt", "c.jpg", "c.Caption"]}
     with _tree(spec) as root:
         for rel in ("shoot/a.TXT", "shoot/b.Txt", "shoot/c.Caption"):
             _write(root, rel, "1girl, solo, long hair, smile")
         # The path `sidecar_path("…/b.jpg", ".TXT")` builds.
-        importable = os.path.isfile(os.path.join(root, "shoot", "b.TXT"))
+        aliased = os.path.isfile(os.path.join(root, "shoot", "b.TXT"))
         result = FolderStructureRead(root).run()
 
     proposal = _rows(result, 2)["shoot"]["proposal"]
     assert proposal["kind"] == "set"
-    assert ("sidecars" in _signals(proposal)) is importable, (
-        "the signal says a caption file sits beside ALL three pictures, so it "
-        "may only fire where the import can read all three"
+    assert "sidecars" in _signals(proposal), (
+        "a caption file sits beside all three pictures and every one of them "
+        "is offered under a row the import can read"
     )
+    assert {row["suffix"] for row in result["captions"]} == (
+        {".TXT", ".Caption"} if aliased else {".TXT", ".Caption", ".Txt"}
+    ), "`b.Txt` is its own row exactly where it is its own file"
 
 
 def test_the_result_says_whether_the_face_signal_ran_at_all():
