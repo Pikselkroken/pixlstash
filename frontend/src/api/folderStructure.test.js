@@ -31,6 +31,9 @@ beforeEach(() => {
 });
 
 describe("starting a folder-structure commit", () => {
+  // A caller that passes no answer has asked nobody, so the default omits the
+  // key and lets the import probe - the same as passing `null`. Defaulting to
+  // `[]` instead made every pre-caption call claim "read nothing".
   it("names the task when the server still has one", async () => {
     await startFolderStructureCommit(
       "read-1",
@@ -44,8 +47,8 @@ describe("starting a folder-structure commit", () => {
       assignments: ASSIGNMENTS,
       mode: "local_import",
       label: "Generations",
-      captions: [],
     });
+    expect(apiClient.post.mock.calls[0][1]).not.toHaveProperty("captions");
   });
 
   it("sends the result instead when the task is gone", async () => {
@@ -62,8 +65,8 @@ describe("starting a folder-structure commit", () => {
       read_result: RESULT,
       assignments: ASSIGNMENTS,
       mode: "local_import",
-      captions: [],
     });
+    expect(body).not.toHaveProperty("captions");
     expect(body).not.toHaveProperty("task_id");
   });
 
