@@ -483,6 +483,24 @@ def test_a_caption_stem_matches_the_picture_regardless_of_case():
     assert by_suffix[".TXT"]["kind"] == "tags"
 
 
+def test_one_convention_in_two_casings_is_one_row():
+    """`a.txt` beside `b.TXT` is one convention, not two. On Windows and macOS
+    the two suffixes name the same file, so offering both would ask the owner
+    to answer one file twice - and the commit refuses the pair as a repeat.
+    The first casing walked is the one reported."""
+    spec = {"": [], "shoot": ["a.jpg", "a.txt", "b.jpg", "b.TXT", "c.jpg", "c.txt"]}
+    with _tree(spec) as root:
+        for rel in ("shoot/a.txt", "shoot/b.TXT", "shoot/c.txt"):
+            _write(root, rel, "1girl, solo, long hair, smile")
+        result = FolderStructureRead(root).run()
+
+    assert [row["suffix"] for row in result["captions"]] == [".txt"], (
+        "one row, reported with the first casing the walk saw"
+    )
+    assert result["captions"][0]["files"] == 3
+    assert result["captions"][0]["kind"] == "tags"
+
+
 def test_a_tree_without_captions_reports_none():
     with _tree({"": [], "shoot": ["a.jpg", "b.jpg", "c.jpg"]}) as root:
         result = FolderStructureRead(root).run()
@@ -803,6 +821,40 @@ def test_a_cancelled_read_keeps_what_it_found():
     assert read.cancelled is True
     assert result["folder_count"] == 2, "the walk's work survived the cancel"
     assert result["root"]["name"] == "Generations"
+
+
+def test_a_cancel_stops_the_sniff_before_the_next_sample(monkeypatch):
+    """The checkpoint runs per sample, not once per suffix.
+
+    Checking only at the top of a suffix let a cancel that arrived while one
+    convention was being classified still open every remaining sample of it -
+    up to `CAPTION_SAMPLES` file reads after the owner pressed stop."""
+    opened: list[str] = []
+    read_box = {}
+
+    def stop_on_first_sniff(path):
+        opened.append(path)
+        read_box["read"].cancel()
+        return ("tags", "1girl, solo")
+
+    monkeypatch.setattr(
+        "pixlstash.services.folder_structure_service.sniff_caption",
+        stop_on_first_sniff,
+    )
+    spec = {"": [], "shoot": ["a.jpg", "a.txt", "b.jpg", "b.txt"]}
+    with _tree(spec) as root:
+        for name in ("a", "b"):
+            _write(root, f"shoot/{name}.txt", "1girl, solo, long hair, smile")
+        read = FolderStructureRead(root)
+        read_box["read"] = read
+        result = read.run()
+
+    assert opened == [os.path.join(root, "shoot", "a.txt")], (
+        f"the second sample must never be opened after the cancel: {opened}"
+    )
+    assert result["captions"] == [], (
+        "a suffix cancelled part-way through its samples is not a classified pattern"
+    )
 
 
 def test_a_read_cancelled_before_it_starts_still_returns_a_document():

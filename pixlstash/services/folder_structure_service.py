@@ -623,17 +623,22 @@ class FolderStructureRead:
                     break
             if suffix is None or not is_safe_sidecar_suffix(suffix):
                 continue
+            # Grouped case-insensitively for the same reason the stems are:
+            # `.txt` and `.TXT` are one file on Windows and macOS, and offering
+            # them as two rows lets the owner answer one file twice. The first
+            # casing seen is the one reported.
+            key = suffix.lower()
             entry = self._captions.setdefault(
-                suffix, {"files": 0, "folders": set(), "samples": []}
+                key, {"suffix": suffix, "files": 0, "folders": set(), "samples": []}
             )
             entry["files"] += 1
             entry["folders"].add(folder.index)
             if (
                 len(entry["samples"]) < CAPTION_SAMPLES
-                and sampled_here[suffix] < _CAPTION_SAMPLES_PER_FOLDER
+                and sampled_here[key] < _CAPTION_SAMPLES_PER_FOLDER
             ):
                 entry["samples"].append(os.path.join(dirpath, name))
-                sampled_here[suffix] += 1
+                sampled_here[key] += 1
 
     def _caption_patterns(self) -> list[dict[str, Any]]:
         """The caption conventions found, each read enough to say what it holds.
@@ -655,13 +660,16 @@ class FolderStructureRead:
             self._captions.items(), key=lambda item: (-item[1]["files"], item[0])
         )
         try:
-            for suffix, entry in ranked:
+            for _key, entry in ranked:
                 if len(rows) >= MAX_CAPTION_PATTERNS:
                     break
                 self._checkpoint()
                 votes: Counter = Counter()
                 excerpts: dict[str, str] = {}
                 for path in entry["samples"]:
+                    # Per sample, not per suffix: a cancel arriving mid-suffix
+                    # would otherwise still open every remaining sample of it.
+                    self._checkpoint()
                     sniffed = sniff_caption(path)
                     if sniffed is None:
                         continue
@@ -682,7 +690,7 @@ class FolderStructureRead:
                 )
                 rows.append(
                     {
-                        "suffix": suffix,
+                        "suffix": entry["suffix"],
                         "kind": kind,
                         "files": entry["files"],
                         "folders": len(entry["folders"]),

@@ -751,6 +751,22 @@ def test_a_caption_answer_with_an_unsafe_suffix_is_refused(owner_env):
     )
     assert bad_kind.status_code == 400, bad_kind.text
     assert "captions[0].kind" in bad_kind.json()["detail"]
+    # A case-only repeat is a repeat: `_notes.txt` and `_NOTES.TXT` name one
+    # file on Windows and macOS, so accepting both would have `attach_sidecars`
+    # read that file as tags for one answer and a description for the other.
+    repeated = owner.post(
+        _COMMIT,
+        json={
+            "task_id": read_task_id,
+            "mode": "local_import",
+            "captions": [
+                {"suffix": "_notes.txt", "kind": "tags"},
+                {"suffix": "_NOTES.TXT", "kind": "description"},
+            ],
+        },
+    )
+    assert repeated.status_code == 400, repeated.text
+    assert "captions[1] repeats suffix" in repeated.json()["detail"]
     # The refusal burned nothing: the read is still committable.
     ok = owner.post(_COMMIT, json={"task_id": read_task_id, "mode": "local_import"})
     assert ok.status_code == 200, ok.text

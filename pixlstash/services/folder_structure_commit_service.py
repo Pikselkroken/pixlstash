@@ -241,14 +241,17 @@ def parse_captions(raw) -> Optional[list[CaptionPattern]]:
             raise CommitError(
                 f"captions[{index}].suffix must be a bare filename fragment"
             )
-        if suffix in seen:
+        # Case-folded: on Windows and macOS `_notes.txt` and `_NOTES.TXT` name
+        # one file, so accepting both would have `attach_sidecars` read it as
+        # two kinds. The read reports one row per suffix for the same reason.
+        if suffix.lower() in seen:
             raise CommitError(f"captions[{index}] repeats suffix {suffix!r}")
         if kind not in CAPTION_KINDS:
             raise CommitError(
                 f"captions[{index}].kind must be one of "
                 f"{sorted(CAPTION_KINDS)}, got {kind!r}"
             )
-        seen.add(suffix)
+        seen.add(suffix.lower())
         parsed.append(CaptionPattern(suffix, kind))
     return parsed
 
