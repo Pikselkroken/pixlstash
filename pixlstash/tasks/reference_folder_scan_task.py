@@ -261,23 +261,29 @@ class ReferenceFolderScanTask(BaseTask):
                 )
                 seed["description_suffix"] = self._description_suffix
             if seed:
-                # Only a suffix that was actually accepted may drive this
-                # scan. A rejected one (unsafe, or colliding with the other
-                # kind) leaves that kind OFF for this scan rather than falling
-                # back to the known conventions: the probe finds the very file
-                # the rejection was about. Tags on `_caption.txt` refuse the
-                # detected description suffix `_caption.txt`, and a
-                # description probe would then re-find it and read one file as
-                # both kinds - which is what the collision rule forbids.
-                accepted = self._persist_suffixes(seed)
-                if "tags_suffix" in seed and not accepted.get("tags_suffix"):
-                    self._tags_suffix = None
-                    self._disabled_kinds.add(SIDECAR_TYPE_TAGS)
-                if "description_suffix" in seed and not accepted.get(
-                    "description_suffix"
-                ):
-                    self._description_suffix = None
-                    self._disabled_kinds.add(SIDECAR_TYPE_DESCRIPTION)
+                # What the folder actually holds after the write is what drives
+                # this scan, not what was detected: the owner may have stored a
+                # suffix through the API since the config was fetched, and that
+                # value - not the detection the writer then skipped - is the
+                # one the rest of the scan must reconcile with.
+                #
+                # No stored suffix means the detection was refused (unsafe, or
+                # colliding with the other kind), and that kind stays OFF for
+                # this scan rather than falling back to the known conventions:
+                # the probe finds the very file the rejection was about. Tags
+                # on `_caption.txt` refuse the detected description suffix
+                # `_caption.txt`, and a description probe would then re-find it
+                # and read one file as both kinds - which is what the collision
+                # rule forbids.
+                effective = self._persist_suffixes(seed)
+                if "tags_suffix" in seed:
+                    self._tags_suffix = effective.get("tags_suffix")
+                    if not self._tags_suffix:
+                        self._disabled_kinds.add(SIDECAR_TYPE_TAGS)
+                if "description_suffix" in seed:
+                    self._description_suffix = effective.get("description_suffix")
+                    if not self._description_suffix:
+                        self._disabled_kinds.add(SIDECAR_TYPE_DESCRIPTION)
 
         # Collect all supported files currently on disk.
         # Skip PixlStash-generated thumbnail files (e.g. foo_thumb.webp) that
@@ -1422,7 +1428,7 @@ class ReferenceFolderScanTask(BaseTask):
             return []
         return [suffix] if suffix else None
 
-    def _persist_suffixes(self, suffixes: dict[str, str]) -> dict[str, str]:
+    def _persist_suffixes(self, suffixes: dict[str, str]) -> dict[str, str | None]:
         """Store auto-detected sidecar suffixes on the folder (only fills NULLs).
 
         A detected suffix is written straight into the folder's configuration
@@ -1432,9 +1438,15 @@ class ReferenceFolderScanTask(BaseTask):
         check would let the scan persist a value the API would have rejected.
 
         Returns:
-            The subset of *suffixes* that survived validation, keyed the same
-            way. A key missing from the result was refused, and the caller must
-            not keep using it for this scan either.
+            The folder's EFFECTIVE suffix per kind once the write has run -
+            what is stored on the row, or ``None`` when nothing is. Read from
+            the row inside the write task, so a suffix the owner stored
+            between `fetch_folder_config()` and this write wins over the
+            detected one instead of being silently ignored: the column is no
+            longer NULL, nothing is persisted, and the caller must reconcile
+            with the stored value rather than the detection it asked about. A
+            ``None`` means the detection was refused and nothing else is
+            stored, so the caller must not keep using it for this scan either.
         """
 
         def _accepted(key: str) -> str | None:
@@ -1454,24 +1466,20 @@ class ReferenceFolderScanTask(BaseTask):
 
         tags_suffix = _accepted("tags_suffix")
         description_suffix = _accepted("description_suffix")
-        if tags_suffix is None and description_suffix is None:
-            return {}
 
-        def update(session: Session) -> dict[str, str]:
-            # What the scan may go on using: a suffix drops out of here for the
-            # same reasons it does not reach the column.
-            accepted: dict[str, str] = {}
-            if tags_suffix:
-                accepted["tags_suffix"] = tags_suffix
-            if description_suffix:
-                accepted["description_suffix"] = description_suffix
+        def update(session: Session) -> dict[str, str | None]:
             rf = (
                 session.exec(select(LibrarySettings)).first()
                 if self._is_root
                 else session.get(ReferenceFolder, self._folder_id)
             )
             if rf is None:
-                return accepted
+                # No row to merge with, so the validated detections are all the
+                # scan has to go on.
+                return {
+                    "tags_suffix": tags_suffix,
+                    "description_suffix": description_suffix,
+                }
             # Judged on the merged row: a detected suffix that would name the
             # same file as the other kind's effective one is not persisted, or
             # the two write-backs would overwrite each other. Descriptions see
@@ -1485,7 +1493,6 @@ class ReferenceFolderScanTask(BaseTask):
                         self._folder_id,
                         rf.description_suffix or DEFAULT_DESCRIPTION_SUFFIX,
                     )
-                    accepted.pop("tags_suffix", None)
                 else:
                     rf.tags_suffix = tags_suffix
             if description_suffix and rf.description_suffix is None:
@@ -1498,12 +1505,14 @@ class ReferenceFolderScanTask(BaseTask):
                         self._folder_id,
                         rf.tags_suffix or DEFAULT_TAGS_SUFFIX,
                     )
-                    accepted.pop("description_suffix", None)
                 else:
                     rf.description_suffix = description_suffix
             session.add(rf)
             session.commit()
-            return accepted
+            return {
+                "tags_suffix": rf.tags_suffix,
+                "description_suffix": rf.description_suffix,
+            }
 
         return self._db.run_task(update, priority=DBPriority.LOW)
 

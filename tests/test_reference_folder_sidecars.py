@@ -851,6 +851,61 @@ def test_scan_drops_a_detected_suffix_the_writer_refused(server, tmp_path):
     assert server.vault.db.run_task(_read) == ("_caption.txt", None)
 
 
+def test_a_suffix_stored_mid_scan_wins_over_the_detection(
+    server, tmp_path, monkeypatch
+):
+    """The owner's PATCH lands after the config fetch and before the write-back.
+
+    ``_persist_suffixes`` then finds the column no longer NULL and persists
+    nothing; reporting the detected suffix back as accepted left the rest of
+    the scan reading - and later overwriting - the wrong file. It reconciles
+    with what the row actually holds.
+    """
+    folder_dir = str(tmp_path / "patched_mid_scan")
+    folder_id = _make_folder(
+        server, folder_dir, description_suffix="_desc.txt", sync_tags=True
+    )
+    _make_image(folder_dir, "photo.png")
+    _write(os.path.join(folder_dir, "photo_x.txt"), "cat, mat")
+    _write(os.path.join(folder_dir, "photo_y.txt"), "dog, log")
+
+    monkeypatch.setattr(
+        "pixlstash.tasks.reference_folder_scan_task.detect_folder_suffixes",
+        lambda _resolved: {"tags_suffix": "_y.txt", "description_suffix": None},
+    )
+
+    task = ReferenceFolderScanTask(server.vault.db, folder_id, folder_dir, folder_dir)
+    persist = task._persist_suffixes
+
+    def _patch_then_persist(seed):
+        def _store(session: Session):
+            rf = session.get(ReferenceFolder, folder_id)
+            rf.tags_suffix = "_x.txt"
+            session.add(rf)
+            session.commit()
+
+        server.vault.db.run_task(_store)
+        return persist(seed)
+
+    task._persist_suffixes = _patch_then_persist
+    task._run_task()
+
+    assert task._tags_suffix == "_x.txt"
+    assert SIDECAR_TYPE_TAGS not in task._disabled_kinds
+
+    def _read(session: Session):
+        rf = session.get(ReferenceFolder, folder_id)
+        pic = session.exec(
+            select(Picture).where(Picture.reference_folder_id == folder_id)
+        ).all()[0]
+        return rf.tags_suffix, pic.tags_file, pic.id
+
+    stored, tags_file, pic_id = server.vault.db.run_task(_read)
+    assert stored == "_x.txt", "the detection must not overwrite the stored suffix"
+    assert tags_file == os.path.join(folder_dir, "photo_x.txt")
+    assert _picture_tags(server, pic_id) == ["cat", "mat"]
+
+
 def test_a_refused_detection_turns_that_kind_off_instead_of_probing(server, tmp_path):
     """Unsetting the refused suffix left the kind on the known conventions,
     and the probe found the very file the refusal was about: with tags on
