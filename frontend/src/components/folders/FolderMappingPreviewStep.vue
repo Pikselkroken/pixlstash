@@ -33,6 +33,11 @@ const props = defineProps({
    * The owner's saved answers for the read's caption-file patterns, for a
    * resumed commit: `[{suffix, kind}]`. Seeds the choices below when it
    * names a pattern; otherwise the read's own guess does.
+   *
+   * `null` means nobody was ever asked (an entry saved before the caption
+   * card existed). With a card to show it behaves as no saved answer; with
+   * none - the commit-on-mount path - it travels to the commit as `null` and
+   * the request leaves the key out, so the import probes as it always did.
    */
   captions: { type: Array, default: () => [] },
   label: { type: String, default: "" },
@@ -122,17 +127,20 @@ watch(
     for (const row of rows) {
       if (answers[row.suffix]) continue;
       answers[row.suffix] =
-        props.captions.find((c) => c.suffix === row.suffix)?.kind ?? row.kind;
+        props.captions?.find((c) => c.suffix === row.suffix)?.kind ?? row.kind;
     }
   },
   { immediate: true },
 );
 /** The answers on the card: one per reported pattern, or the saved ones when
  *  the read is gone (a resumed commit with no result to list them from).
- *  Only "Yes, build this library" sends these - see `commit`. */
+ *  Never `null`: this is the owner standing at the step, so even a step with
+ *  no card to show is them having been through it. Only "Yes, build this
+ *  library" sends these - see `commit`; the commit on mount, which is the one
+ *  path nobody stands at, passes `props.captions` straight through instead. */
 function chosenCaptions() {
   if (props.mode !== "local_import") return [];
-  if (!patterns.value.length) return props.captions;
+  if (!patterns.value.length) return props.captions ?? [];
   return patterns.value.map((row) => ({
     suffix: row.suffix,
     kind: answers[row.suffix] ?? row.kind,
@@ -333,7 +341,9 @@ onMounted(() => {
   // The card is never seen on this path (the commit is already running by the
   // first paint), so the saved answers are the only ones the owner gave. The
   // read's guesses are not an answer, and mapping them here committed a
-  // convention nobody confirmed.
+  // convention nobody confirmed. `null` - an entry saved before the card
+  // existed - is not an answer either, and goes through as `null` so the
+  // request omits the key.
   if (props.commitOnMount) commit(props.assignments, props.captions);
 });
 

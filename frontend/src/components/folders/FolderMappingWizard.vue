@@ -70,6 +70,12 @@ const assignments = ref([]);
 // The Preview step reports them as they are made rather than at the commit,
 // so "Back to the mapping" - which unmounts that step - keeps them, and the
 // step re-seeds from here on the way forward again.
+//
+// `null` is a third state, and only a resumed entry can be in it: an entry
+// saved before this feature existed has no `captions` property at all, so
+// nobody was ever asked and the commit must leave the key out and let the
+// import probe the known conventions (§22). `[]` is an answer - "read
+// nothing" - and belongs to a wizard that actually showed the caption card.
 const captions = ref([]);
 const pictureCount = ref(0);
 // The library exists (a resumed entry) - the Preview step commits directly.
@@ -103,7 +109,7 @@ watch(
     // was sitting right here.
     readResult.value = entry?.result ?? null;
     assignments.value = entry?.assignments ?? [];
-    captions.value = entry?.captions ?? [];
+    captions.value = entry ? (entry.captions ?? null) : [];
     pictureCount.value = entry?.pictureCount ?? 0;
     libraryExists.value = Boolean(entry);
     autoCommit.value = Boolean(entry?.autoCommit);
