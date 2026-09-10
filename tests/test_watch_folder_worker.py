@@ -5,9 +5,11 @@ import threading
 import time
 
 from fastapi.testclient import TestClient
+from sqlmodel import select
 
 from pixlstash.server import Server
 from pixlstash.db_models.picture import Picture
+from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
 
 API_PREFIX = "/api/v1"
 
@@ -251,6 +253,90 @@ def test_watch_folder_imports_copied_files_with_old_mtime_after_initial_scan():
                 assert len(final_pictures) == 2, (
                     "Expected second copied file to be imported even with old mtime"
                 )
+
+
+def test_watch_folder_reads_sidecar_tags_and_skips_the_pending_sentinel_for_them():
+    """A watched folder reads a picture's tags sidecar, same as a reference-
+    folder scan and a local-import commit (`attach_sidecars`, the one helper
+    all three row builders share). A picture whose sidecar gave tags gets
+    those tags and is not queued for the tagger; one with no sidecar still
+    falls back to the pending-tag sentinel."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = f"{temp_dir}/server-config.json"
+        source_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "pictures")
+        )
+        image_files = [
+            os.path.join(dirpath, f)
+            for dirpath, _, filenames in os.walk(source_dir)
+            for f in filenames
+            if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+        ]
+        assert len(image_files) >= 2, "Need at least two images for this test"
+
+        watch_dir = os.path.join(temp_dir, "watch")
+        os.makedirs(watch_dir, exist_ok=True)
+
+        tagged_dst = os.path.join(watch_dir, "tagged.png")
+        untagged_dst = os.path.join(watch_dir, "untagged.png")
+        shutil.copy2(image_files[0], tagged_dst)
+        shutil.copy2(image_files[1], untagged_dst)
+        with open(
+            os.path.join(watch_dir, "tagged_tags.txt"), "w", encoding="utf-8"
+        ) as fh:
+            fh.write("cat, black cat, whiskers")
+
+        with Server(server_config_path) as server:
+            with TestClient(server.api) as client:
+                response = client.post(
+                    f"{API_PREFIX}/login",
+                    json={"username": "testuser", "password": "testpassword"},
+                )
+                assert response.status_code == 200
+
+                create_folder = client.post(
+                    f"{API_PREFIX}/import-folders",
+                    json={"folder": watch_dir, "delete_after_import": False},
+                )
+                assert create_folder.status_code == 200
+
+                start = time.monotonic()
+                pictures = []
+                while time.monotonic() - start < _IMPORT_WAIT_SECONDS:
+                    pictures = server.vault.db.run_task(
+                        lambda session: Picture.find(session)
+                    )
+                    if len(pictures) >= 2:
+                        break
+                    time.sleep(0.25)
+                assert len(pictures) == 2, f"Expected 2 pictures, got {len(pictures)}"
+
+                def read_tags(session):
+                    # A managed import renames the file to a content-derived
+                    # name, so the two pictures are told apart by whether a
+                    # tags sidecar was resolved for them, not by their
+                    # (no longer meaningful) original filename.
+                    rows = []
+                    for pic in Picture.find(session):
+                        tag_values = session.exec(
+                            select(Tag.tag).where(Tag.picture_id == pic.id)
+                        ).all()
+                        rows.append((pic.tags_file, sorted(tag_values)))
+                    return rows
+
+                by_tags_file = dict(server.vault.db.run_task(read_tags))
+
+                (tagged_file, tagged_tags) = next(
+                    (f, t) for f, t in by_tags_file.items() if f is not None
+                )
+                assert tagged_file.endswith("tagged_tags.txt")
+                assert tagged_tags == ["black cat", "cat", "whiskers"]
+
+                (untagged_file, untagged_tags) = next(
+                    (f, t) for f, t in by_tags_file.items() if f is None
+                )
+                assert untagged_file is None
+                assert untagged_tags == [TAG_PENDING_SENTINEL]
 
 
 def test_watch_folder_retries_after_transient_hash_failure(monkeypatch):
