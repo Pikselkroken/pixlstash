@@ -55,6 +55,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import random
 import re
@@ -244,8 +245,13 @@ def _write_captions(
         if rng.random() < 0.05:
             Path(f"{stem}_notes.txt").write_text(rng.choice(_NOTES) + "\n", "utf-8")
         if rng.random() < 0.1:
+            # json.dumps, not interpolation: a real tag holds quotes and
+            # backslashes, and the point of this file is that the read has to
+            # recognise it as metadata rather than a caption - which it cannot
+            # do if the exporter wrote invalid JSON.
             Path(f"{stem}.json").write_text(
-                '{"prompt": "%s", "steps": 28}\n' % ", ".join(tags[:4]), "utf-8"
+                json.dumps({"prompt": ", ".join(tags[:4]), "steps": 28}) + "\n",
+                "utf-8",
             )
     tag_line = ", ".join(tags)
     if style == "wd14" and tag_line:
