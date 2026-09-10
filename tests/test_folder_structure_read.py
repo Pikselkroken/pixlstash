@@ -363,6 +363,34 @@ def test_a_free_form_caption_suffix_is_sidecar_evidence_too():
     assert [row["suffix"] for row in result["captions"]] == ["_tags.txt"]
 
 
+def test_a_case_differing_picture_needs_its_own_caption_file():
+    """`A.jpg` and `a.jpg` are two pictures on Linux, and `A.txt` is a caption
+    for the first of them only. Pairing them case-folded counted the second as
+    captioned too, so a folder the import has no caption for could still claim
+    a caption file beside every picture and read as a Set.
+
+    On a case-insensitive filesystem the two names are one picture and the
+    folder genuinely has a caption beside each of its three - the same
+    `os.path.isfile` question the other case tests ask."""
+    spec = {
+        "": [],
+        "shoot": ["A.jpg", "A.txt", "a.jpg", "b.jpg", "b.txt", "c.jpg", "c.txt"],
+    }
+    with _tree(spec) as root:
+        # The path `sidecar_path("…/a.jpg", ".txt")` builds.
+        importable = os.path.isfile(os.path.join(root, "shoot", "a.txt"))
+        result = FolderStructureRead(root).run()
+
+    proposal = _rows(result, 2)["shoot"]["proposal"]
+    if importable:
+        evidence = _signal(proposal, "sidecars")
+        assert evidence["with_sidecar"] == evidence["pictures"] == 3
+        return
+    assert "sidecars" not in _signals(proposal), (
+        "3 of the folder's 4 pictures have a caption file, so it is no Set"
+    )
+
+
 def _write(root, rel, text):
     with open(os.path.join(root, *rel.split("/")), "w", encoding="utf-8") as fh:
         fh.write(text)
