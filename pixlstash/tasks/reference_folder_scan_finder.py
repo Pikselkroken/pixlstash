@@ -9,6 +9,7 @@ row, so its schedule lives on this finder rather than in a column.
 
 import os
 import time
+from typing import Optional
 
 from sqlmodel import Session, select
 
@@ -199,21 +200,20 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         ``reference`` commit is not one at all: it registers some other folder
         and says nothing about the root's own pictures.
 
-        The ``pending`` and ``abandoned`` records both **win** over the picture
-        row, for the same reason: an unsettled ``local_import`` commits every
-        chunk, so after the first one the library holds pictures the owner has
-        not answered for. A running commit wakes the planner while its record
-        is still ``pending``, and an aborted one leaves its chunks indexed
-        behind a record that says ``abandoned`` - "bring nothing in". Reading
-        either one's rows as the answer caches it and scans the root: mid-
-        commit in the first case, and in the second importing the very files
-        the owner just aborted. ``settled`` is checked **before** ``abandoned``
-        because a later settled import outranks an earlier abandoned one.
-        Otherwise a library with a picture in it was imported into some other
-        way and is scanned as before, so nothing changes for an existing
-        library.
+        The **newest** ``local_import`` record decides, because records are
+        kept and an older answer must not outrank a newer one: a ``done``
+        import followed by an aborted one is an owner who declined the second
+        batch, and reading the old ``done`` as the answer would scan in the
+        very files just aborted. A ``pending`` or ``abandoned`` newest record
+        wins over the picture row for the same reason: an unsettled
+        ``local_import`` commits every chunk, so after the first one the
+        library holds pictures the owner has not answered for. A running
+        commit wakes the planner while its record is still ``pending``, and
+        an aborted one leaves its chunks indexed behind ``abandoned``. Only
+        with no ``local_import`` record at all does a picture row count: that
+        library was filled some other way and is scanned as before.
 
-        The four facts are read in **one statement** so they describe one
+        The two facts are read in **one statement** so they describe one
         snapshot: this read runs outside the writer queue, so across separate
         statements a chunk committing in between shows no ``pending`` record
         and a picture from that very commit, which caches the answer as True
@@ -222,30 +222,21 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         if self._first_import_answered:
             return True
 
-        def read(session: Session) -> tuple[bool, bool, bool, bool]:
-            local_import = select(FolderMappingCommit.id).where(
-                FolderMappingCommit.mode == "local_import"
+        def read(session: Session) -> tuple[Optional[str], bool]:
+            newest = (
+                select(FolderMappingCommit.state)
+                .where(FolderMappingCommit.mode == "local_import")
+                .order_by(FolderMappingCommit.id.desc())
+                .limit(1)
+                .scalar_subquery()
             )
-            return session.exec(
-                select(
-                    local_import.where(
-                        FolderMappingCommit.state == STATE_PENDING
-                    ).exists(),
-                    select(Picture.id).exists(),
-                    local_import.where(
-                        FolderMappingCommit.state.in_((STATE_DONE, STATE_DEFERRED))
-                    ).exists(),
-                    local_import.where(
-                        FolderMappingCommit.state == STATE_ABANDONED
-                    ).exists(),
-                )
-            ).one()
+            return session.exec(select(newest, select(Picture.id).exists())).one()
 
-        pending, has_picture, settled, abandoned = self._db.run_immediate_read_task(
-            read
-        )
-        self._first_import_answered = not pending and (
-            settled or (not abandoned and has_picture)
+        newest_state, has_picture = self._db.run_immediate_read_task(read)
+        if newest_state in (STATE_PENDING, STATE_ABANDONED):
+            return False
+        self._first_import_answered = (
+            newest_state in (STATE_DONE, STATE_DEFERRED) or has_picture
         )
         return self._first_import_answered
 

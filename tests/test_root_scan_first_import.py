@@ -223,8 +223,27 @@ def test_an_aborted_local_import_holds_the_root_scan_off_over_its_own_rows(serve
     )
     assert finder.find_task() is None
     # Nothing was cached, so a later import that does settle still releases
-    # the scan: settled is read before abandoned.
+    # the scan: the newest record decides.
     _record(server, STATE_DONE)
     task = finder.find_task()
     assert task is not None and task.params["folder_id"] is None
     assert finder.first_import_answered() is True
+
+
+def test_an_abort_after_an_earlier_import_still_holds_the_root_scan_off(server):
+    """The reverse order. Records are kept, so a `done` from last week must
+    not outrank the abort the owner just made: the newest record is the
+    answer, and it says bring nothing in."""
+    _drop_picture(server.vault.image_root, "kept.png")
+
+    def add(session: Session):
+        session.add(Picture(file_path="kept.png", pixel_sha="y" * 64))
+        session.commit()
+
+    server.vault.db.run_task(add)
+    _record(server, STATE_DONE)
+    _record(server, STATE_ABANDONED)
+
+    finder = _finder(server)
+    assert finder.first_import_answered() is False
+    assert finder.find_task() is None
