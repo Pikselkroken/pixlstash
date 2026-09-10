@@ -63,6 +63,13 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
    * folder the library already is.
    */
   const rootPictureCount = ref(null);
+  /**
+   * True when `rootPictureCount` stopped at the inspect endpoint's entry cap,
+   * so it is a floor rather than a total: a folder picker has to answer while
+   * somebody is looking at it. The copy says "at least N" instead of naming an
+   * exact number the folder does not hold.
+   */
+  const rootPictureCountCapped = ref(false);
 
   /** Open the one wizard; `resume` is a saved entry, or null for a fresh add. */
   function openWizard(resume = null) {
@@ -100,6 +107,7 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
   function resetForSession() {
     clear();
     rootPictureCount.value = null;
+    rootPictureCountCapped.value = false;
   }
 
   const unsubscribeSessionReset = onSessionReset(resetForSession);
@@ -112,6 +120,7 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
     wizardOpen,
     wizardResume,
     rootPictureCount,
+    rootPictureCountCapped,
     openWizard,
     closeWizard,
   };

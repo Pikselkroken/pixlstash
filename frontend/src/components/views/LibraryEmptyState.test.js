@@ -17,10 +17,12 @@ import LibraryEmptyState from "./LibraryEmptyState.vue";
 import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
 import { IMPORT_FILE_ACCEPT } from "../../utils/media";
 
-function mountState({ rootPictureCount = null } = {}) {
+function mountState({ rootPictureCount = null, capped = false } = {}) {
   const pinia = createPinia();
   setActivePinia(pinia);
-  useFolderMappingStore().rootPictureCount = rootPictureCount;
+  const mapping = useFolderMappingStore();
+  mapping.rootPictureCount = rootPictureCount;
+  mapping.rootPictureCountCapped = capped;
   return mount(LibraryEmptyState, {
     global: {
       plugins: [pinia],
@@ -169,6 +171,15 @@ describe("when the library's own folder already holds pictures", () => {
     expect(buttonLabels(wrapper)[0]).toBe("Import them…");
     await wrapper.findAll(".library-empty__option button")[0].trigger("click");
     expect(wrapper.emitted("choose-folder")).toHaveLength(1);
+  });
+
+  it("says at least when the count stopped at the inspect cap", () => {
+    // /libraries/inspect stops counting at its entry cap so a folder picker
+    // can answer while somebody is looking at it, and says so with
+    // picture_count_capped. The number is a floor; naming it as the total
+    // would under-count the folder the owner is about to import.
+    const wrapper = mountState({ rootPictureCount: 5000, capped: true });
+    expect(wrapper.text()).toContain("At least 5,000 pictures are");
   });
 
   it("keeps the ordinary wording while the answer is unknown", () => {

@@ -25,6 +25,12 @@ const emit = defineEmits(["choose-folder", "add-files", "connect-comfyui"]);
 // this library already is - the state a dismissed import offer leaves.
 const mappingStore = useFolderMappingStore();
 const rootPictureCount = computed(() => mappingStore.rootPictureCount ?? 0);
+// The count stopped at the inspect endpoint's entry cap, so it is a floor and
+// the sentence says so. Naming it as the total under-counts a big folder, and
+// the number this screen shows is the one the owner checks the import against.
+const rootPictureCountCapped = computed(
+  () => mappingStore.rootPictureCountCapped === true,
+);
 
 const fileInput = ref(null);
 
@@ -76,8 +82,13 @@ function filesChosen(event) {
               >Import the pictures already in this folder</span
             >
             <span class="library-empty__detail">
+              {{ rootPictureCountCapped ? "At least" : "" }}
               {{ rootPictureCount.toLocaleString() }}
-              {{ rootPictureCount === 1 ? "picture is" : "pictures are" }}
+              {{
+                rootPictureCount === 1 && !rootPictureCountCapped
+                  ? "picture is"
+                  : "pictures are"
+              }}
               in this library's folder. They are read where they sit; nothing
               is moved.
             </span>
