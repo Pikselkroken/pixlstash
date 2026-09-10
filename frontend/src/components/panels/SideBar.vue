@@ -18,7 +18,10 @@ import FolderTreeNode from "../editors/FolderTreeNode.vue";
 import FolderEditor from "../editors/FolderEditor.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
-import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
+import {
+  readIsPartial,
+  useFolderMappingStore,
+} from "../../stores/useFolderMappingStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import ShareDialog from "../io/ShareDialog.vue";
 import WordmarkLogo from "../WordmarkLogo.vue";
@@ -765,13 +768,18 @@ async function chooseLibraryFolder() {
   // `setRootPictureCount` refuses the write on its own; only returning here
   // stops the routing that follows.
   const epoch = mappingStore.rootCountEpoch;
+  if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
+  if (epoch !== mappingStore.rootCountEpoch) return;
+  // Read AFTER the refresh, never before it: `pendingForThisLibrary` matches
+  // the saved entry against the active library's path, so with no list loaded
+  // yet there is no path to match and a perfectly good entry looked absent.
+  // Routing on that stale null opened a fresh wizard over the very folder this
+  // click should have resumed - and raced the auto-open watcher for it.
   const entry = pendingForThisLibrary.value;
   if (entry?.mode === "local_import") {
     openFolderMappingWizard(entry);
     return;
   }
-  if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
-  if (epoch !== mappingStore.rootCountEpoch) return;
   const path = librariesStore.activeLibrary?.path;
   if (path && librariesStore.canManage) {
     // Re-inspected on every click: a root that was empty when the count was
@@ -899,13 +907,13 @@ async function _fillRootPictureCount(entry) {
   const epoch = mappingStore.rootCountEpoch;
   if (mappingStore.rootPictureCount !== null) return;
   const counted = entry.pictureCount ?? entry.result?.picture_count;
-  // The wizard saves the read's `truncated` beside the count; an entry that
+  // The wizard saves the read's completeness beside the count; an entry that
   // carries the result itself answers from that. An entry saved before the
   // flag existed has a count of unknown completeness, so it is asked for
   // again rather than shown as a total.
   const capped =
     entry.pictureCountCapped ??
-    (entry.result ? entry.result.truncated === true : undefined);
+    (entry.result ? readIsPartial(entry.result) : undefined);
   if (counted != null && capped !== undefined) {
     mappingStore.setRootPictureCount(counted, capped, epoch);
     return;
@@ -962,11 +970,11 @@ async function _offerLoosePictures() {
   const parked = await takeParkedFolderRead();
   if (epoch !== mappingStore.rootCountEpoch) return;
   if (parked?.result && _samePath(parked.path, path)) {
-    // A truncated read stopped at `MAX_FOLDERS` and summed what it had, so its
-    // count is a floor exactly like the inspect endpoint's cap.
+    // A partial read summed only the folders it reached, so its count is a
+    // floor exactly like the inspect endpoint's cap.
     mappingStore.setRootPictureCount(
       parked.result.picture_count ?? null,
-      parked.result.truncated === true,
+      readIsPartial(parked.result),
       epoch,
     );
     autoOpenedPendingMapping = true;

@@ -51,6 +51,22 @@ function readStorage() {
   return null;
 }
 
+/**
+ * Whether a folder read describes less than the whole tree, so its
+ * `picture_count` is a floor rather than a total.
+ *
+ * Two ways, and the second is the one that keeps getting missed: the walk hit
+ * `MAX_FOLDERS` and stopped (`truncated`), or it could not open some folders
+ * and those subtrees are absent from the counts entirely
+ * (`unreadable_folders`, integration_architecture.md §20). One helper because
+ * three call sites derive this and drifted apart once already.
+ *
+ * @param {{truncated?: boolean, unreadable_folders?: number}|null|undefined} result
+ */
+export function readIsPartial(result) {
+  return result?.truncated === true || (result?.unreadable_folders ?? 0) > 0;
+}
+
 export const useFolderMappingStore = defineStore("folderMapping", () => {
   const pending = ref(readStorage());
   const wizardOpen = ref(false);
@@ -65,8 +81,8 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
   const rootPictureCount = ref(null);
   /**
    * True when `rootPictureCount` stopped short - at the inspect endpoint's
-   * entry cap, or at a folder read's `MAX_FOLDERS` - so it is a floor rather
-   * than a total: a folder picker has to answer while
+   * entry cap, or at anything `readIsPartial` calls a partial folder read - so
+   * it is a floor rather than a total: a folder picker has to answer while
    * somebody is looking at it. The copy says "at least N" instead of naming an
    * exact number the folder does not hold.
    */

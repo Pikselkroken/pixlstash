@@ -35,7 +35,10 @@ import {
   getFolderStructureReadStatus,
 } from "../../api/folderStructure";
 import { errorDetail } from "../../utils/apiError";
-import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
+import {
+  readIsPartial,
+  useFolderMappingStore,
+} from "../../stores/useFolderMappingStore";
 import {
   useLibrariesStore,
   useLibrarySwitchStore,
@@ -224,9 +227,9 @@ async function build(accepted) {
       mode: "local_import",
       assignments: accepted,
       pictureCount: pictureCount.value,
-      // A truncated read summed only the folders it reached, so the count it
+      // A partial read summed only the folders it reached, so the count it
       // saves is a floor. The empty library's copy reads this to say so.
-      pictureCountCapped: readResult.value?.truncated === true,
+      pictureCountCapped: readIsPartial(readResult.value),
       autoCommit: true,
     });
     emit("close");

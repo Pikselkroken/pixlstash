@@ -107,6 +107,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Belt and braces for the parked-read tests: each deletes this itself, but
+  // a failing assertion returns before it does, and the leaked desktop shim
+  // then fails every test after it as well.
+  delete window.pixlstashDesktop;
   vi.restoreAllMocks();
 });
 
@@ -334,6 +338,44 @@ describe("the loose-pictures offer for an empty library", () => {
     const empty = mount(LibraryEmptyState, { shallow: true });
     expect(empty.text()).toContain(
       "could not be fully counted; it holds at least 5,000 pictures",
+    );
+
+    empty.unmount();
+    delete window.pixlstashDesktop;
+    wrapper.unmount();
+  });
+
+  it("words a parked read that skipped unreadable folders as a floor too", async () => {
+    // `unreadable_folders > 0` means those subtrees are absent from the
+    // counts entirely (integration_architecture.md §20), so a zero here is an
+    // incomplete read, not an empty folder. Read as a total it sent the owner
+    // to "Add a library", which refuses the folder the library already is.
+    const path = "/home/me/Pictures";
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    window.pixlstashDesktop = {
+      takePendingMapping: async () => ({
+        path,
+        result: {
+          levels: [],
+          picture_count: 0,
+          truncated: false,
+          unreadable_folders: 2,
+        },
+      }),
+    };
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+
+    const mapping = useFolderMappingStore();
+    expect(mapping.rootMayHoldPictures).toBe(true);
+    expect(mapping.wizardResume).toMatchObject({ path, mode: "local_import" });
+    const empty = mount(LibraryEmptyState, { shallow: true });
+    expect(empty.text()).toContain(
+      "could not be fully counted; it may already hold pictures",
     );
 
     empty.unmount();
@@ -689,6 +731,48 @@ describe("the empty library's Choose a folder button", () => {
     libraries.canManage = true;
     return mountSidebar();
   }
+
+  it("resumes an entry the refresh only just made matchable", async () => {
+    // `pendingForThisLibrary` compares the entry's path with the ACTIVE
+    // library's, so before the list has loaded it is null for every entry
+    // there is. Read once up front, that null was still the value the routing
+    // used after the refresh, and the click opened a fresh wizard over the
+    // folder it should have resumed - racing the auto-open watcher for it.
+    const path = "/home/me/Pictures";
+    const entry = {
+      taskId: "task-7",
+      path,
+      label: "Pictures",
+      mode: "local_import",
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    const inspect = vi.fn();
+    apiGet.mockImplementation((url) => {
+      if (url.includes("inspect")) {
+        inspect();
+        return Promise.resolve({ data: { picture_count: 12 } });
+      }
+      if (url === "/libraries") {
+        return Promise.resolve({
+          data: {
+            libraries: [{ id: 1, name: "lib", path, is_active: true }],
+            can_manage: true,
+          },
+        });
+      }
+      return Promise.resolve(respond());
+    });
+    const wrapper = await mountSidebar();
+    const mapping = useFolderMappingStore();
+    expect(mapping.wizardOpen).toBe(false);
+
+    await wrapper.vm.chooseLibraryFolder();
+
+    expect(mapping.wizardResume).toEqual(entry);
+    expect(inspect).not.toHaveBeenCalled();
+
+    wrapper.unmount();
+  });
 
   it("re-inspects, so a root that has since filled up opens the wizard", async () => {
     // A cached 0 from a load over an empty folder used to be permanent, and
