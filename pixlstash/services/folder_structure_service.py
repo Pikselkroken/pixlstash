@@ -598,7 +598,10 @@ class FolderStructureRead:
         files a pattern is judged on are the same ones on every run and come
         from across the tree rather than from one folder.
         """
-        stems = {os.path.splitext(f)[0] for f in folder.direct_pictures}
+        # Case-folded: Windows and macOS filesystems are case-insensitive, so
+        # `img_0001.txt` beside `IMG_0001.JPG` is the same convention there and
+        # matching case-sensitively would report none at all.
+        stems = {os.path.splitext(f)[0].lower() for f in folder.direct_pictures}
         if not stems:
             return
         sampled_here: Counter = Counter()
@@ -611,10 +614,11 @@ class FolderStructureRead:
             ):
                 continue
             # Longest prefix that is a picture stem: one set lookup per
-            # character rather than one comparison per picture.
+            # character rather than one comparison per picture. The suffix is
+            # sliced off the original name, so it keeps its real casing.
             suffix = None
             for cut in range(len(name) - 1, 0, -1):
-                if name[:cut] in stems:
+                if name[:cut].lower() in stems:
                     suffix = name[cut:]
                     break
             if suffix is None or not is_safe_sidecar_suffix(suffix):

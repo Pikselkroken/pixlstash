@@ -460,6 +460,29 @@ def test_metadata_sidecars_never_reach_the_caption_sniff():
     )
 
 
+def test_a_caption_stem_matches_the_picture_regardless_of_case():
+    """`IMG_0001.JPG` beside `img_0001.txt` is one convention, not two files
+    that happen to look alike: on Windows and macOS the filesystem itself
+    treats them as the same stem, and a camera that shouts its names while the
+    exporter whispers its own is the common case. The suffix is still reported
+    with the casing the caption file actually has."""
+    spec = {
+        "": [],
+        "shoot": [
+            f for n in ("0001", "0002") for f in (f"IMG_{n}.JPG", f"img_{n}.TXT")
+        ],
+    }
+    with _tree(spec) as root:
+        for n in ("0001", "0002"):
+            _write(root, f"shoot/img_{n}.TXT", "1girl, solo, long hair, smile")
+        result = FolderStructureRead(root).run()
+
+    by_suffix = {row["suffix"]: row for row in result["captions"]}
+    assert set(by_suffix) == {".TXT"}, "the suffix keeps the caption file's own casing"
+    assert by_suffix[".TXT"]["files"] == 2
+    assert by_suffix[".TXT"]["kind"] == "tags"
+
+
 def test_a_tree_without_captions_reports_none():
     with _tree({"": [], "shoot": ["a.jpg", "b.jpg", "c.jpg"]}) as root:
         result = FolderStructureRead(root).run()
