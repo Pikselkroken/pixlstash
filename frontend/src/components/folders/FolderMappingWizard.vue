@@ -296,7 +296,7 @@ function onCommitted(result) {
         : ''
     "
     :width="840"
-    :pad-body="step !== 'mapping'"
+    :pad-body="step === 'choose'"
     :persistent="true"
     @close="close"
   >

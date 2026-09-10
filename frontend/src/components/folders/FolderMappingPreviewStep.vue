@@ -343,7 +343,10 @@ onUnmounted(() => {
       </template>
     </div>
 
-    <div v-if="patterns.length" class="preview-step__card">
+    <div
+      v-if="patterns.length"
+      class="preview-step__card preview-step__card--captions"
+    >
       <div class="preview-step__card-title">Caption files beside your pictures</div>
       <p class="preview-step__card-lead">
         Text files named after a picture are read as that picture's tags or
@@ -496,11 +499,24 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* The step owns the dialog body (the wizard mounts it flush, like the mapping
+   step) and fills it: the header, the facts and the buttons keep their size,
+   and only the two lists - the entity groups and the caption patterns -
+   shrink and scroll inside themselves. The step's own scroll is the fallback
+   for a window too short even for that. */
 .preview-step {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  padding: var(--space-6);
   overflow-y: auto;
+}
+
+.preview-step > * {
+  flex-shrink: 0;
 }
 
 .preview-step__header {
@@ -530,10 +546,19 @@ onUnmounted(() => {
 .preview-step__groups {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  align-content: start;
   gap: var(--space-4) var(--space-6);
-  max-height: 14rem;
+  flex: 0 1 auto;
+  min-height: 3rem;
   overflow-y: auto;
   padding-right: var(--space-2);
+}
+
+.preview-step__card--captions {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 6rem;
 }
 
 .preview-step__group {
@@ -596,7 +621,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  max-height: 14rem;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
