@@ -452,7 +452,14 @@ count, so `offerLoosePictures` fills it from the entry's own read
 carries neither, opening nothing either way. When the inspect stopped at the
 endpoint's entry cap the count is a floor rather than a total, so
 `rootPictureCountCapped` makes the copy say "At least N pictures are in this
-library's folder" instead of naming a number the folder does not hold. Both refs
+library's folder" instead of naming a number the folder does not hold. A
+folder-structure read's `picture_count` is a floor on the same terms whenever
+the read came back `truncated`: it stopped at `MAX_FOLDERS` and summed only the
+folders it reached, so a count sourced from one carries that flag too. Both
+entry-sourced paths do: the desktop's parked read passes its own
+`result.truncated`, and the wizard saves a `pictureCountCapped` beside
+`pictureCount` on the pending entry, which `_fillRootPictureCount` reads and
+falls back to `result.truncated` for entries written before it did. Both refs
 are cleared on a session change, and an epoch bumped by that same reset discards
 an inspect that was already on the wire, so a count the outgoing owner asked for
 cannot land in the next session. `chooseLibraryFolder` and `offerLoosePictures`
