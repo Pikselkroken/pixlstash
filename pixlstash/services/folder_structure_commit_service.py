@@ -194,21 +194,33 @@ class CaptionPattern:
 def caption_suffixes(captions) -> tuple[Optional[list[str]], Optional[list[str]]]:
     """``(tags_suffixes, description_suffixes)`` for `attach_sidecars`.
 
-    ``(None, None)`` when the owner gave no answer, which probes the known
-    conventions. With an answer, each list holds exactly the suffixes said to
-    be that kind, so an ignored pattern is read as nothing.
+    ``(None, None)`` only for ``None``, which is *no answer at all* and probes
+    the known conventions. **An empty answer is still an answer**: ``[]`` gives
+    ``([], [])``, read nothing. The two differ on exactly the case that
+    matters - a tree whose only ``.txt`` the read dropped (JSON, UTF-16, video
+    only, a thirteenth pattern past the cap) - where "the client asked and
+    there was nothing to confirm" must not fall back to opening it anyway and
+    storing the result as tags.
+
+    Longest suffix first: `attach_sidecars` takes the first that exists, so an
+    owner who confirmed both ``_tags.txt`` and ``.txt`` gets the specific one
+    where both sit beside a picture, which is what the probe's
+    ``_KNOWN_SUFFIXES`` order already does.
     """
-    captions = list(captions or ())
-    if not captions:
+    if captions is None:
         return None, None
+    ranked = sorted(captions, key=lambda c: len(c.suffix), reverse=True)
     return (
-        [c.suffix for c in captions if c.kind == SIDECAR_TYPE_TAGS],
-        [c.suffix for c in captions if c.kind == SIDECAR_TYPE_DESCRIPTION],
+        [c.suffix for c in ranked if c.kind == SIDECAR_TYPE_TAGS],
+        [c.suffix for c in ranked if c.kind == SIDECAR_TYPE_DESCRIPTION],
     )
 
 
-def parse_captions(raw: list) -> list[CaptionPattern]:
+def parse_captions(raw) -> Optional[list[CaptionPattern]]:
     """Validate the wire form of ``captions`` into `CaptionPattern` rows.
+
+    ``None`` in, ``None`` out - the field was absent, so there is no answer to
+    carry and the import probes. ``[]`` in, ``[]`` out: an answer of nothing.
 
     Raises:
         CommitError: A row is malformed, names an unknown kind, or carries a
@@ -216,6 +228,8 @@ def parse_captions(raw: list) -> list[CaptionPattern]:
             reference-folder API enforces, because the suffix is appended to
             a picture path to find the file to read.
     """
+    if raw is None:
+        return None
     parsed: list[CaptionPattern] = []
     seen: set[str] = set()
     for index, row in enumerate(raw or []):
@@ -306,7 +320,7 @@ def record_pending_commit(
     label: Optional[str],
     expected_pictures: int,
     assignments: list[Assignment],
-    captions=(),
+    captions=None,
 ) -> None:
     """Write the accepted mapping down before the commit thread starts.
 
@@ -345,7 +359,11 @@ def record_pending_commit(
                 label=label,
                 expected_pictures=expected_pictures,
                 assignments=json.dumps([a.as_dict() for a in assignments]),
-                captions=json.dumps([c.as_dict() for c in captions]),
+                # ``"null"``, not ``"[]"``: no answer probes, an empty answer
+                # reads nothing, and a resume has to tell them apart.
+                captions=json.dumps(
+                    None if captions is None else [c.as_dict() for c in captions]
+                ),
                 stage="registering",
                 state=STATE_PENDING,
             )
@@ -663,7 +681,11 @@ def validate_local_import_root(server, root_path: str) -> None:
 
 
 def _build_managed_picture(
-    abs_path: str, relative_path: str, image_root: str, captions=()
+    abs_path: str,
+    relative_path: str,
+    image_root: str,
+    tags_suffixes=None,
+    description_suffixes=None,
 ) -> Picture:
     """Build a managed Picture for a file already sitting under *image_root*.
 
@@ -674,6 +696,9 @@ def _build_managed_picture(
     moved for the picture itself; only the thumbnail is generated, exactly as
     the reference-folder path does - the source file already lives where it
     is going to stay.
+
+    *tags_suffixes* / *description_suffixes* are `caption_suffixes`' answer for
+    the whole import, resolved once by the caller rather than per picture.
     """
     pixel_sha = ImageUtils.calculate_hash_from_file_path(abs_path)
     with open(abs_path, "rb") as fh:
@@ -737,9 +762,7 @@ def _build_managed_picture(
     # A caption file the owner already has beside the picture beats the
     # tagger's guess - the same read the reference-folder scan does, at the
     # suffixes the owner confirmed (or the known conventions, unanswered).
-    sidecar_tags = attach_sidecars(pic, abs_path, *caption_suffixes(captions))
-    if sidecar_tags:
-        pic._sidecar_tags = sidecar_tags  # type: ignore[attr-defined]
+    attach_sidecars(pic, abs_path, tags_suffixes, description_suffixes)
     return pic
 
 
@@ -750,7 +773,7 @@ def local_import_pictures(
     expected_pictures: int,
     on_progress=None,
     should_stop=None,
-    captions=(),
+    captions=None,
 ) -> list[int]:
     """Import every supported file under *root_path* as a managed Picture.
 
@@ -777,7 +800,8 @@ def local_import_pictures(
             complete and stays indexed.
         captions: The owner's answers to the read's caption patterns
             (`CaptionPattern` rows), read into tags and descriptions as each
-            picture is built.
+            picture is built. ``None`` is no answer and probes the known
+            conventions; ``[]`` is an answer of nothing and reads no file.
 
     Returns:
         Every matching file's Picture id, existing and newly-created alike.
@@ -834,10 +858,18 @@ def local_import_pictures(
     if on_progress is not None:
         on_progress(processed, total)
 
+    # One answer for the whole import: the lists are the same for every
+    # picture, and resolving them per picture re-sorted them 28,000 times.
+    tags_suffixes, description_suffixes = caption_suffixes(captions)
+
     def _build(abs_path: str) -> Optional[Picture]:
         try:
             return _build_managed_picture(
-                abs_path, rel_by_abs[abs_path], image_root, captions
+                abs_path,
+                rel_by_abs[abs_path],
+                image_root,
+                tags_suffixes,
+                description_suffixes,
             )
         except Exception as exc:
             logger.warning(

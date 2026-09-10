@@ -102,7 +102,11 @@ class FolderStructureCaptionPayload(BaseModel):
     """The owner's answer for one caption-file pattern the read reported."""
 
     suffix: str
-    kind: Literal["tags", "description", "ignore"]
+    #: A plain ``str``, exactly as `FolderStructureAssignmentPayload.kind` is:
+    #: `parse_captions` owns the vocabulary and answers an unknown kind with
+    #: the documented 400 naming the row and the values, where a `Literal`
+    #: would make pydantic answer 422 with its own shape.
+    kind: str
 
 
 class FolderStructureCommitRequest(BaseModel):
@@ -126,11 +130,20 @@ class FolderStructureCommitRequest(BaseModel):
     """
 
     assignments: list[FolderStructureAssignmentPayload] = []
-    captions: list[FolderStructureCaptionPayload] = []
+    captions: Optional[list[FolderStructureCaptionPayload]] = None
     """One row per caption pattern from the read's ``captions``, saying what
-    to read it as. Absent or empty: the import probes the known conventions
-    (``_tags.txt``, ``.caption``, a content-sniffed ``.txt`` …) instead.
-    ``local_import`` only; with ``mode: "reference"`` a non-empty list is 400."""
+    to read it as.
+
+    **Absent (or `null`) and empty are different answers.** Absent is a client
+    that never asked - an older one - and the import probes the known
+    conventions (``_tags.txt``, ``.caption``, a content-sniffed ``.txt`` …).
+    ``[]`` is the owner having been asked and there being nothing to confirm,
+    and reads no caption file at all: the read drops a `.txt` it cannot
+    classify (JSON, markup, UTF-16, a pattern past the cap), and probing one
+    of those anyway is how a metadata blob becomes a picture's tags.
+
+    ``local_import`` only; with ``mode: "reference"`` any list, ``[]``
+    included, is 400."""
     label: Optional[str] = None
     mode: Literal["reference", "local_import"] = "reference"
     """``reference`` (default): register the scanned root as an ordinary
@@ -500,7 +513,7 @@ def create_router(server) -> APIRouter:
         assignments: list,
         label: Optional[str],
         mode: str,
-        captions: list = (),
+        captions: Optional[list] = None,
     ) -> None:
         """Hold a library read lease for the whole commit, then run it.
 
@@ -551,7 +564,7 @@ def create_router(server) -> APIRouter:
         assignments: list,
         label: Optional[str],
         mode: str,
-        captions: list = (),
+        captions: Optional[list] = None,
     ) -> None:
         with server.folder_structure_commit_lock:
             state = server.folder_structure_commit
@@ -841,11 +854,13 @@ def create_router(server) -> APIRouter:
                 [a.model_dump() for a in payload.assignments]
             )
             captions = commit_service.parse_captions(
-                [c.model_dump() for c in payload.captions]
+                None
+                if payload.captions is None
+                else [c.model_dump() for c in payload.captions]
             )
         except commit_service.CommitError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if captions and payload.mode == "reference":
+        if captions is not None and payload.mode == "reference":
             # A reference folder holds one suffix per kind and its scan probes
             # the known conventions for an unset one, so it cannot express
             # "read nothing of this kind": an answer with every tags pattern

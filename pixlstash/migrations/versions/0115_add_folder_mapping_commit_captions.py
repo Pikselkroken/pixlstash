@@ -4,8 +4,9 @@ The read now reports the caption-file patterns beside the pictures and the
 owner says which are tags, which are descriptions and which to ignore. A
 commit resumed after a crash must honour that answer rather than probe the
 conventions again and import a file the owner said to leave alone, so it is
-recorded beside the assignments. ``"[]"`` on every existing row: no answer,
-which is what every commit before this column meant.
+recorded beside the assignments. ``"null"`` on every existing row: no answer at
+all, which is what every commit before this column meant - as opposed to
+``"[]"``, an answer of nothing, which reads no caption file.
 
 Revision ID: 0115_add_folder_mapping_commit_captions
 Revises: 0114_remove_views_and_project_cover
@@ -34,7 +35,15 @@ def upgrade() -> None:
     if "captions" not in _columns(op.get_bind()):
         op.add_column(
             "folder_mapping_commit",
-            sa.Column("captions", sa.String(), nullable=False, server_default="[]"),
+            # `sa.text` so the default is the four-character JSON string
+            # "null" - a bare server_default="null" renders SQL NULL, which
+            # this NOT NULL column would refuse.
+            sa.Column(
+                "captions",
+                sa.String(),
+                nullable=False,
+                server_default=sa.text("'null'"),
+            ),
         )
 
 
