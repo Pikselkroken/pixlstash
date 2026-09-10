@@ -219,16 +219,20 @@ def _widest_convention(
     one their library actually uses rather than whichever the payload listed
     first.
     """
+
+    def files_for(suffix: str) -> int:
+        try:
+            return sum(os.path.isfile(sidecar_path(p, suffix)) for p in file_paths)
+        except ValueError as exc:
+            # Names a picture rather than a sidecar; never worth seeding.
+            logger.warning("Ignoring caption suffix %r: %s", suffix, exc)
+            return 0
+
     if not suffixes:
         return None
     if len(suffixes) == 1:
         return suffixes[0]
-    return max(
-        suffixes,
-        key=lambda suffix: sum(
-            os.path.isfile(sidecar_path(path, suffix)) for path in file_paths
-        ),
-    )
+    return max(suffixes, key=files_for)
 
 
 def parse_captions(raw: list) -> list[CaptionPattern]:

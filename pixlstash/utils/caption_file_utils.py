@@ -108,12 +108,21 @@ def sidecar_path(image_path: str, suffix: str) -> str:
     with no separator provably cannot leave the directory, whereas comparing
     the joined path's dirname is blind to symlinks in the traversal.
 
+    A suffix equal to the image's own extension names the image itself, and a
+    caption file that IS the picture is read as mojibake tags and truncated by
+    the first write-back. Refused here for the same reason: this is the one
+    place every read and write path derives the name.
+
     Raises:
-        ValueError: If *suffix* is not a bare filename fragment.
+        ValueError: If *suffix* is not a bare filename fragment, or names the
+            image itself.
     """
     if not is_safe_sidecar_suffix(suffix):
         raise ValueError(f"Sidecar suffix escapes the image directory: {suffix!r}")
-    return os.path.splitext(image_path)[0] + suffix
+    path = os.path.splitext(image_path)[0] + suffix
+    if os.path.normcase(path) == os.path.normcase(image_path):
+        raise ValueError(f"Sidecar suffix {suffix!r} names the picture itself")
+    return path
 
 
 def classify_sidecar(path: str) -> str | None:
@@ -185,7 +194,15 @@ def resolve_typed_sidecar(
         return candidate if os.path.isfile(candidate) else None
 
     for suffix in _KNOWN_SUFFIXES.get(sidecar_type, ()):  # type: ignore[arg-type]
-        candidate = sidecar_path(image_path, suffix)
+        try:
+            candidate = sidecar_path(image_path, suffix)
+        except ValueError as exc:
+            # A known convention that names this picture itself (a ``.txt``
+            # beside a ``.txt``). Not a sidecar; try the next one.
+            logger.warning(
+                "Skipping %s probe for %s: %s", sidecar_type, image_path, exc
+            )
+            continue
         if not os.path.isfile(candidate):
             continue
         # Unambiguous suffixes classify by name; the trailing ".txt" needs the
@@ -366,10 +383,13 @@ def write_sidecar(path: str, content: str) -> float | None:
         with open(path, "r", encoding="utf-8") as fh:
             if fh.read() == content:
                 return get_sidecar_mtime(path)
-    except OSError as exc:
-        # Missing or unreadable - fall through and (re)write it. Logged at DEBUG
-        # so it satisfies the no-silent-failure policy without noising up a
-        # normal first-time write (there is nothing to read yet).
+    except (OSError, UnicodeDecodeError) as exc:
+        # Missing, unreadable, or not text at all - fall through and (re)write
+        # it. Logged at DEBUG so it satisfies the no-silent-failure policy
+        # without noising up a normal first-time write (there is nothing to
+        # read yet). UnicodeDecodeError is in here because the compare read is
+        # the first thing to touch a file that is not a caption at all, and it
+        # escaped to abort a whole scan.
         logger.debug(
             "Could not read sidecar %s for compare (will rewrite): %s", path, exc
         )
