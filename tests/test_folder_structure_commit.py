@@ -2094,3 +2094,41 @@ def test_an_accepted_caption_answer_takes_the_read_s_spelling():
     )
     assert pattern.suffix == ".txt"
     assert pattern.kind == "description"
+
+
+def test_two_reported_casings_can_each_be_answered():
+    """A repeat is two answers claiming one *reported* row, not two answers
+    that merely look alike case-folded. On Linux `a.txt` and `a.TXT` are two
+    files, the read reports a row for each, and each is answered on its own.
+    Where the read reported a single row for them, two answers still name one
+    file and `attach_sidecars` would read it as two kinds, so it is still a
+    400 - as it is with no reported rows to compare against at all."""
+    import pytest
+
+    from pixlstash.services.folder_structure_commit_service import (
+        CommitError,
+        parse_captions,
+    )
+
+    both = [{"suffix": ".txt", "kind": "tags"}, {"suffix": ".TXT", "kind": "tags"}]
+    answered = parse_captions(
+        [
+            {"suffix": ".TXT", "kind": "description"},
+            {"suffix": ".txt", "kind": "tags"},
+        ],
+        reported=both,
+    )
+    assert [(row.suffix, row.kind) for row in answered] == [
+        (".TXT", "description"),
+        (".txt", "tags"),
+    ], "an exact spelling answers its own row"
+
+    for reported in ([{"suffix": ".txt", "kind": "tags"}], None):
+        with pytest.raises(CommitError, match=r"captions\[1\] repeats suffix"):
+            parse_captions(
+                [
+                    {"suffix": ".txt", "kind": "tags"},
+                    {"suffix": ".TXT", "kind": "description"},
+                ],
+                reported=reported,
+            )

@@ -243,18 +243,30 @@ def parse_captions(raw, reported=None) -> Optional[list[CaptionPattern]]:
         return None
     if not isinstance(raw, list):
         raise CommitError("captions must be a list")
-    # Case-insensitive, because the read groups its own rows that way: it
-    # reports `.TXT` for a folder whose first spelling was that, and the owner
-    # answering `.txt` is answering that same one file.
+    # The spellings the read actually reported, in its own order. Matched
+    # case-insensitively, because the read groups its own rows that way where
+    # the filesystem does: it reports `.TXT` for a folder whose first spelling
+    # was that, and the owner answering `.txt` is answering that same one file.
+    # An exact match wins, so a read that kept `.txt` and `.TXT` apart - two
+    # real files on Linux - can have each of its rows answered on its own.
     offered = (
         None
         if reported is None
-        else {
-            row["suffix"].lower(): row["suffix"]
+        else [
+            row["suffix"]
             for row in reported
             if isinstance(row, dict) and isinstance(row.get("suffix"), str)
-        }
+        ]
     )
+
+    def claimed(suffix: str) -> Optional[str]:
+        """The reported spelling this answer names, or ``None`` if none does."""
+        if offered is None:
+            return None
+        if suffix in offered:
+            return suffix
+        return next((row for row in offered if row.lower() == suffix.lower()), None)
+
     parsed: list[CaptionPattern] = []
     seen: set[str] = set()
     for index, row in enumerate(raw):
@@ -266,32 +278,35 @@ def parse_captions(raw, reported=None) -> Optional[list[CaptionPattern]]:
             raise CommitError(
                 f"captions[{index}].suffix must be a bare filename fragment"
             )
-        # Case-folded: on Windows and macOS `_notes.txt` and `_NOTES.TXT` name
-        # one file, so accepting both would have `attach_sidecars` read it as
-        # two kinds. The read reports one row per suffix for the same reason.
-        if suffix.lower() in seen:
+        # Two answers repeat when they claim the same *reported* row, because
+        # that is the one file `attach_sidecars` would then read as two kinds.
+        # Case-folded where the read reported a single spelling - on Windows
+        # and macOS `_notes.txt` and `_NOTES.TXT` name one file, and the read
+        # reports one row for them - and by the reported spelling where it
+        # kept two apart, so `.txt` and `.TXT` can both be answered on Linux.
+        # With nothing reported to compare against, case-folded is the rule.
+        spelled = claimed(suffix)
+        if (spelled or suffix.lower()) in seen:
             raise CommitError(f"captions[{index}] repeats suffix {suffix!r}")
         if kind not in CAPTION_KINDS:
             raise CommitError(
                 f"captions[{index}].kind must be one of "
                 f"{sorted(CAPTION_KINDS)}, got {kind!r}"
             )
-        seen.add(suffix.lower())
-        parsed.append(CaptionPattern(suffix, kind))
+        seen.add(spelled or suffix.lower())
+        # The accepted answer takes the read's own spelling: on a case-sensitive
+        # filesystem `.TXT` answered for a reported `.txt` would otherwise have
+        # the import look for `photo.TXT` and miss the `photo.txt` it was shown.
+        parsed.append(CaptionPattern(spelled or suffix, kind))
     # After the shape checks, so a malformed row is still answered by what is
     # wrong with the row rather than by "the read never offered it".
-    # The accepted answer takes the read's own spelling: on a case-sensitive
-    # filesystem `.TXT` answered for a reported `.txt` would otherwise have
-    # the import look for `photo.TXT` and miss the `photo.txt` it was shown.
     if offered is not None:
         for index, pattern in enumerate(parsed):
-            spelled = offered.get(pattern.suffix.lower())
-            if spelled is None:
+            if pattern.suffix not in offered:
                 raise CommitError(
                     f"captions[{index}].suffix {pattern.suffix!r} is not one "
                     f"the read reported"
                 )
-            parsed[index] = CaptionPattern(spelled, pattern.kind)
     return parsed
 
 
