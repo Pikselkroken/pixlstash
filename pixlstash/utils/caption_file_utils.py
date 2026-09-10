@@ -311,7 +311,8 @@ def sniff_caption(path: str) -> tuple[str, str] | None:
     Returns ``(kind, excerpt)`` with *kind* ``"tags"`` or ``"description"``
     and *excerpt* the first line or so, whitespace collapsed, for a screen to
     show beside the choice. ``None`` when the file is not a caption at all:
-    unreadable, empty, binary (a NUL byte in the head), or markup/JSON.
+    unreadable, binary (a NUL byte in the head), markup/JSON, or empty
+    without a name that says what it is.
 
     In order:
 
@@ -322,7 +323,10 @@ def sniff_caption(path: str) -> tuple[str, str] | None:
       metadata or an XMP/XML sidecar - no reading turns either into a tag list
       or a description;
     * an unambiguous name (``_tags.txt``, ``_description.txt``, ``.caption``
-      …) decides, because the exporter that wrote it said so;
+      …) decides, because the exporter that wrote it said so - including for
+      an empty file, so the suffix probe still resolves it, `attach_sidecars`
+      records ``tags_file`` and the caller falls back to the sentinel;
+    * an empty file with no such name says nothing, so it is not a caption;
     * otherwise the content decides (`_looks_like_tags`).
     """
     try:
@@ -334,16 +338,17 @@ def sniff_caption(path: str) -> tuple[str, str] | None:
     if b"\x00" in head:
         return None
     text = head.decode("utf-8-sig", errors="replace").strip()
-    if not text or text[0] in "{[<":
+    if text[:1] in ("{", "[", "<"):
         return None
     excerpt = " ".join(text.split())[:_EXCERPT_CHARS]
     name = os.path.basename(path)
     if _TAGS_NAME_RE.search(name):
-        kind = SIDECAR_TYPE_TAGS
-    elif _DESCRIPTION_NAME_RE.search(name):
-        kind = SIDECAR_TYPE_DESCRIPTION
-    else:
-        kind = SIDECAR_TYPE_TAGS if _looks_like_tags(text) else SIDECAR_TYPE_DESCRIPTION
+        return SIDECAR_TYPE_TAGS, excerpt
+    if _DESCRIPTION_NAME_RE.search(name):
+        return SIDECAR_TYPE_DESCRIPTION, excerpt
+    if not text:
+        return None
+    kind = SIDECAR_TYPE_TAGS if _looks_like_tags(text) else SIDECAR_TYPE_DESCRIPTION
     return kind, excerpt
 
 

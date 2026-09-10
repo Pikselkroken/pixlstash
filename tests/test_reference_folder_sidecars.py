@@ -20,11 +20,13 @@ from PIL import Image
 from sqlmodel import Session, delete, select
 
 from pixlstash.db_models import Picture, ReferenceFolder, Tag
+from pixlstash.db_models.tag import TAG_PENDING_SENTINEL
 from pixlstash.routes.reference_folders import _validate_sidecar_suffix
 from pixlstash.server import Server
 from pixlstash.tasks.reference_folder_scan_task import ReferenceFolderScanTask
 from pixlstash.utils.caption_file_utils import (
     SIDECAR_TYPE_TAGS,
+    attach_sidecars,
     classify_sidecar,
     detect_folder_suffixes,
     is_safe_sidecar_suffix,
@@ -79,6 +81,35 @@ def test_resolve_typed_sidecar_routes_bare_txt(tmp_path):
     assert resolve_typed_sidecar(str(img), "description", None) is None
     # An explicit suffix is matched exactly (and not found here).
     assert resolve_typed_sidecar(str(img), "tags", "_tags.txt") is None
+
+
+def test_empty_named_tags_sidecar_is_recorded_and_falls_back_to_the_sentinel(tmp_path):
+    """An empty `_tags.txt` is still the file the exporter said holds tags.
+
+    The name decides before emptiness does, so the convention probe resolves
+    it, `attach_sidecars` records `tags_file`, and the empty list it returns
+    leaves the inserter on the pending-tag sentinel.
+    """
+    img = tmp_path / "photo.png"
+    img.write_bytes(b"x")
+    _write(str(tmp_path / "photo_tags.txt"), "")
+    assert resolve_typed_sidecar(str(img), SIDECAR_TYPE_TAGS, None) == str(
+        tmp_path / "photo_tags.txt"
+    )
+    pic = Picture(file_path=str(img))
+    assert attach_sidecars(pic, str(img)) == []
+    assert pic.tags_file == str(tmp_path / "photo_tags.txt")
+    assert (getattr(pic, "_sidecar_tags", None) or [TAG_PENDING_SENTINEL]) == [
+        TAG_PENDING_SENTINEL
+    ]
+
+
+def test_empty_bare_txt_is_not_a_caption(tmp_path):
+    img = tmp_path / "photo.png"
+    img.write_bytes(b"x")
+    _write(str(tmp_path / "photo.txt"), "   \n")
+    assert classify_sidecar(str(tmp_path / "photo.txt")) is None
+    assert resolve_typed_sidecar(str(img), SIDECAR_TYPE_TAGS, None) is None
 
 
 def test_detect_folder_suffixes(tmp_path):
