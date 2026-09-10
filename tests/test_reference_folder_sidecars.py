@@ -787,6 +787,51 @@ def test_scan_drops_a_detected_suffix_the_writer_refused(server, tmp_path):
     assert server.vault.db.run_task(_read) == ("_caption.txt", None)
 
 
+def test_a_refused_detection_turns_that_kind_off_instead_of_probing(server, tmp_path):
+    """Unsetting the refused suffix left the kind on the known conventions,
+    and the probe found the very file the refusal was about: with tags on
+    `_caption.txt`, the description probe re-opened `photo_caption.txt` and
+    read one file as both kinds. The kind is off for the whole scan instead -
+    the picture the scan indexes and the one it already had alike."""
+    folder_dir = str(tmp_path / "refused_kind_off")
+    folder_id = _make_folder(
+        server,
+        folder_dir,
+        tags_suffix="_caption.txt",
+        sync_tags=True,
+        sync_descriptions=True,
+    )
+    known = _make_image(folder_dir, "known.png")
+    _write(os.path.join(folder_dir, "known_caption.txt"), "cat, mat")
+    known_id = _index_picture(server, folder_id, known)
+    _make_image(folder_dir, "fresh.png")
+    _write(os.path.join(folder_dir, "fresh_caption.txt"), "A calm cat on a mat.")
+
+    ReferenceFolderScanTask(
+        server.vault.db, folder_id, folder_dir, folder_dir
+    )._run_task()
+
+    def _descriptions(session: Session):
+        return [
+            (p.original_file_name, p.description_file, p.description)
+            for p in session.exec(
+                select(Picture).where(Picture.reference_folder_id == folder_id)
+            ).all()
+        ]
+
+    rows = sorted(server.vault.db.run_task(_descriptions))
+    assert rows == [
+        ("fresh.png", None, None),
+        ("known.png", None, None),
+    ], "no description file is recorded under the refused suffix"
+    assert _picture(server, known_id).tags_file == os.path.join(
+        folder_dir, "known_caption.txt"
+    ), "the kind that WAS accepted still reads its file"
+    assert not os.path.exists(os.path.join(folder_dir, "known_description.txt")), (
+        "and nothing is exported for the refused kind either"
+    )
+
+
 def test_folder_route_refuses_a_suffix_that_names_a_picture(server, tmp_path):
     """A ``.png`` suffix makes ``photo.png`` the caption file for
     ``photo.jpg``; the first write-back would replace that picture with text.

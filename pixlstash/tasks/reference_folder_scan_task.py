@@ -151,6 +151,9 @@ class ReferenceFolderScanTask(BaseTask):
         # _run_task(); None means "use known conventions / module defaults".
         self._tags_suffix: str | None = None
         self._description_suffix: str | None = None
+        # Sidecar kinds this scan must not read or write at all, filled in by
+        # _run_task() when a detected suffix is refused (see there).
+        self._disabled_kinds: set[str] = set()
         # The folder's layout, loaded at the start of _run_task(); None means
         # "no layout", same as an unset column (v1.11 Phase 5).
         self._layout = None
@@ -255,17 +258,21 @@ class ReferenceFolderScanTask(BaseTask):
             if seed:
                 # Only a suffix that was actually accepted may drive this
                 # scan. A rejected one (unsafe, or colliding with the other
-                # kind) is left unset, so the rest of the scan resolves that
-                # kind by the known conventions instead of carrying on with a
-                # value the writer refused and reading or overwriting one file
-                # as both kinds.
+                # kind) leaves that kind OFF for this scan rather than falling
+                # back to the known conventions: the probe finds the very file
+                # the rejection was about. Tags on `_caption.txt` refuse the
+                # detected description suffix `_caption.txt`, and a
+                # description probe would then re-find it and read one file as
+                # both kinds - which is what the collision rule forbids.
                 accepted = self._persist_suffixes(seed)
                 if "tags_suffix" in seed and not accepted.get("tags_suffix"):
                     self._tags_suffix = None
+                    self._disabled_kinds.add(SIDECAR_TYPE_TAGS)
                 if "description_suffix" in seed and not accepted.get(
                     "description_suffix"
                 ):
                     self._description_suffix = None
+                    self._disabled_kinds.add(SIDECAR_TYPE_DESCRIPTION)
 
         # Collect all supported files currently on disk.
         # Skip PixlStash-generated thumbnail files (e.g. foo_thumb.webp) that
@@ -961,7 +968,13 @@ class ReferenceFolderScanTask(BaseTask):
         is not the tag set, and reading it as one replaces every tag the
         picture has. A reference folder keeps its own contract, where the
         folder's suffixes say what to read.
+
+        A kind in `_disabled_kinds` is off for this scan whatever the folder
+        is, the same skip: its detected suffix was refused, and probing the
+        known conventions for it would find the file the refusal was about.
         """
+        if sidecar_type in self._disabled_kinds:
+            return
         if self._is_root and not sync:
             return
         is_tags = sidecar_type == SIDECAR_TYPE_TAGS
@@ -1387,11 +1400,22 @@ class ReferenceFolderScanTask(BaseTask):
         attach_sidecars(
             pic,
             file_path,
-            [self._tags_suffix] if self._tags_suffix else None,
-            [self._description_suffix] if self._description_suffix else None,
+            self._read_suffixes(SIDECAR_TYPE_TAGS, self._tags_suffix),
+            self._read_suffixes(SIDECAR_TYPE_DESCRIPTION, self._description_suffix),
         )
 
         return pic
+
+    def _read_suffixes(self, sidecar_type: str, suffix: str | None) -> list[str] | None:
+        """What `attach_sidecars` may read *sidecar_type* at, for this scan.
+
+        ``[]`` reads nothing - the kind is disabled (`_disabled_kinds`), so a
+        picture indexed by this scan records no file of it. ``None`` probes the
+        known conventions, which is what an unset suffix has always meant.
+        """
+        if sidecar_type in self._disabled_kinds:
+            return []
+        return [suffix] if suffix else None
 
     def _persist_suffixes(self, suffixes: dict[str, str]) -> dict[str, str]:
         """Store auto-detected sidecar suffixes on the folder (only fills NULLs).
