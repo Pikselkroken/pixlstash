@@ -5,10 +5,11 @@
  * says what it says.
  *
  * In short: three routes out rather than one, folder first and the only
- * accented one, and not a word about a "database". Presentational - every
+ * accented one, and not a word about a "database". It acts on nothing - every
  * route is emitted for the grid to place, including the chosen files, which
  * are handed up unfiltered because the grid already drops what PixlStash
- * cannot read for both drop paths.
+ * cannot read for both drop paths - but it does read one fact for itself, the
+ * root picture count in `useFolderMappingStore`, which decides its copy.
  */
 import { computed, ref } from "vue";
 import { VIcon } from "vuetify/components";
@@ -25,9 +26,10 @@ const emit = defineEmits(["choose-folder", "add-files", "connect-comfyui"]);
 // this library already is - the state a dismissed import offer leaves.
 const mappingStore = useFolderMappingStore();
 const rootPictureCount = computed(() => mappingStore.rootPictureCount ?? 0);
-// The count stopped at the inspect endpoint's entry cap, so it is a floor and
-// the sentence says so. Naming it as the total under-counts a big folder, and
-// the number this screen shows is the one the owner checks the import against.
+// The count stopped at a cap the server had to answer under, so it is a floor
+// and the sentence says so. Naming it as the total under-counts a big folder,
+// and the number this screen shows is the one the owner checks the import
+// against.
 const rootPictureCountCapped = computed(
   () => mappingStore.rootPictureCountCapped === true,
 );

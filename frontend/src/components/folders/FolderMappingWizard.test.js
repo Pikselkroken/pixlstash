@@ -287,6 +287,7 @@ describe("building the library", () => {
       mode: "local_import",
       assignments: ASSIGNMENTS,
       pictureCount: 5,
+      pictureCountCapped: false,
       autoCommit: true,
     });
     expect(setActiveLibrary).toHaveBeenCalledWith("uuid-new");

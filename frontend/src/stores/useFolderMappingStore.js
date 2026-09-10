@@ -64,8 +64,9 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
    */
   const rootPictureCount = ref(null);
   /**
-   * True when `rootPictureCount` stopped at the inspect endpoint's entry cap,
-   * so it is a floor rather than a total: a folder picker has to answer while
+   * True when `rootPictureCount` stopped short - at the inspect endpoint's
+   * entry cap, or at a folder read's `MAX_FOLDERS` - so it is a floor rather
+   * than a total: a folder picker has to answer while
    * somebody is looking at it. The copy says "at least N" instead of naming an
    * exact number the folder does not hold.
    */

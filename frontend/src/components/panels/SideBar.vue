@@ -900,7 +900,11 @@ async function _fillRootPictureCount(entry) {
   if (mappingStore.rootPictureCount !== null) return;
   const counted = entry.pictureCount ?? entry.result?.picture_count;
   if (counted != null) {
-    mappingStore.setRootPictureCount(counted, false, epoch);
+    // The wizard saves the read's `truncated` beside the count; entries
+    // written before it did carry the result itself, so ask that instead.
+    const capped =
+      entry.pictureCountCapped ?? entry.result?.truncated === true;
+    mappingStore.setRootPictureCount(counted, capped, epoch);
     return;
   }
   const path = entry.path;
@@ -955,9 +959,11 @@ async function _offerLoosePictures() {
   const parked = await takeParkedFolderRead();
   if (epoch !== mappingStore.rootCountEpoch) return;
   if (parked?.result && _samePath(parked.path, path)) {
+    // A truncated read stopped at `MAX_FOLDERS` and summed what it had, so its
+    // count is a floor exactly like the inspect endpoint's cap.
     mappingStore.setRootPictureCount(
       parked.result.picture_count ?? null,
-      false,
+      parked.result.truncated === true,
       epoch,
     );
     autoOpenedPendingMapping = true;

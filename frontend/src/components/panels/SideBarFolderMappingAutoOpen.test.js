@@ -71,6 +71,7 @@ vi.mock("vue-router", async () => {
 
 import { isReadOnly, sessionContext } from "../../utils/apiClient";
 import SideBar from "./SideBar.vue";
+import LibraryEmptyState from "../views/LibraryEmptyState.vue";
 import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
 import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
@@ -306,6 +307,34 @@ describe("the loose-pictures offer for an empty library", () => {
       mode: "local_import",
     });
 
+    delete window.pixlstashDesktop;
+    wrapper.unmount();
+  });
+
+  it("words a truncated parked read as a floor, not as a total", async () => {
+    // The read stopped at `MAX_FOLDERS` and summed only the folders it
+    // reached, so its `picture_count` is a floor exactly like the inspect
+    // endpoint's cap. Passed as an exact total, the empty state named a
+    // number the folder does not hold.
+    const path = "/home/me/Pictures";
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    window.pixlstashDesktop = {
+      takePendingMapping: async () => ({
+        path,
+        result: { levels: [], picture_count: 5000, truncated: true },
+      }),
+    };
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+
+    const empty = mount(LibraryEmptyState, { shallow: true });
+    expect(empty.text()).toContain("At least 5,000 pictures are");
+
+    empty.unmount();
     delete window.pixlstashDesktop;
     wrapper.unmount();
   });

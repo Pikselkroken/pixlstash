@@ -224,6 +224,9 @@ async function build(accepted) {
       mode: "local_import",
       assignments: accepted,
       pictureCount: pictureCount.value,
+      // A truncated read summed only the folders it reached, so the count it
+      // saves is a floor. The empty library's copy reads this to say so.
+      pictureCountCapped: readResult.value?.truncated === true,
       autoCommit: true,
     });
     emit("close");
