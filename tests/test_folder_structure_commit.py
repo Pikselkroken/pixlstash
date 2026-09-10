@@ -888,6 +888,65 @@ def test_an_ignored_pattern_is_dropped_from_a_row_the_commit_reused(owner_env):
     assert os.path.isfile(os.path.join(root, "described_desc.txt"))
 
 
+def _reused_row_state(server, ids):
+    """``{original file name: (tags_file, description_file, description, tags)}``."""
+    from pixlstash.db_models.picture import Picture
+    from pixlstash.db_models.tag import Tag
+    from sqlmodel import select
+
+    def fetch(session):
+        return {
+            p.original_file_name: (
+                p.tags_file,
+                p.description_file,
+                p.description,
+                sorted(
+                    session.exec(select(Tag.tag).where(Tag.picture_id == p.id)).all()
+                ),
+            )
+            for p in session.exec(select(Picture).where(Picture.id.in_(ids))).all()
+        }
+
+    return server.vault.db.run_immediate_read_task(fetch)
+
+
+def test_an_answer_of_nothing_still_reaches_a_row_the_commit_reused(owner_env):
+    """`[]` is the answer "read nothing", not "no answer": a read whose only
+    patterns were dropped hands back an empty list, and the row the root scan
+    indexed mid-commit is still carrying the sidecar the probe opened. A
+    truthiness check skipped it and left that reading in place."""
+    server = owner_env["server"]
+    root = os.path.join(server.vault.image_root, "local-import-empty-answer")
+    _make_tree(root, {"": ["probed.jpg"]})
+    with open(os.path.join(root, "probed.txt"), "w", encoding="utf-8") as fh:
+        fh.write("harbour, dusk, boats")
+
+    from pixlstash.db_models.tag import TAG_PENDING_SENTINEL
+    from pixlstash.services import folder_structure_commit_service as commit_service
+
+    first = commit_service.local_import_pictures(server, root, expected_pictures=1)
+    assert _reused_row_state(server, first)["probed.jpg"] == (
+        os.path.join(root, "probed.txt"),
+        None,
+        None,
+        ["boats", "dusk", "harbour"],
+    )
+
+    second = commit_service.local_import_pictures(
+        server,
+        root,
+        expected_pictures=1,
+        captions=commit_service.parse_captions([]),
+    )
+    assert sorted(second) == sorted(first), "reused, not re-imported"
+    assert _reused_row_state(server, first)["probed.jpg"] == (
+        None,
+        None,
+        None,
+        [TAG_PENDING_SENTINEL],
+    )
+
+
 def test_a_caption_answer_with_an_unsafe_suffix_is_refused(owner_env):
     """The suffix is appended to a picture path to find the file to read, so
     the commit enforces the same bare-fragment rule the reference-folder API

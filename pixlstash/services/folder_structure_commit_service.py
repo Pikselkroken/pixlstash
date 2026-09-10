@@ -1055,7 +1055,10 @@ def local_import_pictures(
         if on_progress is not None:
             on_progress(processed, total)
 
-    if captions and reused_ids:
+    # `is not None`, not truthiness: `[]` is the answer "read nothing", and it
+    # is exactly the answer a row the root scan indexed mid-commit needs to
+    # hear - it still carries the sidecar the probe opened.
+    if captions is not None and reused_ids:
         applied = _apply_captions_to_existing(server, reused_ids, image_root, captions)
         logger.info(
             "Local import: applied the confirmed caption files to %d of %d "
