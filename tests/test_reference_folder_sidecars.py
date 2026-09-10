@@ -131,6 +131,15 @@ def test_sidecar_path_rejects_traversal(evil_suffix):
         sidecar_path("/refs/f/photo.png", evil_suffix)
 
 
+def test_sidecar_path_rejects_the_picture_s_own_extension():
+    """A suffix equal to the picture's extension names the picture itself: the
+    scan would read its bytes as tags and the first write-back would truncate
+    it. The other extensions still resolve normally."""
+    with pytest.raises(ValueError):
+        sidecar_path("/refs/f/photo.png", ".png")
+    assert sidecar_path("/refs/f/photo.jpg", ".png") == "/refs/f/photo.png"
+
+
 def test_validate_sidecar_suffix_accepts_known_conventions():
     for good in ("_tags.txt", "_description.txt", "_wd14.txt", ".caption", ".txt"):
         _validate_sidecar_suffix(good)  # must not raise

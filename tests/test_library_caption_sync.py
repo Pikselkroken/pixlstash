@@ -334,3 +334,127 @@ def test_a_recorded_caption_file_keeps_its_name_under_another_suffix(env):
     with open(os.path.join(root, "keep", "photo.txt"), encoding="utf-8") as fh:
         assert fh.read().strip() == "dog", "written to the recorded file"
     assert not os.path.exists(os.path.join(root, "keep", "photo_tags.txt"))
+
+
+def _set_tags(server, pic_id, *tags):
+    def write(session: Session):
+        session.exec(Tag.__table__.delete().where(Tag.picture_id == pic_id))
+        for tag in tags:
+            session.add(Tag(picture_id=pic_id, tag=tag))
+        session.commit()
+
+    server.vault.db.run_task(write)
+
+
+def test_the_first_enable_reads_the_owner_s_file_before_writing_over_it(env):
+    """The scenario the seeding used to leave to the write-back: a picture
+    indexed long ago, a caption file the owner wrote since, and tags in the
+    database. The scan reads the file in; nothing truncates it."""
+    server = env["server"]
+    root = server.vault.image_root
+    _make_image(os.path.join(root, "first", "a.png"), (11, 12, 13))
+    _set_sync(
+        server,
+        sync_tags=False,
+        sync_descriptions=False,
+        tags_suffix=None,
+        description_suffix=None,
+    )
+    _run_root_scan(server)
+    pic_id, _, tags_file, _ = _picture(server, "first/a.png")
+    assert tags_file is None, "indexed with no caption file beside it"
+    _set_tags(server, pic_id, "boat")
+    _write(os.path.join(root, "first", "a_tags.txt"), "harbour, dusk")
+
+    _set_sync(server, sync_tags=True, tags_suffix="_tags.txt")
+    _run_root_scan(server)
+    _, _, tags_file, tags = _picture(server, "first/a.png")
+    assert tags == ["dusk", "harbour"], "the owner's file is what the scan reads"
+    assert tags_file == os.path.join(root, "first", "a_tags.txt")
+
+    sync_picture_sidecar(server, pic_id)
+    with open(os.path.join(root, "first", "a_tags.txt"), encoding="utf-8") as fh:
+        assert sorted(fh.read().split(", ")) == ["dusk", "harbour"], (
+            "the write-back carries the read-in tags, it does not empty the file"
+        )
+
+
+def test_an_empty_tags_file_leaves_the_picture_s_tags_alone(env):
+    """`apply_caption_updates` replaces the whole tag set, so importing the []
+    a zero-byte file parses to would clear a picture nobody asked to clear."""
+    server = env["server"]
+    root = server.vault.image_root
+    _make_image(os.path.join(root, "empty", "b.png"), (14, 15, 16))
+    _set_sync(
+        server,
+        sync_tags=False,
+        sync_descriptions=False,
+        tags_suffix=None,
+        description_suffix=None,
+    )
+    _run_root_scan(server)
+    pic_id, _, _, _ = _picture(server, "empty/b.png")
+    _set_tags(server, pic_id, "boat", "jetty")
+    _write(os.path.join(root, "empty", "b_tags.txt"), "")
+
+    _set_sync(server, sync_tags=True, tags_suffix="_tags.txt")
+    _run_root_scan(server)
+    _, _, _, tags = _picture(server, "empty/b.png")
+    assert tags == ["boat", "jetty"]
+
+
+def test_descriptions_on_with_tags_off_never_reads_a_stray_txt_as_tags(env):
+    """A Stable Diffusion prompt `.txt` beside a managed picture is the
+    description convention the owner turned on, not the tag set. The read
+    direction is gated per type, as the write direction already was."""
+    server = env["server"]
+    root = server.vault.image_root
+    _make_image(os.path.join(root, "stray", "c.png"), (17, 18, 19))
+    # `.txt` is the tags convention this library once used and the owner has
+    # since turned tags off; descriptions live in `_caption.txt`.
+    _set_sync(
+        server,
+        sync_tags=False,
+        sync_descriptions=False,
+        tags_suffix=".txt",
+        description_suffix="_caption.txt",
+    )
+    _run_root_scan(server)
+    pic_id, _, _, _ = _picture(server, "stray/c.png")
+    _set_tags(server, pic_id, "boat")
+    _write(os.path.join(root, "stray", "c.txt"), "1girl, solo, smile, outdoors")
+    _write(os.path.join(root, "stray", "c_caption.txt"), "A lighthouse at dusk.")
+
+    _set_sync(server, sync_descriptions=True)
+    _run_root_scan(server)
+    _, description, _, tags = _picture(server, "stray/c.png")
+    assert tags == ["boat"], "the prompt file is not the tag set"
+    assert description == "A lighthouse at dusk."
+
+
+def test_the_settings_route_refuses_one_suffix_for_both_kinds(env):
+    """Both write-backs derive their path from the picture stem plus the
+    suffix, so an equal pair is one file: the description wins and the next
+    scan reads prose back in as tags. Compared on the effective values, so the
+    default counts."""
+    owner = env["owner"]
+    server = env["server"]
+    _set_sync(
+        server,
+        sync_tags=False,
+        sync_descriptions=False,
+        tags_suffix=None,
+        description_suffix=None,
+    )
+    both = owner.patch(
+        _CAPTIONS,
+        json={"tags_suffix": "_notes.txt", "description_suffix": "_notes.txt"},
+    )
+    assert both.status_code == 400, both.text
+    assert owner.get(_CAPTIONS).json()["tags_suffix"] is None, "nothing stored"
+
+    against_default = owner.patch(_CAPTIONS, json={"description_suffix": "_tags.txt"})
+    assert against_default.status_code == 400, "the unset tags suffix is _tags.txt"
+
+    ok = owner.patch(_CAPTIONS, json={"description_suffix": "_notes.txt"})
+    assert ok.status_code == 200, ok.text

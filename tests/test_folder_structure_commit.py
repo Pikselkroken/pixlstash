@@ -616,6 +616,49 @@ def test_the_owners_caption_answers_decide_what_is_read(owner_env):
     )
 
 
+def test_confirmed_captions_seed_the_root_and_ask_for_the_read_in_scan(
+    owner_env, monkeypatch
+):
+    """Seeding turns sync on, and from then on the write-back replaces what it
+    finds in a caption file. The pass that reads the owner's files IN is the
+    root scan, so the import asks for one - without it the first tag edit
+    truncated a file nothing had read. The suffix seeded is the confirmed
+    pattern with the most files behind it, not whichever the payload listed
+    first: the root holds one per kind while the read honours them all."""
+    from pixlstash.services import folder_structure_commit_service as commit_service
+    from pixlstash.services.library_settings_service import (
+        get_caption_sync,
+        set_caption_sync,
+    )
+
+    server = owner_env["server"]
+    root = os.path.join(server.vault.image_root, "local-import-seed")
+    _make_tree(root, {"": ["a.jpg", "b.jpg"]})
+    for stem, suffix in (("a", "_tags.txt"), ("b", "_tags.txt"), ("a", "_wd14.txt")):
+        with open(os.path.join(root, stem + suffix), "w", encoding="utf-8") as fh:
+            fh.write("cat, calm")
+    set_caption_sync(server.vault.db, sync_tags=False, tags_suffix=None)
+
+    rescans = []
+    monkeypatch.setattr(server.vault, "rescan_library_root", lambda: rescans.append(1))
+    commit_service.local_import_pictures(
+        server,
+        root,
+        expected_pictures=2,
+        captions=commit_service.parse_captions(
+            [
+                {"suffix": "_wd14.txt", "kind": "tags"},
+                {"suffix": "_tags.txt", "kind": "tags"},
+            ]
+        ),
+    )
+
+    stored = get_caption_sync(server.vault.db)
+    assert stored["sync_tags"] is True
+    assert stored["tags_suffix"] == "_tags.txt", "two files, against _wd14.txt's one"
+    assert rescans, "the root was never asked to read the existing files in"
+
+
 def test_caption_answers_are_refused_in_reference_mode(owner_env):
     """A reference folder holds one suffix per kind and probes the known
     conventions for an unset one, so it cannot honour "ignore" for a kind: an
