@@ -33,6 +33,11 @@ const rootPictureCount = computed(() => mappingStore.rootPictureCount ?? 0);
 const rootPictureCountCapped = computed(
   () => mappingStore.rootPictureCountCapped === true,
 );
+// A capped count is a floor, so a capped zero is not an empty folder: the walk
+// ran out of entries before it reached a picture. The route in is the import
+// either way, and the copy says the folder was not fully counted rather than
+// naming a number as the total.
+const rootMayHoldPictures = computed(() => mappingStore.rootMayHoldPictures);
 
 const fileInput = ref(null);
 
@@ -79,18 +84,21 @@ function filesChosen(event) {
           <span class="library-empty__mark" aria-hidden="true">
             <v-icon size="19">mdi-folder-outline</v-icon>
           </span>
-          <span v-if="rootPictureCount > 0" class="library-empty__text">
+          <span v-if="rootMayHoldPictures" class="library-empty__text">
             <span class="library-empty__heading"
               >Import the pictures already in this folder</span
             >
-            <span class="library-empty__detail">
-              {{ rootPictureCountCapped ? "At least" : "" }}
-              {{ rootPictureCount.toLocaleString() }}
+            <span v-if="rootPictureCountCapped" class="library-empty__detail">
+              Your library folder could not be fully counted; it
               {{
-                rootPictureCount === 1 && !rootPictureCountCapped
-                  ? "picture is"
-                  : "pictures are"
-              }}
+                rootPictureCount > 0
+                  ? `holds at least ${rootPictureCount.toLocaleString()} pictures`
+                  : "may already hold pictures"
+              }}. They are read where they sit; nothing is moved.
+            </span>
+            <span v-else class="library-empty__detail">
+              {{ rootPictureCount.toLocaleString() }}
+              {{ rootPictureCount === 1 ? "picture is" : "pictures are" }}
               in this library's folder. They are read where they sit; nothing
               is moved.
             </span>
@@ -105,7 +113,7 @@ function filesChosen(event) {
             </span>
           </span>
           <AppButton size="sm" variant="primary" @click="emit('choose-folder')">
-            {{ rootPictureCount > 0 ? "Import them…" : "Choose a folder…" }}
+            {{ rootMayHoldPictures ? "Import them…" : "Choose a folder…" }}
           </AppButton>
         </li>
 

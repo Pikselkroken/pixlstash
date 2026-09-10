@@ -332,10 +332,45 @@ describe("the loose-pictures offer for an empty library", () => {
     await wrapper.vm.offerLoosePictures();
 
     const empty = mount(LibraryEmptyState, { shallow: true });
-    expect(empty.text()).toContain("At least 5,000 pictures are");
+    expect(empty.text()).toContain(
+      "could not be fully counted; it holds at least 5,000 pictures",
+    );
 
     empty.unmount();
     delete window.pixlstashDesktop;
+    wrapper.unmount();
+  });
+
+  it("opens the wizard on a capped count that reached no picture", async () => {
+    // count_media_files() can exhaust its entry cap on directories before it
+    // reaches any media (utils/media_files.py), so `picture_count: 0` with
+    // `picture_count_capped: true` is an unfinished walk, not an empty
+    // folder. Read as empty, the offer left the owner with "Add a library",
+    // which refuses the folder the library already is.
+    const path = "/home/me/Pictures";
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? Promise.resolve({
+            data: { picture_count: 0, picture_count_capped: true },
+          })
+        : Promise.resolve(respond()),
+    );
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+
+    const mapping = useFolderMappingStore();
+    expect(mapping.wizardResume).toEqual({ path, mode: "local_import" });
+    const empty = mount(LibraryEmptyState, { shallow: true });
+    expect(empty.text()).toContain(
+      "could not be fully counted; it may already hold pictures",
+    );
+
+    empty.unmount();
     wrapper.unmount();
   });
 
@@ -636,6 +671,30 @@ describe("the empty library's Choose a folder button", () => {
     await wrapper.vm.chooseLibraryFolder();
 
     expect(mapping.rootPictureCount).toBe(3);
+    expect(mapping.wizardResume).toEqual({ path, mode: "local_import" });
+
+    wrapper.unmount();
+  });
+
+  it("opens the wizard on a capped count that reached no picture", async () => {
+    // Same unfinished walk as the offer's own case: a capped 0 is no evidence
+    // the folder is empty, so the click must not fall through to "Add a
+    // library", which refuses the folder the library already is.
+    const path = "/home/me/Pictures";
+    const wrapper = await mountWithManageableLibrary(path);
+    const mapping = useFolderMappingStore();
+    mapping.rootPictureCount = 0;
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? Promise.resolve({
+            data: { picture_count: 0, picture_count_capped: true },
+          })
+        : Promise.resolve(respond()),
+    );
+
+    await wrapper.vm.chooseLibraryFolder();
+
+    expect(mapping.rootMayHoldPictures).toBe(true);
     expect(mapping.wizardResume).toEqual({ path, mode: "local_import" });
 
     wrapper.unmount();

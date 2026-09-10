@@ -179,7 +179,23 @@ describe("when the library's own folder already holds pictures", () => {
     // picture_count_capped. The number is a floor; naming it as the total
     // would under-count the folder the owner is about to import.
     const wrapper = mountState({ rootPictureCount: 5000, capped: true });
-    expect(wrapper.text()).toContain("At least 5,000 pictures are");
+    expect(wrapper.text()).toContain(
+      "Your library folder could not be fully counted; it holds at least 5,000 pictures",
+    );
+  });
+
+  it("offers the import when a capped count reached no picture at all", async () => {
+    // count_media_files() can exhaust its entry cap on directories before it
+    // reaches any media, so a capped 0 says the walk stopped, not that the
+    // folder is empty. The ordinary "Use a folder you already have" sent the
+    // owner to "Add a library", which refuses the folder the library is.
+    const wrapper = mountState({ rootPictureCount: 0, capped: true });
+    expect(wrapper.text()).toContain(
+      "Your library folder could not be fully counted; it may already hold pictures",
+    );
+    expect(buttonLabels(wrapper)[0]).toBe("Import them…");
+    await wrapper.findAll(".library-empty__option button")[0].trigger("click");
+    expect(wrapper.emitted("choose-folder")).toHaveLength(1);
   });
 
   it("keeps the ordinary wording while the answer is unknown", () => {

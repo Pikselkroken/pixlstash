@@ -1,4 +1,4 @@
-import { onScopeDispose, ref } from "vue";
+import { computed, onScopeDispose, ref } from "vue";
 import { defineStore } from "pinia";
 
 import { onSessionReset } from "../utils/apiClient";
@@ -72,6 +72,17 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
    */
   const rootPictureCountCapped = ref(false);
   /**
+   * Whether the folder may hold pictures at all - the test both the button's
+   * route and its copy switch on. A capped zero counts: the walk stopped at
+   * the cap while it was still crossing folders, so it never reached a
+   * picture and proves nothing about whether there is one. Routing it as
+   * empty sent the owner to "Add a library", which refuses the folder the
+   * library already is.
+   */
+  const rootMayHoldPictures = computed(
+    () => rootPictureCount.value > 0 || rootPictureCountCapped.value === true,
+  );
+  /**
    * Bumped by `resetForSession`, so an inspect the outgoing owner started
    * cannot land after the reset and repopulate the next session with the
    * previous library's count. Same shape as `useLibrariesStore`, in a ref
@@ -142,6 +153,7 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
     wizardResume,
     rootPictureCount,
     rootPictureCountCapped,
+    rootMayHoldPictures,
     rootCountEpoch,
     setRootPictureCount,
     resetForSession,

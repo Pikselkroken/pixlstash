@@ -792,7 +792,7 @@ async function chooseLibraryFolder() {
       });
     }
     if (epoch !== mappingStore.rootCountEpoch) return;
-    if (mappingStore.rootPictureCount > 0) {
+    if (mappingStore.rootMayHoldPictures) {
       openFolderMappingWizard({ path, mode: "local_import" });
       return;
     }
@@ -982,7 +982,10 @@ async function _offerLoosePictures() {
       verdict?.picture_count_capped ?? false,
       epoch,
     );
-    if (verdict?.picture_count > 0) {
+    // The store's own reading of the verdict, not `picture_count` again: a
+    // count capped at zero stopped before it reached a picture, so it is no
+    // evidence the folder is empty and the wizard is still the way in.
+    if (mappingStore.rootMayHoldPictures) {
       // The read the wizard starts saves a pending entry, which the watch
       // above would otherwise take as its cue to open the wizard again.
       autoOpenedPendingMapping = true;
