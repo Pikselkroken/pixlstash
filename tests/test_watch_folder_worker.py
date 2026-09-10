@@ -322,9 +322,11 @@ def test_watch_folder_reads_sidecar_tags_and_skips_the_pending_sentinel_for_them
 
                 def read_tags(session):
                     # A managed import renames the file to a content-derived
-                    # name, so the two pictures are told apart by whether a
-                    # tags sidecar was resolved for them, not by their
-                    # (no longer meaningful) original filename.
+                    # name, so the two pictures are told apart by the tags
+                    # they got, not by their (no longer meaningful) original
+                    # filename. No sidecar path is recorded: the picture was
+                    # copied into the library and the file beside the watched
+                    # source is not beside it.
                     rows = []
                     for pic in Picture.find(session):
                         tag_values = session.exec(
@@ -333,19 +335,12 @@ def test_watch_folder_reads_sidecar_tags_and_skips_the_pending_sentinel_for_them
                         rows.append((pic.tags_file, sorted(tag_values)))
                     return rows
 
-                by_tags_file = dict(server.vault.db.run_task(read_tags))
-
-                (tagged_file, tagged_tags) = next(
-                    (f, t) for f, t in by_tags_file.items() if f is not None
-                )
-                assert tagged_file.endswith("tagged_tags.txt")
-                assert tagged_tags == ["black cat", "cat", "whiskers"]
-
-                (untagged_file, untagged_tags) = next(
-                    (f, t) for f, t in by_tags_file.items() if f is None
-                )
-                assert untagged_file is None
-                assert untagged_tags == [TAG_PENDING_SENTINEL]
+                rows = server.vault.db.run_task(read_tags)
+                assert all(f is None for f, _ in rows), rows
+                assert sorted(t for _, t in rows) == [
+                    [TAG_PENDING_SENTINEL],
+                    ["black cat", "cat", "whiskers"],
+                ]
 
 
 def test_watch_folder_retries_after_transient_hash_failure(monkeypatch):

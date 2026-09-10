@@ -2069,3 +2069,18 @@ def test_a_persisted_caption_answer_that_is_not_a_list_fails_loudly():
     for bad in (0, False, "", {}):
         with pytest.raises(CommitError, match="must be a list"):
             parse_captions(bad)
+
+
+def test_an_accepted_caption_answer_takes_the_read_s_spelling():
+    """The membership check is case-insensitive, but the import builds the
+    file name from the suffix it is handed, so on Linux `.TXT` answered for a
+    reported `.txt` would look for `photo.TXT` and miss the file it was shown.
+    The accepted answer is canonicalised to the read's spelling."""
+    from pixlstash.services.folder_structure_commit_service import parse_captions
+
+    reported = [{"suffix": ".txt", "kind": "tags", "files": 3}]
+    (pattern,) = parse_captions(
+        [{"suffix": ".TXT", "kind": "description"}], reported=reported
+    )
+    assert pattern.suffix == ".txt"
+    assert pattern.kind == "description"

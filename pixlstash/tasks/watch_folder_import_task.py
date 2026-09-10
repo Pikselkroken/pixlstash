@@ -123,8 +123,14 @@ class WatchFolderImportTask(BaseTask):
                 # Detect tags + description sidecars next to the source image.
                 # Import folders have no per-folder suffix config, so probe the
                 # known conventions (both suffix lists None), and stash any
-                # tags on the row for `insert_pictures` below.
+                # tags on the row for `insert_pictures` below. The content is
+                # kept, the paths are not: the picture was copied into the
+                # library, so a file beside the watched source is not beside
+                # the managed picture, and recording it would point the row
+                # outside its root at a file the write-back refuses.
                 attach_sidecars(pic, file_path)
+                pic.tags_file = pic.description_file = None
+                pic.tags_file_mtime = pic.description_file_mtime = None
 
                 new_pictures.append(pic)
 
