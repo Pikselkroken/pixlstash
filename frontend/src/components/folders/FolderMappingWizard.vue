@@ -67,6 +67,9 @@ const readResult = ref(null);
 const assignments = ref([]);
 // The owner's answers for the read's caption-file patterns, kept beside the
 // assignments for the same reason: the commit runs after the library switch.
+// The Preview step reports them as they are made rather than at the commit,
+// so "Back to the mapping" - which unmounts that step - keeps them, and the
+// step re-seeds from here on the way forward again.
 const captions = ref([]);
 const pictureCount = ref(0);
 // The library exists (a resumed entry) - the Preview step commits directly.
@@ -349,6 +352,7 @@ function onCommitted(result) {
       :commit-on-mount="autoCommit"
       @back="backToMapping"
       @build="build"
+      @update:captions="captions = $event"
       @commit-started="onCommitStarted"
       @cancel="close"
       @committed="onCommitted"
@@ -359,8 +363,10 @@ function onCommitted(result) {
 
 <style scoped>
 .mapping-wizard__error {
-  /* The mapping step's body is flush; the padding is the dialog's own. */
-  margin: 0 0 var(--space-4);
+  /* Only the choose step gets `pad-body`; the mapping and preview steps own
+     their own padding, so the banner carries its side gutter itself rather
+     than sitting flush against the dialog's edge. */
+  margin: 0 var(--space-6) var(--space-4);
   flex-shrink: 0;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-sm);

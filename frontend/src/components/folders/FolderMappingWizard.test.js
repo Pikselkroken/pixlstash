@@ -296,6 +296,44 @@ describe("building the library", () => {
     expect(wrapper.emitted("close")).toBeTruthy();
   });
 
+  it("keeps the caption answers across 'Back to the mapping'", async () => {
+    // The Preview step is unmounted on the way back, so an answer held only
+    // there was lost and the read's own guess was committed instead.
+    getFolderStructureReadStatus.mockResolvedValue({
+      status: "completed",
+      stage: "done",
+      processed: 2,
+      total: 2,
+      result: {
+        ...READ_RESULT,
+        captions: [
+          { suffix: ".txt", kind: "tags", files: 9, folders: 1, sample: "1girl" },
+        ],
+      },
+    });
+    const wrapper = mountWizard();
+    await settle();
+    await bringThemIn(wrapper);
+    await button(wrapper, "Set up my library").trigger("click");
+    await settle();
+    await wrapper.find(".tree-stub .emit-next").trigger("click");
+    await settle();
+
+    await wrapper.find("select").setValue("ignore");
+    await button(wrapper, "Back to the mapping").trigger("click");
+    await settle();
+    await wrapper.find(".tree-stub .emit-next").trigger("click");
+    await settle();
+
+    expect(wrapper.find("select").element.value).toBe("ignore");
+    await button(wrapper, "Yes, build this library").trigger("click");
+    await settle();
+
+    expect(useFolderMappingStore().pending.captions).toEqual([
+      { suffix: ".txt", kind: "ignore" },
+    ]);
+  });
+
   it("'Drop this, organise later' builds it with no assignments", async () => {
     const wrapper = mountWizard();
     await settle();
