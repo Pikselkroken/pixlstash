@@ -242,6 +242,10 @@ class WorkPlanner:
         self._stalled_since: dict[str, float] = {}
         self._gpu_util_unavailable = False
         self._gpu_util_torch_missing_logged = False
+        # Monotonic time until which no finder is swept. A lease, not a switch:
+        # the holder renews it while it works and a holder that stalls or dies
+        # lets background work back in by itself.
+        self._hold_until = 0.0
         self._lock = threading.Lock()
         # Serialises start()/stop() so a restart cannot interleave with a
         # shutdown that is still joining the outgoing thread.
@@ -340,6 +344,28 @@ class WorkPlanner:
         with self._lock:
             return int(self._inflight_by_finder.get(finder_name, 0))
 
+    def hold(self, seconds: float) -> None:
+        """Keep every finder from submitting work for *seconds* from now.
+
+        Renewing resets the lease to ``now + seconds``; it never accumulates.
+        Tasks already queued or running are not touched, and a sweep that is
+        under way stops at its next finder rather than mid-turn.
+        """
+        with self._lock:
+            self._hold_until = time.monotonic() + seconds
+        self._wake.set()
+
+    def release(self) -> None:
+        """End the hold now rather than letting the lease run out."""
+        with self._lock:
+            self._hold_until = 0.0
+        self._wake.set()
+
+    def _held_for(self) -> float:
+        """Seconds left on the hold; zero or negative when not held."""
+        with self._lock:
+            return self._hold_until - time.monotonic()
+
     def wake(self):
         self._wake.set()
 
@@ -393,6 +419,11 @@ class WorkPlanner:
 
     def _run(self):
         while not self._stop.is_set():
+            held_for = self._held_for()
+            if held_for > 0:
+                self._wake.wait(held_for)
+                self._wake.clear()
+                continue
             try:
                 submitted = self._run_finders_once()
             except Exception:
@@ -473,6 +504,8 @@ class WorkPlanner:
             _PlannerStopping: Shutdown began mid-turn; the caller must abandon
                 the whole cycle rather than move on to the next finder.
         """
+        if self._held_for() > 0:
+            return submitted_any
         finder_name = finder.finder_name()
         max_inflight = max(1, int(finder.max_inflight_tasks()))
 

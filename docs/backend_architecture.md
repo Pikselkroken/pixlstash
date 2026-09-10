@@ -5913,12 +5913,19 @@ frame, and a date-ordered folder would otherwise be judged on its first minute.
 
 `faces` runs through the shipped `FaceDetectionTask` on the shared GPU queue
 rather than opening its own InsightFace session, so there is one model in memory
-rather than two. **It does not queue politely**: `FaceDetectionTask.priority` is
-`URGENT` — "user-triggered interactive tasks, skip ahead of everything" — so
-every batch of the read jumps ahead of background work. That is arguably right
-(the owner is watching a progress bar) but it is worth knowing rather than
-assuming, and it is the reason the read has a deadline: an URGENT task that
-cannot finish starves the queue it jumped.
+rather than two. `FaceDetectionTask.priority` is `URGENT`, but URGENT only wins
+the queue position: the read submits one batch at a time and waits for it, so
+between two batches the single GPU worker took whatever background task the
+planner had queued next, and every switch swapped models. The read therefore
+**holds the work planner**: `WorkPlanner.hold(60)` at the start of the read and
+again on every face batch, each call setting the lease to one minute from now
+(never accumulating). While the lease runs no finder is swept; tasks already
+queued still run, so the first batches share the GPU with that bounded backlog
+and then have it alone. A lease rather than `stop()`: a read that stalls or dies
+hands the workers back on its own, and a read that finishes calls
+`WorkPlanner.release()` at once, because the commit that follows imports through
+the planner and must not wait out the minute. The deadline still matters, since
+an URGENT task that cannot finish starves the queue it jumped.
 
 ### The shape signals: what a photo library looks like
 

@@ -788,6 +788,46 @@ def test_a_read_completes_and_reports_its_result(owner_env):
     assert shoot["proposal"]["kind"] == "set"
 
 
+def test_the_read_holds_the_planner_per_batch_and_releases_it(owner_env, monkeypatch):
+    """The route leases the planner at read start and again on every face
+    batch, then releases it the moment the read settles. Both the planner and
+    the task runner are fakes: the point is the calls the route makes, not what
+    InsightFace would say about five blank pictures."""
+    from pixlstash.routes.folder_structure import _WORKER_HOLD_S
+
+    vault = owner_env["server"].vault
+    calls: list[tuple[str, float | None]] = []
+
+    class _Planner:
+        def hold(self, seconds):
+            calls.append(("hold", seconds))
+
+        def release(self):
+            calls.append(("release", None))
+
+    class _Runner:
+        def submit_and_wait(self, task, timeout_s):
+            calls.append(("batch", None))
+            return [[] for _ in task._bgr_images]
+
+    monkeypatch.setattr(vault, "_work_planner", _Planner(), raising=False)
+    monkeypatch.setattr(vault, "_task_runner", _Runner(), raising=False)
+    monkeypatch.setattr(vault, "_engine", object(), raising=False)
+
+    root = os.path.join(owner_env["tmp"], "held")
+    _make_tree(root, {"shoot": [f"{i}.jpg" for i in range(MIN_FACE_SAMPLE)]})
+    started = owner_env["owner"].post(_READ, json={"path": root})
+    assert started.status_code == 200, started.text
+    body = _drain(owner_env["owner"], started.json()["task_id"])
+    assert body["status"] == "completed", body
+
+    assert calls[0] == ("hold", _WORKER_HOLD_S)
+    assert ("batch", None) in calls
+    assert calls.index(("hold", _WORKER_HOLD_S), 1) < calls.index(("batch", None))
+    assert calls[-1] == ("release", None)
+    assert calls.count(("release", None)) == 1
+
+
 def test_the_read_writes_nothing(owner_env):
     """The release's headline, asserted rather than eyeballed."""
     owner = owner_env["owner"]

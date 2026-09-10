@@ -45,6 +45,13 @@ logger = get_logger(__name__)
 #: times the measured cost of a hundred-picture batch on a CPU-only box.
 _FACE_BATCH_TIMEOUT_S = 180.0
 
+#: How long the read keeps the work planner from submitting background work,
+#: renewed from "now" at the start of the read and on every face batch. A
+#: lease rather than a stop: a read that stalls or dies hands the workers back
+#: on its own, and a walk that outlasts it simply shares the machine again
+#: until the face stage renews it.
+_WORKER_HOLD_S = 60.0
+
 # Matches any non-empty string with no null bytes or newlines. Applied with
 # fullmatch() after realpath so CodeQL recognises the result as a path-injection
 # barrier (realpath alone does not break the taint chain in its model). Same
@@ -245,12 +252,13 @@ def create_router(server) -> APIRouter:
         ``FaceDetectionTask`` rather than opening its own InsightFace session, so
         there is one model in memory rather than two.
 
-        **It does not queue politely.** ``FaceDetectionTask.priority`` is
-        ``URGENT`` - "skip ahead of everything" - so every batch of the read
-        jumps the queue ahead of background work. Defensible (the owner is
-        watching a progress bar) but worth knowing rather than assuming, and it
-        is why the read carries a deadline: an URGENT task that cannot finish
-        starves the queue it jumped. See ``backend_architecture.md`` §24.
+        ``FaceDetectionTask.priority`` is ``URGENT``, but URGENT only wins the
+        queue position: between two batches the single GPU worker takes
+        whatever background task is queued next, and every switch swaps
+        models. So each batch also renews the planner hold (``_WORKER_HOLD_S``)
+        and nothing new is queued behind it while the read is alive. The
+        deadline still matters: an URGENT task that cannot finish starves the
+        queue it jumped. See ``backend_architecture.md`` §24.
         """
         from pixlstash.tasks.face_detection_task import FaceDetectionTask
 
@@ -260,11 +268,24 @@ def create_router(server) -> APIRouter:
             return None
 
         def detect(images: list):
+            _hold_workers()
             return task_runner.submit_and_wait(
                 FaceDetectionTask(engine, images), _FACE_BATCH_TIMEOUT_S
             )
 
         return detect
+
+    def _hold_workers() -> None:
+        planner = getattr(server.vault, "_work_planner", None)
+        if planner is not None:
+            planner.hold(_WORKER_HOLD_S)
+
+    def _release_workers() -> None:
+        # The lease would expire on its own, but the commit that follows a
+        # read imports through the planner and must not wait out the minute.
+        planner = getattr(server.vault, "_work_planner", None)
+        if planner is not None:
+            planner.release()
 
     @router.post(
         "/folder-structure/read",
@@ -352,9 +373,11 @@ def create_router(server) -> APIRouter:
         state = server.folder_structure_read
         if state and state["task_id"] == task_id:
             state["status"] = "running"
+        _hold_workers()
         try:
             result = read.run()
         except BaseException as exc:  # noqa: BLE001 - the slot must never wedge
+            _release_workers()
             logger.error(
                 "Folder-structure read %s failed (%s): %s",
                 task_id,
@@ -375,6 +398,7 @@ def create_router(server) -> APIRouter:
                 raise
             return
 
+        _release_workers()
         state = server.folder_structure_read
         if not state or state["task_id"] != task_id:
             return
