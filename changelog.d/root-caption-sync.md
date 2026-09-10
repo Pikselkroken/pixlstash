@@ -6,3 +6,5 @@
   you confirmed when the folder was imported is used, so nothing is written
   under a second name. Confirming a pattern on import turns its sync on; the
   dialog turns it off.
+- Tags and descriptions can no longer be given the same file name suffix,
+  which would have made one file hold both.

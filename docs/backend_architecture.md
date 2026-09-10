@@ -6333,11 +6333,17 @@ read and written by `GET`/`PATCH /server-config/captions`
 (`routes/library_captions.py`, `library_settings_service.get_caption_sync` /
 `set_caption_sync`). Both toggles start off on a library that was never
 imported through the wizard; the local import turns each kind the owner
-confirmed ON with its suffix (`seed_caption_suffixes`, first `tags` and first
-`description` answer, never overwriting a suffix already set), because
-confirming a pattern *is* the owner saying the folder stores its captions
-there - a second toggle to find afterwards was the first thing a tester
-missed. Settings turns either off again. Turning a type on calls
+confirmed ON with its suffix (`seed_caption_suffixes`, never overwriting a
+suffix already set), because confirming a pattern *is* the owner saying the
+folder stores its captions there - a second toggle to find afterwards was the
+first thing a tester missed. The root holds one suffix per kind while the read
+honours every confirmed one, so the suffix seeded is the confirmed pattern with
+the most files beside the imported pictures (`_widest_convention`), not
+whichever the payload listed first. Settings turns either off again. The import
+then asks for the rescan itself: sync being on means `sync_picture_sidecar`
+replaces whatever a caption file holds, and the scan is the pass that reads the
+owner's existing files IN, so without it the first tag edit truncated a file
+nothing had read. Turning a type on calls
 `Vault.rescan_library_root`, and `ReferenceFolderScanTask` with
 `folder_id=None` then does for the root exactly what it does for a folder:
 `fetch_folder_config` returns the settings' four fields, an unset suffix is
@@ -6350,9 +6356,20 @@ sidecar → exported. **The recorded file wins while it exists**
 write-back alike): a suffix names the files PixlStash creates, never the
 ones the owner already had, so a `photo.txt` recorded at import under a
 `_tags.txt` setting is read and written as `photo.txt` and no second file
-appears beside it. The settings copy says the same. With both toggles off the root still skips that pass, for
-the reason the older comment gave: a stray `.txt` beside a managed picture is
-not a caption until the owner has said what the convention is.
+appears beside it. The settings copy says the same.
+
+**The root's read direction is gated per type, not per root.** A type that is
+off is skipped in `_reconcile_sidecar` itself, so with descriptions on and tags
+off a prompt `.txt` beside a managed picture becomes the description and never
+the tag set: a stray file is not a caption until the owner has said what the
+convention is, and `apply_caption_updates` replaces a picture's whole tag set
+from what it reads. For the same reason a tags file that parses to nothing is
+imported only when the picture was already tracking that file - otherwise an
+empty or unreadable file would clear every tag and drop in the pending
+sentinel. Descriptions have never had that hole; a `None` one is skipped where
+it is applied. A picture's *first* indexing is a different rule and reads the
+sidecar beside it either way (`attach_sidecars`), as the local import does:
+there are no tags yet to overwrite.
 
 `wait_for_first_scan` polls `ReferenceFolder.last_scanned`, which is exactly
 the field the model's own docstring names as "unix timestamp of the last
