@@ -61,7 +61,7 @@ def _has_private_vault_access(source: str) -> list[tuple[int, str]]:
 def test_no_private_vault_access_from_routes():
     violations = []
     for path in sorted(_iter_python_files(ROUTES_DIR)):
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
         hits = _has_private_vault_access(source)
         for lineno, snippet in hits:
             violations.append(
@@ -198,7 +198,7 @@ def test_services_no_direct_db_calls():
     for path in sorted(_iter_python_files(SERVICES_DIR)):
         # as_posix(): allowlist uses "/" separators (see note above).
         rel = path.relative_to(REPO_ROOT).as_posix()
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
         if not _DB_CALL_PATTERN.search(source):
             continue
         if rel in _direct_db_call_service_allowlist:
@@ -527,7 +527,7 @@ def _iter_sink_files():
 def _scan_label_sinks():
     """Yield (rel_path, lineno, enclosing_func_name, guarded, line) for each sink."""
     for path in _iter_sink_files():
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
         func_src = {
             node: (ast.get_source_segment(source, node) or "")
@@ -600,7 +600,7 @@ def test_label_sink_guardrail_detects_a_removed_guard():
     # detection is token-driven (not incidental) for a representative sink.
     sample_rel, sample_name = guarded_now[0]
     path = REPO_ROOT / sample_rel
-    source = path.read_text()
+    source = path.read_text(encoding="utf-8")
     stripped = source
     for token in _LOCK_GUARD_TOKENS:
         stripped = stripped.replace(token, "REMOVED_GUARD")
@@ -629,7 +629,7 @@ _LOCK_TAG_CHOKEPOINTS = ("_set_tag", "_reverse_review", "_resolve", "_apply_writ
 def test_lock_chokepoint_callers_are_guarded():
     path = SERVICES_DIR / "tag_suggestion_service.py"
     rel = path.relative_to(REPO_ROOT).as_posix()
-    source = path.read_text()
+    source = path.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(path))
     call_res = [re.compile(rf"\b{re.escape(cp)}\s*\(") for cp in _LOCK_TAG_CHOKEPOINTS]
 
@@ -672,7 +672,7 @@ def test_attach_sidecars_is_called_only_by_the_two_row_builders():
     """
     callers = set()
     for path in PIXLSTASH_DIR.rglob("*.py"):
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
         if "attach_sidecars(" not in source:
             continue
         rel = path.relative_to(REPO_ROOT).as_posix()
