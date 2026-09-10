@@ -905,3 +905,120 @@ def test_emptying_a_recorded_description_file_clears_the_description(env):
     _run_root_scan(server)
     _, description_after, _, _ = _picture(server, "cleared/h.png")
     assert description_after is None, "the owner emptied their own sidecar"
+
+
+class _FixedDescriptionWorkflow:
+    """Answers every picture in the batch with one machine caption."""
+
+    CAPTION = "A machine-generated caption."
+
+    def generate_batch(self, pictures, engine_override=None, stop_event=None):
+        return {pic.id: self.CAPTION for pic in pictures}
+
+    def estimate_vram_mb(self, image_count, plugin_name=None):
+        return 0
+
+
+def test_the_tagger_drops_a_result_for_a_row_the_scan_filled_meanwhile(env):
+    """The tagger claims a picture by its pending sentinel and hands the GPU
+    back seconds later, and `_add_tags_bulk` deletes every Tag row before
+    writing. If the root scan imported the owner's tags file in between, the
+    unconditional write replaced what they wrote. The claim has to still be
+    there at completion; an empty file puts the sentinel back, so a picture
+    with genuinely nothing in its sidecar is still tagged."""
+    from pixlstash.db_models.tag import TAG_PENDING_SENTINEL
+    from pixlstash.tasks.tag_task import TagTask
+
+    server = env["server"]
+    root = server.vault.image_root
+    _make_image(os.path.join(root, "claimed", "i.png"), (81, 82, 83))
+    _make_image(os.path.join(root, "claimed", "j.png"), (84, 85, 86))
+    _set_sync(
+        server,
+        sync_tags=True,
+        sync_descriptions=False,
+        tags_suffix="_tags.txt",
+        description_suffix="_caption.txt",
+    )
+    _run_root_scan(server)
+    filled_id, _, _, _ = _picture(server, "claimed/i.png")
+    empty_id, _, _, _ = _picture(server, "claimed/j.png")
+
+    # Both pictures are claimed: this is exactly what MissingTagFinder selects.
+    _set_tags(server, filled_id, TAG_PENDING_SENTINEL)
+    _set_tags(server, empty_id, TAG_PENDING_SENTINEL)
+
+    # The scan lands while the GPU is busy. One owner file has tags, one is empty.
+    _write(os.path.join(root, "claimed", "i_tags.txt"), "harbour, dusk")
+    _write(os.path.join(root, "claimed", "j_tags.txt"), "")
+    _run_root_scan(server)
+    assert _picture(server, "claimed/i.png")[3] == ["dusk", "harbour"]
+
+    # The tagger now completes with what it inferred before the scan ran.
+    server.vault.db.run_task(
+        lambda session: TagTask._add_tags_bulk(
+            session,
+            [
+                {"pic_id": filled_id, "tags": ["cat", "dog"]},
+                {"pic_id": empty_id, "tags": ["cat", "dog"]},
+            ],
+        )
+    )
+
+    assert _picture(server, "claimed/i.png")[3] == ["dusk", "harbour"], (
+        "the owner's caption file is the authority; the tagger's result is dropped"
+    )
+    assert _picture(server, "claimed/j.png")[3] == ["cat", "dog"], (
+        "an empty sidecar restores the sentinel, so the tagger still writes"
+    )
+
+
+def test_the_describer_drops_a_caption_for_a_row_the_scan_filled_meanwhile(env):
+    """The same race on the description side, where the claim is a NULL
+    description or a `__description::` sentinel."""
+    from pixlstash.db_models.tag import make_description_sentinel
+    from pixlstash.tasks.description_task import DescriptionTask
+    from types import SimpleNamespace
+
+    server = env["server"]
+    root = server.vault.image_root
+    _make_image(os.path.join(root, "claimed", "k.png"), (87, 88, 89))
+    _make_image(os.path.join(root, "claimed", "l.png"), (90, 91, 92))
+    _set_sync(
+        server,
+        sync_tags=False,
+        sync_descriptions=True,
+        tags_suffix="_tags.txt",
+        description_suffix="_caption.txt",
+    )
+    _run_root_scan(server)
+    filled_id, _, _, _ = _picture(server, "claimed/k.png")
+    untouched_id, _, _, _ = _picture(server, "claimed/l.png")
+
+    def claim(session: Session):
+        session.get(Picture, filled_id).description = make_description_sentinel(None)
+        session.get(Picture, untouched_id).description = None
+        session.commit()
+
+    server.vault.db.run_task(claim)
+
+    # The scan lands while the GPU is busy; only one picture has an owner file.
+    _write(os.path.join(root, "claimed", "k_caption.txt"), "A lighthouse at dusk.")
+    _run_root_scan(server)
+    assert _picture(server, "claimed/k.png")[1] == "A lighthouse at dusk."
+
+    DescriptionTask(
+        server.vault.db,
+        _FixedDescriptionWorkflow(),
+        [
+            SimpleNamespace(id=filled_id, description=None),
+            SimpleNamespace(id=untouched_id, description=None),
+        ],
+    )._run_task()
+
+    assert _picture(server, "claimed/k.png")[1] == "A lighthouse at dusk.", (
+        "the owner's caption file is the authority; the generated one is dropped"
+    )
+    assert _picture(server, "claimed/l.png")[1] == _FixedDescriptionWorkflow.CAPTION, (
+        "a picture still awaiting a description is captioned as before"
+    )

@@ -27,6 +27,7 @@ from pixlstash.db_models import (
     PictureSetMember,
     PictureStack,
     ReferenceFolder,
+    TAG_PENDING_SENTINEL,
     Tag,
     make_tag_sentinel,
 )
@@ -996,6 +997,10 @@ def test_tagger_preserves_locked_confirmed_tags():
             for pid in (locked_pic, free_pic):
                 session.exec(delete(Tag).where(Tag.picture_id == pid))
                 session.add(Tag(picture_id=pid, tag="original"))
+                # The retag sentinel the docstring names: it is the claim
+                # `_add_tags_bulk` acts on, so without it the write is skipped
+                # for want of a claim and the lock guard is never exercised.
+                session.add(Tag(picture_id=pid, tag=TAG_PENDING_SENTINEL))
             session.commit()
 
         server.vault.db.run_task(seed)
@@ -1019,8 +1024,9 @@ def test_tagger_preserves_locked_confirmed_tags():
         free_tags = {
             t["tag"] for t in client.get(f"/pictures/{free_pic}/tags").json()["tags"]
         }
-        # Locked picture's confirmed tags are untouched; the free one is rewritten.
-        assert locked_tags == {"original"}, locked_tags
+        # Locked picture's confirmed tags are untouched, sentinel and all; the
+        # free one is rewritten and the sentinel it was claimed on is consumed.
+        assert locked_tags == {"original", TAG_PENDING_SENTINEL}, locked_tags
         assert free_tags == {"tagger-new"}, free_tags
     finally:
         server.close()

@@ -7,7 +7,7 @@ from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel, Session, create_engine, select
 
 from pixlstash.db_models.picture import Picture
-from pixlstash.db_models.tag import Tag
+from pixlstash.db_models.tag import TAG_PENDING_SENTINEL, Tag
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.tagger_plugins.pixlstash_tagger import (
     CENTRE_CROP_TAG_WHITELIST,
@@ -58,6 +58,9 @@ def test_add_tags_bulk_skips_missing_picture_ids(tmp_path):
         session.add(picture)
         session.commit()
         session.refresh(picture)
+        # The claim every TagTask acts on: the picture is awaiting tagging.
+        session.add(Tag(picture_id=picture.id, tag=TAG_PENDING_SENTINEL))
+        session.commit()
 
         updates = [
             {"pic_id": picture.id, "tags": ["jewelry"]},
@@ -91,6 +94,9 @@ def test_add_tags_bulk_honours_human_labels(tmp_path):
         session.add(picture)
         session.commit()
         session.refresh(picture)
+        # The claim every TagTask acts on: the picture is awaiting tagging.
+        session.add(Tag(picture_id=picture.id, tag=TAG_PENDING_SENTINEL))
+        session.commit()
 
         # Durable human supervision: 'watermark' accepted, 'blurry' rejected.
         session.add(

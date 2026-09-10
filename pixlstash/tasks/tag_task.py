@@ -17,6 +17,7 @@ from pixlstash.db_models import (
     Tag,
     TAG_SENTINEL_LIKE_PATTERN,
     TAG_SENTINEL_ESCAPE_CHAR,
+    is_tag_sentinel,
 )
 from pixlstash.db_models.tag_prediction import (
     feeds_anomaly_score,
@@ -600,12 +601,27 @@ class TagTask(BaseTask):
 
         # Determine which pictures need updating and their new effective tags.
         pics_to_update: list[tuple[int, set]] = []
+        filled_since_claim: list[int] = []
         for update in updates:
             pic_id = update.get("pic_id")
             if pic_id is None:
                 continue
             if pic_id not in existing_picture_ids:
                 logger.debug("Skipping tag update for missing picture_id=%s", pic_id)
+                continue
+            # The claim this pass acted on is the retag sentinel `MissingTagFinder`
+            # selected on (and that a reset restores before queuing an interactive
+            # pass). The rewrite below deletes every Tag row, so a picture whose
+            # sentinel is gone by now had its tags filled from somewhere else
+            # while the GPU was busy - the root scan importing the owner's caption
+            # file is the case this is for - and writing the model's result would
+            # replace what the owner wrote. Their file wins; drop the result. A
+            # sidecar that parsed to nothing puts the sentinel back, so a genuinely
+            # empty picture is still tagged.
+            if not any(
+                is_tag_sentinel(tag) for tag in existing_tags_map.get(pic_id, ())
+            ):
+                filled_since_claim.append(pic_id)
                 continue
             tags = update.get("tags") or []
 
@@ -622,6 +638,14 @@ class TagTask(BaseTask):
                 continue
 
             pics_to_update.append((pic_id, effective_tags))
+
+        if filled_since_claim:
+            logger.info(
+                "Tagger: dropping the result for %d picture(s) %s whose tags were "
+                "written from the owner's caption file since this pass claimed them.",
+                len(filled_since_claim),
+                sorted(filled_since_claim),
+            )
 
         # A locked set freezes a picture's CONFIRMED tags (the Tag table, not just
         # predictions), so the background tagger must never rewrite them - even if

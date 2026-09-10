@@ -6441,6 +6441,19 @@ A picture's *first* indexing is a different rule and reads the sidecar beside it
 either way (`attach_sidecars`), as the local import does: there are no tags yet
 to overwrite.
 
+**An inference pass checks its claim is still there before it writes.** The
+tagger claims a picture by the retag sentinel `MissingTagFinder` selects on and
+the describer by the NULL-or-`__description::` row `MissingDescriptionFinder`
+selects on, and both hand the GPU back seconds later - long enough for a root
+scan to have imported the owner's caption file in between. `TagTask._add_tags_bulk`
+deletes every `Tag` row before writing and `DescriptionTask`'s write was
+unconditional, so the model's result replaced what the owner wrote. Both now
+re-read the row in the write transaction and drop the result (info log) when the
+claim is gone; the owner's file wins. A sidecar that parsed to nothing puts the
+pending sentinel back, so a picture with genuinely nothing beside it is still
+processed. This is the same shape as the locked-set skip both writers already
+have, checked in the same place.
+
 **A detected suffix the writer refuses turns its kind off for that scan**
 (`ReferenceFolderScanTask._disabled_kinds`, checked at the top of
 `_reconcile_sidecar` and by `_read_suffixes` for a newly indexed picture).

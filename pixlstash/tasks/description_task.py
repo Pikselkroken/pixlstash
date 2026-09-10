@@ -8,6 +8,7 @@ from sqlmodel import Session
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture
+from pixlstash.db_models.tag import is_description_sentinel
 from pixlstash.inference.workflows.description import DescriptionWorkflow
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.set_lock_service import locked_picture_ids
@@ -134,14 +135,36 @@ class DescriptionTask(BaseTask):
             # onto it, even if one was generated for an in-flight task.
             locked = locked_picture_ids(session, [pic.id for pic in pics])
             changed = []
+            filled_since_claim = []
             for pic in pics:
                 if pic.id in locked:
                     continue
                 db_pic = session.get(Picture, pic.id)
-                if db_pic is not None:
-                    db_pic.description = pic.description
-                    session.add(db_pic)
-                    changed.append((Picture, pic.id, "description", pic.description))
+                if db_pic is None:
+                    continue
+                # The claim this pass acted on is what `MissingDescriptionFinder`
+                # selects: a NULL description, or a `__description::` sentinel from
+                # a reset. A row holding anything else was filled while the GPU was
+                # busy - the root scan importing the owner's caption file is the
+                # case this is for - and writing the generated caption over it
+                # would replace what they wrote. Their file wins; drop the result.
+                if not (
+                    db_pic.description is None
+                    or is_description_sentinel(db_pic.description)
+                ):
+                    filled_since_claim.append(pic.id)
+                    continue
+                db_pic.description = pic.description
+                session.add(db_pic)
+                changed.append((Picture, pic.id, "description", pic.description))
+            if filled_since_claim:
+                logger.info(
+                    "DescriptionTask: dropping the caption for %d picture(s) %s "
+                    "whose description was written from the owner's caption file "
+                    "since this pass claimed them.",
+                    len(filled_since_claim),
+                    sorted(filled_since_claim),
+                )
             session.commit()
             return changed
 
