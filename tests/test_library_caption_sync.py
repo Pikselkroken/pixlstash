@@ -239,6 +239,12 @@ def test_the_settings_route_reads_patches_and_refuses_an_unsafe_suffix(env):
     assert patched.json()["description_suffix"] == ".caption"
     assert patched.json()["sync_tags"] is False, "a field not sent keeps its value"
 
+    nulled = owner.patch(_CAPTIONS, json={"sync_descriptions": None})
+    assert nulled.status_code == 200, nulled.text
+    assert nulled.json()["sync_descriptions"] is True, (
+        "a toggle sent as null is no change, not an accidental off"
+    )
+
     refused = owner.patch(_CAPTIONS, json={"tags_suffix": "../escape.txt"})
     assert refused.status_code == 400, refused.text
     assert owner.get(_CAPTIONS).json()["tags_suffix"] is None, "nothing stored"

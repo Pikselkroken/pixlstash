@@ -364,7 +364,6 @@ describe("switching", () => {
           VProgressCircular: true,
           LibraryLayoutDialog: true,
           LibraryCaptionsDialog: true,
-        LibraryCaptionsDialog: true,
           AppButton: {
             props: ["disabled", "loading"],
             template:
@@ -409,7 +408,6 @@ describe("switching", () => {
           VProgressCircular: true,
           LibraryLayoutDialog: true,
           LibraryCaptionsDialog: true,
-        LibraryCaptionsDialog: true,
           AppButton: {
             props: ["disabled", "loading"],
             template:

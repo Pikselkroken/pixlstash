@@ -102,13 +102,15 @@ def create_router(server) -> APIRouter:
         "/server-config/captions",
         summary="Set the library's caption-file sync settings",
         description=(
-            "A PATCH: a field not sent keeps its value. Turning a type on asks "
+            "A PATCH: a field not sent, or a toggle sent as `null`, keeps its "
+            "value. Turning a type on asks "
             "for a root rescan, which reads every existing sidecar of that "
             "type in and writes one beside every picture that has content but "
             "no file yet. An empty file is never created. Turning a type off "
             "leaves every file where it is.\n\n"
             "A suffix must be a bare filename fragment (letters, digits, `.`, "
-            "`_`, `-`); anything else is refused with 400. Sending an empty "
+            "`_`, `-`); anything else is refused with 400. Sending an empty or "
+            "`null` "
             "suffix clears it, so the next scan detects the convention on disk "
             "again or the default is used."
         ),
@@ -118,10 +120,14 @@ def create_router(server) -> APIRouter:
     def patch_caption_sync(request: Request, body: CaptionSyncPatch = Body(...)):
         current = get_caption_sync(server.vault.db)
         fields: dict = {}
-        if "sync_tags" in body.model_fields_set:
-            fields["sync_tags"] = bool(body.sync_tags)
-        if "sync_descriptions" in body.model_fields_set:
-            fields["sync_descriptions"] = bool(body.sync_descriptions)
+        # A toggle sent as null is "no change", as PATCH /reference-folders
+        # treats it; only a real boolean is stored. A suffix sent as null
+        # clears it, like an empty string - there is no other way to say
+        # "no convention, detect it again".
+        if body.sync_tags is not None:
+            fields["sync_tags"] = body.sync_tags
+        if body.sync_descriptions is not None:
+            fields["sync_descriptions"] = body.sync_descriptions
         if "tags_suffix" in body.model_fields_set:
             fields["tags_suffix"] = _suffix(body.tags_suffix)
         if "description_suffix" in body.model_fields_set:
