@@ -501,6 +501,7 @@ describe("the loose-pictures offer for an empty library", () => {
       label: "Pictures",
       mode: "local_import",
       pictureCount: 7,
+      pictureCountCapped: false,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
     activeLibraryAt(path);
@@ -522,6 +523,41 @@ describe("the loose-pictures offer for an empty library", () => {
     expect(inspect).not.toHaveBeenCalled();
     expect(useFolderMappingStore().rootPictureCount).toBe(7);
     expect(useFolderMappingStore().wizardResume).toEqual(entry);
+
+    wrapper.unmount();
+  });
+
+  it("asks again for an entry saved before the count carried its cap", async () => {
+    // A legacy entry has a count but no `pictureCountCapped` and no result,
+    // so nothing says whether that count was a total or a floor. Showing it
+    // as a total after an upgrade would be a guess; the server is asked.
+    const path = "/home/me/Pictures";
+    const entry = {
+      taskId: "task-6",
+      path,
+      label: "Pictures",
+      mode: "local_import",
+      pictureCount: 7,
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    apiGet.mockImplementation((url) => {
+      if (url.includes("inspect")) {
+        return Promise.resolve({
+          data: { picture_count: 5000, picture_count_capped: true },
+        });
+      }
+      return Promise.resolve(respond());
+    });
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+
+    expect(useFolderMappingStore().rootPictureCount).toBe(5000);
+    expect(useFolderMappingStore().rootPictureCountCapped).toBe(true);
 
     wrapper.unmount();
   });

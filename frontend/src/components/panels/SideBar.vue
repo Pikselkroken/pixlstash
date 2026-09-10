@@ -899,11 +899,14 @@ async function _fillRootPictureCount(entry) {
   const epoch = mappingStore.rootCountEpoch;
   if (mappingStore.rootPictureCount !== null) return;
   const counted = entry.pictureCount ?? entry.result?.picture_count;
-  if (counted != null) {
-    // The wizard saves the read's `truncated` beside the count; entries
-    // written before it did carry the result itself, so ask that instead.
-    const capped =
-      entry.pictureCountCapped ?? entry.result?.truncated === true;
+  // The wizard saves the read's `truncated` beside the count; an entry that
+  // carries the result itself answers from that. An entry saved before the
+  // flag existed has a count of unknown completeness, so it is asked for
+  // again rather than shown as a total.
+  const capped =
+    entry.pictureCountCapped ??
+    (entry.result ? entry.result.truncated === true : undefined);
+  if (counted != null && capped !== undefined) {
     mappingStore.setRootPictureCount(counted, capped, epoch);
     return;
   }
