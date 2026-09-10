@@ -6385,7 +6385,13 @@ a picture indexed while sync was off already carries a file and the mtime it was
 read at, so a scan that gates on `(path, mtime)` would see nothing changed and
 leave a sidecar and a tag set that diverged while sync was off divergent for
 good. With the mtime forgotten the scan reads the file in, which is the
-recorded-file rule below. Turning a type on calls
+recorded-file rule below. **Whether a rescan is due is decided in that same
+writer** - `set_caption_sync` returns it, against the row the write actually
+replaced - rather than by the route comparing a snapshot it read first: two
+PATCHes that read one suffix, one writing another and the other writing the
+one it read back, both leave stored state the snapshot no longer describes,
+and the second would ask for nothing. An extra idempotent scan is cheap; a
+dropped one leaves the owner's files unread. Turning a type on calls
 `Vault.rescan_library_root`, and `ReferenceFolderScanTask` with
 `folder_id=None` then does for the root exactly what it does for a folder:
 `fetch_folder_config` returns the settings' four fields, an unset suffix is

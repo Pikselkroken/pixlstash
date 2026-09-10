@@ -143,7 +143,6 @@ def create_router(server) -> APIRouter:
         },
     )
     def patch_caption_sync(request: Request, body: CaptionSyncPatch = Body(...)):
-        current = get_caption_sync(server.vault.db)
         fields: dict = {}
         # A toggle sent as null is "no change", as PATCH /reference-folders
         # treats it; only a real boolean is stored. A suffix sent as null
@@ -157,28 +156,23 @@ def create_router(server) -> APIRouter:
             fields["tags_suffix"] = _suffix(body.tags_suffix)
         if "description_suffix" in body.model_fields_set:
             fields["description_suffix"] = _suffix(body.description_suffix)
-        try:
-            stored = (
-                set_caption_sync(
-                    server.vault.db, validate=_reject_shared_suffix, **fields
-                )
-                if fields
-                else current
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
         # The scan is what reads the existing files in and exports the missing
         # ones, as PATCH /reference-folders does for a folder. A type that just
         # came on is due for one, and so is a type whose suffix changed while
         # it is on: that names a different set of files, none of them read yet.
-        due = any(
-            stored[toggle]
-            and (not current[toggle] or stored[suffix_key] != current[suffix_key])
-            for toggle, suffix_key in (
-                ("sync_tags", "tags_suffix"),
-                ("sync_descriptions", "description_suffix"),
+        # The writer decides that, against the row it actually replaced - a
+        # comparison against a snapshot read out here can miss the transition
+        # when two PATCHes overlap.
+        try:
+            stored, due = (
+                set_caption_sync(
+                    server.vault.db, validate=_reject_shared_suffix, **fields
+                )
+                if fields
+                else (get_caption_sync(server.vault.db), False)
             )
-        )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if due:
             server.vault.rescan_library_root()
         return _response(stored)

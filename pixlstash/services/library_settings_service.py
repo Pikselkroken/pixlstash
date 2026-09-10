@@ -198,6 +198,12 @@ _CAPTION_MTIME_COLUMNS = {
     "sync_descriptions": ("description_file", "description_file_mtime"),
 }
 
+#: The suffix field each toggle names its files with.
+_CAPTION_SUFFIX_FIELDS = {
+    "sync_tags": "tags_suffix",
+    "sync_descriptions": "description_suffix",
+}
+
 
 def _forget_caption_mtimes(session: Session, toggle: str) -> None:
     """Make the next root scan re-read the caption files *toggle* governs.
@@ -236,12 +242,22 @@ def get_caption_sync(vault_db) -> dict:
     return vault_db.run_immediate_read_task(read)
 
 
-def set_caption_sync(vault_db, validate=None, **fields) -> dict:
+def set_caption_sync(vault_db, validate=None, **fields) -> tuple[dict, bool]:
     """Store the given `CAPTION_SYNC_FIELDS`; a field not passed keeps its value.
 
-    Returns the settings as stored. The suffixes are trusted here: the route
-    validates them at its boundary and `sidecar_path` refuses an unsafe one at
-    the point of use, the same two doors a reference folder's go through.
+    Returns ``(stored settings, rescan due)``. The suffixes are trusted here:
+    the route validates them at its boundary and `sidecar_path` refuses an
+    unsafe one at the point of use, the same two doors a reference folder's go
+    through.
+
+    *rescan due* is True when this write left a kind on that was off, or
+    changed the suffix of a kind that is on - a different set of files, none of
+    them read yet. It is decided inside the writer, against the row this write
+    actually replaced, because a caller comparing against a separately read
+    snapshot can miss the transition: two PATCHes read suffix X, one writes Y
+    and scans, the other writes X back and sees no change against its stale
+    snapshot, so the state on disk is never read. An extra idempotent rescan is
+    cheap; a dropped one leaves the files unread for good.
 
     *validate*, when given, is called with the MERGED row - the stored values
     with *fields* applied - inside the writer task, before anything is set,
@@ -257,7 +273,7 @@ def set_caption_sync(vault_db, validate=None, **fields) -> dict:
     if unknown:
         raise ValueError(f"unknown caption sync fields: {sorted(unknown)}")
 
-    def write(session: Session) -> dict:
+    def write(session: Session) -> tuple[dict, bool]:
         row = _row(session)
         merged = {name: getattr(row, name) for name in CAPTION_SYNC_FIELDS}
         merged.update(fields)
@@ -268,6 +284,14 @@ def set_caption_sync(vault_db, validate=None, **fields) -> dict:
             for toggle in _CAPTION_MTIME_COLUMNS
             if fields.get(toggle) and not getattr(row, toggle)
         ]
+        rescan_due = any(
+            merged[toggle]
+            and (
+                not getattr(row, toggle)
+                or merged[suffix_field] != getattr(row, suffix_field)
+            )
+            for toggle, suffix_field in _CAPTION_SUFFIX_FIELDS.items()
+        )
         for name, value in fields.items():
             setattr(row, name, value)
         for toggle in turned_on:
@@ -275,7 +299,8 @@ def set_caption_sync(vault_db, validate=None, **fields) -> dict:
         session.add(row)
         session.commit()
         session.refresh(row)
-        return {name: getattr(row, name) for name in CAPTION_SYNC_FIELDS}
+        stored = {name: getattr(row, name) for name in CAPTION_SYNC_FIELDS}
+        return stored, rescan_due
 
     return vault_db.run_task(write, priority=DBPriority.IMMEDIATE)
 

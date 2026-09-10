@@ -707,3 +707,72 @@ def test_a_picture_with_no_caption_file_still_gets_one_written(env):
         assert fh.read().strip() == "kite"
     _, _, tags_file, _ = _picture(server, "fresh/d.png")
     assert tags_file == written, "and the row records it"
+
+
+def test_the_rescan_decision_is_made_against_the_row_the_write_replaced(env):
+    """Two PATCHes read the same suffix. One writes another and asks for the
+    scan; the other writes back exactly the suffix it read. Judged against the
+    snapshot the request read, the second one changed nothing and asks for no
+    scan - and the files under the restored suffix are then never read in. The
+    writer compares with the row it actually replaced, so both end with a
+    rescan asked for. An extra idempotent scan is cheap; a dropped one is not.
+    """
+    from pixlstash.services.library_settings_service import (
+        get_caption_sync,
+        set_caption_sync,
+    )
+
+    server = env["server"]
+    _set_sync(
+        server,
+        sync_tags=True,
+        sync_descriptions=False,
+        tags_suffix="_a.txt",
+        description_suffix="_b.txt",
+    )
+    snapshot = get_caption_sync(server.vault.db)
+
+    _, first_due = set_caption_sync(server.vault.db, tags_suffix="_y.txt")
+    stored, second_due = set_caption_sync(
+        server.vault.db, tags_suffix=snapshot["tags_suffix"]
+    )
+
+    assert first_due, "the suffix changed while tag sync is on"
+    assert stored["tags_suffix"] == snapshot["tags_suffix"], (
+        "the second request wrote back what it read: against its own snapshot "
+        "nothing changed at all"
+    )
+    assert second_due, "but the stored suffix did change, and _a.txt is unread"
+
+    # A kind that is off is never due, whatever its suffix does.
+    _, off_due = set_caption_sync(server.vault.db, description_suffix="_c.txt")
+    assert off_due is False, "description sync is off"
+
+
+def test_turning_a_kind_on_through_the_route_asks_for_the_scan(env, monkeypatch):
+    """The route acts on what the writer reports: the scan is what reads the
+    owner's existing files in before anything is written back over them."""
+    server = env["server"]
+    owner = env["owner"]
+    _set_sync(
+        server,
+        sync_tags=False,
+        sync_descriptions=False,
+        tags_suffix="_a.txt",
+        description_suffix="_b.txt",
+    )
+    rescans = []
+    monkeypatch.setattr(server.vault, "rescan_library_root", lambda: rescans.append(1))
+
+    assert owner.get(_CAPTIONS).status_code == 200
+    assert not rescans, "a read asks for nothing"
+
+    turned_on = owner.patch(_CAPTIONS, json={"sync_tags": True})
+    assert turned_on.status_code == 200, turned_on.text
+    assert len(rescans) == 1, "off -> on is due a scan"
+
+    assert owner.patch(_CAPTIONS, json={"sync_tags": True}).status_code == 200
+    assert len(rescans) == 1, "already on, same suffix: nothing to re-read"
+
+    assert owner.patch(_CAPTIONS, json={"tags_suffix": "_z.txt"}).status_code == 200
+    assert len(rescans) == 2, "a different suffix names files none of which are read"
