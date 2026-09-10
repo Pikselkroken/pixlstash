@@ -117,6 +117,14 @@ def _settle_pending(server, state):
     server.vault.db.run_task(write)
 
 
+def _due(finder):
+    """The next planning cycle after something changed: a closed gate is asked
+    again only after `_GATE_RETRY_S`, and `mark_root_due` is what clears that
+    deadline (and the scan interval) so the tests do not wait it out."""
+    finder.mark_root_due()
+    return finder
+
+
 def _finder(server):
     return ReferenceFolderScanFinder(
         database=server.vault.db,
@@ -131,13 +139,13 @@ def test_a_fresh_library_over_pictures_is_not_scanned_until_the_offer_is_answere
     _drop_picture(server.vault.image_root, "loose.png")
     finder = _finder(server)
     assert finder.first_import_answered() is False
-    assert finder.find_task() is None, "the owner has not been asked yet"
+    assert _due(finder).find_task() is None, "the owner has not been asked yet"
 
     _record(server, STATE_ABANDONED)
-    assert finder.find_task() is None, "an abort is not an answer to import"
+    assert _due(finder).find_task() is None, "an abort is not an answer to import"
 
     _record(server, STATE_PENDING)
-    assert finder.find_task() is None, (
+    assert _due(finder).find_task() is None, (
         "a pending record is the commit still running - the question, not the "
         "answer. Counting it lets the 300 s root scan race the commit: it "
         "builds its own rows with the sidecar probe and insert() reuses them "
@@ -146,13 +154,13 @@ def test_a_fresh_library_over_pictures_is_not_scanned_until_the_offer_is_answere
     _settle_pending(server, STATE_SUPERSEDED)
 
     _record(server, STATE_DEFERRED, mode="reference")
-    assert finder.find_task() is None, (
+    assert _due(finder).find_task() is None, (
         "a reference-folder commit registers some other folder; it says "
         "nothing about the root's own pictures"
     )
 
     _record(server, STATE_DEFERRED)
-    task = finder.find_task()
+    task = _due(finder).find_task()
     assert task is not None and task.params["folder_id"] is None, (
         "organise later is an answer: index everything, map nothing"
     )
@@ -164,14 +172,14 @@ def test_a_library_that_holds_a_picture_is_scanned_as_before(server):
     there, is the answer."""
     _drop_picture(server.vault.image_root, "first.png")
     finder = _finder(server)
-    assert finder.find_task() is None
+    assert _due(finder).find_task() is None
 
     def add(session: Session):
         session.add(Picture(file_path="first.png", pixel_sha="x" * 64))
         session.commit()
 
     server.vault.db.run_task(add)
-    task = finder.find_task()
+    task = _due(finder).find_task()
     assert task is not None and task.params["folder_id"] is None
 
 
@@ -195,10 +203,10 @@ def test_a_running_local_import_holds_the_root_scan_off_though_it_has_committed_
     assert finder.first_import_answered() is False, (
         "a chunk the running commit already inserted is not the owner's answer"
     )
-    assert finder.find_task() is None
+    assert _due(finder).find_task() is None
     # Nothing was cached, so the commit settling still releases the scan.
     _settle_pending(server, STATE_DONE)
-    task = finder.find_task()
+    task = _due(finder).find_task()
     assert task is not None and task.params["folder_id"] is None
 
 
@@ -221,11 +229,11 @@ def test_an_aborted_local_import_holds_the_root_scan_off_over_its_own_rows(serve
         "a chunk the aborted commit had already inserted is not an answer to "
         "import; scanning on it imports the very files the owner declined"
     )
-    assert finder.find_task() is None
+    assert _due(finder).find_task() is None
     # Nothing was cached, so a later import that does settle still releases
     # the scan: the newest record decides.
     _record(server, STATE_DONE)
-    task = finder.find_task()
+    task = _due(finder).find_task()
     assert task is not None and task.params["folder_id"] is None
     assert finder.first_import_answered() is True
 
@@ -246,7 +254,7 @@ def test_an_abort_after_an_earlier_import_still_holds_the_root_scan_off(server):
 
     finder = _finder(server)
     assert finder.first_import_answered() is False
-    assert finder.find_task() is None
+    assert _due(finder).find_task() is None
 
 
 def test_a_superseded_local_import_holds_the_root_scan_off_too(server):
@@ -265,7 +273,7 @@ def test_a_superseded_local_import_holds_the_root_scan_off_too(server):
 
     finder = _finder(server)
     assert finder.first_import_answered() is False
-    assert finder.find_task() is None
+    assert _due(finder).find_task() is None
 
 
 def test_the_same_finder_closes_the_gate_again_for_a_later_import(server):
@@ -275,13 +283,13 @@ def test_the_same_finder_closes_the_gate_again_for_a_later_import(server):
     _record(server, STATE_DONE)
     finder = _finder(server)
     assert finder.first_import_answered() is True
-    task = finder.find_task()
+    task = _due(finder).find_task()
     assert task is not None and task.params["folder_id"] is None
 
     _record(server, STATE_PENDING)
     finder.mark_root_due()
     assert finder.first_import_answered() is False
-    assert finder.find_task() is None
+    assert _due(finder).find_task() is None
 
 
 def test_a_closed_gate_is_not_asked_on_every_planner_sweep(server, monkeypatch):
