@@ -22,6 +22,7 @@ from pixlstash.utils.caption_file_utils import (
     DEFAULT_DESCRIPTION_SUFFIX,
     DEFAULT_TAGS_SUFFIX,
     is_safe_sidecar_suffix,
+    suffixes_collide,
 )
 
 
@@ -53,16 +54,13 @@ class CaptionSyncPatch(BaseModel):
 
 
 def _reject_shared_suffix(merged: dict) -> None:
-    """One suffix for both kinds is one file for both: the two write-backs
-    overwrite each other and the next scan reads the survivor back in as the
-    other kind. Compared on the effective values, because an unset suffix is
-    the default rather than "no file". Runs inside the writer, on the merged
-    row, so two concurrent partial PATCHes cannot each pass against the old
-    row and serialise into the shared state.
+    """One suffix for both kinds is one file for both: see
+    ``caption_file_utils.suffixes_collide``, which owns the rule (effective
+    values, case-insensitive). Runs inside the writer, on the merged row, so
+    two concurrent partial PATCHes cannot each pass against the old row and
+    serialise into the shared state.
     """
-    if (merged["tags_suffix"] or DEFAULT_TAGS_SUFFIX) == (
-        merged["description_suffix"] or DEFAULT_DESCRIPTION_SUFFIX
-    ):
+    if suffixes_collide(merged["tags_suffix"], merged["description_suffix"]):
         raise ValueError(
             "Tags and descriptions cannot share a suffix; they would share one "
             "file and overwrite each other."

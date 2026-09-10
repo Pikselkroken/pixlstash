@@ -18,8 +18,6 @@ from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolde
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.utils.caption_file_utils import (
-    DEFAULT_DESCRIPTION_SUFFIX,
-    DEFAULT_TAGS_SUFFIX,
     SIDECAR_TYPE_DESCRIPTION,
     SIDECAR_TYPE_TAGS,
     detect_folder_suffixes,
@@ -28,6 +26,7 @@ from pixlstash.utils.caption_file_utils import (
     read_description_sidecar,
     read_tags_sidecar,
     resolve_typed_sidecar,
+    suffixes_collide,
     write_sidecar,
     writeback_path,
 )
@@ -76,17 +75,13 @@ def _validate_sidecar_suffix(suffix: str) -> None:
 def _validate_suffix_pair(
     tags_suffix: Optional[str], description_suffix: Optional[str]
 ) -> None:
-    """Refuse one suffix for both kinds, on the effective values.
+    """Refuse one suffix for both kinds.
 
-    One suffix for both is one file for both: the two write-backs overwrite
-    each other and the next scan reads the survivor back in as the other
-    kind. An unset suffix is the default rather than "no file", so the
-    defaults take part. Shared by create and update so a new folder cannot
-    start in the state update refuses.
+    ``caption_file_utils.suffixes_collide`` owns the rule (effective values,
+    case-insensitive); this is its 400 at the API boundary. Shared by create
+    and update so a new folder cannot start in the state update refuses.
     """
-    if (tags_suffix or DEFAULT_TAGS_SUFFIX) == (
-        description_suffix or DEFAULT_DESCRIPTION_SUFFIX
-    ):
+    if suffixes_collide(tags_suffix, description_suffix):
         raise HTTPException(
             status_code=400,
             detail=(

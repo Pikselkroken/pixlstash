@@ -83,6 +83,32 @@ def is_safe_sidecar_suffix(suffix: str | None) -> bool:
     return bool(_SAFE_SUFFIX_RE.match(suffix))
 
 
+def suffixes_collide(tags_suffix: str | None, description_suffix: str | None) -> bool:
+    """Whether tags and descriptions would end up in the same file.
+
+    One suffix for both kinds is one file for both: the two write-backs
+    overwrite each other and the next scan reads the survivor back in as the
+    other kind. This is the single definition of that rule, applied by the
+    library and reference-folder routes, by the import seeding, and by the
+    folder scan before it persists a detected suffix.
+
+    An unset suffix is the module default rather than "no file", so the
+    defaults take part in the comparison. The comparison is case-insensitive
+    because Windows and macOS resolve ``_notes.txt`` and ``_NOTES.TXT`` to one
+    file; ``_SAFE_SUFFIX_RE`` keeps suffixes ASCII, so ``lower()`` is enough.
+
+    Args:
+        tags_suffix: The configured tags suffix, or None for the default.
+        description_suffix: The configured description suffix, or None.
+
+    Returns:
+        True when the two effective suffixes name the same file.
+    """
+    return (tags_suffix or DEFAULT_TAGS_SUFFIX).lower() == (
+        description_suffix or DEFAULT_DESCRIPTION_SUFFIX
+    ).lower()
+
+
 def get_sidecar_mtime(path: str) -> float | None:
     """Return the modification time of *path* as a Unix timestamp, or ``None``."""
     try:
