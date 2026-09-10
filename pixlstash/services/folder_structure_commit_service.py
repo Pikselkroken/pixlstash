@@ -216,22 +216,45 @@ def caption_suffixes(captions) -> tuple[Optional[list[str]], Optional[list[str]]
     )
 
 
-def parse_captions(raw) -> Optional[list[CaptionPattern]]:
+def parse_captions(raw, reported=None) -> Optional[list[CaptionPattern]]:
     """Validate the wire form of ``captions`` into `CaptionPattern` rows.
 
     ``None`` in, ``None`` out - the field was absent, so there is no answer to
     carry and the import probes. ``[]`` in, ``[]`` out: an answer of nothing.
 
+    *reported* is the read's own ``captions`` rows (§20), and every submitted
+    suffix must name one of them. The answer is an answer *to the read's
+    questions*: without the check a client could send ``{"suffix": ".json",
+    "kind": "tags"}`` for a suffix the read deliberately dropped as metadata
+    and `attach_sidecars` would open the JSON and store it as tags, which is
+    exactly the fallback the ``None``/``[]`` distinction exists to prevent.
+    Syntactic safety only says the path cannot escape the directory. ``None``
+    (a caller-supplied ``read_result`` that carries no ``captions``) skips the
+    check: there is nothing to compare against.
+
     Raises:
-        CommitError: A row is malformed, names an unknown kind, or carries a
+        CommitError: A row is malformed, names an unknown kind, carries a
             suffix that is not a bare filename fragment - the same rule the
             reference-folder API enforces, because the suffix is appended to
-            a picture path to find the file to read.
+            a picture path to find the file to read - or names a suffix the
+            read did not report.
     """
     if raw is None:
         return None
     if not isinstance(raw, list):
         raise CommitError("captions must be a list")
+    # Case-insensitive, because the read groups its own rows that way: it
+    # reports `.TXT` for a folder whose first spelling was that, and the owner
+    # answering `.txt` is answering that same one file.
+    offered = (
+        None
+        if reported is None
+        else {
+            row["suffix"].lower()
+            for row in reported
+            if isinstance(row, dict) and isinstance(row.get("suffix"), str)
+        }
+    )
     parsed: list[CaptionPattern] = []
     seen: set[str] = set()
     for index, row in enumerate(raw):
@@ -255,6 +278,15 @@ def parse_captions(raw) -> Optional[list[CaptionPattern]]:
             )
         seen.add(suffix.lower())
         parsed.append(CaptionPattern(suffix, kind))
+    # After the shape checks, so a malformed row is still answered by what is
+    # wrong with the row rather than by "the read never offered it".
+    if offered is not None:
+        for index, pattern in enumerate(parsed):
+            if pattern.suffix.lower() not in offered:
+                raise CommitError(
+                    f"captions[{index}].suffix {pattern.suffix!r} is not one "
+                    f"the read reported"
+                )
     return parsed
 
 

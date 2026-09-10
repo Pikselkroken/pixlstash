@@ -2031,7 +2031,12 @@ pattern ignored would still open a bare `.txt`. A reference folder's sidecar
 fields on `PATCH /reference-folders/{folder_id}` are its contract. `suffix`
 must be a bare filename fragment (the same rule as `PATCH /reference-folders`
 enforces): it is appended to a picture path to find the file to read, and no
-two rows may repeat one.
+two rows may repeat one. It must also name a pattern §20's `captions` reported
+(compared case-insensitively, since that is how the read groups them), because
+this is an answer to the read's questions and not a free-form instruction: a
+suffix the read deliberately left out, a `.json` of metadata among them, would
+otherwise be opened and stored as tags. A caller-supplied `read_result` that
+carries no `captions` of its own has nothing to check against and skips it.
 
 **A folder's nearest accepted ancestor of each exclusive kind wins** — a
 picture is filed under the *closest* Project, Person or Set above it, not
@@ -2046,7 +2051,7 @@ this route is the write that follows from it.
 
 | Status | When |
 |---|---|
-| **400** | an `assignments` row is malformed or names an unknown `kind`; a `captions` row names an unknown `kind`, carries a `suffix` that is not a bare filename fragment, or repeats a `suffix` an earlier row already claimed (compared case-insensitively, since `_notes.txt` and `_NOTES.TXT` are one file on Windows and macOS); `captions` is present at all (`[]` included) with `mode: "reference"` |
+| **400** | an `assignments` row is malformed or names an unknown `kind`; a `captions` row names an unknown `kind`, carries a `suffix` that is not a bare filename fragment, repeats a `suffix` an earlier row already claimed (compared case-insensitively, since `_notes.txt` and `_NOTES.TXT` are one file on Windows and macOS), or names a `suffix` §20's `captions` never reported (same case-insensitive comparison); `captions` is present at all (`[]` included) with `mode: "reference"` |
 | **404** | `task_id` does not name a read this session holds |
 | **409** | the named read has not settled yet, a commit is already running (against any read), the named read has **already been committed**, or the read's root path is already a reference folder that has completed a scan (§25 — the reuse-vs-refuse rule) |
 

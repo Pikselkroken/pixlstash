@@ -856,7 +856,11 @@ def create_router(server) -> APIRouter:
             captions = commit_service.parse_captions(
                 None
                 if payload.captions is None
-                else [c.model_dump() for c in payload.captions]
+                else [c.model_dump() for c in payload.captions],
+                # The read's own rows, so an answer can only name a pattern the
+                # owner was actually shown. Checked here, before the commit
+                # starts, against the same result the root path came from.
+                reported=result.get("captions"),
             )
         except commit_service.CommitError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

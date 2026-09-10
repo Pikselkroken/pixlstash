@@ -773,6 +773,56 @@ def test_a_caption_answer_with_an_unsafe_suffix_is_refused(owner_env):
     assert _drain_commit(owner, ok.json()["task_id"])["status"] == "completed"
 
 
+def test_a_caption_answer_must_name_a_pattern_the_read_reported(owner_env):
+    """`captions` answers the read's questions. A suffix the read never
+    offered is a 400, because the read drops `.json`, `.xmp` and friends as
+    metadata on purpose and a client that sends one back as `tags` would have
+    `attach_sidecars` open the JSON and store it as this picture's tags."""
+    server = owner_env["server"]
+    owner = owner_env["owner"]
+    root = os.path.join(server.vault.image_root, "local-import-unreported")
+    _make_tree(root, {"": ["one.jpg"]})
+    with open(os.path.join(root, "one.txt"), "w", encoding="utf-8") as fh:
+        fh.write("1girl, solo, smile")
+    with open(os.path.join(root, "one.json"), "w", encoding="utf-8") as fh:
+        fh.write('{"prompt": "1girl", "seed": 42}')
+
+    started = owner.post(_READ, json={"path": root})
+    read_task_id = started.json()["task_id"]
+    read = _drain_read(owner, read_task_id)
+    assert [c["suffix"] for c in read["result"]["captions"]] == [".txt"], (
+        "the read offers the `.txt` and never the metadata blob"
+    )
+
+    refused = owner.post(
+        _COMMIT,
+        json={
+            "task_id": read_task_id,
+            "mode": "local_import",
+            "captions": [{"suffix": ".json", "kind": "tags"}],
+        },
+    )
+    assert refused.status_code == 400, refused.text
+    assert "captions[0].suffix" in refused.json()["detail"]
+    assert "read reported" in refused.json()["detail"]
+
+    # Compared the way the read groups its own rows: `.TXT` answers the `.txt`
+    # it reported, because on Windows and macOS they are one file.
+    ok = owner.post(
+        _COMMIT,
+        json={
+            "task_id": read_task_id,
+            "mode": "local_import",
+            "captions": [{"suffix": ".TXT", "kind": "tags"}],
+        },
+    )
+    assert ok.status_code == 200, ok.text
+    assert (
+        _drain_commit(owner, ok.json()["task_id"], timeout_s=60.0)["status"]
+        == "completed"
+    )
+
+
 def test_local_import_wakes_the_planner_as_each_chunk_lands(
     owner_env, monkeypatch, caplog
 ):
