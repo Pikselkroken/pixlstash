@@ -239,8 +239,14 @@ describe("caption files beside the pictures", () => {
     return wrapper.findAll("select");
   }
 
+  // The commit refuses captions with mode `reference` (400), so every caption
+  // question is asked in the mode that accepts them.
+  function mountImport(props) {
+    return mountStep({ mode: "local_import", ...props });
+  }
+
   it("offers each pattern the read found, pre-filled with the read's guess", () => {
-    const wrapper = mountStep({ commitOnMount: false, readResult: READ_RESULT });
+    const wrapper = mountImport({ commitOnMount: false, readResult: READ_RESULT });
     expect(wrapper.text()).toContain("*.txt");
     expect(wrapper.text()).toContain("120 files in 4 folders");
     expect(wrapper.text()).toContain("1girl, solo");
@@ -257,7 +263,7 @@ describe("caption files beside the pictures", () => {
 
   it("sends the owner's answers with the commit, ignore included", async () => {
     startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
-    const wrapper = mountStep({ commitOnMount: false, readResult: READ_RESULT });
+    const wrapper = mountImport({ commitOnMount: false, readResult: READ_RESULT });
     await selects(wrapper)[0].setValue("ignore");
     expect(wrapper.text()).toContain("40 caption files are read");
     expect(wrapper.text()).toContain("120 caption files are left unread");
@@ -267,7 +273,7 @@ describe("caption files beside the pictures", () => {
       "read-1",
       expect.any(Array),
       "",
-      "reference",
+      "local_import",
       READ_RESULT,
       [
         { suffix: ".txt", kind: "ignore" },
@@ -277,7 +283,7 @@ describe("caption files beside the pictures", () => {
   });
 
   it("hands the answers to `build` when the library does not exist yet", async () => {
-    const wrapper = mountStep({
+    const wrapper = mountImport({
       commitOnMount: false,
       libraryExists: false,
       readResult: READ_RESULT,
@@ -295,7 +301,7 @@ describe("caption files beside the pictures", () => {
   it("prefers saved answers over the read's guess, and sends them when the read is gone", async () => {
     startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
     const saved = [{ suffix: ".txt", kind: "description" }];
-    const wrapper = mountStep({
+    const wrapper = mountImport({
       commitOnMount: false,
       readResult: READ_RESULT,
       captions: saved,
@@ -304,14 +310,33 @@ describe("caption files beside the pictures", () => {
 
     // A resumed commit after the library switch: no read result to list the
     // patterns from, only what was saved.
-    const resumed = mountStep({ commitOnMount: true, readResult: null, captions: saved });
+    const resumed = mountImport({
+      commitOnMount: true,
+      readResult: null,
+      captions: saved,
+    });
     await flushPromises();
     expect(resumed.text()).not.toContain("Caption files beside");
     expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual(saved);
   });
 
+  it("asks nothing, and sends nothing, for a reference folder", async () => {
+    // A reference folder's caption files belong to its own editor, and the
+    // commit refuses the mode/captions pair with a 400.
+    startFolderStructureCommit.mockResolvedValue({ task_id: "commit-2" });
+    const wrapper = mountStep({ commitOnMount: false, readResult: READ_RESULT });
+    expect(wrapper.text()).not.toContain("Caption files beside");
+    expect(selects(wrapper)).toHaveLength(0);
+    expect(wrapper.text()).not.toContain("caption files are read");
+
+    await buttonWith(wrapper, "Yes, build this library").trigger("click");
+    await flushPromises();
+    expect(startFolderStructureCommit.mock.calls.at(-1)[3]).toBe("reference");
+    expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual([]);
+  });
+
   it("asks nothing when the read found no caption files", () => {
-    const wrapper = mountStep({
+    const wrapper = mountImport({
       commitOnMount: false,
       readResult: { ...READ_RESULT, captions: [] },
     });

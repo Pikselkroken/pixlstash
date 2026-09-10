@@ -60,6 +60,7 @@ const emit = defineEmits([
   "cancel",
   "committed",
   "commit-started",
+  "update:captions",
   "update:committing",
 ]);
 
@@ -91,7 +92,14 @@ const CAPTION_CHOICES = [
   { value: "description", label: "Description" },
   { value: "ignore", label: "Ignore" },
 ];
-const patterns = computed(() => props.readResult?.captions ?? []);
+/**
+ * Only a local import asks. A reference folder's caption files belong to its
+ * own editor, and the commit refuses the mode/captions pair with a 400, so
+ * neither the card, the counts beside it, nor the payload may carry them.
+ */
+const patterns = computed(() =>
+  props.mode === "local_import" ? (props.readResult?.captions ?? []) : [],
+);
 // suffix -> the owner's answer. Seeded from the saved answers, then the read.
 const answers = reactive({});
 watch(
@@ -108,12 +116,20 @@ watch(
 /** The answers to send: one per reported pattern, or the saved ones when the
  *  read is gone (a resumed commit with no result to list them from). */
 function chosenCaptions() {
+  if (props.mode !== "local_import") return [];
   if (!patterns.value.length) return props.captions;
   return patterns.value.map((row) => ({
     suffix: row.suffix,
     kind: answers[row.suffix] ?? row.kind,
   }));
 }
+/**
+ * The wizard keeps the answers as they are made, not as the commit is pressed.
+ * "Back to the mapping" unmounts this step, so an answer held only here was
+ * lost on the way back and the read's own guess was committed instead; the
+ * wizard's `captions` re-seeds this step on the way forward again.
+ */
+watch(answers, () => emit("update:captions", chosenCaptions()));
 const captionFilesRead = computed(() =>
   patterns.value.reduce(
     (sum, row) => sum + (answers[row.suffix] === "ignore" ? 0 : row.files),
@@ -296,7 +312,8 @@ onUnmounted(() => {
 <template>
   <div class="preview-step">
     <!-- The heading is the dialog's title ("This is what your folders
-         become"), and the way back is the button beside the primary one. -->
+         become"), and the way back is the button in the dialog's header beside
+         it, where a step's chrome belongs. This step draws no second one. -->
     <div class="preview-step__groups">
       <!-- Only the kinds this mapping has: an empty group would still take a
            cell of the grid and leave a hole beside the one that follows. -->
@@ -330,16 +347,20 @@ onUnmounted(() => {
       </template>
     </div>
 
+    <!-- Hidden once the commit is running: a resumed post-switch commit starts
+         on mount, and a card of questions whose every select is disabled is a
+         decision the owner can no longer make. -->
     <div
-      v-if="patterns.length"
+      v-if="patterns.length && !committing"
       class="preview-step__card preview-step__card--captions"
     >
       <div class="preview-step__card-title">Caption files beside your pictures</div>
       <p class="preview-step__card-lead">
-        Text files named after a picture are read as that picture's tags or
-        description instead of PixlStash writing its own, and are kept in sync
-        with your edits from then on (Settings, the library's menu, Caption
-        files). Check each pattern.
+        Text files named after a picture are read as its tags or description,
+        and stay in step with your edits from then on. Confirming a pattern
+        turns caption files on for this library's whole picture folder, not
+        only the one you are importing, and writes a file beside every picture
+        that already has tags or a description. Check each pattern.
       </p>
       <ul class="preview-step__captions">
         <li
@@ -441,9 +462,6 @@ onUnmounted(() => {
     <div class="preview-step__actions">
       <AppButton v-if="!committing" variant="primary" @click="commit()">
         Yes, build this library
-      </AppButton>
-      <AppButton v-if="!committing" variant="secondary" @click="emit('back')">
-        Back to the mapping
       </AppButton>
       <!-- Organise later stays available WHILE the import runs: it is the
            answer to "this is taking ages and I do not want to watch", and it
