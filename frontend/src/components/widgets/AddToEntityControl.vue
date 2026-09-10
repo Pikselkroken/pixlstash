@@ -1087,7 +1087,7 @@ async function toggleSet(item) {
         pictureIds: idsToRemove,
         action: "removed",
       });
-      if (members) idsToRemove.forEach((id) => members.delete(String(id)));
+      applyOptimisticMembership(item.key, "removed", idsToRemove);
     } else {
       await Promise.all(
         idsToAdd.map((id) => addPictureToSet(item.id, id, apiOpts.value)),
@@ -1095,7 +1095,7 @@ async function toggleSet(item) {
       statusMessage.value = `Added to ${item.name}`;
       emit("added", { setId: item.id, pictureIds: idsToAdd, action: "added" });
       lastUsedItem.value = { id: item.id, name: item.name };
-      if (members) idsToAdd.forEach((id) => members.add(String(id)));
+      applyOptimisticMembership(item.key, "added", idsToAdd);
     }
     // The membership just moved, so the list's picture counts did too: ask the
     // server again rather than patching the shared cache from here.
@@ -1138,6 +1138,24 @@ function toggleProject(item) {
         ? "Set to unassigned"
         : `Added to ${item.name}`;
   scheduleStatusClear(1600);
+}
+
+/**
+ * Update membersById based on just-written updates.
+ *
+ * Replacing the map rather than mutating the Set in place matches
+ * `applyOptimisticProjectUpdate`; either one re-renders the row.
+ */
+function applyOptimisticMembership(key, action, ids) {
+  if (!ids?.length) return;
+  const next = { ...membersById.value };
+  const bucket = new Set(next[key] ?? []);
+  for (const id of ids) {
+    if (action === "removed") bucket.delete(String(id));
+    else bucket.add(String(id));
+  }
+  next[key] = bucket;
+  membersById.value = next;
 }
 
 function applyOptimisticProjectUpdate(item, action, ids) {
@@ -1189,8 +1207,7 @@ async function toggleCharacter(item) {
       await removeCharacterFaces(item.id, ids, apiOpts.value);
       statusMessage.value = `Removed from ${item.name}`;
       emit("removed", { characterId: item.id, pictureIds: ids });
-      const members = membersById.value?.[item.key];
-      if (members) ids.forEach((id) => members.delete(String(id)));
+      applyOptimisticMembership(item.key, "removed", ids);
       closeMenu();
     } catch (e) {
       statusMessage.value = reportToggleFailure(e, "Failed to remove");
@@ -1206,13 +1223,13 @@ async function toggleCharacter(item) {
       await addCharacterFaces(item.id, idsToAdd, apiOpts.value);
       statusMessage.value = `Assigned to ${item.name}`;
       emit("added", { characterId: item.id, pictureIds: ids });
-      // Only update the optimistic member cache for pictures that actually have
-      // faces - faceless pictures can't be reflected in the membership state.
-      if (members) {
-        idsToAdd
-          .filter((id) => picturesWithFaces.value.has(String(id)))
-          .forEach((id) => members.add(String(id)));
-      }
+      // Only pictures that actually have faces - a faceless picture cannot be
+      // a character member, so the optimistic update must not invent one.
+      applyOptimisticMembership(
+        item.key,
+        "added",
+        idsToAdd.filter((id) => picturesWithFaces.value.has(String(id))),
+      );
       closeMenu();
     } catch (e) {
       statusMessage.value = reportToggleFailure(e, "Failed to assign");
@@ -1240,8 +1257,7 @@ async function addToLastSet() {
       ids.map((id) => addPictureToSet(item.id, id, apiOpts.value)),
     );
     statusMessage.value = `Added to ${item.name}`;
-    const members = membersById.value?.[String(item.id)];
-    if (members) ids.forEach((id) => members.add(String(id)));
+    applyOptimisticMembership(String(item.id), "added", ids);
     emit("added", { setId: item.id, pictureIds: ids, action: "added" });
     scheduleStatusClear();
     return { success: true, setName: item.name };

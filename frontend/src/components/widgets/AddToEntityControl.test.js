@@ -1,4 +1,4 @@
-// AddToEntityControl.vue - two suites, kept together deliberately.
+// AddToEntityControl.vue - the suites below are kept together deliberately.
 //
 // * **#646, the shared entity-list cache.** The menu is `v-if`-mounted, so every
 //   open destroys and recreates these controls. These cases pin render-from-cache
@@ -7,9 +7,12 @@
 //   `allowCreate`, the pinned "New person…" row, the no-match Create "query"… row,
 //   the single-select face mode that performs no writes, and the menu escaping a
 //   clipping / scrolling host.
+// * **Membership after a write.** `/picture_sets/membership` answers only for
+//   sets that already contain one of the pictures, so the map has no entry for
+//   the set you are adding to.
 //
 // The mocks below are bare `vi.fn()`s and each suite states its own fixtures, so
-// neither can silently inherit the other's people or sets.
+// none can silently inherit another's people or sets.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
@@ -42,9 +45,14 @@ import {
   listPictureSets,
   getPictureSetMembership,
   addPictureToSet,
+  removePictureFromSet,
 } from "../../api/pictureSets";
 import { listProjects, getProjectMembership } from "../../api/projects";
-import { listCharacters, getCharacterMembership } from "../../api/characters";
+import {
+  listCharacters,
+  getCharacterMembership,
+  addCharacterFaces,
+} from "../../api/characters";
 import AddToEntityControl from "./AddToEntityControl.vue";
 
 /** The #645 suite's people. Distinct from #646's CHARACTERS on purpose. */
@@ -1096,5 +1104,172 @@ describe("host-driven mode", () => {
     const alice = rowFor(wrapper, "Alice");
     expect(alice.classes()).toContain("ate-item--checked");
     expect(alice.attributes("aria-selected")).toBe("true");
+  });
+});
+
+describe("membership after a write", () => {
+  let mounted = null;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pinia = createPinia();
+    setActivePinia(pinia);
+    listPictureSets.mockResolvedValue([
+      { id: 1, name: "Empty Set" },
+      { id: 2, name: "Other Set" },
+    ]);
+    // Picture 101 is in set 2 only, so set 1 has no entry at all -- the shape
+    // the real endpoint returns, and the whole reason for these cases.
+    getPictureSetMembership.mockResolvedValue({ 2: [101] });
+    addPictureToSet.mockResolvedValue({});
+    removePictureFromSet.mockResolvedValue({});
+  });
+
+  afterEach(() => {
+    mounted?.unmount();
+    mounted = null;
+  });
+
+  /** `mountControl` already defaults to a set over picture 101; this opens it. */
+  async function openMenu() {
+    mounted = mountControl();
+    await mounted.find(".ate-btn").trigger("click");
+    await flushPromises();
+    await nextTick();
+    return mounted;
+  }
+
+  /** Each character case states its own list and membership, so mocks first. */
+  async function openCharacterMenu() {
+    mounted = mountControl({ type: "character", subjectIds: ["101"] });
+    await mounted.find(".ate-btn").trigger("click");
+    await flushPromises();
+    await nextTick();
+    return mounted;
+  }
+
+  it("ticks the row for a set the picture was not in", async () => {
+    const w = await openMenu();
+    const row = rowByName(w, "Empty Set");
+    expect(row.classes()).not.toContain("ate-item--checked");
+
+    await row.trigger("click");
+    await flushPromises();
+    await nextTick();
+
+    expect(addPictureToSet).toHaveBeenCalled();
+    expect(rowByName(w, "Empty Set").classes()).toContain("ate-item--checked");
+  });
+
+  it("still ticks the row for a set that already had other members", async () => {
+    getPictureSetMembership.mockResolvedValue({ 1: [999], 2: [101] });
+    const w = await openMenu();
+    // 999 is not 101, so the entry exists and the row still starts unticked.
+    expect(rowByName(w, "Empty Set").classes()).not.toContain(
+      "ate-item--checked",
+    );
+
+    await rowByName(w, "Empty Set").trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(rowByName(w, "Empty Set").classes()).toContain("ate-item--checked");
+  });
+
+  it("ticks the row for a character the picture was not assigned to originally", async () => {
+    listCharacters.mockResolvedValue([
+      { id: 11, name: "Ada" },
+      { id: 12, name: "Grace" },
+    ]);
+    // 101 is Ada's, so Grace has no entry -- and 101 has a face, which is what
+    // makes it eligible to appear in Grace's membership at all.
+    getCharacterMembership.mockResolvedValue({
+      character_assignments: { 11: ["101"] },
+      pictures_with_faces: ["101"],
+    });
+    addCharacterFaces.mockResolvedValue({});
+
+    const w = await openCharacterMenu();
+
+    const grace = rowByName(w, "Grace");
+    expect(grace.classes()).not.toContain("ate-item--checked");
+
+    await grace.trigger("click");
+    await flushPromises();
+    await nextTick();
+
+    expect(addCharacterFaces).toHaveBeenCalled();
+    expect(rowByName(w, "Grace").classes()).toContain("ate-item--checked");
+  });
+
+  it("ticks the remembered set when adding to it without the menu", async () => {
+    const w = await openMenu();
+    w.vm.lastUsedSet = { id: 1, name: "Empty Set" };
+    await nextTick();
+
+    await w.vm.addToLastSet();
+    await flushPromises();
+    await nextTick();
+
+    expect(addPictureToSet).toHaveBeenCalled();
+    expect(rowByName(w, "Empty Set").classes()).toContain("ate-item--checked");
+  });
+
+  it("reads a character row unticked when the member has no face", async () => {
+    listCharacters.mockResolvedValue([
+      { id: 11, name: "Ada" },
+      { id: 12, name: "Grace" },
+    ]);
+    // The server says Grace holds 101; 101 has no face. Only the render-time
+    // narrowing can resolve that, so this case is the one that pins it.
+    getCharacterMembership.mockResolvedValue({
+      character_assignments: { 12: ["101"] },
+      pictures_with_faces: [],
+    });
+
+    const w = await openCharacterMenu();
+
+    expect(rowByName(w, "Grace").classes()).not.toContain("ate-item--checked");
+  });
+
+  it("does not record a faceless picture as an optimistic member", async () => {
+    listCharacters.mockResolvedValue([
+      { id: 11, name: "Ada" },
+      { id: 12, name: "Grace" },
+    ]);
+    getCharacterMembership.mockResolvedValue({
+      character_assignments: { 11: ["101"] },
+      pictures_with_faces: [],
+    });
+    addCharacterFaces.mockResolvedValue({});
+
+    const w = await openCharacterMenu();
+
+    await rowByName(w, "Grace").trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(rowByName(w, "Grace").classes()).not.toContain("ate-item--checked");
+
+    // The row is unticked either way; what separates a filtered write from an
+    // unfiltered one is the NEXT click. A phantom member makes idsToAdd empty,
+    // and the assign silently returns instead of calling the API again.
+    await rowByName(w, "Grace").trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(addCharacterFaces).toHaveBeenCalledTimes(2);
+  });
+
+  it("unticks the row for a set the picture is removed from", async () => {
+    const w = await openMenu();
+    const row = rowByName(w, "Other Set");
+    expect(row.classes()).toContain("ate-item--checked");
+
+    await row.trigger("click");
+    await flushPromises();
+    await nextTick();
+
+    expect(removePictureFromSet).toHaveBeenCalled();
+    expect(rowByName(w, "Other Set").classes()).not.toContain(
+      "ate-item--checked",
+    );
   });
 });

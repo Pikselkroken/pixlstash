@@ -330,7 +330,7 @@ watch(
             kind="tag"
             :plugins="taggerPlugins"
             :settings="taggerSettings"
-            @update:settings="(s) => (taggerSettings.value = s)"
+            @update:settings="(s) => (taggerSettings = s)"
           />
         </SettingsFieldBlock>
         <SettingsFieldBlock class="tagger-col" title="Description plugin" top>
@@ -342,7 +342,7 @@ watch(
             kind="description"
             :plugins="taggerPlugins"
             :settings="taggerSettings"
-            @update:settings="(s) => (taggerSettings.value = s)"
+            @update:settings="(s) => (taggerSettings = s)"
           />
         </SettingsFieldBlock>
       </SettingsTwoCol>
