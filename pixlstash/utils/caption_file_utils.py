@@ -117,30 +117,14 @@ def sidecar_path(image_path: str, suffix: str) -> str:
 
 
 def classify_sidecar(path: str) -> str | None:
-    """Classify a sidecar file as tags or a description.
+    """The kind `sniff_caption` reads out of *path*, or ``None`` for a non-caption.
 
-    Filename first: an unambiguous suffix (``_tags.txt``, ``_description.txt``,
-    ``.caption`` …) decides immediately.  An ambiguous bare ``.txt`` falls back
-    to a content sniff (comma-separated short tokens -> tags; prose ->
-    description; tags when unsure).
-
-    Returns ``SIDECAR_TYPE_TAGS`` / ``SIDECAR_TYPE_DESCRIPTION``, or ``None`` if
-    the file cannot be read.
+    One classifier, deliberately: the read's probe and the import's answered
+    read both come through here, so a file the screen offered as a description
+    cannot be resolved as tags by a different rule further down.
     """
-    name = os.path.basename(path)
-    if _TAGS_NAME_RE.search(name):
-        return SIDECAR_TYPE_TAGS
-    if _DESCRIPTION_NAME_RE.search(name):
-        return SIDECAR_TYPE_DESCRIPTION
-
-    # Ambiguous (bare ``.txt`` or unknown) - decide by content.
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            raw = fh.read()
-    except OSError as exc:
-        logger.warning("Could not read sidecar %s for classification: %s", path, exc)
-        return None
-    return SIDECAR_TYPE_TAGS if _looks_like_tags(raw) else SIDECAR_TYPE_DESCRIPTION
+    sniffed = sniff_caption(path)
+    return sniffed and sniffed[0]
 
 
 def resolve_typed_sidecar(
@@ -272,6 +256,12 @@ def attach_sidecars(
     decides what an empty list means - the scan and the local import both
     fall back to the pending-tag sentinel so the tagger runs instead.
 
+    Tags cannot be set on an unsaved `Picture` (they are a relationship), so
+    any that were read are stashed on ``pic._sidecar_tags`` for the inserter
+    to persist once the row has an id. Done here rather than by each caller:
+    three of them repeated the same two lines, and one that forgot them would
+    read the files and drop the tags on the floor.
+
     *tags_suffixes* / *description_suffixes* are the suffixes the owner (or a
     folder's configuration) said hold that kind, tried in order. ``None``
     probes the known conventions instead, content-sniffing a bare ``.txt``;
@@ -299,6 +289,8 @@ def attach_sidecars(
         description = read_description_sidecar(description_path)
         if description and not pic.description:
             pic.description = description
+    if tags:
+        pic._sidecar_tags = tags
     return tags
 
 
@@ -309,14 +301,29 @@ _EXCERPT_CHARS = 100
 
 
 def sniff_caption(path: str) -> tuple[str, str] | None:
-    """Classify one caption file by content, without trusting its name.
+    """Classify one caption file, and say what it starts with.
+
+    **The single place a kind is decided from a file.** The folder read's
+    screen, `classify_sidecar` and through it the suffix probe all come here,
+    so what the owner was shown and what the import resolves agree by
+    construction rather than by two rules happening to match.
 
     Returns ``(kind, excerpt)`` with *kind* ``"tags"`` or ``"description"``
     and *excerpt* the first line or so, whitespace collapsed, for a screen to
     show beside the choice. ``None`` when the file is not a caption at all:
-    unreadable, binary (a NUL byte in the head), or JSON - the metadata
-    sidecars some generators write beside every image, which no reading turns
-    into a tag list or a description.
+    unreadable, empty, binary (a NUL byte in the head), or markup/JSON.
+
+    In order:
+
+    * a NUL byte in the first 4 KB is binary, whatever its extension;
+    * the head is decoded as ``utf-8-sig``, so a BOM is dropped rather than
+      surviving ``.strip()`` and becoming part of the first tag;
+    * a first character of ``{``, ``[`` or ``<`` is a generator's JSON
+      metadata or an XMP/XML sidecar - no reading turns either into a tag list
+      or a description;
+    * an unambiguous name (``_tags.txt``, ``_description.txt``, ``.caption``
+      …) decides, because the exporter that wrote it said so;
+    * otherwise the content decides (`_looks_like_tags`).
     """
     try:
         with open(path, "rb") as fh:
@@ -326,11 +333,17 @@ def sniff_caption(path: str) -> tuple[str, str] | None:
         return None
     if b"\x00" in head:
         return None
-    text = head.decode("utf-8", errors="replace").strip()
-    if not text or text[0] in "{[":
+    text = head.decode("utf-8-sig", errors="replace").strip()
+    if not text or text[0] in "{[<":
         return None
     excerpt = " ".join(text.split())[:_EXCERPT_CHARS]
-    kind = SIDECAR_TYPE_TAGS if _looks_like_tags(text) else SIDECAR_TYPE_DESCRIPTION
+    name = os.path.basename(path)
+    if _TAGS_NAME_RE.search(name):
+        kind = SIDECAR_TYPE_TAGS
+    elif _DESCRIPTION_NAME_RE.search(name):
+        kind = SIDECAR_TYPE_DESCRIPTION
+    else:
+        kind = SIDECAR_TYPE_TAGS if _looks_like_tags(text) else SIDECAR_TYPE_DESCRIPTION
     return kind, excerpt
 
 
@@ -441,8 +454,10 @@ _SIDECAR_EXTS_FOR_DETECTION = frozenset({".txt", ".caption"})
 
 
 def _read_text(path: str) -> str | None:
+    # ``utf-8-sig``, as `sniff_caption` does: a BOM survives ``.strip()`` and
+    # would otherwise ride along on the first tag, as "\ufeff1girl".
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
             return fh.read()
     except OSError as exc:
         logger.warning("Could not read sidecar %s: %s", path, exc)
