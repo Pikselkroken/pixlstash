@@ -9,6 +9,8 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models.tag import is_tag_sentinel
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.caption_file_utils import (
+    DEFAULT_DESCRIPTION_SUFFIX,
+    DEFAULT_TAGS_SUFFIX,
     SIDECAR_TYPE_DESCRIPTION,
     SIDECAR_TYPE_TAGS,
     recorded_sidecar,
@@ -221,6 +223,18 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
         if not image_path:
             return fresh_tags
 
+        # A NULL suffix on a reference folder means "probe the conventions",
+        # which is right for a folder the owner pointed at. The library root
+        # has no convention to find - `PATCH {"sync_tags": true}` with no
+        # suffix is reachable - and probing there would open whatever .txt sits
+        # beside a managed picture and content-sniff it. The default names the
+        # file instead, the same one the response reports as the default.
+        tags_suffix = rf.tags_suffix
+        description_suffix = rf.description_suffix
+        if not pic_db.reference_folder_id:
+            tags_suffix = tags_suffix or DEFAULT_TAGS_SUFFIX
+            description_suffix = description_suffix or DEFAULT_DESCRIPTION_SUFFIX
+
         dirty = False
 
         # The picture's recorded file wins while it exists; the configured
@@ -228,12 +242,12 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
         if rf.sync_tags:
             existing = recorded_sidecar(
                 image_path, pic_db.tags_file
-            ) or resolve_typed_sidecar(image_path, SIDECAR_TYPE_TAGS, rf.tags_suffix)
+            ) or resolve_typed_sidecar(image_path, SIDECAR_TYPE_TAGS, tags_suffix)
             # Create a new file only when there is content; always update an
             # existing one (so clearing tags empties it).
             if existing or current_tags:
                 target = writeback_path(
-                    image_path, SIDECAR_TYPE_TAGS, rf.tags_suffix, existing
+                    image_path, SIDECAR_TYPE_TAGS, tags_suffix, existing
                 )
                 new_mtime = (
                     write_sidecar(target, ", ".join(current_tags))
@@ -250,13 +264,13 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
             existing = recorded_sidecar(
                 image_path, pic_db.description_file
             ) or resolve_typed_sidecar(
-                image_path, SIDECAR_TYPE_DESCRIPTION, rf.description_suffix
+                image_path, SIDECAR_TYPE_DESCRIPTION, description_suffix
             )
             if existing or description:
                 target = writeback_path(
                     image_path,
                     SIDECAR_TYPE_DESCRIPTION,
-                    rf.description_suffix,
+                    description_suffix,
                     existing,
                 )
                 new_mtime = (
