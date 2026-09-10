@@ -1507,7 +1507,7 @@ could be a person, a project or a client.
 | `signal` | Reads | Proposes | Scope |
 |---|---|---|---|
 | `cardinality` | how many distinct names a level has, over how many parents | `tag`, or *not* `tag` | one whole level |
-| `sidecars` | a caption `.txt`/`.caption` beside every picture (case-insensitive) | `set` | one folder |
+| `sidecars` | a caption `.txt`/`.caption` beside every picture, the same pairing `captions` is grouped from, so any suffix counts and not only `a.txt`/`a.jpg.txt` | `set` | one folder |
 | `faces` | one identity across the folder's pictures, **sampled at 20** | `person` | one folder |
 | `name_match` | the folder name against entities the vault already has | that entity's kind | one folder |
 | `leaf` | pictures and no folders below; a date *with other words* strengthens it | `set` | one folder |
@@ -1631,7 +1631,11 @@ already knows. Stems are matched case-insensitively, so `img_0001.txt` beside
 `IMG_0001.JPG` is one convention, but only where the import can read it back:
 the import builds the sidecar name from the picture's own spelling, so a stem
 that differs in case is reported when that path exists, which it does on a
-case-insensitive filesystem and does not on Linux. A few files of each pattern,
+case-insensitive filesystem and does not on Linux. Suffixes group the same way
+and by the same rule: `a.txt` and `b.TXT` are one row, reported with the first
+spelling walked, and `b.TXT` counts towards that row's `files` only where
+`b.txt` names it, again true on a case-insensitive filesystem and false on
+Linux. A few files of each pattern,
 spread across folders rather than taken from the first one walked, are read to
 say whether it holds tag lists or prose (`kind`), and `sample` is an excerpt of
 one *of that kind* so the owner can check the guess without opening a file. Binary, JSON and markup sidecars
@@ -2027,7 +2031,12 @@ pattern ignored would still open a bare `.txt`. A reference folder's sidecar
 fields on `PATCH /reference-folders/{folder_id}` are its contract. `suffix`
 must be a bare filename fragment (the same rule as `PATCH /reference-folders`
 enforces): it is appended to a picture path to find the file to read, and no
-two rows may repeat one.
+two rows may repeat one. It must also name a pattern §20's `captions` reported
+(compared case-insensitively, since that is how the read groups them), because
+this is an answer to the read's questions and not a free-form instruction: a
+suffix the read deliberately left out, a `.json` of metadata among them, would
+otherwise be opened and stored as tags. A caller-supplied `read_result` that
+carries no `captions` of its own has nothing to check against and skips it.
 
 **A folder's nearest accepted ancestor of each exclusive kind wins** — a
 picture is filed under the *closest* Project, Person or Set above it, not
@@ -2042,7 +2051,7 @@ this route is the write that follows from it.
 
 | Status | When |
 |---|---|
-| **400** | an `assignments` row is malformed or names an unknown `kind`; a `captions` row names an unknown `kind`, carries a `suffix` that is not a bare filename fragment, or repeats a `suffix` an earlier row already claimed (compared case-insensitively, since `_notes.txt` and `_NOTES.TXT` are one file on Windows and macOS); `captions` is present at all (`[]` included) with `mode: "reference"` |
+| **400** | an `assignments` row is malformed or names an unknown `kind`; a `captions` row names an unknown `kind`, carries a `suffix` that is not a bare filename fragment, repeats a `suffix` an earlier row already claimed (compared case-insensitively, since `_notes.txt` and `_NOTES.TXT` are one file on Windows and macOS), or names a `suffix` §20's `captions` never reported (same case-insensitive comparison); `captions` is present at all (`[]` included) with `mode: "reference"` |
 | **404** | `task_id` does not name a read this session holds |
 | **409** | the named read has not settled yet, a commit is already running (against any read), the named read has **already been committed**, or the read's root path is already a reference folder that has completed a scan (§25 — the reuse-vs-refuse rule) |
 
@@ -2064,7 +2073,11 @@ modes, never one. Import is **idempotent by `file_path`**: a file already
 indexed under this path (an overlapping earlier `local_import`, or an ordinary
 import that reached it independently) is reused by id, never re-imported as a
 second row — same spirit as `mode: "reference"`'s own "don't redo what already
-happened" rule for a resumed commit (§25).
+happened" rule for a resumed commit (§25). Because reuse skips the sidecar read
+(only a newly-built picture has its caption files opened), **the import writes
+each batch of picture rows and their tag rows in one transaction**: a run that
+dies mid-batch leaves that batch entirely unindexed, so the resume builds those
+pictures properly instead of reusing rows whose captions were never read.
 
 **The root must be inside `image_root` or the commit fails.** There is no
 separate error status for this — the check runs inside the background commit,

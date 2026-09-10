@@ -544,7 +544,6 @@ class FolderStructureRead:
                 parent_index=by_path.get(parent_path) if rel else None,
                 child_count=len(dirnames),
             )
-            lowered = {f.lower() for f in filenames}
             # `is_supported_media_file` drops our own `_thumb.webp` files, which
             # a library indexed before #1164 is full of, sitting beside every
             # original. Counting them made the total grow on every re-read
@@ -562,15 +561,11 @@ class FolderStructureRead:
                 and not is_hidden_entry(f)
                 and not is_pixlstash_thumbnail(f)
             )
-            for picture in folder.direct_pictures:
-                lowered_name = picture.lower()
-                stem = os.path.splitext(lowered_name)[0]
-                # Both conventions: `a.txt` beside `a.jpg`, and `a.jpg.txt`.
-                if any(
-                    stem + ext in lowered or lowered_name + ext in lowered
-                    for ext in _SIDECAR_EXTS
-                ):
-                    folder.with_sidecar += 1
+            # Sets `folder.with_sidecar` too: the collector already decides
+            # which files pair with which picture, and a second heuristic beside
+            # it disagreed - it only knew `a.txt`/`a.jpg.txt`, so a folder whose
+            # every picture had an `a_tags.txt` produced a `captions` row and no
+            # sidecar evidence.
             self._collect_captions(dirpath, filenames, folder)
             by_path[dirpath] = folder.index
             self._folders.append(folder)
@@ -580,6 +575,12 @@ class FolderStructureRead:
         self, dirpath: str, filenames: list[str], folder: _Folder
     ) -> None:
         """Group this folder's caption files by the suffix after the picture stem.
+
+        Also sets ``folder.with_sidecar`` - how many of the folder's pictures a
+        caption file was found for, counting each picture once. It is the same
+        pairing the rows are built from, so the Set signal's evidence and the
+        ``captions`` rows can no longer disagree about whether this folder has
+        captions at all.
 
         A caption file is any non-media file whose name starts with the stem
         of a picture in the same folder and ends in a caption extension:
@@ -610,6 +611,7 @@ class FolderStructureRead:
         if not stems:
             return
         sampled_here: Counter = Counter()
+        captioned: set[str] = set()
         for name in sorted(filenames):
             if (
                 is_hidden_entry(name)
@@ -622,6 +624,7 @@ class FolderStructureRead:
             # character rather than one comparison per picture. The suffix is
             # sliced off the original name, so it keeps its real casing.
             suffix = None
+            matched_stem = ""
             for cut in range(len(name) - 1, 0, -1):
                 spellings = stems.get(name[:cut].lower())
                 if spellings is None:
@@ -638,9 +641,13 @@ class FolderStructureRead:
                     for spelled in spellings
                 ):
                     suffix = candidate
+                    matched_stem = name[:cut]
                     break
             if suffix is None or not is_safe_sidecar_suffix(suffix):
                 continue
+            # A caption file was found for this picture, whatever suffix row it
+            # ends up under - the Set signal's evidence, counted once per stem.
+            captioned.add(matched_stem.lower())
             # Grouped case-insensitively for the same reason the stems are:
             # `.txt` and `.TXT` are one file on Windows and macOS, and offering
             # them as two rows lets the owner answer one file twice. The first
@@ -649,6 +656,15 @@ class FolderStructureRead:
             entry = self._captions.setdefault(
                 key, {"suffix": suffix, "files": 0, "folders": set(), "samples": []}
             )
+            # Same rule as the stems above, for the same reason: the import
+            # joins the picture's own spelling with the *reported* suffix, so
+            # `b.TXT` counts towards a `.txt` row only where `b.txt` names it -
+            # true on a case-insensitive filesystem, false on Linux, where the
+            # import would otherwise silently miss the file the row promised.
+            if suffix != entry["suffix"] and not os.path.isfile(
+                os.path.join(dirpath, matched_stem + entry["suffix"])
+            ):
+                continue
             entry["files"] += 1
             entry["folders"].add(folder.index)
             if (
@@ -657,6 +673,11 @@ class FolderStructureRead:
             ):
                 entry["samples"].append(os.path.join(dirpath, name))
                 sampled_here[key] += 1
+        folder.with_sidecar = sum(
+            1
+            for picture in folder.direct_pictures
+            if os.path.splitext(picture)[0].lower() in captioned
+        )
 
     def _caption_patterns(self) -> list[dict[str, Any]]:
         """The caption conventions found, each read enough to say what it holds.

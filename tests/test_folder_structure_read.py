@@ -339,6 +339,29 @@ def test_a_caption_beside_every_picture_reads_as_set():
     assert "all 3 pictures" in evidence["text"]
 
 
+def test_a_free_form_caption_suffix_is_sidecar_evidence_too():
+    """`a_tags.txt` is as much a caption beside `a.jpg` as `a.txt` is, and the
+    read already groups it as one. The Set signal reads the same pairing, so a
+    folder that produces a `captions` row cannot come back with no sidecar
+    evidence for the pictures that row was built from."""
+    with _tree(
+        {
+            "": [],
+            "shoot": [
+                f for n in ("a", "b", "c") for f in (f"{n}.jpg", f"{n}_tags.txt")
+            ],
+        }
+    ) as root:
+        for n in ("a", "b", "c"):
+            _write(root, f"shoot/{n}_tags.txt", "1girl, solo, long hair, smile")
+        result = FolderStructureRead(root).run()
+
+    proposal = _rows(result, 2)["shoot"]["proposal"]
+    evidence = _signal(proposal, "sidecars")
+    assert evidence["with_sidecar"] == evidence["pictures"] == 3
+    assert [row["suffix"] for row in result["captions"]] == ["_tags.txt"]
+
+
 def _write(root, rel, text):
     with open(os.path.join(root, *rel.split("/")), "w", encoding="utf-8") as fh:
         fh.write(text)
@@ -501,17 +524,26 @@ def test_one_convention_in_two_casings_is_one_row():
     """`a.txt` beside `b.TXT` is one convention, not two. On Windows and macOS
     the two suffixes name the same file, so offering both would ask the owner
     to answer one file twice - and the commit refuses the pair as a repeat.
-    The first casing walked is the one reported."""
+    The first casing walked is the one reported.
+
+    Its count follows the same rule the stems do: the import joins the
+    picture's spelling with the *reported* suffix, so `b.TXT` counts under the
+    `.txt` row exactly where `b.txt` names that file. It does on a
+    case-insensitive filesystem, and does not on Linux."""
     spec = {"": [], "shoot": ["a.jpg", "a.txt", "b.jpg", "b.TXT", "c.jpg", "c.txt"]}
     with _tree(spec) as root:
         for rel in ("shoot/a.txt", "shoot/b.TXT", "shoot/c.txt"):
             _write(root, rel, "1girl, solo, long hair, smile")
+        # The path `sidecar_path("…/b.jpg", ".txt")` builds.
+        importable = os.path.isfile(os.path.join(root, "shoot", "b.txt"))
         result = FolderStructureRead(root).run()
 
     assert [row["suffix"] for row in result["captions"]] == [".txt"], (
         "one row, reported with the first casing the walk saw"
     )
-    assert result["captions"][0]["files"] == 3
+    assert result["captions"][0]["files"] == (3 if importable else 2), (
+        "`b.TXT` counts under the `.txt` row only where the import can read it"
+    )
     assert result["captions"][0]["kind"] == "tags"
 
 
