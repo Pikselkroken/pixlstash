@@ -436,9 +436,11 @@ straight away. Otherwise it asks `GET /libraries/inspect` about the active
 library's own path again, because a cached 0 from a load over an empty folder
 used to be permanent and sent the owner to "Add a library", which refuses the
 folder the library already is. A count above zero opens the wizard with
-`{ path, mode: "local_import" }`; zero, a failed inspect, and a read-only or
-remote session (`canManage` false) all fall through to the ordinary add, and a
-failed inspect leaves the cached count alone.
+`{ path, mode: "local_import" }`; zero and a read-only or remote session
+(`canManage` false) fall through to the ordinary add. A failed inspect leaves
+the cached count alone and routes on that, so it opens the wizard when the cache
+already held a count above zero and falls through only when it did not - the
+same reading of the cache as when the inspect answers.
 
 **The button's own copy reads that count.** `useFolderMappingStore` holds
 `rootPictureCount` and `rootPictureCountCapped`, `null` until something has
@@ -453,7 +455,10 @@ endpoint's entry cap the count is a floor rather than a total, so
 library's folder" instead of naming a number the folder does not hold. Both refs
 are cleared on a session change, and an epoch bumped by that same reset discards
 an inspect that was already on the wire, so a count the outgoing owner asked for
-cannot land in the next session.
+cannot land in the next session. `chooseLibraryFolder` and `offerLoosePictures`
+recheck that epoch after every await of their own and return when it moved:
+dropping the count is not enough on its own, because both of them go on to route
+from it and would put a wizard over the outgoing owner's folder.
 
 **The empty library asks whether its own folder is empty.** The desktop's
 first-run setup creates the vault in whatever folder was chosen, and the web
