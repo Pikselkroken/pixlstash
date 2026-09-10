@@ -6328,10 +6328,13 @@ carries the same four fields a `ReferenceFolder` does - `sync_tags`,
 `sync_descriptions`, `tags_suffix`, `description_suffix` (migration 0116) -
 read and written by `GET`/`PATCH /server-config/captions`
 (`routes/library_captions.py`, `library_settings_service.get_caption_sync` /
-`set_caption_sync`). Both toggles start off; the local import seeds only the
-suffixes (`seed_caption_suffixes`, first `tags` and first `description`
-answer, never overwriting a set value), so the day the owner turns sync on it
-writes to the files they already have. Turning a type on calls
+`set_caption_sync`). Both toggles start off on a library that was never
+imported through the wizard; the local import turns each kind the owner
+confirmed ON with its suffix (`seed_caption_suffixes`, first `tags` and first
+`description` answer, never overwriting a suffix already set), because
+confirming a pattern *is* the owner saying the folder stores its captions
+there - a second toggle to find afterwards was the first thing a tester
+missed. Settings turns either off again. Turning a type on calls
 `Vault.rescan_library_root`, and `ReferenceFolderScanTask` with
 `folder_id=None` then does for the root exactly what it does for a folder:
 `fetch_folder_config` returns the settings' four fields, an unset suffix is

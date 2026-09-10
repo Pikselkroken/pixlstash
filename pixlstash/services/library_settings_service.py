@@ -221,16 +221,30 @@ def set_caption_sync(vault_db, **fields) -> dict:
 def seed_caption_suffixes(
     vault_db, tags_suffix: Optional[str], description_suffix: Optional[str]
 ) -> None:
-    """Fill an unset root suffix from the owner's caption answers; never overwrite."""
+    """Apply the owner's caption answers to the root's sync settings.
+
+    Confirming a pattern as tags or as descriptions on the import screen is
+    the owner saying the folder stores its captions in those files, so sync of
+    that kind is turned ON with the confirmed suffix - an edit in PixlStash
+    reaches the file, a file edited on disk reaches PixlStash, and a picture
+    that has content but no file gets one on the next root scan. A suffix
+    already set is kept (an earlier import's convention wins); the toggle is
+    turned on either way. Nothing is changed for a kind the owner did not
+    confirm, and Settings can turn either off again.
+    """
     if not tags_suffix and not description_suffix:
         return
 
     def write(session: Session) -> None:
         row = _row(session)
-        if tags_suffix and row.tags_suffix is None:
-            row.tags_suffix = tags_suffix
-        if description_suffix and row.description_suffix is None:
-            row.description_suffix = description_suffix
+        if tags_suffix:
+            row.sync_tags = True
+            if row.tags_suffix is None:
+                row.tags_suffix = tags_suffix
+        if description_suffix:
+            row.sync_descriptions = True
+            if row.description_suffix is None:
+                row.description_suffix = description_suffix
         session.add(row)
         session.commit()
 

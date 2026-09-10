@@ -4,4 +4,5 @@
   edits you make in PixlStash are written to the file beside the picture,
   while a file you edit on disk is read back in on the next scan. The naming
   you confirmed when the folder was imported is used, so nothing is written
-  under a second name. Off until you turn it on.
+  under a second name. Confirming a pattern on import turns its sync on; the
+  dialog turns it off.

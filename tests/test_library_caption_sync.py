@@ -264,3 +264,32 @@ def test_the_route_is_refused_to_a_remote_owner(env):
         assert owner.get(_CAPTIONS).status_code == 200, "loopback owner: allowed"
     with _enforcing(server), _remote_host_ops(server, True):
         assert owner.get(_CAPTIONS, headers=remote).status_code == 200
+
+
+def test_confirming_a_pattern_on_import_turns_that_sync_on(env):
+    """The wizard's answer is the opt-in: a tester who confirmed the patterns
+    expected edits to reach the files and did not go looking for a second
+    toggle. A suffix already set is kept; a kind not confirmed is untouched."""
+    from pixlstash.services.library_settings_service import (
+        get_caption_sync,
+        seed_caption_suffixes,
+    )
+
+    server = env["server"]
+    _set_sync(
+        server,
+        sync_tags=False,
+        sync_descriptions=False,
+        tags_suffix=".txt",
+        description_suffix=None,
+    )
+    seed_caption_suffixes(server.vault.db, "_tags.txt", None)
+    stored = get_caption_sync(server.vault.db)
+    assert stored["sync_tags"] is True
+    assert stored["tags_suffix"] == ".txt", "an earlier convention wins"
+    assert stored["sync_descriptions"] is False and stored["description_suffix"] is None
+
+    seed_caption_suffixes(server.vault.db, None, "_caption.txt")
+    stored = get_caption_sync(server.vault.db)
+    assert stored["sync_descriptions"] is True
+    assert stored["description_suffix"] == "_caption.txt"

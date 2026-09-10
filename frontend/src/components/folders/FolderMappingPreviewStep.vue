@@ -346,7 +346,9 @@ onUnmounted(() => {
       <div class="preview-step__card-title">Caption files beside your pictures</div>
       <p class="preview-step__card-lead">
         Text files named after a picture are read as that picture's tags or
-        description instead of PixlStash writing its own. Check each pattern.
+        description instead of PixlStash writing its own, and are kept in sync
+        with your edits from then on (Settings, the library's menu, Caption
+        files). Check each pattern.
       </p>
       <ul class="preview-step__captions">
         <li

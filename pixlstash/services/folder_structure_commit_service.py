@@ -935,9 +935,10 @@ def local_import_pictures(
     # workers' preload pools), `insert_s` is the wait for the single DB writer
     # (contended by the workers' own write transactions). Same spirit as the
     # planner's [PIPELINE_PASS] line, and meant to be read next to it.
-    # The confirmed conventions become the root's own, so the sync toggles in
-    # Settings write to the files the owner already has rather than to the
-    # module defaults beside them. Fills only what is unset; sync stays off.
+    # A confirmed convention is the owner saying the folder stores its captions
+    # there: it becomes the root's own suffix and sync of that kind goes on, so
+    # edits reach the files and the files reach the pictures without a second
+    # setting to find. Settings can turn it off again.
     tags_suffixes, description_suffixes = caption_suffixes(captions)
     seed_caption_suffixes(
         server.vault.db,
