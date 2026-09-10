@@ -4,6 +4,7 @@
   few of each to tell tag lists from prose, and the "Before anything is
   written" step asks you to confirm each one as tags, a description, or
   something to ignore. Confirmed files become the picture's tags or
-  description, and the tagger only runs on pictures that have none. Before,
+  description; a picture whose file gave no tags (no file, or an empty one)
+  is tagged by PixlStash as before. Before,
   the in-place import ("Add a library" on a folder holding pictures, and the
   first-run offer) skipped the files and tagged everything from scratch.

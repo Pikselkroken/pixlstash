@@ -6301,8 +6301,9 @@ under the pending-tag sentinel. The read is now one helper,
 `caption_file_utils.attach_sidecars`, called by `_build_picture` in the scan and
 `_build_managed_picture` here. It records `tags_file`/`description_file`, fills
 `description` from the description sidecar, and returns the tags sidecar's
-tags; both inserters write those as `Tag` rows and put only a picture *without*
-a tags sidecar under the sentinel.
+tags; both inserters write those as `Tag` rows and put a picture under the
+pending-tag sentinel only when *no sidecar tags were read* - no tags file, or
+an empty or unreadable one - so the tagger runs for it as before.
 
 Which files are read is the owner's answer to the read's `captions` (§24),
 carried on the commit as `CaptionPattern` rows (`parse_captions`, the same

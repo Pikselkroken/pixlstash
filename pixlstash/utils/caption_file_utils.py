@@ -265,10 +265,12 @@ def attach_sidecars(
 
     Sets ``tags_file``/``description_file`` (and their mtimes) when a sidecar
     exists, fills ``description`` from the description sidecar when the
-    picture has none, and returns the tags read from the tags sidecar (empty
-    when there is no tags sidecar). The caller decides what an empty list
-    means - the scan and the local import both fall back to the pending-tag
-    sentinel so the tagger runs instead.
+    picture has none, and returns the tags read from the tags sidecar. The
+    list is empty when there is no tags sidecar AND when the file exists but
+    is empty or unreadable, so it says "no tags were read", not "no file":
+    ``pic.tags_file`` is what says whether a file was found. The caller
+    decides what an empty list means - the scan and the local import both
+    fall back to the pending-tag sentinel so the tagger runs instead.
 
     *tags_suffixes* / *description_suffixes* are the suffixes the owner (or a
     folder's configuration) said hold that kind, tried in order. ``None``
