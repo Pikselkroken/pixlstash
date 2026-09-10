@@ -471,4 +471,78 @@ describe("caption files beside the pictures", () => {
     expect(wrapper.text()).not.toContain("Caption files beside");
     expect(selects(wrapper)).toHaveLength(0);
   });
+
+  describe("a read that stopped early and found no pattern", () => {
+    const PARTIAL_EMPTY = {
+      ...READ_RESULT,
+      captions: [],
+      captions_complete: false,
+    };
+
+    it("still says the list is incomplete, with nothing to list", () => {
+      // An empty list under the warning is the only way to say "these may not
+      // be all your caption files"; hiding the card says the opposite.
+      const wrapper = mountImport({
+        commitOnMount: false,
+        readResult: PARTIAL_EMPTY,
+      });
+      expect(wrapper.text()).toContain("Caption files beside");
+      expect(wrapper.text()).toContain("Not every folder was checked");
+      expect(selects(wrapper)).toHaveLength(0);
+    });
+
+    it("lets the import probe rather than answering 'read nothing'", async () => {
+      // Nobody was asked about the folders the walk never reached, so `[]`
+      // would answer for them; `null` omits the key and probes (§22).
+      startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
+      const wrapper = mountImport({
+        commitOnMount: false,
+        readResult: PARTIAL_EMPTY,
+      });
+      await buttonWith(wrapper, "Yes, build this library").trigger("click");
+      await flushPromises();
+
+      expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toBeNull();
+    });
+
+    it("keeps a saved 'read nothing' as the answer it is", async () => {
+      // A resumed commit whose owner already answered `[]`. The read being
+      // partial does not un-ask them.
+      startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
+      const wrapper = mountImport({
+        commitOnMount: false,
+        readResult: PARTIAL_EMPTY,
+        captions: [],
+      });
+      await buttonWith(wrapper, "Yes, build this library").trigger("click");
+      await flushPromises();
+
+      expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual([]);
+    });
+
+    it("answers '[]' when the same empty read got through the whole tree", async () => {
+      // Everything was sniffed and there is nothing to read, so probing would
+      // open a `.txt` §20 deliberately dropped.
+      startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
+      const wrapper = mountImport({
+        commitOnMount: false,
+        readResult: { ...READ_RESULT, captions: [] },
+      });
+      await buttonWith(wrapper, "Yes, build this library").trigger("click");
+      await flushPromises();
+
+      expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual([]);
+    });
+
+    it("asks nothing of a reference folder, partial or not", () => {
+      // `captions` with mode `reference` is a 400, so a partial read must not
+      // put the card on screen there either.
+      const wrapper = mountStep({
+        commitOnMount: false,
+        readResult: PARTIAL_EMPTY,
+      });
+      expect(wrapper.text()).not.toContain("Caption files beside");
+      expect(wrapper.text()).not.toContain("Not every folder was checked");
+    });
+  });
 });

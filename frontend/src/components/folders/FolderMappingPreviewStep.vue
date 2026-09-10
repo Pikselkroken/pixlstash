@@ -34,12 +34,14 @@ const props = defineProps({
    * resumed commit: `[{suffix, kind}]`. Seeds the choices below when it
    * names a pattern; otherwise the read's own guess does.
    *
-   * `null` means nobody was ever asked (an entry saved before the caption
-   * card existed). With a card to show it behaves as no saved answer; with
-   * none - the commit-on-mount path - it travels to the commit as `null` and
-   * the request leaves the key out, so the import probes as it always did.
+   * `null` means nobody was ever asked - a wizard the owner has not answered
+   * on yet, or an entry saved before the caption card existed. With a card to
+   * show it behaves as no saved answer; with none - the commit-on-mount path -
+   * it travels to the commit as `null` and the request leaves the key out, so
+   * the import probes as it always did. It is the default because "no answer
+   * held" is not the same claim as `[]`, "asked, and there was nothing".
    */
-  captions: { type: Array, default: () => [] },
+  captions: { type: Array, default: null },
   label: { type: String, default: "" },
   pictureCount: { type: Number, default: 0 },
   // "reference" registers the scanned root as an external reference folder;
@@ -113,7 +115,9 @@ const patterns = computed(() =>
  * "these are all your caption files".
  */
 const patternsPartial = computed(
-  () => props.readResult?.captions_complete === false,
+  () =>
+    props.mode === "local_import" &&
+    props.readResult?.captions_complete === false,
 );
 // suffix -> the owner's answer. Seeded from the saved answers, then the read.
 // Null-prototype, because the keys are filename fragments: on a plain object
@@ -134,13 +138,19 @@ watch(
 );
 /** The answers on the card: one per reported pattern, or the saved ones when
  *  the read is gone (a resumed commit with no result to list them from).
- *  Never `null`: this is the owner standing at the step, so even a step with
- *  no card to show is them having been through it. Only "Yes, build this
- *  library" sends these - see `commit`; the commit on mount, which is the one
- *  path nobody stands at, passes `props.captions` straight through instead. */
+ *  Only "Yes, build this library" sends these - see `commit`; the commit on
+ *  mount, which is the one path nobody stands at, passes `props.captions`
+ *  straight through instead.
+ *
+ *  With no rows and no saved answer the read decides: a COMPLETE one answers
+ *  `[]`, "everything was sniffed and there is nothing to read". A PARTIAL one
+ *  answers `null` - the walk stopped before the folders that hold the rest, so
+ *  nobody was asked about them and the import probes as it always did (§22).
+ *  A saved `[]` is still an answer and stays `[]` either way. */
 function chosenCaptions() {
   if (props.mode !== "local_import") return [];
-  if (!patterns.value.length) return props.captions ?? [];
+  if (!patterns.value.length)
+    return props.captions ?? (patternsPartial.value ? null : []);
   return patterns.value.map((row) => ({
     suffix: row.suffix,
     kind: answers[row.suffix] ?? row.kind,
@@ -393,9 +403,13 @@ onUnmounted(() => {
 
     <!-- Hidden once the commit is running: a resumed post-switch commit starts
          on mount, and a card of questions whose every select is disabled is a
-         decision the owner can no longer make. -->
+         decision the owner can no longer make.
+
+         Shown with no rows at all when the read stopped early: an empty list
+         under "not every folder was checked" says the list is incomplete,
+         which is the one thing silence cannot say. -->
     <div
-      v-if="patterns.length && !committing"
+      v-if="(patterns.length || patternsPartial) && !committing"
       class="preview-step__card preview-step__card--captions"
     >
       <div class="preview-step__card-title">Caption files beside your pictures</div>
