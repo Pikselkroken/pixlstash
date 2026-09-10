@@ -19,6 +19,10 @@ from sqlmodel import Session, select
 
 from pixlstash.db_models import Character, Picture, Tag
 from pixlstash.db_models.external_move_review import ExternalMoveReview
+from pixlstash.db_models.folder_mapping_commit import (
+    STATE_DEFERRED,
+    FolderMappingCommit,
+)
 from pixlstash.db_models.library_settings import LibrarySettings
 from pixlstash.db_models.picture_move import PictureMove
 from pixlstash.server import Server
@@ -254,11 +258,6 @@ def test_the_finder_hands_out_the_root_scan_once_per_interval(server):
     # The root is only scanned once the first import offer is answered (see
     # test_root_scan_first_import.py). On a shard where this test runs first
     # the module vault is empty, so answer it here rather than rely on order.
-    from pixlstash.db_models.folder_mapping_commit import (
-        STATE_DEFERRED,
-        FolderMappingCommit,
-    )
-
     def answer(session):
         session.add(
             FolderMappingCommit(
