@@ -561,7 +561,13 @@ def detect_folder_suffixes(folder: str, sample_limit: int = 200) -> dict:
     "found_descriptions"}``; the suffix values are ``None`` when that type was
     not found.
     """
-    image_stems: set[str] = set()
+    # Case-folded, spellings kept: the same rule the folder read applies
+    # (`folder_structure_service._collect_captions`). `img.txt` beside
+    # `IMG.JPG` is one convention on Windows and macOS, and matching
+    # case-sensitively would report none at all; the picture's own spelling is
+    # what a write-back joins the suffix to, so a stem that matches only
+    # case-folded has to be checked against the filesystem.
+    image_stems: dict[str, set[str]] = {}
     sidecar_files: list[str] = []
     seen_images = 0
     for root, _dirs, files in os.walk(folder):
@@ -569,7 +575,8 @@ def detect_folder_suffixes(folder: str, sample_limit: int = 200) -> dict:
             full = os.path.join(root, name)
             ext = os.path.splitext(name)[1].lower()
             if ext in _IMAGE_EXTS_FOR_DETECTION:
-                image_stems.add(os.path.splitext(full)[0])
+                stem = os.path.splitext(full)[0]
+                image_stems.setdefault(stem.lower(), set()).add(stem)
                 seen_images += 1
             elif ext in _SIDECAR_EXTS_FOR_DETECTION:
                 sidecar_files.append(full)
@@ -619,13 +626,24 @@ def _read_text(path: str) -> str | None:
         return None
 
 
-def _suffix_for_sidecar(sidecar_path_str: str, image_stems: set[str]) -> str | None:
+def _suffix_for_sidecar(
+    sidecar_path_str: str, image_stems: dict[str, set[str]]
+) -> str | None:
     """Return the suffix of *sidecar_path_str* relative to its image stem.
 
+    *image_stems* maps a case-folded stem to the spellings seen for it.
     Matches the longest image stem that is a prefix of the sidecar path (so
     ``foo_tags.txt`` is read as ``foo_tags`` + ``.txt`` when an image
     ``foo_tags.png`` exists, otherwise as ``foo`` + ``_tags.txt``).  Returns
     ``None`` when no image in the folder owns this sidecar.
+
+    Matching is case-folded but the suffix keeps its spelling, and a stem that
+    matches only case-folded counts only where the path a write-back would
+    build - the picture's stem as spelled plus this suffix - actually exists.
+    That is true on a case-insensitive filesystem, where ``img.txt`` beside
+    ``IMG.JPG`` is the convention the owner has, and false on Linux, where
+    claiming it would name a file nothing can read back. One ``isfile`` per
+    case-differing stem; an exactly-spelled stem costs nothing extra.
 
     Only stems in the sidecar's *own directory* are considered. ``os.walk``
     spans subdirectories, so a bare prefix match would let image ``/root/a.png``
@@ -633,15 +651,22 @@ def _suffix_for_sidecar(sidecar_path_str: str, image_stems: set[str]) -> str | N
     separator-bearing value that must never reach the folder's configuration.
     The result is validated for the same reason before it is returned.
     """
-    sidecar_dir = os.path.dirname(sidecar_path_str)
-    base = os.path.splitext(sidecar_path_str)[0]
+    sidecar_dir = os.path.dirname(sidecar_path_str).lower()
+    base = os.path.splitext(sidecar_path_str)[0].lower()
     best_stem: str | None = None
-    for stem in image_stems:
+    for stem, spellings in image_stems.items():
         if os.path.dirname(stem) != sidecar_dir:
             continue
-        if base == stem or base.startswith(stem):
-            if best_stem is None or len(stem) > len(best_stem):
-                best_stem = stem
+        if not base.startswith(stem):
+            continue
+        if best_stem is not None and len(stem) <= len(best_stem):
+            continue
+        candidate = sidecar_path_str[len(stem) :]
+        if sidecar_path_str[: len(stem)] not in spellings and not any(
+            os.path.isfile(spelled + candidate) for spelled in spellings
+        ):
+            continue
+        best_stem = stem
     if best_stem is None:
         return None
     suffix = sidecar_path_str[len(best_stem) :]

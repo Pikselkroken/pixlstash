@@ -249,6 +249,29 @@ def test_detect_folder_suffixes_ignores_cross_directory_match(tmp_path):
         assert suffix is None or is_safe_sidecar_suffix(suffix), (key, suffix)
 
 
+def test_detect_folder_suffixes_matches_a_stem_that_differs_only_in_case(tmp_path):
+    """The folder read pairs `IMG.JPG` with `img.txt` on a case-insensitive
+    filesystem (`folder_structure_service._collect_captions`), so the scan's
+    fallback detection has to agree: matching case-sensitively found nothing
+    there and persisted the default suffix beside the owner's own files.
+
+    The rule is the folder read's: fold the stems for the lookup, keep the
+    suffix spelling, and count a case-differing candidate only where the path
+    a write-back would build - the picture's stem as spelled plus the suffix -
+    actually exists. That is exactly what this asserts, so the test says the
+    same thing on Linux (no match) and on macOS/Windows (a match).
+    """
+    root = str(tmp_path)
+    Image.new("RGB", (8, 8)).save(os.path.join(root, "IMG.JPG"), format="JPEG")
+    _write(os.path.join(root, "img.txt"), "cat, calm, sitting")
+
+    detected = detect_folder_suffixes(root)
+
+    readable_back = os.path.isfile(os.path.join(root, "IMG.txt"))
+    assert (detected["tags_suffix"] == ".txt") is readable_back
+    assert detected["found_tags"] is readable_back
+
+
 def test_detect_folder_suffixes_still_finds_same_directory_convention(tmp_path):
     """The dirname restriction must not break ordinary detection."""
     root = str(tmp_path)
