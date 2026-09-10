@@ -467,7 +467,12 @@ def test_a_caption_stem_matches_the_picture_regardless_of_case():
     that happen to look alike: on Windows and macOS the filesystem itself
     treats them as the same stem, and a camera that shouts its names while the
     exporter whispers its own is the common case. The suffix is still reported
-    with the casing the caption file actually has."""
+    with the casing the caption file actually has.
+
+    The row is only worth offering where the import can read it back, and the
+    import builds the sidecar from the picture's own spelling, so the read
+    reports it exactly when that path exists: it does on a case-insensitive
+    filesystem, and does not on Linux."""
     spec = {
         "": [],
         "shoot": [
@@ -477,9 +482,16 @@ def test_a_caption_stem_matches_the_picture_regardless_of_case():
     with _tree(spec) as root:
         for n in ("0001", "0002"):
             _write(root, f"shoot/img_{n}.TXT", "1girl, solo, long hair, smile")
+        # The path `sidecar_path("…/IMG_0001.JPG", ".TXT")` builds.
+        importable = os.path.isfile(os.path.join(root, "shoot", "IMG_0001.TXT"))
         result = FolderStructureRead(root).run()
 
     by_suffix = {row["suffix"]: row for row in result["captions"]}
+    if not importable:
+        assert by_suffix == {}, (
+            "a case-folded stem match the import cannot read is not a convention"
+        )
+        return
     assert set(by_suffix) == {".TXT"}, "the suffix keeps the caption file's own casing"
     assert by_suffix[".TXT"]["files"] == 2
     assert by_suffix[".TXT"]["kind"] == "tags"

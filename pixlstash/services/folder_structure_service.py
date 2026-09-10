@@ -600,8 +600,13 @@ class FolderStructureRead:
         """
         # Case-folded: Windows and macOS filesystems are case-insensitive, so
         # `img_0001.txt` beside `IMG_0001.JPG` is the same convention there and
-        # matching case-sensitively would report none at all.
-        stems = {os.path.splitext(f)[0].lower() for f in folder.direct_pictures}
+        # matching case-sensitively would report none at all. The spellings are
+        # kept because the import builds the sidecar name from the picture's
+        # own, so a stem that only matches case-folded has to be checked.
+        stems: dict[str, set[str]] = {}
+        for picture in folder.direct_pictures:
+            stem = os.path.splitext(picture)[0]
+            stems.setdefault(stem.lower(), set()).add(stem)
         if not stems:
             return
         sampled_here: Counter = Counter()
@@ -618,8 +623,21 @@ class FolderStructureRead:
             # sliced off the original name, so it keeps its real casing.
             suffix = None
             for cut in range(len(name) - 1, 0, -1):
-                if name[:cut].lower() in stems:
-                    suffix = name[cut:]
+                spellings = stems.get(name[:cut].lower())
+                if spellings is None:
+                    continue
+                candidate = name[cut:]
+                # Offered only where the import can read it back: the import
+                # joins the picture's own spelling with the suffix, so a stem
+                # that matches only case-folded counts when that path exists,
+                # which it does on a case-insensitive filesystem and does not
+                # on Linux. One `isfile` per case-differing stem; an
+                # exactly-spelled stem costs nothing extra.
+                if name[:cut] in spellings or any(
+                    os.path.isfile(os.path.join(dirpath, spelled + candidate))
+                    for spelled in spellings
+                ):
+                    suffix = candidate
                     break
             if suffix is None or not is_safe_sidecar_suffix(suffix):
                 continue
