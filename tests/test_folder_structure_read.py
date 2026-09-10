@@ -22,6 +22,7 @@ from pixlstash.server import Server
 from pixlstash.tasks.face_extraction_task import FaceExtractionTask
 from pixlstash.services import folder_structure_service
 from pixlstash.services.folder_structure_service import (
+    CAPTION_SAMPLES,
     DEFAULT_DEADLINE_S,
     FolderStructureRead,
     JUST_A_FOLDER,
@@ -456,6 +457,99 @@ def test_one_suffix_two_exporters_votes_across_the_tree(tags_folders, prose_fold
     )
     assert by_suffix[".txt"]["sample"].startswith("1girl"), (
         "the excerpt has to come from a file of the kind that won"
+    )
+
+
+def test_caption_samples_span_the_folders_whatever_order_they_are_walked_in(
+    monkeypatch,
+):
+    """`CAPTION_SAMPLES` files decide what a suffix holds, and the cap used to
+    be spent folder by folder: the first four folders walked filled it and
+    every later folder contributed nothing. A suffix a tool wrote as tags
+    early in the tree and as prose later was then classified by walk order.
+
+    The samples are picked round-robin over the folders in sorted order once
+    the walk is done, so they span the tree and two reads of it agree."""
+    spec = {"": []}
+    for n in range(CAPTION_SAMPLES):
+        spec[f"shoot{n}"] = [f for i in (1, 2) for f in (f"p{i}.jpg", f"p{i}.txt")]
+    real_walk = os.walk
+
+    def walked_backwards(top, *args, **kwargs):
+        return iter(list(real_walk(top, *args, **kwargs))[::-1])
+
+    def read_with(root, walk):
+        opened: list[str] = []
+
+        def record(path):
+            opened.append(path)
+            return ("tags", "1girl, solo")
+
+        with monkeypatch.context() as patched:
+            patched.setattr(folder_structure_service, "sniff_caption", record)
+            patched.setattr(os, "walk", walk)
+            FolderStructureRead(root).run()
+        return opened
+
+    with _tree(spec) as root:
+        forwards = read_with(root, real_walk)
+        backwards = read_with(root, walked_backwards)
+
+    assert len(forwards) == CAPTION_SAMPLES
+    assert len({os.path.dirname(path) for path in forwards}) == CAPTION_SAMPLES, (
+        f"one sample from each of the {CAPTION_SAMPLES} folders, not four "
+        f"folders twice over: {forwards}"
+    )
+    assert backwards == forwards, (
+        "the same tree must be judged on the same files whatever order the "
+        "filesystem hands the folders back in"
+    )
+
+
+def test_a_cancelled_sniff_says_the_caption_list_is_only_what_it_found(monkeypatch):
+    """The rows already classified are kept (a partial result is worth
+    showing), so nothing in them says the list stops there. `.captions_complete`
+    is what says it: the answers still apply tree-wide, but a pattern living
+    only in the part never reached was never offered, and a card that says
+    nothing reads as "these are all your caption files"."""
+    read_box = {}
+    sniffed = []
+
+    def stop_on_the_second_sniff(path):
+        sniffed.append(path)
+        if len(sniffed) == 2:
+            read_box["read"].cancel()
+        return ("tags", "1girl, solo")
+
+    monkeypatch.setattr(
+        folder_structure_service, "sniff_caption", stop_on_the_second_sniff
+    )
+    spec = {
+        "": [],
+        "shoot": [
+            "a.jpg",
+            "a_alpha.txt",
+            "b.jpg",
+            "b_alpha.txt",
+            "c.jpg",
+            "c_beta.txt",
+        ],
+    }
+    with _tree(spec) as root:
+        read = FolderStructureRead(root)
+        read_box["read"] = read
+        cancelled = read.run()
+        monkeypatch.undo()
+        whole = FolderStructureRead(root).run()
+
+    assert [row["suffix"] for row in cancelled["captions"]] == ["_alpha.txt"], (
+        "the pattern classified before the cancel is kept; `_beta.txt` is the "
+        "one the sniff never reached"
+    )
+    assert cancelled["captions_complete"] is False
+    assert [row["suffix"] for row in whole["captions"]] == ["_alpha.txt", "_beta.txt"]
+    assert whole["captions_complete"] is True, (
+        "a read that finished says so, or the line is on every screen"
     )
 
 
@@ -1499,12 +1593,29 @@ def test_the_tag_shape_needs_repetition_across_several_parents():
 
 def test_a_sidecar_in_capitals_still_counts():
     """A dataset exported on Windows is the obvious victim of a case-sensitive
-    extension match, and it would fail by the Set signal never firing."""
-    with _tree(
-        {"": [], "shoot": ["a.jpg", "a.TXT", "b.jpg", "b.Txt", "c.jpg", "c.Caption"]}
-    ) as root:
+    extension match, and it would fail by the Set signal never firing.
+
+    It counts exactly as far as the import can read it back. `b.Txt` lands
+    under the `.TXT` row, whose *reported* casing is what the import joins to
+    `b.jpg`, so it is evidence where `b.TXT` names that file - on a
+    case-insensitive filesystem, and not on Linux. Asserted on the sidecar
+    evidence rather than on `kind`: three pictures with nothing below already
+    read as a Set off the leaf signal, so the old assertion held whatever the
+    caption files did."""
+    spec = {"": [], "shoot": ["a.jpg", "a.TXT", "b.jpg", "b.Txt", "c.jpg", "c.Caption"]}
+    with _tree(spec) as root:
+        for rel in ("shoot/a.TXT", "shoot/b.Txt", "shoot/c.Caption"):
+            _write(root, rel, "1girl, solo, long hair, smile")
+        # The path `sidecar_path("…/b.jpg", ".TXT")` builds.
+        importable = os.path.isfile(os.path.join(root, "shoot", "b.TXT"))
         result = FolderStructureRead(root).run()
-    assert _rows(result, 2)["shoot"]["proposal"]["kind"] == "set"
+
+    proposal = _rows(result, 2)["shoot"]["proposal"]
+    assert proposal["kind"] == "set"
+    assert ("sidecars" in _signals(proposal)) is importable, (
+        "the signal says a caption file sits beside ALL three pictures, so it "
+        "may only fire where the import can read all three"
+    )
 
 
 def test_the_result_says_whether_the_face_signal_ran_at_all():

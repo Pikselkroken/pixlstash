@@ -1691,6 +1691,62 @@ def test_an_interrupted_commit_is_recorded_pending_with_what_it_needs(owner_env)
     )
 
 
+def test_a_recorded_caption_answer_survives_the_round_trip(owner_env):
+    """The answers go into the row as JSON and come back out as `CaptionPattern`
+    rows, and only the round trip proves the two agree.
+
+    Nothing exercised a non-empty answer through both halves: a resume read
+    its captions back as whatever `parse_captions` made of the recorded text,
+    so a suffix dropped or a kind flattened in between would have surfaced as
+    the wrong files being read into the library, one restart later. `None` is
+    checked in the same breath because it is a different request - no answer
+    at all, probe the conventions - and not an empty answer.
+    """
+    from pixlstash.services import folder_structure_commit_service as svc
+
+    server = owner_env["server"]
+    root = os.path.join(owner_env["tmp"], "caption-record")
+    _make_tree(root, {"Anna": ["a.jpg"]})
+    answers = [
+        {"suffix": "_tags.txt", "kind": "tags"},
+        {"suffix": "_description.txt", "kind": "description"},
+        {"suffix": "_notes.txt", "kind": "ignore"},
+    ]
+    common = dict(
+        root_path=root,
+        mode="local_import",
+        label=None,
+        expected_pictures=1,
+        assignments=svc.parse_assignments([{"relative_path": "Anna", "kind": "tag"}]),
+    )
+
+    svc.record_pending_commit(
+        server,
+        task_id="captions-recorded",
+        captions=svc.parse_captions(answers, reported=answers),
+        **common,
+    )
+    try:
+        pending = svc.pending_commit(server)
+        assert pending is not None and pending["task_id"] == "captions-recorded"
+        assert [
+            {"suffix": row.suffix, "kind": row.kind} for row in pending["captions"]
+        ] == answers
+    finally:
+        svc.settle_pending_commit(server, "captions-recorded", "abandoned")
+
+    svc.record_pending_commit(server, task_id="captions-unanswered", **common)
+    try:
+        unanswered = svc.pending_commit(server)
+        assert unanswered is not None
+        assert unanswered["captions"] is None, (
+            "no answer must not come back as an empty one: the two ask the "
+            "import for different things"
+        )
+    finally:
+        svc.settle_pending_commit(server, "captions-unanswered", "abandoned")
+
+
 def test_stopping_a_commit_that_is_over_reports_what_it_actually_is(owner_env):
     """Same honesty as the read's cancel: no claim the client cannot check."""
     owner, server = owner_env["owner"], owner_env["server"]
@@ -2324,3 +2380,18 @@ def test_a_persisted_caption_answer_that_is_not_a_list_fails_loudly():
     for bad in (0, False, "", {}):
         with pytest.raises(CommitError, match="must be a list"):
             parse_captions(bad)
+
+
+def test_an_accepted_caption_answer_takes_the_read_s_spelling():
+    """The membership check is case-insensitive, but the import builds the
+    file name from the suffix it is handed, so on Linux `.TXT` answered for a
+    reported `.txt` would look for `photo.TXT` and miss the file it was shown.
+    The accepted answer is canonicalised to the read's spelling."""
+    from pixlstash.services.folder_structure_commit_service import parse_captions
+
+    reported = [{"suffix": ".txt", "kind": "tags", "files": 3}]
+    (pattern,) = parse_captions(
+        [{"suffix": ".TXT", "kind": "description"}], reported=reported
+    )
+    assert pattern.suffix == ".txt"
+    assert pattern.kind == "description"

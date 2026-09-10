@@ -297,7 +297,7 @@ def parse_captions(raw, reported=None) -> Optional[list[CaptionPattern]]:
         None
         if reported is None
         else {
-            row["suffix"].lower()
+            row["suffix"].lower(): row["suffix"]
             for row in reported
             if isinstance(row, dict) and isinstance(row.get("suffix"), str)
         }
@@ -327,13 +327,18 @@ def parse_captions(raw, reported=None) -> Optional[list[CaptionPattern]]:
         parsed.append(CaptionPattern(suffix, kind))
     # After the shape checks, so a malformed row is still answered by what is
     # wrong with the row rather than by "the read never offered it".
+    # The accepted answer takes the read's own spelling: on a case-sensitive
+    # filesystem `.TXT` answered for a reported `.txt` would otherwise have
+    # the import look for `photo.TXT` and miss the `photo.txt` it was shown.
     if offered is not None:
         for index, pattern in enumerate(parsed):
-            if pattern.suffix.lower() not in offered:
+            spelled = offered.get(pattern.suffix.lower())
+            if spelled is None:
                 raise CommitError(
                     f"captions[{index}].suffix {pattern.suffix!r} is not one "
                     f"the read reported"
                 )
+            parsed[index] = CaptionPattern(spelled, pattern.kind)
     return parsed
 
 

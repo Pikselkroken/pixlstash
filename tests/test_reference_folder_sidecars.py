@@ -105,6 +105,47 @@ def test_empty_named_tags_sidecar_is_recorded_and_falls_back_to_the_sentinel(tmp
     ]
 
 
+@pytest.mark.skipif(
+    os.name == "nt" or os.geteuid() == 0,
+    reason="chmod 000 does not deny a read to root, and not at all on Windows",
+)
+def test_an_unreadable_named_tags_sidecar_is_recorded_rather_than_reported_absent(
+    tmp_path,
+):
+    """A `_tags.txt` that will not open is a tags sidecar nothing could be read
+    from, which is not the same thing as no tags sidecar at all.
+
+    `sniff_caption` returned None for it, so the probe never resolved it and
+    `attach_sidecars` left `tags_file` unset - the picture then looked exactly
+    like one that was never captioned, and the distinction the contract draws
+    between unreadable and absent was gone by the time any caller saw it.
+    """
+    img = tmp_path / "photo.png"
+    img.write_bytes(b"x")
+    unreadable = tmp_path / "photo_tags.txt"
+    _write(str(unreadable), "1girl, solo")
+    os.chmod(unreadable, 0o000)
+    try:
+        assert classify_sidecar(str(unreadable)) == SIDECAR_TYPE_TAGS
+        assert resolve_typed_sidecar(str(img), SIDECAR_TYPE_TAGS, None) == str(
+            unreadable
+        )
+        pic = Picture(file_path=str(img))
+        assert attach_sidecars(pic, str(img)) == [], "nothing could be read"
+        assert pic.tags_file == str(unreadable), "but the file is recorded"
+
+        # The name is the only thing left to go on once the content is gone,
+        # and a bare `.txt` has none: it is decided by its content, so an
+        # unreadable one stays a non-caption rather than being guessed at.
+        nameless = tmp_path / "other.txt"
+        _write(str(nameless), "1girl, solo")
+        os.chmod(nameless, 0o000)
+        assert classify_sidecar(str(nameless)) is None
+        os.chmod(nameless, 0o644)
+    finally:
+        os.chmod(unreadable, 0o644)
+
+
 def test_empty_bare_txt_is_not_a_caption(tmp_path):
     img = tmp_path / "photo.png"
     img.write_bytes(b"x")

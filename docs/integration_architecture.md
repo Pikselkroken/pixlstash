@@ -1618,6 +1618,7 @@ indeterminate bar rather than 0%.
      "files": 27931, "folders": 340,
      "sample": "1girl, solo, long hair, looking at viewer"}
   ],
+  "captions_complete": true,    // false = only the patterns found so far
   "levels": [ /* one per depth, ascending, level 1 = the root itself */ ]
 }
 ```
@@ -1635,14 +1636,27 @@ case-insensitive filesystem and does not on Linux. Suffixes group the same way
 and by the same rule: `a.txt` and `b.TXT` are one row, reported with the first
 spelling walked, and `b.TXT` counts towards that row's `files` only where
 `b.txt` names it, again true on a case-insensitive filesystem and false on
-Linux. A few files of each pattern,
-spread across folders rather than taken from the first one walked, are read to
+Linux. A few files of each pattern are read to
 say whether it holds tag lists or prose (`kind`), and `sample` is an excerpt of
-one *of that kind* so the owner can check the guess without opening a file. Binary, JSON and markup sidecars
+one *of that kind* so the owner can check the guess without opening a file.
+Those files are taken round-robin across the folders that hold the pattern, in
+sorted folder order, one from each before a second from any: a suffix a tool
+wrote as tags in one part of the tree and as prose in another must not be
+classified by whichever folders `os.walk` reached first, and two reads of the
+same tree must agree. Binary, JSON and markup sidecars
 are not captions and are not listed, and neither is anything past the twelfth
 pattern. The screen offers each row as *Tags / Description / Ignore*,
 pre-filled with `kind`, and sends the answers back as `captions` on the commit
 (§22).
+
+**`captions_complete: false` means this is only what was found so far.** The
+walk hit `max_folders`, or a cancel or the deadline stopped the walk or the
+sniff part-way. The answers themselves are unaffected: they are per suffix and
+the import applies them tree-wide, so an answered suffix is read in folders the
+walk never reached. What is missing is a pattern that exists only in the
+unvisited part and was therefore never offered. The screen says so on the
+caption card rather than presenting a partial list as the whole of it; nothing
+about the commit payload changes.
 
 Two fields the screen must not ignore, because both mean *this map is not the
 whole library*:

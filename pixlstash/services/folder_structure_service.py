@@ -63,6 +63,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from functools import partial
+from itertools import zip_longest
 from typing import Any, Callable, Optional
 
 import cv2
@@ -392,6 +393,8 @@ class FolderStructureRead:
         self._folders: list[_Folder] = []
         #: suffix -> {"files", "folders", "samples"}: every caption file the
         #: walk passed, grouped by the suffix after its picture's stem.
+        #: ``samples`` is folder -> that folder's candidate paths; which of
+        #: them are read is decided across folders once the walk is over.
         self._captions: dict[str, dict[str, Any]] = {}
         self._truncated = False
         self._unreadable = 0
@@ -595,9 +598,9 @@ class FolderStructureRead:
         to the latter.
 
         Filenames are taken in sorted order and at most
-        `_CAPTION_SAMPLES_PER_FOLDER` of each suffix are sampled here, so the
-        files a pattern is judged on are the same ones on every run and come
-        from across the tree rather than from one folder.
+        `_CAPTION_SAMPLES_PER_FOLDER` of each suffix are kept here, as this
+        folder's *candidates*: `_spread_samples` picks the files a pattern is
+        actually judged on from across the folders once the walk is over.
         """
         # Case-folded: Windows and macOS filesystems are case-insensitive, so
         # `img_0001.txt` beside `IMG_0001.JPG` is the same convention there and
@@ -610,7 +613,9 @@ class FolderStructureRead:
             stems.setdefault(stem.lower(), set()).add(stem)
         if not stems:
             return
-        sampled_here: Counter = Counter()
+        #: suffix key -> this folder's candidate sample paths, merged into the
+        #: per-suffix index below once the folder is done.
+        sampled_here: dict[str, list[str]] = {}
         captioned: set[str] = set()
         for name in sorted(filenames):
             if (
@@ -645,16 +650,13 @@ class FolderStructureRead:
                     break
             if suffix is None or not is_safe_sidecar_suffix(suffix):
                 continue
-            # A caption file was found for this picture, whatever suffix row it
-            # ends up under - the Set signal's evidence, counted once per stem.
-            captioned.add(matched_stem.lower())
             # Grouped case-insensitively for the same reason the stems are:
             # `.txt` and `.TXT` are one file on Windows and macOS, and offering
             # them as two rows lets the owner answer one file twice. The first
             # casing seen is the one reported.
             key = suffix.lower()
             entry = self._captions.setdefault(
-                key, {"suffix": suffix, "files": 0, "folders": set(), "samples": []}
+                key, {"suffix": suffix, "files": 0, "folders": set(), "samples": {}}
             )
             # Same rule as the stems above, for the same reason: the import
             # joins the picture's own spelling with the *reported* suffix, so
@@ -665,14 +667,26 @@ class FolderStructureRead:
                 os.path.join(dirpath, matched_stem + entry["suffix"])
             ):
                 continue
+            # A caption file the import can actually read was found for this
+            # picture - the Set signal's evidence, counted once per stem. Below
+            # the casing check, not above it: a `b.TXT` the `.txt` row had to
+            # drop is not a sidecar the import will read either, and counting
+            # it here made `with_sidecar` promise a file no row offers.
+            captioned.add(matched_stem.lower())
             entry["files"] += 1
             entry["folders"].add(folder.index)
-            if (
-                len(entry["samples"]) < CAPTION_SAMPLES
-                and sampled_here[key] < _CAPTION_SAMPLES_PER_FOLDER
-            ):
-                entry["samples"].append(os.path.join(dirpath, name))
-                sampled_here[key] += 1
+            candidates = sampled_here.setdefault(key, [])
+            if len(candidates) < _CAPTION_SAMPLES_PER_FOLDER:
+                candidates.append(os.path.join(dirpath, name))
+        for key, candidates in sampled_here.items():
+            per_folder = self._captions[key]["samples"]
+            per_folder[dirpath] = candidates
+            # Only the first `CAPTION_SAMPLES` folders in sorted order can
+            # reach the round robin in `_spread_samples`, since each of them
+            # gives it one sample in the first pass. Keeping the rest would
+            # pin two paths per suffix for 20,000 folders and never read one.
+            while len(per_folder) > CAPTION_SAMPLES:
+                del per_folder[max(per_folder)]
         folder.with_sidecar = sum(
             1
             for picture in folder.direct_pictures
@@ -706,7 +720,7 @@ class FolderStructureRead:
                 self._checkpoint()
                 votes: Counter = Counter()
                 excerpts: dict[str, str] = {}
-                for path in entry["samples"]:
+                for path in _spread_samples(entry["samples"]):
                     # Per sample, not per suffix: a cancel arriving mid-suffix
                     # would otherwise still open every remaining sample of it.
                     self._checkpoint()
@@ -909,7 +923,7 @@ class FolderStructureRead:
         # The filename lists were only ever input to the signals, and the route
         # holds this object for the process lifetime. A 28,000-picture library
         # would otherwise pin all 28,000 filenames until the next read - and
-        # the caption index pins one sample path per suffix per folder on top.
+        # the caption index pins a few sample paths per suffix on top.
         for folder in self._folders:
             folder.direct_pictures = []
         self._captions = {}
@@ -945,6 +959,14 @@ class FolderStructureRead:
             # to confirm as tags, descriptions or nothing before the commit
             # reads them. Empty when there are none.
             "captions": captions,
+            # False when this list is only the patterns found so far: the walk
+            # hit `max_folders`, or a cancel or the deadline stopped it or the
+            # sniff part-way. The answers still apply tree-wide - they are per
+            # suffix, so an answered suffix is read in folders the walk never
+            # reached - but a pattern that lives only in the unvisited part was
+            # never offered, and a card that says nothing reads as "these are
+            # all your caption files".
+            "captions_complete": not self._truncated and not self.cancelled,
             "levels": level_docs,
         }
 
@@ -1436,6 +1458,22 @@ def _evenly_spaced(items: list[str], count: int) -> list[str]:
         return list(items)
     step = len(items) / count
     return [items[int(i * step)] for i in range(count)]
+
+
+def _spread_samples(per_folder: dict[str, list[str]]) -> list[str]:
+    """Up to `CAPTION_SAMPLES` of one suffix's candidates, spread across folders.
+
+    Round robin in sorted folder order - one from every folder before a second
+    from any - so the files a pattern is judged on span the tree. Filling the
+    quota folder by folder instead took every sample from the first few folders
+    `os.walk` happened to reach, and a suffix used for tags early and for prose
+    later was then classified by walk order rather than by what it mostly holds.
+    Sorting the folders is what makes two runs of the same tree agree whatever
+    order the filesystem hands them back in.
+    """
+    columns = [per_folder[folder] for folder in sorted(per_folder)]
+    spread = [path for row in zip_longest(*columns) for path in row if path]
+    return spread[:CAPTION_SAMPLES]
 
 
 def _grouped_by_parent(

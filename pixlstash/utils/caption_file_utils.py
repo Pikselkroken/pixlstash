@@ -458,11 +458,15 @@ def sniff_caption(path: str) -> tuple[str, str] | None:
     Returns ``(kind, excerpt)`` with *kind* ``"tags"`` or ``"description"``
     and *excerpt* the first line or so, whitespace collapsed, for a screen to
     show beside the choice. ``None`` when the file is not a caption at all:
-    unreadable, binary (a NUL byte in the head), markup/JSON, or empty
+    binary (a NUL byte in the head), markup/JSON, or empty or unreadable
     without a name that says what it is.
 
     In order:
 
+    * a file that will not open is still classified by an unambiguous name,
+      with an empty excerpt, and logged: an unreadable ``_tags.txt`` is a tags
+      sidecar nothing could be read from, and `attach_sidecars` records that
+      rather than reporting the file as absent;
     * a NUL byte in the first 4 KB is binary, whatever its extension;
     * the head is decoded as ``utf-8-sig``, so a BOM is dropped rather than
       surviving ``.strip()`` and becoming part of the first tag;
@@ -476,11 +480,23 @@ def sniff_caption(path: str) -> tuple[str, str] | None:
     * an empty file with no such name says nothing, so it is not a caption;
     * otherwise the content decides (`_looks_like_tags`).
     """
+    name = os.path.basename(path)
     try:
         with open(path, "rb") as fh:
             head = fh.read(_SNIFF_BYTES)
     except OSError as exc:
+        # Unreadable, but a name the exporter made unambiguous still says what
+        # the file holds, and that is the answer `attach_sidecars` needs: a
+        # `_tags.txt` it cannot open is recorded as a tags sidecar with no tags
+        # read, which is "unreadable", where `None` would say "absent" and send
+        # the picture to the tagger as though nothing was ever written for it.
+        # The excerpt is empty because nothing was read; there is nothing to
+        # show. A file with no such name says nothing either way and stays None.
         logger.warning("Could not read caption file %s: %s", path, exc)
+        if _TAGS_NAME_RE.search(name):
+            return SIDECAR_TYPE_TAGS, ""
+        if _DESCRIPTION_NAME_RE.search(name):
+            return SIDECAR_TYPE_DESCRIPTION, ""
         return None
     if b"\x00" in head:
         return None
@@ -488,7 +504,6 @@ def sniff_caption(path: str) -> tuple[str, str] | None:
     if text[:1] in ("{", "[", "<"):
         return None
     excerpt = " ".join(text.split())[:_EXCERPT_CHARS]
-    name = os.path.basename(path)
     if _TAGS_NAME_RE.search(name):
         return SIDECAR_TYPE_TAGS, excerpt
     if _DESCRIPTION_NAME_RE.search(name):
