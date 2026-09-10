@@ -88,7 +88,8 @@ def _suffix(value: Optional[str]) -> Optional[str]:
             status_code=400,
             detail=(
                 "Sidecar suffix may only contain letters, digits, '.', '_' and "
-                "'-' (no path separators or '..')."
+                "'-' (no path separators or '..'), and may not end in a picture "
+                "or video extension."
             ),
         )
     return value

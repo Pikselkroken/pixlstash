@@ -60,14 +60,17 @@ def _validate_sidecar_suffix(suffix: str) -> None:
         suffix: The candidate sidecar suffix from the request.
 
     Raises:
-        HTTPException: 400 when the suffix contains a path separator or "..".
+        HTTPException: 400 when the suffix contains a path separator or "..",
+            or ends in a picture or video extension (it would name a media
+            file, and the write-back would replace that picture with text).
     """
     if not is_safe_sidecar_suffix(suffix):
         raise HTTPException(
             status_code=400,
             detail=(
                 "Sidecar suffix may only contain letters, digits, '.', '_' and "
-                "'-' (no path separators or '..')."
+                "'-' (no path separators or '..'), and may not end in a picture "
+                "or video extension."
             ),
         )
 

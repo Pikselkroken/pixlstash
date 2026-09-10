@@ -253,7 +253,19 @@ class ReferenceFolderScanTask(BaseTask):
                 )
                 seed["description_suffix"] = self._description_suffix
             if seed:
-                self._persist_suffixes(seed)
+                # Only a suffix that was actually accepted may drive this
+                # scan. A rejected one (unsafe, or colliding with the other
+                # kind) is left unset, so the rest of the scan resolves that
+                # kind by the known conventions instead of carrying on with a
+                # value the writer refused and reading or overwriting one file
+                # as both kinds.
+                accepted = self._persist_suffixes(seed)
+                if "tags_suffix" in seed and not accepted.get("tags_suffix"):
+                    self._tags_suffix = None
+                if "description_suffix" in seed and not accepted.get(
+                    "description_suffix"
+                ):
+                    self._description_suffix = None
 
         # Collect all supported files currently on disk.
         # Skip PixlStash-generated thumbnail files (e.g. foo_thumb.webp) that
@@ -1382,7 +1394,7 @@ class ReferenceFolderScanTask(BaseTask):
 
         return pic
 
-    def _persist_suffixes(self, suffixes: dict[str, str]) -> None:
+    def _persist_suffixes(self, suffixes: dict[str, str]) -> dict[str, str]:
         """Store auto-detected sidecar suffixes on the folder (only fills NULLs).
 
         A detected suffix is written straight into the folder's configuration
@@ -1390,6 +1402,11 @@ class ReferenceFolderScanTask(BaseTask):
         must clear the same bar as a suffix supplied through the API. Validate
         here too: this is the second door into that column, and skipping the
         check would let the scan persist a value the API would have rejected.
+
+        Returns:
+            The subset of *suffixes* that survived validation, keyed the same
+            way. A key missing from the result was refused, and the caller must
+            not keep using it for this scan either.
         """
 
         def _accepted(key: str) -> str | None:
@@ -1410,16 +1427,23 @@ class ReferenceFolderScanTask(BaseTask):
         tags_suffix = _accepted("tags_suffix")
         description_suffix = _accepted("description_suffix")
         if tags_suffix is None and description_suffix is None:
-            return
+            return {}
 
-        def update(session: Session) -> None:
+        def update(session: Session) -> dict[str, str]:
+            # What the scan may go on using: a suffix drops out of here for the
+            # same reasons it does not reach the column.
+            accepted: dict[str, str] = {}
+            if tags_suffix:
+                accepted["tags_suffix"] = tags_suffix
+            if description_suffix:
+                accepted["description_suffix"] = description_suffix
             rf = (
                 session.exec(select(LibrarySettings)).first()
                 if self._is_root
                 else session.get(ReferenceFolder, self._folder_id)
             )
             if rf is None:
-                return
+                return accepted
             # Judged on the merged row: a detected suffix that would name the
             # same file as the other kind's effective one is not persisted, or
             # the two write-backs would overwrite each other. Descriptions see
@@ -1433,6 +1457,7 @@ class ReferenceFolderScanTask(BaseTask):
                         self._folder_id,
                         rf.description_suffix or DEFAULT_DESCRIPTION_SUFFIX,
                     )
+                    accepted.pop("tags_suffix", None)
                 else:
                     rf.tags_suffix = tags_suffix
             if description_suffix and rf.description_suffix is None:
@@ -1445,12 +1470,14 @@ class ReferenceFolderScanTask(BaseTask):
                         self._folder_id,
                         rf.tags_suffix or DEFAULT_TAGS_SUFFIX,
                     )
+                    accepted.pop("description_suffix", None)
                 else:
                     rf.description_suffix = description_suffix
             session.add(rf)
             session.commit()
+            return accepted
 
-        self._db.run_task(update, priority=DBPriority.LOW)
+        return self._db.run_task(update, priority=DBPriority.LOW)
 
     def _set_status(
         self,

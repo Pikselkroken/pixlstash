@@ -27,6 +27,7 @@ from pixlstash.utils.caption_file_utils import (
     SIDECAR_TYPE_TAGS,
     classify_sidecar,
     detect_folder_suffixes,
+    is_recorded_sidecar_shape,
     is_safe_sidecar_suffix,
     resolve_typed_sidecar,
     sidecar_path,
@@ -134,10 +135,38 @@ def test_sidecar_path_rejects_traversal(evil_suffix):
 def test_sidecar_path_rejects_the_picture_s_own_extension():
     """A suffix equal to the picture's extension names the picture itself: the
     scan would read its bytes as tags and the first write-back would truncate
-    it. The other extensions still resolve normally."""
+    it."""
     with pytest.raises(ValueError):
         sidecar_path("/refs/f/photo.png", ".png")
-    assert sidecar_path("/refs/f/photo.jpg", ".png") == "/refs/f/photo.png"
+
+
+@pytest.mark.parametrize("media_suffix", [".png", ".jpg", ".mp4", "_thumb.webp"])
+def test_sidecar_path_rejects_a_suffix_that_names_a_media_file(media_suffix):
+    """`photo.jpg` plus `.png` resolves to `photo.png`, which is a picture, not
+    a caption for one. If it exists beside `photo.jpg` the scan reads its bytes
+    as tags and the first write-back replaces the picture with text, so a
+    suffix ending in any picture or video extension is refused."""
+    with pytest.raises(ValueError):
+        sidecar_path("/refs/f/photo.jpg", media_suffix)
+    assert is_safe_sidecar_suffix(media_suffix) is False
+
+
+@pytest.mark.parametrize("suffix", [".PNG", ".Png"])
+def test_sidecar_path_refuses_the_picture_s_own_name_in_any_case(suffix):
+    """`os.path.normcase` folds case on Windows only, so on a default
+    case-insensitive macOS volume `photo.png` plus `.PNG` still named the
+    picture and the write-back replaced it. Refused on every platform."""
+    with pytest.raises(ValueError):
+        sidecar_path("/refs/f/photo.png", suffix)
+
+
+def test_is_recorded_sidecar_shape_refuses_the_picture_in_another_case():
+    """The same rule for a path already recorded in the database: a write-back
+    through it would overwrite the original picture."""
+    assert (
+        is_recorded_sidecar_shape("/refs/f/photo.png", "/refs/f/photo_tags.txt") is True
+    )
+    assert is_recorded_sidecar_shape("/refs/f/photo.png", "/refs/f/photo.PNG") is False
 
 
 def test_validate_sidecar_suffix_accepts_known_conventions():
@@ -156,6 +185,8 @@ def test_validate_sidecar_suffix_accepts_known_conventions():
         "_t..txt",
         "x" * 65,  # over the length cap
         "_t .txt",  # space is not allowed
+        ".png",  # names a picture, not a caption for one
+        "_caption.mp4",  # a video for the same reason
     ],
 )
 def test_validate_sidecar_suffix_rejects_dangerous(evil_suffix):
@@ -691,6 +722,56 @@ def test_scan_refuses_to_persist_a_suffix_the_other_kind_already_uses(server, tm
     # A detected suffix that does not collide still lands.
     task._persist_suffixes({"description_suffix": "_desc.txt"})
     assert server.vault.db.run_task(_read) == ("_caption.txt", "_desc.txt")
+
+
+def test_scan_drops_a_detected_suffix_the_writer_refused(server, tmp_path):
+    """A refused detection must not stay on the running task either.
+
+    ``_run_task`` assigns the detected suffix to the task *before*
+    ``_persist_suffixes`` judges it, so a description suffix equal to the
+    stored tags suffix reached ``_reconcile_sidecar`` anyway and let one file
+    be read, and then overwritten, as both kinds.
+    """
+    folder_dir = str(tmp_path / "detect_collide")
+    folder_id = _make_folder(
+        server,
+        folder_dir,
+        tags_suffix="_caption.txt",
+        sync_tags=True,
+        sync_descriptions=True,
+    )
+    _make_image(folder_dir, "photo.png")
+    _write(os.path.join(folder_dir, "photo_caption.txt"), "A calm cat on a mat.")
+
+    task = ReferenceFolderScanTask(server.vault.db, folder_id, folder_dir, folder_dir)
+    task._run_task()
+
+    assert task._tags_suffix == "_caption.txt"
+    assert task._description_suffix is None, "the refused suffix must not survive"
+
+    def _read(session: Session):
+        rf = session.get(ReferenceFolder, folder_id)
+        return rf.tags_suffix, rf.description_suffix
+
+    assert server.vault.db.run_task(_read) == ("_caption.txt", None)
+
+
+def test_folder_route_refuses_a_suffix_that_names_a_picture(server, tmp_path):
+    """A ``.png`` suffix makes ``photo.png`` the caption file for
+    ``photo.jpg``; the first write-back would replace that picture with text.
+    Refused at the API boundary, not only at the sink."""
+    client = _login_client(server)
+    folder_id = _make_folder(server, str(tmp_path / "media_suffix"))
+
+    refused = client.patch(
+        f"/reference-folders/{folder_id}", json={"tags_suffix": ".png"}
+    )
+    assert refused.status_code == 400, refused.text
+
+    def _read(session: Session):
+        return session.get(ReferenceFolder, folder_id).tags_suffix
+
+    assert server.vault.db.run_task(_read) is None, "nothing stored"
 
 
 def test_move_reference_picture_rejects_non_reference_picture(server, tmp_path):

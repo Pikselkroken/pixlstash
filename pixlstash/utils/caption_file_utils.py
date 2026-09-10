@@ -20,6 +20,8 @@ import tempfile
 from collections import Counter
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.image_processing.video_utils import VIDEO_EXTENSIONS
+from pixlstash.utils.media_files import SUPPORTED_IMAGE_EXTS
 
 logger = get_logger(__name__)
 
@@ -63,6 +65,28 @@ _DESCRIPTION_NAME_RE = re.compile(
 # suffix, and ``sidecar_path`` enforces it again at the point of use.
 _SAFE_SUFFIX_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
+# Extensions a suffix must not end in, because appending one names a media
+# file rather than a caption: ``photo.jpg`` plus ``.png`` resolves to
+# ``photo.png``, and when that picture sits beside it the first write-back
+# replaces the picture with text. Both extension sets, so a video is as
+# protected as a still, and the thumbnail carve-out in
+# ``is_supported_media_file`` is deliberately not reused: ``_thumb.webp`` is
+# one of the names a write-back must not take.
+_MEDIA_EXTS = tuple(sorted(SUPPORTED_IMAGE_EXTS | frozenset(VIDEO_EXTENSIONS)))
+
+
+def _names_same_file(path: str, other: str) -> bool:
+    """Whether two paths name one file on any platform PixlStash runs on.
+
+    ``os.path.normcase`` folds case on Windows only, so on a default
+    case-insensitive macOS volume ``photo.png`` and ``photo.PNG`` compared as
+    different files and a sidecar was allowed to name the picture itself.
+    Compared lowercased everywhere instead: on a case-sensitive volume that
+    costs at most a refused sidecar spelling, while the miss overwrites a
+    picture with text.
+    """
+    return path.lower() == other.lower()
+
 
 def is_safe_sidecar_suffix(suffix: str | None) -> bool:
     """Return True when *suffix* is a bare filename fragment safe to append.
@@ -72,13 +96,16 @@ def is_safe_sidecar_suffix(suffix: str | None) -> bool:
 
     Returns:
         True when appending *suffix* to an image stem cannot leave the image's
-        directory; False for empty values, ``..``, or any path separator.
+        directory and cannot name a picture or video; False for empty values,
+        ``..``, any path separator, or a media extension.
     """
     if not suffix or ".." in suffix:
         return False
     if "/" in suffix or "\\" in suffix:
         return False
     if os.sep in suffix or (os.altsep and os.altsep in suffix):
+        return False
+    if suffix.lower().endswith(_MEDIA_EXTS):
         return False
     return bool(_SAFE_SUFFIX_RE.match(suffix))
 
@@ -144,9 +171,9 @@ def sidecar_path(image_path: str, suffix: str) -> str:
             image itself.
     """
     if not is_safe_sidecar_suffix(suffix):
-        raise ValueError(f"Sidecar suffix escapes the image directory: {suffix!r}")
+        raise ValueError(f"Sidecar suffix is not a usable caption name: {suffix!r}")
     path = os.path.splitext(image_path)[0] + suffix
-    if os.path.normcase(path) == os.path.normcase(image_path):
+    if _names_same_file(path, image_path):
         raise ValueError(f"Sidecar suffix {suffix!r} names the picture itself")
     return path
 
@@ -194,7 +221,7 @@ def is_recorded_sidecar_shape(image_path: str, path: str | None) -> bool:
     tail = path[len(stem) :] if path.startswith(stem) else ""
     if not tail or not is_safe_sidecar_suffix(tail):
         return False
-    return os.path.normcase(path) != os.path.normcase(image_path)
+    return not _names_same_file(path, image_path)
 
 
 def recorded_sidecar(image_path: str, stored_path: str | None) -> str | None:
