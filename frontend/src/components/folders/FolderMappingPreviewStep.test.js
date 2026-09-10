@@ -410,6 +410,23 @@ describe("caption files beside the pictures", () => {
     ]);
   });
 
+  it("says so when the read only got through part of the tree", async () => {
+    // The answers are per suffix and apply tree-wide, so nothing about the
+    // payload changes; what is missing is a pattern that lives only in the
+    // part the walk never reached. Silence would read as "these are all your
+    // caption files".
+    const line = "Not every folder was checked";
+    expect(
+      mountImport({ commitOnMount: false, readResult: READ_RESULT }).text(),
+    ).not.toContain(line);
+    const wrapper = mountImport({
+      commitOnMount: false,
+      readResult: { ...READ_RESULT, captions_complete: false },
+    });
+    expect(wrapper.text()).toContain(line);
+    expect(selects(wrapper)).toHaveLength(2);
+  });
+
   it("asks nothing when the read found no caption files", () => {
     const wrapper = mountImport({
       commitOnMount: false,

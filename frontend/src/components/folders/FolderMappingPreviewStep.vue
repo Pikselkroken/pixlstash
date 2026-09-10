@@ -100,6 +100,16 @@ const CAPTION_CHOICES = [
 const patterns = computed(() =>
   props.mode === "local_import" ? (props.readResult?.captions ?? []) : [],
 );
+/**
+ * The read stopped early, so this list is the patterns found so far (§20).
+ * The answers still apply tree-wide - they are per suffix, so an answered
+ * suffix is read in the folders the walk never reached - but a pattern that
+ * lives only there was never offered, and a card that says nothing reads as
+ * "these are all your caption files".
+ */
+const patternsPartial = computed(
+  () => props.readResult?.captions_complete === false,
+);
 // suffix -> the owner's answer. Seeded from the saved answers, then the read.
 // Null-prototype, because the keys are filename fragments: on a plain object
 // `answers.constructor` is already truthy so the seeding skips it and a
@@ -383,6 +393,10 @@ onUnmounted(() => {
         Text files named after a picture are read once, during this import,
         as its tags or description. Nothing is written back to them. Check
         each pattern.
+      </p>
+      <p v-if="patternsPartial" class="preview-step__card-lead">
+        Not every folder was checked; only the patterns found so far are
+        listed.
       </p>
       <ul class="preview-step__captions">
         <li
