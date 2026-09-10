@@ -86,6 +86,7 @@ from pixlstash.utils.caption_file_utils import (
     SIDECAR_TYPE_TAGS,
     attach_sidecars,
     is_safe_sidecar_suffix,
+    sidecar_path,
 )
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -205,6 +206,28 @@ def caption_suffixes(captions) -> tuple[Optional[list[str]], Optional[list[str]]
     return (
         [c.suffix for c in captions if c.kind == SIDECAR_TYPE_TAGS],
         [c.suffix for c in captions if c.kind == SIDECAR_TYPE_DESCRIPTION],
+    )
+
+
+def _widest_convention(
+    file_paths: list[str], suffixes: Optional[list[str]]
+) -> Optional[str]:
+    """The confirmed suffix that names the most files, for seeding the root.
+
+    ``attach_sidecars`` reads every confirmed suffix, but the root holds one
+    per kind, so an owner who confirmed two tags patterns has to be given the
+    one their library actually uses rather than whichever the payload listed
+    first.
+    """
+    if not suffixes:
+        return None
+    if len(suffixes) == 1:
+        return suffixes[0]
+    return max(
+        suffixes,
+        key=lambda suffix: sum(
+            os.path.isfile(sidecar_path(path, suffix)) for path in file_paths
+        ),
     )
 
 
@@ -920,22 +943,30 @@ def local_import_pictures(
         if on_progress is not None:
             on_progress(processed, total)
 
-    # The split that says where an import's time went: `build_s` is decode +
-    # thumbnail + hash on the build pool (CPU and disk, contended by the
-    # workers' preload pools), `insert_s` is the wait for the single DB writer
-    # (contended by the workers' own write transactions). Same spirit as the
-    # planner's [PIPELINE_PASS] line, and meant to be read next to it.
     # A confirmed convention is the owner saying the folder stores its captions
     # there: it becomes the root's own suffix and sync of that kind goes on, so
     # edits reach the files and the files reach the pictures without a second
     # setting to find. Settings can turn it off again.
     tags_suffixes, description_suffixes = caption_suffixes(captions)
-    seed_caption_suffixes(
+    seeded = seed_caption_suffixes(
         server.vault.db,
-        (tags_suffixes or [None])[0],
-        (description_suffixes or [None])[0],
+        _widest_convention(file_paths, tags_suffixes),
+        _widest_convention(file_paths, description_suffixes),
     )
+    if seeded:
+        # Sync now writes DB content into existing files, and `write_sidecar`
+        # replaces what it finds. The root scan is the pass that reads the
+        # owner's files IN first, so ask for it here rather than leaving the
+        # first write-back to truncate a caption nobody imported yet - the
+        # same call `PATCH /server-config/captions` makes when it turns a
+        # type on.
+        server.vault.rescan_library_root()
 
+    # The split that says where an import's time went: `build_s` is decode +
+    # thumbnail + hash on the build pool (CPU and disk, contended by the
+    # workers' preload pools), `insert_s` is the wait for the single DB writer
+    # (contended by the workers' own write transactions). Same spirit as the
+    # planner's [PIPELINE_PASS] line, and meant to be read next to it.
     wall_s = time.monotonic() - pass_started
     built_count = len(to_build)
     logger.info(

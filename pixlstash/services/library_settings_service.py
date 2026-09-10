@@ -220,7 +220,7 @@ def set_caption_sync(vault_db, **fields) -> dict:
 
 def seed_caption_suffixes(
     vault_db, tags_suffix: Optional[str], description_suffix: Optional[str]
-) -> None:
+) -> bool:
     """Apply the owner's caption answers to the root's sync settings.
 
     Confirming a pattern as tags or as descriptions on the import screen is
@@ -231,9 +231,14 @@ def seed_caption_suffixes(
     already set is kept (an earlier import's convention wins); the toggle is
     turned on either way. Nothing is changed for a kind the owner did not
     confirm, and Settings can turn either off again.
+
+    Returns:
+        True when a type was turned on, so the caller can ask for the root
+        rescan that reads the existing files in before anything is written
+        back over them.
     """
     if not tags_suffix and not description_suffix:
-        return
+        return False
 
     def write(session: Session) -> None:
         row = _row(session)
@@ -249,6 +254,7 @@ def seed_caption_suffixes(
         session.commit()
 
     vault_db.run_task(write, priority=DBPriority.IMMEDIATE)
+    return True
 
 
 def get_layout(vault_db) -> tuple[Optional[str], Optional[str]]:
