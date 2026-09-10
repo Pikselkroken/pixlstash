@@ -16,6 +16,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models.folder_mapping_commit import (
     STATE_DEFERRED,
     STATE_DONE,
+    STATE_PENDING,
     FolderMappingCommit,
 )
 from pixlstash.db_models.picture import Picture
@@ -75,7 +76,7 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         self._root_last_scanned: float | None = None
         self._root_scanned_once = False
         # Once the library holds a picture or the owner has answered the
-        # import offer it stays answered; the two queries run until then.
+        # import offer it stays answered; the queries run until then.
         self._first_import_answered = False
 
     def mark_root_due(self) -> None:
@@ -195,14 +196,28 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         caption choices. ``abandoned`` is "bring nothing in" and ``superseded``
         was replaced by a newer record, so neither is an answer either. A
         ``reference`` commit is not one at all: it registers some other folder
-        and says nothing about the root's own pictures. A library with a
-        picture in it was imported into some other way and is scanned as
-        before, so nothing changes for an existing library.
+        and says nothing about the root's own pictures.
+
+        The ``pending`` check runs **first**, before the picture row, because a
+        running ``local_import`` commits every chunk and wakes the planner while
+        its record is still ``pending``: after the first chunk the library holds
+        pictures, and a picture-row check that ran first would read those as the
+        answer and cache it, starting the root scan mid-commit. Otherwise a
+        library with a picture in it was imported into some other way and is
+        scanned as before, so nothing changes for an existing library.
         """
         if self._first_import_answered:
             return True
 
         def read(session: Session) -> bool:
+            running = session.exec(
+                select(FolderMappingCommit.id)
+                .where(FolderMappingCommit.mode == "local_import")
+                .where(FolderMappingCommit.state == STATE_PENDING)
+                .limit(1)
+            ).first()
+            if running is not None:
+                return False
             if session.exec(select(Picture.id).limit(1)).first() is not None:
                 return True
             return (

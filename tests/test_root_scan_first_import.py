@@ -16,14 +16,17 @@ import time
 
 import pytest
 from PIL import Image
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from pixlstash.db_models.folder_mapping_commit import (
     STATE_ABANDONED,
     STATE_DEFERRED,
+    STATE_DONE,
     STATE_PENDING,
+    STATE_SUPERSEDED,
     FolderMappingCommit,
 )
+from pixlstash.db_models.picture import Picture
 from pixlstash.server import Server
 from pixlstash.tasks import TaskType
 from pixlstash.tasks.reference_folder_scan_finder import ReferenceFolderScanFinder
@@ -71,6 +74,24 @@ def _record(server, state, mode="local_import"):
     server.vault.db.run_task(write)
 
 
+def _settle_pending(server, state):
+    """Move every pending record to *state*, the way the commit's own settle
+    (or `record_pending_commit` superseding it) does. A pending row never
+    survives alongside a newer answer in the real flow."""
+
+    def write(session: Session):
+        for row in session.exec(
+            select(FolderMappingCommit).where(
+                FolderMappingCommit.state == STATE_PENDING
+            )
+        ).all():
+            row.state = state
+            session.add(row)
+        session.commit()
+
+    server.vault.db.run_task(write)
+
+
 def _finder(server):
     return ReferenceFolderScanFinder(
         database=server.vault.db,
@@ -97,6 +118,7 @@ def test_a_fresh_library_over_pictures_is_not_scanned_until_the_offer_is_answere
         "builds its own rows with the sidecar probe and insert() reuses them "
         "without applying the owner's caption choices"
     )
+    _settle_pending(server, STATE_SUPERSEDED)
 
     _record(server, STATE_DEFERRED, mode="reference")
     assert finder.find_task() is None, (
@@ -119,12 +141,37 @@ def test_a_library_that_holds_a_picture_is_scanned_as_before(server):
     finder = _finder(server)
     assert finder.find_task() is None
 
-    from pixlstash.db_models.picture import Picture
-
     def add(session: Session):
         session.add(Picture(file_path="first.png", pixel_sha="x" * 64))
         session.commit()
 
     server.vault.db.run_task(add)
+    task = finder.find_task()
+    assert task is not None and task.params["folder_id"] is None
+
+
+def test_a_running_local_import_holds_the_root_scan_off_though_it_has_committed_rows(
+    server,
+):
+    """`local_import_pictures` commits every chunk and wakes the planner while
+    its record is still pending, so the library holds pictures long before the
+    owner's answer is applied. The pending record wins, and the answer is not
+    cached: the commit's own settle is what releases the scan."""
+    _drop_picture(server.vault.image_root, "chunk.png")
+
+    def add(session: Session):
+        session.add(Picture(file_path="chunk.png", pixel_sha="y" * 64))
+        session.commit()
+
+    server.vault.db.run_task(add)
+    _record(server, STATE_PENDING)
+
+    finder = _finder(server)
+    assert finder.first_import_answered() is False, (
+        "a chunk the running commit already inserted is not the owner's answer"
+    )
+    assert finder.find_task() is None
+    # Nothing was cached, so the commit settling still releases the scan.
+    _settle_pending(server, STATE_DONE)
     task = finder.find_task()
     assert task is not None and task.params["folder_id"] is None
