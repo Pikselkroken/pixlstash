@@ -242,6 +242,10 @@ class WorkPlanner:
         self._stalled_since: dict[str, float] = {}
         self._gpu_util_unavailable = False
         self._gpu_util_torch_missing_logged = False
+        # Monotonic time until which no finder is swept. A lease, not a switch:
+        # the holder renews it while it works and a holder that stalls or dies
+        # lets background work back in by itself.
+        self._hold_until = 0.0
         self._lock = threading.Lock()
         # Serialises start()/stop() so a restart cannot interleave with a
         # shutdown that is still joining the outgoing thread.
@@ -340,6 +344,14 @@ class WorkPlanner:
         with self._lock:
             return int(self._inflight_by_finder.get(finder_name, 0))
 
+    def hold(self, seconds: float) -> None:
+        """Keep every finder from submitting work for *seconds* from now.
+
+        Renewing resets the lease to ``now + seconds``; it never accumulates.
+        Tasks already queued or running are not touched.
+        """
+        self._hold_until = time.monotonic() + seconds
+
     def wake(self):
         self._wake.set()
 
@@ -393,6 +405,11 @@ class WorkPlanner:
 
     def _run(self):
         while not self._stop.is_set():
+            held_for = self._hold_until - time.monotonic()
+            if held_for > 0:
+                self._wake.wait(held_for)
+                self._wake.clear()
+                continue
             try:
                 submitted = self._run_finders_once()
             except Exception:
