@@ -1624,7 +1624,7 @@ indeterminate bar rather than 0%.
 
 **`captions`** is the owner's captions as they actually are on disk. Every
 `.txt` or `.caption` file whose name starts with a picture's stem in the same
-folder is a caption file, grouped by the `suffix` after that stem (`a.txt`,
+folder is a caption file, grouped by the `suffix` after that stem, compared case-insensitively (`a.txt`,
 `a_tags.txt` and `a.jpg.caption` beside `a.jpg` are `.txt`, `_tags.txt` and
 `.jpg.caption`), so nothing depends on the convention being one PixlStash
 already knows. A few files of each pattern, spread across folders rather than
@@ -2038,7 +2038,7 @@ this route is the write that follows from it.
 
 | Status | When |
 |---|---|
-| **400** | an `assignments` row is malformed or names an unknown `kind`; a `captions` row names an unknown `kind`, carries a `suffix` that is not a bare filename fragment, or repeats a `suffix` an earlier row already claimed; `captions` is present at all (`[]` included) with `mode: "reference"` |
+| **400** | an `assignments` row is malformed or names an unknown `kind`; a `captions` row names an unknown `kind`, carries a `suffix` that is not a bare filename fragment, or repeats a `suffix` an earlier row already claimed (compared case-insensitively, since `_notes.txt` and `_NOTES.TXT` are one file on Windows and macOS); `captions` is present at all (`[]` included) with `mode: "reference"` |
 | **404** | `task_id` does not name a read this session holds |
 | **409** | the named read has not settled yet, a commit is already running (against any read), the named read has **already been committed**, or the read's root path is already a reference folder that has completed a scan (§25 — the reuse-vs-refuse rule) |
 
