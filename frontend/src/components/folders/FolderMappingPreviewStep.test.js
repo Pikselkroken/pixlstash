@@ -379,6 +379,48 @@ describe("caption files beside the pictures", () => {
     expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toBeNull();
   });
 
+  it("never lets a late read result overwrite the saved answer", async () => {
+    // A resumed auto-commit starts before the read result is back. When it
+    // lands the card seeds itself from the read's guesses - which is not the
+    // owner answering. Reporting that seeding replaced the held `[]` with the
+    // guesses, so a retry after a failed auto-commit sent a convention nobody
+    // confirmed.
+    startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
+    const wrapper = mountImport({
+      commitOnMount: true,
+      readResult: null,
+      captions: [],
+    });
+    await flushPromises();
+    expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual([]);
+
+    await wrapper.setProps({ readResult: READ_RESULT });
+    await flushPromises();
+
+    // The card itself stays hidden while the commit runs, but the seeding
+    // happens either way - it is the report that must not.
+    expect(wrapper.emitted("update:captions")).toBeUndefined();
+  });
+
+  it("reports an answer the owner actually makes", async () => {
+    // The positive control for the test above: only the select's own change
+    // replaces what the wizard holds, and it still does.
+    const wrapper = mountImport({
+      commitOnMount: false,
+      readResult: READ_RESULT,
+    });
+    expect(wrapper.emitted("update:captions")).toBeUndefined();
+
+    await selects(wrapper)[0].setValue("ignore");
+
+    expect(wrapper.emitted("update:captions").at(-1)).toEqual([
+      [
+        { suffix: ".txt", kind: "ignore" },
+        { suffix: "_caption.txt", kind: "description" },
+      ],
+    ]);
+  });
+
   it("answers normally from 'never asked' once the card is on screen", async () => {
     // The same `null`, but with patterns to show: the card seeds from the
     // read's guesses and what the owner leaves there is a real answer.
