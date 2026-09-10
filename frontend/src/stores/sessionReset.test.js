@@ -122,13 +122,15 @@ const STORES = [
     seed: (s) => {
       s.save({ taskId: "abc123", path: "/home/me/Pictures", label: "Pictures" });
       s.openWizard(s.pending);
-      s.setRootPictureCount(12, false, s.rootCountEpoch);
+      s.setRootPictureCount(12, true, s.rootCountEpoch);
     },
     isEmpty: (s) =>
       s.pending === null &&
       !s.wizardOpen &&
       s.wizardResume === null &&
-      s.rootPictureCount === null,
+      s.rootPictureCount === null &&
+      s.rootPictureCountCapped === false &&
+      !s.rootMayHoldPictures,
   },
   {
     name: "useLockedSetsStore",
