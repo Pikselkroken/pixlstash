@@ -198,39 +198,41 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         ``reference`` commit is not one at all: it registers some other folder
         and says nothing about the root's own pictures.
 
-        The ``pending`` check runs **first**, before the picture row, because a
-        running ``local_import`` commits every chunk and wakes the planner while
-        its record is still ``pending``: after the first chunk the library holds
-        pictures, and a picture-row check that ran first would read those as the
-        answer and cache it, starting the root scan mid-commit. Otherwise a
-        library with a picture in it was imported into some other way and is
-        scanned as before, so nothing changes for an existing library.
+        The ``pending`` record **wins** over the picture row, because a running
+        ``local_import`` commits every chunk and wakes the planner while its
+        record is still ``pending``: after the first chunk the library holds
+        pictures, and reading those as the answer would cache it and start the
+        root scan mid-commit. Otherwise a library with a picture in it was
+        imported into some other way and is scanned as before, so nothing
+        changes for an existing library.
+
+        The three facts are read in **one statement** so they describe one
+        snapshot: this read runs outside the writer queue, so across separate
+        statements a chunk committing in between shows no ``pending`` record
+        and a picture from that very commit, which caches the answer as True
+        with the import still running.
         """
         if self._first_import_answered:
             return True
 
-        def read(session: Session) -> bool:
-            running = session.exec(
-                select(FolderMappingCommit.id)
-                .where(FolderMappingCommit.mode == "local_import")
-                .where(FolderMappingCommit.state == STATE_PENDING)
-                .limit(1)
-            ).first()
-            if running is not None:
-                return False
-            if session.exec(select(Picture.id).limit(1)).first() is not None:
-                return True
-            return (
-                session.exec(
-                    select(FolderMappingCommit.id)
-                    .where(FolderMappingCommit.mode == "local_import")
-                    .where(FolderMappingCommit.state.in_((STATE_DONE, STATE_DEFERRED)))
-                    .limit(1)
-                ).first()
-                is not None
+        def read(session: Session) -> tuple[bool, bool, bool]:
+            local_import = select(FolderMappingCommit.id).where(
+                FolderMappingCommit.mode == "local_import"
             )
+            return session.exec(
+                select(
+                    local_import.where(
+                        FolderMappingCommit.state == STATE_PENDING
+                    ).exists(),
+                    select(Picture.id).exists(),
+                    local_import.where(
+                        FolderMappingCommit.state.in_((STATE_DONE, STATE_DEFERRED))
+                    ).exists(),
+                )
+            ).one()
 
-        self._first_import_answered = bool(self._db.run_immediate_read_task(read))
+        pending, has_picture, settled = self._db.run_immediate_read_task(read)
+        self._first_import_answered = not pending and (has_picture or settled)
         return self._first_import_answered
 
     def _root_task(self, folders: list[ReferenceFolder], now: float):
