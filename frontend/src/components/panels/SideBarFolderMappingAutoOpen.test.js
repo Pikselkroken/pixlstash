@@ -390,12 +390,55 @@ describe("the loose-pictures offer for an empty library", () => {
 
   it("stays quiet when the pending entry is this library's own", async () => {
     // The control: an entry the auto-open WILL act on must still suppress the
-    // offer, or the owner gets the wizard twice.
+    // offer, or the owner gets the wizard twice. The count is still filled -
+    // LibraryEmptyState words its button from it - but from a read that opens
+    // nothing.
     const path = "/home/me/Pictures";
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ taskId: "task-4", path, label: "Pictures", mode: "local_import" }),
-    );
+    const entry = {
+      taskId: "task-4",
+      path,
+      label: "Pictures",
+      mode: "local_import",
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    const inspect = vi.fn();
+    apiGet.mockImplementation((url) => {
+      if (url.includes("inspect")) {
+        inspect();
+        return Promise.resolve({ data: { picture_count: 12 } });
+      }
+      return Promise.resolve(respond());
+    });
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+    await wrapper.vm.offerLoosePictures();
+
+    expect(inspect).toHaveBeenCalledTimes(1);
+    expect(useFolderMappingStore().rootPictureCount).toBe(12);
+    // The auto-open's wizard, not a second one the offer put up.
+    expect(useFolderMappingStore().wizardResume).toEqual(entry);
+
+    wrapper.unmount();
+  });
+
+  it("fills the count from the entry's own read without asking again", async () => {
+    // "Add a library" saves the read's `pictureCount` with the entry. A page
+    // reloaded onto it left `rootPictureCount` null, so the empty state
+    // offered "Choose a folder…" for a folder full of pictures.
+    const path = "/home/me/Pictures";
+    const entry = {
+      taskId: "task-5",
+      path,
+      label: "Pictures",
+      mode: "local_import",
+      pictureCount: 7,
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
     activeLibraryAt(path);
     const libraries = useLibrariesStore();
     libraries.hasLoadedSuccessfully = true;
@@ -413,6 +456,8 @@ describe("the loose-pictures offer for an empty library", () => {
     await wrapper.vm.offerLoosePictures();
 
     expect(inspect).not.toHaveBeenCalled();
+    expect(useFolderMappingStore().rootPictureCount).toBe(7);
+    expect(useFolderMappingStore().wizardResume).toEqual(entry);
 
     wrapper.unmount();
   });

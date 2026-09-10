@@ -862,14 +862,40 @@ function offerLoosePictures() {
   // AND no offer, for the life of the install; there was no way into the
   // library at all. This has to stay the same test as the auto-open, so state
   // it the same way.
-  if (
-    isReadOnly.value ||
-    pendingForThisLibrary.value?.mode === "local_import"
-  ) {
-    return Promise.resolve();
+  if (isReadOnly.value) return Promise.resolve();
+  const entry = pendingForThisLibrary.value;
+  if (entry?.mode === "local_import") {
+    // Nothing to offer, but the count is still `null` on a page reloaded onto
+    // a persisted entry: the offer is what usually fills it, and the empty
+    // state's wording reads it, so the way back in said "Choose a folder…"
+    // for a folder full of pictures. Fill it and open nothing.
+    loosePicturesOffer ??= _fillRootPictureCount(entry);
+    return loosePicturesOffer;
   }
   loosePicturesOffer ??= _offerLoosePictures();
   return loosePicturesOffer;
+}
+
+/** The count for the wording above, from the entry's own read if it carries
+ *  one - an entry saved before the read finished does not - else the server. */
+async function _fillRootPictureCount(entry) {
+  if (mappingStore.rootPictureCount !== null) return;
+  const counted = entry.pictureCount ?? entry.result?.picture_count;
+  if (counted != null) {
+    mappingStore.rootPictureCount = counted;
+    return;
+  }
+  const path = entry.path;
+  if (!path) return;
+  try {
+    const verdict = await inspectLibraryPath(path);
+    mappingStore.rootPictureCount = verdict?.picture_count ?? 0;
+  } catch (error) {
+    console.warn("Could not check the library folder for pictures", {
+      path,
+      error,
+    });
+  }
 }
 
 /**
