@@ -1,6 +1,7 @@
 <template>
   <div>
-    <div v-if="isChecking" class="root-loading" />
+    <RouterView v-if="route.meta.public" />
+    <div v-else-if="isChecking" class="root-loading" />
     <template v-else>
       <LoginScreen v-if="!isAuthenticated" :tokenError="tokenError" />
       <RouterView v-else />
@@ -10,7 +11,7 @@
 
 <script setup>
 import { onMounted, ref } from "vue";
-import { RouterView } from "vue-router";
+import { RouterView, useRoute } from "vue-router";
 import {
   activateShareToken,
   checkSession,
@@ -21,6 +22,7 @@ import { getSessionContext } from "./api/session";
 import LoginScreen from "./components/views/LoginScreen.vue";
 import { markEnd, markStart } from "./utils/perfMarks";
 
+const route = useRoute();
 const isChecking = ref(true);
 const tokenError = ref(null);
 

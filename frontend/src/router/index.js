@@ -66,6 +66,18 @@ const routes = [
   { path: "/:pathMatch(.*)*", redirect: "/" },
 ];
 
+// Dev-only: every control the app ships, on one page, rendered by the real
+// components under the real theme. Not in the production bundle. Public so it
+// works with no backend session (Root.vue skips the auth gate for it).
+if (import.meta.env.DEV) {
+  routes.unshift({
+    path: "/design",
+    name: "design",
+    meta: { public: true },
+    component: () => import("../components/views/DesignInventory.vue"),
+  });
+}
+
 const router = createRouter({
   history: createWebHistory(),
   routes,
