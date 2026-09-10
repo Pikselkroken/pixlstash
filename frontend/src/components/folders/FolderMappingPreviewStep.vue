@@ -311,13 +311,14 @@ onUnmounted(() => {
     </div>
 
     <div class="preview-step__groups">
-      <div
-        v-for="kind in FACET_KINDS"
-        :key="kind.value"
-        class="preview-step__group"
-        :style="kindStyle(kind.value)"
-      >
-        <template v-if="grouped.get(kind.value)?.size">
+      <!-- Only the kinds this mapping has: an empty group would still take a
+           cell of the grid and leave a hole beside the one that follows. -->
+      <template v-for="kind in FACET_KINDS" :key="kind.value">
+        <div
+          v-if="grouped.get(kind.value)?.size"
+          class="preview-step__group"
+          :style="kindStyle(kind.value)"
+        >
           <div class="preview-step__group-title">
             <v-icon size="15">{{ kind.icon }}</v-icon>
             {{ grouped.get(kind.value).size }}
@@ -338,8 +339,8 @@ onUnmounted(() => {
               {{ grouped.get(kind.value).size - 24 }} more
             </span>
           </div>
-        </template>
-      </div>
+        </div>
+      </template>
     </div>
 
     <div v-if="patterns.length" class="preview-step__card">
@@ -523,10 +524,20 @@ onUnmounted(() => {
   color: rgba(var(--v-theme-on-background), 0.65);
 }
 
+/* Two groups to a line at the dialog's width, and the block scrolls on its
+   own past 14rem so a library with many sets does not turn the whole step
+   into one long scroll; the caption list below gets the same treatment. */
 .preview-step__groups {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-4) var(--space-6);
+  max-height: 14rem;
+  overflow-y: auto;
+  padding-right: var(--space-2);
+}
+
+.preview-step__group {
+  min-width: 0;
 }
 
 .preview-step__group-title {
@@ -581,10 +592,12 @@ onUnmounted(() => {
 .preview-step__captions {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 var(--space-2) 0 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  max-height: 14rem;
+  overflow-y: auto;
 }
 
 .preview-step__caption {
