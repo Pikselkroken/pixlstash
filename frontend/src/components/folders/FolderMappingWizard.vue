@@ -212,15 +212,22 @@ function onMappingNext(built) {
  * read, or the empty library offering its own folder) there is nothing to
  * add, so it is the Preview step's commit with no assignments.
  *
- * The held caption answers go too. Whatever the owner saw on the Preview's
+ * The held caption answers go too: whatever the owner saw on the Preview's
  * card before coming back here, "organise later" is them declining to decide,
- * and the auto-commit that follows must send `[]` - an answer meaning "read
- * nothing" - not the read's own guesses.
+ * and the read's own guesses are not their answer. What replaces them is what
+ * the read managed to see, the same rule the Preview step's `chosenCaptions`
+ * applies. A COMPLETE read answers `[]` - everything beside the pictures was
+ * sniffed, so declining to confirm any of it means nothing is read, which is
+ * the owner's decision and is what keeps a metadata blob from being imported
+ * as tags. A PARTIAL one answers `null`: the walk stopped before the folders
+ * that hold the rest, nobody could have been asked about those, so the import
+ * probes the known conventions as it always did (§22).
  */
 function later() {
-  captions.value = [];
+  const answered = readResult.value?.captions_complete === false ? null : [];
+  captions.value = answered;
   if (!libraryExists.value) {
-    build([]);
+    build([], answered);
     return;
   }
   assignments.value = [];
@@ -232,7 +239,10 @@ function later() {
  * The library does not exist yet: create it, remember what to commit, and
  * switch to it. The commit itself runs after the reload - see the header.
  */
-async function build(accepted, answered = []) {
+// `answered` defaults to `null` for the same reason the commit helper does:
+// a caller that passes no answer has asked nobody, and `[]` would claim "read
+// nothing" on their behalf. Both call sites pass their own.
+async function build(accepted, answered = null) {
   if (building.value) return;
   building.value = true;
   buildError.value = "";
