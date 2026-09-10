@@ -435,8 +435,9 @@ new signal, for `SideBar.chooseLibraryFolder`.
 straight away. Otherwise it asks `GET /libraries/inspect` about the active
 library's own path again, because a cached 0 from a load over an empty folder
 used to be permanent and sent the owner to "Add a library", which refuses the
-folder the library already is. A count above zero opens the wizard with
-`{ path, mode: "local_import" }`; zero and a read-only or remote session
+folder the library already is. A count above zero, or a capped one, opens the
+wizard with `{ path, mode: "local_import" }`; an uncapped zero and a read-only
+or remote session
 (`canManage` false) fall through to the ordinary add. A failed inspect leaves
 the cached count alone and routes on that, so it opens the wizard when the cache
 already held a count above zero and falls through only when it did not - the
@@ -451,8 +452,14 @@ count, so `offerLoosePictures` fills it from the entry's own read
 (`pictureCount`, else `result.picture_count`) and inspects only when the entry
 carries neither, opening nothing either way. When the inspect stopped at the
 endpoint's entry cap the count is a floor rather than a total, so
-`rootPictureCountCapped` makes the copy say "At least N pictures are in this
-library's folder" instead of naming a number the folder does not hold. A
+`rootPictureCountCapped` makes the copy say "Your library folder could not be
+fully counted; it holds at least N pictures" instead of naming a number the
+folder does not hold. A capped count is not evidence about an empty folder
+either, zero included: the walk can exhaust the cap on directories before it
+reaches any media, so `rootMayHoldPictures` is `rootPictureCount > 0 ||
+rootPictureCountCapped`, and both `chooseLibraryFolder` and
+`offerLoosePictures` route a capped zero to the import wizard rather than to
+"Add a library", which refuses the folder the library already is. A
 folder-structure read's `picture_count` is a floor on the same terms whenever
 the read came back `truncated`: it stopped at `MAX_FOLDERS` and summed only the
 folders it reached, so a count sourced from one carries that flag too. Both
