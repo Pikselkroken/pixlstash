@@ -464,7 +464,7 @@ onUnmounted(() => {
           <span class="preview-step__fact-mark">—</span>
           {{ captionFilesIgnored.toLocaleString() }} caption
           {{ captionFilesIgnored === 1 ? "file is" : "files are" }} left
-          unread; PixlStash writes its own instead
+          unread
         </div>
         <div class="preview-step__fact">
           <span class="preview-step__fact-mark">—</span>
