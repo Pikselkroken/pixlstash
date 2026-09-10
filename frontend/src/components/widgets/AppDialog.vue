@@ -6,7 +6,6 @@
     :persistent="persistent"
     transition="dialog-bottom-transition"
     @update:model-value="(v) => !v && emit('close')"
-    @click:outside="onClickOutside"
   >
     <div
       class="app-dialog"
@@ -78,17 +77,13 @@ const ENTER_EXEMPT =
  * so every AppDialog gets it and no page-level Escape owner is consulted
  * first. `accept` only fires for dialogs that listen for it.
  */
-/**
- * A persistent dialog ignores the backdrop, as it ignores Escape. Vuetify
- * emits `click:outside` whether or not the dialog is persistent - it only
- * stops closing ITSELF - so wiring the event straight to `close` let a stray
- * click dismiss the folder-mapping wizard mid-answer, which is the one gesture
- * that dialog exists to refuse.
- */
-function onClickOutside() {
-  if (props.persistent) return;
-  emit("close");
-}
+// The backdrop is deliberately NOT wired to `close`. Vuetify emits
+// `click:outside` whether or not the dialog is persistent - it only stops
+// closing ITSELF - so a `click:outside` handler let a stray click dismiss the
+// folder-mapping wizard mid-answer, and on a non-persistent dialog it doubled
+// the `update:model-value=false` Vuetify also emits, so owners saw `close`
+// twice. `update:model-value` is the one source: Vuetify sets it false on a
+// scrim click or Escape exactly when the dialog is not persistent.
 
 function onKeydown(e) {
   if (e.key === "Escape") {

@@ -94,7 +94,15 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
     }
   }
 
-  const unsubscribeSessionReset = onSessionReset(clear);
+  /** A session change forgets the pending entry AND what the folder held:
+   *  the count is the previous library's, and the empty state would offer to
+   *  import pictures that are not there. */
+  function resetForSession() {
+    clear();
+    rootPictureCount.value = null;
+  }
+
+  const unsubscribeSessionReset = onSessionReset(resetForSession);
   onScopeDispose(unsubscribeSessionReset);
 
   return {

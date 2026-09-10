@@ -82,14 +82,18 @@ describe("AppDialog keyboard contract", () => {
 });
 
 describe("AppDialog backdrop", () => {
-  it("closes on a click outside, unless persistent", async () => {
+  it("closes once when Vuetify closes it, and ignores click:outside itself", async () => {
+    // Vuetify emits update:model-value=false on a scrim click or Escape
+    // exactly when the dialog is not persistent, and click:outside always.
+    // Only the former is wired, so a non-persistent dialog closes once and a
+    // persistent one - the folder-mapping wizard - not at all on a stray
+    // click; wiring both used to close the former twice and the latter once.
     const w = mountDialog();
-    await w.findComponent({ name: "v-dialog" }).vm.$emit("click:outside");
+    const dialog = w.findComponent({ name: "v-dialog" });
+    await dialog.vm.$emit("click:outside");
+    await dialog.vm.$emit("update:modelValue", false);
     expect(w.emitted("close")).toHaveLength(1);
 
-    // Vuetify emits click:outside on a persistent dialog too; it only refuses
-    // to close itself. A stray click on the scrim used to dismiss the
-    // folder-mapping wizard mid-answer this way.
     const p = mountDialog({ persistent: true });
     await p.findComponent({ name: "v-dialog" }).vm.$emit("click:outside");
     expect(p.emitted("close")).toBeUndefined();
