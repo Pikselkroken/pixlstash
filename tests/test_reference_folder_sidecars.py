@@ -635,6 +635,64 @@ def test_scan_persists_a_safe_detected_suffix(server, tmp_path):
     assert server.vault.db.run_task(_read) == ("_tags.txt", "_description.txt")
 
 
+def test_folder_route_refuses_a_suffix_that_differs_only_in_case(server, tmp_path):
+    """Windows and macOS resolve `_notes.txt` and `_NOTES.TXT` to one file, so
+    the pair shares a file exactly as an identical suffix does. Refused on
+    create and on update, both directions."""
+    client = _login_client(server)
+    folder_dir = str(tmp_path / "case")
+    os.makedirs(folder_dir, exist_ok=True)
+
+    created = client.post(
+        "/reference-folders",
+        json={
+            "folder": folder_dir,
+            "tags_suffix": "_notes.txt",
+            "description_suffix": "_NOTES.TXT",
+        },
+    )
+    assert created.status_code == 400, created.text
+    assert "share" in created.text
+
+    folder_id = _make_folder(
+        server,
+        str(tmp_path / "case2"),
+        tags_suffix="_notes.txt",
+        description_suffix="_caption.txt",
+    )
+    refused = client.patch(
+        f"/reference-folders/{folder_id}", json={"description_suffix": "_NOTES.TXT"}
+    )
+    assert refused.status_code == 400, refused.text
+
+    def _read(session: Session):
+        rf = session.get(ReferenceFolder, folder_id)
+        return rf.tags_suffix, rf.description_suffix
+
+    assert server.vault.db.run_task(_read) == ("_notes.txt", "_caption.txt")
+
+
+def test_scan_refuses_to_persist_a_suffix_the_other_kind_already_uses(server, tmp_path):
+    """The scan is the second door into the suffix columns, and it fills a
+    NULL without looking at its sibling. A detected description suffix equal
+    to the stored tags suffix would point both write-backs at one file."""
+    folder_dir = str(tmp_path / "collide")
+    folder_id = _make_folder(server, folder_dir, tags_suffix="_caption.txt")
+    task = ReferenceFolderScanTask(server.vault.db, folder_id, folder_dir, folder_dir)
+
+    task._persist_suffixes({"description_suffix": "_CAPTION.TXT"})
+
+    def _read(session: Session):
+        rf = session.get(ReferenceFolder, folder_id)
+        return rf.tags_suffix, rf.description_suffix
+
+    assert server.vault.db.run_task(_read) == ("_caption.txt", None)
+
+    # A detected suffix that does not collide still lands.
+    task._persist_suffixes({"description_suffix": "_desc.txt"})
+    assert server.vault.db.run_task(_read) == ("_caption.txt", "_desc.txt")
+
+
 def test_move_reference_picture_rejects_non_reference_picture(server, tmp_path):
     client = _login_client(server)
     dest_dir = str(tmp_path / "dest")

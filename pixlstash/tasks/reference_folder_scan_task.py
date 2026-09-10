@@ -31,6 +31,7 @@ from pixlstash.utils.caption_file_utils import (
     read_tags_sidecar,
     recorded_sidecar,
     resolve_typed_sidecar,
+    suffixes_collide,
     write_sidecar,
     writeback_path,
 )
@@ -1419,10 +1420,33 @@ class ReferenceFolderScanTask(BaseTask):
             )
             if rf is None:
                 return
+            # Judged on the merged row: a detected suffix that would name the
+            # same file as the other kind's effective one is not persisted, or
+            # the two write-backs would overwrite each other. Descriptions see
+            # whatever tags just persisted.
             if tags_suffix and rf.tags_suffix is None:
-                rf.tags_suffix = tags_suffix
+                if suffixes_collide(tags_suffix, rf.description_suffix):
+                    logger.warning(
+                        "Not persisting detected tags suffix %r for folder %s: "
+                        "it would name the same file as description suffix %r.",
+                        tags_suffix,
+                        self._folder_id,
+                        rf.description_suffix or DEFAULT_DESCRIPTION_SUFFIX,
+                    )
+                else:
+                    rf.tags_suffix = tags_suffix
             if description_suffix and rf.description_suffix is None:
-                rf.description_suffix = description_suffix
+                if suffixes_collide(rf.tags_suffix, description_suffix):
+                    logger.warning(
+                        "Not persisting detected description suffix %r for "
+                        "folder %s: it would name the same file as tags "
+                        "suffix %r.",
+                        description_suffix,
+                        self._folder_id,
+                        rf.tags_suffix or DEFAULT_TAGS_SUFFIX,
+                    )
+                else:
+                    rf.description_suffix = description_suffix
             session.add(rf)
             session.commit()
 

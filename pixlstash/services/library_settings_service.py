@@ -21,6 +21,11 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models.library_settings import LibrarySettings
+from pixlstash.utils.caption_file_utils import (
+    DEFAULT_DESCRIPTION_SUFFIX,
+    DEFAULT_TAGS_SUFFIX,
+    suffixes_collide,
+)
 from pixlstash.utils.service.smart_score_invalidation import invalidate_all_smart_scores
 from pixlstash.pixl_logging import get_logger
 
@@ -242,6 +247,12 @@ def seed_caption_suffixes(
     turned on either way. Nothing is changed for a kind the owner did not
     confirm, and Settings can turn either off again.
 
+    A kind is skipped entirely - toggle unchanged, column left as it was, the
+    reason logged - when its effective suffix would name the same file as the
+    other kind's (``caption_file_utils.suffixes_collide``). Otherwise a second
+    import could seed descriptions with the suffix tags already use and point
+    both write-backs at one file.
+
     Returns:
         True when a type was turned on, so the caller can ask for the root
         rescan that reads the existing files in before anything is written
@@ -250,21 +261,44 @@ def seed_caption_suffixes(
     if not tags_suffix and not description_suffix:
         return False
 
-    def write(session: Session) -> None:
+    def write(session: Session) -> bool:
         row = _row(session)
+        turned_on = False
+        # Judged on the merged row, kind by kind: the effective suffix is the
+        # stored one when there is one (an earlier convention wins) and the
+        # confirmed one otherwise, and descriptions see whatever tags seeded.
         if tags_suffix:
-            row.sync_tags = True
-            if row.tags_suffix is None:
-                row.tags_suffix = tags_suffix
+            effective = row.tags_suffix or tags_suffix
+            if suffixes_collide(effective, row.description_suffix):
+                logger.warning(
+                    "Not turning tag sync on for the library root: tags suffix "
+                    "%r would name the same file as description suffix %r.",
+                    effective,
+                    row.description_suffix or DEFAULT_DESCRIPTION_SUFFIX,
+                )
+            else:
+                row.sync_tags = True
+                row.tags_suffix = effective
+                turned_on = True
         if description_suffix:
-            row.sync_descriptions = True
-            if row.description_suffix is None:
-                row.description_suffix = description_suffix
+            effective = row.description_suffix or description_suffix
+            if suffixes_collide(row.tags_suffix, effective):
+                logger.warning(
+                    "Not turning description sync on for the library root: "
+                    "description suffix %r would name the same file as tags "
+                    "suffix %r.",
+                    effective,
+                    row.tags_suffix or DEFAULT_TAGS_SUFFIX,
+                )
+            else:
+                row.sync_descriptions = True
+                row.description_suffix = effective
+                turned_on = True
         session.add(row)
         session.commit()
+        return turned_on
 
-    vault_db.run_task(write, priority=DBPriority.IMMEDIATE)
-    return True
+    return vault_db.run_task(write, priority=DBPriority.IMMEDIATE)
 
 
 def get_layout(vault_db) -> tuple[Optional[str], Optional[str]]:

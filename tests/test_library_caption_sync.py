@@ -253,6 +253,62 @@ def test_the_settings_route_reads_patches_and_refuses_an_unsafe_suffix(env):
     assert cleared.json()["description_suffix"] is None
 
 
+def test_the_route_refuses_a_suffix_that_differs_only_in_case(env):
+    """Windows and macOS resolve `_notes.txt` and `_NOTES.TXT` to one file, so
+    the pair is as shared as an exact match: both write-backs would land on it
+    and the next scan would read the survivor back in as the other kind."""
+    owner = env["owner"]
+    server = env["server"]
+    _set_sync(
+        server,
+        sync_tags=True,
+        sync_descriptions=True,
+        tags_suffix="_notes.txt",
+        description_suffix="_caption.txt",
+    )
+    refused = owner.patch(_CAPTIONS, json={"description_suffix": "_NOTES.TXT"})
+    assert refused.status_code == 400, refused.text
+    assert "share" in refused.text
+    stored = owner.get(_CAPTIONS).json()
+    assert stored["description_suffix"] == "_caption.txt", "nothing stored"
+
+    # The other direction, and against the default rather than a stored value.
+    _set_sync(server, tags_suffix=None, description_suffix="_caption.txt")
+    refused = owner.patch(_CAPTIONS, json={"description_suffix": "_TAGS.TXT"})
+    assert refused.status_code == 400, refused.text
+    assert owner.get(_CAPTIONS).json()["description_suffix"] == "_caption.txt"
+
+
+def test_seeding_refuses_a_suffix_the_other_kind_already_uses(env):
+    """A second import must not seed one kind with the suffix the other kind
+    already uses: both write-backs would point at one file. The kind is
+    skipped whole - toggle unchanged, column unset - not half-applied."""
+    from pixlstash.services.library_settings_service import (
+        get_caption_sync,
+        seed_caption_suffixes,
+    )
+
+    server = env["server"]
+    _set_sync(
+        server,
+        sync_tags=True,
+        sync_descriptions=False,
+        tags_suffix="_caption.txt",
+        description_suffix=None,
+    )
+    assert seed_caption_suffixes(server.vault.db, None, "_CAPTION.TXT") is False
+    stored = get_caption_sync(server.vault.db)
+    assert stored["sync_descriptions"] is False
+    assert stored["description_suffix"] is None
+    assert stored["tags_suffix"] == "_caption.txt", "the stored kind is untouched"
+
+    # A kind that does not collide is still seeded in the same call.
+    assert seed_caption_suffixes(server.vault.db, "_caption.txt", "_desc.txt") is True
+    stored = get_caption_sync(server.vault.db)
+    assert stored["sync_descriptions"] is True
+    assert stored["description_suffix"] == "_desc.txt"
+
+
 def test_the_route_is_refused_to_a_remote_owner(env):
     """§16.3: the locality tier, in the negative direction. A remote owner is
     refused both verbs unless allow_remote_host_ops is on, and a local one is
