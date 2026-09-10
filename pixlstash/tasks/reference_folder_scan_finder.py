@@ -19,6 +19,7 @@ from pixlstash.db_models.folder_mapping_commit import (
     STATE_DEFERRED,
     STATE_DONE,
     STATE_PENDING,
+    STATE_SUPERSEDED,
     FolderMappingCommit,
 )
 from pixlstash.db_models.picture import Picture
@@ -209,9 +210,11 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         ``local_import`` commits every chunk, so after the first one the
         library holds pictures the owner has not answered for. A running
         commit wakes the planner while its record is still ``pending``, and
-        an aborted one leaves its chunks indexed behind ``abandoned``. Only
-        with no ``local_import`` record at all does a picture row count: that
-        library was filled some other way and is scanned as before.
+        an aborted one leaves its chunks indexed behind ``abandoned``, and a
+        ``superseded`` newest one was replaced by a reference commit with its
+        chunks just as unanswered. Only with no ``local_import`` record at all
+        does a picture row count: that library was filled some other way and
+        is scanned as before.
 
         The two facts are read in **one statement** so they describe one
         snapshot: this read runs outside the writer queue, so across separate
@@ -233,7 +236,11 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
             return session.exec(select(newest, select(Picture.id).exists())).one()
 
         newest_state, has_picture = self._db.run_immediate_read_task(read)
-        if newest_state in (STATE_PENDING, STATE_ABANDONED):
+        if newest_state in (STATE_PENDING, STATE_ABANDONED, STATE_SUPERSEDED):
+            # Superseded is a pending record a newer commit of either mode
+            # replaced. A newer local_import would be the newest row itself,
+            # so a superseded newest one was replaced by a reference commit
+            # and its chunks are as unanswered as a pending one's.
             return False
         self._first_import_answered = (
             newest_state in (STATE_DONE, STATE_DEFERRED) or has_picture

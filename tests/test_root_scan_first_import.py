@@ -247,3 +247,22 @@ def test_an_abort_after_an_earlier_import_still_holds_the_root_scan_off(server):
     finder = _finder(server)
     assert finder.first_import_answered() is False
     assert finder.find_task() is None
+
+
+def test_a_superseded_local_import_holds_the_root_scan_off_too(server):
+    """`record_pending_commit` supersedes a pending record of either mode, so a
+    partial local import can be replaced by a reference commit and stay the
+    newest local-import row. Its chunks are as unanswered as a pending one's."""
+    _drop_picture(server.vault.image_root, "partial.png")
+
+    def add(session: Session):
+        session.add(Picture(file_path="partial.png", pixel_sha="x" * 64))
+        session.commit()
+
+    server.vault.db.run_task(add)
+    _record(server, STATE_SUPERSEDED)
+    _record(server, STATE_DONE, mode="reference")
+
+    finder = _finder(server)
+    assert finder.first_import_answered() is False
+    assert finder.find_task() is None
