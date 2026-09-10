@@ -2041,7 +2041,8 @@ pattern past the twelfth) and probing one of those anyway is how a metadata
 blob becomes a picture's tags.
 
 `captions` is `local_import` only: with `mode: "reference"` the field being
-present at all, `[]` included, is `400`, because a reference folder holds one
+present at all, `[]` and an explicit `null` included, is `400`, because a
+reference folder holds one
 suffix per kind and its scan probes the known conventions for an unset one, so
 it cannot express "read nothing of this kind" and an answer with every tags
 pattern ignored would still open a bare `.txt`. A reference folder's sidecar

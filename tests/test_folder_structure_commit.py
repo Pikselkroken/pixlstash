@@ -707,6 +707,16 @@ def test_caption_answers_are_refused_in_reference_mode(owner_env):
         json={"task_id": read_task_id, "mode": "reference", "captions": []},
     )
     assert empty.status_code == 400, empty.text
+    # And an explicit `null`: §22 refuses the field being *present*, and a
+    # client that sends one has asked for captions and been given a mapping
+    # that cannot carry them. Only an omitted field is the older client that
+    # never asked, which the commit below is.
+    explicit_null = owner.post(
+        _COMMIT,
+        json={"task_id": read_task_id, "mode": "reference", "captions": None},
+    )
+    assert explicit_null.status_code == 400, explicit_null.text
+    assert "local_import" in explicit_null.json()["detail"]
     # The refusal burned nothing: the read is still committable without them.
     ok = owner.post(_COMMIT, json={"task_id": read_task_id, "mode": "reference"})
     assert ok.status_code == 200, ok.text

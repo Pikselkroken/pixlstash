@@ -864,7 +864,14 @@ def create_router(server) -> APIRouter:
             )
         except commit_service.CommitError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if captions is not None and payload.mode == "reference":
+        if "captions" in payload.model_fields_set and payload.mode == "reference":
+            # Asked of the request rather than of the parsed answer: §22 refuses
+            # the field being *present at all* here, and an explicit
+            # `"captions": null` is as present as `[]` is. `model_fields_set` is
+            # what tells that apart from the field being omitted, the same way
+            # `PATCH /reference-folders` tells "clear this suffix" from "leave
+            # it alone".
+            #
             # A reference folder holds one suffix per kind and its scan probes
             # the known conventions for an unset one, so it cannot express
             # "read nothing of this kind": an answer with every tags pattern
