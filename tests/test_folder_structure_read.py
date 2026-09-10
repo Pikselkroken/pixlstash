@@ -339,6 +339,29 @@ def test_a_caption_beside_every_picture_reads_as_set():
     assert "all 3 pictures" in evidence["text"]
 
 
+def test_a_free_form_caption_suffix_is_sidecar_evidence_too():
+    """`a_tags.txt` is as much a caption beside `a.jpg` as `a.txt` is, and the
+    read already groups it as one. The Set signal reads the same pairing, so a
+    folder that produces a `captions` row cannot come back with no sidecar
+    evidence for the pictures that row was built from."""
+    with _tree(
+        {
+            "": [],
+            "shoot": [
+                f for n in ("a", "b", "c") for f in (f"{n}.jpg", f"{n}_tags.txt")
+            ],
+        }
+    ) as root:
+        for n in ("a", "b", "c"):
+            _write(root, f"shoot/{n}_tags.txt", "1girl, solo, long hair, smile")
+        result = FolderStructureRead(root).run()
+
+    proposal = _rows(result, 2)["shoot"]["proposal"]
+    evidence = _signal(proposal, "sidecars")
+    assert evidence["with_sidecar"] == evidence["pictures"] == 3
+    assert [row["suffix"] for row in result["captions"]] == ["_tags.txt"]
+
+
 def _write(root, rel, text):
     with open(os.path.join(root, *rel.split("/")), "w", encoding="utf-8") as fh:
         fh.write(text)

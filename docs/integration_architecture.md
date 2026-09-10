@@ -1507,7 +1507,7 @@ could be a person, a project or a client.
 | `signal` | Reads | Proposes | Scope |
 |---|---|---|---|
 | `cardinality` | how many distinct names a level has, over how many parents | `tag`, or *not* `tag` | one whole level |
-| `sidecars` | a caption `.txt`/`.caption` beside every picture (case-insensitive) | `set` | one folder |
+| `sidecars` | a caption `.txt`/`.caption` beside every picture, the same pairing `captions` is grouped from, so any suffix counts and not only `a.txt`/`a.jpg.txt` | `set` | one folder |
 | `faces` | one identity across the folder's pictures, **sampled at 20** | `person` | one folder |
 | `name_match` | the folder name against entities the vault already has | that entity's kind | one folder |
 | `leaf` | pictures and no folders below; a date *with other words* strengthens it | `set` | one folder |
