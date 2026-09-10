@@ -113,8 +113,9 @@ watch(
   },
   { immediate: true },
 );
-/** The answers to send: one per reported pattern, or the saved ones when the
- *  read is gone (a resumed commit with no result to list them from). */
+/** The answers on the card: one per reported pattern, or the saved ones when
+ *  the read is gone (a resumed commit with no result to list them from).
+ *  Only "Yes, build this library" sends these - see `commit`. */
 function chosenCaptions() {
   if (props.mode !== "local_import") return [];
   if (!patterns.value.length) return props.captions;
@@ -130,20 +131,22 @@ function chosenCaptions() {
  * wizard's `captions` re-seeds this step on the way forward again.
  */
 watch(answers, () => emit("update:captions", chosenCaptions()));
-const captionFilesRead = computed(() =>
-  patterns.value.reduce(
-    (sum, row) => sum + (answers[row.suffix] === "ignore" ? 0 : row.files),
+/**
+ * How many files carry a given answer. Counted per kind, not read against
+ * unread, because only `tags` spares the tagger: a picture with a description
+ * file still has no tags and is queued for the tagger exactly as an unread
+ * one is. Ignore is named beside them so it is seen to cost something.
+ */
+function captionFiles(kind) {
+  return patterns.value.reduce(
+    (sum, row) =>
+      sum + ((answers[row.suffix] ?? row.kind) === kind ? row.files : 0),
     0,
-  ),
-);
-// Named beside the read count so Ignore is seen to cost something: every
-// ignored file is a picture the tagger does from scratch.
-const captionFilesIgnored = computed(() =>
-  patterns.value.reduce(
-    (sum, row) => sum + (answers[row.suffix] === "ignore" ? row.files : 0),
-    0,
-  ),
-);
+  );
+}
+const captionFilesAsTags = computed(() => captionFiles("tags"));
+const captionFilesAsDescriptions = computed(() => captionFiles("description"));
+const captionFilesIgnored = computed(() => captionFiles("ignore"));
 
 const grouped = computed(() => {
   const byKind = new Map(FACET_KINDS.map((k) => [k.value, new Map()]));
@@ -241,8 +244,17 @@ async function poll(taskId) {
   }
 }
 
-async function commit(assignments = props.assignments) {
-  const captions = chosenCaptions();
+/**
+ * `captions` is the second thing a caller decides, beside the assignments: a
+ * commit sends the answers the owner actually saw on the card, and `[]` -
+ * "answered, read nothing" - whenever there was no card to see. Defaulting it
+ * from the card is only right for "Yes, build this library"; the commit that
+ * starts on mount, and Organise later, both pass their own.
+ */
+async function commit(
+  assignments = props.assignments,
+  captions = chosenCaptions(),
+) {
   if (!props.libraryExists) {
     emit("build", assignments, captions);
     return;
@@ -277,10 +289,14 @@ async function commit(assignments = props.assignments) {
  * means, not what "later" means. Once the import is running the same words
  * mean the same thing - keep every picture already indexed, apply none of the
  * mapping - which is what `stop=defer` does server-side.
+ *
+ * No assignments and no caption answers: this is the owner declining to
+ * decide, and the read's guesses are not their answer. `[]` still says "read
+ * nothing" rather than leaving the import to probe.
  */
 async function organiseLater() {
   if (!committing.value) {
-    commit([]);
+    commit([], []);
     return;
   }
   try {
@@ -300,7 +316,11 @@ async function abort() {
 }
 
 onMounted(() => {
-  if (props.commitOnMount) commit();
+  // The card is never seen on this path (the commit is already running by the
+  // first paint), so the saved answers are the only ones the owner gave. The
+  // read's guesses are not an answer, and mapping them here committed a
+  // convention nobody confirmed.
+  if (props.commitOnMount) commit(props.assignments, props.captions);
 });
 
 onUnmounted(() => {
@@ -413,20 +433,31 @@ onUnmounted(() => {
           {{ entityCount.toLocaleString() }} {{ entityKinds }}
           {{ entityCount === 1 ? "is" : "are" }} created or matched
         </div>
-        <div v-if="captionFilesRead" class="preview-step__fact">
+        <!-- Per kind: only a tags file spares the tagger. A description file
+             leaves the picture with no tags of its own, so counting the two
+             together claimed a saving the tagger never gets. -->
+        <div v-if="captionFilesAsTags" class="preview-step__fact">
           <span class="preview-step__fact-mark preview-step__fact-mark--yes"
             >✓</span
           >
-          {{ captionFilesRead.toLocaleString() }} caption
-          {{ captionFilesRead === 1 ? "file is" : "files are" }} read as tags
-          and descriptions; only pictures without one are tagged from scratch
+          {{ captionFilesAsTags.toLocaleString() }} caption
+          {{ captionFilesAsTags === 1 ? "file is" : "files are" }} read as tags;
+          {{ captionFilesAsTags === 1 ? "that picture is" : "those pictures are" }}
+          not tagged from scratch
+        </div>
+        <div v-if="captionFilesAsDescriptions" class="preview-step__fact">
+          <span class="preview-step__fact-mark preview-step__fact-mark--yes"
+            >✓</span
+          >
+          {{ captionFilesAsDescriptions.toLocaleString() }} caption
+          {{ captionFilesAsDescriptions === 1 ? "file is" : "files are" }} read
+          as descriptions
         </div>
         <div v-if="captionFilesIgnored" class="preview-step__fact">
           <span class="preview-step__fact-mark">—</span>
           {{ captionFilesIgnored.toLocaleString() }} caption
           {{ captionFilesIgnored === 1 ? "file is" : "files are" }} left
-          unread; {{ captionFilesIgnored === 1 ? "that picture is" : "those pictures are" }}
-          tagged from scratch
+          unread; PixlStash writes its own instead
         </div>
         <div class="preview-step__fact">
           <span class="preview-step__fact-mark">—</span>
