@@ -500,6 +500,56 @@ describe("the loose-pictures offer for an empty library", () => {
     wrapper.unmount();
   });
 
+  it("drops the parked read when the session changes while it is in flight", async () => {
+    // The parked read is an IPC round trip to the Electron shell, so a logout
+    // can land inside it. Its result is the outgoing owner's folder: it must
+    // open no wizard, and must not spend this session's one auto-open either,
+    // or the incoming owner's own pending entry is silently swallowed.
+    const path = "/home/me/Pictures";
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    let resolveParked;
+    window.pixlstashDesktop = {
+      takePendingMapping: () =>
+        new Promise((resolve) => {
+          resolveParked = resolve;
+        }),
+    };
+    const inspect = vi.fn();
+    apiGet.mockImplementation((url) => {
+      if (url.includes("inspect")) {
+        inspect();
+        return Promise.resolve({ data: { picture_count: 12 } });
+      }
+      return Promise.resolve(respond());
+    });
+    const wrapper = await mountSidebar();
+    const mapping = useFolderMappingStore();
+
+    const offer = wrapper.vm.offerLoosePictures();
+    await flushPromises();
+    mapping.resetForSession();
+    resolveParked({ path, result: { levels: [{ depth: 1, folders: [] }] } });
+    await offer;
+
+    expect(mapping.wizardOpen).toBe(false);
+    expect(mapping.wizardResume).toBe(null);
+    expect(inspect).not.toHaveBeenCalled();
+
+    // `autoOpenedPendingMapping` untouched: the new session's own entry still
+    // gets its auto-open.
+    const entry = { taskId: "", path, label: "Pictures", mode: "local_import" };
+    mapping.save(entry);
+    await flushPromises();
+    expect(mapping.wizardOpen).toBe(true);
+    expect(mapping.wizardResume).toEqual(entry);
+
+    delete window.pixlstashDesktop;
+    wrapper.unmount();
+  });
+
   it("ignores a parked read of some other folder", async () => {
     const path = "/home/me/Pictures";
     activeLibraryAt(path);
@@ -604,6 +654,35 @@ describe("the empty library's Choose a folder button", () => {
     await click;
 
     expect(mapping.rootPictureCount).toBe(null);
+    expect(mapping.wizardResume).toBe(null);
+
+    wrapper.unmount();
+  });
+
+  it("opens nothing at all when the session changes under the inspect", async () => {
+    // The test above only proves the COUNT was dropped: `wizardResume` is null
+    // for the ordinary add too, which `openReferenceFolderEditor` opens with
+    // `wizardOpen` true. Dropping the count is not enough - the click has to
+    // stop, or the outgoing owner's folder gets a wizard in the new session.
+    const path = "/home/me/Pictures";
+    const wrapper = await mountWithManageableLibrary(path);
+    const mapping = useFolderMappingStore();
+    let resolveInspect;
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? new Promise((resolve) => {
+            resolveInspect = resolve;
+          })
+        : Promise.resolve(respond()),
+    );
+
+    const click = wrapper.vm.chooseLibraryFolder();
+    await flushPromises();
+    mapping.resetForSession();
+    resolveInspect({ data: { picture_count: 42 } });
+    await click;
+
+    expect(mapping.wizardOpen).toBe(false);
     expect(mapping.wizardResume).toBe(null);
 
     wrapper.unmount();

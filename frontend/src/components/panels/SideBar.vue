@@ -759,8 +759,11 @@ function chooseFolderType(type) {
  * dismissed offer therefore has a way back. Otherwise the ordinary add.
  */
 async function chooseLibraryFolder() {
-  // Captured before the awaits below: a session change while the inspect is on
-  // the wire must not write the outgoing owner's count into the new session.
+  // Captured before the awaits below: a session change while one of them is
+  // pending must not write the outgoing owner's count into the new session,
+  // and must not open a wizard over the outgoing owner's folder either.
+  // `setRootPictureCount` refuses the write on its own; only returning here
+  // stops the routing that follows.
   const epoch = mappingStore.rootCountEpoch;
   const entry = pendingForThisLibrary.value;
   if (entry?.mode === "local_import") {
@@ -768,6 +771,7 @@ async function chooseLibraryFolder() {
     return;
   }
   if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
+  if (epoch !== mappingStore.rootCountEpoch) return;
   const path = librariesStore.activeLibrary?.path;
   if (path && librariesStore.canManage) {
     // Re-inspected on every click: a root that was empty when the count was
@@ -787,6 +791,7 @@ async function chooseLibraryFolder() {
         error,
       });
     }
+    if (epoch !== mappingStore.rootCountEpoch) return;
     if (mappingStore.rootPictureCount > 0) {
       openFolderMappingWizard({ path, mode: "local_import" });
       return;
@@ -888,6 +893,9 @@ function offerLoosePictures() {
 /** The count for the wording above, from the entry's own read if it carries
  *  one - an entry saved before the read finished does not - else the server. */
 async function _fillRootPictureCount(entry) {
+  // No epoch recheck after the await below, unlike the two functions that
+  // route on the result: the count write is the only thing this one does
+  // after it, and `setRootPictureCount` refuses a stale epoch itself.
   const epoch = mappingStore.rootCountEpoch;
   if (mappingStore.rootPictureCount !== null) return;
   const counted = entry.pictureCount ?? entry.result?.picture_count;
@@ -932,8 +940,12 @@ async function takeParkedFolderRead() {
 }
 
 async function _offerLoosePictures() {
+  // Rechecked after every await below, same as `chooseLibraryFolder`: a
+  // session change mid-flight must open no wizard over the outgoing owner's
+  // folder, and must not claim this session's one auto-open either.
   const epoch = mappingStore.rootCountEpoch;
   if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
+  if (epoch !== mappingStore.rootCountEpoch) return;
   const path = librariesStore.activeLibrary?.path;
   if (!path || !librariesStore.canManage) return;
   // On desktop the startup screen may have read this very folder already,
@@ -941,6 +953,7 @@ async function _offerLoosePictures() {
   // doing it there: the wizard opens on its questions instead of on a second
   // progress bar over an empty grid.
   const parked = await takeParkedFolderRead();
+  if (epoch !== mappingStore.rootCountEpoch) return;
   if (parked?.result && _samePath(parked.path, path)) {
     mappingStore.setRootPictureCount(
       parked.result.picture_count ?? null,
@@ -957,6 +970,7 @@ async function _offerLoosePictures() {
   }
   try {
     const verdict = await inspectLibraryPath(path);
+    if (epoch !== mappingStore.rootCountEpoch) return;
     mappingStore.setRootPictureCount(
       verdict?.picture_count ?? 0,
       verdict?.picture_count_capped ?? false,
