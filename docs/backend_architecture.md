@@ -5922,8 +5922,10 @@ again on every face batch, each call setting the lease to one minute from now
 (never accumulating). While the lease runs no finder is swept; tasks already
 queued still run, so the first batches share the GPU with that bounded backlog
 and then have it alone. A lease rather than `stop()`: a read that stalls or dies
-hands the workers back on its own. The deadline still matters, since an URGENT
-task that cannot finish starves the queue it jumped.
+hands the workers back on its own, and a read that finishes calls
+`WorkPlanner.release()` at once, because the commit that follows imports through
+the planner and must not wait out the minute. The deadline still matters, since
+an URGENT task that cannot finish starves the queue it jumped.
 
 ### The shape signals: what a photo library looks like
 

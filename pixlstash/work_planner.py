@@ -352,6 +352,11 @@ class WorkPlanner:
         """
         self._hold_until = time.monotonic() + seconds
 
+    def release(self) -> None:
+        """End the hold now rather than letting the lease run out."""
+        self._hold_until = 0.0
+        self._wake.set()
+
     def wake(self):
         self._wake.set()
 

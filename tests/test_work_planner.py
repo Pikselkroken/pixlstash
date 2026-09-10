@@ -1134,3 +1134,20 @@ def test_hold_is_from_now_and_does_not_accumulate():
     planner.hold(60)
     planner.hold(60)
     assert planner._hold_until - time.monotonic() <= 60.0
+
+
+def test_release_ends_the_hold_without_waiting_for_the_lease():
+    runner = _FastCompleteRunner()
+    submitted = []
+    runner.on_submit = submitted.append
+    planner = WorkPlanner(task_runner=runner, task_finders=[_OneShotFinder()])
+    planner.hold(60)
+    planner.start()
+    try:
+        planner.release()
+        deadline = time.monotonic() + 3.0
+        while not submitted and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert [task.id for task in submitted] == ["task-1"]
+    finally:
+        planner.stop()

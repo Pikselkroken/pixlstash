@@ -280,6 +280,13 @@ def create_router(server) -> APIRouter:
         if planner is not None:
             planner.hold(_WORKER_HOLD_S)
 
+    def _release_workers() -> None:
+        # The lease would expire on its own, but the commit that follows a
+        # read imports through the planner and must not wait out the minute.
+        planner = getattr(server.vault, "_work_planner", None)
+        if planner is not None:
+            planner.release()
+
     @router.post(
         "/folder-structure/read",
         summary="Start the folder-structure read",
@@ -370,6 +377,7 @@ def create_router(server) -> APIRouter:
         try:
             result = read.run()
         except BaseException as exc:  # noqa: BLE001 - the slot must never wedge
+            _release_workers()
             logger.error(
                 "Folder-structure read %s failed (%s): %s",
                 task_id,
@@ -390,6 +398,7 @@ def create_router(server) -> APIRouter:
                 raise
             return
 
+        _release_workers()
         state = server.folder_structure_read
         if not state or state["task_id"] != task_id:
             return
