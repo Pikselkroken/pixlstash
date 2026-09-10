@@ -14,7 +14,7 @@ LAYOUT = {
                       0, 1700, 1160, 900),
     "Main.dc.html": ("bringing-in", "2 · What we found", 1260, 0, 1240, 900),
     "MapTree.dc.html": ("bringing-in", "3 · Name what your folders are", 2600, 0, 1440, 860),
-    "Preview.dc.html": ("bringing-in", "4 · Before anything is written", 4140, 0, 1300, 1300),
+    "Preview.dc.html": ("bringing-in", "4 · This is what your folders become", 4140, 0, 1300, 1300),
     "Storage.dc.html": ("living-in", "How your folders are laid out", 0, 0, 1160, 1400),
     "Moves.dc.html": ("living-in", "When you move things yourself", 1260, 0, 1240, 1420),
     "Views.dc.html": ("living-in", "PixlStash Views", 2600, 0, 1300, 960),
