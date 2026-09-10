@@ -159,7 +159,7 @@ const title = computed(() => {
     case "mapping":
       return "Create the PixlStash database";
     case "preview":
-      return "Before anything is written";
+      return "This is what your folders become";
     default:
       return "Add a library";
   }

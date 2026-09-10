@@ -295,21 +295,8 @@ onUnmounted(() => {
 
 <template>
   <div class="preview-step">
-    <div class="preview-step__header">
-      <div>
-        <h2 class="preview-step__title">This is what your folders become</h2>
-        <p class="preview-step__lead">nothing written yet</p>
-      </div>
-      <AppButton
-        variant="secondary"
-        size="sm"
-        :disabled="committing"
-        @click="emit('back')"
-      >
-        Back to the mapping
-      </AppButton>
-    </div>
-
+    <!-- The heading is the dialog's title ("This is what your folders
+         become"), and the way back is the button beside the primary one. -->
     <div class="preview-step__groups">
       <!-- Only the kinds this mapping has: an empty group would still take a
            cell of the grid and leave a hole beside the one that follows. -->
@@ -519,37 +506,18 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-.preview-step__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-}
-
-.preview-step__title {
-  /* NOT --font-pixel: a step heading is chrome. Tiny5 is the wordmark, a brand
-     moment and an empty-state headline - nothing a person reads a sentence in. */
-  margin: 0;
-  font-size: var(--text-xl);
-  font-weight: var(--weight-semibold);
-}
-
-.preview-step__lead {
-  margin: var(--space-1) 0 0;
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-background), 0.65);
-}
-
-/* Two groups to a line at the dialog's width, and the block scrolls on its
-   own past 14rem so a library with many sets does not turn the whole step
-   into one long scroll; the caption list below gets the same treatment. */
+/* The groups flow: each is its title followed by its chips on one wrapping
+   line, sized to its content, so a Project and three Sets share a row and a
+   group with many chips takes what it needs and no more. The block shrinks
+   into its own scrollbar before the facts and buttons below give way. */
 .preview-step__groups {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  align-content: start;
-  gap: var(--space-4) var(--space-6);
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: flex-start;
+  gap: var(--space-3) var(--space-6);
   flex: 0 1 auto;
-  min-height: 3rem;
+  min-height: 2rem;
   overflow-y: auto;
   padding-right: var(--space-2);
 }
@@ -562,22 +530,27 @@ onUnmounted(() => {
 }
 
 .preview-step__group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
   min-width: 0;
+  max-width: 100%;
 }
 
 .preview-step__group-title {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  margin-right: var(--space-2);
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
-  margin-bottom: var(--space-2);
+  white-space: nowrap;
 }
 
+/* The chips are items of the group's own wrap, beside the title. */
 .preview-step__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
+  display: contents;
 }
 
 .preview-step__group-title .v-icon {

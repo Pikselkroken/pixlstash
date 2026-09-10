@@ -273,7 +273,7 @@ describe("building the library", () => {
     await wrapper.find(".tree-stub .emit-next").trigger("click");
     await settle();
     expect(wrapper.findComponent(AppDialog).props("title")).toBe(
-      "Before anything is written",
+      "This is what your folders become",
     );
 
     await button(wrapper, "Yes, build this library").trigger("click");
@@ -349,7 +349,7 @@ describe("resuming after the switch", () => {
     await settle();
 
     expect(wrapper.findComponent(AppDialog).props("title")).toBe(
-      "Before anything is written",
+      "This is what your folders become",
     );
     expect(startFolderStructureCommit).toHaveBeenCalledWith(
       "read-1",
@@ -688,7 +688,7 @@ describe("the branches nobody walks on purpose", () => {
     await wrapper.find(".tree-stub .emit-next").trigger("click");
     await settle();
     expect(wrapper.findComponent(AppDialog).props("title")).toBe(
-      "Before anything is written",
+      "This is what your folders become",
     );
 
     wrapper.unmount();
