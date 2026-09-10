@@ -4080,15 +4080,21 @@ and updates `file_path` on the existing row instead.
   the boot scan used to answer first: a small library was indexed, tags read
   by convention and all, before the screen came up, so the grid was no longer
   empty and the mapping questions and the caption card never appeared. The
-  gate lifts on the first picture row, or on a `local_import` record that has
-  settled as `done` or `deferred` ("organise later" is an answer: index
-  everything, map nothing), and is then remembered for the process. A
-  `pending` record is the commit still running, so it is the question rather
+  gate lifts on a `local_import` record that has settled as `done` or
+  `deferred` ("organise later" is an answer: index everything, map nothing),
+  or on the first picture row when no `local_import` record is `pending` or
+  `abandoned`, and is then remembered for the process. Those two states hold
+  the gate shut *over* the picture rows because an unsettled `local_import`
+  commits every chunk, so it leaves pictures behind that nobody answered for.
+  A `pending` record is the commit still running, so it is the question rather
   than the answer; counting it puts the 300-second root scan into a race with
   it, where the scan builds its own rows with the sidecar probe, wins, and the
   commit's `insert()` reuses them without ever applying the owner's caption
-  choices. `abandoned` is "bring nothing in" and `superseded` was replaced by
-  a newer record, so neither is an answer either. An existing
+  choices. `abandoned` is "bring nothing in", and its chunks stay indexed, so
+  reading them as the answer scans the root and imports the very files the
+  owner aborted; `superseded` was replaced by a newer record. Settled is read
+  before `abandoned`, so a later settled import outranks an earlier abandoned
+  one. An existing
   library is unaffected; the one behaviour that changes is that an empty
   library's first pictures arrive through the import offer rather than by
   the watcher, which is the offer's whole purpose. Root mode differs
