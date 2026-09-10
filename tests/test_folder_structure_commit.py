@@ -1898,3 +1898,22 @@ def test_linking_a_large_import_costs_a_bounded_number_of_statements(owner_env):
         f"pictures, {large} for 400"
     )
     assert large < 20, f"{large} statements to link 400 pictures"
+
+
+def test_a_persisted_caption_answer_that_is_not_a_list_fails_loudly():
+    """The crash-resume re-parse reads `captions` back out of the durable
+    record. A falsey non-list there (`0`, `false`, `""`) is corruption, not
+    an empty answer: masking it as "read nothing" would change what the
+    resumed commit does without anyone seeing why."""
+    import pytest
+
+    from pixlstash.services.folder_structure_commit_service import (
+        CommitError,
+        parse_captions,
+    )
+
+    assert parse_captions(None) is None
+    assert parse_captions([]) == []
+    for bad in (0, False, "", {}):
+        with pytest.raises(CommitError, match="must be a list"):
+            parse_captions(bad)

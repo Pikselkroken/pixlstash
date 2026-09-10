@@ -230,9 +230,11 @@ def parse_captions(raw) -> Optional[list[CaptionPattern]]:
     """
     if raw is None:
         return None
+    if not isinstance(raw, list):
+        raise CommitError("captions must be a list")
     parsed: list[CaptionPattern] = []
     seen: set[str] = set()
-    for index, row in enumerate(raw or []):
+    for index, row in enumerate(raw):
         if not isinstance(row, dict):
             raise CommitError(f"captions[{index}] must be an object")
         suffix = row.get("suffix")
