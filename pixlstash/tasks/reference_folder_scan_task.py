@@ -746,11 +746,15 @@ class ReferenceFolderScanTask(BaseTask):
             tags_by_pic = self._fetch_folder_tags(folder_id)
 
         caption_updates: list[dict] = []
-        # The root reconciles only once the owner turned sync on: with it off a
-        # stray .txt beside a managed picture is not a caption, and reading it
-        # as one would tag the picture. On, it has a suffix to go by - the
-        # wizard's confirmed convention, or one detected above - exactly as a
-        # reference folder does.
+        # The root reconciles an ALREADY-INDEXED picture only once the owner
+        # turned sync on: with it off, a stray .txt that appears beside a
+        # managed picture is not a caption, and reading it as one would retag
+        # the picture. On, it has a suffix to go by - the wizard's confirmed
+        # convention, or one detected above - exactly as a reference folder
+        # does. A picture's FIRST indexing is a different rule and reads the
+        # sidecar beside it either way (`_build_picture` -> `attach_sidecars`),
+        # the same as the local-import wizard: a file arriving with its caption
+        # keeps it, and there are no tags yet to overwrite.
         sidecar_candidates = (
             ()
             if self._is_root and not (sync_tags or sync_descriptions)
@@ -938,21 +942,39 @@ class ReferenceFolderScanTask(BaseTask):
         already had. Resolving by suffix first dropped a ``photo.txt``
         recorded at import under a ``_tags.txt`` setting and exported a
         second file beside it.
+
+        The root reconciles per type, not per folder: with descriptions on and
+        tags off, a Stable Diffusion prompt ``.txt`` beside a managed picture
+        is not the tag set, and reading it as one replaces every tag the
+        picture has. A reference folder keeps its own contract, where the
+        folder's suffixes say what to read.
         """
+        if self._is_root and not sync:
+            return
         is_tags = sidecar_type == SIDECAR_TYPE_TAGS
         path_key = "tags_file" if is_tags else "description_file"
         mtime_key = "tags_file_mtime" if is_tags else "description_file_mtime"
 
-        current_path = recorded_sidecar(file_path, stored_path) or resolve_typed_sidecar(
-            file_path, sidecar_type, suffix
-        )
+        current_path = recorded_sidecar(
+            file_path, stored_path
+        ) or resolve_typed_sidecar(file_path, sidecar_type, suffix)
         if current_path is not None:
             current_mtime = get_sidecar_mtime(current_path)
             if current_path != stored_path or current_mtime != stored_mtime:
                 update[path_key] = current_path
                 update[mtime_key] = current_mtime
                 if is_tags:
-                    update["new_tags"] = read_tags_sidecar(current_path)
+                    new_tags = read_tags_sidecar(current_path)
+                    # An empty file that this picture was not already tracking
+                    # is "nothing to import", not "delete every tag": the read
+                    # is unreadable-or-empty either way, and `apply_caption_
+                    # updates` clears the whole set and drops in the pending
+                    # sentinel. A file the picture already had may still empty
+                    # it - that is the owner clearing their own sidecar.
+                    # Descriptions have no hole here; a None one is skipped
+                    # where it is applied.
+                    if new_tags or stored_path is not None:
+                        update["new_tags"] = new_tags
                 else:
                     update["new_description"] = read_description_sidecar(current_path)
             return
