@@ -1262,6 +1262,9 @@ def test_a_folder_the_process_cannot_read_is_counted_not_dropped_in_silence():
     assert result["unreadable_folders"] == 1, (
         "the unreadable folder must be counted, not silently dropped"
     )
+    assert result["captions_complete"] is False, (
+        "a skipped subtree may hold patterns the walk never saw"
+    )
     assert result["truncated"] is False, "truncation is a different fact"
 
 

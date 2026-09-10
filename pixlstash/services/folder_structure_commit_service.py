@@ -458,7 +458,7 @@ def pending_commit(server) -> Optional[dict]:
         # a person; the pictures already indexed are unaffected.
         logger.error(
             "Cannot resume the folder-mapping commit %s: its recorded "
-            "assignments are unreadable (%s). Nothing was changed.",
+            "assignments or captions are unreadable (%s). Nothing was changed.",
             record["task_id"],
             exc,
         )
