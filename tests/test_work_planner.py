@@ -1133,7 +1133,10 @@ def test_hold_is_from_now_and_does_not_accumulate():
     planner = WorkPlanner(task_runner=_FastCompleteRunner(), task_finders=[])
     planner.hold(60)
     planner.hold(60)
-    assert planner._hold_until - time.monotonic() <= 60.0
+    # Bounded on both sides: a lease that accumulated would read near 120, and
+    # the upper bound holds by construction because monotonic() never runs
+    # backwards between the hold and the read.
+    assert 59.0 < planner._held_for() <= 60.0
 
 
 def test_release_ends_the_hold_without_waiting_for_the_lease():

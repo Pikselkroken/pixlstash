@@ -348,14 +348,23 @@ class WorkPlanner:
         """Keep every finder from submitting work for *seconds* from now.
 
         Renewing resets the lease to ``now + seconds``; it never accumulates.
-        Tasks already queued or running are not touched.
+        Tasks already queued or running are not touched, and a sweep that is
+        under way stops at its next finder rather than mid-turn.
         """
-        self._hold_until = time.monotonic() + seconds
+        with self._lock:
+            self._hold_until = time.monotonic() + seconds
+        self._wake.set()
 
     def release(self) -> None:
         """End the hold now rather than letting the lease run out."""
-        self._hold_until = 0.0
+        with self._lock:
+            self._hold_until = 0.0
         self._wake.set()
+
+    def _held_for(self) -> float:
+        """Seconds left on the hold; zero or negative when not held."""
+        with self._lock:
+            return self._hold_until - time.monotonic()
 
     def wake(self):
         self._wake.set()
@@ -410,7 +419,7 @@ class WorkPlanner:
 
     def _run(self):
         while not self._stop.is_set():
-            held_for = self._hold_until - time.monotonic()
+            held_for = self._held_for()
             if held_for > 0:
                 self._wake.wait(held_for)
                 self._wake.clear()
@@ -495,6 +504,8 @@ class WorkPlanner:
             _PlannerStopping: Shutdown began mid-turn; the caller must abandon
                 the whole cycle rather than move on to the next finder.
         """
+        if self._held_for() > 0:
+            return submitted_any
         finder_name = finder.finder_name()
         max_inflight = max(1, int(finder.max_inflight_tasks()))
 
