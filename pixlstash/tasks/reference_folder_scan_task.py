@@ -1316,16 +1316,15 @@ class ReferenceFolderScanTask(BaseTask):
             pic.created_at = created_at
 
         # Tags are stored via the Tag relationship and cannot be set on the
-        # unsaved Picture directly; stash them as a transient attribute so
-        # the caller can persist them after the Picture is inserted.
-        sidecar_tags = attach_sidecars(
+        # unsaved Picture directly; `attach_sidecars` stashes them as a
+        # transient attribute so `_insert_pictures` can persist them once the
+        # Picture has an id.
+        attach_sidecars(
             pic,
             file_path,
             [self._tags_suffix] if self._tags_suffix else None,
             [self._description_suffix] if self._description_suffix else None,
         )
-        if sidecar_tags:
-            pic._sidecar_tags = sidecar_tags  # type: ignore[attr-defined]
 
         return pic
 
