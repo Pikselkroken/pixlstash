@@ -203,8 +203,14 @@ function onMappingNext(built) {
  * that does not exist yet that is `build([])`; for one that does (a resumed
  * read, or the empty library offering its own folder) there is nothing to
  * add, so it is the Preview step's commit with no assignments.
+ *
+ * The held caption answers go too. Whatever the owner saw on the Preview's
+ * card before coming back here, "organise later" is them declining to decide,
+ * and the auto-commit that follows must send `[]` - an answer meaning "read
+ * nothing" - not the read's own guesses.
  */
 function later() {
+  captions.value = [];
   if (!libraryExists.value) {
     build([]);
     return;
@@ -316,52 +322,68 @@ function onCommitted(result) {
         Back to the mapping
       </AppButton>
     </template>
-    <p v-if="buildError" class="mapping-wizard__error" role="alert">
-      {{ buildError }}
-    </p>
+    <!-- Every step but the first is mounted flush, and a flush dialog body is
+         a flex ROW: the banner and the step were laid out side by side, the
+         banner squeezing the step it was meant to sit above. This is the
+         column they stack in. -->
+    <div class="mapping-wizard__body">
+      <p v-if="buildError" class="mapping-wizard__error" role="alert">
+        {{ buildError }}
+      </p>
 
-    <FolderMappingChooseStep
-      v-if="step === 'choose'"
-      :key="session"
-      :resume="resume"
-      @scan="onScanStarted"
-      @task="onTaskStarted"
-      @ready="onScanReady"
-      @cancel="close"
-      @close="emit('close')"
-    />
+      <FolderMappingChooseStep
+        v-if="step === 'choose'"
+        :key="session"
+        :resume="resume"
+        @scan="onScanStarted"
+        @task="onTaskStarted"
+        @ready="onScanReady"
+        @cancel="close"
+        @close="emit('close')"
+      />
 
-    <FolderMappingTreeStep
-      v-else-if="step === 'mapping' && readResult"
-      :result="readResult"
-      @next="onMappingNext"
-      @later="later"
-    />
+      <FolderMappingTreeStep
+        v-else-if="step === 'mapping' && readResult"
+        :result="readResult"
+        @next="onMappingNext"
+        @later="later"
+      />
 
-    <FolderMappingPreviewStep
-      v-else-if="step === 'preview'"
-      :path="path"
-      :read-task-id="readTaskId"
-      :read-result="readResult"
-      :assignments="assignments"
-      :captions="captions"
-      :label="label"
-      mode="local_import"
-      :picture-count="pictureCount"
-      :library-exists="libraryExists"
-      :commit-on-mount="autoCommit"
-      @back="backToMapping"
-      @build="build"
-      @update:captions="captions = $event"
-      @commit-started="onCommitStarted"
-      @cancel="close"
-      @committed="onCommitted"
-      @update:committing="committing = $event"
-    />
+      <FolderMappingPreviewStep
+        v-else-if="step === 'preview'"
+        :path="path"
+        :read-task-id="readTaskId"
+        :read-result="readResult"
+        :assignments="assignments"
+        :captions="captions"
+        :label="label"
+        mode="local_import"
+        :picture-count="pictureCount"
+        :library-exists="libraryExists"
+        :commit-on-mount="autoCommit"
+        @back="backToMapping"
+        @build="build"
+        @update:captions="captions = $event"
+        @commit-started="onCommitStarted"
+        @cancel="close"
+        @committed="onCommitted"
+        @update:committing="committing = $event"
+      />
+    </div>
   </AppDialog>
 </template>
 
 <style scoped>
+/* Fills the dialog body so a flush step still gets its whole height, and
+   stacks the error banner above the step rather than beside it. */
+.mapping-wizard__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 .mapping-wizard__error {
   /* Only the choose step gets `pad-body`; the mapping and preview steps own
      their own padding, so the banner carries its side gutter itself rather

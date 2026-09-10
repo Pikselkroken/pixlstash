@@ -1623,15 +1623,18 @@ indeterminate bar rather than 0%.
 ```
 
 **`captions`** is the owner's captions as they actually are on disk. Every
-non-media file whose name starts with a picture's stem in the same folder is a
-caption file, grouped by the `suffix` after that stem — `a.txt`, `a_tags.txt`
-and `a.jpg.caption` beside `a.jpg` are `.txt`, `_tags.txt` and `.jpg.caption` —
-so nothing depends on the convention being one PixlStash already knows. A few
-files of each pattern are read to say whether it holds tag lists or prose
-(`kind`), and `sample` is an excerpt of one so the owner can check that guess
-without opening a file. Binary and JSON sidecars are not captions and are not
-listed. The screen offers each row as *Tags / Description / Ignore*, pre-filled
-with `kind`, and sends the answers back as `captions` on the commit (§22).
+`.txt` or `.caption` file whose name starts with a picture's stem in the same
+folder is a caption file, grouped by the `suffix` after that stem, compared case-insensitively (`a.txt`,
+`a_tags.txt` and `a.jpg.caption` beside `a.jpg` are `.txt`, `_tags.txt` and
+`.jpg.caption`), so nothing depends on the convention being one PixlStash
+already knows. A few files of each pattern, spread across folders rather than
+taken from the first one walked, are read to say whether it holds tag lists or
+prose (`kind`), and `sample` is an excerpt of one *of that kind* so the owner
+can check the guess without opening a file. Binary, JSON and markup sidecars
+are not captions and are not listed, and neither is anything past the twelfth
+pattern. The screen offers each row as *Tags / Description / Ignore*,
+pre-filled with `kind`, and sends the answers back as `captions` on the commit
+(§22).
 
 Two fields the screen must not ignore, because both mean *this map is not the
 whole library*:
@@ -1966,8 +1969,9 @@ newly-indexed picture gets, exactly as any other import produces.
   ],
   "captions": [
     // One entry per pattern in the read's `captions` (§20), saying what to
-    // read it as. Optional: absent or empty, the import probes the known
-    // conventions instead (`_tags.txt`, `.caption`, a content-sniffed `.txt`).
+    // read it as. Omit the field entirely and the import probes the known
+    // conventions instead (`_tags.txt`, `.caption`, a content-sniffed
+    // `.txt`); send `[]` and it reads nothing.
     {"suffix": ".txt", "kind": "tags"},
     {"suffix": "_caption.txt", "kind": "description"},
     {"suffix": "_notes.txt", "kind": "ignore"}
@@ -1994,20 +1998,32 @@ to, exactly as `name_match`'s `match.id` proposed or as the owner picked from
 `candidates`; omitted, a new one is created named after the folder.
 
 `captions` is the owner's answer to §20's `captions`, one row per `suffix`, and
-it is an answer, not a hint: with any row present only the suffixes said to be
-`tags` are read as tags and only those said to be `description` as
+it is an answer, not a hint: with the field present only the suffixes said to
+be `tags` are read as tags and only those said to be `description` as
 descriptions, and an `ignore`d pattern is never opened, however caption-like
-its content. A picture with a tags file gets those tags and is not queued for
-the tagger; one with a description file gets that description and is not
-captioned; the rest are handled as before. `captions` is `local_import` only:
-with `mode: "reference"` a non-empty list is `400`, because a reference folder
-holds one suffix per kind and its scan probes the known conventions for an
-unset one, so it cannot express "read nothing of this kind" and an answer
-with every tags pattern ignored would still open a bare `.txt`. A reference
-folder's sidecar fields on `PATCH /reference-folders/{folder_id}` are its
-contract. `suffix` must be a bare filename fragment (the
-same rule as `PATCH /reference-folders` enforces): it is appended to a picture
-path to find the file to read.
+its content. A picture whose tags file gave at least one tag gets those tags
+and is not queued for the tagger; one whose tags file was empty or unreadable
+is queued like any other, because "no tags were read" is not "this picture has
+no tags". A picture with a description file gets that description and is not
+captioned; the rest are handled as before.
+
+**Omitting `captions` and sending `[]` are different requests.** Omitted (or
+`null`) is a client that never asked - an older one - and the import probes the
+known conventions instead. `[]` is the owner having been asked and had nothing
+to confirm, and reads no caption file at all. The two have to differ, because
+§20 deliberately drops a `.txt` it cannot classify (JSON, markup, UTF-16, a
+pattern past the twelfth) and probing one of those anyway is how a metadata
+blob becomes a picture's tags.
+
+`captions` is `local_import` only: with `mode: "reference"` the field being
+present at all, `[]` included, is `400`, because a reference folder holds one
+suffix per kind and its scan probes the known conventions for an unset one, so
+it cannot express "read nothing of this kind" and an answer with every tags
+pattern ignored would still open a bare `.txt`. A reference folder's sidecar
+fields on `PATCH /reference-folders/{folder_id}` are its contract. `suffix`
+must be a bare filename fragment (the same rule as `PATCH /reference-folders`
+enforces): it is appended to a picture path to find the file to read, and no
+two rows may repeat one.
 
 **A folder's nearest accepted ancestor of each exclusive kind wins** — a
 picture is filed under the *closest* Project, Person or Set above it, not
@@ -2022,7 +2038,7 @@ this route is the write that follows from it.
 
 | Status | When |
 |---|---|
-| **400** | an `assignments` row is malformed or names an unknown `kind`; a `captions` row names an unknown `kind` or a `suffix` that is not a bare filename fragment; `captions` is non-empty with `mode: "reference"` |
+| **400** | an `assignments` row is malformed or names an unknown `kind`; a `captions` row names an unknown `kind`, carries a `suffix` that is not a bare filename fragment, or repeats a `suffix` an earlier row already claimed (compared case-insensitively, since `_notes.txt` and `_NOTES.TXT` are one file on Windows and macOS); `captions` is present at all (`[]` included) with `mode: "reference"` |
 | **404** | `task_id` does not name a read this session holds |
 | **409** | the named read has not settled yet, a commit is already running (against any read), the named read has **already been committed**, or the read's root path is already a reference folder that has completed a scan (§25 — the reuse-vs-refuse rule) |
 

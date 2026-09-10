@@ -254,7 +254,9 @@ describe("caption files beside the pictures", () => {
       "tags",
       "description",
     ]);
-    expect(wrapper.text()).toContain("160 caption files are read");
+    // Per kind, because only a tags file spares the tagger.
+    expect(wrapper.text()).toContain("120 caption files are read as tags");
+    expect(wrapper.text()).toContain("40 caption files are read as descriptions");
     expect(wrapper.text()).not.toContain("left unread");
     // The suffix is the row's label; the select carries the name for AT only.
     expect(wrapper.text()).not.toContain("Read *.txt as");
@@ -265,7 +267,8 @@ describe("caption files beside the pictures", () => {
     startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
     const wrapper = mountImport({ commitOnMount: false, readResult: READ_RESULT });
     await selects(wrapper)[0].setValue("ignore");
-    expect(wrapper.text()).toContain("40 caption files are read");
+    expect(wrapper.text()).toContain("40 caption files are read as descriptions");
+    expect(wrapper.text()).not.toContain("read as tags");
     expect(wrapper.text()).toContain("120 caption files are left unread");
     await buttonWith(wrapper, "Yes, build this library").trigger("click");
     await flushPromises();
@@ -333,6 +336,78 @@ describe("caption files beside the pictures", () => {
     await flushPromises();
     expect(startFolderStructureCommit.mock.calls.at(-1)[3]).toBe("reference");
     expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual([]);
+  });
+
+  it("commits no answer at all for Organise later", async () => {
+    // The card is on screen with the read's guesses in it, but declining to
+    // decide is not confirming them: `[]` says "read nothing", and only a
+    // missing key would let the import probe.
+    startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
+    const wrapper = mountImport({ commitOnMount: false, readResult: READ_RESULT });
+    expect(selects(wrapper)).toHaveLength(2);
+
+    await buttonWith(wrapper, "Organise later").trigger("click");
+    await flushPromises();
+
+    expect(startFolderStructureCommit.mock.calls.at(-1)[1]).toEqual([]);
+    expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual([]);
+  });
+
+  it("commits the saved answer on mount, never the read's guess", async () => {
+    // The commit starts before the card can be read, so the guesses in it were
+    // never anybody's answer. This is what "Drop this, organise later" on an
+    // existing library resumes into, with nothing saved.
+    startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
+    mountImport({ commitOnMount: true, readResult: READ_RESULT, captions: [] });
+    await flushPromises();
+
+    expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual([]);
+  });
+
+  it("does not claim a description file spares the tagger", async () => {
+    // A picture with a description still has no tags of its own, so it is
+    // queued for the tagger exactly as one with no caption file at all.
+    const wrapper = mountImport({
+      commitOnMount: false,
+      readResult: {
+        ...READ_RESULT,
+        captions: [READ_RESULT.captions[1]],
+      },
+    });
+
+    expect(wrapper.text()).toContain("40 caption files are read as descriptions");
+    expect(wrapper.text()).not.toContain("read as tags");
+    expect(wrapper.text()).not.toContain("tagged from scratch");
+  });
+
+  it("answers a suffix that is also an inherited object key", async () => {
+    // The suffixes come from the owner's filenames, so `constructor` and
+    // `__proto__` are reachable. On a plain object the seeding check reads the
+    // inherited value as an answer already made and skips it, and the commit
+    // then sends a function as the kind.
+    startFolderStructureCommit.mockResolvedValue({ task_id: "commit-3" });
+    const wrapper = mountImport({
+      commitOnMount: false,
+      readResult: {
+        ...READ_RESULT,
+        captions: [
+          {
+            suffix: "constructor",
+            kind: "tags",
+            files: 7,
+            folders: 1,
+            sample: "1girl, solo",
+          },
+        ],
+      },
+    });
+    expect(selects(wrapper)[0].element.value).toBe("tags");
+
+    await buttonWith(wrapper, "Yes, build this library").trigger("click");
+    await flushPromises();
+    expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual([
+      { suffix: "constructor", kind: "tags" },
+    ]);
   });
 
   it("asks nothing when the read found no caption files", () => {

@@ -456,14 +456,16 @@ _LABEL_SINK_EXEMPT = {
         "async staging import of NEW pictures (#459) - sentinel Tag on freshly "
         "created rows that cannot yet be in a locked set"
     ),
-    ("pixlstash/tasks/watch_folder_import_task.py", "_run_task"): (
-        "watch-folder import of NEW pictures (sidecar description)"
-    ),
+    # `watch_folder_import_task.py :: _run_task` used to be exempt here for its
+    # own copy of the sidecar description write. It now calls `attach_sidecars`
+    # like the other two row builders, so the exemption below covers it and a
+    # separate entry would only be a stale one.
     ("pixlstash/utils/caption_file_utils.py", "attach_sidecars"): (
         "sidecar description onto a NEW, unsaved picture row; called only by "
-        "ReferenceFolderScanTask._build_picture and "
-        "folder_structure_commit_service._build_managed_picture while they "
-        "build rows that are not yet in any set"
+        "ReferenceFolderScanTask._build_picture, "
+        "folder_structure_commit_service._build_managed_picture and "
+        "WatchFolderImportTask._run_task while they build rows that are not "
+        "yet in any set"
     ),
     ("pixlstash/vault.py", "import_default_data"): (
         "logo / default-data import (new pictures)"
@@ -662,7 +664,7 @@ def test_lock_chokepoint_callers_are_guarded():
     )
 
 
-def test_attach_sidecars_is_called_only_by_the_two_row_builders():
+def test_attach_sidecars_is_called_only_by_the_row_builders():
     """The rule-4 exemption above rests on WHO calls ``attach_sidecars``.
 
     It writes a sidecar description onto a picture row, which is exempt only
@@ -710,6 +712,7 @@ def test_attach_sidecars_is_called_only_by_the_two_row_builders():
     assert callers == {
         "pixlstash/tasks/reference_folder_scan_task.py::_build_picture",
         "pixlstash/services/folder_structure_commit_service.py::_build_managed_picture",
+        "pixlstash/tasks/watch_folder_import_task.py::_run_task",
         existing_rows_caller,
     }, f"unexpected attach_sidecars caller(s): {sorted(callers)}"
     assert any(

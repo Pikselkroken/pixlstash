@@ -562,7 +562,10 @@ def test_the_owners_caption_answers_decide_what_is_read(owner_env):
     with open(os.path.join(root, "one.txt"), "w", encoding="utf-8") as fh:
         fh.write("1girl, solo, smile")
     with open(os.path.join(root, "one_desc.txt"), "w", encoding="utf-8") as fh:
-        fh.write("cat, dog, tree")  # named like a description, reads like tags
+        # A name the sniff trusts over the content: `_desc.txt` is the
+        # exporter saying what it wrote, whatever a comma-separated line
+        # looks like.
+        fh.write("cat, dog, tree")
     with open(os.path.join(root, "two.txt"), "w", encoding="utf-8") as fh:
         fh.write("A dog on a beach.")
 
@@ -659,6 +662,65 @@ def test_confirmed_captions_seed_the_root_and_ask_for_the_read_in_scan(
     assert rescans, "the root was never asked to read the existing files in"
 
 
+def test_no_caption_answer_probes_but_an_empty_one_reads_nothing(owner_env):
+    """Omitting `captions` and sending `[]` are different requests.
+
+    Omitted is an older client that never asked, and the import probes the
+    known conventions as it always did. `[]` is the owner having been asked
+    and had nothing to confirm, and it must read no file at all: the read
+    drops a `.txt` it cannot classify (JSON, markup, UTF-16, a pattern past
+    the cap), and probing one of those anyway is how a metadata blob becomes
+    a picture's tags.
+    """
+    server = owner_env["server"]
+    owner = owner_env["owner"]
+    from pixlstash.db_models.picture import Picture
+    from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
+    from sqlmodel import select
+
+    def commit(folder: str, payload_captions):
+        root = os.path.join(server.vault.image_root, folder)
+        _make_tree(root, {"": ["shot.jpg"]})
+        with open(os.path.join(root, "shot.txt"), "w", encoding="utf-8") as fh:
+            fh.write("1girl, solo, smile")
+        started = owner.post(_READ, json={"path": root})
+        assert started.status_code == 200, started.text
+        read_task_id = started.json()["task_id"]
+        _drain_read(owner, read_task_id)
+        body = {
+            "task_id": read_task_id,
+            "mode": "local_import",
+            "assignments": [],
+        }
+        if payload_captions is not None:
+            body["captions"] = payload_captions
+        accepted = owner.post(_COMMIT, json=body)
+        assert accepted.status_code == 200, accepted.text
+        done = _drain_commit(owner, accepted.json()["task_id"], timeout_s=60.0)
+        assert done["status"] == "completed", done
+
+        def fetch(session):
+            pic = session.exec(
+                select(Picture).where(Picture.file_path == f"{folder}/shot.jpg")
+            ).one()
+            tags = sorted(
+                session.exec(select(Tag.tag).where(Tag.picture_id == pic.id)).all()
+            )
+            return pic.tags_file, tags
+
+        return server.vault.db.run_immediate_read_task(fetch)
+
+    tags_file, tags = commit("captions-omitted", None)
+    assert tags == ["1girl", "smile", "solo"], "an older client still probes"
+    assert tags_file is not None
+
+    tags_file, tags = commit("captions-empty", [])
+    assert tags == [TAG_PENDING_SENTINEL], (
+        "an empty answer reads nothing, so the tagger gets the picture"
+    )
+    assert tags_file is None, "no file was even resolved"
+
+
 def test_caption_answers_are_refused_in_reference_mode(owner_env):
     """A reference folder holds one suffix per kind and probes the known
     conventions for an unset one, so it cannot honour "ignore" for a kind: an
@@ -681,6 +743,13 @@ def test_caption_answers_are_refused_in_reference_mode(owner_env):
     )
     assert refused.status_code == 400, refused.text
     assert "local_import" in refused.json()["detail"]
+    # `[]` too: it is an answer ("read nothing"), not the absence of one, and
+    # a reference folder cannot express it either.
+    empty = owner.post(
+        _COMMIT,
+        json={"task_id": read_task_id, "mode": "reference", "captions": []},
+    )
+    assert empty.status_code == 400, empty.text
     # The refusal burned nothing: the read is still committable without them.
     ok = owner.post(_COMMIT, json={"task_id": read_task_id, "mode": "reference"})
     assert ok.status_code == 200, ok.text
@@ -767,6 +836,36 @@ def test_a_caption_answer_with_an_unsafe_suffix_is_refused(owner_env):
     )
     assert refused.status_code == 400, refused.text
     assert "captions[0].suffix" in refused.json()["detail"]
+    # An unknown kind is the same 400, naming the row and the values it takes.
+    # `kind` is a plain `str` on the payload precisely so `parse_captions`
+    # gets to answer: a `Literal` there has pydantic answer 422 in its own
+    # shape, which §22 does not document and the wizard does not read.
+    bad_kind = owner.post(
+        _COMMIT,
+        json={
+            "task_id": read_task_id,
+            "mode": "local_import",
+            "captions": [{"suffix": ".txt", "kind": "captions"}],
+        },
+    )
+    assert bad_kind.status_code == 400, bad_kind.text
+    assert "captions[0].kind" in bad_kind.json()["detail"]
+    # A case-only repeat is a repeat: `_notes.txt` and `_NOTES.TXT` name one
+    # file on Windows and macOS, so accepting both would have `attach_sidecars`
+    # read that file as tags for one answer and a description for the other.
+    repeated = owner.post(
+        _COMMIT,
+        json={
+            "task_id": read_task_id,
+            "mode": "local_import",
+            "captions": [
+                {"suffix": "_notes.txt", "kind": "tags"},
+                {"suffix": "_NOTES.TXT", "kind": "description"},
+            ],
+        },
+    )
+    assert repeated.status_code == 400, repeated.text
+    assert "captions[1] repeats suffix" in repeated.json()["detail"]
     # The refusal burned nothing: the read is still committable.
     ok = owner.post(_COMMIT, json={"task_id": read_task_id, "mode": "local_import"})
     assert ok.status_code == 200, ok.text

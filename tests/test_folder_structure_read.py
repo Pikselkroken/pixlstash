@@ -387,6 +387,120 @@ def test_the_read_reports_every_caption_convention_beside_the_pictures():
     assert "_thumb.webp" not in by_suffix
 
 
+def _mixed_exporter_tree(tags_folders, prose_folder):
+    """One `.txt` convention, two exporters: tag lists in *tags_folders*,
+    prose in *prose_folder*. The folder names are the caller's so the same
+    tree can be walked with the prose folder first or last."""
+    spec = {"": []}
+    for folder in tags_folders:
+        spec[folder] = [f for n in "abc" for f in (f"{n}.jpg", f"{n}.txt")]
+    spec[prose_folder] = [f for n in "uvwxyz" for f in (f"{n}.jpg", f"{n}.txt")]
+    return spec
+
+
+@pytest.mark.parametrize(
+    ("tags_folders", "prose_folder"),
+    [(("a_wd14", "b_wd14"), "z_blip"), (("y_wd14", "z_wd14"), "a_blip")],
+)
+def test_one_suffix_two_exporters_votes_across_the_tree(tags_folders, prose_folder):
+    """A dataset that ran wd14 over some folders and BLIP over others has one
+    suffix and two conventions. The samples are spread over the folders, so
+    the answer is the tree's majority rather than whichever folder ``os.walk``
+    reached first - the same tree walked in either order says the same thing.
+    """
+    spec = _mixed_exporter_tree(tags_folders, prose_folder)
+    with _tree(spec) as root:
+        for folder in tags_folders:
+            for name in "abc":
+                _write(root, f"{folder}/{name}.txt", "1girl, solo, long hair, smile")
+        for name in "uvwxyz":
+            _write(
+                root,
+                f"{prose_folder}/{name}.txt",
+                "A woman with long hair stands in a sunlit field, smiling.",
+            )
+        result = FolderStructureRead(root).run()
+
+    by_suffix = {row["suffix"]: row for row in result["captions"]}
+    assert set(by_suffix) == {".txt"}
+    assert by_suffix[".txt"]["files"] == 12
+    assert by_suffix[".txt"]["folders"] == 3
+    assert by_suffix[".txt"]["kind"] == "tags", (
+        "two of the three folders hold tag lists; the prose folder holding the "
+        "most files must not carry the vote by itself"
+    )
+    assert by_suffix[".txt"]["sample"].startswith("1girl"), (
+        "the excerpt has to come from a file of the kind that won"
+    )
+
+
+def test_metadata_sidecars_never_reach_the_caption_sniff():
+    """`.xmp`, `.csv` and friends are metadata, not captions. They are dropped
+    on the extension so the read never opens them at all, rather than opening
+    every one of them to find out. And a caption file written with a BOM
+    classifies as itself: the BOM survives ``.strip()``, so decoding it away
+    is what keeps it off the front of the first tag."""
+    spec = {
+        "": [],
+        "shoot": [f for n in "ab" for f in (f"{n}.jpg", f"{n}.txt", f"{n}.xmp")]
+        + ["scores.csv", "a.csv", "b.csv"],
+    }
+    with _tree(spec) as root:
+        for name in "ab":
+            _write(root, f"shoot/{name}.txt", "\ufeff1girl, solo, long hair, smile")
+            _write(root, f"shoot/{name}.xmp", '<?xml version="1.0"?><x:xmpmeta/>')
+            _write(root, f"shoot/{name}.csv", "file,score\na.jpg,0.92")
+        result = FolderStructureRead(root).run()
+
+    by_suffix = {row["suffix"]: row for row in result["captions"]}
+    assert set(by_suffix) == {".txt"}, "only caption extensions are offered"
+    assert by_suffix[".txt"]["kind"] == "tags"
+    assert by_suffix[".txt"]["sample"].startswith("1girl"), (
+        "a BOM is not part of the first tag"
+    )
+
+
+def test_a_caption_stem_matches_the_picture_regardless_of_case():
+    """`IMG_0001.JPG` beside `img_0001.txt` is one convention, not two files
+    that happen to look alike: on Windows and macOS the filesystem itself
+    treats them as the same stem, and a camera that shouts its names while the
+    exporter whispers its own is the common case. The suffix is still reported
+    with the casing the caption file actually has."""
+    spec = {
+        "": [],
+        "shoot": [
+            f for n in ("0001", "0002") for f in (f"IMG_{n}.JPG", f"img_{n}.TXT")
+        ],
+    }
+    with _tree(spec) as root:
+        for n in ("0001", "0002"):
+            _write(root, f"shoot/img_{n}.TXT", "1girl, solo, long hair, smile")
+        result = FolderStructureRead(root).run()
+
+    by_suffix = {row["suffix"]: row for row in result["captions"]}
+    assert set(by_suffix) == {".TXT"}, "the suffix keeps the caption file's own casing"
+    assert by_suffix[".TXT"]["files"] == 2
+    assert by_suffix[".TXT"]["kind"] == "tags"
+
+
+def test_one_convention_in_two_casings_is_one_row():
+    """`a.txt` beside `b.TXT` is one convention, not two. On Windows and macOS
+    the two suffixes name the same file, so offering both would ask the owner
+    to answer one file twice - and the commit refuses the pair as a repeat.
+    The first casing walked is the one reported."""
+    spec = {"": [], "shoot": ["a.jpg", "a.txt", "b.jpg", "b.TXT", "c.jpg", "c.txt"]}
+    with _tree(spec) as root:
+        for rel in ("shoot/a.txt", "shoot/b.TXT", "shoot/c.txt"):
+            _write(root, rel, "1girl, solo, long hair, smile")
+        result = FolderStructureRead(root).run()
+
+    assert [row["suffix"] for row in result["captions"]] == [".txt"], (
+        "one row, reported with the first casing the walk saw"
+    )
+    assert result["captions"][0]["files"] == 3
+    assert result["captions"][0]["kind"] == "tags"
+
+
 def test_a_tree_without_captions_reports_none():
     with _tree({"": [], "shoot": ["a.jpg", "b.jpg", "c.jpg"]}) as root:
         result = FolderStructureRead(root).run()
@@ -707,6 +821,40 @@ def test_a_cancelled_read_keeps_what_it_found():
     assert read.cancelled is True
     assert result["folder_count"] == 2, "the walk's work survived the cancel"
     assert result["root"]["name"] == "Generations"
+
+
+def test_a_cancel_stops_the_sniff_before_the_next_sample(monkeypatch):
+    """The checkpoint runs per sample, not once per suffix.
+
+    Checking only at the top of a suffix let a cancel that arrived while one
+    convention was being classified still open every remaining sample of it -
+    up to `CAPTION_SAMPLES` file reads after the owner pressed stop."""
+    opened: list[str] = []
+    read_box = {}
+
+    def stop_on_first_sniff(path):
+        opened.append(path)
+        read_box["read"].cancel()
+        return ("tags", "1girl, solo")
+
+    monkeypatch.setattr(
+        "pixlstash.services.folder_structure_service.sniff_caption",
+        stop_on_first_sniff,
+    )
+    spec = {"": [], "shoot": ["a.jpg", "a.txt", "b.jpg", "b.txt"]}
+    with _tree(spec) as root:
+        for name in ("a", "b"):
+            _write(root, f"shoot/{name}.txt", "1girl, solo, long hair, smile")
+        read = FolderStructureRead(root)
+        read_box["read"] = read
+        result = read.run()
+
+    assert opened == [os.path.join(root, "shoot", "a.txt")], (
+        f"the second sample must never be opened after the cancel: {opened}"
+    )
+    assert result["captions"] == [], (
+        "a suffix cancelled part-way through its samples is not a classified pattern"
+    )
 
 
 def test_a_read_cancelled_before_it_starts_still_returns_a_document():

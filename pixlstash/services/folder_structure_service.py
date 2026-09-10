@@ -70,7 +70,11 @@ import numpy as np
 from PIL import Image
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.caption_file_utils import is_safe_sidecar_suffix, sniff_caption
+from pixlstash.utils.caption_file_utils import (
+    SIDECAR_TYPE_DESCRIPTION,
+    is_safe_sidecar_suffix,
+    sniff_caption,
+)
 from pixlstash.utils.library_layout import Facet
 from pixlstash.utils.media_files import (
     SUPPORTED_IMAGE_EXTS,
@@ -105,8 +109,15 @@ MIN_SIDECAR_PICTURES = 3
 #: pattern is one convention - a dataset exporter writes every file the same
 #: way - so a handful settles it, and each read is one small file.
 CAPTION_SAMPLES = 8
+#: Samples taken from any one folder. A tree that exports `wd14/*.txt` next to
+#: `blip/*.txt` has one suffix and two conventions, and eight samples all taken
+#: from whichever folder `os.walk` reached first is not a vote - it is the walk
+#: order deciding what the owner is shown.
+_CAPTION_SAMPLES_PER_FOLDER = 2
 #: Distinct caption patterns reported, most files first. A tree with more
-#: distinct suffixes than this has stray notes, not conventions.
+#: distinct suffixes than this has stray notes, not conventions. It is applied
+#: *before* the sniff, so a tree of thousands of one-off suffixes is never
+#: opened rather than opened and then trimmed.
 MAX_CAPTION_PATTERNS = 12
 
 #: Below this many direct pictures the leaf and batch-numbering signals stay
@@ -571,73 +582,131 @@ class FolderStructureRead:
         """Group this folder's caption files by the suffix after the picture stem.
 
         A caption file is any non-media file whose name starts with the stem
-        of a picture in the same folder: ``a.txt``, ``a_tags.txt`` and
-        ``a.jpg.caption`` beside ``a.jpg`` are the suffixes ``.txt``,
-        ``_tags.txt`` and ``.jpg.caption``. Not the extension list the Set
-        signal uses - the point is to find the convention the owner actually
-        has, whatever it is called. Longest stem wins, so ``foo_tags.txt``
-        beside both ``foo.png`` and ``foo_tags.png`` belongs to the latter.
+        of a picture in the same folder and ends in a caption extension:
+        ``a.txt``, ``a_tags.txt`` and ``a.jpg.caption`` beside ``a.jpg`` are
+        the suffixes ``.txt``, ``_tags.txt`` and ``.jpg.caption``. The
+        *suffix* is free-form - the point is to find the convention the owner
+        actually has, whatever the exporter called it - but the extension is
+        `_SIDECAR_EXTS`, because a `.json`, `.xmp` or `.csv` beside a picture
+        is metadata, never a caption, and opening every one of them to find
+        that out is a second read of the whole tree. Longest stem wins, so
+        ``foo_tags.txt`` beside both ``foo.png`` and ``foo_tags.png`` belongs
+        to the latter.
+
+        Filenames are taken in sorted order and at most
+        `_CAPTION_SAMPLES_PER_FOLDER` of each suffix are sampled here, so the
+        files a pattern is judged on are the same ones on every run and come
+        from across the tree rather than from one folder.
         """
-        stems = {os.path.splitext(f)[0] for f in folder.direct_pictures}
+        # Case-folded: Windows and macOS filesystems are case-insensitive, so
+        # `img_0001.txt` beside `IMG_0001.JPG` is the same convention there and
+        # matching case-sensitively would report none at all.
+        stems = {os.path.splitext(f)[0].lower() for f in folder.direct_pictures}
         if not stems:
             return
-        for name in filenames:
+        sampled_here: Counter = Counter()
+        for name in sorted(filenames):
             if (
                 is_hidden_entry(name)
                 or is_supported_media_file(name)
                 or is_pixlstash_thumbnail(name)
+                or os.path.splitext(name)[1].lower() not in _SIDECAR_EXTS
             ):
                 continue
             # Longest prefix that is a picture stem: one set lookup per
-            # character rather than one comparison per picture.
+            # character rather than one comparison per picture. The suffix is
+            # sliced off the original name, so it keeps its real casing.
             suffix = None
             for cut in range(len(name) - 1, 0, -1):
-                if name[:cut] in stems:
+                if name[:cut].lower() in stems:
                     suffix = name[cut:]
                     break
             if suffix is None or not is_safe_sidecar_suffix(suffix):
                 continue
+            # Grouped case-insensitively for the same reason the stems are:
+            # `.txt` and `.TXT` are one file on Windows and macOS, and offering
+            # them as two rows lets the owner answer one file twice. The first
+            # casing seen is the one reported.
+            key = suffix.lower()
             entry = self._captions.setdefault(
-                suffix, {"files": 0, "folders": set(), "samples": []}
+                key, {"suffix": suffix, "files": 0, "folders": set(), "samples": []}
             )
             entry["files"] += 1
             entry["folders"].add(folder.index)
-            if len(entry["samples"]) < CAPTION_SAMPLES:
+            if (
+                len(entry["samples"]) < CAPTION_SAMPLES
+                and sampled_here[key] < _CAPTION_SAMPLES_PER_FOLDER
+            ):
                 entry["samples"].append(os.path.join(dirpath, name))
+                sampled_here[key] += 1
 
     def _caption_patterns(self) -> list[dict[str, Any]]:
         """The caption conventions found, each read enough to say what it holds.
 
         One row per suffix, most files first, ``kind`` the majority of the
         sampled files (``tags`` or ``description``) and ``sample`` an excerpt
-        of one, so the owner can check the guess without opening a file. A
-        suffix none of whose samples read as a caption (binary, JSON metadata)
-        is not a convention worth asking about and is left out.
+        of one of *that* kind, so the owner can check the guess without opening
+        a file. A suffix none of whose samples read as a caption (binary,
+        markup, JSON metadata) is not a convention worth asking about and is
+        left out.
+
+        The suffixes are ranked before anything is opened and the loop stops at
+        `MAX_CAPTION_PATTERNS`: the cap is what keeps a tree of thousands of
+        one-off suffixes from costing thousands of file reads, so trimming the
+        finished rows instead would be the cap in name only.
         """
-        rows = []
-        for suffix, entry in self._captions.items():
-            votes: Counter = Counter()
-            excerpt = ""
-            for path in entry["samples"]:
-                sniffed = sniff_caption(path)
-                if sniffed is None:
+        rows: list[dict[str, Any]] = []
+        ranked = sorted(
+            self._captions.items(), key=lambda item: (-item[1]["files"], item[0])
+        )
+        try:
+            for _key, entry in ranked:
+                if len(rows) >= MAX_CAPTION_PATTERNS:
+                    break
+                self._checkpoint()
+                votes: Counter = Counter()
+                excerpts: dict[str, str] = {}
+                for path in entry["samples"]:
+                    # Per sample, not per suffix: a cancel arriving mid-suffix
+                    # would otherwise still open every remaining sample of it.
+                    self._checkpoint()
+                    sniffed = sniff_caption(path)
+                    if sniffed is None:
+                        continue
+                    kind, text = sniffed
+                    votes[kind] += 1
+                    excerpts.setdefault(kind, text)
+                if not votes:
                     continue
-                kind, text = sniffed
-                votes[kind] += 1
-                excerpt = excerpt or text
-            if not votes:
-                continue
-            rows.append(
-                {
-                    "suffix": suffix,
-                    "kind": votes.most_common(1)[0][0],
-                    "files": entry["files"],
-                    "folders": len(entry["folders"]),
-                    "sample": excerpt,
-                }
+                # A tie goes to description, and so does the walk order that
+                # produced it: pre-filling a prose convention as tags puts a
+                # sentence's words on every picture in the library, while the
+                # other way round puts a tag list in one description field.
+                # ponytail: one answer per suffix tree-wide; per-folder
+                # patterns if mixed exporters show up.
+                kind = max(
+                    votes,
+                    key=lambda k: (votes[k], k == SIDECAR_TYPE_DESCRIPTION),
+                )
+                rows.append(
+                    {
+                        "suffix": entry["suffix"],
+                        "kind": kind,
+                        "files": entry["files"],
+                        "folders": len(entry["folders"]),
+                        "sample": excerpts[kind],
+                    }
+                )
+        except ReadCancelled:
+            # Cancelled or out of time part-way through the sniff. Report the
+            # patterns already classified rather than losing them: the caller
+            # is building a deliberately partial result.
+            logger.info(
+                "Folder-structure read cancelled while reading caption files - "
+                "reporting the %d pattern(s) already classified",
+                len(rows),
             )
-        rows.sort(key=lambda row: (-row["files"], row["suffix"]))
-        return rows[:MAX_CAPTION_PATTERNS]
+        return rows
 
     def _total_picture_counts(self) -> None:
         """Fill every folder's recursive count, deepest first.
@@ -796,11 +865,14 @@ class FolderStructureRead:
             )
 
         root = self._folders[0] if self._folders else None
+        captions = self._caption_patterns()
         # The filename lists were only ever input to the signals, and the route
         # holds this object for the process lifetime. A 28,000-picture library
-        # would otherwise pin all 28,000 filenames until the next read.
+        # would otherwise pin all 28,000 filenames until the next read - and
+        # the caption index pins one sample path per suffix per folder on top.
         for folder in self._folders:
             folder.direct_pictures = []
+        self._captions = {}
         return {
             "root": {
                 "path": self._root,
@@ -832,7 +904,7 @@ class FolderStructureRead:
             # The caption-file conventions beside the pictures, for the owner
             # to confirm as tags, descriptions or nothing before the commit
             # reads them. Empty when there are none.
-            "captions": self._caption_patterns(),
+            "captions": captions,
             "levels": level_docs,
         }
 

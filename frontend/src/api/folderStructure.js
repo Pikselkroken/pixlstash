@@ -83,7 +83,10 @@ export async function cancelFolderStructureRead(taskId) {
  *   `readResult` reaches the server.
  * @param {Array<{suffix: string, kind: "tags"|"description"|"ignore"}>} [captions] -
  *   the owner's answer for each caption-file pattern the read reported
- *   (`result.captions`). Empty: the import probes the known conventions.
+ *   (`result.captions`). Sent in `local_import` only, and always sent there:
+ *   `[]` is an answer ("read nothing"), while leaving the key out asks the
+ *   import to probe the known conventions instead. `mode: "reference"`
+ *   refuses the pair with a 400, so the key never goes with it.
  * @returns {Promise<Object>} `{ task_id }`.
  */
 export async function startFolderStructureCommit(
@@ -103,7 +106,11 @@ export async function startFolderStructureCommit(
     ? { task_id: taskId, assignments, mode }
     : { read_result: readResult, assignments, mode };
   if (label) body.label = label;
-  if (captions.length) body.captions = captions;
+  // Sending `[]` and omitting the key mean different things: `[]` says "read
+  // nothing", no key at all says "probe the known conventions". A local
+  // import always carries the owner's answer, empty included; a reference
+  // folder never carries one at all (400).
+  if (mode === "local_import") body.captions = captions;
   return unwrap(apiClient.post(COMMIT_URL, body));
 }
 
