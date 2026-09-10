@@ -6316,9 +6316,11 @@ does; an answer means only the named suffixes are read, and an `ignore`d one is
 never opened. The answers are written into the durable `FolderMappingCommit`
 record beside the assignments (`captions`, migration 0115) for the same reason
 the assignments are: a commit resumed after a crash must not re-probe and
-import a file the owner said to leave alone. In reference mode the first
-`tags` and `description` suffixes become the new `ReferenceFolder`'s configured
-ones. It reads at import only: the root scan's reconcile pass still skips
+import a file the owner said to leave alone. Reference mode refuses `captions`
+outright (400): a `ReferenceFolder` holds one suffix per kind and its scan
+probes the known conventions for an unset one, so it cannot honour "ignore"
+for a kind, and half-honouring the answer would read the file the owner said
+to leave alone. It reads at import only: the root scan's reconcile pass still skips
 sidecars, per its own comment, so a caption edited on disk after the import is
 not picked up for a managed picture.
 

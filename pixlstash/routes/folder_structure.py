@@ -129,7 +129,8 @@ class FolderStructureCommitRequest(BaseModel):
     captions: list[FolderStructureCaptionPayload] = []
     """One row per caption pattern from the read's ``captions``, saying what
     to read it as. Absent or empty: the import probes the known conventions
-    (``_tags.txt``, ``.caption``, a content-sniffed ``.txt`` …) instead."""
+    (``_tags.txt``, ``.caption``, a content-sniffed ``.txt`` …) instead.
+    ``local_import`` only; with ``mode: "reference"`` a non-empty list is 400."""
     label: Optional[str] = None
     mode: Literal["reference", "local_import"] = "reference"
     """``reference`` (default): register the scanned root as an ordinary
@@ -591,7 +592,7 @@ def create_router(server) -> APIRouter:
                 # registered (adopt it and finish the mapping) from one that
                 # was already there (refuse).
                 rf = commit_service.register_reference_folder(
-                    server, root_path, label=label, task_id=task_id, captions=captions
+                    server, root_path, label=label, task_id=task_id
                 )
                 _commit_progress(task_id, "indexing", 0, expected_pictures)
                 commit_service.record_commit_stage(server, task_id, "indexing")
@@ -844,6 +845,20 @@ def create_router(server) -> APIRouter:
             )
         except commit_service.CommitError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if captions and payload.mode == "reference":
+            # A reference folder holds one suffix per kind and its scan probes
+            # the known conventions for an unset one, so it cannot express
+            # "read nothing of this kind": an answer with every tags pattern
+            # ignored would still open a bare .txt. The folder's own sidecar
+            # fields are its contract instead.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "captions apply to mode=local_import. A reference folder's "
+                    "sidecar suffixes are its own: set them on "
+                    "PATCH /reference-folders/{folder_id}."
+                ),
+            )
 
         # A read commits once. Re-checked (not just re-validated) here, inside
         # the lock, immediately before the commit actually starts: two

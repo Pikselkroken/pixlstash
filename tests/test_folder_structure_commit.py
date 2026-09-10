@@ -616,6 +616,37 @@ def test_the_owners_caption_answers_decide_what_is_read(owner_env):
     )
 
 
+def test_caption_answers_are_refused_in_reference_mode(owner_env):
+    """A reference folder holds one suffix per kind and probes the known
+    conventions for an unset one, so it cannot honour "ignore" for a kind: an
+    answer with every tags pattern ignored would still open a bare .txt. The
+    commit refuses rather than half-honour the answer."""
+    owner = owner_env["owner"]
+    root = os.path.join(owner_env["tmp"], "reference-captions")
+    _make_tree(root, {"shoot": ["a.jpg", "a.txt"]})
+    started = owner.post(_READ, json={"path": root})
+    assert started.status_code == 200, started.text
+    read_task_id = started.json()["task_id"]
+    _drain_read(owner, read_task_id)
+    refused = owner.post(
+        _COMMIT,
+        json={
+            "task_id": read_task_id,
+            "mode": "reference",
+            "captions": [{"suffix": ".txt", "kind": "ignore"}],
+        },
+    )
+    assert refused.status_code == 400, refused.text
+    assert "local_import" in refused.json()["detail"]
+    # The refusal burned nothing: the read is still committable without them.
+    ok = owner.post(_COMMIT, json={"task_id": read_task_id, "mode": "reference"})
+    assert ok.status_code == 200, ok.text
+    assert (
+        _drain_commit(owner, ok.json()["task_id"], timeout_s=60.0)["status"]
+        == "completed"
+    )
+
+
 def test_a_caption_answer_with_an_unsafe_suffix_is_refused(owner_env):
     """The suffix is appended to a picture path to find the file to read, so
     the commit enforces the same bare-fragment rule the reference-folder API

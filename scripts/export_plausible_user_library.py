@@ -347,9 +347,19 @@ def export_library(
         tags_by_picture: dict[int, list[str]] = {}
         descriptions: dict[int, Optional[str]] = {}
         if captions > 0:
-            for picture_id, tag in session.exec(select(Tag.picture_id, Tag.tag)):
-                if not is_tag_sentinel(tag):
-                    tags_by_picture.setdefault(picture_id, []).append(tag)
+            # Only the sampled pictures' tags: with --limit the whole Tag table
+            # is a full scan for rows that never get written. Chunked so the
+            # IN list stays under SQLite's bound-parameter cap.
+            ids = [p.id for p in pictures]
+            for start in range(0, len(ids), 500):
+                rows = session.exec(
+                    select(Tag.picture_id, Tag.tag).where(
+                        Tag.picture_id.in_(ids[start : start + 500])
+                    )
+                )
+                for picture_id, tag in rows:
+                    if not is_tag_sentinel(tag):
+                        tags_by_picture.setdefault(picture_id, []).append(tag)
             descriptions = {
                 p.id: (
                     None if is_description_sentinel(p.description) else p.description
