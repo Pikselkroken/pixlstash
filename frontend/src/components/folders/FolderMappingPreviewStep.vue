@@ -101,7 +101,11 @@ const patterns = computed(() =>
   props.mode === "local_import" ? (props.readResult?.captions ?? []) : [],
 );
 // suffix -> the owner's answer. Seeded from the saved answers, then the read.
-const answers = reactive({});
+// Null-prototype, because the keys are filename fragments: on a plain object
+// `answers.constructor` is already truthy so the seeding skips it and a
+// function is committed as the kind, and `answers.__proto__ = "tags"` is
+// swallowed by the inherited setter instead of storing the answer.
+const answers = reactive(Object.create(null));
 watch(
   patterns,
   (rows) => {

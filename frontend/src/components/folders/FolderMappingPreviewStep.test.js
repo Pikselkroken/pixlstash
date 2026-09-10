@@ -380,6 +380,36 @@ describe("caption files beside the pictures", () => {
     expect(wrapper.text()).not.toContain("tagged from scratch");
   });
 
+  it("answers a suffix that is also an inherited object key", async () => {
+    // The suffixes come from the owner's filenames, so `constructor` and
+    // `__proto__` are reachable. On a plain object the seeding check reads the
+    // inherited value as an answer already made and skips it, and the commit
+    // then sends a function as the kind.
+    startFolderStructureCommit.mockResolvedValue({ task_id: "commit-3" });
+    const wrapper = mountImport({
+      commitOnMount: false,
+      readResult: {
+        ...READ_RESULT,
+        captions: [
+          {
+            suffix: "constructor",
+            kind: "tags",
+            files: 7,
+            folders: 1,
+            sample: "1girl, solo",
+          },
+        ],
+      },
+    });
+    expect(selects(wrapper)[0].element.value).toBe("tags");
+
+    await buttonWith(wrapper, "Yes, build this library").trigger("click");
+    await flushPromises();
+    expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual([
+      { suffix: "constructor", kind: "tags" },
+    ]);
+  });
+
   it("asks nothing when the read found no caption files", () => {
     const wrapper = mountImport({
       commitOnMount: false,
