@@ -18,6 +18,8 @@ from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolde
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.utils.caption_file_utils import (
+    DEFAULT_DESCRIPTION_SUFFIX,
+    DEFAULT_TAGS_SUFFIX,
     SIDECAR_TYPE_DESCRIPTION,
     SIDECAR_TYPE_TAGS,
     detect_folder_suffixes,
@@ -904,6 +906,19 @@ def create_router(server) -> APIRouter:
                 rf.description_suffix = _normalize_suffix(payload.description_suffix)
             if "tags_suffix" in payload.model_fields_set:
                 rf.tags_suffix = _normalize_suffix(payload.tags_suffix)
+            if {"description_suffix", "tags_suffix"} & payload.model_fields_set and (
+                rf.tags_suffix or DEFAULT_TAGS_SUFFIX
+            ) == (rf.description_suffix or DEFAULT_DESCRIPTION_SUFFIX):
+                # One suffix for both kinds is one file for both: the two
+                # write-backs overwrite each other and the next scan reads the
+                # survivor back in as the other kind.
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Tags and descriptions cannot share a suffix; they "
+                        "would share one file and overwrite each other."
+                    ),
+                )
             if "host_path" in payload.model_fields_set:
                 rf.host_path = _normalize_optional_host_path(payload.host_path)
             if {"layout", "layout_unfiled"} & payload.model_fields_set:

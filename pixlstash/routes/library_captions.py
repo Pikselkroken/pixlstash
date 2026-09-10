@@ -112,10 +112,19 @@ def create_router(server) -> APIRouter:
             "`_`, `-`); anything else is refused with 400. Sending an empty or "
             "`null` "
             "suffix clears it, so the next scan detects the convention on disk "
-            "again or the default is used."
+            "again or the default is used. The two types may not end up with "
+            "the same suffix, their own or the default: one file cannot hold "
+            "both."
         ),
         response_model=CaptionSyncResponse,
-        responses={400: {"description": "A suffix is not a bare filename fragment."}},
+        responses={
+            400: {
+                "description": (
+                    "A suffix is not a bare filename fragment, or both types "
+                    "would use the same one."
+                )
+            }
+        },
     )
     def patch_caption_sync(request: Request, body: CaptionSyncPatch = Body(...)):
         current = get_caption_sync(server.vault.db)
@@ -132,13 +141,35 @@ def create_router(server) -> APIRouter:
             fields["tags_suffix"] = _suffix(body.tags_suffix)
         if "description_suffix" in body.model_fields_set:
             fields["description_suffix"] = _suffix(body.description_suffix)
+        # One suffix for both kinds means one file for both: the two write-backs
+        # overwrite each other and the next scan reads the survivor back in as
+        # the other kind. Compared on the effective values, because an unset
+        # suffix is the default rather than "no file".
+        effective = {**current, **fields}
+        if (effective["tags_suffix"] or DEFAULT_TAGS_SUFFIX) == (
+            effective["description_suffix"] or DEFAULT_DESCRIPTION_SUFFIX
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Tags and descriptions cannot share a suffix; they would "
+                    "share one file and overwrite each other."
+                ),
+            )
         stored = set_caption_sync(server.vault.db, **fields) if fields else current
-        turned_on = (fields.get("sync_tags") and not current["sync_tags"]) or (
-            fields.get("sync_descriptions") and not current["sync_descriptions"]
+        # The scan is what reads the existing files in and exports the missing
+        # ones, as PATCH /reference-folders does for a folder. A type that just
+        # came on is due for one, and so is a type whose suffix changed while
+        # it is on: that names a different set of files, none of them read yet.
+        due = any(
+            stored[toggle]
+            and (not current[toggle] or stored[suffix_key] != current[suffix_key])
+            for toggle, suffix_key in (
+                ("sync_tags", "tags_suffix"),
+                ("sync_descriptions", "description_suffix"),
+            )
         )
-        if turned_on:
-            # The scan is what reads the existing files in and exports the
-            # missing ones, as PATCH /reference-folders does for a folder.
+        if due:
             server.vault.rescan_library_root()
         return _response(stored)
 
