@@ -961,6 +961,15 @@ async function _offerLoosePictures() {
   const epoch = mappingStore.rootCountEpoch;
   if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
   if (epoch !== mappingStore.rootCountEpoch) return;
+  // The refresh can be what makes a persisted entry match this library for
+  // the first time, so ask again here as `chooseLibraryFolder` does: that
+  // entry is the auto-open watcher's to resume, and a fresh offer over it
+  // would replace its saved answers with an empty wizard.
+  const saved = pendingForThisLibrary.value;
+  if (saved?.mode === "local_import") {
+    await _fillRootPictureCount(saved);
+    return;
+  }
   const path = librariesStore.activeLibrary?.path;
   if (!path || !librariesStore.canManage) return;
   // On desktop the startup screen may have read this very folder already,

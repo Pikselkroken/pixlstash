@@ -774,6 +774,50 @@ describe("the empty library's Choose a folder button", () => {
     wrapper.unmount();
   });
 
+  it("leaves an entry the refresh only just made matchable to the auto-open", async () => {
+    // Same race on the offer path: read before the refresh, the entry was
+    // null, and the fresh offer then wrote `{ path, mode }` over the saved
+    // taskId, assignments and autoCommit the watcher was about to resume.
+    const path = "/home/me/Pictures";
+    const entry = {
+      taskId: "task-8",
+      path,
+      label: "Pictures",
+      mode: "local_import",
+      autoCommit: true,
+      pictureCount: 4,
+      pictureCountCapped: false,
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    const inspect = vi.fn();
+    apiGet.mockImplementation((url) => {
+      if (url.includes("inspect")) {
+        inspect();
+        return Promise.resolve({ data: { picture_count: 12 } });
+      }
+      if (url === "/libraries") {
+        return Promise.resolve({
+          data: {
+            libraries: [{ id: 1, name: "lib", path, is_active: true }],
+            can_manage: true,
+          },
+        });
+      }
+      return Promise.resolve(respond());
+    });
+    const wrapper = await mountSidebar();
+    const mapping = useFolderMappingStore();
+
+    await wrapper.vm.offerLoosePictures();
+    await flushPromises();
+
+    expect(mapping.wizardResume).toEqual(entry);
+    expect(mapping.rootPictureCount).toBe(4);
+    expect(inspect).not.toHaveBeenCalled();
+
+    wrapper.unmount();
+  });
+
   it("re-inspects, so a root that has since filled up opens the wizard", async () => {
     // A cached 0 from a load over an empty folder used to be permanent, and
     // sent the owner to "Add a library", which refuses the folder the library
