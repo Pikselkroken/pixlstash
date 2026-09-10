@@ -96,6 +96,24 @@ describe("LibraryCaptionsDialog", () => {
     expect(wrapper.emitted("close")).toBeTruthy();
   });
 
+  it("cannot save over settings it never read", async () => {
+    // A failed GET leaves both toggles false and both suffixes "", which is a
+    // body the PATCH would store: one click after a transient 500 turned sync
+    // off and cleared the suffixes the owner had chosen.
+    getCaptionSettings.mockRejectedValue({
+      response: { status: 500, data: { detail: "Database is locked" } },
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Database is locked");
+    const save = button(wrapper, "Save");
+    expect(save.attributes("disabled")).toBeDefined();
+    await save.trigger("click");
+    await flushPromises();
+    expect(setCaptionSettings).not.toHaveBeenCalled();
+  });
+
   it("shows the server's refusal and stays open", async () => {
     setCaptionSettings.mockRejectedValue({
       response: { status: 400, data: { detail: "Sidecar suffix may only contain letters" } },

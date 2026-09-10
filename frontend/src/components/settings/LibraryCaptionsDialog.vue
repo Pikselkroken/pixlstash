@@ -30,6 +30,14 @@ const loading = ref(false);
 const saving = ref(false);
 const error = ref("");
 const refused = ref(false);
+/**
+ * The GET has landed and `apply()` has run. Save is disabled until it has:
+ * on a failed read both toggles are still false and both suffixes still "",
+ * which is a valid-looking body the PATCH would happily store - one click
+ * after a transient 500 turned sync off and cleared both suffixes. Same guard,
+ * same reason, as `loaded` in LibraryLayoutDialog.
+ */
+const loaded = ref(false);
 
 const syncTags = ref(false);
 const syncDescriptions = ref(false);
@@ -63,10 +71,12 @@ function apply(body) {
 
 async function load() {
   loading.value = true;
+  loaded.value = false;
   error.value = "";
   refused.value = false;
   try {
     apply(await getCaptionSettings());
+    loaded.value = true;
   } catch (err) {
     refused.value = err?.response?.status === 403;
     if (!refused.value) {
@@ -97,10 +107,13 @@ async function save() {
   }
 }
 
+// `blocked` is watched alongside `open` because the registry read that answers
+// it is still in flight when the dialog opens, and a blocked dialog draws the
+// "only on this machine" text instead - there is nothing to read for.
 watch(
-  () => props.open,
-  (open) => {
-    if (open) load();
+  [() => props.open, blocked],
+  ([open, cannot]) => {
+    if (open && !cannot) load();
   },
   { immediate: true },
 );
@@ -122,11 +135,11 @@ watch(
     <template v-else>
       <p class="captions-dlg__sub">
         Keep text files next to each picture in this library in sync with
-        PixlStash. Tags and descriptions are separate files: a change made here
-        is written out, and a file edited outside PixlStash is read back in on
-        the next scan. A picture that already has a caption file keeps it,
-        whatever it is called. The suffix below only names the files PixlStash
-        creates for pictures that have none; an empty file is never created.
+        PixlStash, so your tags and descriptions travel with the pictures.
+        Turning a type on writes a file beside every picture that already has
+        tags or a description, and where a picture already has a caption file,
+        that file's text replaces what PixlStash holds. The suffix below only
+        names the files PixlStash creates; an empty file is never created.
       </p>
 
       <p v-if="error" class="captions-dlg__error" role="alert">{{ error }}</p>
@@ -188,7 +201,7 @@ watch(
         <AppButton
           variant="primary"
           size="sm"
-          :disabled="loading"
+          :disabled="loading || !loaded"
           :loading="saving"
           @click="save"
         >
