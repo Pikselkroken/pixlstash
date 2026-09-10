@@ -52,13 +52,13 @@ def _drop_picture(root, name):
     os.utime(path, (old, old))
 
 
-def _record(server, state):
+def _record(server, state, mode="local_import"):
     def write(session: Session):
         session.add(
             FolderMappingCommit(
-                task_id=f"t-{state}",
+                task_id=f"t-{mode}-{state}",
                 root_path=server.vault.image_root,
-                mode="local_import",
+                mode=mode,
                 expected_pictures=1,
                 state=state,
             )
@@ -86,6 +86,12 @@ def test_a_fresh_library_over_pictures_is_not_scanned_until_the_offer_is_answere
 
     _record(server, STATE_ABANDONED)
     assert finder.find_task() is None, "an abort is not an answer to import"
+
+    _record(server, STATE_DEFERRED, mode="reference")
+    assert finder.find_task() is None, (
+        "a reference-folder commit registers some other folder; it says "
+        "nothing about the root's own pictures"
+    )
 
     _record(server, STATE_DEFERRED)
     task = finder.find_task()

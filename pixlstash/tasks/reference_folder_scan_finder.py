@@ -182,10 +182,13 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         the boot-time root scan used to answer first: a small library was
         indexed, tags and all, before the screen came up, so the grid was no
         longer empty and the questions never appeared. The root scan waits
-        for the answer. Any commit record counts - done, deferred ("organise
-        later"), pending - except an abandoned one, which is "bring nothing
-        in". A library with a picture in it was imported into some other way
-        and is scanned as before, so nothing changes for an existing library.
+        for the answer. Any ``local_import`` commit record counts - done,
+        deferred ("organise later"), pending - except an abandoned one, which
+        is "bring nothing in". A ``reference`` commit is not an answer: it
+        registers some other folder and says nothing about the root's own
+        pictures. A library with a picture in it was imported into some other
+        way and is scanned as before, so nothing changes for an existing
+        library.
         """
         if self._first_import_answered:
             return True
@@ -196,6 +199,7 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
             return (
                 session.exec(
                     select(FolderMappingCommit.id)
+                    .where(FolderMappingCommit.mode == "local_import")
                     .where(FolderMappingCommit.state != STATE_ABANDONED)
                     .limit(1)
                 ).first()
