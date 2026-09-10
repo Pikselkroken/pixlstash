@@ -6422,13 +6422,24 @@ off is skipped in `_reconcile_sidecar` itself, so with descriptions on and tags
 off a prompt `.txt` beside a managed picture becomes the description and never
 the tag set: a stray file is not a caption until the owner has said what the
 convention is, and `apply_caption_updates` replaces a picture's whole tag set
-from what it reads. For the same reason a tags file that parses to nothing is
-imported only when the picture was already tracking that file - otherwise an
-empty or unreadable file would clear every tag and drop in the pending
-sentinel. Descriptions have never had that hole; a `None` one is skipped where
-it is applied. A picture's *first* indexing is a different rule and reads the
-sidecar beside it either way (`attach_sidecars`), as the local import does:
-there are no tags yet to overwrite.
+from what it reads.
+
+**A failed read is not an empty file.** The reconcile reads once through
+`caption_file_utils.read_caption_text`, which returns `None` *only* on `OSError`
+and `""` for a file that really is empty. On `None` it records nothing at all -
+not the content, not the new mtime - so the next scan sees the mtime it already
+had and tries again once the file is readable; recording the mtime would have
+made a `chmod 000` permanent. Empty content is applied as a clear only when the
+picture was already tracking that file, for tags and descriptions alike: that is
+the owner emptying their own sidecar, whereas a stray empty `.txt` appearing
+beside a picture imports nothing. Both halves used to be wrong in opposite
+directions - an unreadable tags file cleared every tag and stored its mtime, and
+an emptied description file was indistinguishable from a failed read and so
+never cleared the stored description.
+
+A picture's *first* indexing is a different rule and reads the sidecar beside it
+either way (`attach_sidecars`), as the local import does: there are no tags yet
+to overwrite.
 
 **A detected suffix the writer refuses turns its kind off for that scan**
 (`ReferenceFolderScanTask._disabled_kinds`, checked at the top of

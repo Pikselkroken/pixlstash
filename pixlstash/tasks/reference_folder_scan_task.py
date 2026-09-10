@@ -32,8 +32,8 @@ from pixlstash.utils.caption_file_utils import (
     detect_folder_suffixes,
     get_sidecar_mtime,
     is_safe_sidecar_suffix,
-    read_description_sidecar,
-    read_tags_sidecar,
+    parse_caption_tags,
+    read_caption_text,
     recorded_sidecar,
     resolve_typed_sidecar,
     suffixes_collide,
@@ -848,7 +848,10 @@ class ReferenceFolderScanTask(BaseTask):
                     if "description_file" in u:
                         pic_db.description_file = u["description_file"]
                         pic_db.description_file_mtime = u["description_file_mtime"]
-                    if u.get("new_description") is not None:
+                    if "new_description" in u:
+                        # Presence, not truthiness: the key is only set after a
+                        # successful read, and ``None`` there is the owner
+                        # having emptied a sidecar this picture was tracking.
                         pic_db.description = u["new_description"]
                     session.add(pic_db)
                     if "new_tags" in u:
@@ -998,22 +1001,32 @@ class ReferenceFolderScanTask(BaseTask):
         if current_path is not None:
             current_mtime = get_sidecar_mtime(current_path)
             if current_path != stored_path or current_mtime != stored_mtime:
+                raw = read_caption_text(current_path)
+                if raw is None:
+                    # The read FAILED (permissions, a partial write); the file
+                    # is not empty, it is unknown. Applying anything here would
+                    # read as the owner clearing their caption, and recording
+                    # the new mtime would make it permanent: the next scan sees
+                    # a matching mtime and never looks again. Record nothing,
+                    # so the retry happens as soon as the file is readable.
+                    # `read_caption_text` already logged why.
+                    return
                 update[path_key] = current_path
                 update[mtime_key] = current_mtime
+                content = raw.strip()
+                # An empty file that this picture was not already tracking is
+                # "nothing to import", not "delete the caption": a stray empty
+                # `.txt` beside a picture is not the owner emptying their
+                # sidecar, and `apply_caption_updates` would clear the whole
+                # tag set and drop in the pending sentinel. A file the picture
+                # already had may well be empty - that IS the owner clearing
+                # it, for tags and descriptions alike.
+                if not content and stored_path is None:
+                    return
                 if is_tags:
-                    new_tags = read_tags_sidecar(current_path)
-                    # An empty file that this picture was not already tracking
-                    # is "nothing to import", not "delete every tag": the read
-                    # is unreadable-or-empty either way, and `apply_caption_
-                    # updates` clears the whole set and drops in the pending
-                    # sentinel. A file the picture already had may still empty
-                    # it - that is the owner clearing their own sidecar.
-                    # Descriptions have no hole here; a None one is skipped
-                    # where it is applied.
-                    if new_tags or stored_path is not None:
-                        update["new_tags"] = new_tags
+                    update["new_tags"] = parse_caption_tags(raw)
                 else:
-                    update["new_description"] = read_description_sidecar(current_path)
+                    update["new_description"] = content or None
             return
 
         # No sidecar on disk. Drop a stale stored reference (keep the DB data).

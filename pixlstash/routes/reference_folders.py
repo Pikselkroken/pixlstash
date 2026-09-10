@@ -28,8 +28,8 @@ from pixlstash.utils.caption_file_utils import (
     detect_folder_suffixes,
     get_sidecar_mtime,
     is_safe_sidecar_suffix,
-    read_description_sidecar,
-    read_tags_sidecar,
+    parse_caption_tags,
+    read_caption_text,
     resolve_typed_sidecar,
     suffixes_collide,
     write_sidecar,
@@ -1605,8 +1605,15 @@ def create_router(server) -> APIRouter:
                     tags_path = resolve_typed_sidecar(
                         pic.file_path, SIDECAR_TYPE_TAGS, rf.tags_suffix
                     )
-                    if tags_path:
-                        tags = read_tags_sidecar(tags_path)
+                    raw_tags = read_caption_text(tags_path) if tags_path else None
+                    if tags_path and raw_tags is not None:
+                        # Only after a SUCCESSFUL read: the `[]` an unreadable
+                        # file parses to would delete the picture's tags and
+                        # stamp the file's mtime, and the scan's mtime gate
+                        # would then never read it again. An empty file that
+                        # really is empty is still the owner clearing it.
+                        # `read_caption_text` logged why the read failed.
+                        tags = parse_caption_tags(raw_tags)
                         session.exec(delete(Tag).where(Tag.picture_id == pic.id))
                         if tags:
                             session.add_all(
@@ -1626,8 +1633,13 @@ def create_router(server) -> APIRouter:
                         SIDECAR_TYPE_DESCRIPTION,
                         rf.description_suffix,
                     )
-                    if description_path:
-                        pic.description = read_description_sidecar(description_path)
+                    raw_description = (
+                        read_caption_text(description_path)
+                        if description_path
+                        else None
+                    )
+                    if description_path and raw_description is not None:
+                        pic.description = raw_description.strip() or None
                         pic.description_file = description_path
                         pic.description_file_mtime = get_sidecar_mtime(description_path)
                         descriptions_count += 1

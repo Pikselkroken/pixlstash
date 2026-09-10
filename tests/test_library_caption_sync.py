@@ -819,3 +819,89 @@ def test_a_pending_description_is_never_written_into_a_caption_file(env):
 
     _, description, _, _ = _picture(server, "pending/f.png")
     assert description == make_description_sentinel("joycaption"), "row untouched"
+
+
+def _recorded(server, rel):
+    """``(tags_file_mtime, description_file_mtime, description)`` for a picture."""
+
+    def read(session: Session):
+        pic = session.exec(select(Picture).where(Picture.file_path == rel)).first()
+        return pic.tags_file_mtime, pic.description_file_mtime, pic.description
+
+    return server.vault.db.run_immediate_read_task(read)
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="chmod 000 does not deny reads to Windows or to root",
+)
+def test_an_unreadable_tags_file_keeps_the_tags_and_retries_next_scan(env):
+    """A read that FAILED is not the owner clearing their sidecar. The read
+    used to collapse an OSError into the same `[]` an empty file gives, so a
+    permission blip on a recorded tags file deleted every tag AND stored the
+    new mtime - which made it permanent, because the next scan compares mtimes
+    and never reads the file again."""
+    server = env["server"]
+    root = server.vault.image_root
+    _make_image(os.path.join(root, "denied", "g.png"), (71, 72, 73))
+    tags_file = os.path.join(root, "denied", "g_tags.txt")
+    _write(tags_file, "harbour, dusk")
+    _set_sync(
+        server,
+        sync_tags=True,
+        sync_descriptions=False,
+        tags_suffix="_tags.txt",
+        description_suffix="_caption.txt",
+    )
+    _run_root_scan(server)
+    _, _, recorded_path, tags = _picture(server, "denied/g.png")
+    assert tags == ["dusk", "harbour"]
+    assert recorded_path == tags_file
+    recorded_mtime, _, _ = _recorded(server, "denied/g.png")
+
+    # The owner edits the file and its permissions go with it.
+    _write(tags_file, "quay, night")
+    os.utime(tags_file, (recorded_mtime + 60, recorded_mtime + 60))
+    os.chmod(tags_file, 0o000)
+    try:
+        _run_root_scan(server)
+        _, _, _, tags_after = _picture(server, "denied/g.png")
+        assert tags_after == ["dusk", "harbour"], "an unreadable file clears nothing"
+        assert _recorded(server, "denied/g.png")[0] == recorded_mtime, (
+            "and the recorded mtime is untouched, so the next scan retries"
+        )
+
+        os.chmod(tags_file, 0o644)
+        _run_root_scan(server)
+        _, _, _, tags_retried = _picture(server, "denied/g.png")
+        assert tags_retried == ["night", "quay"], "the retry reads the edit in"
+    finally:
+        os.chmod(tags_file, 0o644)
+
+
+def test_emptying_a_recorded_description_file_clears_the_description(env):
+    """The inverse hole: a description read gave `None` for an empty file and
+    for an unreadable one alike, and the apply step skipped `None`, so the
+    owner emptying a sidecar they own left the stored description in place."""
+    server = env["server"]
+    root = server.vault.image_root
+    _make_image(os.path.join(root, "cleared", "h.png"), (74, 75, 76))
+    caption_file = os.path.join(root, "cleared", "h_caption.txt")
+    _write(caption_file, "A lighthouse at dusk.")
+    _set_sync(
+        server,
+        sync_tags=False,
+        sync_descriptions=True,
+        tags_suffix="_tags.txt",
+        description_suffix="_caption.txt",
+    )
+    _run_root_scan(server)
+    _, description, _, _ = _picture(server, "cleared/h.png")
+    assert description == "A lighthouse at dusk."
+    recorded_mtime = _recorded(server, "cleared/h.png")[1]
+
+    _write(caption_file, "")
+    os.utime(caption_file, (recorded_mtime + 60, recorded_mtime + 60))
+    _run_root_scan(server)
+    _, description_after, _, _ = _picture(server, "cleared/h.png")
+    assert description_after is None, "the owner emptied their own sidecar"

@@ -354,15 +354,59 @@ def writeback_target(
     return None
 
 
+def read_caption_text(path: str) -> str | None:
+    """The raw text of a caption file, or ``None`` when it could not be read.
+
+    ``None`` means **only** that the read failed (permissions, a vanished file,
+    a bad decode); an empty file reads as ``""``. Callers that turn a sidecar
+    into stored data need the two apart: an empty file is the owner clearing
+    their caption, an unreadable one is nothing at all, and collapsing the two
+    makes a transient `OSError` look like an intentional clear.
+    """
+    # ``utf-8-sig``, as `sniff_caption` does: a BOM survives ``.strip()`` and
+    # would otherwise ride along on the first tag, as "﻿1girl".
+    try:
+        with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
+            return fh.read()
+    except OSError as exc:
+        logger.warning("Could not read sidecar %s: %s", path, exc)
+        return None
+
+
+def parse_caption_tags(raw_text: str) -> list[str]:
+    """Parse a comma-separated tag string into a deduplicated, normalised list."""
+    text = (raw_text or "").strip()
+    if not text:
+        return []
+
+    parts = [p.strip() for p in text.replace("\n", ",").split(",")]
+    seen: set[str] = set()
+    result: list[str] = []
+    for raw_tag in parts:
+        normalised = " ".join(raw_tag.replace("_", " ").lower().split())
+        if normalised and normalised not in seen:
+            seen.add(normalised)
+            result.append(normalised)
+    return result
+
+
 def read_tags_sidecar(path: str) -> list[str]:
-    """Read a tags sidecar into a normalised, de-duplicated list of tags."""
-    raw = _read_text(path)
-    return _parse_txt_tags(raw) if raw is not None else []
+    """Read a tags sidecar into a normalised, de-duplicated list of tags.
+
+    An unreadable file and an empty one both give ``[]``; use
+    `read_caption_text` plus `parse_caption_tags` where the difference matters.
+    """
+    raw = read_caption_text(path)
+    return parse_caption_tags(raw) if raw is not None else []
 
 
 def read_description_sidecar(path: str) -> str | None:
-    """Read a description sidecar into stripped text, or ``None`` when empty."""
-    raw = _read_text(path)
+    """Read a description sidecar into stripped text, or ``None`` when empty.
+
+    ``None`` also covers an unreadable file; use `read_caption_text` where the
+    difference matters.
+    """
+    raw = read_caption_text(path)
     if raw is None:
         return None
     text = raw.strip()
@@ -630,17 +674,6 @@ _IMAGE_EXTS_FOR_DETECTION = frozenset(
 _SIDECAR_EXTS_FOR_DETECTION = frozenset({".txt", ".caption"})
 
 
-def _read_text(path: str) -> str | None:
-    # ``utf-8-sig``, as `sniff_caption` does: a BOM survives ``.strip()`` and
-    # would otherwise ride along on the first tag, as "\ufeff1girl".
-    try:
-        with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
-            return fh.read()
-    except OSError as exc:
-        logger.warning("Could not read sidecar %s: %s", path, exc)
-        return None
-
-
 def _suffix_for_sidecar(
     sidecar_path_str: str, image_stems: dict[str, set[str]]
 ) -> str | None:
@@ -724,20 +757,3 @@ def _looks_like_tags(text: str) -> bool:
 
     # Short content without prose signals -> tags.
     return not has_sentence_punct
-
-
-def _parse_txt_tags(raw_text: str) -> list[str]:
-    """Parse a comma-separated tag string into a deduplicated, normalised list."""
-    text = (raw_text or "").strip()
-    if not text:
-        return []
-
-    parts = [p.strip() for p in text.replace("\n", ",").split(",")]
-    seen: set[str] = set()
-    result: list[str] = []
-    for raw_tag in parts:
-        normalised = " ".join(raw_tag.replace("_", " ").lower().split())
-        if normalised and normalised not in seen:
-            seen.add(normalised)
-            result.append(normalised)
-    return result
