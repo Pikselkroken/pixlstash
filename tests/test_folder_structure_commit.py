@@ -815,6 +815,79 @@ def test_caption_answers_reach_pictures_the_import_did_not_build(owner_env):
     assert got["two.jpg"] == ("A red boat at dusk.", [TAG_PENDING_SENTINEL])
 
 
+def test_an_ignored_pattern_is_dropped_from_a_row_the_commit_reused(owner_env):
+    """`attach_sidecars` cannot say "ignore": an empty suffix list reads
+    nothing, so a row the concurrent root scan won with the probe kept the file
+    it had opened and whatever it read out of it, even after the owner said
+    that pattern is not a caption. The commit puts such a row back where an
+    unread picture starts."""
+    server = owner_env["server"]
+    root = os.path.join(server.vault.image_root, "local-import-ignored")
+    _make_tree(root, {"": ["probed.jpg", "described.jpg"]})
+    with open(os.path.join(root, "probed.txt"), "w", encoding="utf-8") as fh:
+        fh.write("harbour, dusk, boats")
+    with open(os.path.join(root, "described_desc.txt"), "w", encoding="utf-8") as fh:
+        fh.write("A red boat at dusk.")
+
+    from pixlstash.db_models.picture import Picture
+    from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
+    from pixlstash.services import folder_structure_commit_service as commit_service
+    from sqlmodel import select
+
+    # No answers: the probe opens both files and records them, which is the
+    # state the root scan leaves a row it won mid-commit in.
+    first = commit_service.local_import_pictures(server, root, expected_pictures=2)
+    assert len(first) == 2
+
+    def fetch(session):
+        pics = session.exec(select(Picture).where(Picture.id.in_(first))).all()
+        return {
+            p.original_file_name: (
+                p.tags_file,
+                p.description_file,
+                p.description,
+                sorted(
+                    session.exec(select(Tag.tag).where(Tag.picture_id == p.id)).all()
+                ),
+            )
+            for p in pics
+        }
+
+    got = server.vault.db.run_immediate_read_task(fetch)
+    assert got["probed.jpg"] == (
+        os.path.join(root, "probed.txt"),
+        None,
+        None,
+        ["boats", "dusk", "harbour"],
+    )
+    assert got["described.jpg"] == (
+        None,
+        os.path.join(root, "described_desc.txt"),
+        "A red boat at dusk.",
+        [TAG_PENDING_SENTINEL],
+    )
+
+    second = commit_service.local_import_pictures(
+        server,
+        root,
+        expected_pictures=2,
+        captions=commit_service.parse_captions(
+            [
+                {"suffix": ".txt", "kind": "ignore"},
+                {"suffix": "_desc.txt", "kind": "ignore"},
+            ]
+        ),
+    )
+    assert sorted(second) == sorted(first), "reused, not re-imported"
+    got = server.vault.db.run_immediate_read_task(fetch)
+    assert got["probed.jpg"] == (None, None, None, [TAG_PENDING_SENTINEL]), (
+        "the probe's reading is dropped and the tagger gets the picture"
+    )
+    assert got["described.jpg"] == (None, None, None, [TAG_PENDING_SENTINEL])
+    assert os.path.isfile(os.path.join(root, "probed.txt")), "the file itself stays"
+    assert os.path.isfile(os.path.join(root, "described_desc.txt"))
+
+
 def test_a_caption_answer_with_an_unsafe_suffix_is_refused(owner_env):
     """The suffix is appended to a picture path to find the file to read, so
     the commit enforces the same bare-fragment rule the reference-folder API

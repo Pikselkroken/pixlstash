@@ -6345,7 +6345,16 @@ only the named suffixes are read (longest first, so `_tags.txt` wins over
 written into the durable `FolderMappingCommit` record beside the assignments
 (`captions`, migration 0115, `"null"` for no answer) for the same reason the
 assignments are: a commit resumed after a crash must not re-probe and import a
-file the owner said to leave alone. Reference mode refuses `captions` outright
+file the owner said to leave alone. A row this commit did not build - indexed before the wizard, or won by
+the concurrent root scan while a chunk was being built - gets the answers
+through `_apply_captions_to_existing`, and there `ignore` needs its own step:
+an empty suffix list makes `attach_sidecars` read nothing, which cannot undo
+what the probe already recorded on such a row. So a row whose recorded file for
+an ignored kind is set is put back where an unread picture starts - the path
+and mtime cleared, tags replaced with the pending sentinel, description
+cleared - while a row with no recorded file of that kind keeps whatever the
+owner had typed. The file on disk is never touched. Reference mode refuses
+`captions` outright
 (400): a `ReferenceFolder` holds one suffix per kind and its scan probes the
 known conventions for an unset one, so it cannot honour "ignore" for a kind,
 and half-honouring the answer would read the file the owner said to leave

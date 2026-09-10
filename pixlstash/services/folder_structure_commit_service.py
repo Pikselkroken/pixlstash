@@ -810,6 +810,15 @@ def _apply_captions_to_existing(
     file's tags replace the row's and its description replaces the row's. A
     picture frozen by a locked set is skipped, as `_link_pictures` skips it.
 
+    An answer of *ignore* is an answer too, and it is the one `attach_sidecars`
+    cannot carry: an empty suffix list reads nothing, so a row the root scan
+    won with the probe keeps the file's imported tags and its recorded path
+    even though the owner has just said that file is not a caption. Such a row
+    is put back where an unread picture starts - no recorded file, the pending
+    sentinel for tags, no description - but only when it *has* a recorded file
+    of that kind, so a row that was carrying the owner's own typed tags and no
+    caption file keeps them.
+
     Returns how many rows changed.
     """
     tags_suffixes, description_suffixes = caption_suffixes(captions)
@@ -832,6 +841,14 @@ def _apply_captions_to_existing(
                 description_suffixes,
                 overwrite_description=True,
             )
+            if tags_suffixes == [] and pic.tags_file:
+                pic.tags_file = None
+                pic.tags_file_mtime = None
+                tags = [TAG_PENDING_SENTINEL]
+            if description_suffixes == [] and pic.description_file:
+                pic.description_file = None
+                pic.description_file_mtime = None
+                pic.description = None
             if tags:
                 session.exec(Tag.__table__.delete().where(Tag.picture_id == pic.id))
                 session.add_all(Tag(picture_id=pic.id, tag=t) for t in tags)
