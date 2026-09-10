@@ -121,8 +121,14 @@ const STORES = [
     use: useFolderMappingStore,
     seed: (s) => {
       s.save({ taskId: "abc123", path: "/home/me/Pictures", label: "Pictures" });
+      s.openWizard(s.pending);
+      s.setRootPictureCount(12, false, s.rootCountEpoch);
     },
-    isEmpty: (s) => s.pending === null,
+    isEmpty: (s) =>
+      s.pending === null &&
+      !s.wizardOpen &&
+      s.wizardResume === null &&
+      s.rootPictureCount === null,
   },
   {
     name: "useLockedSetsStore",

@@ -118,9 +118,13 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
 
   /** A session change forgets the pending entry AND what the folder held:
    *  the count is the previous library's, and the empty state would offer to
-   *  import pictures that are not there. */
+   *  import pictures that are not there. The open wizard goes too: Pinia
+   *  outlives a logout in the same tab, and the next credential must not
+   *  find the previous owner's host path and read result on screen. */
   function resetForSession() {
     clear();
+    wizardOpen.value = false;
+    wizardResume.value = null;
     rootCountEpoch.value += 1;
     rootPictureCount.value = null;
     rootPictureCountCapped.value = false;
