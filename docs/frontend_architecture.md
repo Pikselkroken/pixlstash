@@ -428,7 +428,32 @@ sidebar accessory nobody was pointed at.
 **Every route reuses wiring App.vue already had.** `local-import` reaches
 `SideBar.startLocalImport`, `open-settings` reaches `SideBar.openSettingsDialog`
 (with `"workflows"`, where the ComfyUI URL lives), and `choose-folder` is the one
-new signal, for `SideBar.openReferenceFolderEditor`.
+new signal, for `SideBar.chooseLibraryFolder`.
+
+**`chooseLibraryFolder` re-inspects the root on every click.** A persisted
+`local_import` entry for this library reopens `FolderMappingWizard` on it
+straight away. Otherwise it asks `GET /libraries/inspect` about the active
+library's own path again, because a cached 0 from a load over an empty folder
+used to be permanent and sent the owner to "Add a library", which refuses the
+folder the library already is. A count above zero opens the wizard with
+`{ path, mode: "local_import" }`; zero, a failed inspect, and a read-only or
+remote session (`canManage` false) all fall through to the ordinary add, and a
+failed inspect leaves the cached count alone.
+
+**The button's own copy reads that count.** `useFolderMappingStore` holds
+`rootPictureCount` and `rootPictureCountCapped`, `null` until something has
+asked, and `LibraryEmptyState` switches on them: "Import the pictures already in
+this folder" / "Import them…" above zero, "Use a folder you already have" /
+"Choose a folder…" otherwise. A page reloaded onto a persisted entry has no
+count, so `offerLoosePictures` fills it from the entry's own read
+(`pictureCount`, else `result.picture_count`) and inspects only when the entry
+carries neither, opening nothing either way. When the inspect stopped at the
+endpoint's entry cap the count is a floor rather than a total, so
+`rootPictureCountCapped` makes the copy say "At least N pictures are in this
+library's folder" instead of naming a number the folder does not hold. Both refs
+are cleared on a session change, and an epoch bumped by that same reset discards
+an inspect that was already on the wire, so a count the outgoing owner asked for
+cannot land in the next session.
 
 **The empty library asks whether its own folder is empty.** The desktop's
 first-run setup creates the vault in whatever folder was chosen, and the web
