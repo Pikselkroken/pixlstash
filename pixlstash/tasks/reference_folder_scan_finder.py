@@ -14,6 +14,7 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models.folder_mapping_commit import (
+    STATE_ABANDONED,
     STATE_DEFERRED,
     STATE_DONE,
     STATE_PENDING,
@@ -198,15 +199,21 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         ``reference`` commit is not one at all: it registers some other folder
         and says nothing about the root's own pictures.
 
-        The ``pending`` record **wins** over the picture row, because a running
-        ``local_import`` commits every chunk and wakes the planner while its
-        record is still ``pending``: after the first chunk the library holds
-        pictures, and reading those as the answer would cache it and start the
-        root scan mid-commit. Otherwise a library with a picture in it was
-        imported into some other way and is scanned as before, so nothing
-        changes for an existing library.
+        The ``pending`` and ``abandoned`` records both **win** over the picture
+        row, for the same reason: an unsettled ``local_import`` commits every
+        chunk, so after the first one the library holds pictures the owner has
+        not answered for. A running commit wakes the planner while its record
+        is still ``pending``, and an aborted one leaves its chunks indexed
+        behind a record that says ``abandoned`` - "bring nothing in". Reading
+        either one's rows as the answer caches it and scans the root: mid-
+        commit in the first case, and in the second importing the very files
+        the owner just aborted. ``settled`` is checked **before** ``abandoned``
+        because a later settled import outranks an earlier abandoned one.
+        Otherwise a library with a picture in it was imported into some other
+        way and is scanned as before, so nothing changes for an existing
+        library.
 
-        The three facts are read in **one statement** so they describe one
+        The four facts are read in **one statement** so they describe one
         snapshot: this read runs outside the writer queue, so across separate
         statements a chunk committing in between shows no ``pending`` record
         and a picture from that very commit, which caches the answer as True
@@ -215,7 +222,7 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         if self._first_import_answered:
             return True
 
-        def read(session: Session) -> tuple[bool, bool, bool]:
+        def read(session: Session) -> tuple[bool, bool, bool, bool]:
             local_import = select(FolderMappingCommit.id).where(
                 FolderMappingCommit.mode == "local_import"
             )
@@ -228,11 +235,18 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
                     local_import.where(
                         FolderMappingCommit.state.in_((STATE_DONE, STATE_DEFERRED))
                     ).exists(),
+                    local_import.where(
+                        FolderMappingCommit.state == STATE_ABANDONED
+                    ).exists(),
                 )
             ).one()
 
-        pending, has_picture, settled = self._db.run_immediate_read_task(read)
-        self._first_import_answered = not pending and (has_picture or settled)
+        pending, has_picture, settled, abandoned = self._db.run_immediate_read_task(
+            read
+        )
+        self._first_import_answered = not pending and (
+            settled or (not abandoned and has_picture)
+        )
         return self._first_import_answered
 
     def _root_task(self, folders: list[ReferenceFolder], now: float):

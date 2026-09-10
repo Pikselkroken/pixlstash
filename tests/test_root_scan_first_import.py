@@ -40,8 +40,11 @@ _CONFLICTING_FINDERS = (
 )
 
 
-@pytest.fixture
-def server():
+@pytest.fixture(scope="module")
+def _module_server():
+    """One Server for the module: starting it is what these tests cost, and
+    every case here reads the same two tables. Same shape as
+    tests/test_library_root_scan.py."""
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "server-config.json")
         with Server(config_path) as srv:
@@ -49,6 +52,28 @@ def server():
                 srv.vault._planner_work_finders.pop(task_type)
             srv.vault._work_planner.detach_finders(_CONFLICTING_FINDERS)
             yield srv
+
+
+@pytest.fixture
+def server(_module_server):
+    """The shared server with an empty library: no commit record, no picture
+    row and nothing in the root folder, so each case starts from "the owner
+    has not been asked yet" the way a per-test Server used to."""
+    srv = _module_server
+
+    def wipe(session: Session):
+        for model in (FolderMappingCommit, Picture):
+            for row in session.exec(select(model)).all():
+                session.delete(row)
+        session.commit()
+
+    root = srv.vault.image_root
+    for name in os.listdir(root):
+        path = os.path.join(root, name)
+        if os.path.isfile(path):
+            os.remove(path)
+    srv.vault.db.run_task(wipe)
+    yield srv
 
 
 def _drop_picture(root, name):
@@ -175,3 +200,31 @@ def test_a_running_local_import_holds_the_root_scan_off_though_it_has_committed_
     _settle_pending(server, STATE_DONE)
     task = finder.find_task()
     assert task is not None and task.params["folder_id"] is None
+
+
+def test_an_aborted_local_import_holds_the_root_scan_off_over_its_own_rows(server):
+    """An abort settles the record `abandoned` and leaves every chunk the
+    commit had already inserted indexed. Those rows are the files the owner
+    just refused, so reading them as the answer would scan the root and import
+    exactly what the abort declined."""
+    _drop_picture(server.vault.image_root, "aborted.png")
+
+    def add(session: Session):
+        session.add(Picture(file_path="aborted.png", pixel_sha="z" * 64))
+        session.commit()
+
+    server.vault.db.run_task(add)
+    _record(server, STATE_ABANDONED)
+
+    finder = _finder(server)
+    assert finder.first_import_answered() is False, (
+        "a chunk the aborted commit had already inserted is not an answer to "
+        "import; scanning on it imports the very files the owner declined"
+    )
+    assert finder.find_task() is None
+    # Nothing was cached, so a later import that does settle still releases
+    # the scan: settled is read before abandoned.
+    _record(server, STATE_DONE)
+    task = finder.find_task()
+    assert task is not None and task.params["folder_id"] is None
+    assert finder.first_import_answered() is True
