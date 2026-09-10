@@ -431,8 +431,12 @@ sidebar accessory nobody was pointed at.
 new signal, for `SideBar.chooseLibraryFolder`.
 
 **`chooseLibraryFolder` re-inspects the root on every click.** A persisted
-`local_import` entry for this library reopens `FolderMappingWizard` on it
-straight away. Otherwise it asks `GET /libraries/inspect` about the active
+`local_import` entry for this library reopens `FolderMappingWizard` on it. That
+test is read *after* the library list has been refreshed, never before:
+`pendingForThisLibrary` matches the entry against the active library's path, so
+with no list loaded there is nothing to match and a saved entry looks absent.
+Routed on that stale answer, the click opened a fresh wizard over the very
+folder it should have resumed. Otherwise it asks `GET /libraries/inspect` about the active
 library's own path again, because a cached 0 from a load over an empty folder
 used to be permanent and sent the owner to "Add a library", which refuses the
 folder the library already is. A count above zero, or a capped one, opens the
@@ -462,11 +466,16 @@ rootPictureCountCapped`, and both `chooseLibraryFolder` and
 "Add a library", which refuses the folder the library already is. A
 folder-structure read's `picture_count` is a floor on the same terms whenever
 the read came back `truncated`: it stopped at `MAX_FOLDERS` and summed only the
-folders it reached, so a count sourced from one carries that flag too. Both
-entry-sourced paths do: the desktop's parked read passes its own
-`result.truncated`, and the wizard saves a `pictureCountCapped` beside
-`pictureCount` on the pending entry, which `_fillRootPictureCount` reads and
-falls back to `result.truncated` for entries written before it did. Both refs
+folders it reached, so a count sourced from one carries that flag too, and on
+the same terms again when it came back with `unreadable_folders > 0`, because
+those subtrees are absent from `picture_count` entirely (the folder-read
+contract, `integration_architecture.md` §20). `readIsPartial(result)` in
+`useFolderMappingStore` is the one place that reads either signal, so the three
+sites deriving a saved count's completeness cannot drift apart again. All of
+them use it: the desktop's parked read passes `readIsPartial(parked.result)`,
+and the wizard saves a `pictureCountCapped` beside `pictureCount` on the
+pending entry, which `_fillRootPictureCount` reads and falls back to
+`readIsPartial(entry.result)` for entries written before it did. Both refs
 are cleared on a session change, and an epoch bumped by that same reset discards
 an inspect that was already on the wire, so a count the outgoing owner asked for
 cannot land in the next session. `chooseLibraryFolder` and `offerLoosePictures`
