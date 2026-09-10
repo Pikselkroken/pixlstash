@@ -662,6 +662,33 @@ def test_lock_chokepoint_callers_are_guarded():
     )
 
 
+def test_attach_sidecars_is_called_only_by_the_two_row_builders():
+    """The rule-4 exemption above rests on WHO calls ``attach_sidecars``.
+
+    It writes a sidecar description onto a picture row, which is exempt only
+    while the row is new and unsaved and so cannot be in a locked set. A third
+    caller reaching it with an already-indexed picture would carry a file's
+    text onto frozen label data with no guard anywhere.
+    """
+    callers = set()
+    for path in PIXLSTASH_DIR.rglob("*.py"):
+        source = path.read_text()
+        if "attach_sidecars(" not in source:
+            continue
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        for node in ast.walk(ast.parse(source, filename=str(path))):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.name == "attach_sidecars":
+                continue  # the definition itself, not a call
+            if "attach_sidecars(" in (ast.get_source_segment(source, node) or ""):
+                callers.add(f"{rel}::{node.name}")
+    assert callers == {
+        "pixlstash/tasks/reference_folder_scan_task.py::_build_picture",
+        "pixlstash/services/folder_structure_commit_service.py::_build_managed_picture",
+    }, f"unexpected attach_sidecars caller(s): {sorted(callers)}"
+
+
 def test_workers_not_started_at_vault_init():
     """Vault.__init__ must not start worker threads; Vault.start() must."""
     from pixlstash.vault import Vault
