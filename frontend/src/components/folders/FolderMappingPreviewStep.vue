@@ -391,7 +391,10 @@ onUnmounted(() => {
           v-for="row in patterns"
           :key="row.suffix"
           class="preview-step__caption"
-          :class="{ 'preview-step__caption--ignored': answers[row.suffix] === 'ignore' }"
+          :class="{
+            'preview-step__caption--ignored':
+              (answers[row.suffix] ?? row.kind) === 'ignore',
+          }"
         >
           <div class="preview-step__caption-what">
             <code class="preview-step__caption-suffix">*{{ row.suffix }}</code>

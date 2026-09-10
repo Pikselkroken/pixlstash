@@ -10,6 +10,7 @@ from sqlmodel import select
 from pixlstash.server import Server
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
+from pixlstash.tasks import TaskType
 
 API_PREFIX = "/api/v1"
 
@@ -287,6 +288,14 @@ def test_watch_folder_reads_sidecar_tags_and_skips_the_pending_sentinel_for_them
             fh.write("cat, black cat, whiskers")
 
         with Server(server_config_path) as server:
+            # MissingTagFinder claims any picture holding the pending sentinel
+            # and TagTask deletes a picture's existing Tag rows before writing
+            # its own, so a live tagger can replace both rows this test reads
+            # between the import and the read. detach_finders() edits the
+            # planner under its own lock, so this is safe against the running
+            # loop thread.
+            server.vault._planner_work_finders.pop(TaskType.TAGGER)
+            server.vault._work_planner.detach_finders([TaskType.TAGGER])
             with TestClient(server.api) as client:
                 response = client.post(
                     f"{API_PREFIX}/login",

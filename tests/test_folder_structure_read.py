@@ -20,11 +20,13 @@ import pytest
 
 from pixlstash.server import Server
 from pixlstash.tasks.face_extraction_task import FaceExtractionTask
+from pixlstash.services import folder_structure_service
 from pixlstash.services.folder_structure_service import (
     DEFAULT_DEADLINE_S,
     FolderStructureRead,
     JUST_A_FOLDER,
     KINDS,
+    MAX_CAPTION_PATTERNS,
     MAX_FOLDERS,
     MIN_FACE_SAMPLE,
     FACE_MAJORITY_PCT,
@@ -499,6 +501,46 @@ def test_one_convention_in_two_casings_is_one_row():
     )
     assert result["captions"][0]["files"] == 3
     assert result["captions"][0]["kind"] == "tags"
+
+
+def test_a_suffix_that_sniffs_as_metadata_still_spends_a_slot_of_the_cap(monkeypatch):
+    """`MAX_CAPTION_PATTERNS` caps the suffixes *examined*, not the rows that
+    come back. A tree whose best-ranked suffixes hold JSON would otherwise keep
+    opening later suffixes until twelve of them happened to classify, which is
+    exactly the read of thousands of one-off suffixes the cap exists to
+    prevent."""
+    suffixes = [f"_a{n:02d}.txt" for n in range(MAX_CAPTION_PATTERNS + 1)]
+    spec = {
+        "": [],
+        "shoot": [
+            name
+            for n, suffix in enumerate(suffixes)
+            for name in (f"p{n:02d}.jpg", f"p{n:02d}{suffix}")
+        ],
+    }
+    opened: list[str] = []
+    with _tree(spec) as root:
+        for n, suffix in enumerate(suffixes):
+            # The best-ranked suffix holds a generator's JSON metadata, which
+            # `sniff_caption` refuses, so it classifies nothing.
+            text = '{"prompt": "1girl"}' if n == 0 else "1girl, solo, long hair"
+            _write(root, f"shoot/p{n:02d}{suffix}", text)
+        real = folder_structure_service.sniff_caption
+
+        def spy(path):
+            opened.append(os.path.basename(path))
+            return real(path)
+
+        monkeypatch.setattr(folder_structure_service, "sniff_caption", spy)
+        result = FolderStructureRead(root).run()
+
+    assert len(opened) == MAX_CAPTION_PATTERNS, f"opened {opened}"
+    assert not any(name.endswith(suffixes[-1]) for name in opened), (
+        "the thirteenth-ranked suffix is never opened"
+    )
+    assert [row["suffix"] for row in result["captions"]] == suffixes[1:-1], (
+        "the refused suffix spends its slot and the tail stays unexamined"
+    )
 
 
 def test_a_tree_without_captions_reports_none():

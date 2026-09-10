@@ -650,19 +650,20 @@ class FolderStructureRead:
         markup, JSON metadata) is not a convention worth asking about and is
         left out.
 
-        The suffixes are ranked before anything is opened and the loop stops at
-        `MAX_CAPTION_PATTERNS`: the cap is what keeps a tree of thousands of
-        one-off suffixes from costing thousands of file reads, so trimming the
-        finished rows instead would be the cap in name only.
+        The suffixes are ranked before anything is opened and only the first
+        `MAX_CAPTION_PATTERNS` are examined: the cap is what keeps a tree of
+        thousands of one-off suffixes from costing thousands of file reads, so
+        a suffix that sniffs as markup and yields no row still spends its slot.
+        Capping the finished rows instead would be the cap in name only, since
+        a run of JSON suffixes at the top of the ranking would then walk the
+        whole tail looking for twelve that classify.
         """
         rows: list[dict[str, Any]] = []
         ranked = sorted(
             self._captions.items(), key=lambda item: (-item[1]["files"], item[0])
         )
         try:
-            for _key, entry in ranked:
-                if len(rows) >= MAX_CAPTION_PATTERNS:
-                    break
+            for _key, entry in ranked[:MAX_CAPTION_PATTERNS]:
                 self._checkpoint()
                 votes: Counter = Counter()
                 excerpts: dict[str, str] = {}
