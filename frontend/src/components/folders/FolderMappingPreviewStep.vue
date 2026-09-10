@@ -380,11 +380,9 @@ onUnmounted(() => {
     >
       <div class="preview-step__card-title">Caption files beside your pictures</div>
       <p class="preview-step__card-lead">
-        Text files named after a picture are read as its tags or description,
-        and stay in step with your edits from then on. Confirming a pattern
-        turns caption files on for this library's whole picture folder, not
-        only the one you are importing, and writes a file beside every picture
-        that already has tags or a description. Check each pattern.
+        Text files named after a picture are read once, during this import,
+        as its tags or description. Nothing is written back to them. Check
+        each pattern.
       </p>
       <ul class="preview-step__captions">
         <li
@@ -464,7 +462,7 @@ onUnmounted(() => {
           <span class="preview-step__fact-mark">—</span>
           {{ captionFilesIgnored.toLocaleString() }} caption
           {{ captionFilesIgnored === 1 ? "file is" : "files are" }} left
-          unread; PixlStash writes its own instead
+          unread
         </div>
         <div class="preview-step__fact">
           <span class="preview-step__fact-mark">—</span>
