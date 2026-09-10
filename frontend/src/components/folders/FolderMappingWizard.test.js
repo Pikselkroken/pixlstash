@@ -445,6 +445,7 @@ describe("resuming after the switch", () => {
     label: "Generations",
     mode: "local_import",
     assignments: ASSIGNMENTS,
+    captions: [],
     pictureCount: 5,
     autoCommit: true,
   };
@@ -474,6 +475,27 @@ describe("resuming after the switch", () => {
       label: "Generations",
       mode: "local_import",
     });
+  });
+
+  it("sends no caption answer for an entry saved before the card existed", async () => {
+    // No `captions` property at all: this entry was saved by a build that
+    // never asked, so there is no answer to resume. `[]` would say "read
+    // nothing" and silence sidecars that import would have picked up; the
+    // key has to be absent so the import probes, as it always did (§22).
+    const { captions, ...preFeature } = entry;
+    expect(captions).toEqual([]);
+    useFolderMappingStore().save(preFeature);
+    mountWizard({ resume: preFeature });
+    await settle();
+
+    expect(startFolderStructureCommit).toHaveBeenCalledWith(
+      "read-1",
+      ASSIGNMENTS,
+      "Generations",
+      "local_import",
+      null,
+      null,
+    );
   });
 
   it("reattaches a plain entry at the scan card and keeps it on close", async () => {

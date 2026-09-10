@@ -966,7 +966,11 @@ class FolderStructureRead:
             # reached - but a pattern that lives only in the unvisited part was
             # never offered, and a card that says nothing reads as "these are
             # all your caption files".
-            "captions_complete": not self._truncated and not self.cancelled,
+            # An unreadable subtree was skipped by the walk, so its patterns
+            # were never seen either.
+            "captions_complete": (
+                not self._truncated and not self.cancelled and not self._unreadable
+            ),
             "levels": level_docs,
         }
 

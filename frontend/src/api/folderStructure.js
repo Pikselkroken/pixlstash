@@ -81,12 +81,13 @@ export async function cancelFolderStructureRead(taskId) {
  * @param {Object|null} [readResult] - the read's own result, for a caller that
  *   has one but no task the server still remembers. Exactly one of `taskId` and
  *   `readResult` reaches the server.
- * @param {Array<{suffix: string, kind: "tags"|"description"|"ignore"}>} [captions] -
+ * @param {Array<{suffix: string, kind: "tags"|"description"|"ignore"}>|null} [captions] -
  *   the owner's answer for each caption-file pattern the read reported
- *   (`result.captions`). Sent in `local_import` only, and always sent there:
- *   `[]` is an answer ("read nothing"), while leaving the key out asks the
- *   import to probe the known conventions instead. `mode: "reference"`
- *   refuses the pair with a 400, so the key never goes with it.
+ *   (`result.captions`). Sent in `local_import` only: `[]` is an answer
+ *   ("read nothing"), while `null` - nobody was ever asked - omits the key
+ *   and asks the import to probe the known conventions instead.
+ *   `mode: "reference"` refuses the pair with a 400, so the key never goes
+ *   with it.
  * @returns {Promise<Object>} `{ task_id }`.
  */
 export async function startFolderStructureCommit(
@@ -108,9 +109,11 @@ export async function startFolderStructureCommit(
   if (label) body.label = label;
   // Sending `[]` and omitting the key mean different things: `[]` says "read
   // nothing", no key at all says "probe the known conventions". A local
-  // import always carries the owner's answer, empty included; a reference
-  // folder never carries one at all (400).
-  if (mode === "local_import") body.captions = captions;
+  // import carries the owner's answer, empty included; `null` is a resumed
+  // entry from before the caption card existed, where there is no answer to
+  // carry and probing is what that import would always have done. A
+  // reference folder carries none at all (400).
+  if (mode === "local_import" && captions !== null) body.captions = captions;
   return unwrap(apiClient.post(COMMIT_URL, body));
 }
 

@@ -364,6 +364,42 @@ describe("caption files beside the pictures", () => {
     expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual([]);
   });
 
+  it("passes 'never asked' through the commit on mount rather than answering", async () => {
+    // `null` is an entry saved before this card existed: nobody was asked, and
+    // `[]` would answer "read nothing" on their behalf and silence sidecars
+    // that same import used to pick up by probing.
+    startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
+    mountImport({
+      commitOnMount: true,
+      readResult: READ_RESULT,
+      captions: null,
+    });
+    await flushPromises();
+
+    expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toBeNull();
+  });
+
+  it("answers normally from 'never asked' once the card is on screen", async () => {
+    // The same `null`, but with patterns to show: the card seeds from the
+    // read's guesses and what the owner leaves there is a real answer.
+    startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
+    const wrapper = mountImport({
+      commitOnMount: false,
+      readResult: READ_RESULT,
+      captions: null,
+    });
+    expect(selects(wrapper)[0].element.value).toBe("tags");
+
+    await selects(wrapper)[0].setValue("ignore");
+    await buttonWith(wrapper, "Yes, build this library").trigger("click");
+    await flushPromises();
+
+    expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual([
+      { suffix: ".txt", kind: "ignore" },
+      { suffix: "_caption.txt", kind: "description" },
+    ]);
+  });
+
   it("does not claim a description file spares the tagger", async () => {
     // A picture with a description still has no tags of its own, so it is
     // queued for the tagger exactly as one with no caption file at all.

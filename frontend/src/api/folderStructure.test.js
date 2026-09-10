@@ -89,11 +89,24 @@ describe("starting a folder-structure commit", () => {
 
   // `[]` and no key at all are two different instructions: `[]` is the owner
   // answering "read nothing", no key asks the import to probe the known
-  // conventions. A local import always answers; `reference` refuses the pair.
+  // conventions. A local import answers; `reference` refuses the pair.
   it("sends an empty answer in a local import rather than omitting it", async () => {
     await startFolderStructureCommit("read-1", [], "", "local_import", null, []);
 
     expect(apiClient.post.mock.calls[0][1].captions).toEqual([]);
+  });
+
+  it("omits the key in a local import when nobody was asked", async () => {
+    await startFolderStructureCommit(
+      "read-1",
+      [],
+      "",
+      "local_import",
+      null,
+      null,
+    );
+
+    expect(apiClient.post.mock.calls[0][1]).not.toHaveProperty("captions");
   });
 
   it("sends the answers it is given in a local import", async () => {
