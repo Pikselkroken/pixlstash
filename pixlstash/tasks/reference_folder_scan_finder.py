@@ -36,6 +36,11 @@ logger = get_logger(__name__)
 
 # Re-scan active folders at most this often (seconds).
 _RESCAN_INTERVAL_S: float = 300.0
+#: How long a closed import gate is left alone before it is asked again. The
+#: planner sweeps every finder up to twenty times a second and the local
+#: importer wakes it after every chunk, so without this the gate's query
+#: would run on every sweep for the whole of a pending import.
+_GATE_RETRY_S: float = 5.0
 # Retry mount_error folders quickly so transient bind/access glitches clear
 # from UI without waiting for a full active re-scan interval.
 _MOUNT_ERROR_RETRY_INTERVAL_S: float = 15.0
@@ -78,10 +83,13 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         # owner renamed while the app was closed.
         self._root_last_scanned: float | None = None
         self._root_scanned_once = False
+        # When the import gate last said no, and when to ask it again.
+        self._gate_retry_at: float | None = None
 
     def mark_root_due(self) -> None:
         """Ask for the library root to be rescanned on the next planning cycle."""
         self._root_last_scanned = None
+        self._gate_retry_at = None
 
     def root_scan_complete(self) -> bool:
         """Whether the library root has been scanned at least once since boot.
@@ -222,7 +230,8 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         Not cached: a finder lives as long as the process, and a later import
         must close the gate again the moment its record is pending. The read
         is one statement, and `_root_task` asks only when a root scan is
-        otherwise due, so it costs one query per `_RESCAN_INTERVAL_S`.
+        otherwise due and, while the answer is no, no more than once per
+        `_GATE_RETRY_S`.
         """
 
         def read(session: Session) -> tuple[Optional[str], bool]:
@@ -253,9 +262,16 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         if last is not None and (now - last) < _RESCAN_INTERVAL_S:
             return None
         # After the interval check, so the gate's one query runs only when a
-        # scan would otherwise be handed out.
-        if not self.first_import_answered():
+        # scan would otherwise be handed out; and no more than once per
+        # `_GATE_RETRY_S` while it says no, since a closed gate never stamps
+        # `_root_last_scanned` and the interval check above would not throttle
+        # it.
+        if self._gate_retry_at is not None and now < self._gate_retry_at:
             return None
+        if not self.first_import_answered():
+            self._gate_retry_at = now + _GATE_RETRY_S
+            return None
+        self._gate_retry_at = None
         # Stamped when the task is handed out, not when it finishes, so a slow
         # scan is not queued a second time behind itself.
         self._root_last_scanned = now

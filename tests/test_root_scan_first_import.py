@@ -282,3 +282,26 @@ def test_the_same_finder_closes_the_gate_again_for_a_later_import(server):
     finder.mark_root_due()
     assert finder.first_import_answered() is False
     assert finder.find_task() is None
+
+
+def test_a_closed_gate_is_not_asked_on_every_planner_sweep(server, monkeypatch):
+    """The planner sweeps up to twenty times a second and the importer wakes
+    it after every chunk; while the gate says no it is asked again only after
+    a short deadline, not on every sweep."""
+    _record(server, STATE_PENDING)
+    finder = _finder(server)
+    real = server.vault.db.run_immediate_read_task
+    calls = []
+
+    def counted(func, *args, **kwargs):
+        calls.append(1)
+        return real(func, *args, **kwargs)
+
+    monkeypatch.setattr(server.vault.db, "run_immediate_read_task", counted)
+    now = 1_000.0
+    assert finder._root_task([], now) is None
+    assert finder._root_task([], now + 0.05) is None
+    assert finder._root_task([], now + 1.0) is None
+    assert len(calls) == 1, "one query per retry window, not one per sweep"
+    assert finder._root_task([], now + 6.0) is None
+    assert len(calls) == 2
