@@ -44,6 +44,7 @@ describe("starting a folder-structure commit", () => {
       assignments: ASSIGNMENTS,
       mode: "local_import",
       label: "Generations",
+      captions: [],
     });
   });
 
@@ -61,6 +62,7 @@ describe("starting a folder-structure commit", () => {
       read_result: RESULT,
       assignments: ASSIGNMENTS,
       mode: "local_import",
+      captions: [],
     });
     expect(body).not.toHaveProperty("task_id");
   });
@@ -83,5 +85,36 @@ describe("starting a folder-structure commit", () => {
     await startFolderStructureCommit("read-1", [], "", "reference");
 
     expect(apiClient.post.mock.calls[0][1]).not.toHaveProperty("label");
+  });
+
+  // `[]` and no key at all are two different instructions: `[]` is the owner
+  // answering "read nothing", no key asks the import to probe the known
+  // conventions. A local import always answers; `reference` refuses the pair.
+  it("sends an empty answer in a local import rather than omitting it", async () => {
+    await startFolderStructureCommit("read-1", [], "", "local_import", null, []);
+
+    expect(apiClient.post.mock.calls[0][1].captions).toEqual([]);
+  });
+
+  it("sends the answers it is given in a local import", async () => {
+    const answers = [{ suffix: ".txt", kind: "tags" }];
+    await startFolderStructureCommit(
+      "read-1",
+      [],
+      "",
+      "local_import",
+      null,
+      answers,
+    );
+
+    expect(apiClient.post.mock.calls[0][1].captions).toEqual(answers);
+  });
+
+  it("never sends captions with a reference folder, which the route refuses", async () => {
+    await startFolderStructureCommit("read-1", [], "", "reference", null, [
+      { suffix: ".txt", kind: "tags" },
+    ]);
+
+    expect(apiClient.post.mock.calls[0][1]).not.toHaveProperty("captions");
   });
 });
