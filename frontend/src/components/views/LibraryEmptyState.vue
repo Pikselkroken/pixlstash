@@ -92,7 +92,7 @@ function filesChosen(event) {
               Your library folder could not be fully counted; it
               {{
                 rootPictureCount > 0
-                  ? `holds at least ${rootPictureCount.toLocaleString()} pictures`
+                  ? `holds at least ${rootPictureCount.toLocaleString()} ${rootPictureCount === 1 ? "picture" : "pictures"}`
                   : "may already hold pictures"
               }}. They are read where they sit; nothing is moved.
             </span>

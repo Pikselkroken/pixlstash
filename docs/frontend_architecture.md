@@ -453,8 +453,10 @@ asked, and `LibraryEmptyState` switches on them: "Import the pictures already in
 this folder" / "Import them…" above zero, "Use a folder you already have" /
 "Choose a folder…" otherwise. A page reloaded onto a persisted entry has no
 count, so `offerLoosePictures` fills it from the entry's own read
-(`pictureCount`, else `result.picture_count`) and inspects only when the entry
-carries neither, opening nothing either way. When the inspect stopped at the
+(`pictureCount`, else `result.picture_count`) and inspects when the entry
+carries neither, or carries a count whose completeness is unknown (a legacy
+entry with `pictureCount` but no `pictureCountCapped` and no result), opening
+nothing either way. When the inspect stopped at the
 endpoint's entry cap the count is a floor rather than a total, so
 `rootPictureCountCapped` makes the copy say "Your library folder could not be
 fully counted; it holds at least N pictures" instead of naming a number the
