@@ -6342,7 +6342,12 @@ detected on disk and persisted (`_persist_suffixes` writes `LibrarySettings`
 for the root), `_fetch_folder_tags` reads the `reference_folder_id IS NULL`
 pictures, and the reconcile pass runs over every existing root picture -
 sidecar changed on disk since its recorded mtime → read in; content with no
-sidecar → exported. With both toggles off the root still skips that pass, for
+sidecar → exported. **The recorded file wins while it exists**
+(`caption_file_utils.recorded_sidecar`, in the reconcile and in the
+write-back alike): a suffix names the files PixlStash creates, never the
+ones the owner already had, so a `photo.txt` recorded at import under a
+`_tags.txt` setting is read and written as `photo.txt` and no second file
+appears beside it. The settings copy says the same. With both toggles off the root still skips that pass, for
 the reason the older comment gave: a stray `.txt` beside a managed picture is
 not a caption until the owner has said what the convention is.
 

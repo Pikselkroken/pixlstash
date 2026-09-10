@@ -71,8 +71,8 @@ describe("LibraryCaptionsDialog", () => {
     await flushPromises();
     const boxes = wrapper.findAll("input[type=checkbox]");
     expect(boxes.map((b) => b.element.checked)).toEqual([false, true]);
-    expect(wrapper.find("input[aria-label='Tags filename suffix']").exists()).toBe(false);
-    const field = wrapper.find("input[aria-label='Description filename suffix']");
+    expect(wrapper.find("input[aria-label='Suffix for new tags files']").exists()).toBe(false);
+    const field = wrapper.find("input[aria-label='Suffix for new description files']");
     expect(field.element.value).toBe("_caption.txt");
     expect(wrapper.text()).toContain("image_caption.txt");
   });
@@ -82,7 +82,7 @@ describe("LibraryCaptionsDialog", () => {
     const wrapper = mountDialog();
     await flushPromises();
     await wrapper.findAll("input[type=checkbox]")[0].setValue(true);
-    await wrapper.find("input[aria-label='Tags filename suffix']").setValue(".txt");
+    await wrapper.find("input[aria-label='Suffix for new tags files']").setValue(".txt");
     expect(setCaptionSettings).not.toHaveBeenCalled();
 
     await button(wrapper, "Save").trigger("click");

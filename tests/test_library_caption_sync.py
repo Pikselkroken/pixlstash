@@ -299,3 +299,38 @@ def test_confirming_a_pattern_on_import_turns_that_sync_on(env):
     stored = get_caption_sync(server.vault.db)
     assert stored["sync_descriptions"] is True
     assert stored["description_suffix"] == "_caption.txt"
+
+
+def test_a_recorded_caption_file_keeps_its_name_under_another_suffix(env):
+    """The suffix names files PixlStash creates. A picture imported with a
+    `photo.txt` under a `_tags.txt` setting is read and written as
+    `photo.txt`; no `_tags.txt` appears beside it, in either direction."""
+    server = env["server"]
+    root = server.vault.image_root
+    _make_image(os.path.join(root, "keep", "photo.png"), (21, 22, 23))
+    _write(os.path.join(root, "keep", "photo.txt"), "cat, calm")
+    _set_sync(server, sync_tags=False, sync_descriptions=False, tags_suffix=None)
+    _run_root_scan(server)
+    pic_id, _, tags_file, tags = _picture(server, "keep/photo.png")
+    assert tags == ["calm", "cat"] and tags_file.endswith("photo.txt")
+
+    _set_sync(server, sync_tags=True, tags_suffix="_tags.txt")
+    _write(os.path.join(root, "keep", "photo.txt"), "cat, calm, asleep")
+    later = time.time() + 5
+    os.utime(os.path.join(root, "keep", "photo.txt"), (later, later))
+    _run_root_scan(server)
+    _, _, tags_file, tags = _picture(server, "keep/photo.png")
+    assert tags == ["asleep", "calm", "cat"], "read from the recorded file"
+    assert tags_file.endswith("photo.txt")
+    assert not os.path.exists(os.path.join(root, "keep", "photo_tags.txt"))
+
+    def edit(session: Session):
+        session.exec(Tag.__table__.delete().where(Tag.picture_id == pic_id))
+        session.add(Tag(picture_id=pic_id, tag="dog"))
+        session.commit()
+
+    server.vault.db.run_task(edit)
+    sync_picture_sidecar(server, pic_id)
+    with open(os.path.join(root, "keep", "photo.txt"), encoding="utf-8") as fh:
+        assert fh.read().strip() == "dog", "written to the recorded file"
+    assert not os.path.exists(os.path.join(root, "keep", "photo_tags.txt"))

@@ -29,6 +29,7 @@ from pixlstash.utils.caption_file_utils import (
     is_safe_sidecar_suffix,
     read_description_sidecar,
     read_tags_sidecar,
+    recorded_sidecar,
     resolve_typed_sidecar,
     write_sidecar,
     writeback_path,
@@ -931,12 +932,20 @@ class ReferenceFolderScanTask(BaseTask):
         when *sync* is on, the file is missing, and *export_content* is non-empty,
         create the file on disk now and record its new path/mtime.  A vanished
         file only clears the stored reference (the database data is kept).
+
+        The picture's *recorded* file wins while it exists: the configured
+        suffix names the files this scan creates, not the ones the owner
+        already had. Resolving by suffix first dropped a ``photo.txt``
+        recorded at import under a ``_tags.txt`` setting and exported a
+        second file beside it.
         """
         is_tags = sidecar_type == SIDECAR_TYPE_TAGS
         path_key = "tags_file" if is_tags else "description_file"
         mtime_key = "tags_file_mtime" if is_tags else "description_file_mtime"
 
-        current_path = resolve_typed_sidecar(file_path, sidecar_type, suffix)
+        current_path = recorded_sidecar(file_path, stored_path) or resolve_typed_sidecar(
+            file_path, sidecar_type, suffix
+        )
         if current_path is not None:
             current_mtime = get_sidecar_mtime(current_path)
             if current_path != stored_path or current_mtime != stored_mtime:

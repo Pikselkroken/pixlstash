@@ -124,8 +124,9 @@ watch(
         Keep text files next to each picture in this library in sync with
         PixlStash. Tags and descriptions are separate files: a change made here
         is written out, and a file edited outside PixlStash is read back in on
-        the next scan. Files are created when a picture has content and none
-        yet; an empty file is never created.
+        the next scan. A picture that already has a caption file keeps it,
+        whatever it is called. The suffix below only names the files PixlStash
+        creates for pictures that have none; an empty file is never created.
       </p>
 
       <p v-if="error" class="captions-dlg__error" role="alert">{{ error }}</p>
@@ -141,7 +142,7 @@ watch(
         <div v-if="syncTags" class="captions-dlg__suffix">
           <VTextField
             v-model="tagsSuffix"
-            label="Tags filename suffix"
+            label="Suffix for new tags files"
             :placeholder="defaults.tags"
             density="compact"
             variant="filled"
@@ -165,7 +166,7 @@ watch(
         <div v-if="syncDescriptions" class="captions-dlg__suffix">
           <VTextField
             v-model="descriptionSuffix"
-            label="Description filename suffix"
+            label="Suffix for new description files"
             :placeholder="defaults.description"
             density="compact"
             variant="filled"

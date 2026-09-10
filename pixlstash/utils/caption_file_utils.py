@@ -143,6 +143,23 @@ def classify_sidecar(path: str) -> str | None:
     return SIDECAR_TYPE_TAGS if _looks_like_tags(raw) else SIDECAR_TYPE_DESCRIPTION
 
 
+def recorded_sidecar(image_path: str, stored_path: str | None) -> str | None:
+    """The picture's own recorded sidecar, when it is still there.
+
+    A configured suffix names the files PixlStash *creates*; a picture whose
+    file was found under another name keeps that file. Honoured only when the
+    recorded value is exactly the image stem plus a safe suffix - the one
+    shape a legitimately recorded path can have (#776) - and the file exists.
+    """
+    if not stored_path:
+        return None
+    stem = os.path.splitext(image_path)[0]
+    tail = stored_path[len(stem) :] if stored_path.startswith(stem) else ""
+    if not tail or not is_safe_sidecar_suffix(tail):
+        return None
+    return stored_path if os.path.isfile(stored_path) else None
+
+
 def resolve_typed_sidecar(
     image_path: str, sidecar_type: str, configured_suffix: str | None
 ) -> str | None:

@@ -1,7 +1,6 @@
 """Caption, tag, and hidden-tag processing utilities."""
 
 import json
-import os
 import re
 
 from sqlmodel import Session, select
@@ -12,6 +11,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.caption_file_utils import (
     SIDECAR_TYPE_DESCRIPTION,
     SIDECAR_TYPE_TAGS,
+    recorded_sidecar,
     resolve_typed_sidecar,
     write_sidecar,
     writeback_path,
@@ -223,16 +223,12 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
 
         dirty = False
 
+        # The picture's recorded file wins while it exists; the configured
+        # suffix only names a file that has to be created.
         if rf.sync_tags:
-            existing = resolve_typed_sidecar(
-                image_path, SIDECAR_TYPE_TAGS, rf.tags_suffix
-            )
-            if (
-                existing is None
-                and pic_db.tags_file
-                and os.path.isfile(pic_db.tags_file)
-            ):
-                existing = pic_db.tags_file
+            existing = recorded_sidecar(
+                image_path, pic_db.tags_file
+            ) or resolve_typed_sidecar(image_path, SIDECAR_TYPE_TAGS, rf.tags_suffix)
             # Create a new file only when there is content; always update an
             # existing one (so clearing tags empties it).
             if existing or current_tags:
@@ -251,15 +247,11 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
 
         if rf.sync_descriptions:
             description = (pic_db.description or "").strip()
-            existing = resolve_typed_sidecar(
+            existing = recorded_sidecar(
+                image_path, pic_db.description_file
+            ) or resolve_typed_sidecar(
                 image_path, SIDECAR_TYPE_DESCRIPTION, rf.description_suffix
             )
-            if (
-                existing is None
-                and pic_db.description_file
-                and os.path.isfile(pic_db.description_file)
-            ):
-                existing = pic_db.description_file
             if existing or description:
                 target = writeback_path(
                     image_path,
