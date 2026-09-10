@@ -947,6 +947,86 @@ def test_an_answer_of_nothing_still_reaches_a_row_the_commit_reused(owner_env):
     )
 
 
+def test_a_reused_row_drops_a_file_no_confirmed_suffix_names(owner_env):
+    """The restore is not only for the all-ignored answer. With `.txt` ignored
+    and `_tags.txt` confirmed, a row recording `photo.txt` and having no
+    `photo_tags.txt` used to keep the ignored file and the tags read out of
+    it, because nothing had been ignored *entirely*."""
+    server = owner_env["server"]
+    root = os.path.join(server.vault.image_root, "local-import-mixed-answer")
+    _make_tree(root, {"": ["mixed.jpg", "proper.jpg"]})
+    with open(os.path.join(root, "mixed.txt"), "w", encoding="utf-8") as fh:
+        fh.write("harbour, dusk, boats")
+    with open(os.path.join(root, "proper_tags.txt"), "w", encoding="utf-8") as fh:
+        fh.write("cliff, gulls")
+
+    from pixlstash.db_models.tag import TAG_PENDING_SENTINEL
+    from pixlstash.services import folder_structure_commit_service as commit_service
+
+    first = commit_service.local_import_pictures(server, root, expected_pictures=2)
+    assert _reused_row_state(server, first)["mixed.jpg"][0] == os.path.join(
+        root, "mixed.txt"
+    ), "the probe recorded the bare .txt"
+
+    second = commit_service.local_import_pictures(
+        server,
+        root,
+        expected_pictures=2,
+        captions=commit_service.parse_captions(
+            [
+                {"suffix": ".txt", "kind": "ignore"},
+                {"suffix": "_tags.txt", "kind": "tags"},
+            ]
+        ),
+    )
+    assert sorted(second) == sorted(first), "reused, not re-imported"
+    got = _reused_row_state(server, first)
+    assert got["mixed.jpg"] == (None, None, None, [TAG_PENDING_SENTINEL]), (
+        "a recorded file at no confirmed suffix is dropped, mixed answer or not"
+    )
+    assert got["proper.jpg"] == (
+        os.path.join(root, "proper_tags.txt"),
+        None,
+        None,
+        ["cliff", "gulls"],
+    )
+
+
+def test_a_confirmed_tags_file_that_is_empty_hands_the_picture_to_the_tagger(
+    owner_env,
+):
+    """`attach_sidecars` records the path and returns `[]` for an empty file,
+    which says "no tags were read". The row's old tags were kept instead."""
+    server = owner_env["server"]
+    root = os.path.join(server.vault.image_root, "local-import-empty-file")
+    _make_tree(root, {"": ["blank.jpg"]})
+    with open(os.path.join(root, "blank_tags.txt"), "w", encoding="utf-8") as fh:
+        fh.write("harbour, dusk")
+
+    from pixlstash.db_models.tag import TAG_PENDING_SENTINEL
+    from pixlstash.services import folder_structure_commit_service as commit_service
+
+    answers = commit_service.parse_captions([{"suffix": "_tags.txt", "kind": "tags"}])
+    first = commit_service.local_import_pictures(
+        server, root, expected_pictures=1, captions=answers
+    )
+    assert _reused_row_state(server, first)["blank.jpg"][3] == ["dusk", "harbour"]
+
+    # The owner empties their own sidecar and re-runs the import.
+    with open(os.path.join(root, "blank_tags.txt"), "w", encoding="utf-8") as fh:
+        fh.write("")
+    second = commit_service.local_import_pictures(
+        server, root, expected_pictures=1, captions=answers
+    )
+    assert sorted(second) == sorted(first), "reused, not re-imported"
+    assert _reused_row_state(server, first)["blank.jpg"] == (
+        os.path.join(root, "blank_tags.txt"),
+        None,
+        None,
+        [TAG_PENDING_SENTINEL],
+    ), "the confirmed file is still recorded; its emptiness is 'no tags'"
+
+
 def test_a_caption_answer_with_an_unsafe_suffix_is_refused(owner_env):
     """The suffix is appended to a picture path to find the file to read, so
     the commit enforces the same bare-fragment rule the reference-folder API

@@ -218,6 +218,25 @@ def caption_suffixes(captions) -> tuple[Optional[list[str]], Optional[list[str]]
     )
 
 
+def _approved_paths(image_path: str, suffixes: Optional[list[str]]) -> set[str]:
+    """Every caption file the owner's answer allows beside *image_path*.
+
+    The set a *recorded* path is judged against: a row carrying anything else
+    for that kind is carrying a file the owner did not confirm, whether they
+    ignored the pattern or simply confirmed a different one. Empty for ``[]``
+    (ignore everything) and for ``None`` (no answer, so nothing is approved
+    and nothing is judged - that case returns before this is used).
+    """
+    approved: set[str] = set()
+    for suffix in suffixes or ():
+        try:
+            approved.add(sidecar_path(image_path, suffix))
+        except ValueError as exc:
+            # Names the picture rather than a sidecar; never an approved file.
+            logger.warning("Ignoring caption suffix %r: %s", suffix, exc)
+    return approved
+
+
 def _widest_convention(
     file_paths: list[str], suffixes: Optional[list[str]]
 ) -> Optional[str]:
@@ -813,13 +832,21 @@ def _apply_captions_to_existing(
     picture frozen by a locked set is skipped, as `_link_pictures` skips it.
 
     An answer of *ignore* is an answer too, and it is the one `attach_sidecars`
-    cannot carry: an empty suffix list reads nothing, so a row the root scan
+    cannot carry: it reads only the approved suffixes, so a row the root scan
     won with the probe keeps the file's imported tags and its recorded path
-    even though the owner has just said that file is not a caption. Such a row
-    is put back where an unread picture starts - no recorded file, the pending
-    sentinel for tags, no description - but only when it *has* a recorded file
-    of that kind, so a row that was carrying the owner's own typed tags and no
-    caption file keeps them.
+    even though the owner has just said that file is not a caption. One rule
+    covers it: a recorded file that is not at an approved suffix for its kind
+    puts the row back where an unread picture starts - no recorded file, the
+    pending sentinel for tags, no description. Not a second branch for the
+    all-ignored case, because the mixed answer is the one that bit: with
+    ``.txt`` ignored and ``_tags.txt`` approved, a row recording ``photo.txt``
+    and having no ``photo_tags.txt`` kept the ignored file and its tags. A row
+    with no recorded file of that kind is left alone, so the owner's own typed
+    tags survive.
+
+    An approved file that reads empty is *"no tags were read"*, which is the
+    pending sentinel too: `attach_sidecars` records its path and returns ``[]``
+    either way, and ``tags_file`` is what says whether a file was found.
 
     Returns how many rows changed.
     """
@@ -843,11 +870,17 @@ def _apply_captions_to_existing(
                 description_suffixes,
                 overwrite_description=True,
             )
-            if tags_suffixes == [] and pic.tags_file:
+            if pic.tags_file in _approved_paths(abs_path, tags_suffixes):
+                # An approved file that reads empty said "no tags", not "keep
+                # the ones you had": the tagger gets the picture back.
+                tags = tags or [TAG_PENDING_SENTINEL]
+            elif pic.tags_file:
                 pic.tags_file = None
                 pic.tags_file_mtime = None
                 tags = [TAG_PENDING_SENTINEL]
-            if description_suffixes == [] and pic.description_file:
+            if pic.description_file and pic.description_file not in _approved_paths(
+                abs_path, description_suffixes
+            ):
                 pic.description_file = None
                 pic.description_file_mtime = None
                 pic.description = None
