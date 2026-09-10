@@ -645,6 +645,44 @@ def test_an_edit_before_the_first_scan_leaves_an_unrecorded_sidecar_alone(env):
     assert tags_file == tags_path
 
 
+def test_turning_a_kind_on_makes_the_scan_re_read_files_it_already_recorded(env):
+    """A picture indexed while sync was off already carries the file and the
+    mtime it was read at, because a first indexing reads the sidecar beside it
+    either way. Edit its tags in PixlStash while sync is off and the two have
+    diverged; the reconcile then sees the same path and the same mtime, so it
+    neither imports nor exports and they stay diverged for good. Turning the
+    kind on forgets that mtime, so the scan reads the file in - the file wins,
+    the recorded-file rule."""
+    from pixlstash.services.library_settings_service import set_caption_sync
+
+    server = env["server"]
+    root = server.vault.image_root
+    _make_image(os.path.join(root, "reenable", "e.png"), (31, 32, 33))
+    _write(os.path.join(root, "reenable", "e.txt"), "harbour, dusk")
+    _set_sync(
+        server,
+        sync_tags=False,
+        sync_descriptions=False,
+        tags_suffix=None,
+        description_suffix=None,
+    )
+    _run_root_scan(server)
+    pic_id, _, tags_file, tags = _picture(server, "reenable/e.png")
+    assert (tags_file, tags) == (
+        os.path.join(root, "reenable", "e.txt"),
+        ["dusk", "harbour"],
+    ), "the first indexing recorded the file and its mtime"
+
+    # Edited in PixlStash while sync was off: nothing wrote the file back.
+    _set_tags(server, pic_id, "boat")
+
+    set_caption_sync(server.vault.db, sync_tags=True, tags_suffix=".txt")
+    _run_root_scan(server)
+    _, _, tags_file, tags = _picture(server, "reenable/e.png")
+    assert tags == ["dusk", "harbour"], "the file the owner has is read back in"
+    assert tags_file == os.path.join(root, "reenable", "e.txt")
+
+
 def test_a_picture_with_no_caption_file_still_gets_one_written(env):
     """The skip is about replacing somebody else's file, not about writing:
     with nothing on disk the suffix-derived file is still created."""

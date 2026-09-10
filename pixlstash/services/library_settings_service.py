@@ -17,10 +17,12 @@ import hmac
 import json
 from typing import Optional
 
+from sqlalchemy import update as sa_update
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models.library_settings import LibrarySettings
+from pixlstash.db_models.picture import Picture
 from pixlstash.utils.caption_file_utils import (
     DEFAULT_DESCRIPTION_SUFFIX,
     DEFAULT_TAGS_SUFFIX,
@@ -190,6 +192,40 @@ CAPTION_SYNC_FIELDS = (
 )
 
 
+#: The picture columns each toggle governs: ``(recorded file, its mtime)``.
+_CAPTION_MTIME_COLUMNS = {
+    "sync_tags": ("tags_file", "tags_file_mtime"),
+    "sync_descriptions": ("description_file", "description_file_mtime"),
+}
+
+
+def _forget_caption_mtimes(session: Session, toggle: str) -> None:
+    """Make the next root scan re-read the caption files *toggle* governs.
+
+    A picture indexed while sync was off can already carry a recorded file of
+    that kind and the mtime it had when it was read, and its tags or
+    description may have been edited in PixlStash since. Turning the kind on
+    queues a root scan, but `_reconcile_sidecar` gates the read on
+    ``(path, mtime)`` and would see neither changed: it imports nothing and
+    exports nothing, and the file and the database stay divergent for good.
+
+    Forgetting the mtime makes that scan see the file as changed on disk and
+    read it in, which is the recorded-file rule - the file wins - and the same
+    outcome as a file edited while PixlStash was closed. Only the root's own
+    pictures: a reference folder's rows are that folder's toggle to manage.
+    """
+    file_column, mtime_column = _CAPTION_MTIME_COLUMNS[toggle]
+    table = Picture.__table__
+    session.execute(
+        sa_update(table)
+        .where(
+            table.c.reference_folder_id.is_(None),
+            table.c[file_column].is_not(None),
+        )
+        .values({mtime_column: None})
+    )
+
+
 def get_caption_sync(vault_db) -> dict:
     """The root's caption-file sync settings: the four `CAPTION_SYNC_FIELDS`."""
 
@@ -212,6 +248,10 @@ def set_caption_sync(vault_db, validate=None, **fields) -> dict:
     and raises ``ValueError`` to refuse. A cross-field rule checked against a
     separately read snapshot is a race: two partial PATCHes can each pass
     against the old row and serialise into the state the rule forbids.
+
+    A toggle going off -> on also forgets that kind's recorded mtimes
+    (`_forget_caption_mtimes`), in this same writer, so the scan the caller
+    queues actually reads the existing files in.
     """
     unknown = set(fields) - set(CAPTION_SYNC_FIELDS)
     if unknown:
@@ -223,8 +263,15 @@ def set_caption_sync(vault_db, validate=None, **fields) -> dict:
         merged.update(fields)
         if validate is not None:
             validate(merged)
+        turned_on = [
+            toggle
+            for toggle in _CAPTION_MTIME_COLUMNS
+            if fields.get(toggle) and not getattr(row, toggle)
+        ]
         for name, value in fields.items():
             setattr(row, name, value)
+        for toggle in turned_on:
+            _forget_caption_mtimes(session, toggle)
         session.add(row)
         session.commit()
         session.refresh(row)
@@ -253,6 +300,10 @@ def seed_caption_suffixes(
     import could seed descriptions with the suffix tags already use and point
     both write-backs at one file.
 
+    Turning a kind on forgets that kind's recorded mtimes on the root's
+    pictures (`_forget_caption_mtimes`), so that rescan reads the files in
+    rather than deciding nothing changed.
+
     Returns:
         True when a type was turned on, so the caller can ask for the root
         rescan that reads the existing files in before anything is written
@@ -277,6 +328,8 @@ def seed_caption_suffixes(
                     row.description_suffix or DEFAULT_DESCRIPTION_SUFFIX,
                 )
             else:
+                if not row.sync_tags:
+                    _forget_caption_mtimes(session, "sync_tags")
                 row.sync_tags = True
                 row.tags_suffix = effective
                 turned_on = True
@@ -291,6 +344,8 @@ def seed_caption_suffixes(
                     row.tags_suffix or DEFAULT_TAGS_SUFFIX,
                 )
             else:
+                if not row.sync_descriptions:
+                    _forget_caption_mtimes(session, "sync_descriptions")
                 row.sync_descriptions = True
                 row.description_suffix = effective
                 turned_on = True

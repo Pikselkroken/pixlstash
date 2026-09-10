@@ -6377,7 +6377,15 @@ whichever the payload listed first. Settings turns either off again. The import
 then asks for the rescan itself: sync being on means `sync_picture_sidecar`
 replaces whatever a caption file holds, and the scan is the pass that reads the
 owner's existing files IN, so without it the first tag edit truncated a file
-nothing had read. Turning a type on calls
+nothing had read. Turning a type on also forgets that kind's recorded mtimes on
+every root picture that has a file of it
+(`library_settings_service._forget_caption_mtimes`, one UPDATE inside the same
+writer as the toggle, in `set_caption_sync` and `seed_caption_suffixes` alike):
+a picture indexed while sync was off already carries a file and the mtime it was
+read at, so a scan that gates on `(path, mtime)` would see nothing changed and
+leave a sidecar and a tag set that diverged while sync was off divergent for
+good. With the mtime forgotten the scan reads the file in, which is the
+recorded-file rule below. Turning a type on calls
 `Vault.rescan_library_root`, and `ReferenceFolderScanTask` with
 `folder_id=None` then does for the root exactly what it does for a folder:
 `fetch_folder_config` returns the settings' four fields, an unset suffix is
@@ -6414,6 +6422,16 @@ sentinel. Descriptions have never had that hole; a `None` one is skipped where
 it is applied. A picture's *first* indexing is a different rule and reads the
 sidecar beside it either way (`attach_sidecars`), as the local import does:
 there are no tags yet to overwrite.
+
+**A detected suffix the writer refuses turns its kind off for that scan**
+(`ReferenceFolderScanTask._disabled_kinds`, checked at the top of
+`_reconcile_sidecar` and by `_read_suffixes` for a newly indexed picture).
+Leaving it unset instead was a fallback to the known conventions, and the probe
+then found the very file the refusal was about: tags detected on `_caption.txt`
+make the detected description suffix `_caption.txt` collide, and the description
+probe re-found `_caption.txt` and read one file as both kinds. Off for the scan
+means no file of that kind is recorded, read or written; the next scan detects
+again against whatever the settings now hold.
 
 `wait_for_first_scan` polls `ReferenceFolder.last_scanned`, which is exactly
 the field the model's own docstring names as "unix timestamp of the last
