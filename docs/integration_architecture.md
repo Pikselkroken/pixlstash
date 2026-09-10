@@ -1631,7 +1631,11 @@ already knows. Stems are matched case-insensitively, so `img_0001.txt` beside
 `IMG_0001.JPG` is one convention, but only where the import can read it back:
 the import builds the sidecar name from the picture's own spelling, so a stem
 that differs in case is reported when that path exists, which it does on a
-case-insensitive filesystem and does not on Linux. A few files of each pattern,
+case-insensitive filesystem and does not on Linux. Suffixes group the same way
+and by the same rule: `a.txt` and `b.TXT` are one row, reported with the first
+spelling walked, and `b.TXT` counts towards that row's `files` only where
+`b.txt` names it, again true on a case-insensitive filesystem and false on
+Linux. A few files of each pattern,
 spread across folders rather than taken from the first one walked, are read to
 say whether it holds tag lists or prose (`kind`), and `sample` is an excerpt of
 one *of that kind* so the owner can check the guess without opening a file. Binary, JSON and markup sidecars

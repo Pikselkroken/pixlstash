@@ -524,17 +524,26 @@ def test_one_convention_in_two_casings_is_one_row():
     """`a.txt` beside `b.TXT` is one convention, not two. On Windows and macOS
     the two suffixes name the same file, so offering both would ask the owner
     to answer one file twice - and the commit refuses the pair as a repeat.
-    The first casing walked is the one reported."""
+    The first casing walked is the one reported.
+
+    Its count follows the same rule the stems do: the import joins the
+    picture's spelling with the *reported* suffix, so `b.TXT` counts under the
+    `.txt` row exactly where `b.txt` names that file. It does on a
+    case-insensitive filesystem, and does not on Linux."""
     spec = {"": [], "shoot": ["a.jpg", "a.txt", "b.jpg", "b.TXT", "c.jpg", "c.txt"]}
     with _tree(spec) as root:
         for rel in ("shoot/a.txt", "shoot/b.TXT", "shoot/c.txt"):
             _write(root, rel, "1girl, solo, long hair, smile")
+        # The path `sidecar_path("…/b.jpg", ".txt")` builds.
+        importable = os.path.isfile(os.path.join(root, "shoot", "b.txt"))
         result = FolderStructureRead(root).run()
 
     assert [row["suffix"] for row in result["captions"]] == [".txt"], (
         "one row, reported with the first casing the walk saw"
     )
-    assert result["captions"][0]["files"] == 3
+    assert result["captions"][0]["files"] == (3 if importable else 2), (
+        "`b.TXT` counts under the `.txt` row only where the import can read it"
+    )
     assert result["captions"][0]["kind"] == "tags"
 
 

@@ -656,6 +656,15 @@ class FolderStructureRead:
             entry = self._captions.setdefault(
                 key, {"suffix": suffix, "files": 0, "folders": set(), "samples": []}
             )
+            # Same rule as the stems above, for the same reason: the import
+            # joins the picture's own spelling with the *reported* suffix, so
+            # `b.TXT` counts towards a `.txt` row only where `b.txt` names it -
+            # true on a case-insensitive filesystem, false on Linux, where the
+            # import would otherwise silently miss the file the row promised.
+            if suffix != entry["suffix"] and not os.path.isfile(
+                os.path.join(dirpath, matched_stem + entry["suffix"])
+            ):
+                continue
             entry["files"] += 1
             entry["folders"].add(folder.index)
             if (
