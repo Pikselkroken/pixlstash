@@ -5947,8 +5947,9 @@ drawn from whichever folder `os.walk` reached first is the walk order deciding
 what the owner is shown, not a vote.
 
 After the walk `_caption_patterns` ranks the suffixes by file count, stops at
-`MAX_CAPTION_PATTERNS` (12) **before opening anything** (so a tree of thousands
-of one-off suffixes costs no reads at all), and passes each sample through
+`MAX_CAPTION_PATTERNS` (12) **before opening anything** (so the whole sniff is
+at most 12 x `CAPTION_SAMPLES` (8) file opens, however long the tail of
+one-off suffixes is), and passes each sample through
 `caption_file_utils.sniff_caption`, the single place a kind is decided from a
 file. It refuses binary (a NUL in the first 4 KB), decodes `utf-8-sig` so a BOM
 cannot ride along on the first tag, refuses a leading `{`, `[` or `<` (a

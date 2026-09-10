@@ -1627,8 +1627,11 @@ indeterminate bar rather than 0%.
 `.txt` or `.caption` file whose name starts with a picture's stem in the same
 folder is a caption file, grouped by the `suffix` after that stem (`a.txt`,
 `a_tags.txt` and `a.jpg.caption` beside `a.jpg` are `.txt`, `_tags.txt` and
-`.jpg.caption`), so nothing depends on the convention being one PixlStash
-already knows. Stems are matched case-insensitively, so `img_0001.txt` beside
+`.jpg.caption`), so nothing depends on the *suffix* being one PixlStash
+already knows. The extension is the one thing that is fixed: only `.txt` and
+`.caption` are read (`_SIDECAR_EXTS`), so a convention that writes its captions
+into any other extension is not detected and is not listed. Stems are matched
+case-insensitively, so `img_0001.txt` beside
 `IMG_0001.JPG` is one convention, but only where the import can read it back:
 the import builds the sidecar name from the picture's own spelling, so a stem
 that differs in case is reported when that path exists, which it does on a

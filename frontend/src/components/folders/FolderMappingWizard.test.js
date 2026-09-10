@@ -312,6 +312,31 @@ describe("building the library", () => {
     expect(wrapper.emitted("close")).toBeTruthy();
   });
 
+  it("saves 'nobody was asked' when the read stopped before any pattern", async () => {
+    // A fresh wizard holds no answer, and a read that stopped early asked for
+    // none, so the entry must not claim `[]` ("read nothing") on the owner's
+    // behalf - the commit after the switch would then skip sidecars the folders
+    // the walk never reached still hold.
+    getFolderStructureReadStatus.mockResolvedValue({
+      status: "completed",
+      stage: "done",
+      processed: 2,
+      total: 2,
+      result: { ...READ_RESULT, captions: [], captions_complete: false },
+    });
+    const wrapper = mountWizard();
+    await bringThemIn(wrapper);
+    await button(wrapper, "Set up my library").trigger("click");
+    await settle();
+    await wrapper.find(".tree-stub .emit-next").trigger("click");
+    await settle();
+
+    await button(wrapper, "Yes, build this library").trigger("click");
+    await settle();
+
+    expect(useFolderMappingStore().pending.captions).toBeNull();
+  });
+
   it("keeps the caption answers across 'Back to the mapping'", async () => {
     // The Preview step is unmounted on the way back, so an answer held only
     // there was lost and the read's own guess was committed instead.

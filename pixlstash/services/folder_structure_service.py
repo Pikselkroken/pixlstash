@@ -640,13 +640,24 @@ class FolderStructureRead:
                 # that matches only case-folded counts when that path exists,
                 # which it does on a case-insensitive filesystem and does not
                 # on Linux. One `isfile` per case-differing stem; an
-                # exactly-spelled stem costs nothing extra.
-                if name[:cut] in spellings or any(
-                    os.path.isfile(os.path.join(dirpath, spelled + candidate))
-                    for spelled in spellings
-                ):
-                    suffix = candidate
+                # exactly-spelled stem costs nothing extra. The spelling that
+                # was accepted is the one kept: it is the picture this caption
+                # belongs to, and on Linux `A.jpg` and `a.jpg` are two of them.
+                if name[:cut] in spellings:
                     matched_stem = name[:cut]
+                else:
+                    matched_stem = next(
+                        (
+                            spelled
+                            for spelled in sorted(spellings)
+                            if os.path.isfile(
+                                os.path.join(dirpath, spelled + candidate)
+                            )
+                        ),
+                        "",
+                    )
+                if matched_stem:
+                    suffix = candidate
                     break
             if suffix is None or not is_safe_sidecar_suffix(suffix):
                 continue
@@ -671,8 +682,10 @@ class FolderStructureRead:
             # picture - the Set signal's evidence, counted once per stem. Below
             # the casing check, not above it: a `b.TXT` the `.txt` row had to
             # drop is not a sidecar the import will read either, and counting
-            # it here made `with_sidecar` promise a file no row offers.
-            captioned.add(matched_stem.lower())
+            # it here made `with_sidecar` promise a file no row offers. Kept
+            # by exact spelling: `A.jpg` and `a.jpg` are two pictures on Linux
+            # and a caption for one is not a caption for the other.
+            captioned.add(matched_stem)
             entry["files"] += 1
             entry["folders"].add(folder.index)
             candidates = sampled_here.setdefault(key, [])
@@ -690,7 +703,7 @@ class FolderStructureRead:
         folder.with_sidecar = sum(
             1
             for picture in folder.direct_pictures
-            if os.path.splitext(picture)[0].lower() in captioned
+            if os.path.splitext(picture)[0] in captioned
         )
 
     def _caption_patterns(self) -> list[dict[str, Any]]:
