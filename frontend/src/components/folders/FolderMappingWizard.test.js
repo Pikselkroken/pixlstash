@@ -74,6 +74,22 @@ const PICTURES = {
 const READ_RESULT = { picture_count: 5, folder_count: 2, levels: [] };
 const ASSIGNMENTS = [{ relative_path: "Alice", kind: "person" }];
 
+/** A settled read that found one caption pattern, so the Preview asks. */
+function readFoundCaptions() {
+  getFolderStructureReadStatus.mockResolvedValue({
+    status: "completed",
+    stage: "done",
+    processed: 2,
+    total: 2,
+    result: {
+      ...READ_RESULT,
+      captions: [
+        { suffix: ".txt", kind: "tags", files: 9, folders: 1, sample: "1girl" },
+      ],
+    },
+  });
+}
+
 const TreeStub = {
   props: ["result"],
   emits: ["next", "later"],
@@ -296,6 +312,92 @@ describe("building the library", () => {
     expect(wrapper.emitted("close")).toBeTruthy();
   });
 
+  it("keeps the caption answers across 'Back to the mapping'", async () => {
+    // The Preview step is unmounted on the way back, so an answer held only
+    // there was lost and the read's own guess was committed instead.
+    readFoundCaptions();
+    const wrapper = mountWizard();
+    await settle();
+    await bringThemIn(wrapper);
+    await button(wrapper, "Set up my library").trigger("click");
+    await settle();
+    await wrapper.find(".tree-stub .emit-next").trigger("click");
+    await settle();
+
+    await wrapper.find("select").setValue("ignore");
+    await button(wrapper, "Back to the mapping").trigger("click");
+    await settle();
+    await wrapper.find(".tree-stub .emit-next").trigger("click");
+    await settle();
+
+    expect(wrapper.find("select").element.value).toBe("ignore");
+    // One way back, in the dialog's header: the step drew a second of its own.
+    expect(
+      wrapper.findAll("button").filter((b) => b.text().includes("Back to the mapping")),
+    ).toHaveLength(1);
+    await button(wrapper, "Yes, build this library").trigger("click");
+    await settle();
+
+    expect(useFolderMappingStore().pending.captions).toEqual([
+      { suffix: ".txt", kind: "ignore" },
+    ]);
+  });
+
+  it("'Drop this, organise later' drops the caption answers too", async () => {
+    // Declining to decide is not confirming the read's guesses, and the entry
+    // this saves is what the commit after the switch sends.
+    readFoundCaptions();
+    const wrapper = mountWizard();
+    await settle();
+    await bringThemIn(wrapper);
+    await button(wrapper, "Set up my library").trigger("click");
+    await settle();
+    await wrapper.find(".tree-stub .emit-next").trigger("click");
+    await settle();
+    await wrapper.find("select").setValue("description");
+    await button(wrapper, "Back to the mapping").trigger("click");
+    await settle();
+
+    await wrapper.find(".tree-stub .emit-later").trigger("click");
+    await settle();
+
+    expect(useFolderMappingStore().pending).toMatchObject({
+      assignments: [],
+      captions: [],
+      autoCommit: true,
+    });
+  });
+
+  it("keeps the caption answers when the create fails", async () => {
+    addLibrary.mockRejectedValue({
+      response: { data: { detail: '"Generations" covers this folder.' } },
+    });
+    readFoundCaptions();
+    const wrapper = mountWizard();
+    await settle();
+    await bringThemIn(wrapper);
+    await button(wrapper, "Set up my library").trigger("click");
+    await settle();
+    await wrapper.find(".tree-stub .emit-next").trigger("click");
+    await settle();
+    await wrapper.find("select").setValue("ignore");
+
+    await button(wrapper, "Yes, build this library").trigger("click");
+    await settle();
+
+    expect(wrapper.find(".mapping-wizard__error").text()).toContain(
+      "covers this folder",
+    );
+    // The step is still mounted, and the wizard still holds the answer: a
+    // second attempt must not re-seed itself from the read's guess.
+    expect(wrapper.find("select").element.value).toBe("ignore");
+    await button(wrapper, "Back to the mapping").trigger("click");
+    await settle();
+    await wrapper.find(".tree-stub .emit-next").trigger("click");
+    await settle();
+    expect(wrapper.find("select").element.value).toBe("ignore");
+  });
+
   it("'Drop this, organise later' builds it with no assignments", async () => {
     const wrapper = mountWizard();
     await settle();
@@ -326,6 +428,10 @@ describe("building the library", () => {
     expect(wrapper.find(".mapping-wizard__error").text()).toContain(
       "covers this folder",
     );
+    // In the column with the step, not a row sibling of the flush dialog body.
+    expect(
+      wrapper.find(".mapping-wizard__body > .mapping-wizard__error").exists(),
+    ).toBe(true);
     expect(setActiveLibrary).not.toHaveBeenCalled();
     expect(useFolderMappingStore().pending).toBeNull();
     expect(wrapper.emitted("close")).toBeFalsy();
@@ -433,6 +539,27 @@ describe("the empty library's own folder", () => {
       READ_RESULT,
       [],
     );
+  });
+
+  it("organising later commits no caption answer, guess or not", async () => {
+    // The library already exists, so this is the Preview's own commit-on-mount
+    // rather than `build`. The card never appears; the guesses in it are not
+    // an answer, and `[]` is.
+    readFoundCaptions();
+    const wrapper = mountWizard({ resume: own });
+    await settle();
+    await button(wrapper, "Set up my library").trigger("click");
+    await settle();
+    await wrapper.find(".tree-stub .emit-next").trigger("click");
+    await settle();
+    await wrapper.find("select").setValue("description");
+    await button(wrapper, "Back to the mapping").trigger("click");
+    await settle();
+
+    await wrapper.find(".tree-stub .emit-later").trigger("click");
+    await settle();
+
+    expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual([]);
   });
 });
 
