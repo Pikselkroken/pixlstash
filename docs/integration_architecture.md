@@ -2073,7 +2073,11 @@ modes, never one. Import is **idempotent by `file_path`**: a file already
 indexed under this path (an overlapping earlier `local_import`, or an ordinary
 import that reached it independently) is reused by id, never re-imported as a
 second row — same spirit as `mode: "reference"`'s own "don't redo what already
-happened" rule for a resumed commit (§25).
+happened" rule for a resumed commit (§25). Because reuse skips the sidecar read
+(only a newly-built picture has its caption files opened), **the import writes
+each batch of picture rows and their tag rows in one transaction**: a run that
+dies mid-batch leaves that batch entirely unindexed, so the resume builds those
+pictures properly instead of reusing rows whose captions were never read.
 
 **The root must be inside `image_root` or the commit fails.** There is no
 separate error status for this — the check runs inside the background commit,

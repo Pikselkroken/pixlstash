@@ -823,6 +823,52 @@ def test_a_caption_answer_must_name_a_pattern_the_read_reported(owner_env):
     )
 
 
+def test_a_chunks_pictures_and_their_tags_land_together(owner_env, monkeypatch):
+    """One transaction per chunk, pictures and tags alike.
+
+    `to_build` skips anything already indexed and only a newly-built picture is
+    handed to `attach_sidecars`, so a chunk that committed its picture rows and
+    then died before its tag rows would come back on resume as "already
+    indexed" and never have its sidecars read - the tags on disk lost with
+    nothing saying so. Killing the process between the two writes cannot be
+    tested directly; failing the tag write is the same boundary, and the
+    pictures must go back with it."""
+    server = owner_env["server"]
+    owner = owner_env["owner"]
+    root = os.path.join(server.vault.image_root, "local-import-atomic")
+    _make_tree(root, {"": ["a.jpg", "b.jpg"]})
+    started = owner.post(_READ, json={"path": root})
+    read_task_id = started.json()["task_id"]
+    _drain_read(owner, read_task_id)
+
+    from pixlstash.services import folder_structure_commit_service as svc
+
+    class _TagWriteDies:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("the tag write died between the two writes")
+
+    monkeypatch.setattr(svc, "Tag", _TagWriteDies)
+
+    commit_started = owner.post(
+        _COMMIT, json={"task_id": read_task_id, "mode": "local_import"}
+    )
+    assert commit_started.status_code == 200, commit_started.text
+    body = _drain_commit(owner, commit_started.json()["task_id"], timeout_s=60.0)
+    assert body["status"] == "failed", body
+
+    from pixlstash.db_models.picture import Picture
+    from sqlmodel import select
+
+    def fetch(session):
+        return session.exec(
+            select(Picture.id).where(Picture.file_path.like("local-import-atomic/%"))
+        ).all()
+
+    assert server.vault.db.run_immediate_read_task(fetch) == [], (
+        "a chunk whose tag write failed must leave no picture rows behind"
+    )
+
+
 def test_local_import_wakes_the_planner_as_each_chunk_lands(
     owner_env, monkeypatch, caplog
 ):

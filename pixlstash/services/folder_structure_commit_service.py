@@ -958,9 +958,15 @@ def local_import_pictures(
                 )
                 built = [p for p in built if p.file_path not in taken]
             session.add_all(built)
-            session.commit()
-            for pic in built:
-                session.refresh(pic)
+            # Flush, not commit: the ids are wanted, the transaction is not
+            # over. A chunk's picture rows and its tag rows have to land
+            # together, because `to_build` skips anything already indexed and
+            # only a newly-built picture goes through `attach_sidecars`.
+            # Committing the pictures on their own meant a crash before the tag
+            # write left a resume that reused those rows and never read their
+            # sidecars - silently, with the files still beside the pictures.
+            session.flush()
+            built_ids = [pic.id for pic in built]
             # Sidecar tags land as real tags; a picture without any waits for
             # the tagger under the sentinel, as the scan's `_insert_pictures` does.
             session.add_all(
@@ -971,7 +977,7 @@ def local_import_pictures(
                 )
             )
             session.commit()
-            return [pic.id for pic in built] + list(taken.values())
+            return built_ids + list(taken.values())
 
         insert_started = time.monotonic()
         picture_ids.extend(
