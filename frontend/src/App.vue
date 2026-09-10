@@ -370,7 +370,9 @@ function openSettingsDialog(tab = "") {
  * copies files in, and the button that reaches this promises the opposite.
  */
 function openAddReferenceFolder() {
-  sidebarRef.value?.openReferenceFolderEditor?.();
+  // The sidebar decides: the library's own folder when it holds pictures
+  // (the import offer again), otherwise the ordinary add.
+  sidebarRef.value?.chooseLibraryFolder?.();
 }
 
 /** The library is empty: let the sidebar ask whether its folder is. */

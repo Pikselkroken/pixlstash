@@ -55,6 +55,14 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
   const pending = ref(readStorage());
   const wizardOpen = ref(false);
   const wizardResume = ref(null);
+  /**
+   * How many pictures the open library's OWN folder holds on disk, as the
+   * sidebar's offer last asked the server; `null` until it has. The empty
+   * library reads it to offer "import them" instead of "choose a folder", so
+   * a dismissed offer still has a way back in - "Add a library" refuses the
+   * folder the library already is.
+   */
+  const rootPictureCount = ref(null);
 
   /** Open the one wizard; `resume` is a saved entry, or null for a fresh add. */
   function openWizard(resume = null) {
@@ -89,5 +97,14 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
   const unsubscribeSessionReset = onSessionReset(clear);
   onScopeDispose(unsubscribeSessionReset);
 
-  return { pending, save, clear, wizardOpen, wizardResume, openWizard, closeWizard };
+  return {
+    pending,
+    save,
+    clear,
+    wizardOpen,
+    wizardResume,
+    rootPictureCount,
+    openWizard,
+    closeWizard,
+  };
 });

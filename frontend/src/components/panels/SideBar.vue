@@ -750,6 +750,42 @@ function chooseFolderType(type) {
   openReferenceFolderEditor();
 }
 
+/**
+ * The empty library's "Choose a folder…" / "Import them…".
+ *
+ * When the library's own folder holds pictures, the way in is the mapping
+ * wizard over that folder - the same one the offer opens - and never "Add a
+ * library", which refuses the folder because the library already is it. A
+ * dismissed offer therefore has a way back. Otherwise the ordinary add.
+ */
+async function chooseLibraryFolder() {
+  const entry = pendingForThisLibrary.value;
+  if (entry?.mode === "local_import") {
+    openFolderMappingWizard(entry);
+    return;
+  }
+  if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
+  const path = librariesStore.activeLibrary?.path;
+  if (path && librariesStore.canManage) {
+    if (mappingStore.rootPictureCount === null) {
+      try {
+        const verdict = await inspectLibraryPath(path);
+        mappingStore.rootPictureCount = verdict?.picture_count ?? 0;
+      } catch (error) {
+        console.warn("Could not check the library folder for pictures", {
+          path,
+          error,
+        });
+      }
+    }
+    if (mappingStore.rootPictureCount > 0) {
+      openFolderMappingWizard({ path, mode: "local_import" });
+      return;
+    }
+  }
+  openReferenceFolderEditor();
+}
+
 function openReferenceFolderEditor(rf = null) {
   if (rf === null) {
     // Adding a folder is "Add a library" now: a folder indexed in place as
@@ -865,6 +901,7 @@ async function _offerLoosePictures() {
   // progress bar over an empty grid.
   const parked = await takeParkedFolderRead();
   if (parked?.result && _samePath(parked.path, path)) {
+    mappingStore.rootPictureCount = parked.result.picture_count ?? null;
     autoOpenedPendingMapping = true;
     openFolderMappingWizard({
       path,
@@ -875,6 +912,7 @@ async function _offerLoosePictures() {
   }
   try {
     const verdict = await inspectLibraryPath(path);
+    mappingStore.rootPictureCount = verdict?.picture_count ?? 0;
     if (verdict?.picture_count > 0) {
       // The read the wizard starts saves a pending entry, which the watch
       // above would otherwise take as its cue to open the wizard again.
@@ -4491,6 +4529,7 @@ defineExpose({
   // "Nothing is moved" one screen earlier, so routing through the chooser would
   // have the release's headline claim falsified by the next click.
   openReferenceFolderEditor,
+  chooseLibraryFolder,
   offerLoosePictures,
   startLocalImport,
   currentProjectId,

@@ -80,3 +80,18 @@ describe("AppDialog keyboard contract", () => {
     expect(w.emitted("accept")).toBeFalsy();
   });
 });
+
+describe("AppDialog backdrop", () => {
+  it("closes on a click outside, unless persistent", async () => {
+    const w = mountDialog();
+    await w.findComponent({ name: "v-dialog" }).vm.$emit("click:outside");
+    expect(w.emitted("close")).toHaveLength(1);
+
+    // Vuetify emits click:outside on a persistent dialog too; it only refuses
+    // to close itself. A stray click on the scrim used to dismiss the
+    // folder-mapping wizard mid-answer this way.
+    const p = mountDialog({ persistent: true });
+    await p.findComponent({ name: "v-dialog" }).vm.$emit("click:outside");
+    expect(p.emitted("close")).toBeUndefined();
+  });
+});
