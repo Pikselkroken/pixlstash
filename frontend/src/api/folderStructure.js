@@ -85,7 +85,8 @@ export async function cancelFolderStructureRead(taskId) {
  *   the owner's answer for each caption-file pattern the read reported
  *   (`result.captions`). Sent in `local_import` only: `[]` is an answer
  *   ("read nothing"), while `null` - nobody was ever asked - omits the key
- *   and asks the import to probe the known conventions instead.
+ *   and asks the import to probe the known conventions instead. `null` is the
+ *   default, because a caller that passes nothing has asked nobody.
  *   `mode: "reference"` refuses the pair with a 400, so the key never goes
  *   with it.
  * @returns {Promise<Object>} `{ task_id }`.
@@ -96,7 +97,7 @@ export async function startFolderStructureCommit(
   label,
   mode = "reference",
   readResult = null,
-  captions = [],
+  captions = null,
 ) {
   // A read lives in one server process's memory. The desktop's first run reads
   // the library folder while the GPU runtime downloads and then restarts the
@@ -109,9 +110,9 @@ export async function startFolderStructureCommit(
   if (label) body.label = label;
   // Sending `[]` and omitting the key mean different things: `[]` says "read
   // nothing", no key at all says "probe the known conventions". A local
-  // import carries the owner's answer, empty included; `null` is a resumed
-  // entry from before the caption card existed, where there is no answer to
-  // carry and probing is what that import would always have done. A
+  // import carries the owner's answer, empty included; `null` - the default,
+  // and a resumed entry from before the caption card existed - is no answer
+  // to carry, and probing is what that import would always have done. A
   // reference folder carries none at all (400).
   if (mode === "local_import" && captions !== null) body.captions = captions;
   return unwrap(apiClient.post(COMMIT_URL, body));

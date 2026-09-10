@@ -161,8 +161,17 @@ function chosenCaptions() {
  * "Back to the mapping" unmounts this step, so an answer held only here was
  * lost on the way back and the read's own guess was committed instead; the
  * wizard's `captions` re-seeds this step on the way forward again.
+ *
+ * Only an owner's change reports. Watching `answers` instead reported the
+ * seeding too: on a resumed commit-on-mount, whose read result arrives after
+ * the commit has already started, the seeding wrote the read's guesses into
+ * `answers` and the emit replaced the held `[]`/`null` with them - so a retry
+ * after a failed auto-commit sent a convention nobody confirmed.
  */
-watch(answers, () => emit("update:captions", chosenCaptions()));
+function answerChosen(suffix, kind) {
+  answers[suffix] = kind;
+  emit("update:captions", chosenCaptions());
+}
 /**
  * How many files carry a given answer. Counted per kind, not read against
  * unread, because only `tags` spares the tagger: a picture with a description
@@ -445,13 +454,14 @@ onUnmounted(() => {
             </span>
           </div>
           <AppSelect
-            v-model="answers[row.suffix]"
+            :model-value="answers[row.suffix]"
             :options="CAPTION_CHOICES"
             :label="`Read *${row.suffix} as`"
             hide-label
             compact
             :disabled="committing"
             class="preview-step__caption-choice"
+            @update:model-value="answerChosen(row.suffix, $event)"
           />
         </li>
       </ul>
