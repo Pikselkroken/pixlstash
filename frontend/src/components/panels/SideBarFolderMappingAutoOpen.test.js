@@ -530,3 +530,54 @@ describe("the loose-pictures offer for an empty library", () => {
     wrapper.unmount();
   });
 });
+
+describe("the empty library's Choose a folder button", () => {
+  async function mountWithManageableLibrary(path) {
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    return mountSidebar();
+  }
+
+  it("re-inspects, so a root that has since filled up opens the wizard", async () => {
+    // A cached 0 from a load over an empty folder used to be permanent, and
+    // sent the owner to "Add a library", which refuses the folder the library
+    // already is.
+    const path = "/home/me/Pictures";
+    const wrapper = await mountWithManageableLibrary(path);
+    const mapping = useFolderMappingStore();
+    mapping.rootPictureCount = 0;
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? Promise.resolve({ data: { picture_count: 3 } })
+        : Promise.resolve(respond()),
+    );
+
+    await wrapper.vm.chooseLibraryFolder();
+
+    expect(mapping.rootPictureCount).toBe(3);
+    expect(mapping.wizardResume).toEqual({ path, mode: "local_import" });
+
+    wrapper.unmount();
+  });
+
+  it("keeps the cached count and takes the old route when the inspect fails", async () => {
+    const path = "/home/me/Pictures";
+    const wrapper = await mountWithManageableLibrary(path);
+    const mapping = useFolderMappingStore();
+    mapping.rootPictureCount = 0;
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? Promise.reject(new Error("offline"))
+        : Promise.resolve(respond()),
+    );
+
+    await wrapper.vm.chooseLibraryFolder();
+
+    expect(mapping.rootPictureCount).toBe(0);
+    expect(mapping.wizardResume).toBe(null);
+
+    wrapper.unmount();
+  });
+});

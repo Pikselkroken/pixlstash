@@ -767,16 +767,18 @@ async function chooseLibraryFolder() {
   if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
   const path = librariesStore.activeLibrary?.path;
   if (path && librariesStore.canManage) {
-    if (mappingStore.rootPictureCount === null) {
-      try {
-        const verdict = await inspectLibraryPath(path);
-        mappingStore.rootPictureCount = verdict?.picture_count ?? 0;
-      } catch (error) {
-        console.warn("Could not check the library folder for pictures", {
-          path,
-          error,
-        });
-      }
+    // Re-inspected on every click: a root that was empty when the count was
+    // cached may hold pictures now, and a stale 0 sends the owner to "Add a
+    // library", which refuses the folder the library already is. A failed
+    // inspect leaves the cached count alone.
+    try {
+      const verdict = await inspectLibraryPath(path);
+      mappingStore.rootPictureCount = verdict?.picture_count ?? 0;
+    } catch (error) {
+      console.warn("Could not check the library folder for pictures", {
+        path,
+        error,
+      });
     }
     if (mappingStore.rootPictureCount > 0) {
       openFolderMappingWizard({ path, mode: "local_import" });
