@@ -1999,9 +1999,13 @@ it is an answer, not a hint: with any row present only the suffixes said to be
 descriptions, and an `ignore`d pattern is never opened, however caption-like
 its content. A picture with a tags file gets those tags and is not queued for
 the tagger; one with a description file gets that description and is not
-captioned; the rest are handled as before. In `mode: "reference"` the folder
-holds one suffix per kind, so the first `tags` and the first `description` row
-become its configured suffixes. `suffix` must be a bare filename fragment (the
+captioned; the rest are handled as before. `captions` is `local_import` only:
+with `mode: "reference"` a non-empty list is `400`, because a reference folder
+holds one suffix per kind and its scan probes the known conventions for an
+unset one, so it cannot express "read nothing of this kind" and an answer
+with every tags pattern ignored would still open a bare `.txt`. A reference
+folder's sidecar fields on `PATCH /reference-folders/{folder_id}` are its
+contract. `suffix` must be a bare filename fragment (the
 same rule as `PATCH /reference-folders` enforces): it is appended to a picture
 path to find the file to read.
 
@@ -2018,7 +2022,7 @@ this route is the write that follows from it.
 
 | Status | When |
 |---|---|
-| **400** | an `assignments` row is malformed or names an unknown `kind`; a `captions` row names an unknown `kind` or a `suffix` that is not a bare filename fragment |
+| **400** | an `assignments` row is malformed or names an unknown `kind`; a `captions` row names an unknown `kind` or a `suffix` that is not a bare filename fragment; `captions` is non-empty with `mode: "reference"` |
 | **404** | `task_id` does not name a read this session holds |
 | **409** | the named read has not settled yet, a commit is already running (against any read), the named read has **already been committed**, or the read's root path is already a reference folder that has completed a scan (§25 — the reuse-vs-refuse rule) |
 

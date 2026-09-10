@@ -537,7 +537,6 @@ def register_reference_folder(
     *,
     label: Optional[str] = None,
     task_id: Optional[str] = None,
-    captions=(),
 ) -> ReferenceFolder:
     """Register *root_path* for in-place indexing, or return it if it already is.
 
@@ -556,10 +555,6 @@ def register_reference_folder(
         task_id: The durable record this registration belongs to, when there is
             one. It is what lets a resumed commit adopt the row it registered
             itself - see `_commit_owns_this_root`.
-        captions: The owner's caption-pattern answers. A reference folder
-            holds one suffix per kind, so the first ``tags`` and the first
-            ``description`` pattern become its configured suffixes and the
-            scan reads exactly those.
     """
     # Resolved, not merely normalised, for the reason
     # `routes.reference_folders.create_reference_folder` gives where it does the
@@ -571,7 +566,6 @@ def register_reference_folder(
     # but a row stored under an alias would still read back wrong everywhere
     # else.
     root_path = os.path.realpath(os.path.normpath(root_path))
-    tags_suffixes, description_suffixes = caption_suffixes(captions)
     error = validate_reference_folder_path(root_path)
     if error:
         raise CommitError(error)
@@ -615,10 +609,6 @@ def register_reference_folder(
             label=label or os.path.basename(root_path) or root_path,
             status=status,
             pending_reimport=True,
-            # ponytail: one suffix per kind is all the row holds; a second
-            # tags pattern in the same tree is read only by a local import.
-            tags_suffix=(tags_suffixes or [None])[0],
-            description_suffix=(description_suffixes or [None])[0],
         )
         session.add(rf)
         session.commit()

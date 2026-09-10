@@ -295,29 +295,17 @@ onUnmounted(() => {
 
 <template>
   <div class="preview-step">
-    <div class="preview-step__header">
-      <div>
-        <h2 class="preview-step__title">This is what your folders become</h2>
-        <p class="preview-step__lead">nothing written yet</p>
-      </div>
-      <AppButton
-        variant="secondary"
-        size="sm"
-        :disabled="committing"
-        @click="emit('back')"
-      >
-        Back to the mapping
-      </AppButton>
-    </div>
-
+    <!-- The heading is the dialog's title ("This is what your folders
+         become"), and the way back is the button beside the primary one. -->
     <div class="preview-step__groups">
-      <div
-        v-for="kind in FACET_KINDS"
-        :key="kind.value"
-        class="preview-step__group"
-        :style="kindStyle(kind.value)"
-      >
-        <template v-if="grouped.get(kind.value)?.size">
+      <!-- Only the kinds this mapping has: an empty group would still take a
+           cell of the grid and leave a hole beside the one that follows. -->
+      <template v-for="kind in FACET_KINDS" :key="kind.value">
+        <div
+          v-if="grouped.get(kind.value)?.size"
+          class="preview-step__group"
+          :style="kindStyle(kind.value)"
+        >
           <div class="preview-step__group-title">
             <v-icon size="15">{{ kind.icon }}</v-icon>
             {{ grouped.get(kind.value).size }}
@@ -338,11 +326,14 @@ onUnmounted(() => {
               {{ grouped.get(kind.value).size - 24 }} more
             </span>
           </div>
-        </template>
-      </div>
+        </div>
+      </template>
     </div>
 
-    <div v-if="patterns.length" class="preview-step__card">
+    <div
+      v-if="patterns.length"
+      class="preview-step__card preview-step__card--captions"
+    >
       <div class="preview-step__card-title">Caption files beside your pictures</div>
       <p class="preview-step__card-lead">
         Text files named after a picture are read as that picture's tags or
@@ -497,53 +488,71 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* The step owns the dialog body (the wizard mounts it flush, like the mapping
+   step) and fills it: the header, the facts and the buttons keep their size,
+   and only the two lists - the entity groups and the caption patterns -
+   shrink and scroll inside themselves. The step's own scroll is the fallback
+   for a window too short even for that. */
 .preview-step {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  padding: var(--space-6);
   overflow-y: auto;
 }
 
-.preview-step__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
+.preview-step > * {
+  flex-shrink: 0;
 }
 
-.preview-step__title {
-  /* NOT --font-pixel: a step heading is chrome. Tiny5 is the wordmark, a brand
-     moment and an empty-state headline - nothing a person reads a sentence in. */
-  margin: 0;
-  font-size: var(--text-xl);
-  font-weight: var(--weight-semibold);
-}
-
-.preview-step__lead {
-  margin: var(--space-1) 0 0;
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-background), 0.65);
-}
-
+/* The groups flow: each is its title followed by its chips on one wrapping
+   line, sized to its content, so a Project and three Sets share a row and a
+   group with many chips takes what it needs and no more. The block shrinks
+   into its own scrollbar before the facts and buttons below give way. */
 .preview-step__groups {
   display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: flex-start;
+  gap: var(--space-3) var(--space-6);
+  flex: 0 1 auto;
+  min-height: 2rem;
+  overflow-y: auto;
+  padding-right: var(--space-2);
+}
+
+.preview-step__card--captions {
+  display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  flex: 0 1 auto;
+  min-height: 6rem;
+}
+
+.preview-step__group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
 }
 
 .preview-step__group-title {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  margin-right: var(--space-2);
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
-  margin-bottom: var(--space-2);
+  white-space: nowrap;
 }
 
+/* The chips are items of the group's own wrap, beside the title. */
 .preview-step__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
+  display: contents;
 }
 
 .preview-step__group-title .v-icon {
@@ -583,10 +592,13 @@ onUnmounted(() => {
 .preview-step__captions {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 var(--space-2) 0 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .preview-step__caption {

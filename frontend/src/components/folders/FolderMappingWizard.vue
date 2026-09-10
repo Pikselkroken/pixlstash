@@ -41,6 +41,7 @@ import {
   useLibrarySwitchStore,
 } from "../../stores/useLibrariesStore";
 import AppDialog from "../widgets/AppDialog.vue";
+import AppButton from "../widgets/AppButton.vue";
 import FolderMappingChooseStep from "./FolderMappingChooseStep.vue";
 import FolderMappingTreeStep from "./FolderMappingTreeStep.vue";
 import FolderMappingPreviewStep from "./FolderMappingPreviewStep.vue";
@@ -159,7 +160,7 @@ const title = computed(() => {
     case "mapping":
       return "Create the PixlStash database";
     case "preview":
-      return "Before anything is written";
+      return "This is what your folders become";
     default:
       return "Add a library";
   }
@@ -296,10 +297,22 @@ function onCommitted(result) {
         : ''
     "
     :width="840"
-    :pad-body="step !== 'mapping'"
+    :pad-body="step === 'choose'"
     :persistent="true"
     @close="close"
   >
+    <!-- The way back sits in the dialog's own header on the preview, beside
+         the close control, where a step's chrome belongs. -->
+    <template v-if="step === 'preview'" #header-right>
+      <AppButton
+        variant="secondary"
+        size="sm"
+        :disabled="committing"
+        @click="backToMapping"
+      >
+        Back to the mapping
+      </AppButton>
+    </template>
     <p v-if="buildError" class="mapping-wizard__error" role="alert">
       {{ buildError }}
     </p>

@@ -6305,8 +6305,9 @@ under the pending-tag sentinel. The read is now one helper,
 `caption_file_utils.attach_sidecars`, called by `_build_picture` in the scan and
 `_build_managed_picture` here. It records `tags_file`/`description_file`, fills
 `description` from the description sidecar, and returns the tags sidecar's
-tags; both inserters write those as `Tag` rows and put only a picture *without*
-a tags sidecar under the sentinel.
+tags; both inserters write those as `Tag` rows and put a picture under the
+pending-tag sentinel only when *no sidecar tags were read* - no tags file, or
+an empty or unreadable one - so the tagger runs for it as before.
 
 Which files are read is the owner's answer to the read's `captions` (§24),
 carried on the commit as `CaptionPattern` rows (`parse_captions`, the same
@@ -6319,9 +6320,11 @@ does; an answer means only the named suffixes are read, and an `ignore`d one is
 never opened. The answers are written into the durable `FolderMappingCommit`
 record beside the assignments (`captions`, migration 0115) for the same reason
 the assignments are: a commit resumed after a crash must not re-probe and
-import a file the owner said to leave alone. In reference mode the first
-`tags` and `description` suffixes become the new `ReferenceFolder`'s configured
-ones.
+import a file the owner said to leave alone. Reference mode refuses `captions`
+outright (400): a `ReferenceFolder` holds one suffix per kind and its scan
+probes the known conventions for an unset one, so it cannot honour "ignore"
+for a kind, and half-honouring the answer would read the file the owner said
+to leave alone.
 
 **The root syncs like a folder once the owner says so.** `LibrarySettings`
 carries the same four fields a `ReferenceFolder` does - `sync_tags`,
