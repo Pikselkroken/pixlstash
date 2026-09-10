@@ -78,9 +78,6 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         # owner renamed while the app was closed.
         self._root_last_scanned: float | None = None
         self._root_scanned_once = False
-        # Once the library holds a picture or the owner has answered the
-        # import offer it stays answered; the queries run until then.
-        self._first_import_answered = False
 
     def mark_root_due(self) -> None:
         """Ask for the library root to be rescanned on the next planning cycle."""
@@ -219,11 +216,14 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         The two facts are read in **one statement** so they describe one
         snapshot: this read runs outside the writer queue, so across separate
         statements a chunk committing in between shows no ``pending`` record
-        and a picture from that very commit, which caches the answer as True
-        with the import still running.
+        and a picture from that very commit, which would answer True with the
+        import still running.
+
+        Not cached: a finder lives as long as the process, and a later import
+        must close the gate again the moment its record is pending. The read
+        is one statement, and `_root_task` asks only when a root scan is
+        otherwise due, so it costs one query per `_RESCAN_INTERVAL_S`.
         """
-        if self._first_import_answered:
-            return True
 
         def read(session: Session) -> tuple[Optional[str], bool]:
             newest = (
@@ -242,20 +242,19 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
             # so a superseded newest one was replaced by a reference commit
             # and its chunks are as unanswered as a pending one's.
             return False
-        self._first_import_answered = (
-            newest_state in (STATE_DONE, STATE_DEFERRED) or has_picture
-        )
-        return self._first_import_answered
+        return newest_state in (STATE_DONE, STATE_DEFERRED) or has_picture
 
     def _root_task(self, folders: list[ReferenceFolder], now: float):
         """The library-root scan, when it is due. Folders go first: a root scan
         walks the whole library, so it must not push a pending mount back."""
         if self._image_root is None or not os.path.isdir(self._image_root):
             return None
-        if not self.first_import_answered():
-            return None
         last = self._root_last_scanned
         if last is not None and (now - last) < _RESCAN_INTERVAL_S:
+            return None
+        # After the interval check, so the gate's one query runs only when a
+        # scan would otherwise be handed out.
+        if not self.first_import_answered():
             return None
         # Stamped when the task is handed out, not when it finishes, so a slow
         # scan is not queued a second time behind itself.

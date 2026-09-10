@@ -4083,7 +4083,8 @@ and updates `file_path` on the existing row instead.
   gate reads the **newest** `local_import` record: it lifts when that record
   has settled as `done` or `deferred` ("organise later" is an answer: index
   everything, map nothing), or on the first picture row when there is no
-  `local_import` record at all, and is then remembered for the process. A
+  `local_import` record at all, and is asked again before every due scan
+  (a later import must be able to close it again). A
   newest record that is `pending`, `abandoned` or `superseded` (a pending
   record a later reference commit replaced) holds the gate shut, uncached,
   *over* the picture rows, because an unsettled `local_import`

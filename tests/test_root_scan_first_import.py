@@ -266,3 +266,19 @@ def test_a_superseded_local_import_holds_the_root_scan_off_too(server):
     finder = _finder(server)
     assert finder.first_import_answered() is False
     assert finder.find_task() is None
+
+
+def test_the_same_finder_closes_the_gate_again_for_a_later_import(server):
+    """A finder lives as long as the process. Once one import has settled it
+    must still notice the next one starting: a positive answer is not
+    remembered, it is asked again before every due scan."""
+    _record(server, STATE_DONE)
+    finder = _finder(server)
+    assert finder.first_import_answered() is True
+    task = finder.find_task()
+    assert task is not None and task.params["folder_id"] is None
+
+    _record(server, STATE_PENDING)
+    finder.mark_root_due()
+    assert finder.first_import_answered() is False
+    assert finder.find_task() is None
