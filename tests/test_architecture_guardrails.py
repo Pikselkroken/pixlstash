@@ -458,7 +458,7 @@ _LABEL_SINK_EXEMPT = {
     ),
     # `watch_folder_import_task.py :: _run_task` used to be exempt here for its
     # own copy of the sidecar description write. It now calls `attach_sidecars`
-    # like the other two row builders, so the exemption below covers it and a
+    # like the other row builders, so the exemption below covers it and a
     # separate entry would only be a stale one.
     ("pixlstash/utils/caption_file_utils.py", "attach_sidecars"): (
         "sidecar description onto a NEW, unsaved picture row; called only by "
