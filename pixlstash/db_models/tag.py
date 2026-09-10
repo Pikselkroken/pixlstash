@@ -124,6 +124,18 @@ def is_description_sentinel(value: str | None) -> bool:
     return value is not None and value.startswith(DESCRIPTION_SENTINEL_PREFIX)
 
 
+def description_caption_content(value: str | None) -> str:
+    """The description as caption text, or ``""`` while one is only pending.
+
+    A sentinel is PixlStash's own bookkeeping - "a description is queued for
+    this picture" - not something the owner wrote, so it must never reach a
+    caption file beside their picture, the way `is_tag_sentinel` keeps the tag
+    sentinels out of theirs. Every sidecar write path runs the description
+    through here: the root scan's reconcile and `sync_picture_sidecar`.
+    """
+    return "" if is_description_sentinel(value) else (value or "").strip()
+
+
 def parse_engine_from_description_sentinel(value: str | None) -> str | None:
     """Extract the engine name from a description sentinel, or ``None``.
 

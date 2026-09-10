@@ -12,7 +12,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models.tag import TAG_PENDING_SENTINEL, Tag, is_tag_sentinel
+from pixlstash.db_models.tag import (
+    TAG_PENDING_SENTINEL,
+    Tag,
+    description_caption_content,
+    is_tag_sentinel,
+)
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.pixl_logging import get_logger
@@ -1513,7 +1518,7 @@ def create_router(server) -> APIRouter:
                             tags_count += 1
                             dirty = True
                 if SIDECAR_TYPE_DESCRIPTION in requested_types:
-                    description = (pic.description or "").strip()
+                    description = description_caption_content(pic.description)
                     if description or pic.description_file:
                         target = writeback_path(
                             pic.file_path,

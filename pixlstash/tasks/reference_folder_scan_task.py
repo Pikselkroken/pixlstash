@@ -14,7 +14,12 @@ from pixlstash.db_models.deleted_file_log import DeletedFileLog
 from pixlstash.db_models.library_settings import LibrarySettings
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
-from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL, is_tag_sentinel
+from pixlstash.db_models.tag import (
+    Tag,
+    TAG_PENDING_SENTINEL,
+    description_caption_content,
+    is_tag_sentinel,
+)
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.tasks.base_task import BaseTask
 from pixlstash.tasks.missing_file_purge_task import MissingFilePurgeTask
@@ -803,7 +808,7 @@ class ReferenceFolderScanTask(BaseTask):
                 stored_path=pic.description_file,
                 stored_mtime=pic.description_file_mtime,
                 sync=sync_descriptions,
-                export_content=(pic.description or "").strip(),
+                export_content=description_caption_content(pic.description),
             )
             if len(update) > 1:
                 caption_updates.append(update)

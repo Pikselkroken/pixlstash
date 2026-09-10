@@ -776,3 +776,46 @@ def test_turning_a_kind_on_through_the_route_asks_for_the_scan(env, monkeypatch)
 
     assert owner.patch(_CAPTIONS, json={"tags_suffix": "_z.txt"}).status_code == 200
     assert len(rescans) == 2, "a different suffix names files none of which are read"
+
+
+def test_a_pending_description_is_never_written_into_a_caption_file(env):
+    """A queued description is stored as the internal `__description::` marker
+    until the engine runs. It is PixlStash's own bookkeeping, not something the
+    owner wrote, so neither the scan's export nor the write-back after a tag
+    edit may put it in a file beside their picture - the same exclusion the tag
+    sentinels already get."""
+    from pixlstash.db_models.tag import make_description_sentinel
+
+    server = env["server"]
+    root = server.vault.image_root
+    _make_image(os.path.join(root, "pending", "f.png"), (61, 62, 63))
+    _set_sync(
+        server,
+        sync_tags=True,
+        sync_descriptions=True,
+        tags_suffix="_tags.txt",
+        description_suffix="_caption.txt",
+    )
+    _run_root_scan(server)
+    pic_id, _, _, _ = _picture(server, "pending/f.png")
+
+    def queue_a_description(session: Session):
+        pic = session.get(Picture, pic_id)
+        pic.description = make_description_sentinel("joycaption")
+        session.add(pic)
+        session.commit()
+
+    server.vault.db.run_task(queue_a_description)
+    caption_file = os.path.join(root, "pending", "f_caption.txt")
+
+    _run_root_scan(server)
+    assert not os.path.exists(caption_file), "the reconcile exports no marker"
+
+    _set_tags(server, pic_id, "kite")
+    sync_picture_sidecar(server, pic_id)
+    with open(os.path.join(root, "pending", "f_tags.txt"), encoding="utf-8") as fh:
+        assert fh.read().strip() == "kite", "the tag edit did reach its own file"
+    assert not os.path.exists(caption_file), "and still wrote no description file"
+
+    _, description, _, _ = _picture(server, "pending/f.png")
+    assert description == make_description_sentinel("joycaption"), "row untouched"

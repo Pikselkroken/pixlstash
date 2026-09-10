@@ -6,7 +6,7 @@ import re
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models.tag import is_tag_sentinel
+from pixlstash.db_models.tag import description_caption_content, is_tag_sentinel
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.caption_file_utils import (
     DEFAULT_DESCRIPTION_SUFFIX,
@@ -261,7 +261,7 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
                 dirty = True
 
         if rf.sync_descriptions:
-            description = (pic_db.description or "").strip()
+            description = description_caption_content(pic_db.description)
             target = writeback_target(
                 image_path,
                 SIDECAR_TYPE_DESCRIPTION,
