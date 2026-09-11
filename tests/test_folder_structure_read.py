@@ -755,6 +755,36 @@ def test_a_suffix_that_sniffs_as_metadata_still_spends_a_slot_of_the_cap(monkeyp
     )
 
 
+@pytest.mark.parametrize(
+    "extra, complete",
+    [(0, True), (1, False)],
+    ids=["twelve-suffixes-is-the-whole-list", "thirteen-leaves-one-unexamined"],
+)
+def test_more_suffixes_than_the_cap_examines_is_an_incomplete_caption_list(
+    extra, complete
+):
+    """The cap drops the tail before any file is opened, so the rows are a top
+    slice of the ranking and not the whole of it. `captions_complete` is the
+    only thing that can say so: the rows themselves look exactly the same as a
+    tree whose every convention was offered."""
+    suffixes = [f"_a{n:02d}.txt" for n in range(MAX_CAPTION_PATTERNS + extra)]
+    spec = {
+        "": [],
+        "shoot": [
+            name
+            for n, suffix in enumerate(suffixes)
+            for name in (f"p{n:02d}.jpg", f"p{n:02d}{suffix}")
+        ],
+    }
+    with _tree(spec) as root:
+        for n, suffix in enumerate(suffixes):
+            _write(root, f"shoot/p{n:02d}{suffix}", "1girl, solo, long hair")
+        result = FolderStructureRead(root).run()
+
+    assert len(result["captions"]) == MAX_CAPTION_PATTERNS
+    assert result["captions_complete"] is complete
+
+
 def test_a_tree_without_captions_reports_none():
     with _tree({"": [], "shoot": ["a.jpg", "b.jpg", "c.jpg"]}) as root:
         result = FolderStructureRead(root).run()

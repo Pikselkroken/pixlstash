@@ -401,6 +401,10 @@ class FolderStructureRead:
         #: is the row every other spelling of it folds into where the
         #: filesystem names one file by both.
         self._caption_spellings: dict[str, str] = {}
+        #: True when the walk found more suffixes than `MAX_CAPTION_PATTERNS`
+        #: examines, so the reported rows are the top of the ranking rather
+        #: than all of it. Set in `_caption_patterns`, where the slice happens.
+        self._captions_capped = False
         self._truncated = False
         self._unreadable = 0
         self._skipped_hidden = 0
@@ -727,12 +731,15 @@ class FolderStructureRead:
         a suffix that sniffs as markup and yields no row still spends its slot.
         Capping the finished rows instead would be the cap in name only, since
         a run of JSON suffixes at the top of the ranking would then walk the
-        whole tail looking for twelve that classify.
+        whole tail looking for twelve that classify. A tree with more ranked
+        candidates than the cap sets ``_captions_capped``, so the result says
+        `captions_complete: false`: the rows are a top slice, not the list.
         """
         rows: list[dict[str, Any]] = []
         ranked = sorted(
             self._captions.items(), key=lambda item: (-item[1]["files"], item[0])
         )
+        self._captions_capped = len(ranked) > MAX_CAPTION_PATTERNS
         try:
             for _key, entry in ranked[:MAX_CAPTION_PATTERNS]:
                 self._checkpoint()
@@ -748,27 +755,27 @@ class FolderStructureRead:
                     kind, text = sniffed
                     votes[kind] += 1
                     excerpts.setdefault(kind, text)
-                if not votes:
-                    continue
-                # A tie goes to description, and so does the walk order that
-                # produced it: pre-filling a prose convention as tags puts a
-                # sentence's words on every picture in the library, while the
-                # other way round puts a tag list in one description field.
-                # ponytail: one answer per suffix tree-wide; per-folder
-                # patterns if mixed exporters show up.
-                kind = max(
-                    votes,
-                    key=lambda k: (votes[k], k == SIDECAR_TYPE_DESCRIPTION),
-                )
-                rows.append(
-                    {
-                        "suffix": entry["suffix"],
-                        "kind": kind,
-                        "files": entry["files"],
-                        "folders": len(entry["folders"]),
-                        "sample": excerpts[kind],
-                    }
-                )
+                if votes:
+                    # A tie goes to description, and so does the walk order
+                    # that produced it: pre-filling a prose convention as tags
+                    # puts a sentence's words on every picture in the library,
+                    # while the other way round puts a tag list in one
+                    # description field.
+                    # ponytail: one answer per suffix tree-wide; per-folder
+                    # patterns if mixed exporters show up.
+                    kind = max(
+                        votes,
+                        key=lambda k: (votes[k], k == SIDECAR_TYPE_DESCRIPTION),
+                    )
+                    rows.append(
+                        {
+                            "suffix": entry["suffix"],
+                            "kind": kind,
+                            "files": entry["files"],
+                            "folders": len(entry["folders"]),
+                            "sample": excerpts[kind],
+                        }
+                    )
         except ReadCancelled:
             # Cancelled or out of time part-way through the sniff. Report the
             # patterns already classified rather than losing them: the caller
@@ -986,9 +993,14 @@ class FolderStructureRead:
             # never offered, and a card that says nothing reads as "these are
             # all your caption files".
             # An unreadable subtree was skipped by the walk, so its patterns
-            # were never seen either.
+            # were never seen either, and a tree with more suffixes than the
+            # sniff's own cap examines had the rest dropped before any file
+            # was opened.
             "captions_complete": (
-                not self._truncated and not self.cancelled and not self._unreadable
+                not self._truncated
+                and not self.cancelled
+                and not self._unreadable
+                and not self._captions_capped
             ),
             "levels": level_docs,
         }
