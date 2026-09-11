@@ -59,6 +59,7 @@ from pixlstash.services.set_lock_service import (
     locked_picture_id_subquery,
 )
 from pixlstash.utils.sql_chunking import chunked
+from pixlstash.services.folder_structure_commit_service import local_import_pending
 from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.services.restore import RestoreService
@@ -155,6 +156,12 @@ class Vault:
             )
         else:
             self.db = VaultDatabase(self._db_path)
+        # A local import that was pending when the process died is resumed, so
+        # the flag that holds the root scan off it has to survive the restart
+        # too. Read once, here: after this instant only the commit service
+        # moves it.
+        if self.db.run_immediate_read_task(local_import_pending):
+            self.db.local_import_running.set()
         self.set_description(description or "")
 
         self.snapshot_service = SnapshotService(self)

@@ -11,6 +11,14 @@ from sqlmodel import Session, delete, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models.deleted_file_log import DeletedFileLog
+from pixlstash.db_models.folder_mapping_commit import (
+    STATE_ABANDONED,
+    STATE_DEFERRED,
+    STATE_DONE,
+    STATE_PENDING,
+    STATE_SUPERSEDED,
+    FolderMappingCommit,
+)
 from pixlstash.db_models.library_settings import LibrarySettings
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
@@ -74,6 +82,76 @@ _ROOT_INTERNAL_DIRS = ROOT_INTERNAL_DIRS
 # owner drops in is picked up once it has settled, on the next scan. A rename
 # keeps the mtime, so a moved file is followed at once.
 _ROOT_SETTLE_S = 60.0
+
+
+def root_import_answered(session: Session) -> bool:
+    """Whether the library root may be indexed yet.
+
+    A library that holds no picture and has never had a folder-mapping commit
+    is one whose owner has not been asked what the pictures in its folder are.
+    The app asks when it loads an empty library over a folder that holds
+    pictures - the first-run offer, and "Add a library" - and the boot-time
+    root scan used to answer first: a small library was indexed, tags and all,
+    before the screen came up, so the grid was no longer empty and the
+    questions never appeared. The root scan waits for the answer.
+
+    A ``local_import`` commit record counts only once it has **settled**:
+    ``done``, or ``deferred`` ("organise later", which is an answer - index
+    everything, map nothing). A ``pending`` one is the commit still running,
+    so it is the question being answered rather than the answer, and treating
+    it as one puts the 300-second root scan into a race with it: the scan
+    builds its own rows with the sidecar probe, wins, and the commit's
+    ``insert()`` reuses them without ever applying the owner's caption
+    choices. ``abandoned`` is "bring nothing in" and ``superseded`` was
+    replaced by a newer record, so neither is an answer either. A
+    ``reference`` commit is not one at all: it registers some other folder and
+    says nothing about the root's own pictures.
+
+    The **newest** ``local_import`` record decides, because records are kept
+    and an older answer must not outrank a newer one: a ``done`` import
+    followed by an aborted one is an owner who declined the second batch, and
+    reading the old ``done`` as the answer would scan in the very files just
+    aborted. A ``pending`` or ``abandoned`` newest record wins over the picture
+    row for the same reason: an unsettled ``local_import`` commits every chunk,
+    so after the first one the library holds pictures the owner has not
+    answered for. A running commit wakes the planner while its record is still
+    ``pending``, and an aborted one leaves its chunks indexed behind
+    ``abandoned``, and a ``superseded`` newest one was replaced by a reference
+    commit with its chunks just as unanswered. Only with no ``local_import``
+    record at all does a picture row count: that library was filled some other
+    way and is scanned as before.
+
+    The two facts are read in **one statement** so they describe one snapshot:
+    this read runs outside the writer queue, so across separate statements a
+    chunk committing in between shows no ``pending`` record and a picture from
+    that very commit, which would answer True with the import still running.
+
+    Asked twice, by both halves of the handoff.
+    :meth:`~pixlstash.tasks.reference_folder_scan_finder.ReferenceFolderScanFinder.first_import_answered`
+    decides whether a root scan is handed out at all; the re-check at the start
+    of :meth:`ReferenceFolderScanTask._run_task` is what makes that handoff
+    fail closed, since `record_pending_commit` can write a pending record
+    between the finder's read and the runner starting the task. Never cached
+    on either side: a later import must close the gate again the moment its
+    record is pending.
+    """
+    newest = (
+        select(FolderMappingCommit.state)
+        .where(FolderMappingCommit.mode == "local_import")
+        .order_by(FolderMappingCommit.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    newest_state, has_picture = session.exec(
+        select(newest, select(Picture.id).exists())
+    ).one()
+    if newest_state in (STATE_PENDING, STATE_ABANDONED, STATE_SUPERSEDED):
+        # Superseded is a pending record a newer commit of either mode
+        # replaced. A newer local_import would be the newest row itself, so a
+        # superseded newest one was replaced by a reference commit and its
+        # chunks are as unanswered as a pending one's.
+        return False
+    return newest_state in (STATE_DONE, STATE_DEFERRED) or has_picture
 
 
 def _is_supported_file(file_path: str) -> bool:
@@ -152,9 +230,63 @@ class ReferenceFolderScanTask(BaseTask):
         # "no layout", same as an unset column (v1.11 Phase 5).
         self._layout = None
 
+    def _import_started_mid_scan(self) -> bool:
+        """Whether a local import began after this root scan's gate read.
+
+        `root_import_answered` reads the database and releases it, and this
+        task does more work before `os.walk` even starts. In that window the
+        commit endpoint can write its pending row and set
+        `local_import_pictures` walking, and then both sides build a row for
+        the same file - exactly the race the gate exists to prevent. Another
+        preflight read cannot close it, because the window is *after* the
+        read, not before it.
+
+        `vault.db.local_import_running` closes it, and the ORDER is what makes
+        it fail closed. `record_pending_commit` SETS the flag **before** it
+        writes its row and therefore before its walk; the root scan checks it
+        **after** its own gate read and again once per directory. So a commit
+        that starts after the scan's read is seen at the latest one directory
+        later, and the rows built in that one directory are reused by the
+        commit's `insert()` rather than duplicated. The window is bounded to a
+        single directory instead of the whole walk, and it never runs the other
+        way: the flag cannot be stale in the direction that lets a scan walk on
+        during a live import.
+
+        Cheap on purpose - an in-process `Event.is_set()`, not a query - so
+        asking it per directory costs nothing. The database re-check stays for
+        the cases an in-memory flag cannot cover: a crash-resumed import (the
+        flag is seeded at vault start) and any second process.
+        """
+        if not self._is_root or not self._db.local_import_running.is_set():
+            return False
+        logger.info(
+            "Library root scan stopped: a local import is pending. Nothing "
+            "further is indexed; retried on a later cycle."
+        )
+        return True
+
     def _run_task(self):
         resolved = self._resolved_path
         folder_id = self._folder_id
+
+        # The finder's read decided a root scan could be handed out; this asks
+        # again now the scan is actually starting, which is what makes the
+        # handoff fail closed. `record_pending_commit` can write a pending
+        # local_import in between - the owner answering the first-import offer
+        # while this task sat in the queue - and walking on that stale answer
+        # is the race the gate exists to prevent. `_root_last_scanned` stays
+        # stamped: `mark_root_due` or the next interval asks again.
+        if self._is_root and not self._db.run_immediate_read_task(root_import_answered):
+            logger.info(
+                "Library root scan skipped: an unanswered local import was "
+                "recorded after the scan was queued. Retried on a later cycle."
+            )
+            return {"status": "skipped", "folder_id": folder_id}
+
+        # And the same question the cheap way, for the commit that starts
+        # AFTER the read above. See `_import_started_mid_scan`.
+        if self._import_started_mid_scan():
+            return {"status": "skipped", "folder_id": folder_id}
 
         if not os.path.isdir(resolved):
             logger.warning(
@@ -277,6 +409,14 @@ class ReferenceFolderScanTask(BaseTask):
             )
 
         for root, dirs, files in os.walk(resolved, topdown=True, onerror=_walk_error):
+            # One `is_set()` per directory: a commit accepted after the gate
+            # read above is seen at the latest one directory later, and this
+            # walk has built nothing yet, so stopping here leaves the whole
+            # import to the commit. `_root_last_scanned` stays stamped and
+            # `on_root_scanned` is not called, so the purge sweep keeps
+            # waiting. See `_import_started_mid_scan`.
+            if self._import_started_mid_scan():
+                return {"status": "skipped", "folder_id": folder_id}
             # Prune subdirectories that are roots of other reference folders so
             # their files are only indexed by their own scan task; dot-folders,
             # which are nobody's pictures - a vault's own caches or something

@@ -36,7 +36,10 @@ import {
   getFolderStructureReadStatus,
 } from "../../api/folderStructure";
 import { errorDetail } from "../../utils/apiError";
-import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
+import {
+  readIsPartial,
+  useFolderMappingStore,
+} from "../../stores/useFolderMappingStore";
 import {
   useLibrariesStore,
   useLibrarySwitchStore,
@@ -199,6 +202,18 @@ function onScanReady({ taskId, result }) {
   readTaskId.value = taskId;
   readResult.value = result;
   pictureCount.value = result.picture_count || 0;
+  // The empty-library flow opens this wizard on a library that already
+  // exists, so its live read never reaches `build()` - the only other place
+  // the count is saved. Without this the empty state keeps whatever the
+  // sidebar's uncapped inspect left behind and presents a partial read's
+  // floor as a total.
+  if (props.resume?.mode === "local_import") {
+    mappingStore.setRootPictureCount(
+      pictureCount.value,
+      readIsPartial(result),
+      mappingStore.rootCountEpoch,
+    );
+  }
   step.value = "mapping";
 }
 
@@ -254,6 +269,9 @@ async function build(accepted, answered = null) {
       assignments: accepted,
       captions: answered,
       pictureCount: pictureCount.value,
+      // A partial read summed only the folders it reached, so the count it
+      // saves is a floor. The empty library's copy reads this to say so.
+      pictureCountCapped: readIsPartial(readResult.value),
       autoCommit: true,
     });
     emit("close");

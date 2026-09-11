@@ -1,4 +1,4 @@
-import { onScopeDispose, ref } from "vue";
+import { computed, onScopeDispose, ref } from "vue";
 import { defineStore } from "pinia";
 
 import { onSessionReset } from "../utils/apiClient";
@@ -51,10 +51,68 @@ function readStorage() {
   return null;
 }
 
+/**
+ * Whether a folder read describes less than the whole tree, so its
+ * `picture_count` is a floor rather than a total.
+ *
+ * Two ways, and the second is the one that keeps getting missed: the walk hit
+ * `MAX_FOLDERS` and stopped (`truncated`), or it could not open some folders
+ * and those subtrees are absent from the counts entirely
+ * (`unreadable_folders`, integration_architecture.md §20). One helper because
+ * three call sites derive this and drifted apart once already.
+ *
+ * @param {{truncated?: boolean, unreadable_folders?: number}|null|undefined} result
+ */
+export function readIsPartial(result) {
+  return result?.truncated === true || (result?.unreadable_folders ?? 0) > 0;
+}
+
 export const useFolderMappingStore = defineStore("folderMapping", () => {
   const pending = ref(readStorage());
   const wizardOpen = ref(false);
   const wizardResume = ref(null);
+  /**
+   * How many pictures the open library's OWN folder holds on disk, as the
+   * sidebar's offer last asked the server; `null` until it has. The empty
+   * library reads it to offer "import them" instead of "choose a folder", so
+   * a dismissed offer still has a way back in - "Add a library" refuses the
+   * folder the library already is.
+   */
+  const rootPictureCount = ref(null);
+  /**
+   * True when `rootPictureCount` stopped short - at the inspect endpoint's
+   * entry cap, or at anything `readIsPartial` calls a partial folder read - so
+   * it is a floor rather than a total: a folder picker has to answer while
+   * somebody is looking at it. The copy says "at least N" instead of naming an
+   * exact number the folder does not hold.
+   */
+  const rootPictureCountCapped = ref(false);
+  /**
+   * Whether the folder may hold pictures at all - the test both the button's
+   * route and its copy switch on. A capped zero counts: the walk stopped at
+   * the cap while it was still crossing folders, so it never reached a
+   * picture and proves nothing about whether there is one. Routing it as
+   * empty sent the owner to "Add a library", which refuses the folder the
+   * library already is.
+   */
+  const rootMayHoldPictures = computed(
+    () => rootPictureCount.value > 0 || rootPictureCountCapped.value === true,
+  );
+  /**
+   * Bumped by `resetForSession`, so an inspect the outgoing owner started
+   * cannot land after the reset and repopulate the next session with the
+   * previous library's count. Same shape as `useLibrariesStore`, in a ref
+   * because the reads that write the count live in SideBar.
+   */
+  const rootCountEpoch = ref(0);
+
+  /** Record what the library's own folder holds, unless the session changed
+   *  since the read that counted it started. */
+  function setRootPictureCount(count, capped, epoch) {
+    if (epoch !== rootCountEpoch.value) return;
+    rootPictureCount.value = count;
+    rootPictureCountCapped.value = capped;
+  }
 
   /** Open the one wizard; `resume` is a saved entry, or null for a fresh add. */
   function openWizard(resume = null) {
@@ -86,8 +144,36 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
     }
   }
 
-  const unsubscribeSessionReset = onSessionReset(clear);
+  /** A session change forgets the pending entry AND what the folder held:
+   *  the count is the previous library's, and the empty state would offer to
+   *  import pictures that are not there. The open wizard goes too: Pinia
+   *  outlives a logout in the same tab, and the next credential must not
+   *  find the previous owner's host path and read result on screen. */
+  function resetForSession() {
+    clear();
+    wizardOpen.value = false;
+    wizardResume.value = null;
+    rootCountEpoch.value += 1;
+    rootPictureCount.value = null;
+    rootPictureCountCapped.value = false;
+  }
+
+  const unsubscribeSessionReset = onSessionReset(resetForSession);
   onScopeDispose(unsubscribeSessionReset);
 
-  return { pending, save, clear, wizardOpen, wizardResume, openWizard, closeWizard };
+  return {
+    pending,
+    save,
+    clear,
+    wizardOpen,
+    wizardResume,
+    rootPictureCount,
+    rootPictureCountCapped,
+    rootMayHoldPictures,
+    rootCountEpoch,
+    setRootPictureCount,
+    resetForSession,
+    openWizard,
+    closeWizard,
+  };
 });

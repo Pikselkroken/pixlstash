@@ -18,7 +18,10 @@ import FolderTreeNode from "../editors/FolderTreeNode.vue";
 import FolderEditor from "../editors/FolderEditor.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
-import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
+import {
+  readIsPartial,
+  useFolderMappingStore,
+} from "../../stores/useFolderMappingStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import ShareDialog from "../io/ShareDialog.vue";
 import WordmarkLogo from "../WordmarkLogo.vue";
@@ -750,6 +753,61 @@ function chooseFolderType(type) {
   openReferenceFolderEditor();
 }
 
+/**
+ * The empty library's "Choose a folder…" / "Import them…".
+ *
+ * When the library's own folder holds pictures, the way in is the mapping
+ * wizard over that folder - the same one the offer opens - and never "Add a
+ * library", which refuses the folder because the library already is it. A
+ * dismissed offer therefore has a way back. Otherwise the ordinary add.
+ */
+async function chooseLibraryFolder() {
+  // Captured before the awaits below: a session change while one of them is
+  // pending must not write the outgoing owner's count into the new session,
+  // and must not open a wizard over the outgoing owner's folder either.
+  // `setRootPictureCount` refuses the write on its own; only returning here
+  // stops the routing that follows.
+  const epoch = mappingStore.rootCountEpoch;
+  if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
+  if (epoch !== mappingStore.rootCountEpoch) return;
+  // Read AFTER the refresh, never before it: `pendingForThisLibrary` matches
+  // the saved entry against the active library's path, so with no list loaded
+  // yet there is no path to match and a perfectly good entry looked absent.
+  // Routing on that stale null opened a fresh wizard over the very folder this
+  // click should have resumed - and raced the auto-open watcher for it.
+  const entry = pendingForThisLibrary.value;
+  if (entry?.mode === "local_import") {
+    openFolderMappingWizard(entry);
+    return;
+  }
+  const path = librariesStore.activeLibrary?.path;
+  if (path && librariesStore.canManage) {
+    // Re-inspected on every click: a root that was empty when the count was
+    // cached may hold pictures now, and a stale 0 sends the owner to "Add a
+    // library", which refuses the folder the library already is. A failed
+    // inspect leaves the cached count alone.
+    try {
+      const verdict = await inspectLibraryPath(path);
+      mappingStore.setRootPictureCount(
+        verdict?.picture_count ?? 0,
+        verdict?.picture_count_capped ?? false,
+        epoch,
+      );
+    } catch (error) {
+      console.warn("Could not check the library folder for pictures", {
+        path,
+        error,
+      });
+    }
+    if (epoch !== mappingStore.rootCountEpoch) return;
+    if (mappingStore.rootMayHoldPictures) {
+      openFolderMappingWizard({ path, mode: "local_import" });
+      return;
+    }
+  }
+  openReferenceFolderEditor();
+}
+
 function openReferenceFolderEditor(rf = null) {
   if (rf === null) {
     // Adding a folder is "Add a library" now: a folder indexed in place as
@@ -826,14 +884,55 @@ function offerLoosePictures() {
   // AND no offer, for the life of the install; there was no way into the
   // library at all. This has to stay the same test as the auto-open, so state
   // it the same way.
-  if (
-    isReadOnly.value ||
-    pendingForThisLibrary.value?.mode === "local_import"
-  ) {
-    return Promise.resolve();
+  if (isReadOnly.value) return Promise.resolve();
+  const entry = pendingForThisLibrary.value;
+  if (entry?.mode === "local_import") {
+    // Nothing to offer, but the count is still `null` on a page reloaded onto
+    // a persisted entry: the offer is what usually fills it, and the empty
+    // state's wording reads it, so the way back in said "Choose a folder…"
+    // for a folder full of pictures. Fill it and open nothing.
+    loosePicturesOffer ??= _fillRootPictureCount(entry);
+    return loosePicturesOffer;
   }
   loosePicturesOffer ??= _offerLoosePictures();
   return loosePicturesOffer;
+}
+
+/** The count for the wording above, from the entry's own read if it carries
+ *  one - an entry saved before the read finished does not - else the server. */
+async function _fillRootPictureCount(entry) {
+  // No epoch recheck after the await below, unlike the two functions that
+  // route on the result: the count write is the only thing this one does
+  // after it, and `setRootPictureCount` refuses a stale epoch itself.
+  const epoch = mappingStore.rootCountEpoch;
+  if (mappingStore.rootPictureCount !== null) return;
+  const counted = entry.pictureCount ?? entry.result?.picture_count;
+  // The wizard saves the read's completeness beside the count; an entry that
+  // carries the result itself answers from that. An entry saved before the
+  // flag existed has a count of unknown completeness, so it is asked for
+  // again rather than shown as a total.
+  const capped =
+    entry.pictureCountCapped ??
+    (entry.result ? readIsPartial(entry.result) : undefined);
+  if (counted != null && capped !== undefined) {
+    mappingStore.setRootPictureCount(counted, capped, epoch);
+    return;
+  }
+  const path = entry.path;
+  if (!path) return;
+  try {
+    const verdict = await inspectLibraryPath(path);
+    mappingStore.setRootPictureCount(
+      verdict?.picture_count ?? 0,
+      verdict?.picture_count_capped ?? false,
+      epoch,
+    );
+  } catch (error) {
+    console.warn("Could not check the library folder for pictures", {
+      path,
+      error,
+    });
+  }
 }
 
 /**
@@ -856,7 +955,21 @@ async function takeParkedFolderRead() {
 }
 
 async function _offerLoosePictures() {
+  // Rechecked after every await below, same as `chooseLibraryFolder`: a
+  // session change mid-flight must open no wizard over the outgoing owner's
+  // folder, and must not claim this session's one auto-open either.
+  const epoch = mappingStore.rootCountEpoch;
   if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
+  if (epoch !== mappingStore.rootCountEpoch) return;
+  // The refresh can be what makes a persisted entry match this library for
+  // the first time, so ask again here as `chooseLibraryFolder` does: that
+  // entry is the auto-open watcher's to resume, and a fresh offer over it
+  // would replace its saved answers with an empty wizard.
+  const saved = pendingForThisLibrary.value;
+  if (saved?.mode === "local_import") {
+    await _fillRootPictureCount(saved);
+    return;
+  }
   const path = librariesStore.activeLibrary?.path;
   if (!path || !librariesStore.canManage) return;
   // On desktop the startup screen may have read this very folder already,
@@ -864,7 +977,15 @@ async function _offerLoosePictures() {
   // doing it there: the wizard opens on its questions instead of on a second
   // progress bar over an empty grid.
   const parked = await takeParkedFolderRead();
+  if (epoch !== mappingStore.rootCountEpoch) return;
   if (parked?.result && _samePath(parked.path, path)) {
+    // A partial read summed only the folders it reached, so its count is a
+    // floor exactly like the inspect endpoint's cap.
+    mappingStore.setRootPictureCount(
+      parked.result.picture_count ?? null,
+      readIsPartial(parked.result),
+      epoch,
+    );
     autoOpenedPendingMapping = true;
     openFolderMappingWizard({
       path,
@@ -875,7 +996,16 @@ async function _offerLoosePictures() {
   }
   try {
     const verdict = await inspectLibraryPath(path);
-    if (verdict?.picture_count > 0) {
+    if (epoch !== mappingStore.rootCountEpoch) return;
+    mappingStore.setRootPictureCount(
+      verdict?.picture_count ?? 0,
+      verdict?.picture_count_capped ?? false,
+      epoch,
+    );
+    // The store's own reading of the verdict, not `picture_count` again: a
+    // count capped at zero stopped before it reached a picture, so it is no
+    // evidence the folder is empty and the wizard is still the way in.
+    if (mappingStore.rootMayHoldPictures) {
       // The read the wizard starts saves a pending entry, which the watch
       // above would otherwise take as its cue to open the wizard again.
       autoOpenedPendingMapping = true;
@@ -4491,6 +4621,7 @@ defineExpose({
   // "Nothing is moved" one screen earlier, so routing through the chooser would
   // have the release's headline claim falsified by the next click.
   openReferenceFolderEditor,
+  chooseLibraryFolder,
   offerLoosePictures,
   startLocalImport,
   currentProjectId,

@@ -979,6 +979,14 @@ class VaultDatabase:
         # decoded (issue #585). Shared by task threads (marking) and finder
         # threads (suppression); reachable from both via their ``self._db``.
         self.unprocessable_images = UnprocessableImageRegistry()
+        # Set while a ``local_import`` folder-mapping commit is pending, so the
+        # root scan can see one that started after its own gate read. Lives
+        # here, beside the registry above, for the same reason: it is shared by
+        # a task thread and the commit's thread and both reach it as
+        # ``self._db`` / ``server.vault.db``. Owned by
+        # ``folder_structure_commit_service``; ``Vault.__init__`` seeds it from
+        # the database so a crash-resumed import is covered too.
+        self.local_import_running = threading.Event()
         db_exists = os.path.exists(self._db_path)
         logger.debug(f"Vault init, db_path={self._db_path}, db_exists={db_exists}")
 

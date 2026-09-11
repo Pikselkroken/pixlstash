@@ -19,6 +19,10 @@ from sqlmodel import Session, select
 
 from pixlstash.db_models import Character, Picture, Tag
 from pixlstash.db_models.external_move_review import ExternalMoveReview
+from pixlstash.db_models.folder_mapping_commit import (
+    STATE_DEFERRED,
+    FolderMappingCommit,
+)
 from pixlstash.db_models.library_settings import LibrarySettings
 from pixlstash.db_models.picture_move import PictureMove
 from pixlstash.server import Server
@@ -49,7 +53,28 @@ def server():
             for task_type in _CONFLICTING_FINDERS:
                 srv.vault._planner_work_finders.pop(task_type)
             srv.vault._work_planner.detach_finders(_CONFLICTING_FINDERS)
+            # The root is only scanned once the first import offer is answered,
+            # and the task asks as well as the finder (see
+            # test_root_scan_first_import.py). This module runs scans by hand
+            # on a vault that starts empty, so answer it once for all of them.
+            srv.vault.db.run_task(_answer_the_import_offer(srv))
             yield srv
+
+
+def _answer_the_import_offer(server):
+    def answer(session: Session):
+        session.add(
+            FolderMappingCommit(
+                task_id="answered-by-test",
+                root_path=server.vault.image_root,
+                mode="local_import",
+                expected_pictures=0,
+                state=STATE_DEFERRED,
+            )
+        )
+        session.commit()
+
+    return answer
 
 
 def _make_image(path, color, *, settled=True):
@@ -251,6 +276,8 @@ def test_an_owner_move_in_a_laid_out_root_is_queued_for_review(server):
 
 
 def test_the_finder_hands_out_the_root_scan_once_per_interval(server):
+    # The import offer is answered in the module fixture; without it neither
+    # the finder nor the task would hand out a root scan at all.
     finder = ReferenceFolderScanFinder(
         database=server.vault.db,
         path_mapper=PathMapper(),

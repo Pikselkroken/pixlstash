@@ -323,6 +323,7 @@ describe("building the library", () => {
       assignments: ASSIGNMENTS,
       captions: [],
       pictureCount: 5,
+      pictureCountCapped: false,
       autoCommit: true,
     });
     expect(setActiveLibrary).toHaveBeenCalledWith("uuid-new");
@@ -1015,5 +1016,29 @@ describe("reopening", () => {
     expect(
       wrapper.find(".choose-step__field .app-input__field").element.value,
     ).toBe("");
+  });
+
+  it("records the live read's count, and that a partial one is a floor", async () => {
+    // This flow runs on a library that already exists, so it never reaches
+    // `build()` - the only other place the count is saved. The sidebar's own
+    // inspect says nothing about unreadable folders, so without this the
+    // empty state presents this floor as a total.
+    getFolderStructureReadStatus.mockResolvedValue({
+      status: "completed",
+      stage: "done",
+      processed: 2,
+      total: 2,
+      result: { ...READ_RESULT, unreadable_folders: 2 },
+    });
+    const wrapper = mountWizard({
+      resume: { path: "/home/me/Pictures/Family", mode: "local_import" },
+    });
+    await settle();
+    await button(wrapper, "Set up my library").trigger("click");
+    await settle();
+
+    const store = useFolderMappingStore();
+    expect(store.rootPictureCount).toBe(READ_RESULT.picture_count);
+    expect(store.rootPictureCountCapped).toBe(true);
   });
 });
