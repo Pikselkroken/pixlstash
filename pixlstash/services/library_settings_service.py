@@ -218,7 +218,7 @@ def set_caption_sync(vault_db, **fields) -> tuple[dict, bool]:
     one at the point of use.
 
     Raises:
-        ValueError: The merged row would give both kinds one suffix.
+        ValueError: The merged row would give both kinds, both on, one suffix.
     """
     unknown = set(fields) - set(CAPTION_SYNC_FIELDS)
     if unknown:
@@ -228,7 +228,13 @@ def set_caption_sync(vault_db, **fields) -> tuple[dict, bool]:
         row = _row(session)
         before = _caption_fields(row)
         after = {**before, **fields}
-        if suffixes_collide(after["tags_suffix"], after["description_suffix"]):
+        # Only two kinds that are both on share a file; a suffix kept for a
+        # kind that is off is checked when that kind comes on, where its field
+        # is on screen.
+        both_on = after["sync_tags"] and after["sync_descriptions"]
+        if both_on and suffixes_collide(
+            after["tags_suffix"], after["description_suffix"]
+        ):
             raise ValueError(
                 "Tags and descriptions cannot share a suffix; they would share "
                 "one file and overwrite each other."

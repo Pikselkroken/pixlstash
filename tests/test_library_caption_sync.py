@@ -260,9 +260,14 @@ def test_the_settings_route_reads_patches_and_refuses_bad_suffixes(env, monkeypa
 
     assert owner.patch(_CAPTIONS, json={"tags_suffix": "../x"}).status_code == 400
     assert owner.patch(_CAPTIONS, json={"tags_suffix": ".png"}).status_code == 400
-    shared = owner.patch(_CAPTIONS, json={"description_suffix": ".TXT"})
+    # A suffix for a kind that is off is only latent: stored, checked when the
+    # kind comes on, when its field is on screen rather than hidden.
+    assert (
+        owner.patch(_CAPTIONS, json={"description_suffix": ".TXT"}).status_code == 200
+    )
+    shared = owner.patch(_CAPTIONS, json={"sync_descriptions": True})
     assert shared.status_code == 400 and "share a suffix" in shared.text
-    assert owner.get(_CAPTIONS).json()["description_suffix"] is None, (
+    assert owner.get(_CAPTIONS).json()["sync_descriptions"] is False, (
         "nothing stored on a 400"
     )
 
