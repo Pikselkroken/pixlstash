@@ -357,6 +357,34 @@ def test_confirming_a_pattern_on_import_turns_that_sync_on(env):
     assert stored["description_suffix"] == "_caption.txt"
 
 
+def test_seeding_a_convention_already_stored_asks_for_no_rescan(env):
+    """What is returned is *rescan due*, not "a kind was confirmed". A second
+    import of a folder whose convention is already stored turns nothing on and
+    changes no suffix, and walking the whole library again for files that were
+    read the first time costs every later import for nothing."""
+    from pixlstash.services.library_settings_service import (
+        get_caption_sync,
+        seed_caption_suffixes,
+    )
+
+    server = env["server"]
+    _set_sync(
+        server,
+        sync_tags=False,
+        sync_descriptions=False,
+        tags_suffix=None,
+        description_suffix=None,
+    )
+    assert seed_caption_suffixes(server.vault.db, "_tags.txt", None) is True
+    assert seed_caption_suffixes(server.vault.db, "_tags.txt", None) is False
+
+    # An earlier convention wins, so a kind that is on with a suffix stored
+    # takes nothing from a later import - nothing changed, nothing to rescan.
+    assert seed_caption_suffixes(server.vault.db, "_labels.txt", None) is False
+    stored = get_caption_sync(server.vault.db)
+    assert stored["tags_suffix"] == "_tags.txt"
+
+
 def test_a_recorded_caption_file_keeps_its_name_under_another_suffix(env):
     """The suffix names files PixlStash creates. A picture imported with a
     `photo.txt` under a `_tags.txt` setting is read and written as

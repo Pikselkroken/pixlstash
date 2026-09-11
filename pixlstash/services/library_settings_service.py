@@ -330,16 +330,19 @@ def seed_caption_suffixes(
     rather than deciding nothing changed.
 
     Returns:
-        True when a type was turned on, so the caller can ask for the root
-        rescan that reads the existing files in before anything is written
-        back over them.
+        True when this write left a kind on that was off, or changed the
+        suffix of a kind that is on - the same rule `set_caption_sync` uses -
+        so the caller can ask for the root rescan that reads the existing
+        files in before anything is written back over them. A repeat import
+        of a convention already confirmed changes nothing and returns False,
+        rather than walking the whole library again for files already read.
     """
     if not tags_suffix and not description_suffix:
         return False
 
     def write(session: Session) -> bool:
         row = _row(session)
-        turned_on = False
+        rescan_due = False
         # Judged on the merged row, kind by kind: the effective suffix is the
         # stored one when there is one (an earlier convention wins) and the
         # confirmed one otherwise, and descriptions see whatever tags seeded.
@@ -355,9 +358,14 @@ def seed_caption_suffixes(
             else:
                 if not row.sync_tags:
                     _forget_caption_mtimes(session, "sync_tags")
+                # Same rule as `set_caption_sync`, and judged before the row
+                # is written: a kind already on with this very suffix is a
+                # set of files already read, not a reason to walk the library.
+                rescan_due = (
+                    rescan_due or not row.sync_tags or effective != row.tags_suffix
+                )
                 row.sync_tags = True
                 row.tags_suffix = effective
-                turned_on = True
         if description_suffix:
             effective = row.description_suffix or description_suffix
             if suffixes_collide(row.tags_suffix, effective):
@@ -371,12 +379,16 @@ def seed_caption_suffixes(
             else:
                 if not row.sync_descriptions:
                     _forget_caption_mtimes(session, "sync_descriptions")
+                rescan_due = (
+                    rescan_due
+                    or not row.sync_descriptions
+                    or effective != row.description_suffix
+                )
                 row.sync_descriptions = True
                 row.description_suffix = effective
-                turned_on = True
         session.add(row)
         session.commit()
-        return turned_on
+        return rescan_due
 
     return vault_db.run_task(write, priority=DBPriority.IMMEDIATE)
 
