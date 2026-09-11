@@ -4072,7 +4072,7 @@ and updates `file_path` on the existing row instead.
   itself (no `ReferenceFolder` row to stamp): due at boot, then every
   `_RESCAN_INTERVAL_S`, and immediately when `ReferenceFolderWatcher` — which
   watches `image_root` under the id `None` — reports a change. **Due at boot
-  has one exception** (`first_import_answered`): a library that holds no
+  has one exception** (`root_import_answered`): a library that holds no
   picture and has no *settled* `local_import` folder-mapping commit record is
   not scanned. That is a library whose owner has not been asked what the
   pictures in its folder are — the app asks when it loads an *empty* library
@@ -4084,7 +4084,16 @@ and updates `file_path` on the existing row instead.
   has settled as `done` or `deferred` ("organise later" is an answer: index
   everything, map nothing), or on the first picture row when there is no
   `local_import` record at all, and is asked again before every due scan
-  (a later import must be able to close it again). A
+  (a later import must be able to close it again). **Both halves of the
+  handoff ask it.** `ReferenceFolderScanFinder.first_import_answered` decides
+  whether a root scan is handed out at all; `ReferenceFolderScanTask._run_task`
+  asks again at start, before it walks anything, and that re-check is what
+  makes the handoff fail closed: `record_pending_commit` can write a pending
+  record between the finder's read and the runner starting the task, and a
+  task walking on that stale answer is the race the gate exists to prevent. A
+  re-check that finds the gate shut logs at info and returns without walking;
+  `_root_last_scanned` stays stamped, so `mark_root_due` or the next interval
+  is what asks again. A
   newest record that is `pending`, `abandoned` or `superseded` (a pending
   record a later reference commit replaced) holds the gate shut, uncached,
   *over* the picture rows, because an unsettled `local_import`

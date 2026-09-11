@@ -28,7 +28,7 @@ from pixlstash.db_models.folder_mapping_commit import (
 )
 from pixlstash.db_models.picture import Picture
 from pixlstash.server import Server
-from pixlstash.tasks import TaskType
+from pixlstash.tasks import TaskType, reference_folder_scan_task
 from pixlstash.tasks.reference_folder_scan_finder import ReferenceFolderScanFinder
 from pixlstash.utils.path_mapper import PathMapper
 
@@ -115,6 +115,19 @@ def _settle_pending(server, state):
         session.commit()
 
     server.vault.db.run_task(write)
+
+
+def _managed(server):
+    """The library's own pictures, oldest id first."""
+    return server.vault.db.run_task(
+        lambda s: list(
+            s.exec(
+                select(Picture)
+                .where(Picture.reference_folder_id.is_(None))
+                .order_by(Picture.id)
+            ).all()
+        )
+    )
 
 
 def _due(finder):
@@ -313,3 +326,34 @@ def test_a_closed_gate_is_not_asked_on_every_planner_sweep(server, monkeypatch):
     assert len(calls) == 1, "one query per retry window, not one per sweep"
     assert finder._root_task([], now + 6.0) is None
     assert len(calls) == 2
+
+
+def test_a_scan_handed_out_before_a_pending_import_walks_nothing(server, monkeypatch):
+    """The handoff, not the read. The finder's gate said yes and handed the
+    task out; `record_pending_commit` then wrote a pending record before the
+    runner started it. The task asks the same question again at start, so the
+    stale answer it was handed out on cannot make it walk."""
+    _drop_picture(server.vault.image_root, "handoff.png")
+    _record(server, STATE_DONE)
+    task = _due(_finder(server)).find_task()
+    assert task is not None and task.params["folder_id"] is None
+
+    walked: list[str] = []
+    real_walk = os.walk
+
+    def spy(path, *args, **kwargs):
+        walked.append(path)
+        return real_walk(path, *args, **kwargs)
+
+    monkeypatch.setattr(reference_folder_scan_task.os, "walk", spy)
+
+    _record(server, STATE_PENDING)
+    assert task._run_task() == {"status": "skipped", "folder_id": None}
+    assert walked == [], "the gate closed after the hand-out; nothing is walked"
+    assert _managed(server) == [], "so no row is built and no move reconciled"
+
+    # The control: the same task, with the record settled, scans as before.
+    _settle_pending(server, STATE_DONE)
+    assert task._run_task()["status"] == "active"
+    assert server.vault.image_root in walked
+    assert [p.file_path for p in _managed(server)] == ["handoff.png"]

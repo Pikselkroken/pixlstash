@@ -9,24 +9,17 @@ row, so its schedule lives on this finder rather than in a column.
 
 import os
 import time
-from typing import Optional
 
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models.folder_mapping_commit import (
-    STATE_ABANDONED,
-    STATE_DEFERRED,
-    STATE_DONE,
-    STATE_PENDING,
-    STATE_SUPERSEDED,
-    FolderMappingCommit,
-)
-from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
-from pixlstash.tasks.reference_folder_scan_task import ReferenceFolderScanTask
+from pixlstash.tasks.reference_folder_scan_task import (
+    ReferenceFolderScanTask,
+    root_import_answered,
+)
 from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_accessible,
     validate_reference_folder_path,
@@ -183,49 +176,13 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         return self._root_task(folders, now)
 
     def first_import_answered(self) -> bool:
-        """Whether the root may be indexed yet.
+        """Whether a root scan may be handed out now.
 
-        A library that holds no picture and has never had a folder-mapping
-        commit is one whose owner has not been asked what the pictures in its
-        folder are. The app asks when it loads an empty library over a folder
-        that holds pictures - the first-run offer, and "Add a library" - and
-        the boot-time root scan used to answer first: a small library was
-        indexed, tags and all, before the screen came up, so the grid was no
-        longer empty and the questions never appeared. The root scan waits
-        for the answer.
-
-        A ``local_import`` commit record counts only once it has **settled**:
-        ``done``, or ``deferred`` ("organise later", which is an answer -
-        index everything, map nothing). A ``pending`` one is the commit still
-        running, so it is the question being answered rather than the answer,
-        and treating it as one puts the 300-second root scan into a race with
-        it: the scan builds its own rows with the sidecar probe, wins, and the
-        commit's ``insert()`` reuses them without ever applying the owner's
-        caption choices. ``abandoned`` is "bring nothing in" and ``superseded``
-        was replaced by a newer record, so neither is an answer either. A
-        ``reference`` commit is not one at all: it registers some other folder
-        and says nothing about the root's own pictures.
-
-        The **newest** ``local_import`` record decides, because records are
-        kept and an older answer must not outrank a newer one: a ``done``
-        import followed by an aborted one is an owner who declined the second
-        batch, and reading the old ``done`` as the answer would scan in the
-        very files just aborted. A ``pending`` or ``abandoned`` newest record
-        wins over the picture row for the same reason: an unsettled
-        ``local_import`` commits every chunk, so after the first one the
-        library holds pictures the owner has not answered for. A running
-        commit wakes the planner while its record is still ``pending``, and
-        an aborted one leaves its chunks indexed behind ``abandoned``, and a
-        ``superseded`` newest one was replaced by a reference commit with its
-        chunks just as unanswered. Only with no ``local_import`` record at all
-        does a picture row count: that library was filled some other way and
-        is scanned as before.
-
-        The two facts are read in **one statement** so they describe one
-        snapshot: this read runs outside the writer queue, so across separate
-        statements a chunk committing in between shows no ``pending`` record
-        and a picture from that very commit, which would answer True with the
-        import still running.
+        The rule, and why the two facts are read in one statement, live with
+        :func:`~pixlstash.tasks.reference_folder_scan_task.root_import_answered`.
+        This read only decides the handoff: the task asks the same question
+        again when it starts, so a record written in between closes the gate
+        rather than being missed.
 
         Not cached: a finder lives as long as the process, and a later import
         must close the gate again the moment its record is pending. The read
@@ -233,25 +190,7 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         otherwise due and, while the answer is no, no more than once per
         `_GATE_RETRY_S`.
         """
-
-        def read(session: Session) -> tuple[Optional[str], bool]:
-            newest = (
-                select(FolderMappingCommit.state)
-                .where(FolderMappingCommit.mode == "local_import")
-                .order_by(FolderMappingCommit.id.desc())
-                .limit(1)
-                .scalar_subquery()
-            )
-            return session.exec(select(newest, select(Picture.id).exists())).one()
-
-        newest_state, has_picture = self._db.run_immediate_read_task(read)
-        if newest_state in (STATE_PENDING, STATE_ABANDONED, STATE_SUPERSEDED):
-            # Superseded is a pending record a newer commit of either mode
-            # replaced. A newer local_import would be the newest row itself,
-            # so a superseded newest one was replaced by a reference commit
-            # and its chunks are as unanswered as a pending one's.
-            return False
-        return newest_state in (STATE_DONE, STATE_DEFERRED) or has_picture
+        return self._db.run_immediate_read_task(root_import_answered)
 
     def _root_task(self, folders: list[ReferenceFolder], now: float):
         """The library-root scan, when it is due. Folders go first: a root scan

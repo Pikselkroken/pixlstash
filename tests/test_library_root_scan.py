@@ -53,7 +53,28 @@ def server():
             for task_type in _CONFLICTING_FINDERS:
                 srv.vault._planner_work_finders.pop(task_type)
             srv.vault._work_planner.detach_finders(_CONFLICTING_FINDERS)
+            # The root is only scanned once the first import offer is answered,
+            # and the task asks as well as the finder (see
+            # test_root_scan_first_import.py). This module runs scans by hand
+            # on a vault that starts empty, so answer it once for all of them.
+            srv.vault.db.run_task(_answer_the_import_offer(srv))
             yield srv
+
+
+def _answer_the_import_offer(server):
+    def answer(session: Session):
+        session.add(
+            FolderMappingCommit(
+                task_id="answered-by-test",
+                root_path=server.vault.image_root,
+                mode="local_import",
+                expected_pictures=0,
+                state=STATE_DEFERRED,
+            )
+        )
+        session.commit()
+
+    return answer
 
 
 def _make_image(path, color, *, settled=True):
@@ -255,22 +276,8 @@ def test_an_owner_move_in_a_laid_out_root_is_queued_for_review(server):
 
 
 def test_the_finder_hands_out_the_root_scan_once_per_interval(server):
-    # The root is only scanned once the first import offer is answered (see
-    # test_root_scan_first_import.py). On a shard where this test runs first
-    # the module vault is empty, so answer it here rather than rely on order.
-    def answer(session):
-        session.add(
-            FolderMappingCommit(
-                task_id="answered-by-test",
-                root_path=server.vault.image_root,
-                mode="local_import",
-                expected_pictures=0,
-                state=STATE_DEFERRED,
-            )
-        )
-        session.commit()
-
-    server.vault.db.run_task(answer)
+    # The import offer is answered in the module fixture; without it neither
+    # the finder nor the task would hand out a root scan at all.
     finder = ReferenceFolderScanFinder(
         database=server.vault.db,
         path_mapper=PathMapper(),
