@@ -32,7 +32,9 @@ const props = defineProps({
   /**
    * The owner's saved answers for the read's caption-file patterns, for a
    * resumed commit: `[{suffix, kind}]`. Seeds the choices below when it
-   * names a pattern; otherwise the read's own guess does.
+   * names a pattern; otherwise the read's own guess does - except for an
+   * explicit `[]`, which is the answer "read nothing" and seeds every row as
+   * Ignore rather than handing the guesses back.
    *
    * `null` means nobody was ever asked - a wizard the owner has not answered
    * on yet, or an entry saved before the caption card existed. With a card to
@@ -128,10 +130,16 @@ const answers = reactive(Object.create(null));
 watch(
   patterns,
   (rows) => {
+    // A saved `[]` is the answer "read nothing" - Organise later, or a commit
+    // that failed after it. Falling through to each row's guess lost it the
+    // moment the read had patterns to show, and `chosenCaptions` then handed
+    // the commit a convention the owner had already declined.
+    const readNothing = props.captions?.length === 0;
     for (const row of rows) {
       if (answers[row.suffix]) continue;
       answers[row.suffix] =
-        props.captions?.find((c) => c.suffix === row.suffix)?.kind ?? row.kind;
+        props.captions?.find((c) => c.suffix === row.suffix)?.kind ??
+        (readNothing ? "ignore" : row.kind);
     }
   },
   { immediate: true },
