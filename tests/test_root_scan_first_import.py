@@ -131,10 +131,12 @@ def test_a_settled_import_answers_and_a_scan_queued_before_it_recheck(server):
     task = _due(finder)
     assert task is not None
 
-    # Accepted while the task sat in the queue: the task asks again and skips.
+    # Accepted while the task sat in the queue: the task asks again and skips,
+    # and the finder asks again on its next cycle, not after the interval.
     _record(server, STATE_PENDING)
     assert task._run_task()["status"] == "skipped"
     assert _managed(server) == []
+    assert finder._root_last_scanned is None
 
 
 def test_a_reference_commit_says_nothing_about_the_root(server):
@@ -148,4 +150,9 @@ def test_a_library_that_already_holds_pictures_is_scanned_as_before(server):
     server.vault.db.run_task(
         lambda s: (s.add(Picture(file_path="old.png", pixel_sha="x" * 40)), s.commit())
     )
+    assert _due(_finder(server)) is not None
+    # An aborted import is not an answer, but it must not switch the rescan
+    # off for a library that was already indexed.
+    _record(server, STATE_PENDING)
+    _settle_pending(server, STATE_ABANDONED)
     assert _due(_finder(server)) is not None

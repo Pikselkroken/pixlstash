@@ -128,6 +128,7 @@ class ReferenceFolderScanTask(BaseTask):
         resolved_path: str,
         other_resolved_paths: frozenset[str] = frozenset(),
         on_root_scanned=None,
+        on_root_skipped=None,
     ):
         super().__init__(
             task_type="ReferenceFolderScanTask",
@@ -145,6 +146,7 @@ class ReferenceFolderScanTask(BaseTask):
         # ``None`` is the library's own picture root (see the class docstring).
         self._is_root = folder_id is None
         self._on_root_scanned = on_root_scanned
+        self._on_root_skipped = on_root_skipped
         # Sidecar filename suffixes for this folder, loaded at the start of
         # _run_task(); None means "use known conventions / module defaults".
         self._tags_suffix: str | None = None
@@ -164,8 +166,10 @@ class ReferenceFolderScanTask(BaseTask):
         if self._is_root and not self._db.run_immediate_read_task(root_import_answered):
             logger.info(
                 "Library root scan skipped: a local import is unanswered. "
-                "Retried on a later cycle."
+                "Retried on the next cycle."
             )
+            if self._on_root_skipped:
+                self._on_root_skipped()
             return {"status": "skipped", "folder_id": folder_id}
 
         if not os.path.isdir(resolved):
