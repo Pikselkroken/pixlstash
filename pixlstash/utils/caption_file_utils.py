@@ -94,6 +94,19 @@ def is_safe_sidecar_suffix(suffix: str | None) -> bool:
     return bool(_SAFE_SUFFIX_RE.match(suffix))
 
 
+def suffixes_collide(tags_suffix: str | None, description_suffix: str | None) -> bool:
+    """Whether tags and descriptions would end up in the same file.
+
+    One suffix for both kinds is one file for both: the two write-backs
+    overwrite each other. An unset suffix means the module default, so the
+    defaults take part; compared case-insensitively because Windows and macOS
+    name one file by both spellings.
+    """
+    return (tags_suffix or DEFAULT_TAGS_SUFFIX).lower() == (
+        description_suffix or DEFAULT_DESCRIPTION_SUFFIX
+    ).lower()
+
+
 def get_sidecar_mtime(path: str) -> float | None:
     """Return the modification time of *path* as a Unix timestamp, or ``None``."""
     try:
@@ -214,6 +227,62 @@ def resolve_typed_sidecar(
     return None
 
 
+def is_recorded_sidecar_shape(image_path: str, path: str | None) -> bool:
+    """Whether *path* is a sidecar a legitimate row could have recorded: exactly
+    the image stem plus a safe suffix (#776). One rule for every recorded path,
+    read or write, so a fabricated column cannot direct a file write elsewhere.
+    """
+    if not path:
+        return False
+    stem = os.path.splitext(image_path)[0]
+    tail = path[len(stem) :] if path.startswith(stem) else ""
+    return bool(tail) and is_safe_sidecar_suffix(tail)
+
+
+def recorded_sidecar(image_path: str, stored_path: str | None) -> str | None:
+    """The picture's own recorded sidecar, when it still exists.
+
+    A configured suffix names the files PixlStash *creates*; a picture whose
+    file was found under another name keeps that file.
+    """
+    if not is_recorded_sidecar_shape(image_path, stored_path):
+        return None
+    return stored_path if os.path.isfile(stored_path) else None
+
+
+def writeback_target(
+    image_path: str,
+    sidecar_type: str,
+    configured_suffix: str | None,
+    stored_path: str | None,
+    has_content: bool,
+) -> str | None:
+    """The file an edit may write *sidecar_type* back to, or ``None`` to skip.
+
+    The picture's recorded file is the one an edit replaces. A file that exists
+    beside the picture but is *not* recorded is one nothing has read in yet
+    (sync was just turned on and the scan that reads files in has not run), and
+    replacing it would destroy a caption; it is skipped and logged. A new file
+    is created from *configured_suffix* or the default only when *has_content*.
+    """
+    recorded = recorded_sidecar(image_path, stored_path)
+    if recorded:
+        return recorded
+    if not has_content:
+        return None
+    target = writeback_path(image_path, sidecar_type, configured_suffix, None)
+    if target is None or not os.path.isfile(target):
+        return target
+    logger.info(
+        "Skipping the %s write-back for %s: %s exists but is not this picture's "
+        "recorded sidecar; a scan reads it in before an edit replaces it.",
+        sidecar_type,
+        image_path,
+        target,
+    )
+    return None
+
+
 def writeback_path(
     image_path: str,
     sidecar_type: str,
@@ -238,9 +307,7 @@ def writeback_path(
     the caller and wedging a scan or returning a 500. Callers must handle it.
     """
     if existing_path:
-        stem = os.path.splitext(image_path)[0]
-        tail = existing_path[len(stem) :] if existing_path.startswith(stem) else ""
-        if tail and is_safe_sidecar_suffix(tail):
+        if is_recorded_sidecar_shape(image_path, existing_path):
             return existing_path
         logger.warning(
             "Ignoring recorded %s sidecar path %r for %s: not the image "

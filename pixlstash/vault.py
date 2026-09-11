@@ -604,6 +604,12 @@ class Vault:
             return
         self._ref_folder_watcher.unwatch_folder(folder_id)
 
+    def rescan_library_root(self) -> None:
+        """Ask for the library's own picture root to be rescanned now: the pass
+        that reads existing caption files in and writes the missing ones out
+        once caption sync is turned on."""
+        self._on_reference_folder_fs_changed(None)
+
     def _on_reference_folder_fs_changed(self, folder_id: int | None) -> None:
         """Callback invoked by the filesystem watcher when a relevant file changes.
 

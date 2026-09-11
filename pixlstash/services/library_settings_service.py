@@ -21,6 +21,7 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models.library_settings import LibrarySettings
+from pixlstash.utils.caption_file_utils import suffixes_collide
 from pixlstash.utils.service.smart_score_invalidation import invalidate_all_smart_scores
 from pixlstash.pixl_logging import get_logger
 
@@ -175,6 +176,118 @@ def reconcile_settings_fingerprint(vault_db, salt: str, penalised_tags: dict) ->
 # ---------------------------------------------------------------------------
 # The folder layout (v1.11 Phase 4b)
 # ---------------------------------------------------------------------------
+
+
+CAPTION_SYNC_FIELDS = (
+    "sync_tags",
+    "sync_descriptions",
+    "tags_suffix",
+    "description_suffix",
+)
+
+
+def _caption_fields(row: LibrarySettings) -> dict:
+    return {name: getattr(row, name) for name in CAPTION_SYNC_FIELDS}
+
+
+def _rescan_due(before: dict, after: dict) -> bool:
+    """A kind that came on, or whose suffix changed while on, names files
+    nothing has read yet; the root scan is the pass that reads them in and
+    writes the missing ones out."""
+    return any(
+        after[toggle] and (not before[toggle] or after[suffix] != before[suffix])
+        for toggle, suffix in (
+            ("sync_tags", "tags_suffix"),
+            ("sync_descriptions", "description_suffix"),
+        )
+    )
+
+
+def get_caption_sync(vault_db) -> dict:
+    """The root's caption-file sync settings, the four `CAPTION_SYNC_FIELDS`."""
+    return vault_db.run_immediate_read_task(
+        lambda session: _caption_fields(_row(session))
+    )
+
+
+def set_caption_sync(vault_db, **fields) -> tuple[dict, bool]:
+    """Store the given `CAPTION_SYNC_FIELDS`; a field not passed keeps its value.
+
+    Returns ``(stored settings, rescan due)``. Suffixes are trusted here: the
+    route validates them at its boundary and `sidecar_path` refuses an unsafe
+    one at the point of use.
+
+    Raises:
+        ValueError: The merged row would give both kinds one suffix.
+    """
+    unknown = set(fields) - set(CAPTION_SYNC_FIELDS)
+    if unknown:
+        raise ValueError(f"unknown caption sync fields: {sorted(unknown)}")
+
+    def write(session: Session) -> tuple[dict, bool]:
+        row = _row(session)
+        before = _caption_fields(row)
+        after = {**before, **fields}
+        if suffixes_collide(after["tags_suffix"], after["description_suffix"]):
+            raise ValueError(
+                "Tags and descriptions cannot share a suffix; they would share "
+                "one file and overwrite each other."
+            )
+        for name, value in fields.items():
+            setattr(row, name, value)
+        session.add(row)
+        session.commit()
+        return after, _rescan_due(before, after)
+
+    return vault_db.run_task(write, priority=DBPriority.IMMEDIATE)
+
+
+def seed_caption_suffixes(
+    vault_db, tags_suffix: Optional[str], description_suffix: Optional[str]
+) -> bool:
+    """Turn a kind on with the suffix the owner confirmed on import.
+
+    Confirming a pattern as tags or descriptions is the owner saying the folder
+    stores its captions there, so sync of that kind goes on: edits reach the
+    files and files edited on disk reach PixlStash. A suffix already stored is
+    kept (an earlier import's convention wins); a kind not confirmed is left
+    alone; a kind whose suffix would name the other kind's file is skipped and
+    logged. Settings can turn either off again.
+
+    Returns whether a root rescan is due, by `set_caption_sync`'s rule.
+    """
+    if not tags_suffix and not description_suffix:
+        return False
+
+    def write(session: Session) -> bool:
+        row = _row(session)
+        before = _caption_fields(row)
+        for toggle, field, confirmed in (
+            ("sync_tags", "tags_suffix", tags_suffix),
+            ("sync_descriptions", "description_suffix", description_suffix),
+        ):
+            if not confirmed:
+                continue
+            effective = getattr(row, field) or confirmed
+            other = (
+                row.description_suffix if field == "tags_suffix" else row.tags_suffix
+            )
+            pair = (effective, other) if field == "tags_suffix" else (other, effective)
+            if suffixes_collide(*pair):
+                logger.warning(
+                    "Not turning %s on for the library root: suffix %r would name "
+                    "the same file as the other kind's.",
+                    toggle,
+                    effective,
+                )
+                continue
+            setattr(row, toggle, True)
+            setattr(row, field, effective)
+        session.add(row)
+        session.commit()
+        return _rescan_due(before, _caption_fields(row))
+
+    return vault_db.run_task(write, priority=DBPriority.IMMEDIATE)
 
 
 def get_layout(vault_db) -> tuple[Optional[str], Optional[str]]:

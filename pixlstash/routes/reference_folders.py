@@ -12,7 +12,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models.tag import TAG_PENDING_SENTINEL, Tag, is_tag_sentinel
+from pixlstash.db_models.tag import (
+    TAG_PENDING_SENTINEL,
+    Tag,
+    description_caption_content,
+    is_tag_sentinel,
+)
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.pixl_logging import get_logger
@@ -23,9 +28,10 @@ from pixlstash.utils.caption_file_utils import (
     detect_folder_suffixes,
     get_sidecar_mtime,
     is_safe_sidecar_suffix,
-    read_description_sidecar,
-    read_tags_sidecar,
+    parse_caption_tags,
+    read_caption_text,
     resolve_typed_sidecar,
+    suffixes_collide,
     write_sidecar,
     writeback_path,
 )
@@ -46,6 +52,21 @@ from pixlstash.utils.path_utils import resolve_path_within
 from sqlmodel import Session, delete, select
 
 logger = get_logger(__name__)
+
+
+def _validate_suffix_pair(
+    tags_suffix: Optional[str], description_suffix: Optional[str]
+) -> None:
+    """Refuse one suffix for both kinds: one file cannot hold both, and the
+    two write-backs would overwrite each other (`suffixes_collide`)."""
+    if suffixes_collide(tags_suffix, description_suffix):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Tags and descriptions cannot share a suffix; they would share "
+                "one file and overwrite each other."
+            ),
+        )
 
 
 def _validate_sidecar_suffix(suffix: str) -> None:
@@ -693,6 +714,9 @@ def create_router(server) -> APIRouter:
                     detail="A reference folder with this path already exists.",
                 )
             _validate_reference_folder_conflicts(session, folder)
+            tags_suffix = _normalize_suffix(payload.tags_suffix)
+            description_suffix = _normalize_suffix(payload.description_suffix)
+            _validate_suffix_pair(tags_suffix, description_suffix)
             rf = ReferenceFolder(
                 folder=folder,
                 host_path=host_path,
@@ -700,8 +724,8 @@ def create_router(server) -> APIRouter:
                 allow_delete_file=False,
                 sync_descriptions=bool(payload.sync_descriptions),
                 sync_tags=bool(payload.sync_tags),
-                description_suffix=_normalize_suffix(payload.description_suffix),
-                tags_suffix=_normalize_suffix(payload.tags_suffix),
+                description_suffix=description_suffix,
+                tags_suffix=tags_suffix,
                 status=initial_status,
                 # This is the sole deliberate folder (re-)add path, so mark it
                 # for an explicit re-import: the first scan to complete will
@@ -904,6 +928,8 @@ def create_router(server) -> APIRouter:
                 rf.description_suffix = _normalize_suffix(payload.description_suffix)
             if "tags_suffix" in payload.model_fields_set:
                 rf.tags_suffix = _normalize_suffix(payload.tags_suffix)
+            if {"description_suffix", "tags_suffix"} & payload.model_fields_set:
+                _validate_suffix_pair(rf.tags_suffix, rf.description_suffix)
             if "host_path" in payload.model_fields_set:
                 rf.host_path = _normalize_optional_host_path(payload.host_path)
             if {"layout", "layout_unfiled"} & payload.model_fields_set:
@@ -1485,7 +1511,7 @@ def create_router(server) -> APIRouter:
                             tags_count += 1
                             dirty = True
                 if SIDECAR_TYPE_DESCRIPTION in requested_types:
-                    description = (pic.description or "").strip()
+                    description = description_caption_content(pic.description)
                     if description or pic.description_file:
                         target = writeback_path(
                             pic.file_path,
@@ -1572,8 +1598,11 @@ def create_router(server) -> APIRouter:
                     tags_path = resolve_typed_sidecar(
                         pic.file_path, SIDECAR_TYPE_TAGS, rf.tags_suffix
                     )
-                    if tags_path:
-                        tags = read_tags_sidecar(tags_path)
+                    raw_tags = read_caption_text(tags_path) if tags_path else None
+                    # Only after a successful read: the `[]` an unreadable file
+                    # would parse to deletes the picture's tags.
+                    if raw_tags is not None:
+                        tags = parse_caption_tags(raw_tags)
                         session.exec(delete(Tag).where(Tag.picture_id == pic.id))
                         if tags:
                             session.add_all(
@@ -1593,8 +1622,13 @@ def create_router(server) -> APIRouter:
                         SIDECAR_TYPE_DESCRIPTION,
                         rf.description_suffix,
                     )
-                    if description_path:
-                        pic.description = read_description_sidecar(description_path)
+                    raw_description = (
+                        read_caption_text(description_path)
+                        if description_path
+                        else None
+                    )
+                    if raw_description is not None:
+                        pic.description = raw_description.strip() or None
                         pic.description_file = description_path
                         pic.description_file_mtime = get_sidecar_mtime(description_path)
                         descriptions_count += 1
