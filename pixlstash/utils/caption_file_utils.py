@@ -413,17 +413,25 @@ def read_description_sidecar(path: str) -> str | None:
     return text or None
 
 
-def _first_sidecar(image_path: str, suffixes) -> str | None:
-    """The first of *suffixes* that names an existing file beside *image_path*."""
+def _existing_sidecars(image_path: str, suffixes) -> list[str]:
+    """Each of *suffixes* naming an existing file beside *image_path*, in order.
+
+    Every one of them, not just the first: the read reports a suffix per row
+    and the owner answers each row on its own, so on a case-sensitive
+    filesystem ``.txt`` and ``.TXT`` are two files both confirmed as tags and
+    both have to be opened. Stopping at the first would drop the second file's
+    content, and silently so when the first is empty.
+    """
+    paths: list[str] = []
     for suffix in suffixes:
         try:
             candidate = sidecar_path(image_path, suffix)
         except ValueError as exc:
             logger.warning("Cannot resolve sidecar for %s: %s", image_path, exc)
             continue
-        if os.path.isfile(candidate):
-            return candidate
-    return None
+        if os.path.isfile(candidate) and candidate not in paths:
+            paths.append(candidate)
+    return paths
 
 
 def attach_sidecars(
@@ -457,27 +465,49 @@ def attach_sidecars(
     an empty list reads nothing of that kind - the owner's "ignore".
     *overwrite_description* is for a row that already exists: the owner has
     just confirmed the file is the caption, so it replaces what the row had.
+
+    **Every confirmed suffix that names an existing file is read**, not just
+    the first: the read reports one row per suffix and the owner answers each
+    row separately, so two rows both answered ``tags`` are two files to read.
+    The tags are their union, in suffix order and de-duplicated, and
+    ``tags_file`` records the first of them. A description cannot be a union,
+    so the first confirmed file with content wins and is what
+    ``description_file`` records, falling back to the first existing file when
+    none of them has any.
     """
-    tags: list[str] = []
     if tags_suffixes is None:
-        tags_path = resolve_typed_sidecar(file_path, SIDECAR_TYPE_TAGS, None)
+        probed = resolve_typed_sidecar(file_path, SIDECAR_TYPE_TAGS, None)
+        tags_paths = [probed] if probed else []
     else:
-        tags_path = _first_sidecar(file_path, tags_suffixes)
-    if tags_path:
-        pic.tags_file = tags_path
-        pic.tags_file_mtime = get_sidecar_mtime(tags_path)
-        tags = read_tags_sidecar(tags_path)
+        tags_paths = _existing_sidecars(file_path, tags_suffixes)
+    tags: list[str] = []
+    seen: set[str] = set()
+    for path in tags_paths:
+        for tag in read_tags_sidecar(path):
+            if tag not in seen:
+                seen.add(tag)
+                tags.append(tag)
+    if tags_paths:
+        pic.tags_file = tags_paths[0]
+        pic.tags_file_mtime = get_sidecar_mtime(tags_paths[0])
 
     if description_suffixes is None:
-        description_path = resolve_typed_sidecar(
-            file_path, SIDECAR_TYPE_DESCRIPTION, None
-        )
+        probed = resolve_typed_sidecar(file_path, SIDECAR_TYPE_DESCRIPTION, None)
+        description_paths = [probed] if probed else []
     else:
-        description_path = _first_sidecar(file_path, description_suffixes)
+        description_paths = _existing_sidecars(file_path, description_suffixes)
+    description_path = None
+    description = None
+    for path in description_paths:
+        text = read_description_sidecar(path)
+        if text:
+            description_path, description = path, text
+            break
+    if description_path is None and description_paths:
+        description_path = description_paths[0]
     if description_path:
         pic.description_file = description_path
         pic.description_file_mtime = get_sidecar_mtime(description_path)
-        description = read_description_sidecar(description_path)
         if description and (overwrite_description or not pic.description):
             pic.description = description
     if tags:

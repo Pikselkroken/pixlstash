@@ -332,12 +332,15 @@ async function commit(
  * mapping - which is what `stop=defer` does server-side.
  *
  * No assignments and no caption answers: this is the owner declining to
- * decide, and the read's guesses are not their answer. `[]` still says "read
- * nothing" rather than leaving the import to probe.
+ * decide, and the read's guesses are not their answer. After a complete read
+ * `[]` says "read nothing" rather than leaving the import to probe; after a
+ * partial one nobody could have been asked about the unwalked part, so the
+ * answer stays `null` and the import probes, as `chosenCaptions` and the
+ * wizard's own `later()` do.
  */
 async function organiseLater() {
   if (!committing.value) {
-    commit([], []);
+    commit([], patternsPartial.value ? null : []);
     return;
   }
   try {

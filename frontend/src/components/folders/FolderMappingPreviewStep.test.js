@@ -338,6 +338,22 @@ describe("caption files beside the pictures", () => {
     expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual([]);
   });
 
+  it("leaves the answer open for Organise later after a partial read", async () => {
+    // Declining to decide after a read that stopped early is not "read
+    // nothing": the unwalked folders were never offered, so the key is left
+    // out and the import probes there, the same rule as the wizard's later().
+    startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
+    const wrapper = mountImport({
+      commitOnMount: false,
+      readResult: { ...READ_RESULT, captions_complete: false },
+    });
+
+    await buttonWith(wrapper, "Organise later").trigger("click");
+    await flushPromises();
+
+    expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toBeNull();
+  });
+
   it("commits no answer at all for Organise later", async () => {
     // The card is on screen with the read's guesses in it, but declining to
     // decide is not confirming them: `[]` says "read nothing", and only a

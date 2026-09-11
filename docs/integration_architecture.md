@@ -1656,7 +1656,9 @@ pre-filled with `kind`, and sends the answers back as `captions` on the commit
 (§22).
 
 **`captions_complete: false` means this is only what was found so far.** The
-walk hit `max_folders`, skipped an unreadable folder, or a cancel or the deadline stopped the walk or the
+walk hit `max_folders`, skipped an unreadable folder, found more than twelve
+distinct suffixes so the rest were never opened, or a cancel or the deadline
+stopped the walk or the
 sniff part-way. The answers themselves are unaffected: they are per suffix and
 the import applies them tree-wide, so an answered suffix is read in folders the
 walk never reached. What is missing is a pattern that exists only in the

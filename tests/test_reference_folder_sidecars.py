@@ -146,6 +146,59 @@ def test_an_unreadable_named_tags_sidecar_is_recorded_rather_than_reported_absen
         os.chmod(unreadable, 0o644)
 
 
+def test_every_confirmed_tags_suffix_is_read_not_just_the_first(tmp_path):
+    """Two rows both answered `tags` are two files, and both get opened.
+
+    On a case-sensitive filesystem the read reports `.txt` and `_tags.txt` as
+    separate rows and the owner confirms each; taking only the first existing
+    one silently dropped the second file's tags, and dropped everything when
+    the first file was empty.
+    """
+    img = tmp_path / "a.png"
+    img.write_bytes(b"x")
+    _write(str(tmp_path / "a.txt"), "cat")
+    _write(str(tmp_path / "a_tags.txt"), "dog")
+
+    pic = Picture(file_path=str(img))
+    # Suffix order as `caption_suffixes` ranks them: longest first.
+    tags = attach_sidecars(pic, str(img), tags_suffixes=["_tags.txt", ".txt"])
+    assert tags == ["dog", "cat"]
+    assert pic.tags_file == str(tmp_path / "a_tags.txt"), "the first existing file"
+    assert getattr(pic, "_sidecar_tags", None) == ["dog", "cat"]
+
+    # An empty first file is the case that lost everything.
+    _write(str(tmp_path / "a_tags.txt"), "")
+    pic = Picture(file_path=str(img))
+    assert attach_sidecars(pic, str(img), tags_suffixes=["_tags.txt", ".txt"]) == [
+        "cat"
+    ]
+    assert pic.tags_file == str(tmp_path / "a_tags.txt")
+
+
+def test_description_takes_the_first_confirmed_file_with_content(tmp_path):
+    """A description cannot be a union, so the first one with content wins.
+
+    The path recorded is that file, not the empty one that happened to sort
+    first; with nothing anywhere the first existing file is still recorded, so
+    "empty" stays distinguishable from "absent".
+    """
+    img = tmp_path / "b.png"
+    img.write_bytes(b"x")
+    _write(str(tmp_path / "b_description.txt"), "   \n")
+    _write(str(tmp_path / "b.txt"), "A cat on a windowsill.")
+
+    pic = Picture(file_path=str(img))
+    attach_sidecars(pic, str(img), description_suffixes=["_description.txt", ".txt"])
+    assert pic.description == "A cat on a windowsill."
+    assert pic.description_file == str(tmp_path / "b.txt")
+
+    _write(str(tmp_path / "b.txt"), "")
+    pic = Picture(file_path=str(img))
+    attach_sidecars(pic, str(img), description_suffixes=["_description.txt", ".txt"])
+    assert pic.description is None
+    assert pic.description_file == str(tmp_path / "b_description.txt")
+
+
 def test_empty_bare_txt_is_not_a_caption(tmp_path):
     img = tmp_path / "photo.png"
     img.write_bytes(b"x")
