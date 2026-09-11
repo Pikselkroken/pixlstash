@@ -75,6 +75,7 @@ from pixlstash.db_models.project import Project
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.library_settings_service import seed_caption_suffixes
 from pixlstash.services.project_membership_service import (
     set_character_projects,
     set_picture_set_projects,
@@ -976,6 +977,18 @@ def local_import_pictures(
         processed += len(chunk)
         if on_progress is not None:
             on_progress(processed, total)
+
+    # A confirmed convention is the owner saying the folder stores its captions
+    # there: it becomes the root's own suffix and sync of that kind goes on, so
+    # edits reach the files and the files reach the pictures without a second
+    # setting to find. Settings can turn it off again. The rescan reads the
+    # owner's files in before any write-back could replace one.
+    if seed_caption_suffixes(
+        server.vault.db,
+        next(iter(tags_suffixes or ()), None),
+        next(iter(description_suffixes or ()), None),
+    ):
+        server.vault.rescan_library_root()
 
     # The split that says where an import's time went: `build_s` is decode +
     # thumbnail + hash on the build pool (CPU and disk, contended by the

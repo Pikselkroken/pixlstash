@@ -18,7 +18,7 @@ wants the same defects penalised.
 
 from typing import Optional
 
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Boolean, Column, Integer, String
 from sqlmodel import Field, SQLModel
 
 
@@ -81,5 +81,23 @@ class LibrarySettings(SQLModel, table=True):
     )
     layout: Optional[str] = Field(default=None, sa_column=Column(String, nullable=True))
     layout_unfiled: Optional[str] = Field(
+        default=None, sa_column=Column(String, nullable=True)
+    )
+    # Caption-file sync for the library's own picture root: the same four
+    # fields a ReferenceFolder carries, a toggle and a filename suffix per
+    # kind. Off until the owner turns a kind on in Settings or confirms a
+    # caption pattern on import.
+    sync_tags: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="0"),
+    )
+    sync_descriptions: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="0"),
+    )
+    tags_suffix: Optional[str] = Field(
+        default=None, sa_column=Column(String, nullable=True)
+    )
+    description_suffix: Optional[str] = Field(
         default=None, sa_column=Column(String, nullable=True)
     )

@@ -168,10 +168,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_45_local_7_loopback():
+def test_host_capability_tier_split_is_47_local_7_loopback():
     """The loopback tier is the 5 file-manager spawns, the process restart and
     the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 52
-    routes carry a locality tier = 45 local + 7 loopback.
+    routes carry a locality tier = 47 local + 7 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -414,6 +414,14 @@ def test_host_capability_tier_split_is_45_local_7_loopback():
     /server-config/layout`` for the same rollback reason. The loopback count is
     unchanged: neither route spawns anything.
 
+    54 = 47 + 7 with the library root's caption-file sync pair: ``GET`` and
+    ``PATCH /server-config/captions``, the root's copy of the four fields
+    ``PATCH /reference-folders/{folder_id}`` already carries on this tier.
+    The PATCH decides whether, and under what filename, a file is written
+    beside every picture in the library root; the GET is its control surface,
+    the ``GET /server-config/layout`` argument. Neither takes a host path and
+    neither spawns anything, so the loopback count is unchanged.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -427,7 +435,7 @@ def test_host_capability_tier_split_is_45_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 7, sorted(loopback)
-    assert len(local) == 45, sorted(local)
+    assert len(local) == 47, sorted(local)
 
 
 # ===========================================================================

@@ -2182,6 +2182,8 @@ even when there is no layout to parse beside it.
 |---|---|---|---|
 | `GET` | `/api/v1/server-config/layout` | `local_owner_only` | `{layout, layout_unfiled, default_layout}` for the library's own picture root |
 | `PATCH` | `/api/v1/server-config/layout` | `local_owner_only` | the same, after recording. `400` with the reason if the layout cannot be read |
+| `GET` | `/api/v1/server-config/captions` | `local_owner_only` | `{sync_tags, sync_descriptions, tags_suffix, description_suffix, default_tags_suffix, default_description_suffix}`: caption-file sync for the library's own picture root, the same four fields a reference folder carries |
+| `PATCH` | `/api/v1/server-config/captions` | `local_owner_only` | the same, after recording. A toggle sent as `null` is no change; an empty suffix clears it. `400` for a suffix that is not a bare filename fragment, or one suffix for both kinds. Turning a kind on asks for a root rescan, which reads existing caption files in and writes one beside every picture that has content but no file |
 | `PATCH` | `/api/v1/reference-folders/{folder_id}` | `local_owner_only` | the folder, now carrying `layout` / `layout_unfiled`. The same two fields on the folder the owner indexed in place, and they are read back by `GET /reference-folders` too |
 | `GET` | `/api/v1/pictures/{id}/layout` | `picture_scoped` | `{layout, current_folder, suggested_folder}` |
 | `POST` | `/api/v1/pictures/layout/move-to-match` | `picture_scoped` | `{moved_count, moved_picture_ids, skipped, operation_id}` |

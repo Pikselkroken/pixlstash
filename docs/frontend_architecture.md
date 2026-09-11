@@ -1024,6 +1024,23 @@ phases — it is the guard on that fall-through if Vuetify's markup ever moves.
 
 Emits: `update:public-url`
 
+##### `LibraryCaptionsDialog.vue`: caption files beside the library's own pictures
+
+The same shape as the layout dialog, one row down the same `⋯` menu:
+`Caption files…` on the active row only, because `GET`/`PATCH
+/server-config/captions` address whichever library is open. Two rows, a
+checkbox per type ("Sync tags", "Sync descriptions") with the suffix field for
+new files shown only while the type is on, and an `e.g. image_tags.txt` hint
+that follows what is typed. Nothing is written until Save, which sends all
+four fields; a 400 (an unsafe suffix, or one suffix for both types) shows the
+server's reason and keeps the dialog open. Save stays disabled until the GET
+has applied, since a failed read leaves a valid-looking "everything off" form
+the PATCH would store. A remote owner sees the locality sentence instead of
+the controls, as in `LibraryLayoutDialog`. `LibraryCaptionsDialog.test.js`
+pins those four behaviours. The reference-folder editor's sync block is the
+same contract per folder; both say that a picture's existing caption file
+keeps its name and the suffix only names files PixlStash creates.
+
 #### `AppearanceSection.vue` (544 lines)
 Appearance tab content: sidebar thumbnail size, sidebar width (Full / Dock toggle), theme, date format, keyboard-hint toggle, guest-session clear. Props: `sidebarThumbnailSize`, `themeMode`, `dateFormat`, `showKeyboardHint`. Emits corresponding `update:*` events. Contains own `clearGuestSession()` logic and `hasGuestSessionCookie` state. The sidebar width toggle reads/writes `useSidebarStore.sidebarDocked` directly.
 

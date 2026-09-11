@@ -14,7 +14,12 @@ from pixlstash.db_models.deleted_file_log import DeletedFileLog
 from pixlstash.db_models.library_settings import LibrarySettings
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
-from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL, is_tag_sentinel
+from pixlstash.db_models.tag import (
+    Tag,
+    TAG_PENDING_SENTINEL,
+    description_caption_content,
+    is_tag_sentinel,
+)
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.tasks.base_task import BaseTask
 from pixlstash.tasks.missing_file_purge_task import MissingFilePurgeTask
@@ -28,9 +33,11 @@ from pixlstash.utils.caption_file_utils import (
     detect_folder_suffixes,
     get_sidecar_mtime,
     is_safe_sidecar_suffix,
-    read_description_sidecar,
-    read_tags_sidecar,
+    parse_caption_tags,
+    read_caption_text,
+    recorded_sidecar,
     resolve_typed_sidecar,
+    suffixes_collide,
     write_sidecar,
     writeback_path,
 )
@@ -50,6 +57,9 @@ from pixlstash.services.move_reconciliation_service import record_pending_review
 from pixlstash.utils.library_layout import DEFAULT_LAYOUT, parse_layout
 from pixlstash.utils.reference_folder_watcher import ROOT_INTERNAL_DIRS
 from pixlstash.utils.path_utils import path_is_within
+from pixlstash.utils.service.smart_score_invalidation import (
+    invalidate_on_anomaly_change,
+)
 
 logger = get_logger(__name__)
 
@@ -114,10 +124,11 @@ class ReferenceFolderScanTask(BaseTask):
     purge sweep deletes an hour later. The root differs from a reference folder
     in exactly the ways ``layout_move_service.LayoutRoot`` names: pictures are
     the ``reference_folder_id IS NULL`` rows, ``Picture.file_path`` is stored
-    relative to the root (:meth:`_stored`), the layout comes from
-    ``LibrarySettings`` and there is no status, sidecar sync or suffix
-    detection. Everything else - move following by pixel hash, the move
-    journal, the review queue, the thumbnail carry - is shared unchanged.
+    relative to the root (:meth:`_stored`), the layout and the caption-file
+    sync settings come from ``LibrarySettings`` and there is no status.
+    Everything else - move following by pixel hash, the move journal, the
+    review queue, the thumbnail carry, the sidecar reconcile - is shared
+    unchanged.
     """
 
     def __init__(
@@ -196,9 +207,17 @@ class ReferenceFolderScanTask(BaseTask):
         def fetch_folder_config(session: Session):
             if self._is_root:
                 settings = session.exec(select(LibrarySettings)).first()
-                layout = settings.layout if settings is not None else None
-                unfiled = settings.layout_unfiled if settings is not None else None
-                return (None, None, False, False, False, layout, unfiled)
+                if settings is None:
+                    return (None, None, False, False, False, None, None)
+                return (
+                    settings.tags_suffix,
+                    settings.description_suffix,
+                    bool(settings.sync_tags),
+                    bool(settings.sync_descriptions),
+                    False,
+                    settings.layout,
+                    settings.layout_unfiled,
+                )
             rf = session.get(ReferenceFolder, folder_id)
             if rf is None:
                 return None
@@ -247,7 +266,15 @@ class ReferenceFolderScanTask(BaseTask):
         if (sync_tags or sync_descriptions) and (
             self._tags_suffix is None or self._description_suffix is None
         ):
-            detected = detect_folder_suffixes(resolved)
+            # Detected over what this scan walks: a convention read out of a
+            # nested reference folder or PixlStash's own directories is not
+            # this folder's, and persisting it names every sidecar written.
+            skip_dirs = set(self._other_resolved_paths)
+            if self._is_root:
+                skip_dirs |= {
+                    os.path.join(resolved, name) for name in _ROOT_INTERNAL_DIRS
+                }
+            detected = detect_folder_suffixes(resolved, skip_dirs=skip_dirs)
             seed: dict[str, str] = {}
             if self._tags_suffix is None:
                 self._tags_suffix = detected["tags_suffix"] or DEFAULT_TAGS_SUFFIX
@@ -256,6 +283,10 @@ class ReferenceFolderScanTask(BaseTask):
                 self._description_suffix = (
                     detected["description_suffix"] or DEFAULT_DESCRIPTION_SUFFIX
                 )
+                if suffixes_collide(self._tags_suffix, self._description_suffix):
+                    # One `.txt` convention detected as both kinds: it is the
+                    # tags file, and descriptions take the default name.
+                    self._description_suffix = DEFAULT_DESCRIPTION_SUFFIX
                 seed["description_suffix"] = self._description_suffix
             if seed:
                 self._persist_suffixes(seed)
@@ -752,9 +783,17 @@ class ReferenceFolderScanTask(BaseTask):
             tags_by_pic = self._fetch_folder_tags(folder_id)
 
         caption_updates: list[dict] = []
-        # The root has no sidecar convention: a stray .txt beside a managed
-        # picture is not a caption, and reading it as one would tag the picture.
-        sidecar_candidates = () if self._is_root else existing_by_path.items()
+        # The root reconciles an already-indexed picture only once the owner
+        # turned sync on: with it off, a stray .txt that appears beside a
+        # managed picture is not a caption, and reading it as one would retag
+        # the picture. A picture's FIRST indexing reads the sidecar beside it
+        # either way (`_build_picture` -> `attach_sidecars`), as the local
+        # import does.
+        sidecar_candidates = (
+            ()
+            if self._is_root and not (sync_tags or sync_descriptions)
+            else existing_by_path.items()
+        )
         for file_path, pic in sidecar_candidates:
             if file_path in removed_paths or pic.deleted:
                 # Don't touch sidecar data for removed/scrapheap pictures.
@@ -778,7 +817,7 @@ class ReferenceFolderScanTask(BaseTask):
                 stored_path=pic.description_file,
                 stored_mtime=pic.description_file_mtime,
                 sync=sync_descriptions,
-                export_content=(pic.description or "").strip(),
+                export_content=description_caption_content(pic.description),
             )
             if len(update) > 1:
                 caption_updates.append(update)
@@ -800,33 +839,52 @@ class ReferenceFolderScanTask(BaseTask):
                         len(locked),
                         sorted(locked),
                     )
-                for u in updates:
-                    if u["pic_id"] in locked:
-                        continue
-                    pic_db = session.get(Picture, u["pic_id"])
-                    if pic_db is None:
-                        continue
-                    if "tags_file" in u:
-                        pic_db.tags_file = u["tags_file"]
-                        pic_db.tags_file_mtime = u["tags_file_mtime"]
-                    if "description_file" in u:
-                        pic_db.description_file = u["description_file"]
-                        pic_db.description_file_mtime = u["description_file_mtime"]
-                    if u.get("new_description") is not None:
-                        pic_db.description = u["new_description"]
-                    session.add(pic_db)
-                    if "new_tags" in u:
-                        # Replace tags - an empty list means all tags were removed.
-                        session.exec(delete(Tag).where(Tag.picture_id == u["pic_id"]))
-                        tags = u["new_tags"]
-                        if tags:
-                            session.add_all(
-                                [Tag(picture_id=u["pic_id"], tag=t) for t in tags]
+                # A Tag row feeds the scorer's anomaly penalty and a cached
+                # smart score is never recomputed on its own, so a sidecar
+                # edit is wrapped like every other tag mutation.
+                retagged = [
+                    u["pic_id"]
+                    for u in updates
+                    if "new_tags" in u and u["pic_id"] not in locked
+                ]
+                with invalidate_on_anomaly_change(
+                    session, retagged, context="sidecar tag sync"
+                ):
+                    for u in updates:
+                        if u["pic_id"] in locked:
+                            continue
+                        pic_db = session.get(Picture, u["pic_id"])
+                        if pic_db is None:
+                            continue
+                        if "tags_file" in u:
+                            pic_db.tags_file = u["tags_file"]
+                            pic_db.tags_file_mtime = u["tags_file_mtime"]
+                        if "description_file" in u:
+                            pic_db.description_file = u["description_file"]
+                            pic_db.description_file_mtime = u["description_file_mtime"]
+                        if "new_description" in u:
+                            # Presence, not truthiness: the key is set only after
+                            # a successful read, and None there is the owner
+                            # having emptied a sidecar this picture tracks.
+                            pic_db.description = u["new_description"]
+                        session.add(pic_db)
+                        if "new_tags" in u:
+                            # Replace tags - an empty list means all tags were removed.
+                            session.exec(
+                                delete(Tag).where(Tag.picture_id == u["pic_id"])
                             )
-                        else:
-                            session.add(
-                                Tag(picture_id=u["pic_id"], tag=TAG_PENDING_SENTINEL)
-                            )
+                            tags = u["new_tags"]
+                            if tags:
+                                session.add_all(
+                                    [Tag(picture_id=u["pic_id"], tag=t) for t in tags]
+                                )
+                            else:
+                                session.add(
+                                    Tag(
+                                        picture_id=u["pic_id"], tag=TAG_PENDING_SENTINEL
+                                    )
+                                )
+                    session.flush()
                 session.commit()
 
             self._db.run_task(
@@ -894,10 +952,15 @@ class ReferenceFolderScanTask(BaseTask):
         """
 
         def fetch(session: Session) -> dict[int, list[str]]:
+            owner = (
+                Picture.reference_folder_id.is_(None)
+                if folder_id is None
+                else Picture.reference_folder_id == folder_id
+            )
             rows = session.exec(
                 select(Tag.picture_id, Tag.tag)
                 .join(Picture, Tag.picture_id == Picture.id)
-                .where(Picture.reference_folder_id == folder_id)
+                .where(owner)
             ).all()
             out: dict[int, list[str]] = {}
             for pic_id, tag in rows:
@@ -926,21 +989,39 @@ class ReferenceFolderScanTask(BaseTask):
         when *sync* is on, the file is missing, and *export_content* is non-empty,
         create the file on disk now and record its new path/mtime.  A vanished
         file only clears the stored reference (the database data is kept).
+
+        The picture's *recorded* file wins while it exists: the configured
+        suffix names the files this scan creates, not the ones the owner
+        already had. The root reconciles per kind, not per folder: with
+        descriptions on and tags off, a prompt ``.txt`` beside a managed
+        picture is not the tag set. A file that will not open is left for the
+        next pass rather than imported as empty, and an empty file the picture
+        was not already tracking is nothing to import, not a cleared caption.
         """
+        if self._is_root and not sync:
+            return
         is_tags = sidecar_type == SIDECAR_TYPE_TAGS
         path_key = "tags_file" if is_tags else "description_file"
         mtime_key = "tags_file_mtime" if is_tags else "description_file_mtime"
 
-        current_path = resolve_typed_sidecar(file_path, sidecar_type, suffix)
+        current_path = recorded_sidecar(
+            file_path, stored_path
+        ) or resolve_typed_sidecar(file_path, sidecar_type, suffix)
         if current_path is not None:
             current_mtime = get_sidecar_mtime(current_path)
             if current_path != stored_path or current_mtime != stored_mtime:
+                raw = read_caption_text(current_path)
+                if raw is None:
+                    return
+                content = raw.strip()
+                if not content and stored_path is None:
+                    return
                 update[path_key] = current_path
                 update[mtime_key] = current_mtime
                 if is_tags:
-                    update["new_tags"] = read_tags_sidecar(current_path)
+                    update["new_tags"] = parse_caption_tags(raw)
                 else:
-                    update["new_description"] = read_description_sidecar(current_path)
+                    update["new_description"] = content or None
             return
 
         # No sidecar on disk. Drop a stale stored reference (keep the DB data).
@@ -1370,17 +1451,29 @@ class ReferenceFolderScanTask(BaseTask):
 
         tags_suffix = _accepted("tags_suffix")
         description_suffix = _accepted("description_suffix")
-        if self._is_root or (tags_suffix is None and description_suffix is None):
+        if tags_suffix is None and description_suffix is None:
             return
 
         def update(session: Session) -> None:
-            rf = session.get(ReferenceFolder, self._folder_id)
+            rf = (
+                session.exec(select(LibrarySettings)).first()
+                if self._is_root
+                else session.get(ReferenceFolder, self._folder_id)
+            )
             if rf is None:
                 return
             if tags_suffix and rf.tags_suffix is None:
                 rf.tags_suffix = tags_suffix
             if description_suffix and rf.description_suffix is None:
-                rf.description_suffix = description_suffix
+                if suffixes_collide(rf.tags_suffix, description_suffix):
+                    logger.warning(
+                        "Not persisting detected description suffix %r for %s: it "
+                        "would name the same file as the tags suffix.",
+                        description_suffix,
+                        self._folder_path,
+                    )
+                else:
+                    rf.description_suffix = description_suffix
             session.add(rf)
             session.commit()
 

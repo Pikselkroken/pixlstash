@@ -56,6 +56,7 @@ from .tag import (  # noqa: F401
     DESCRIPTION_SENTINEL_ESCAPE_CHAR,
     make_description_sentinel,
     is_description_sentinel,
+    description_caption_content,
     parse_engine_from_description_sentinel,
 )
 from .review import Review  # noqa: F401
