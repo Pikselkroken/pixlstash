@@ -432,6 +432,28 @@ describe("the empty library's own folder", () => {
       READ_RESULT,
     );
   });
+
+  it("records the live read's count, and that a partial one is a floor", async () => {
+    // This flow runs on a library that already exists, so it never reaches
+    // `build()` - the only other place the count is saved. The sidebar's own
+    // inspect says nothing about unreadable folders, so without this the
+    // empty state presents this floor as a total.
+    getFolderStructureReadStatus.mockResolvedValue({
+      status: "completed",
+      stage: "done",
+      processed: 2,
+      total: 2,
+      result: { ...READ_RESULT, unreadable_folders: 2 },
+    });
+    const wrapper = mountWizard({ resume: own });
+    await settle();
+    await button(wrapper, "Set up my library").trigger("click");
+    await settle();
+
+    const store = useFolderMappingStore();
+    expect(store.rootPictureCount).toBe(READ_RESULT.picture_count);
+    expect(store.rootPictureCountCapped).toBe(true);
+  });
 });
 
 describe("the other verdicts", () => {

@@ -185,6 +185,18 @@ function onScanReady({ taskId, result }) {
   readTaskId.value = taskId;
   readResult.value = result;
   pictureCount.value = result.picture_count || 0;
+  // The empty-library flow opens this wizard on a library that already
+  // exists, so its live read never reaches `build()` - the only other place
+  // the count is saved. Without this the empty state keeps whatever the
+  // sidebar's uncapped inspect left behind and presents a partial read's
+  // floor as a total.
+  if (props.resume?.mode === "local_import") {
+    mappingStore.setRootPictureCount(
+      pictureCount.value,
+      readIsPartial(result),
+      mappingStore.rootCountEpoch,
+    );
+  }
   step.value = "mapping";
 }
 
