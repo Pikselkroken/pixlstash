@@ -170,8 +170,8 @@ def test_loopback_owner_only_is_justification_required():
 
 def test_host_capability_tier_split_is_47_local_7_loopback():
     """The loopback tier is the 5 file-manager spawns, the process restart and
-    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 52
-    routes carry a locality tier = 45 local + 7 loopback.
+    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 54
+    routes carry a locality tier = 47 local + 7 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
