@@ -4093,7 +4093,25 @@ and updates `file_path` on the existing row instead.
   task walking on that stale answer is the race the gate exists to prevent. A
   re-check that finds the gate shut logs at info and returns without walking;
   `_root_last_scanned` stays stamped, so `mark_root_due` or the next interval
-  is what asks again. A
+  is what asks again. **A second read cannot close the window after that
+  read**, which is what `vault.db.local_import_running` is for: a
+  `threading.Event` meaning "a `local_import` commit is pending", seeded from
+  the database by `Vault.__init__` (`local_import_pending`) so a
+  crash-resumed import is covered, set by `record_pending_commit` and cleared
+  by `_settle_in_session` once no `local_import` record is pending any more.
+  **The order is the mechanism.** `record_pending_commit` sets the flag
+  *before* it writes its row and therefore before `local_import_pictures`
+  walks; `ReferenceFolderScanTask` checks it *after* its own gate read and
+  again once per directory of its walk (`_import_started_mid_scan`, one
+  `is_set()` on an in-process flag, not a query). So a commit that starts after the scan's read is seen at the latest
+  one directory later, and the rows built in that one directory are reused by
+  the commit's own `insert()` rather than duplicated: the window is bounded to
+  a single directory instead of the whole walk, and it cannot be stale in the
+  direction that lets a scan keep walking during a live import. A scan that
+  stops this way logs at info, returns `skipped`, builds nothing further and
+  does not call `on_root_scanned`, so `MissingFilePurgeFinder` keeps waiting.
+  The database re-check stays alongside it for what an in-process flag cannot
+  see: a second process. A
   newest record that is `pending`, `abandoned` or `superseded` (a pending
   record a later reference commit replaced) holds the gate shut, uncached,
   *over* the picture rows, because an unsettled `local_import`

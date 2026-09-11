@@ -11,6 +11,7 @@ answer puts the root scan into a race with it.
 """
 
 import os
+import shutil
 import tempfile
 import time
 
@@ -28,6 +29,7 @@ from pixlstash.db_models.folder_mapping_commit import (
 )
 from pixlstash.db_models.picture import Picture
 from pixlstash.server import Server
+from pixlstash.vault import Vault
 from pixlstash.tasks import TaskType, reference_folder_scan_task
 from pixlstash.tasks.reference_folder_scan_finder import ReferenceFolderScanFinder
 from pixlstash.utils.path_mapper import PathMapper
@@ -357,3 +359,88 @@ def test_a_scan_handed_out_before_a_pending_import_walks_nothing(server, monkeyp
     assert task._run_task()["status"] == "active"
     assert server.vault.image_root in walked
     assert [p.file_path for p in _managed(server)] == ["handoff.png"]
+
+
+def test_an_import_that_starts_mid_walk_stops_the_scan_one_directory_later(
+    server, monkeypatch
+):
+    """The window the re-check alone cannot close.
+
+    `root_import_answered` reads the database and releases it, and the task
+    does more work before `os.walk` starts. `vault.db.local_import_running`
+    is raised by `record_pending_commit` BEFORE its row and before its own
+    walk, and the scan asks it once per directory, so an import accepted mid
+    walk costs at most the one directory already in hand - whose rows the
+    commit's `insert()` reuses - rather than the whole tree.
+    """
+    root = server.vault.image_root
+    _drop_picture(root, "top.png")
+    sub = os.path.join(root, "later")
+    os.makedirs(sub, exist_ok=True)
+    _drop_picture(sub, "deep.png")
+    _record(server, STATE_DONE)
+    task = _due(_finder(server)).find_task()
+    assert task is not None and task.params["folder_id"] is None
+
+    walked: list[str] = []
+    real_walk = os.walk
+
+    def spy(path, *args, **kwargs):
+        for entry in real_walk(path, *args, **kwargs):
+            walked.append(entry[0])
+            yield entry
+            # The owner's click landing between two directories, which is
+            # exactly where `record_pending_commit` raises the flag.
+            server.vault.db.local_import_running.set()
+
+    monkeypatch.setattr(reference_folder_scan_task.os, "walk", spy)
+    try:
+        assert task._run_task() == {"status": "skipped", "folder_id": None}
+        assert walked == [root, sub], (
+            "one directory, not the rest of the tree: the flag is asked per "
+            "directory, so the walk stops at the next one"
+        )
+        assert _managed(server) == [], (
+            "the scan returns before it builds anything, so the import owns "
+            "every file including the ones this walk had already listed"
+        )
+
+        # The control: the same task, walking plainly with the flag down,
+        # indexes both directories.
+        monkeypatch.undo()
+        server.vault.db.local_import_running.clear()
+        assert task._run_task()["status"] == "active"
+        assert sorted(p.file_path for p in _managed(server)) == [
+            os.path.join("later", "deep.png"),
+            "top.png",
+        ]
+    finally:
+        server.vault.db.local_import_running.clear()
+        shutil.rmtree(sub, ignore_errors=True)
+
+
+def test_a_vault_resuming_a_pending_import_starts_with_the_flag_up(tmp_path):
+    """A crash mid-import is resumed at the next start-up, so the flag that
+    holds the root scan off it has to survive the restart. `Vault.__init__`
+    seeds it from the record; an in-memory flag alone would come up down and
+    let the boot scan race the resumed commit."""
+    root = str(tmp_path / "resumed-library")
+    with Vault(image_root=root, disable_background_workers=True) as vault:
+        assert not vault.db.local_import_running.is_set(), "a fresh library"
+
+        def write(session: Session):
+            session.add(
+                FolderMappingCommit(
+                    task_id="interrupted-import",
+                    root_path=root,
+                    mode="local_import",
+                    expected_pictures=1,
+                    state=STATE_PENDING,
+                )
+            )
+            session.commit()
+
+        vault.db.run_task(write)
+
+    with Vault(image_root=root, disable_background_workers=True) as resumed:
+        assert resumed.db.local_import_running.is_set()

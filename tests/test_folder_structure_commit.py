@@ -1006,6 +1006,57 @@ def test_an_interrupted_commit_is_recorded_pending_with_what_it_needs(owner_env)
     )
 
 
+def test_a_pending_local_import_raises_the_flag_the_root_scan_watches(owner_env):
+    """`vault.db.local_import_running` is the in-process half of the gate.
+
+    The root scan's database re-check reads and releases, and the task does
+    more work before `os.walk`; a commit accepted in that window would build
+    the same files twice. The flag closes it, so it has to go up with the
+    record and come down with the settle. A `reference` commit never raises
+    it: it says nothing about the root's own pictures.
+    """
+    from pixlstash.services import folder_structure_commit_service as svc
+
+    server = owner_env["server"]
+    flag = server.vault.db.local_import_running
+    assert not flag.is_set(), "nothing is importing yet"
+
+    svc.record_pending_commit(
+        server,
+        task_id="test-flag-reference",
+        root_path=os.path.join(owner_env["tmp"], "flag-reference"),
+        mode="reference",
+        label=None,
+        expected_pictures=0,
+        assignments=[],
+    )
+    try:
+        assert not flag.is_set(), "a reference commit is not a local import"
+    finally:
+        svc.settle_pending_commit(server, "test-flag-reference", "abandoned")
+
+    svc.record_pending_commit(
+        server,
+        task_id="test-flag-local",
+        root_path=server.vault.image_root,
+        mode="local_import",
+        label=None,
+        expected_pictures=0,
+        assignments=[],
+    )
+    try:
+        assert flag.is_set(), (
+            "set before the row is written and before the commit walks, so a "
+            "scan checking it after its own gate read cannot miss this import"
+        )
+    finally:
+        svc.settle_pending_commit(server, "test-flag-local", "abandoned")
+    assert not flag.is_set(), (
+        "settling the last pending local import lowers it again; a gate that "
+        "stayed shut would stop the root scan for the life of the process"
+    )
+
+
 def test_stopping_a_commit_that_is_over_reports_what_it_actually_is(owner_env):
     """Same honesty as the read's cancel: no claim the client cannot check."""
     owner, server = owner_env["owner"], owner_env["server"]
