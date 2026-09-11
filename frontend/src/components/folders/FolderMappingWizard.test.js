@@ -286,6 +286,7 @@ describe("building the library", () => {
       label: "Generations",
       mode: "local_import",
       assignments: ASSIGNMENTS,
+      captions: null,
       pictureCount: 5,
       autoCommit: true,
     });
@@ -309,6 +310,41 @@ describe("building the library", () => {
       autoCommit: true,
     });
     expect(setActiveLibrary).toHaveBeenCalledWith("uuid-new");
+  });
+
+  it("keeps the caption answers across 'Back to the mapping'", async () => {
+    const wrapper = mountWizard();
+    await settle();
+    getFolderStructureReadStatus.mockResolvedValue({
+      status: "completed",
+      stage: "done",
+      processed: 2,
+      total: 2,
+      result: {
+        ...READ_RESULT,
+        captions: [{ suffix: ".txt", kind: "tags", files: 3, folders: 1, sample: "a" }],
+      },
+    });
+    await bringThemIn(wrapper);
+    await button(wrapper, "Set up my library").trigger("click");
+    await settle();
+    await wrapper.find(".tree-stub .emit-next").trigger("click");
+    await settle();
+
+    await wrapper.find('select[aria-label="Read *.txt as"]').setValue("ignore");
+    await button(wrapper, "Back to the mapping").trigger("click");
+    await settle();
+    await wrapper.find(".tree-stub .emit-next").trigger("click");
+    await settle();
+
+    expect(wrapper.find('select[aria-label="Read *.txt as"]').element.value).toBe(
+      "ignore",
+    );
+    await button(wrapper, "Yes, build this library").trigger("click");
+    await settle();
+    expect(useFolderMappingStore().pending).toMatchObject({
+      captions: [{ suffix: ".txt", kind: "ignore" }],
+    });
   });
 
   it("stays open with the server's refusal when the create fails", async () => {
@@ -356,6 +392,7 @@ describe("resuming after the switch", () => {
       "Generations",
       "local_import",
       null,
+      null,
     );
     expect(addLibrary).not.toHaveBeenCalled();
     expect(startFolderStructureRead).not.toHaveBeenCalled();
@@ -365,6 +402,7 @@ describe("resuming after the switch", () => {
       path: PATH,
       label: "Generations",
       mode: "local_import",
+      captions: null,
     });
   });
 
@@ -429,6 +467,7 @@ describe("the empty library's own folder", () => {
       "",
       "local_import",
       READ_RESULT,
+      null,
     );
   });
 });
@@ -664,6 +703,7 @@ describe("the branches nobody walks on purpose", () => {
       "",
       "local_import",
       READ_RESULT,
+      null,
     );
     expect(addLibrary).not.toHaveBeenCalled();
 

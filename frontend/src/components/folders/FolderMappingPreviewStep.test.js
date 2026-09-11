@@ -108,6 +108,7 @@ describe("FolderMappingPreviewStep", () => {
       "",
       "reference",
       null,
+      null,
     );
   });
 
@@ -219,6 +220,60 @@ describe("FolderMappingPreviewStep", () => {
       for (const noun of ["projects", "sets", "people", "tags"]) {
         expect(text).toContain(noun);
       }
+    });
+  });
+
+  describe("the caption-file card", () => {
+    const TXT = { suffix: ".txt", kind: "tags", files: 3, folders: 1, sample: "a, b" };
+
+    it("lists each pattern and sends the owner's answer with the commit", async () => {
+      startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
+      const wrapper = mountStep({
+        commitOnMount: false,
+        mode: "local_import",
+        readResult: { captions: [TXT] },
+      });
+      await flushPromises();
+
+      expect(wrapper.find(".preview-step__caption-suffix").text()).toBe("*.txt");
+      await wrapper.find('select[aria-label="Read *.txt as"]').setValue("ignore");
+      expect(wrapper.emitted("update:captions").at(-1)[0]).toEqual([
+        { suffix: ".txt", kind: "ignore" },
+      ]);
+      await buttonWith(wrapper, "Yes, build this library").trigger("click");
+      await flushPromises();
+
+      expect(startFolderStructureCommit.mock.calls[0][5]).toEqual([
+        { suffix: ".txt", kind: "ignore" },
+      ]);
+    });
+
+    it("organise later answers 'read nothing' rather than the read's guesses", async () => {
+      startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
+      const wrapper = mountStep({
+        commitOnMount: false,
+        mode: "local_import",
+        readResult: { captions: [TXT] },
+      });
+      await flushPromises();
+
+      await buttonWith(wrapper, "Organise later").trigger("click");
+      await flushPromises();
+
+      expect(startFolderStructureCommit.mock.calls[0][5]).toEqual([]);
+    });
+
+    it("commits the saved answers on mount, not the read's guesses", async () => {
+      startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
+      const saved = [{ suffix: ".txt", kind: "description" }];
+      mountStep({
+        mode: "local_import",
+        readResult: { captions: [TXT] },
+        captions: saved,
+      });
+      await flushPromises();
+
+      expect(startFolderStructureCommit.mock.calls[0][5]).toEqual(saved);
     });
   });
 });

@@ -79,4 +79,17 @@ describe("AppDialog keyboard contract", () => {
     await w.find(".txt").trigger("keydown", { key: "Enter", ctrlKey: true });
     expect(w.emitted("accept")).toBeFalsy();
   });
+
+  it("closes from update:model-value only, never from click:outside", async () => {
+    // Vuetify emits click:outside even on a persistent dialog, which let a
+    // stray click dismiss the folder-mapping wizard mid-answer.
+    const w = mountDialog({ persistent: true });
+    const dialog = w.findComponent({ name: "v-dialog" });
+
+    dialog.vm.$emit("click:outside");
+    expect(w.emitted("close")).toBeFalsy();
+
+    dialog.vm.$emit("update:modelValue", false);
+    expect(w.emitted("close")).toHaveLength(1);
+  });
 });

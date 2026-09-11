@@ -64,6 +64,12 @@ const label = ref("");
 const readTaskId = ref("");
 const readResult = ref(null);
 const assignments = ref([]);
+// The owner's answers for the read's caption-file patterns, kept beside the
+// assignments for the same reason: the commit runs after the library switch.
+// The Preview step reports them as they are made, so "Back to the mapping"
+// (which unmounts that step) keeps them. `null` is "nobody has been asked",
+// which the commit sends as no key at all; `[]` is an answer of nothing.
+const captions = ref(null);
 const pictureCount = ref(0);
 // The library exists (a resumed entry) - the Preview step commits directly.
 // Before that, the Preview step's "build" is this component's `build()`.
@@ -96,6 +102,7 @@ watch(
     // was sitting right here.
     readResult.value = entry?.result ?? null;
     assignments.value = entry?.assignments ?? [];
+    captions.value = entry?.captions ?? null;
     pictureCount.value = entry?.pictureCount ?? 0;
     libraryExists.value = Boolean(entry);
     autoCommit.value = Boolean(entry?.autoCommit);
@@ -197,8 +204,12 @@ function onMappingNext(built) {
  * add, so it is the Preview step's commit with no assignments.
  */
 function later() {
+  // Declining to decide is not confirming the read's guesses: a read that
+  // reported its patterns is answered "read nothing", one from before the
+  // caption card existed is answered nothing at all.
+  captions.value = Array.isArray(readResult.value?.captions) ? [] : null;
   if (!libraryExists.value) {
-    build([]);
+    build([], captions.value);
     return;
   }
   assignments.value = [];
@@ -210,19 +221,21 @@ function later() {
  * The library does not exist yet: create it, remember what to commit, and
  * switch to it. The commit itself runs after the reload - see the header.
  */
-async function build(accepted) {
+async function build(accepted, answered = null) {
   if (building.value) return;
   building.value = true;
   buildError.value = "";
   try {
     const library = await addLibrary(path.value, label.value);
     assignments.value = accepted;
+    captions.value = answered;
     mappingStore.save({
       taskId: readTaskId.value,
       path: path.value,
       label: label.value,
       mode: "local_import",
       assignments: accepted,
+      captions: answered,
       pictureCount: pictureCount.value,
       autoCommit: true,
     });
@@ -245,6 +258,9 @@ function onCommitStarted() {
     path: entry.path,
     label: entry.label,
     mode: entry.mode,
+    // The answer outlives the commit: a failed or interrupted one must reopen
+    // onto the owner's choices, not the read's guesses.
+    captions: captions.value,
   });
 }
 
@@ -322,6 +338,7 @@ function onCommitted(result) {
       :read-task-id="readTaskId"
       :read-result="readResult"
       :assignments="assignments"
+      :captions="captions"
       :label="label"
       mode="local_import"
       :picture-count="pictureCount"
@@ -329,6 +346,7 @@ function onCommitted(result) {
       :commit-on-mount="autoCommit"
       @back="backToMapping"
       @build="build"
+      @update:captions="captions = $event"
       @commit-started="onCommitStarted"
       @cancel="close"
       @committed="onCommitted"

@@ -7,17 +7,22 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
 
 vi.mock("vuetify/components", () => ({
   VIcon: { name: "v-icon", template: "<i><slot /></i>" },
 }));
 
 import LibraryEmptyState from "./LibraryEmptyState.vue";
+import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
 import { IMPORT_FILE_ACCEPT } from "../../utils/media";
 
 function mountState() {
+  const pinia = createPinia();
+  setActivePinia(pinia);
   return mount(LibraryEmptyState, {
     global: {
+      plugins: [pinia],
       stubs: {
         // No manual `$emit("click")`: the real AppButton declares no emits, so
         // `@click` on it is plain attribute fallthrough onto its own <button>
@@ -149,5 +154,19 @@ describe("what the buttons do", () => {
     await input.trigger("change");
 
     expect(input.element.value).toBe("");
+  });
+
+  it("offers to import the pictures the library's own folder already holds", async () => {
+    // The state a dismissed import offer leaves: "Choose a folder…" would lead
+    // to "Add a library", which refuses the folder the library already is.
+    const wrapper = mountState();
+    useFolderMappingStore().setRootPictureCount(12);
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find(".library-empty__heading").text()).toBe(
+      "Import the pictures already in this folder",
+    );
+    expect(wrapper.find(".library-empty__detail").text()).toContain("12 pictures");
+    expect(buttonLabels(wrapper)[0]).toBe("Import them…");
   });
 });
