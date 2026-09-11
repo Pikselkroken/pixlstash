@@ -62,6 +62,14 @@ function mountDialog() {
   });
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 function button(wrapper, text) {
   return wrapper.findAll("button").find((b) => b.text().includes(text));
 }
@@ -146,6 +154,31 @@ describe("LibraryCaptionsDialog", () => {
     await save.trigger("click");
     await flushPromises();
     expect(setCaptionSettings).not.toHaveBeenCalled();
+  });
+
+  it("ignores a read that lands after a newer one", async () => {
+    // Close and reopen before the first GET answers and the two are in flight
+    // together. The older response landing last used to overwrite the form and
+    // clear `loading`, so Save was enabled on settings the owner had moved on
+    // from.
+    const first = deferred();
+    const second = deferred();
+    getCaptionSettings
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const wrapper = mountDialog();
+    await wrapper.setProps({ open: false });
+    await wrapper.setProps({ open: true });
+    expect(getCaptionSettings).toHaveBeenCalledTimes(2);
+
+    second.resolve({ ...STORED, description_suffix: "_second.txt" });
+    await flushPromises();
+    first.resolve({ ...STORED, description_suffix: "_first.txt" });
+    await flushPromises();
+
+    const field = wrapper.find("input[aria-label='Suffix for new description files']");
+    expect(field.element.value).toBe("_second.txt");
+    expect(button(wrapper, "Save").attributes("disabled")).toBeUndefined();
   });
 
   it("shows the server's refusal and stays open", async () => {

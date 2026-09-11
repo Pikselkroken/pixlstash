@@ -74,21 +74,32 @@ function apply(body) {
   };
 }
 
+// Closing and reopening starts a second GET while the first is still out, and
+// the responses can land in either order. The older one landing last would
+// overwrite the form with settings the owner has moved on from, and clear
+// `loading` so Save is enabled on them. Only the newest read may touch
+// anything - the same `seq` guard `LibraryLayoutDialog.save` uses.
+let loadSeq = 0;
+
 async function load() {
+  const seq = ++loadSeq;
   loading.value = true;
   loaded.value = false;
   error.value = "";
   refused.value = false;
   try {
-    apply(await getCaptionSettings());
+    const body = await getCaptionSettings();
+    if (seq !== loadSeq) return;
+    apply(body);
     loaded.value = true;
   } catch (err) {
+    if (seq !== loadSeq) return;
     refused.value = err?.response?.status === 403;
     if (!refused.value) {
       error.value = errorDetail(err) || "Could not read the caption settings.";
     }
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) loading.value = false;
   }
 }
 
