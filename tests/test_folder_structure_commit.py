@@ -2491,3 +2491,28 @@ def test_two_reported_casings_can_each_be_answered():
                 ],
                 reported=reported,
             )
+
+
+def test_a_caption_answer_must_cover_every_reported_pattern():
+    """One answer per reported row. A non-empty answer that leaves a row out
+    would have that file neither read nor ignored on purpose, only skipped;
+    `[]` stays the one-line "read nothing"."""
+    import pytest
+
+    from pixlstash.services.folder_structure_commit_service import (
+        CommitError,
+        parse_captions,
+    )
+
+    reported = [{"suffix": ".txt"}, {"suffix": "_desc.txt"}]
+    with pytest.raises(CommitError, match="unanswered.*_desc.txt"):
+        parse_captions([{"suffix": ".txt", "kind": "tags"}], reported=reported)
+    assert parse_captions([], reported=reported) == []
+    both = parse_captions(
+        [
+            {"suffix": ".txt", "kind": "tags"},
+            {"suffix": "_desc.txt", "kind": "ignore"},
+        ],
+        reported=reported,
+    )
+    assert [p.suffix for p in both] == [".txt", "_desc.txt"]

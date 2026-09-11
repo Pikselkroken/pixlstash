@@ -323,6 +323,30 @@ describe("caption files beside the pictures", () => {
     expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual(saved);
   });
 
+  it("keeps a saved 'read nothing' when the card has patterns to show", async () => {
+    // `[]` is an answer, not an absence: Organise later, or a commit that
+    // failed after one. Seeding each row from the read's guess instead put the
+    // declined conventions back on the card and committed them on the retry.
+    startFolderStructureCommit.mockResolvedValue({ task_id: "commit-4" });
+    const wrapper = mountImport({
+      commitOnMount: false,
+      readResult: READ_RESULT,
+      captions: [],
+    });
+    expect(selects(wrapper).map((s) => s.element.value)).toEqual([
+      "ignore",
+      "ignore",
+    ]);
+
+    await buttonWith(wrapper, "Yes, build this library").trigger("click");
+    await flushPromises();
+
+    expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual([
+      { suffix: ".txt", kind: "ignore" },
+      { suffix: "_caption.txt", kind: "ignore" },
+    ]);
+  });
+
   it("asks nothing, and sends nothing, for a reference folder", async () => {
     // A reference folder's caption files belong to its own editor, and the
     // commit refuses the mode/captions pair with a 400.

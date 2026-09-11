@@ -279,6 +279,11 @@ function onCommitStarted() {
     path: entry.path,
     label: entry.label,
     mode: entry.mode,
+    // The caption card has been shown by now, so what this wizard holds is the
+    // owner's answer and has to outlive the commit: dropping it meant a commit
+    // that failed or was interrupted reopened onto a card seeded from the
+    // read's guesses again, with no sign the answer had ever been made.
+    captions: captions.value,
   });
 }
 

@@ -356,6 +356,17 @@ def parse_captions(raw, reported=None) -> Optional[list[CaptionPattern]]:
                     f"captions[{index}].suffix {pattern.suffix!r} is not one "
                     f"the read reported"
                 )
+        # One answer per reported row: a non-empty answer that leaves a row
+        # out would have that file neither read nor ignored on purpose, only
+        # skipped. `[]` stays the one-line "read nothing".
+        if parsed:
+            answered = {pattern.suffix for pattern in parsed}
+            missing = [suffix for suffix in offered if suffix not in answered]
+            if missing:
+                raise CommitError(
+                    f"captions leaves reported pattern(s) unanswered: "
+                    f"{', '.join(repr(s) for s in missing)}"
+                )
     return parsed
 
 

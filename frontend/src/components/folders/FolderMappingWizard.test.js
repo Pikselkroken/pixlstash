@@ -532,6 +532,28 @@ describe("resuming after the switch", () => {
       path: PATH,
       label: "Generations",
       mode: "local_import",
+      captions: [],
+    });
+  });
+
+  it("keeps the caption answers in the downgraded entry", async () => {
+    // The downgrade used to rewrite the entry with task, path, label and mode
+    // alone. A commit that fails or is interrupted then reopens with no saved
+    // answer at all, and the next preview seeds from the read's guesses - the
+    // owner's "read nothing" or their corrected kinds are simply gone.
+    const answered = [{ suffix: ".txt", kind: "description" }];
+    const held = { ...entry, captions: answered };
+    useFolderMappingStore().save(held);
+    mountWizard({ resume: held });
+    await settle();
+
+    expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual(answered);
+    expect(useFolderMappingStore().pending).toEqual({
+      taskId: "read-1",
+      path: PATH,
+      label: "Generations",
+      mode: "local_import",
+      captions: answered,
     });
   });
 
