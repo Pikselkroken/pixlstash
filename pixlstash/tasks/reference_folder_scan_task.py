@@ -250,7 +250,18 @@ class ReferenceFolderScanTask(BaseTask):
         if (sync_tags or sync_descriptions) and (
             self._tags_suffix is None or self._description_suffix is None
         ):
-            detected = detect_folder_suffixes(resolved)
+            # Detect over exactly what this scan is about to walk. The walk
+            # below prunes hidden trees, the reference folders registered
+            # inside this one, and (under the root) PixlStash's own
+            # directories; a suffix detected from captions in one of those is
+            # persisted as this library's convention and then names every
+            # sidecar written beside pictures the scan does index.
+            skip_dirs = set(self._other_resolved_paths)
+            if self._is_root:
+                skip_dirs |= {
+                    os.path.join(resolved, name) for name in _ROOT_INTERNAL_DIRS
+                }
+            detected = detect_folder_suffixes(resolved, skip_dirs=skip_dirs)
             seed: dict[str, str] = {}
             if self._tags_suffix is None:
                 self._tags_suffix = detected["tags_suffix"] or DEFAULT_TAGS_SUFFIX

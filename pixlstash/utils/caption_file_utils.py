@@ -18,10 +18,11 @@ import os
 import re
 import tempfile
 from collections import Counter
+from collections.abc import Collection
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.video_utils import VIDEO_EXTENSIONS
-from pixlstash.utils.media_files import SUPPORTED_IMAGE_EXTS
+from pixlstash.utils.media_files import SUPPORTED_IMAGE_EXTS, is_hidden_entry
 
 logger = get_logger(__name__)
 
@@ -654,17 +655,30 @@ def write_sidecar(path: str, content: str) -> float | None:
     return get_sidecar_mtime(path)
 
 
-def detect_folder_suffixes(folder: str, sample_limit: int = 200) -> dict:
+def detect_folder_suffixes(
+    folder: str,
+    sample_limit: int = 200,
+    skip_dirs: Collection[str] = (),
+) -> dict:
     """Infer the sidecar naming convention already in use inside *folder*.
 
     Walks the folder, matches each sidecar text file to its image, derives the
     suffix that follows the image stem, classifies the sidecar (filename then
     content), and returns the most common suffix observed for each type.
 
+    The walk prunes what every walk of a picture tree prunes - hidden entries
+    (``is_hidden_entry``) - plus the absolute directory paths in *skip_dirs*,
+    which the caller fills with the subtrees its own scan will not look inside:
+    reference folders registered under this one, and the directories PixlStash
+    writes itself under the library root. A convention read out of a subtree
+    nobody indexes is not this folder's convention, and persisting it as one
+    names every sidecar the scan goes on to write.
+
     Returns a dict ``{"tags_suffix", "description_suffix", "found_tags",
     "found_descriptions"}``; the suffix values are ``None`` when that type was
     not found.
     """
+    skipped = {os.path.normpath(path) for path in skip_dirs}
     # Case-folded, spellings kept: the same rule the folder read applies
     # (`folder_structure_service._collect_captions`). `img.txt` beside
     # `IMG.JPG` is one convention on Windows and macOS, and matching
@@ -674,8 +688,16 @@ def detect_folder_suffixes(folder: str, sample_limit: int = 200) -> dict:
     image_stems: dict[str, set[str]] = {}
     sidecar_files: list[str] = []
     seen_images = 0
-    for root, _dirs, files in os.walk(folder):
+    for root, dirs, files in os.walk(folder):
+        dirs[:] = [
+            name
+            for name in dirs
+            if not is_hidden_entry(name)
+            and os.path.normpath(os.path.join(root, name)) not in skipped
+        ]
         for name in files:
+            if is_hidden_entry(name):
+                continue
             full = os.path.join(root, name)
             ext = os.path.splitext(name)[1].lower()
             if ext in _IMAGE_EXTS_FOR_DETECTION:

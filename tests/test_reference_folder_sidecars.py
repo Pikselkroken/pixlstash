@@ -378,6 +378,36 @@ def test_detect_folder_suffixes_still_finds_same_directory_convention(tmp_path):
     assert detected["found_tags"] is True
 
 
+def test_detect_folder_suffixes_skips_what_the_scan_prunes(tmp_path):
+    """Detection must only see the subtrees the scan that follows it walks.
+
+    The scan prunes hidden trees and the reference folders registered inside
+    the root, but detection walked the whole thing, so captions under a pruned
+    subtree could outvote the root's own convention and be persisted as the
+    library's suffix - naming every sidecar written beside pictures the scan
+    does index.
+    """
+    root = str(tmp_path)
+    Image.new("RGB", (8, 8)).save(os.path.join(root, "a.png"), format="PNG")
+    _write(os.path.join(root, "a_y.txt"), "cat, calm, sitting")
+
+    # Each excluded subtree alone outvotes the root, so dropping either half of
+    # the pruning - the hidden tree or the registered reference folder - fails
+    # this.
+    hidden = os.path.join(root, ".hidden")
+    nested = os.path.join(root, "nested")
+    for sub in (hidden, nested):
+        os.makedirs(sub, exist_ok=True)
+        for stem in ("b", "c"):
+            Image.new("RGB", (8, 8)).save(os.path.join(sub, f"{stem}.png"), "PNG")
+            _write(os.path.join(sub, f"{stem}_x.txt"), "dog, loud, running")
+
+    detected = detect_folder_suffixes(root, skip_dirs=[nested])
+
+    assert detected["tags_suffix"] == "_y.txt"
+    assert detected["found_tags"] is True
+
+
 @pytest.mark.parametrize(
     "unsafe", ["b/c.txt", "../escape.txt", "a\\b.txt", "..", "x" * 65]
 )
@@ -958,7 +988,7 @@ def test_a_suffix_stored_mid_scan_wins_over_the_detection(
 
     monkeypatch.setattr(
         "pixlstash.tasks.reference_folder_scan_task.detect_folder_suffixes",
-        lambda _resolved: {"tags_suffix": "_y.txt", "description_suffix": None},
+        lambda _resolved, **_kw: {"tags_suffix": "_y.txt", "description_suffix": None},
     )
 
     task = ReferenceFolderScanTask(server.vault.db, folder_id, folder_dir, folder_dir)
