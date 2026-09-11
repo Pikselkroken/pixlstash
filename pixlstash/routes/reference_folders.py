@@ -935,7 +935,15 @@ def create_router(server) -> APIRouter:
                 rf.description_suffix = _normalize_suffix(payload.description_suffix)
             if "tags_suffix" in payload.model_fields_set:
                 rf.tags_suffix = _normalize_suffix(payload.tags_suffix)
-            if {"description_suffix", "tags_suffix"} & payload.model_fields_set:
+            if (rf.sync_tags and rf.sync_descriptions) or (
+                {"description_suffix", "tags_suffix"} & payload.model_fields_set
+            ):
+                # The merged pair is checked whenever both kinds end up on, not
+                # only when a suffix was patched: a row created before the rule
+                # existed can carry one suffix for both kinds, and a
+                # toggle-only PATCH would otherwise arm two write-backs onto
+                # one file. A patch that leaves a kind off is let through so
+                # such a row stays repairable.
                 _validate_suffix_pair(rf.tags_suffix, rf.description_suffix)
             if "host_path" in payload.model_fields_set:
                 rf.host_path = _normalize_optional_host_path(payload.host_path)

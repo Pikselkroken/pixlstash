@@ -851,6 +851,40 @@ def test_folder_route_refuses_a_suffix_that_differs_only_in_case(server, tmp_pat
     assert server.vault.db.run_task(_read) == ("_notes.txt", "_caption.txt")
 
 
+def test_folder_route_refuses_to_turn_on_both_kinds_over_a_shared_suffix(
+    server, tmp_path
+):
+    """The collision check ran only when a suffix was in the patch, so a row
+    predating the rule - one suffix, one kind writing - could have the other
+    kind switched on by a toggle-only PATCH and arm two write-backs onto one
+    file. Turning a kind *off* stays allowed, or the row could not be repaired."""
+    client = _login_client(server)
+    folder_id = _make_folder(
+        server,
+        str(tmp_path / "legacy_pair"),
+        tags_suffix="_caption.txt",
+        description_suffix="_caption.txt",
+        sync_tags=True,
+        sync_descriptions=False,
+    )
+
+    refused = client.patch(
+        f"/reference-folders/{folder_id}", json={"sync_descriptions": True}
+    )
+    assert refused.status_code == 400, refused.text
+    assert "share" in refused.text
+
+    def _read(session: Session):
+        rf = session.get(ReferenceFolder, folder_id)
+        return rf.sync_tags, rf.sync_descriptions
+
+    assert server.vault.db.run_task(_read) == (True, False)
+
+    allowed = client.patch(f"/reference-folders/{folder_id}", json={"sync_tags": False})
+    assert allowed.status_code == 200, allowed.text
+    assert server.vault.db.run_task(_read) == (False, False)
+
+
 def test_scan_refuses_to_persist_a_suffix_the_other_kind_already_uses(server, tmp_path):
     """The scan is the second door into the suffix columns, and it fills a
     NULL without looking at its sibling. A detected description suffix equal
