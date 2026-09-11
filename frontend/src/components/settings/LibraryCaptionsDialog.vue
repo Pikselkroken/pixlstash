@@ -53,6 +53,11 @@ const unavailable = computed(() => blocked.value || refused.value);
 function example(suffix, fallback) {
   return "image" + (String(suffix || "").trim() || fallback);
 }
+// What the Save button is gated on, and - per the dialog keyboard contract -
+// what plain Enter is gated on too: one condition, so the key can never do
+// what the button refuses.
+const canSave = computed(() => loaded.value && !loading.value && !saving.value);
+
 const tagsExample = computed(() => example(tagsSuffix.value, defaults.value.tags));
 const descriptionExample = computed(() =>
   example(descriptionSuffix.value, defaults.value.description),
@@ -88,6 +93,7 @@ async function load() {
 }
 
 async function save() {
+  if (!canSave.value) return;
   saving.value = true;
   error.value = "";
   try {
@@ -125,6 +131,7 @@ watch(
     :width="520"
     title="Caption files"
     @close="emit('close')"
+    @accept="save"
   >
     <p v-if="unavailable" class="captions-dlg__sub">
       Caption files can only be set up on the machine running PixlStash, or over
@@ -195,13 +202,19 @@ watch(
 
     <template v-if="!unavailable" #footer>
       <div class="captions-dlg__actions">
-        <AppButton variant="secondary" size="sm" @click="emit('close')">
+        <AppButton
+          variant="secondary"
+          size="sm"
+          key-hint="esc"
+          @click="emit('close')"
+        >
           Cancel
         </AppButton>
         <AppButton
           variant="primary"
           size="sm"
-          :disabled="loading || !loaded"
+          key-hint="enter"
+          :disabled="!canSave"
           :loading="saving"
           @click="save"
         >

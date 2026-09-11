@@ -32,7 +32,14 @@ function mountDialog() {
     global: {
       plugins: [pinia],
       stubs: {
-        AppDialog: { template: "<div><slot /><slot name='footer' /></div>" },
+        AppDialog: {
+          emits: ["close", "accept"],
+          // The real AppDialog turns plain Enter on its own subtree into
+          // `accept` (the dialog keyboard contract); the stub only has to let
+          // a test fire it.
+          template:
+            "<div @keydown.enter=\"$emit('accept')\"><slot /><slot name='footer' /></div>",
+        },
         VCheckbox: {
           props: ["modelValue", "label"],
           emits: ["update:modelValue"],
@@ -46,9 +53,9 @@ function mountDialog() {
             '<input :aria-label="label" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
         },
         AppButton: {
-          props: ["disabled", "loading"],
+          props: ["disabled", "loading", "keyHint"],
           template:
-            '<button :disabled="disabled || loading" @click="$emit(\'click\')"><slot /></button>',
+            '<button :disabled="disabled || loading" :data-key-hint="keyHint" @click="$emit(\'click\')"><slot /></button>',
         },
       },
     },
@@ -94,6 +101,33 @@ describe("LibraryCaptionsDialog", () => {
       descriptionSuffix: "_caption.txt",
     });
     expect(wrapper.emitted("close")).toBeTruthy();
+  });
+
+  it("saves on plain Enter, and wears the two key hints", async () => {
+    setCaptionSettings.mockResolvedValue(STORED);
+    const wrapper = mountDialog();
+    await flushPromises();
+
+    expect(button(wrapper, "Cancel").attributes("data-key-hint")).toBe("esc");
+    expect(button(wrapper, "Save").attributes("data-key-hint")).toBe("enter");
+
+    await wrapper.trigger("keydown.enter");
+    await flushPromises();
+    expect(setCaptionSettings).toHaveBeenCalledTimes(1);
+    expect(wrapper.emitted("close")).toBeTruthy();
+  });
+
+  it("Enter does nothing while Save is disabled", async () => {
+    // Same guard as the button: a read that never landed must not be saved
+    // over by a keystroke either.
+    getCaptionSettings.mockRejectedValue({ response: { status: 500 } });
+    const wrapper = mountDialog();
+    await flushPromises();
+
+    expect(button(wrapper, "Save").attributes("disabled")).toBeDefined();
+    await wrapper.trigger("keydown.enter");
+    await flushPromises();
+    expect(setCaptionSettings).not.toHaveBeenCalled();
   });
 
   it("cannot save over settings it never read", async () => {
