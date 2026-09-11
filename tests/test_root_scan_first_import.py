@@ -42,11 +42,12 @@ _CONFLICTING_FINDERS = (
 )
 
 
-@pytest.fixture(scope="module")
-def _module_server():
-    """One Server for the module: starting it is what these tests cost, and
-    every case here reads the same two tables. Same shape as
-    tests/test_library_root_scan.py."""
+@pytest.fixture
+def server():
+    """A Server per test. A module-scoped one outlived the other modules a CI
+    shard runs beside it and came back to "no such table" once their servers
+    had torn the shared vault location down under it; the few seconds a
+    fresh server costs per case buy a library that is really empty."""
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "server-config.json")
         with Server(config_path) as srv:
@@ -54,28 +55,6 @@ def _module_server():
                 srv.vault._planner_work_finders.pop(task_type)
             srv.vault._work_planner.detach_finders(_CONFLICTING_FINDERS)
             yield srv
-
-
-@pytest.fixture
-def server(_module_server):
-    """The shared server with an empty library: no commit record, no picture
-    row and nothing in the root folder, so each case starts from "the owner
-    has not been asked yet" the way a per-test Server used to."""
-    srv = _module_server
-
-    def wipe(session: Session):
-        for model in (FolderMappingCommit, Picture):
-            for row in session.exec(select(model)).all():
-                session.delete(row)
-        session.commit()
-
-    root = srv.vault.image_root
-    for name in os.listdir(root):
-        path = os.path.join(root, name)
-        if os.path.isfile(path):
-            os.remove(path)
-    srv.vault.db.run_task(wipe)
-    yield srv
 
 
 def _drop_picture(root, name):
@@ -313,14 +292,16 @@ def test_a_closed_gate_is_not_asked_on_every_planner_sweep(server, monkeypatch):
     a short deadline, not on every sweep."""
     _record(server, STATE_PENDING)
     finder = _finder(server)
-    real = server.vault.db.run_immediate_read_task
     calls = []
+    real = finder.first_import_answered
 
-    def counted(func, *args, **kwargs):
+    def counted():
+        # Counted on the finder itself: the server's other finders share the
+        # database handle, and their own reads are not the question here.
         calls.append(1)
-        return real(func, *args, **kwargs)
+        return real()
 
-    monkeypatch.setattr(server.vault.db, "run_immediate_read_task", counted)
+    monkeypatch.setattr(finder, "first_import_answered", counted)
     now = 1_000.0
     assert finder._root_task([], now) is None
     assert finder._root_task([], now + 0.05) is None
