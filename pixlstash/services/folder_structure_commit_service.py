@@ -202,9 +202,11 @@ def caption_suffixes(captions) -> tuple[Optional[list[str]], Optional[list[str]]
     there was nothing to confirm" must not fall back to opening it anyway and
     storing the result as tags.
 
-    Longest suffix first: `attach_sidecars` takes the first that exists, so an
-    owner who confirmed both ``_tags.txt`` and ``.txt`` gets the specific one
-    where both sit beside a picture, which is what the probe's
+    Longest suffix first. `attach_sidecars` reads every confirmed suffix that
+    exists, so the order is not what gets read but what gets *recorded* and
+    what wins: ``tags_file`` is the first existing file, the description is
+    the first one with content, and both favour the specific ``_tags.txt``
+    over a bare ``.txt`` where both sit beside a picture - what the probe's
     ``_KNOWN_SUFFIXES`` order already does.
     """
     if captions is None:

@@ -6337,8 +6337,16 @@ had nothing to confirm and **no caption file is opened at all**. They cannot be
 the same value, because the read deliberately drops a `.txt` it cannot classify
 - JSON, markup, UTF-16, a thirteenth pattern past the cap - and probing one of
 those anyway is how a metadata blob becomes a picture's tags. With an answer,
-only the named suffixes are read (longest first, so `_tags.txt` wins over
-`.txt` where both exist) and an `ignore`d one is never opened. The answers are
+only the named suffixes are read and an `ignore`d one is never opened. *Every*
+confirmed suffix that names an existing file is read, because the read reports
+one row per suffix and each row is answered on its own - a case-sensitive
+filesystem holding both `a.txt` and `a.TXT` gives two rows, and stopping at
+the first would drop the second file. The tags are the union of them all
+(suffix order, de-duplicated); a description cannot be a union, so the first
+confirmed file with content wins. The lists are ordered longest suffix first,
+which decides what is *recorded* rather than what is read: `tags_file` is the
+first existing file and `_tags.txt` beats a bare `.txt` where both exist.
+The answers are
 written into the durable `FolderMappingCommit` record beside the assignments
 (`captions`, migration 0115, `"null"` for no answer) for the same reason the
 assignments are: a commit resumed after a crash must not re-probe and import a
