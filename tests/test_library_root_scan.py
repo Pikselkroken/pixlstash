@@ -19,6 +19,10 @@ from sqlmodel import Session, select
 
 from pixlstash.db_models import Character, Picture, Tag
 from pixlstash.db_models.external_move_review import ExternalMoveReview
+from pixlstash.db_models.folder_mapping_commit import (
+    STATE_DEFERRED,
+    FolderMappingCommit,
+)
 from pixlstash.db_models.library_settings import LibrarySettings
 from pixlstash.db_models.picture_move import PictureMove
 from pixlstash.server import Server
@@ -49,6 +53,22 @@ def server():
             for task_type in _CONFLICTING_FINDERS:
                 srv.vault._planner_work_finders.pop(task_type)
             srv.vault._work_planner.detach_finders(_CONFLICTING_FINDERS)
+
+            # The root scan waits for the first import offer to be answered
+            # (tests/test_root_scan_first_import.py); this module runs scans
+            # by hand on a vault that starts empty, so answer it once for all.
+            def answer(session: Session):
+                session.add(
+                    FolderMappingCommit(
+                        task_id="answered-by-test",
+                        root_path=srv.vault.image_root,
+                        mode="local_import",
+                        state=STATE_DEFERRED,
+                    )
+                )
+                session.commit()
+
+            srv.vault.db.run_task(answer)
             yield srv
 
 
