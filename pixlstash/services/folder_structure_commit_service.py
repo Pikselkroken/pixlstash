@@ -63,7 +63,6 @@ from pixlstash.db_models.character import Character
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.folder_mapping_commit import (
     FolderMappingCommit,
-    STATE_ABANDONED,
     STATE_DEFERRED,
     STATE_DONE,
     STATE_PENDING,
@@ -429,11 +428,10 @@ def root_import_answered(session: Session) -> bool:
     The newest ``local_import`` record decides. ``done`` or ``deferred``
     ("organise later": index everything, map nothing) is an answer.
     ``pending`` is the commit still running and holds the scan off so the
-    two do not build rows for the same files; ``abandoned`` and
-    ``superseded`` left chunks indexed that the owner never answered for and
-    hold it off too, until a later import settles. With no ``local_import``
-    record at all a library that already holds pictures was filled some other
-    way and is scanned as before.
+    two do not build rows for the same files. ``abandoned`` and
+    ``superseded`` are no answer, so the empty library keeps waiting for the
+    offer; a library that already holds pictures is scanned as before, or an
+    aborted import would switch its rescan off for good.
 
     Both facts come from one statement so they describe one snapshot: this
     read runs outside the writer queue.
@@ -448,7 +446,7 @@ def root_import_answered(session: Session) -> bool:
     newest_state, has_picture = session.exec(
         select(newest, select(Picture.id).exists())
     ).one()
-    if newest_state in (STATE_PENDING, STATE_ABANDONED, STATE_SUPERSEDED):
+    if newest_state == STATE_PENDING:
         return False
     return newest_state in (STATE_DONE, STATE_DEFERRED) or has_picture
 

@@ -203,6 +203,7 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
                 self._path_mapper.resolve(rf.folder) for rf in folders
             ),
             on_root_scanned=self._note_root_scanned,
+            on_root_skipped=self.mark_root_due,
         )
 
     def _mark_mount_error(self, folder_id: int) -> None:
