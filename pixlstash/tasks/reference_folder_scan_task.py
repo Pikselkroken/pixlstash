@@ -229,6 +229,41 @@ class ReferenceFolderScanTask(BaseTask):
         # "no layout", same as an unset column (v1.11 Phase 5).
         self._layout = None
 
+    def _import_started_mid_scan(self) -> bool:
+        """Whether a local import began after this root scan's gate read.
+
+        `root_import_answered` reads the database and releases it, and this
+        task does more work before `os.walk` even starts. In that window the
+        commit endpoint can write its pending row and set
+        `local_import_pictures` walking, and then both sides build a row for
+        the same file - exactly the race the gate exists to prevent. Another
+        preflight read cannot close it, because the window is *after* the
+        read, not before it.
+
+        `vault.db.local_import_running` closes it, and the ORDER is what makes
+        it fail closed. `record_pending_commit` SETS the flag **before** it
+        writes its row and therefore before its walk; the root scan checks it
+        **after** its own gate read and again once per directory. So a commit
+        that starts after the scan's read is seen at the latest one directory
+        later, and the rows built in that one directory are reused by the
+        commit's `insert()` rather than duplicated. The window is bounded to a
+        single directory instead of the whole walk, and it never runs the other
+        way: the flag cannot be stale in the direction that lets a scan walk on
+        during a live import.
+
+        Cheap on purpose - an in-process `Event.is_set()`, not a query - so
+        asking it per directory costs nothing. The database re-check stays for
+        the cases an in-memory flag cannot cover: a crash-resumed import (the
+        flag is seeded at vault start) and any second process.
+        """
+        if not self._is_root or not self._db.local_import_running.is_set():
+            return False
+        logger.info(
+            "Library root scan stopped: a local import is pending. Nothing "
+            "further is indexed; retried on a later cycle."
+        )
+        return True
+
     def _run_task(self):
         resolved = self._resolved_path
         folder_id = self._folder_id
@@ -245,6 +280,11 @@ class ReferenceFolderScanTask(BaseTask):
                 "Library root scan skipped: an unanswered local import was "
                 "recorded after the scan was queued. Retried on a later cycle."
             )
+            return {"status": "skipped", "folder_id": folder_id}
+
+        # And the same question the cheap way, for the commit that starts
+        # AFTER the read above. See `_import_started_mid_scan`.
+        if self._import_started_mid_scan():
             return {"status": "skipped", "folder_id": folder_id}
 
         if not os.path.isdir(resolved):
@@ -368,6 +408,14 @@ class ReferenceFolderScanTask(BaseTask):
             )
 
         for root, dirs, files in os.walk(resolved, topdown=True, onerror=_walk_error):
+            # One `is_set()` per directory: a commit accepted after the gate
+            # read above is seen at the latest one directory later, and this
+            # walk has built nothing yet, so stopping here leaves the whole
+            # import to the commit. `_root_last_scanned` stays stamped and
+            # `on_root_scanned` is not called, so the purge sweep keeps
+            # waiting. See `_import_started_mid_scan`.
+            if self._import_started_mid_scan():
+                return {"status": "skipped", "folder_id": folder_id}
             # Prune subdirectories that are roots of other reference folders so
             # their files are only indexed by their own scan task; dot-folders,
             # which are nobody's pictures - a vault's own caches or something
