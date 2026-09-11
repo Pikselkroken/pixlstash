@@ -56,6 +56,9 @@ from pixlstash.services.move_reconciliation_service import record_pending_review
 from pixlstash.utils.library_layout import DEFAULT_LAYOUT, parse_layout
 from pixlstash.utils.reference_folder_watcher import ROOT_INTERNAL_DIRS
 from pixlstash.utils.path_utils import path_is_within
+from pixlstash.utils.service.smart_score_invalidation import (
+    invalidate_on_anomaly_change,
+)
 
 logger = get_logger(__name__)
 
@@ -847,36 +850,56 @@ class ReferenceFolderScanTask(BaseTask):
                         len(locked),
                         sorted(locked),
                     )
-                for u in updates:
-                    if u["pic_id"] in locked:
-                        continue
-                    pic_db = session.get(Picture, u["pic_id"])
-                    if pic_db is None:
-                        continue
-                    if "tags_file" in u:
-                        pic_db.tags_file = u["tags_file"]
-                        pic_db.tags_file_mtime = u["tags_file_mtime"]
-                    if "description_file" in u:
-                        pic_db.description_file = u["description_file"]
-                        pic_db.description_file_mtime = u["description_file_mtime"]
-                    if "new_description" in u:
-                        # Presence, not truthiness: the key is only set after a
-                        # successful read, and ``None`` there is the owner
-                        # having emptied a sidecar this picture was tracking.
-                        pic_db.description = u["new_description"]
-                    session.add(pic_db)
-                    if "new_tags" in u:
-                        # Replace tags - an empty list means all tags were removed.
-                        session.exec(delete(Tag).where(Tag.picture_id == u["pic_id"]))
-                        tags = u["new_tags"]
-                        if tags:
-                            session.add_all(
-                                [Tag(picture_id=u["pic_id"], tag=t) for t in tags]
+                # An applied Tag row is an input to the scorer's anomaly penalty, and a
+                # non-NULL cached smart score is never recomputed, so a sidecar tag edit
+                # that adds or drops an anomaly tag would leave the score stale. Wrap the
+                # rewrite the way the other tag mutations do, and commit inside the same
+                # transaction as the invalidation.
+                retagged_ids = [
+                    u["pic_id"]
+                    for u in updates
+                    if "new_tags" in u and u["pic_id"] not in locked
+                ]
+                with invalidate_on_anomaly_change(
+                    session,
+                    retagged_ids,
+                    context="reference-folder sidecar tag sync",
+                ):
+                    for u in updates:
+                        if u["pic_id"] in locked:
+                            continue
+                        pic_db = session.get(Picture, u["pic_id"])
+                        if pic_db is None:
+                            continue
+                        if "tags_file" in u:
+                            pic_db.tags_file = u["tags_file"]
+                            pic_db.tags_file_mtime = u["tags_file_mtime"]
+                        if "description_file" in u:
+                            pic_db.description_file = u["description_file"]
+                            pic_db.description_file_mtime = u["description_file_mtime"]
+                        if "new_description" in u:
+                            # Presence, not truthiness: the key is only set after a
+                            # successful read, and ``None`` there is the owner
+                            # having emptied a sidecar this picture was tracking.
+                            pic_db.description = u["new_description"]
+                        session.add(pic_db)
+                        if "new_tags" in u:
+                            # Replace tags - an empty list means all tags were removed.
+                            session.exec(
+                                delete(Tag).where(Tag.picture_id == u["pic_id"])
                             )
-                        else:
-                            session.add(
-                                Tag(picture_id=u["pic_id"], tag=TAG_PENDING_SENTINEL)
-                            )
+                            tags = u["new_tags"]
+                            if tags:
+                                session.add_all(
+                                    [Tag(picture_id=u["pic_id"], tag=t) for t in tags]
+                                )
+                            else:
+                                session.add(
+                                    Tag(
+                                        picture_id=u["pic_id"], tag=TAG_PENDING_SENTINEL
+                                    )
+                                )
+                    session.flush()
                 session.commit()
 
             self._db.run_task(

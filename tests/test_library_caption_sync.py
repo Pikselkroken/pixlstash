@@ -1050,3 +1050,59 @@ def test_the_describer_drops_a_caption_for_a_row_the_scan_filled_meanwhile(env):
     assert _picture(server, "claimed/l.png")[1] == _FixedDescriptionWorkflow.CAPTION, (
         "a picture still awaiting a description is captioned as before"
     )
+
+
+def test_a_sidecar_edit_adding_an_anomaly_tag_clears_the_cached_smart_score(env):
+    """An applied ``Tag`` row is an input to the scorer's anomaly penalty, and
+    ``SmartScoreTask`` only picks up pictures whose score is NULL. The reconcile
+    pass replaces tags directly, so without the ``invalidate_on_anomaly_change``
+    wrapper an on-disk caption edit leaves the cached score stale."""
+    from datetime import datetime
+    from pixlstash.db_models.tag_prediction import TagPrediction
+
+    server = env["server"]
+    root = server.vault.image_root
+    _make_image(os.path.join(root, "score", "m.png"), (93, 94, 95))
+    _make_image(os.path.join(root, "score", "n.png"), (96, 97, 98))
+    _write(os.path.join(root, "score", "m.txt"), "cat")
+    _write(os.path.join(root, "score", "n.txt"), "cat")
+    _set_sync(server, sync_tags=True, sync_descriptions=False, tags_suffix=".txt")
+    _run_root_scan(server)
+    anomaly_id, _, _, _ = _picture(server, "score/m.png")
+    content_id, _, _, _ = _picture(server, "score/n.png")
+
+    def seed(session: Session):
+        # "watermark" is in the anomaly vocabulary; the scorer charges the
+        # prediction only once the defect is visible in the tag list.
+        session.add(
+            TagPrediction(
+                picture_id=anomaly_id,
+                tag="watermark",
+                confidence=0.9,
+                model_version="test-v1",
+                status="PENDING",
+                predicted_at=datetime.utcnow(),
+            )
+        )
+        session.get(Picture, anomaly_id).smart_score = 0.5
+        session.get(Picture, content_id).smart_score = 0.5
+        session.commit()
+
+    server.vault.db.run_task(seed)
+
+    later = time.time() + 5
+    for name, text in (("m.txt", "cat, watermark"), ("n.txt", "cat, sunset")):
+        _write(os.path.join(root, "score", name), text)
+        os.utime(os.path.join(root, "score", name), (later, later))
+    _run_root_scan(server)
+
+    def scores(session: Session):
+        return (
+            session.get(Picture, anomaly_id).smart_score,
+            session.get(Picture, content_id).smart_score,
+        )
+
+    anomaly_score, content_score = server.vault.db.run_immediate_read_task(scores)
+    assert _picture(server, "score/m.png")[3] == ["cat", "watermark"]
+    assert anomaly_score is None, "the anomaly tag arrived; the cached score is stale"
+    assert content_score == 0.5, "a content-only edit keeps the stored score"
