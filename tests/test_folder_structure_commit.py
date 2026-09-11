@@ -1037,6 +1037,54 @@ def test_a_confirmed_tags_file_that_is_empty_hands_the_picture_to_the_tagger(
     ), "the confirmed file is still recorded; its emptiness is 'no tags'"
 
 
+def test_a_confirmed_description_file_that_is_empty_clears_the_description(
+    owner_env,
+):
+    """Emptying the confirmed description file is the owner clearing their
+    caption. A truthiness check on the read text skipped the assignment, so the
+    reused row kept a description its file no longer holds. A brand new row
+    still keeps whatever it came with: only the confirmed-file path overwrites."""
+    server = owner_env["server"]
+    root = os.path.join(server.vault.image_root, "local-import-empty-description")
+    _make_tree(root, {"": ["blank.jpg"]})
+    desc_path = os.path.join(root, "blank_words.txt")
+    with open(desc_path, "w", encoding="utf-8") as fh:
+        fh.write("old")
+
+    from pixlstash.services import folder_structure_commit_service as commit_service
+
+    answers = commit_service.parse_captions(
+        [{"suffix": "_words.txt", "kind": "description"}]
+    )
+    first = commit_service.local_import_pictures(
+        server, root, expected_pictures=1, captions=answers
+    )
+    assert _reused_row_state(server, first)["blank.jpg"][2] == "old"
+
+    with open(desc_path, "w", encoding="utf-8") as fh:
+        fh.write("   \n")
+    second = commit_service.local_import_pictures(
+        server, root, expected_pictures=1, captions=answers
+    )
+    assert sorted(second) == sorted(first), "reused, not re-imported"
+    tags_file, description_file, description, _tags = _reused_row_state(server, first)[
+        "blank.jpg"
+    ]
+    assert (description_file, description) == (desc_path, None), (
+        "the confirmed file is still recorded; its emptiness clears the caption"
+    )
+
+    # The new-row path is unchanged: an empty file never overwrites.
+    from types import SimpleNamespace
+
+    from pixlstash.utils.caption_file_utils import attach_sidecars
+
+    fresh = SimpleNamespace(description="kept", description_file=None)
+    attach_sidecars(fresh, os.path.join(root, "blank.jpg"), [], ["_words.txt"])
+    assert fresh.description == "kept"
+    assert fresh.description_file == desc_path
+
+
 def test_a_caption_answer_with_an_unsafe_suffix_is_refused(owner_env):
     """The suffix is appended to a picture path to find the file to read, so
     the commit enforces the same bare-fragment rule the reference-folder API

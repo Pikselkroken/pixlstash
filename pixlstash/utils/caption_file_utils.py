@@ -464,7 +464,11 @@ def attach_sidecars(
     probes the known conventions instead, content-sniffing a bare ``.txt``;
     an empty list reads nothing of that kind - the owner's "ignore".
     *overwrite_description* is for a row that already exists: the owner has
-    just confirmed the file is the caption, so it replaces what the row had.
+    just confirmed the file is the caption, so it replaces what the row had -
+    including with nothing, when the confirmed file reads empty. Only a file
+    that actually read counts: an unreadable one is not a cleared caption, so
+    the row keeps its description. Without the flag (a new row) an empty file
+    never overwrites what the row came with.
 
     **Every confirmed suffix that names an existing file is read**, not just
     the first: the read reports one row per suffix and the owner answers each
@@ -498,18 +502,29 @@ def attach_sidecars(
         description_paths = _existing_sidecars(file_path, description_suffixes)
     description_path = None
     description = None
+    read_empty = False
     for path in description_paths:
-        text = read_description_sidecar(path)
+        raw = read_caption_text(path)
+        if raw is None:
+            continue
+        text = raw.strip()
         if text:
             description_path, description = path, text
             break
+        read_empty = True
     if description_path is None and description_paths:
         description_path = description_paths[0]
     if description_path:
         pic.description_file = description_path
         pic.description_file_mtime = get_sidecar_mtime(description_path)
-        if description and (overwrite_description or not pic.description):
-            pic.description = description
+        if description:
+            if overwrite_description or not pic.description:
+                pic.description = description
+        elif overwrite_description and read_empty:
+            # The owner confirmed this file is the caption and it is empty:
+            # that is a cleared description, not a failed read. An unreadable
+            # file leaves ``read_empty`` False and the row keeps what it had.
+            pic.description = None
     if tags:
         pic._sidecar_tags = tags
     return tags
