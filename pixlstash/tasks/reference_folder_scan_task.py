@@ -27,8 +27,8 @@ from pixlstash.utils.caption_file_utils import (
     detect_folder_suffixes,
     get_sidecar_mtime,
     is_safe_sidecar_suffix,
-    read_description_sidecar,
-    read_tags_sidecar,
+    parse_caption_tags,
+    read_caption_text,
     resolve_typed_sidecar,
     write_sidecar,
     writeback_path,
@@ -910,6 +910,10 @@ class ReferenceFolderScanTask(BaseTask):
         when *sync* is on, the file is missing, and *export_content* is non-empty,
         create the file on disk now and record its new path/mtime.  A vanished
         file only clears the stored reference (the database data is kept).
+
+        A file that exists but will not open records the path with a ``None``
+        mtime and imports nothing, so the next pass reads it again rather than
+        treating the failed read as an up-to-date empty caption.
         """
         is_tags = sidecar_type == SIDECAR_TYPE_TAGS
         path_key = "tags_file" if is_tags else "description_file"
@@ -919,12 +923,25 @@ class ReferenceFolderScanTask(BaseTask):
         if current_path is not None:
             current_mtime = get_sidecar_mtime(current_path)
             if current_path != stored_path or current_mtime != stored_mtime:
+                raw = read_caption_text(current_path)
+                if raw is None:
+                    # The file is there but would not open. Record it, leave the
+                    # mtime unset and import nothing: stamping the mtime of a
+                    # read that failed makes the next pass see "unchanged" and
+                    # the owner's captions are then missed for good, while
+                    # importing the empty result would clear what is stored.
+                    # Only written when it differs, so a permanently unreadable
+                    # file does not report a change on every pass.
+                    if current_path != stored_path or stored_mtime is not None:
+                        update[path_key] = current_path
+                        update[mtime_key] = None
+                    return
                 update[path_key] = current_path
                 update[mtime_key] = current_mtime
                 if is_tags:
-                    update["new_tags"] = read_tags_sidecar(current_path)
+                    update["new_tags"] = parse_caption_tags(raw)
                 else:
-                    update["new_description"] = read_description_sidecar(current_path)
+                    update["new_description"] = raw.strip() or None
             return
 
         # No sidecar on disk. Drop a stale stored reference (keep the DB data).

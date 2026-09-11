@@ -6325,6 +6325,24 @@ Each inserter writes those as `Tag` rows and puts a picture under the
 pending-tag sentinel only when *no sidecar tags were read* - no tags file, or
 an empty or unreadable one - so the tagger runs for it as before.
 
+**A file that would not open records its path but no mtime.** Whether a read
+succeeded and what it contained are two different facts, and the row keeps both:
+`tags_file`/`description_file` say a file is there, the mtime says when its
+content was last taken in. `read_caption_text` is what separates them - `None`
+only for an `OSError`, `""` for an empty file - and `attach_sidecars` reads
+through it, applying content only from a read that succeeded. Stamping the
+current mtime after a failed read is what makes the miss permanent: the next
+pass compares `(path, mtime)`, sees no change, and never opens the file again,
+so confirmed tags stay missing (and the tagger overwrites them with its own)
+and a confirmed description is lost - all from a chmod that has since been
+undone. A `None` mtime differs from every mtime on disk, so the file is read
+again next pass. `ReferenceFolderScanTask._reconcile_sidecar` holds the same
+line on the re-read, or the retry would immediately stamp the failure it was
+sent to recover from; it writes the pair only when it differs from what is
+stored, so a file that stays unreadable does not report a change every pass.
+`read_tags_sidecar`/`read_description_sidecar` still collapse the two for
+callers that only want content, and say so.
+
 Which files are read is the owner's answer to the read's `captions` (§24),
 carried on the commit as `CaptionPattern` rows (`parse_captions`, the same
 bare-fragment rule on the suffix as the reference-folder API) and turned into
