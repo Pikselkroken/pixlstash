@@ -336,7 +336,9 @@ class _Folder:
     rel_path: str
     parent_index: Optional[int]
     #: Images only, thumbnails excluded - the face pass's sample source, and
-    #: what the sidecar signal counts caption files against.
+    #: what the sidecar signal counts its `with_sidecar` against. The caption
+    #: files themselves are paired against every indexable media stem, videos
+    #: included, because that is what the import reads them for.
     direct_pictures: list[str] = field(default_factory=list)
     #: Everything in this folder the commit will index: images AND videos, our
     #: own thumbnails excluded. What the owner is shown and promised.
@@ -586,16 +588,22 @@ class FolderStructureRead:
     def _collect_captions(
         self, dirpath: str, filenames: list[str], folder: _Folder
     ) -> None:
-        """Group this folder's caption files by the suffix after the picture stem.
+        """Group this folder's caption files by the suffix after the media stem.
 
         Also sets ``folder.with_sidecar`` - how many of the folder's pictures a
         caption file was found for, counting each picture once. It is the same
         pairing the rows are built from, so the Set signal's evidence and the
         ``captions`` rows can no longer disagree about whether this folder has
-        captions at all.
+        captions at all. Only pictures are counted there, but the *stems* are
+        every indexable media file's, videos included: the import calls
+        `attach_sidecars` for everything `is_supported_media_file` accepts, so
+        a read that indexed image stems alone never offered the row for
+        ``clip_tags.txt`` beside ``clip.mp4`` and the owner could not answer a
+        file the import would then read anyway.
 
         A caption file is any non-media file whose name starts with the stem
-        of a picture in the same folder and ends in a caption extension:
+        of an indexable media file in the same folder and ends in a caption
+        extension:
         ``a.txt``, ``a_tags.txt`` and ``a.jpg.caption`` beside ``a.jpg`` are
         the suffixes ``.txt``, ``_tags.txt`` and ``.jpg.caption``. The
         *suffix* is free-form - the point is to find the convention the owner
@@ -617,8 +625,10 @@ class FolderStructureRead:
         # kept because the import builds the sidecar name from the picture's
         # own, so a stem that only matches case-folded has to be checked.
         stems: dict[str, set[str]] = {}
-        for picture in folder.direct_pictures:
-            stem = os.path.splitext(picture)[0]
+        for media in filenames:
+            if is_hidden_entry(media) or not is_supported_media_file(media):
+                continue
+            stem = os.path.splitext(media)[0]
             stems.setdefault(stem.lower(), set()).add(stem)
         if not stems:
             return

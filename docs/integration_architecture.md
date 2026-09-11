@@ -1624,11 +1624,15 @@ indeterminate bar rather than 0%.
 ```
 
 **`captions`** is the owner's captions as they actually are on disk. Every
-`.txt` or `.caption` file whose name starts with a picture's stem in the same
-folder is a caption file, grouped by the `suffix` after that stem (`a.txt`,
-`a_tags.txt` and `a.jpg.caption` beside `a.jpg` are `.txt`, `_tags.txt` and
-`.jpg.caption`), so nothing depends on the *suffix* being one PixlStash
-already knows. The extension is the one thing that is fixed: only `.txt` and
+`.txt` or `.caption` file whose name starts with the stem of an **indexable
+media file** in the same folder is a caption file, grouped by the `suffix`
+after that stem (`a.txt`, `a_tags.txt` and `a.jpg.caption` beside `a.jpg` are
+`.txt`, `_tags.txt` and `.jpg.caption`), so nothing depends on the *suffix*
+being one PixlStash already knows. Videos count for that pairing exactly as
+pictures do, because the import reads a sidecar beside every file it indexes,
+so `clip_tags.txt` beside `clip.mp4` is offered as a `_tags.txt` row even in a
+folder holding no images at all. Only the `sidecars` signal's
+`pictures`/`with_sidecar` counters stay picture-only. The extension is the one thing that is fixed: only `.txt` and
 `.caption` are read (`_SIDECAR_EXTS`), so a convention that writes its captions
 into any other extension is not detected and is not listed. Stems are matched
 case-insensitively, so `img_0001.txt` beside

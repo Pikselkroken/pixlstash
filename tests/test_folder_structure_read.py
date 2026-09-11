@@ -363,6 +363,23 @@ def test_a_free_form_caption_suffix_is_sidecar_evidence_too():
     assert [row["suffix"] for row in result["captions"]] == ["_tags.txt"]
 
 
+def test_a_caption_beside_a_video_is_a_convention_to_ask_about():
+    """The import calls `attach_sidecars` for every file it indexes, videos
+    included, so a folder of clips with `_tags.txt` beside them is a caption
+    convention the import will read. Pairing captions against images only left
+    that row off the card, and a `[]` answer then sent the import to read a
+    file the owner was never shown."""
+    with _tree({"": [], "clips": ["clip.mp4", "clip_tags.txt", "take2.mp4"]}) as root:
+        _write(root, "clips/clip_tags.txt", "1girl, solo, long hair, smile")
+        result = FolderStructureRead(root).run()
+
+    assert [row["suffix"] for row in result["captions"]] == ["_tags.txt"]
+    proposal = _rows(result, 2)["clips"]["proposal"]
+    assert "sidecars" not in _signals(proposal), (
+        "`with_sidecar` stays picture-only, and this folder has no pictures"
+    )
+
+
 def test_a_case_differing_picture_needs_its_own_caption_file():
     """`A.jpg` and `a.jpg` are two pictures on Linux, and `A.txt` is a caption
     for the first of them only. Pairing them case-folded counted the second as
