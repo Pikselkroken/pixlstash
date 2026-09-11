@@ -99,6 +99,7 @@ function mountPane() {
         // Its own suite covers what the dialog does; here the only question is
         // whether the menu item opens it, and on which row.
         LibraryLayoutDialog: true,
+        LibraryCaptionsDialog: true,
         AppButton: {
           props: ["disabled", "loading"],
           template:
@@ -362,6 +363,7 @@ describe("switching", () => {
           VIcon: true,
           VProgressCircular: true,
           LibraryLayoutDialog: true,
+          LibraryCaptionsDialog: true,
           AppButton: {
             props: ["disabled", "loading"],
             template:
@@ -405,6 +407,7 @@ describe("switching", () => {
           VIcon: true,
           VProgressCircular: true,
           LibraryLayoutDialog: true,
+          LibraryCaptionsDialog: true,
           AppButton: {
             props: ["disabled", "loading"],
             template:
@@ -528,6 +531,16 @@ describe("the row menu", () => {
     const dialog = () => wrapper.findComponent({ name: "LibraryLayoutDialog" });
     expect(dialog().props("open")).toBe(false);
     await item.trigger("click");
+    expect(dialog().props("open")).toBe(true);
+  });
+
+  it("offers Caption files on the open library only, and opens the dialog", async () => {
+    const wrapper = await settle(mountPane());
+
+    expect(menuItem(wrapper, "Client work", "Caption files…")).toBeFalsy();
+    const dialog = () => wrapper.findComponent({ name: "LibraryCaptionsDialog" });
+    expect(dialog().props("open")).toBe(false);
+    await menuItem(wrapper, "Family Photos", "Caption files…").trigger("click");
     expect(dialog().props("open")).toBe(true);
   });
 

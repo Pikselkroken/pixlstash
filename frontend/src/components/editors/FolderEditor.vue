@@ -349,8 +349,9 @@
                   Keep <code>.txt</code> sidecar files next to each image in sync
                   with PixlStash. Tags and descriptions are stored in separate
                   files: changes made outside PixlStash are read back in, and
-                  changes made here are written out (the files are created when
-                  they don't exist yet).
+                  changes made here are written out. An image that already has a
+                  file keeps it, whatever it is called; the suffixes below only
+                  name the files created for images that have none.
                 </div>
 
                 <!-- Tags -->
@@ -364,7 +365,7 @@
                   <div v-if="localSyncTags" class="editor-sync-suffix">
                     <v-text-field
                       v-model="localTagsSuffix"
-                      label="Tags filename suffix"
+                      label="Suffix for new tags files"
                       :placeholder="DEFAULT_TAGS_SUFFIX"
                       density="compact"
                       variant="filled"
@@ -387,7 +388,7 @@
                   <div v-if="localSyncDescriptions" class="editor-sync-suffix">
                     <v-text-field
                       v-model="localDescriptionSuffix"
-                      label="Description filename suffix"
+                      label="Suffix for new description files"
                       :placeholder="DEFAULT_DESCRIPTION_SUFFIX"
                       density="compact"
                       variant="filled"

@@ -42,6 +42,7 @@ import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
+import LibraryCaptionsDialog from "./LibraryCaptionsDialog.vue";
 import LibraryLayoutDialog from "./LibraryLayoutDialog.vue";
 import SettingsSection from "./SettingsSection.vue";
 
@@ -55,6 +56,8 @@ const props = defineProps({
 // property of the *open* library - the routes are `/server-config/...`, which
 // is whichever library is active - so the item is on the active row only.
 const layoutDialogOpen = ref(false);
+// `Caption files…` is the same shape: its routes address the open library.
+const captionsDialogOpen = ref(false);
 
 const { confirm } = useConfirm();
 const librariesStore = useLibrariesStore();
@@ -453,6 +456,19 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
                     Choose a layout…
                   </button>
                 </li>
+                <li v-if="library.is_active" role="none">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="library-menu__item"
+                    @click="
+                      openMenuUuid = '';
+                      captionsDialogOpen = true;
+                    "
+                  >
+                    Caption files…
+                  </button>
+                </li>
                 <!-- Absent on the active library on purpose: detaching it is
                      refused by the registry, and an item that can only fail is
                      worse than no item. -->
@@ -603,6 +619,10 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
     <LibraryLayoutDialog
       :open="layoutDialogOpen"
       @close="layoutDialogOpen = false"
+    />
+    <LibraryCaptionsDialog
+      :open="captionsDialogOpen"
+      @close="captionsDialogOpen = false"
     />
 
     <p class="visually-hidden" role="status" aria-live="polite">

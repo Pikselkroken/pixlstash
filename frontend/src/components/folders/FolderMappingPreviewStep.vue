@@ -369,8 +369,11 @@ onUnmounted(() => {
     >
       <div class="preview-step__card-title">Caption files beside your pictures</div>
       <p class="preview-step__card-lead">
-        Text files named after a picture are read as its tags or description.
-        Check each pattern.
+        Text files named after a picture are read as its tags or description,
+        and stay in step with your edits from then on. Confirming a pattern
+        turns caption files on for this library's whole picture folder, not
+        only the one you are importing, and writes a file beside every picture
+        that already has tags or a description. Check each pattern.
       </p>
       <ul class="preview-step__captions">
         <li
