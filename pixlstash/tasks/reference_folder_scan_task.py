@@ -18,11 +18,13 @@ from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL, is_tag_sentinel
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.tasks.base_task import BaseTask
 from pixlstash.tasks.missing_file_purge_task import MissingFilePurgeTask
+from pixlstash.services.folder_structure_commit_service import root_import_answered
 from pixlstash.utils.caption_file_utils import (
     DEFAULT_DESCRIPTION_SUFFIX,
     DEFAULT_TAGS_SUFFIX,
     SIDECAR_TYPE_DESCRIPTION,
     SIDECAR_TYPE_TAGS,
+    attach_sidecars,
     detect_folder_suffixes,
     get_sidecar_mtime,
     is_safe_sidecar_suffix,
@@ -154,6 +156,17 @@ class ReferenceFolderScanTask(BaseTask):
     def _run_task(self):
         resolved = self._resolved_path
         folder_id = self._folder_id
+
+        # The finder asked before handing this out; asked again now the scan
+        # is starting, so a local import accepted while the task sat in the
+        # queue closes the gate instead of being walked over. See
+        # `root_import_answered`.
+        if self._is_root and not self._db.run_immediate_read_task(root_import_answered):
+            logger.info(
+                "Library root scan skipped: a local import is unanswered. "
+                "Retried on a later cycle."
+            )
+            return {"status": "skipped", "folder_id": folder_id}
 
         if not os.path.isdir(resolved):
             logger.warning(
@@ -1314,30 +1327,15 @@ class ReferenceFolderScanTask(BaseTask):
         if created_at:
             pic.created_at = created_at
 
-        # Detect and read the tags and description sidecars independently, using
-        # the folder's configured suffixes (falling back to known conventions).
-        tags_path = resolve_typed_sidecar(
-            file_path, SIDECAR_TYPE_TAGS, self._tags_suffix
+        # A configured suffix is read at exactly that name; an unset one
+        # probes the known conventions. Any tags read are stashed on the row
+        # for `_insert_pictures` to persist once it has an id.
+        attach_sidecars(
+            pic,
+            file_path,
+            [self._tags_suffix] if self._tags_suffix else None,
+            [self._description_suffix] if self._description_suffix else None,
         )
-        if tags_path:
-            pic.tags_file = tags_path
-            pic.tags_file_mtime = get_sidecar_mtime(tags_path)
-            sidecar_tags = read_tags_sidecar(tags_path)
-            # Tags are stored via the Tag relationship and cannot be set on the
-            # unsaved Picture directly; stash them as a transient attribute so
-            # the caller can persist them after the Picture is inserted.
-            if sidecar_tags:
-                pic._sidecar_tags = sidecar_tags  # type: ignore[attr-defined]
-
-        description_path = resolve_typed_sidecar(
-            file_path, SIDECAR_TYPE_DESCRIPTION, self._description_suffix
-        )
-        if description_path:
-            pic.description_file = description_path
-            pic.description_file_mtime = get_sidecar_mtime(description_path)
-            sidecar_description = read_description_sidecar(description_path)
-            if sidecar_description and not pic.description:
-                pic.description = sidecar_description
 
         return pic
 

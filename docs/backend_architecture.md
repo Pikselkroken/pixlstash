@@ -4075,8 +4075,22 @@ and updates `file_path` on the existing row instead.
   from a reference folder exactly where `layout_move_service.LayoutRoot` says it
   does: pictures are the `reference_folder_id IS NULL` rows, `file_path` is
   written root-relative (`_stored`), the layout comes from `LibrarySettings`,
-  and there is no status, sidecar sync or suffix detection. The walk prunes
-  dot-directories and `_ROOT_INTERNAL_DIRS` (`snapshots`, `tmp`), the same set
+  and there is no status, sidecar sync or suffix detection. **The root scan
+  waits for the first import offer to be answered** (`root_import_answered`,
+  `folder_structure_commit_service`): an empty library over a folder that
+  holds pictures is one whose owner has not been asked what those pictures
+  are, and the scan, due at boot, used to index a small library before the
+  screen came up, so the offer never appeared. The newest `local_import`
+  commit record decides: `done` or `deferred` is an answer; `pending`,
+  `abandoned` and `superseded` hold the scan off (a running commit would race
+  it, an abort left chunks the owner never answered for); with no
+  `local_import` record at all, a library that already holds a picture is
+  scanned as before. The finder asks when a root scan is otherwise due, at
+  most once per `_GATE_RETRY_S` while the answer is no, and the task asks again
+  as it starts so an import accepted while it sat in the queue closes the gate.
+  The empty-library screen keeps a way back in ("Import them…") because a
+  dismissed offer would otherwise leave the library empty for good. The walk
+  prunes dot-directories and `_ROOT_INTERNAL_DIRS` (`snapshots`, `tmp`), the same set
   `folder_structure_commit_service.LIBRARY_OWN_FOLDERS` refuses to import. A file
   younger than `_ROOT_SETTLE_S` is on disk but neither new nor removed: PixlStash's
   own imports write the file before the row, so a young file belongs to whoever
@@ -6010,6 +6024,20 @@ their evidence lines but propose no kind, so the folder reads as a Person with
 filesystem fact rather than a prior, and it keeps its existing standing
 against `faces` (the two still narrow to candidates).
 
+**The walk also collects the caption files themselves** (`_collect_captions`):
+every non-media file with a text extension whose name starts with the stem of
+a media file in the same folder, grouped case-insensitively by the suffix
+after the stem, longest stem winning. Up to `CAPTION_SAMPLES` files per suffix
+(at most two from any one folder) are kept, and `_caption_patterns` sniffs
+them once the walk is over (`caption_file_utils.sniff_caption`, the one place
+a kind is decided from a file: NUL bytes, JSON and markup are not captions, an
+unambiguous name decides, a bare `.txt` is decided by content). The majority
+kind is reported, a tie going to description, with an excerpt of a file of
+that kind. Only the first `MAX_CAPTION_PATTERNS` suffixes by file count are
+opened, so a tree of one-off notes costs a bounded number of reads. The result
+carries them as `captions` (§20 of the integration doc); the sidecar signal's
+`with_sidecar` comes from the same pairing, so the two cannot disagree.
+
 ### Why cardinality is level-scoped and nothing else is
 
 Cardinality is a property of a *level* — "four names under 118 parents" cannot
@@ -6277,6 +6305,17 @@ mid-batch for reasons that have nothing to do with completion. It has a
 30-minute bound (`INDEX_TIMEOUT_S`) for the same reason §24's read has a
 deadline: a stuck scan must fail the commit rather than hang the screen
 forever.
+
+**`local_import_pictures` reads the caption files beside each picture.**
+`_build_managed_picture` calls `caption_file_utils.attach_sidecars`, the same
+read `ReferenceFolderScanTask._build_picture` and the watch-folder import go
+through, at the suffixes the owner confirmed (`caption_suffixes` turns the
+commit's `CaptionPattern` rows into one list per kind; `None`, no answer,
+probes the known conventions; `[]` reads nothing). Tags land as real `Tag`
+rows in the same transaction as the picture, and only a picture with no tags
+file gets the pending sentinel, so the tagger runs where nothing was written
+and nowhere else. The answers are stored on `FolderMappingCommit.captions`
+(migration 0115, JSON `null` for no answer) so a resume honours them.
 
 **`local_import_pictures` wakes the planner after every chunk it inserts.**
 The rows are visible to the finders the moment a chunk's transaction commits,

@@ -495,6 +495,105 @@ def test_local_import_mode_imports_as_managed_pictures_and_assigns(owner_env):
         assert os.path.isfile(thumb), f"{relative} should have a thumbnail at {thumb}"
 
 
+def test_local_import_reads_the_confirmed_caption_files(owner_env):
+    """The owner's answers decide what a caption file is: a confirmed tags
+    file becomes the picture's tags, a confirmed description file its
+    description, and an ignored pattern is never opened however tag-like it
+    reads. A picture with no tags file waits for the tagger under the
+    sentinel."""
+    from sqlmodel import select
+
+    from pixlstash.db_models import Picture, Tag
+    from pixlstash.db_models.tag import TAG_PENDING_SENTINEL
+
+    server = owner_env["server"]
+    owner = owner_env["owner"]
+    root = os.path.join(server.vault.image_root, "captioned-library")
+    _make_tree(root, {"": ["a.jpg", "a.txt", "a_notes.txt", "b.jpg", "b_caption.txt"]})
+    with open(os.path.join(root, "a.txt"), "w") as fh:
+        fh.write("1girl, red_hair, solo\n")
+    with open(os.path.join(root, "a_notes.txt"), "w") as fh:
+        fh.write("reshoot, tighter crop\n")
+    with open(os.path.join(root, "b_caption.txt"), "w") as fh:
+        fh.write("A woman by a window.\n")
+
+    started = owner.post(_READ, json={"path": root})
+    read_task_id = started.json()["task_id"]
+    read = _drain_read(owner, read_task_id)
+    assert {row["suffix"] for row in read["result"]["captions"]} == {
+        ".txt",
+        "_notes.txt",
+        "_caption.txt",
+    }
+
+    commit_started = owner.post(
+        _COMMIT,
+        json={
+            "task_id": read_task_id,
+            "mode": "local_import",
+            "assignments": [],
+            "captions": [
+                {"suffix": ".txt", "kind": "tags"},
+                {"suffix": "_notes.txt", "kind": "ignore"},
+                {"suffix": "_caption.txt", "kind": "description"},
+            ],
+        },
+    )
+    assert commit_started.status_code == 200, commit_started.text
+    body = _drain_commit(owner, commit_started.json()["task_id"], timeout_s=60.0)
+    assert body["status"] == "completed", body
+
+    def read_rows(session):
+        pics = {
+            os.path.basename(p.file_path): p
+            for p in session.exec(
+                select(Picture).where(
+                    Picture.file_path.startswith("captioned-library/")
+                )
+            )
+        }
+        tags = {
+            name: sorted(
+                t.tag for t in session.exec(select(Tag).where(Tag.picture_id == pic.id))
+            )
+            for name, pic in pics.items()
+        }
+        return pics, tags
+
+    pics, tags = server.vault.db.run_task(read_rows)
+    assert tags["a.jpg"] == ["1girl", "red hair", "solo"]
+    assert pics["a.jpg"].tags_file == os.path.join(root, "a.txt")
+    assert pics["a.jpg"].description is None, "an ignored pattern is never read"
+    assert tags["b.jpg"] == [TAG_PENDING_SENTINEL]
+    assert pics["b.jpg"].description == "A woman by a window."
+
+
+def test_captions_are_refused_in_reference_mode_and_validated(owner_env):
+    from pixlstash.services import folder_structure_commit_service as commit_service
+
+    owner = owner_env["owner"]
+    root = os.path.join(owner_env["tmp"], "captions-reference")
+    _make_tree(root, {"": ["a.jpg", "a.txt"]})
+    started = owner.post(_READ, json={"path": root})
+    read_task_id = started.json()["task_id"]
+    _drain_read(owner, read_task_id)
+
+    refused = owner.post(
+        _COMMIT, json={"task_id": read_task_id, "mode": "reference", "captions": []}
+    )
+    assert refused.status_code == 400, refused.text
+    assert "local_import" in refused.json()["detail"]
+
+    for bad in (
+        [{"suffix": "../x", "kind": "tags"}],
+        [{"suffix": ".txt", "kind": "x"}],
+    ):
+        with pytest.raises(commit_service.CommitError):
+            commit_service.parse_captions(bad)
+    assert commit_service.parse_captions(None) is None
+    assert commit_service.parse_captions([]) == []
+
+
 def test_local_import_wakes_the_planner_as_each_chunk_lands(
     owner_env, monkeypatch, caplog
 ):
@@ -984,6 +1083,7 @@ def test_an_interrupted_commit_is_recorded_pending_with_what_it_needs(owner_env)
         assignments=svc.parse_assignments(
             [{"relative_path": "Anna", "kind": "person"}]
         ),
+        captions=svc.parse_captions([{"suffix": ".txt", "kind": "ignore"}]),
     )
     try:
         pending = svc.pending_commit(server)
@@ -993,6 +1093,7 @@ def test_an_interrupted_commit_is_recorded_pending_with_what_it_needs(owner_env)
         assert pending["mode"] == "reference"
         assert [a.relative_path for a in pending["assignments"]] == ["Anna"]
         assert [a.kind for a in pending["assignments"]] == ["person"]
+        assert pending["captions"] == [svc.CaptionPattern(".txt", "ignore")]
     finally:
         svc.settle_pending_commit(server, "test-interrupted", "abandoned")
 

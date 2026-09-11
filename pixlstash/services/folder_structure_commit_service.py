@@ -63,6 +63,8 @@ from pixlstash.db_models.character import Character
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.folder_mapping_commit import (
     FolderMappingCommit,
+    STATE_ABANDONED,
+    STATE_DEFERRED,
     STATE_DONE,
     STATE_PENDING,
     STATE_SUPERSEDED,
@@ -80,6 +82,12 @@ from pixlstash.services.project_membership_service import (
 )
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.utils.service.label_ledger import POS, record_human_labels
+from pixlstash.utils.caption_file_utils import (
+    SIDECAR_TYPE_DESCRIPTION,
+    SIDECAR_TYPE_TAGS,
+    attach_sidecars,
+    is_safe_sidecar_suffix,
+)
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -111,6 +119,12 @@ _POLL_INTERVAL_S = 0.25
 #: The facets a folder can be accepted as, plus "tag" which is a `Facet` value
 #: too - every accepted `kind` the mapping screen sends is one of these.
 _ACCEPTED_KINDS = frozenset(f.value for f in Facet)
+
+#: What the owner can say a caption pattern is. ``ignore`` is an answer, not
+#: the absence of one: an ignored ``.txt`` is never read, while a commit that
+#: carries no answer at all probes the known conventions.
+CAPTION_IGNORE = "ignore"
+CAPTION_KINDS = frozenset({SIDECAR_TYPE_TAGS, SIDECAR_TYPE_DESCRIPTION, CAPTION_IGNORE})
 
 
 class CommitError(Exception):
@@ -159,6 +173,76 @@ class Assignment:
             "kind": self.kind,
             "match_id": self.match_id,
         }
+
+
+@dataclass(frozen=True)
+class CaptionPattern:
+    """The owner's answer for one caption-file pattern the read found.
+
+    Attributes:
+        suffix: What follows the picture's stem (``_tags.txt``, ``.caption``,
+            ``.jpg.txt``), as the read reported it.
+        kind: ``tags``, ``description`` or ``ignore``.
+    """
+
+    suffix: str
+    kind: str
+
+    def as_dict(self) -> dict:
+        return {"suffix": self.suffix, "kind": self.kind}
+
+
+def parse_captions(raw) -> Optional[list[CaptionPattern]]:
+    """Validate the wire form of ``captions`` into `CaptionPattern` rows.
+
+    ``None`` in, ``None`` out: no answer, and the import probes the known
+    conventions. ``[]`` is an answer of nothing and reads no caption file.
+
+    Raises:
+        CommitError: A row is malformed, names an unknown kind, or carries a
+            suffix that is not a bare filename fragment, the rule the
+            reference-folder API enforces because the suffix is appended to
+            a picture path to find the file to read.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise CommitError("captions must be a list")
+    parsed: list[CaptionPattern] = []
+    seen: set[str] = set()
+    for index, row in enumerate(raw):
+        if not isinstance(row, dict):
+            raise CommitError(f"captions[{index}] must be an object")
+        suffix, kind = row.get("suffix"), row.get("kind")
+        if not isinstance(suffix, str) or not is_safe_sidecar_suffix(suffix):
+            raise CommitError(
+                f"captions[{index}].suffix must be a bare filename fragment"
+            )
+        if suffix.lower() in seen:
+            raise CommitError(f"captions[{index}] repeats suffix {suffix!r}")
+        if kind not in CAPTION_KINDS:
+            raise CommitError(
+                f"captions[{index}].kind must be one of {sorted(CAPTION_KINDS)}, got {kind!r}"
+            )
+        seen.add(suffix.lower())
+        parsed.append(CaptionPattern(suffix, kind))
+    return parsed
+
+
+def caption_suffixes(captions) -> tuple[Optional[list[str]], Optional[list[str]]]:
+    """``(tags_suffixes, description_suffixes)`` for `attach_sidecars`.
+
+    ``(None, None)`` for no answer, which probes the known conventions. An
+    empty answer gives ``([], [])``: read nothing. The order is the read's,
+    most files first, so where two confirmed suffixes both sit beside one
+    picture the library's main convention is the one read.
+    """
+    if captions is None:
+        return None, None
+    return (
+        [c.suffix for c in captions if c.kind == SIDECAR_TYPE_TAGS],
+        [c.suffix for c in captions if c.kind == SIDECAR_TYPE_DESCRIPTION],
+    )
 
 
 @dataclass
@@ -228,6 +312,7 @@ def record_pending_commit(
     label: Optional[str],
     expected_pictures: int,
     assignments: list[Assignment],
+    captions: Optional[list[CaptionPattern]] = None,
 ) -> None:
     """Write the accepted mapping down before the commit thread starts.
 
@@ -266,6 +351,11 @@ def record_pending_commit(
                 label=label,
                 expected_pictures=expected_pictures,
                 assignments=json.dumps([a.as_dict() for a in assignments]),
+                # "null", not "[]": no answer probes, an empty answer reads
+                # nothing, and a resume has to tell them apart.
+                captions=json.dumps(
+                    None if captions is None else [c.as_dict() for c in captions]
+                ),
                 stage="registering",
                 state=STATE_PENDING,
             )
@@ -302,6 +392,7 @@ def pending_commit(server) -> Optional[dict]:
             "label": row.label,
             "expected_pictures": row.expected_pictures,
             "assignments": row.assignments,
+            "captions": row.captions,
             "stage": row.stage,
         }
 
@@ -310,18 +401,55 @@ def pending_commit(server) -> Optional[dict]:
         return None
     try:
         record["assignments"] = parse_assignments(json.loads(record["assignments"]))
+        record["captions"] = parse_captions(json.loads(record["captions"]))
     except (ValueError, CommitError) as exc:
         # Unreadable is not resumable, and a start-up that raises here would
         # be a library that cannot open at all. Say so and leave the row for
         # a person; the pictures already indexed are unaffected.
         logger.error(
             "Cannot resume the folder-mapping commit %s: its recorded "
-            "assignments are unreadable (%s). Nothing was changed.",
+            "assignments or captions are unreadable (%s). Nothing was changed.",
             record["task_id"],
             exc,
         )
         return None
     return record
+
+
+def root_import_answered(session: Session) -> bool:
+    """Whether the library root may be indexed by the root scan yet.
+
+    An empty library over a folder that holds pictures is one whose owner has
+    not been asked what those pictures are: the app asks when it loads (the
+    first-run import offer). The boot-time root scan used to answer first, so
+    a small library was indexed, tags and all, before the screen came up and
+    the questions never appeared. The scan waits for the answer.
+
+    The newest ``local_import`` record decides. ``done`` or ``deferred``
+    ("organise later": index everything, map nothing) is an answer.
+    ``pending`` is the commit still running and holds the scan off so the
+    two do not build rows for the same files; ``abandoned`` and
+    ``superseded`` left chunks indexed that the owner never answered for and
+    hold it off too, until a later import settles. With no ``local_import``
+    record at all a library that already holds pictures was filled some other
+    way and is scanned as before.
+
+    Both facts come from one statement so they describe one snapshot: this
+    read runs outside the writer queue.
+    """
+    newest = (
+        select(FolderMappingCommit.state)
+        .where(FolderMappingCommit.mode == "local_import")
+        .order_by(FolderMappingCommit.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    newest_state, has_picture = session.exec(
+        select(newest, select(Picture.id).exists())
+    ).one()
+    if newest_state in (STATE_PENDING, STATE_ABANDONED, STATE_SUPERSEDED):
+        return False
+    return newest_state in (STATE_DONE, STATE_DEFERRED) or has_picture
 
 
 def settle_pending_commit(server, task_id: str, state: str) -> None:
@@ -581,7 +709,11 @@ def validate_local_import_root(server, root_path: str) -> None:
 
 
 def _build_managed_picture(
-    abs_path: str, relative_path: str, image_root: str
+    abs_path: str,
+    relative_path: str,
+    image_root: str,
+    tags_suffixes: Optional[list[str]] = None,
+    description_suffixes: Optional[list[str]] = None,
 ) -> Picture:
     """Build a managed Picture for a file already sitting under *image_root*.
 
@@ -592,6 +724,9 @@ def _build_managed_picture(
     moved for the picture itself; only the thumbnail is generated, exactly as
     the reference-folder path does - the source file already lives where it
     is going to stay.
+
+    *tags_suffixes* / *description_suffixes* are `caption_suffixes`' answer
+    for the whole import, resolved once by the caller.
     """
     pixel_sha = ImageUtils.calculate_hash_from_file_path(abs_path)
     with open(abs_path, "rb") as fh:
@@ -652,6 +787,10 @@ def _build_managed_picture(
     )
     if created_at:
         pic.created_at = created_at
+    # A caption file the owner already has beside the picture beats the
+    # tagger's guess: the same read the reference-folder scan does, at the
+    # suffixes the owner confirmed (or the known conventions, unanswered).
+    attach_sidecars(pic, abs_path, tags_suffixes, description_suffixes)
     return pic
 
 
@@ -662,6 +801,7 @@ def local_import_pictures(
     expected_pictures: int,
     on_progress=None,
     should_stop=None,
+    captions: Optional[list[CaptionPattern]] = None,
 ) -> list[int]:
     """Import every supported file under *root_path* as a managed Picture.
 
@@ -686,6 +826,10 @@ def local_import_pictures(
             Checked *between* chunks and never inside one, so a stop can never
             tear a half-written chunk: every picture already inserted is
             complete and stays indexed.
+        captions: The owner's answers to the read's caption patterns, read
+            into tags and descriptions as each picture is built. ``None`` is
+            no answer and probes the known conventions; ``[]`` is an answer
+            of nothing and reads no file.
 
     Returns:
         Every matching file's Picture id, existing and newly-created alike.
@@ -742,9 +886,18 @@ def local_import_pictures(
     if on_progress is not None:
         on_progress(processed, total)
 
+    # One answer for the whole import, resolved once rather than per picture.
+    tags_suffixes, description_suffixes = caption_suffixes(captions)
+
     def _build(abs_path: str) -> Optional[Picture]:
         try:
-            return _build_managed_picture(abs_path, rel_by_abs[abs_path], image_root)
+            return _build_managed_picture(
+                abs_path,
+                rel_by_abs[abs_path],
+                image_root,
+                tags_suffixes,
+                description_suffixes,
+            )
         except Exception as exc:
             logger.warning(
                 "Local import: failed to build picture for %s: %s", abs_path, exc
@@ -795,11 +948,18 @@ def local_import_pictures(
                 )
                 built = [p for p in built if p.file_path not in taken]
             session.add_all(built)
-            session.commit()
-            for pic in built:
-                session.refresh(pic)
+            # Flush, not commit: the picture rows and their tag rows land in
+            # one transaction, since a resume reuses any picture already
+            # indexed and would never read its sidecar again.
+            session.flush()
+            # Sidecar tags land as real tags; a picture without any waits for
+            # the tagger under the sentinel, as the scan's `_insert_pictures` does.
             session.add_all(
-                Tag(picture_id=pic.id, tag=TAG_PENDING_SENTINEL) for pic in built
+                Tag(picture_id=pic.id, tag=tag)
+                for pic in built
+                for tag in (
+                    getattr(pic, "_sidecar_tags", None) or [TAG_PENDING_SENTINEL]
+                )
             )
             session.commit()
             return [pic.id for pic in built] + list(taken.values())
