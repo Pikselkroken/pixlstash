@@ -105,6 +105,16 @@ class FolderStructureAssignmentPayload(BaseModel):
     match_id: Optional[int] = None
 
 
+class FolderStructureCaptionPayload(BaseModel):
+    """The owner's answer for one caption-file pattern the read reported."""
+
+    suffix: str
+    #: A plain ``str``, as `FolderStructureAssignmentPayload.kind` is:
+    #: `parse_captions` owns the vocabulary and answers an unknown kind with
+    #: a 400 naming the row.
+    kind: str
+
+
 class FolderStructureCommitRequest(BaseModel):
     task_id: Optional[str] = None
     """The read to commit, when this server is the one that performed it."""
@@ -126,6 +136,16 @@ class FolderStructureCommitRequest(BaseModel):
     """
 
     assignments: list[FolderStructureAssignmentPayload] = []
+    captions: Optional[list[FolderStructureCaptionPayload]] = None
+    """One row per caption pattern from the read's ``captions``, saying what
+    to read it as: ``tags``, ``description`` or ``ignore``.
+
+    Absent and empty are different answers. Absent is a client that never
+    asked (an older one), and the import probes the known conventions;
+    ``[]`` is the owner having been asked with nothing to confirm, and reads
+    no caption file. ``local_import`` only: with ``mode: "reference"`` the
+    field is refused (400), since a reference folder's suffixes are its own
+    ``PATCH /reference-folders/{folder_id}`` fields."""
     label: Optional[str] = None
     mode: Literal["reference", "local_import"] = "reference"
     """``reference`` (default): register the scanned root as an ordinary
@@ -512,6 +532,7 @@ def create_router(server) -> APIRouter:
         assignments: list,
         label: Optional[str],
         mode: str,
+        captions: Optional[list] = None,
     ) -> None:
         """Hold a library read lease for the whole commit, then run it.
 
@@ -544,7 +565,13 @@ def create_router(server) -> APIRouter:
             return
         try:
             _run_commit_holding_the_library(
-                task_id, root_path, expected_pictures, assignments, label, mode
+                task_id,
+                root_path,
+                expected_pictures,
+                assignments,
+                label,
+                mode,
+                captions,
             )
         finally:
             server.library_coordinator.release_read(lease)
@@ -556,6 +583,7 @@ def create_router(server) -> APIRouter:
         assignments: list,
         label: Optional[str],
         mode: str,
+        captions: Optional[list] = None,
     ) -> None:
         with server.folder_structure_commit_lock:
             state = server.folder_structure_commit
@@ -576,6 +604,7 @@ def create_router(server) -> APIRouter:
                         task_id, "indexing", processed, total
                     ),
                     should_stop=should_stop,
+                    captions=captions,
                 )
                 _commit_progress(
                     task_id, "assigning", expected_pictures, expected_pictures
@@ -741,6 +770,7 @@ def create_router(server) -> APIRouter:
                 record["assignments"],
                 record["label"],
                 record["mode"],
+                record["captions"],
             ),
             daemon=True,
             name="folder-structure-commit-resume",
@@ -842,8 +872,25 @@ def create_router(server) -> APIRouter:
             assignments = commit_service.parse_assignments(
                 [a.model_dump() for a in payload.assignments]
             )
+            captions = commit_service.parse_captions(
+                None
+                if payload.captions is None
+                else [c.model_dump() for c in payload.captions]
+            )
         except commit_service.CommitError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if "captions" in payload.model_fields_set and payload.mode == "reference":
+            # The field being present at all is what §22 refuses, `null`
+            # included, so this asks the request rather than the parsed
+            # answer. A reference folder's suffixes are its own contract.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "captions apply to mode=local_import. A reference folder's "
+                    "sidecar suffixes are its own: set them on "
+                    "PATCH /reference-folders/{folder_id}."
+                ),
+            )
 
         # A read commits once. Re-checked (not just re-validated) here, inside
         # the lock, immediately before the commit actually starts: two
@@ -904,6 +951,7 @@ def create_router(server) -> APIRouter:
             label=payload.label,
             expected_pictures=expected_pictures,
             assignments=assignments,
+            captions=captions,
         )
 
         threading.Thread(
@@ -915,6 +963,7 @@ def create_router(server) -> APIRouter:
                 assignments,
                 payload.label,
                 payload.mode,
+                captions,
             ),
             daemon=True,
             name="folder-structure-commit",

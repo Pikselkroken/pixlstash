@@ -6,7 +6,7 @@
  * either way - committing registers the folder for in-place indexing and
  * writes database rows only.
  */
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 
 import {
   getFolderStructureCommitStatus,
@@ -16,6 +16,7 @@ import {
 import { errorDetail } from "../../utils/apiError";
 import { FACET_KINDS, kindStyle } from "../../utils/folderMappingKinds";
 import AppButton from "../widgets/AppButton.vue";
+import AppSelect from "../widgets/AppSelect.vue";
 
 const props = defineProps({
   path: { type: String, required: true },
@@ -28,6 +29,12 @@ const props = defineProps({
    */
   readResult: { type: Object, default: null },
   assignments: { type: Array, required: true },
+  /**
+   * Saved answers for the read's caption-file patterns, `[{suffix, kind}]`,
+   * for a resumed commit. Seeds the card; a saved `[]` ("read nothing")
+   * seeds every row as Ignore. `null` is "nobody was asked yet".
+   */
+  captions: { type: Array, default: null },
   label: { type: String, default: "" },
   pictureCount: { type: Number, default: 0 },
   // "reference" registers the scanned root as an external reference folder;
@@ -53,6 +60,7 @@ const emit = defineEmits([
   "cancel",
   "committed",
   "commit-started",
+  "update:captions",
   "update:committing",
 ]);
 
@@ -72,6 +80,67 @@ const total = ref(0);
 
 let pollTimer = null;
 let disposed = false;
+
+/**
+ * The caption-file conventions the read found beside the pictures, with its
+ * guess at what each holds. Asked, not assumed: a prose convention read as
+ * tags puts a sentence's words on every picture in the library.
+ */
+const CAPTION_CHOICES = [
+  { value: "tags", label: "Tags" },
+  { value: "description", label: "Description" },
+  { value: "ignore", label: "Ignore" },
+];
+// Only a local import asks; the commit refuses the key in reference mode.
+const patterns = computed(() =>
+  props.mode === "local_import" ? (props.readResult?.captions ?? []) : [],
+);
+// suffix -> the owner's answer. Null-prototype: the keys are filename
+// fragments, and `__proto__` or `constructor` as a key would misbehave.
+const answers = reactive(Object.create(null));
+watch(
+  patterns,
+  (rows) => {
+    const readNothing = props.captions?.length === 0;
+    for (const row of rows) {
+      if (answers[row.suffix]) continue;
+      answers[row.suffix] =
+        props.captions?.find((c) => c.suffix === row.suffix)?.kind ??
+        (readNothing ? "ignore" : row.kind);
+    }
+  },
+  { immediate: true },
+);
+/** One answer per reported pattern. With no rows: the saved answer, else
+ *  `[]` for a read that reported its (empty) patterns, else `null` for a
+ *  read from before the card existed, which the commit sends as no key. */
+function chosenCaptions() {
+  if (props.mode !== "local_import") return null;
+  if (!patterns.value.length) {
+    if (Array.isArray(props.captions)) return props.captions;
+    return Array.isArray(props.readResult?.captions) ? [] : null;
+  }
+  return patterns.value.map((row) => ({
+    suffix: row.suffix,
+    kind: answers[row.suffix] ?? row.kind,
+  }));
+}
+// Reported as made, not at commit: "Back to the mapping" unmounts this step
+// and the wizard re-seeds it from what it was told.
+function answerChosen(suffix, kind) {
+  answers[suffix] = kind;
+  emit("update:captions", chosenCaptions());
+}
+function captionFiles(kind) {
+  return patterns.value.reduce(
+    (sum, row) =>
+      sum + ((answers[row.suffix] ?? row.kind) === kind ? row.files : 0),
+    0,
+  );
+}
+const captionFilesAsTags = computed(() => captionFiles("tags"));
+const captionFilesAsDescriptions = computed(() => captionFiles("description"));
+const captionFilesIgnored = computed(() => captionFiles("ignore"));
 
 const grouped = computed(() => {
   const byKind = new Map(FACET_KINDS.map((k) => [k.value, new Map()]));
@@ -169,9 +238,14 @@ async function poll(taskId) {
   }
 }
 
-async function commit(assignments = props.assignments) {
+// `captions` defaults from the card only for "Yes, build this library"; the
+// commit on mount and Organise later both pass their own.
+async function commit(
+  assignments = props.assignments,
+  captions = chosenCaptions(),
+) {
   if (!props.libraryExists) {
-    emit("build", assignments);
+    emit("build", assignments, captions);
     return;
   }
   committing.value = true;
@@ -183,6 +257,7 @@ async function commit(assignments = props.assignments) {
       props.label,
       props.mode,
       props.readResult,
+      captions,
     );
     commitTaskId.value = started.task_id;
     emit("commit-started", started.task_id);
@@ -206,7 +281,9 @@ async function commit(assignments = props.assignments) {
  */
 async function organiseLater() {
   if (!committing.value) {
-    commit([]);
+    // Declining to decide is not confirming the read's guesses: a read that
+    // reported its patterns is answered "read nothing".
+    commit([], Array.isArray(props.readResult?.captions) ? [] : null);
     return;
   }
   try {
@@ -226,7 +303,9 @@ async function abort() {
 }
 
 onMounted(() => {
-  if (props.commitOnMount) commit();
+  // The card is never seen on this path, so only the saved answers count;
+  // the read's guesses are not an answer.
+  if (props.commitOnMount) commit(props.assignments, props.captions);
 });
 
 onUnmounted(() => {
@@ -284,6 +363,50 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <div
+      v-if="patterns.length && !committing"
+      class="preview-step__card"
+    >
+      <div class="preview-step__card-title">Caption files beside your pictures</div>
+      <p class="preview-step__card-lead">
+        Text files named after a picture are read as its tags or description.
+        Check each pattern.
+      </p>
+      <ul class="preview-step__captions">
+        <li
+          v-for="row in patterns"
+          :key="row.suffix"
+          class="preview-step__caption"
+          :class="{
+            'preview-step__caption--ignored':
+              (answers[row.suffix] ?? row.kind) === 'ignore',
+          }"
+        >
+          <div class="preview-step__caption-what">
+            <code class="preview-step__caption-suffix">*{{ row.suffix }}</code>
+            <span class="preview-step__caption-count">
+              {{ row.files.toLocaleString() }}
+              {{ row.files === 1 ? "file" : "files" }} in
+              {{ row.folders.toLocaleString() }}
+              {{ row.folders === 1 ? "folder" : "folders" }}
+            </span>
+            <span class="preview-step__caption-sample" :title="row.sample">
+              {{ row.sample }}
+            </span>
+          </div>
+          <AppSelect
+            :model-value="answers[row.suffix]"
+            :options="CAPTION_CHOICES"
+            :label="`Read *${row.suffix} as`"
+            hide-label
+            compact
+            class="preview-step__caption-choice"
+            @update:model-value="answerChosen(row.suffix, $event)"
+          />
+        </li>
+      </ul>
+    </div>
+
     <div class="preview-step__card">
       <div class="preview-step__card-title">
         What happens when you press the button
@@ -302,6 +425,28 @@ onUnmounted(() => {
           >
           {{ entityCount.toLocaleString() }} {{ entityKinds }}
           {{ entityCount === 1 ? "is" : "are" }} created or matched
+        </div>
+        <div v-if="captionFilesAsTags" class="preview-step__fact">
+          <span class="preview-step__fact-mark preview-step__fact-mark--yes"
+            >✓</span
+          >
+          {{ captionFilesAsTags.toLocaleString() }} caption
+          {{ captionFilesAsTags === 1 ? "file is" : "files are" }} read as tags;
+          {{ captionFilesAsTags === 1 ? "that picture is" : "those pictures are" }}
+          not tagged from scratch
+        </div>
+        <div v-if="captionFilesAsDescriptions" class="preview-step__fact">
+          <span class="preview-step__fact-mark preview-step__fact-mark--yes"
+            >✓</span
+          >
+          {{ captionFilesAsDescriptions.toLocaleString() }} caption
+          {{ captionFilesAsDescriptions === 1 ? "file is" : "files are" }} read
+          as descriptions
+        </div>
+        <div v-if="captionFilesIgnored" class="preview-step__fact">
+          <span class="preview-step__fact-mark">—</span>
+          {{ captionFilesIgnored.toLocaleString() }} caption
+          {{ captionFilesIgnored === 1 ? "file is" : "files are" }} left unread
         </div>
         <div class="preview-step__fact">
           <span class="preview-step__fact-mark">—</span>
@@ -459,6 +604,67 @@ onUnmounted(() => {
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   margin-bottom: var(--space-4);
+}
+
+.preview-step__card-lead {
+  margin: calc(-1 * var(--space-2)) 0 var(--space-4);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-background), 0.65);
+}
+
+.preview-step__captions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.preview-step__caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.preview-step__caption--ignored .preview-step__caption-what {
+  opacity: 0.55;
+}
+
+.preview-step__caption-what {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  font-size: var(--text-sm);
+}
+
+.preview-step__caption-suffix {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-panel));
+}
+
+.preview-step__caption-count {
+  color: rgba(var(--v-theme-on-background), 0.72);
+}
+
+.preview-step__caption-sample {
+  flex-basis: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-background), 0.55);
+}
+
+.preview-step__caption-choice {
+  flex-shrink: 0;
+  width: 10rem;
 }
 
 .preview-step__facts {

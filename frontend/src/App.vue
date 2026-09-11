@@ -364,13 +364,15 @@ function openSettingsDialog(tab = "") {
   sidebarRef.value?.openSettingsDialog?.(typeof tab === "string" ? tab : "");
 }
 
-/** The empty library's "Choose a folder…" - a reference folder, read in place.
+/** The empty library's "Choose a folder…" / "Import them…".
  *
- * Not the add-folder type chooser: its other option is an import folder, which
- * copies files in, and the button that reaches this promises the opposite.
+ * The sidebar picks the route: the local_import wizard over the library's own
+ * folder when it already holds pictures (the way back in once the offer was
+ * dismissed), else a folder read in place. Not the add-folder type chooser:
+ * its other option copies files in, and the button promises the opposite.
  */
 function openAddReferenceFolder() {
-  sidebarRef.value?.openReferenceFolderEditor?.();
+  sidebarRef.value?.chooseLibraryFolder?.();
 }
 
 /** The library is empty: let the sidebar ask whether its folder is. */

@@ -15,6 +15,7 @@ from sqlmodel import Session, select
 from pixlstash.database import DBPriority
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.folder_structure_commit_service import root_import_answered
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
 from pixlstash.tasks.reference_folder_scan_task import ReferenceFolderScanTask
 from pixlstash.utils.reference_folder_validator import (
@@ -26,6 +27,10 @@ logger = get_logger(__name__)
 
 # Re-scan active folders at most this often (seconds).
 _RESCAN_INTERVAL_S: float = 300.0
+#: How long a closed import gate is left alone before it is asked again. The
+#: planner sweeps up to twenty times a second, and a closed gate never stamps
+#: `_root_last_scanned`, so without this its query would run on every sweep.
+_GATE_RETRY_S: float = 5.0
 # Retry mount_error folders quickly so transient bind/access glitches clear
 # from UI without waiting for a full active re-scan interval.
 _MOUNT_ERROR_RETRY_INTERVAL_S: float = 15.0
@@ -68,10 +73,13 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         # owner renamed while the app was closed.
         self._root_last_scanned: float | None = None
         self._root_scanned_once = False
+        # When the import gate last said no, and when to ask it again.
+        self._gate_retry_at: float | None = None
 
     def mark_root_due(self) -> None:
         """Ask for the library root to be rescanned on the next planning cycle."""
         self._root_last_scanned = None
+        self._gate_retry_at = None
 
     def root_scan_complete(self) -> bool:
         """Whether the library root has been scanned at least once since boot.
@@ -172,6 +180,15 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
         last = self._root_last_scanned
         if last is not None and (now - last) < _RESCAN_INTERVAL_S:
             return None
+        # The root waits for the first import offer to be answered (see
+        # `root_import_answered`). Asked only when a scan is otherwise due,
+        # and no more than once per `_GATE_RETRY_S` while the answer is no.
+        if self._gate_retry_at is not None and now < self._gate_retry_at:
+            return None
+        if not self._db.run_immediate_read_task(root_import_answered):
+            self._gate_retry_at = now + _GATE_RETRY_S
+            return None
+        self._gate_retry_at = None
         # Stamped when the task is handed out, not when it finishes, so a slow
         # scan is not queued a second time behind itself.
         self._root_last_scanned = now
@@ -186,6 +203,7 @@ class ReferenceFolderScanFinder(BaseTaskFinder):
                 self._path_mapper.resolve(rf.folder) for rf in folders
             ),
             on_root_scanned=self._note_root_scanned,
+            on_root_skipped=self.mark_root_due,
         )
 
     def _mark_mount_error(self, folder_id: int) -> None:

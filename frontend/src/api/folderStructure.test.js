@@ -84,4 +84,19 @@ describe("starting a folder-structure commit", () => {
 
     expect(apiClient.post.mock.calls[0][1]).not.toHaveProperty("label");
   });
+
+  it("sends the caption answers for a local import only, and never null", async () => {
+    const captions = [{ suffix: ".txt", kind: "ignore" }];
+    await startFolderStructureCommit("read-1", [], "", "local_import", null, captions);
+    expect(apiClient.post.mock.calls[0][1].captions).toEqual(captions);
+
+    await startFolderStructureCommit("read-1", [], "", "local_import", null, []);
+    expect(apiClient.post.mock.calls[1][1].captions).toEqual([]);
+
+    await startFolderStructureCommit("read-1", [], "", "local_import");
+    expect(apiClient.post.mock.calls[2][1]).not.toHaveProperty("captions");
+
+    await startFolderStructureCommit("read-1", [], "", "reference", null, captions);
+    expect(apiClient.post.mock.calls[3][1]).not.toHaveProperty("captions");
+  });
 });

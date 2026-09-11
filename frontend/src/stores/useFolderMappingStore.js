@@ -1,4 +1,4 @@
-import { onScopeDispose, ref } from "vue";
+import { computed, onScopeDispose, ref } from "vue";
 import { defineStore } from "pinia";
 
 import { onSessionReset } from "../utils/apiClient";
@@ -55,6 +55,24 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
   const pending = ref(readStorage());
   const wizardOpen = ref(false);
   const wizardResume = ref(null);
+  /**
+   * How many pictures the open library's OWN folder holds on disk, as the
+   * sidebar last asked the server; `null` until it has. The empty library
+   * reads it to offer "Import them…" instead of "Choose a folder…", so a
+   * dismissed import offer still has a way back in. `capped` means the count
+   * stopped at the inspect endpoint's cap and is a floor, not a total.
+   */
+  const rootPictureCount = ref(null);
+  const rootPictureCountCapped = ref(false);
+  // A capped zero is not an empty folder: the walk stopped before a picture.
+  const rootMayHoldPictures = computed(
+    () => rootPictureCount.value > 0 || rootPictureCountCapped.value,
+  );
+
+  function setRootPictureCount(count, capped = false) {
+    rootPictureCount.value = count;
+    rootPictureCountCapped.value = capped;
+  }
 
   /** Open the one wizard; `resume` is a saved entry, or null for a fresh add. */
   function openWizard(resume = null) {
@@ -66,7 +84,7 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
     wizardOpen.value = false;
   }
 
-  /** @param {{taskId: string, path: string, label?: string, mode?: "reference"|"local_import", autoCommit?: boolean, assignments?: Array, pictureCount?: number}} entry */
+  /** @param {{taskId: string, path: string, label?: string, mode?: "reference"|"local_import", autoCommit?: boolean, assignments?: Array, captions?: Array|null, pictureCount?: number}} entry */
   function save(entry) {
     pending.value = entry;
     try {
@@ -86,8 +104,32 @@ export const useFolderMappingStore = defineStore("folderMapping", () => {
     }
   }
 
-  const unsubscribeSessionReset = onSessionReset(clear);
+  // A session change forgets the entry, the count (it is the previous
+  // library's) and the open wizard: Pinia outlives a logout in the same tab,
+  // and the next credential must not find the previous owner's folder on screen.
+  function resetForSession() {
+    clear();
+    wizardOpen.value = false;
+    wizardResume.value = null;
+    rootPictureCount.value = null;
+    rootPictureCountCapped.value = false;
+  }
+
+  const unsubscribeSessionReset = onSessionReset(resetForSession);
   onScopeDispose(unsubscribeSessionReset);
 
-  return { pending, save, clear, wizardOpen, wizardResume, openWizard, closeWizard };
+  return {
+    pending,
+    save,
+    clear,
+    wizardOpen,
+    wizardResume,
+    rootPictureCount,
+    rootPictureCountCapped,
+    rootMayHoldPictures,
+    setRootPictureCount,
+    resetForSession,
+    openWizard,
+    closeWizard,
+  };
 });

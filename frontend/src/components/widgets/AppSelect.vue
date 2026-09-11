@@ -1,6 +1,6 @@
 <template>
   <div class="app-select">
-    <FieldLabel v-if="label">{{ label }}</FieldLabel>
+    <FieldLabel v-if="label && !hideLabel">{{ label }}</FieldLabel>
     <div
       v-if="multiple"
       class="app-select__multiple"
@@ -59,6 +59,9 @@ const props = defineProps({
   // Array of strings OR { label, value } objects.
   options: { type: Array, default: () => [] },
   compact: { type: Boolean, default: false },
+  // Keep `label` as the accessible name only, for a row whose text already
+  // says what the select decides.
+  hideLabel: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   multiple: { type: Boolean, default: false },
 });

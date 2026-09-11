@@ -355,6 +355,60 @@ def test_a_caption_beside_most_pictures_says_nothing_at_all():
 
 
 # ===========================================================================
+# Caption files: the conventions beside the pictures, for the owner to confirm
+# ===========================================================================
+
+
+def _write(root, rel, text):
+    with open(os.path.join(root, *rel.split("/")), "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def test_caption_patterns_are_grouped_by_suffix_and_sniffed_for_kind():
+    spec = {
+        "": [],
+        "wd14": ["a.jpg", "a.txt", "b.jpg", "b.txt"],
+        "florence": ["c.jpg", "c_caption.txt", "d.jpg", "d_caption.txt", "e.jpg"],
+    }
+    with _tree(spec) as root:
+        for name in ("wd14/a.txt", "wd14/b.txt"):
+            _write(root, name, "1girl, solo, red hair\n")
+        for name in ("florence/c_caption.txt", "florence/d_caption.txt"):
+            _write(root, name, "A woman with red hair stands by a window.\n")
+        result = FolderStructureRead(root).run()
+
+    rows = {row["suffix"]: row for row in result["captions"]}
+    assert set(rows) == {".txt", "_caption.txt"}
+    assert rows[".txt"]["kind"] == "tags" and rows[".txt"]["files"] == 2
+    assert rows["_caption.txt"]["kind"] == "description"
+    assert rows["_caption.txt"]["folders"] == 1
+    assert rows["_caption.txt"]["sample"].startswith("A woman")
+
+
+def test_metadata_beside_a_picture_is_not_offered_as_a_caption():
+    """A generator's JSON and an XMP sidecar are never captions, and a `.txt`
+    holding JSON is metadata too: none of them may be pre-filled as tags."""
+    spec = {"": ["a.jpg", "a.json", "a.xmp", "a.txt", "b.jpg", "b.txt"]}
+    with _tree(spec) as root:
+        _write(root, "a.txt", '{"prompt": "1girl"}')
+        _write(root, "b.txt", "[1, 2, 3]")
+        result = FolderStructureRead(root).run()
+
+    assert result["captions"] == []
+
+
+def test_a_caption_file_is_paired_with_the_longest_picture_stem():
+    with _tree(
+        {"": ["foo.jpg", "foo_tags.jpg", "foo_tags.txt", "bar.jpg", "bar_tags.txt"]}
+    ) as root:
+        _write(root, "foo_tags.txt", "cat, dog")
+        _write(root, "bar_tags.txt", "cat, dog")
+        result = FolderStructureRead(root).run()
+
+    assert sorted(row["suffix"] for row in result["captions"]) == [".txt", "_tags.txt"]
+
+
+# ===========================================================================
 # Signal: faces (folder-scoped, sampled)
 # ===========================================================================
 

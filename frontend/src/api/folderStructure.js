@@ -81,6 +81,10 @@ export async function cancelFolderStructureRead(taskId) {
  * @param {Object|null} [readResult] - the read's own result, for a caller that
  *   has one but no task the server still remembers. Exactly one of `taskId` and
  *   `readResult` reaches the server.
+ * @param {Array<{suffix: string, kind: "tags"|"description"|"ignore"}>|null} [captions] -
+ *   the owner's answer per caption-file pattern the read reported. Sent for
+ *   `local_import` only: `[]` means "read nothing", `null` omits the key and
+ *   lets the import probe the known conventions (a client that never asked).
  * @returns {Promise<Object>} `{ task_id }`.
  */
 export async function startFolderStructureCommit(
@@ -89,6 +93,7 @@ export async function startFolderStructureCommit(
   label,
   mode = "reference",
   readResult = null,
+  captions = null,
 ) {
   // A read lives in one server process's memory. The desktop's first run reads
   // the library folder while the GPU runtime downloads and then restarts the
@@ -99,6 +104,7 @@ export async function startFolderStructureCommit(
     ? { task_id: taskId, assignments, mode }
     : { read_result: readResult, assignments, mode };
   if (label) body.label = label;
+  if (mode === "local_import" && captions !== null) body.captions = captions;
   return unwrap(apiClient.post(COMMIT_URL, body));
 }
 

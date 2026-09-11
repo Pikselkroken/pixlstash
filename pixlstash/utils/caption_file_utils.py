@@ -18,8 +18,11 @@ import os
 import re
 import tempfile
 from collections import Counter
+from collections.abc import Collection
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.image_processing.video_utils import VIDEO_EXTENSIONS
+from pixlstash.utils.media_files import SUPPORTED_IMAGE_EXTS, is_hidden_entry
 
 logger = get_logger(__name__)
 
@@ -63,6 +66,11 @@ _DESCRIPTION_NAME_RE = re.compile(
 # suffix, and ``sidecar_path`` enforces it again at the point of use.
 _SAFE_SUFFIX_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
+# A suffix ending in a media extension names a picture, not a caption:
+# ``photo.jpg`` + ``.png`` is ``photo.png``, and a write-back there replaces
+# a picture with text.
+_MEDIA_EXTS = tuple(sorted(SUPPORTED_IMAGE_EXTS | frozenset(VIDEO_EXTENSIONS)))
+
 
 def is_safe_sidecar_suffix(suffix: str | None) -> bool:
     """Return True when *suffix* is a bare filename fragment safe to append.
@@ -72,13 +80,16 @@ def is_safe_sidecar_suffix(suffix: str | None) -> bool:
 
     Returns:
         True when appending *suffix* to an image stem cannot leave the image's
-        directory; False for empty values, ``..``, or any path separator.
+        directory and cannot name a picture or video; False for empty values,
+        ``..``, any path separator, or a media extension.
     """
     if not suffix or ".." in suffix:
         return False
     if "/" in suffix or "\\" in suffix:
         return False
     if os.sep in suffix or (os.altsep and os.altsep in suffix):
+        return False
+    if suffix.lower().endswith(_MEDIA_EXTS):
         return False
     return bool(_SAFE_SUFFIX_RE.match(suffix))
 
@@ -117,30 +128,55 @@ def sidecar_path(image_path: str, suffix: str) -> str:
 
 
 def classify_sidecar(path: str) -> str | None:
-    """Classify a sidecar file as tags or a description.
+    """The kind `sniff_caption` reads out of *path*, or ``None`` for a non-caption."""
+    sniffed = sniff_caption(path)
+    return sniffed and sniffed[0]
 
-    Filename first: an unambiguous suffix (``_tags.txt``, ``_description.txt``,
-    ``.caption`` …) decides immediately.  An ambiguous bare ``.txt`` falls back
-    to a content sniff (comma-separated short tokens -> tags; prose ->
-    description; tags when unsure).
 
-    Returns ``SIDECAR_TYPE_TAGS`` / ``SIDECAR_TYPE_DESCRIPTION``, or ``None`` if
-    the file cannot be read.
+#: How much of a caption file the sniff reads. A caption is a line or a
+#: paragraph; anything that needs more than this to classify is not one.
+_SNIFF_BYTES = 4096
+_EXCERPT_CHARS = 100
+
+
+def sniff_caption(path: str) -> tuple[str, str] | None:
+    """Classify one caption file and say what it starts with.
+
+    The one place a kind is decided from a file: the folder read's caption
+    card and the suffix probe both come through here, so what the owner is
+    shown and what the import reads agree by construction.
+
+    Returns ``(kind, excerpt)`` with *kind* ``"tags"`` or ``"description"``
+    and *excerpt* the first line or so, whitespace collapsed. ``None`` when
+    the file is not a caption at all: unreadable, binary (a NUL byte in the
+    head), JSON or markup (a generator's metadata, an XMP sidecar), or empty
+    without a name that says what it is. An unambiguous name (``_tags.txt``,
+    ``.caption`` ...) decides before the content does, an empty file
+    included; a bare ``.txt`` is decided by `_looks_like_tags`.
     """
     name = os.path.basename(path)
-    if _TAGS_NAME_RE.search(name):
-        return SIDECAR_TYPE_TAGS
-    if _DESCRIPTION_NAME_RE.search(name):
-        return SIDECAR_TYPE_DESCRIPTION
-
-    # Ambiguous (bare ``.txt`` or unknown) - decide by content.
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            raw = fh.read()
+        with open(path, "rb") as fh:
+            head = fh.read(_SNIFF_BYTES)
     except OSError as exc:
-        logger.warning("Could not read sidecar %s for classification: %s", path, exc)
+        logger.warning("Could not read caption file %s: %s", path, exc)
         return None
-    return SIDECAR_TYPE_TAGS if _looks_like_tags(raw) else SIDECAR_TYPE_DESCRIPTION
+    if b"\x00" in head:
+        return None
+    # utf-8-sig: a BOM would otherwise survive .strip() and become part of
+    # the first tag.
+    text = head.decode("utf-8-sig", errors="replace").strip()
+    if text[:1] in ("{", "[", "<"):
+        return None
+    excerpt = " ".join(text.split())[:_EXCERPT_CHARS]
+    if _TAGS_NAME_RE.search(name):
+        return SIDECAR_TYPE_TAGS, excerpt
+    if _DESCRIPTION_NAME_RE.search(name):
+        return SIDECAR_TYPE_DESCRIPTION, excerpt
+    if not text:
+        return None
+    kind = SIDECAR_TYPE_TAGS if _looks_like_tags(text) else SIDECAR_TYPE_DESCRIPTION
+    return kind, excerpt
 
 
 def resolve_typed_sidecar(
@@ -227,19 +263,120 @@ def writeback_path(
         return None
 
 
+def read_caption_text(path: str) -> str | None:
+    """The raw text of a caption file, or ``None`` when it could not be read.
+
+    An empty file reads as ``""``, so callers can tell the owner clearing a
+    caption from a read that failed.
+    """
+    try:
+        with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
+            return fh.read()
+    except OSError as exc:
+        logger.warning("Could not read sidecar %s: %s", path, exc)
+        return None
+
+
+def parse_caption_tags(raw_text: str) -> list[str]:
+    """Parse a comma-separated tag string into a deduplicated, normalised list."""
+    text = (raw_text or "").strip()
+    if not text:
+        return []
+
+    parts = [p.strip() for p in text.replace("\n", ",").split(",")]
+    seen: set[str] = set()
+    result: list[str] = []
+    for raw_tag in parts:
+        normalised = " ".join(raw_tag.replace("_", " ").lower().split())
+        if normalised and normalised not in seen:
+            seen.add(normalised)
+            result.append(normalised)
+    return result
+
+
 def read_tags_sidecar(path: str) -> list[str]:
     """Read a tags sidecar into a normalised, de-duplicated list of tags."""
-    raw = _read_text(path)
-    return _parse_txt_tags(raw) if raw is not None else []
+    raw = read_caption_text(path)
+    return parse_caption_tags(raw) if raw is not None else []
 
 
 def read_description_sidecar(path: str) -> str | None:
     """Read a description sidecar into stripped text, or ``None`` when empty."""
-    raw = _read_text(path)
+    raw = read_caption_text(path)
     if raw is None:
         return None
     text = raw.strip()
     return text or None
+
+
+def _first_existing_sidecar(
+    image_path: str, sidecar_type: str, suffixes: list[str] | None
+) -> str | None:
+    """The sidecar of *sidecar_type* beside *image_path*, by the owner's rule.
+
+    ``None`` probes the known conventions (a bare ``.txt`` is content-sniffed);
+    a list is tried in order and the first existing file wins, so ``[]`` reads
+    nothing of that kind.
+    """
+    if suffixes is None:
+        return resolve_typed_sidecar(image_path, sidecar_type, None)
+    for suffix in suffixes:
+        try:
+            candidate = sidecar_path(image_path, suffix)
+        except ValueError as exc:
+            logger.warning("Cannot resolve sidecar for %s: %s", image_path, exc)
+            continue
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def attach_sidecars(
+    pic,
+    file_path: str,
+    tags_suffixes: list[str] | None = None,
+    description_suffixes: list[str] | None = None,
+) -> list[str]:
+    """Record the sidecars beside *file_path* on an unsaved picture.
+
+    Sets ``tags_file`` / ``description_file`` and their mtimes when a sidecar
+    exists and could be read, fills ``description`` from the description
+    sidecar when the picture has none, and returns the tags read. The list is
+    empty when there is no tags sidecar and when the file is empty; the caller
+    decides what that means (the scan and the local import both fall back to
+    the pending-tag sentinel so the tagger runs). A file that would not open
+    is not recorded at all, so the next scan tries it again.
+
+    Tags cannot be set on an unsaved `Picture` (they are a relationship), so
+    they are stashed on ``pic._sidecar_tags`` for the inserter to persist.
+
+    *tags_suffixes* / *description_suffixes*: ``None`` probes the known
+    conventions; a list is the suffixes the owner confirmed for that kind, in
+    order of preference; ``[]`` reads nothing of that kind.
+    """
+    tags: list[str] = []
+    tags_path = _first_existing_sidecar(file_path, SIDECAR_TYPE_TAGS, tags_suffixes)
+    if tags_path:
+        text = read_caption_text(tags_path)
+        if text is not None:
+            pic.tags_file = tags_path
+            pic.tags_file_mtime = get_sidecar_mtime(tags_path)
+            tags = parse_caption_tags(text)
+
+    description_path = _first_existing_sidecar(
+        file_path, SIDECAR_TYPE_DESCRIPTION, description_suffixes
+    )
+    if description_path:
+        raw = read_caption_text(description_path)
+        if raw is not None:
+            pic.description_file = description_path
+            pic.description_file_mtime = get_sidecar_mtime(description_path)
+            if raw.strip() and not pic.description:
+                pic.description = raw.strip()
+
+    if tags:
+        pic._sidecar_tags = tags  # type: ignore[attr-defined]
+    return tags
 
 
 def write_sidecar(path: str, content: str) -> float | None:
@@ -290,22 +427,36 @@ def write_sidecar(path: str, content: str) -> float | None:
     return get_sidecar_mtime(path)
 
 
-def detect_folder_suffixes(folder: str, sample_limit: int = 200) -> dict:
+def detect_folder_suffixes(
+    folder: str, sample_limit: int = 200, skip_dirs: Collection[str] = ()
+) -> dict:
     """Infer the sidecar naming convention already in use inside *folder*.
 
     Walks the folder, matches each sidecar text file to its image, derives the
     suffix that follows the image stem, classifies the sidecar (filename then
     content), and returns the most common suffix observed for each type.
+    Hidden entries and the absolute directories in *skip_dirs* (subtrees the
+    caller's own scan does not index) are not walked: a convention found in
+    one of those is not this folder's.
 
     Returns a dict ``{"tags_suffix", "description_suffix", "found_tags",
     "found_descriptions"}``; the suffix values are ``None`` when that type was
     not found.
     """
+    skipped = {os.path.normpath(path) for path in skip_dirs}
     image_stems: set[str] = set()
     sidecar_files: list[str] = []
     seen_images = 0
-    for root, _dirs, files in os.walk(folder):
+    for root, dirs, files in os.walk(folder):
+        dirs[:] = [
+            name
+            for name in dirs
+            if not is_hidden_entry(name)
+            and os.path.normpath(os.path.join(root, name)) not in skipped
+        ]
         for name in files:
+            if is_hidden_entry(name):
+                continue
             full = os.path.join(root, name)
             ext = os.path.splitext(name)[1].lower()
             if ext in _IMAGE_EXTS_FOR_DETECTION:
@@ -346,15 +497,6 @@ _IMAGE_EXTS_FOR_DETECTION = frozenset(
     {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif", ".avif", ".gif"}
 )
 _SIDECAR_EXTS_FOR_DETECTION = frozenset({".txt", ".caption"})
-
-
-def _read_text(path: str) -> str | None:
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            return fh.read()
-    except OSError as exc:
-        logger.warning("Could not read sidecar %s: %s", path, exc)
-        return None
 
 
 def _suffix_for_sidecar(sidecar_path_str: str, image_stems: set[str]) -> str | None:
@@ -422,20 +564,3 @@ def _looks_like_tags(text: str) -> bool:
 
     # Short content without prose signals -> tags.
     return not has_sentence_punct
-
-
-def _parse_txt_tags(raw_text: str) -> list[str]:
-    """Parse a comma-separated tag string into a deduplicated, normalised list."""
-    text = (raw_text or "").strip()
-    if not text:
-        return []
-
-    parts = [p.strip() for p in text.replace("\n", ",").split(",")]
-    seen: set[str] = set()
-    result: list[str] = []
-    for raw_tag in parts:
-        normalised = " ".join(raw_tag.replace("_", " ").lower().split())
-        if normalised and normalised not in seen:
-            seen.add(normalised)
-            result.append(normalised)
-    return result

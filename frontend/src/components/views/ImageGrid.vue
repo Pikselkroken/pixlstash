@@ -497,7 +497,7 @@
       <!-- All three routes reuse wiring App.vue already had: `local-import`
            reaches `SideBar.startLocalImport`, `open-settings` reaches
            `SideBar.openSettingsDialog`, and `choose-folder` is the one new
-           signal, for the reference-folder editor the sidebar owns. -->
+           signal, for `SideBar.chooseLibraryFolder`. -->
       <LibraryEmptyState
         v-if="showLibraryEmptyState"
         @choose-folder="emit('choose-folder')"

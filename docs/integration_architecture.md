@@ -1612,9 +1612,25 @@ indeterminate bar rather than 0%.
     "restricted": 0             //   below the root and on the system blocklist
   },
   "face_signal_ran": true,      // false = no inference engine; nobody is a Person
+  "captions": [                 // caption-file conventions found beside the pictures
+    {"suffix": ".txt", "kind": "tags", "files": 27_800, "folders": 340,
+     "sample": "1girl, solo, red hair, looking at viewer"},
+    {"suffix": "_caption.txt", "kind": "description", "files": 612, "folders": 4,
+     "sample": "A woman with red hair stands by a window."}
+  ],
   "levels": [ /* one per depth, ascending, level 1 = the root itself */ ]
 }
 ```
+
+**`captions`** is every text file that pairs with a picture by name, grouped by
+the suffix after the picture's stem (`a.txt`, `a_tags.txt`, `a.jpg.caption`
+beside `a.jpg` are the suffixes `.txt`, `_tags.txt`, `.jpg.caption`), most
+files first. `kind` is the read's guess from a few sampled files (comma lists
+read as `tags`, prose as `description`); `sample` is an excerpt so the owner
+can check it without opening a file. Binary files, JSON and markup are never
+offered, and only text extensions (`.txt`, `.caption`) are considered. The
+owner confirms or corrects each row on the commit (§22, `captions`). Empty
+when there are none.
 
 Two fields the screen must not ignore, because both mean *this map is not the
 whole library*:
@@ -1937,6 +1953,11 @@ newly-indexed picture gets, exactly as any other import produces.
   "read_result": { /* … */ },  // or the read's own result, from §20's status
   "label": "Generations",       // optional; defaults to the folder's own name
   "mode": "reference",          // "reference" (default) | "local_import"
+  "captions": [                 // local_import only: one row per §20 caption pattern
+    {"suffix": ".txt", "kind": "tags"},
+    {"suffix": "_caption.txt", "kind": "description"},
+    {"suffix": "_notes.txt", "kind": "ignore"}
+  ],
   "assignments": [
     // One entry per folder the owner accepted as something. A folder left
     // "just a folder" or undecided is simply absent — there is nothing here
@@ -2004,6 +2025,21 @@ indexed under this path (an overlapping earlier `local_import`, or an ordinary
 import that reached it independently) is reused by id, never re-imported as a
 second row — same spirit as `mode: "reference"`'s own "don't redo what already
 happened" rule for a resumed commit (§25).
+
+**`captions` says what each caption file beside the pictures is.** A picture
+built by the import reads the files at the confirmed suffixes: a `tags` file
+becomes its tags (and it is not queued for the tagger), a `description` file
+its description, and an `ignore` pattern is never opened however tag-like its
+content. **Absent and empty are different answers.** A request with no
+`captions` key is a client that never asked (an older one), and the import
+probes the known conventions as it always did (`_tags.txt`, `.caption`, a
+content-sniffed `.txt`). `[]` is the owner having been asked with nothing to
+confirm, and reads no caption file at all. The answer is recorded on the
+durable commit record, so a commit resumed after a crash honours it. A row's
+`suffix` must be a bare filename fragment and `kind` one of `tags`,
+`description`, `ignore`, else `400`. `mode: "reference"` refuses the field
+outright (`400`), `null` and `[]` included: a reference folder's sidecar
+suffixes are its own `PATCH /reference-folders/{folder_id}` fields.
 
 **The root must be inside `image_root` or the commit fails.** There is no
 separate error status for this — the check runs inside the background commit,

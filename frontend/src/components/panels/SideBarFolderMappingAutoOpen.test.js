@@ -484,4 +484,50 @@ describe("the loose-pictures offer for an empty library", () => {
     delete window.pixlstashDesktop;
     wrapper.unmount();
   });
+
+  // The empty library's button once the offer has been dismissed: the way
+  // back in is the same wizard, never "Add a library" over the library's own
+  // folder.
+  it("chooseLibraryFolder opens the local_import wizard over a folder that holds pictures", async () => {
+    const path = "/home/me/Pictures";
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? Promise.resolve({ data: { picture_count: 12 } })
+        : Promise.resolve(respond()),
+    );
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.chooseLibraryFolder();
+
+    expect(useFolderMappingStore().rootPictureCount).toBe(12);
+    expect(useFolderMappingStore().wizardResume).toEqual({
+      path,
+      mode: "local_import",
+    });
+
+    wrapper.unmount();
+  });
+
+  it("chooseLibraryFolder resumes this library's pending entry instead of reading again", async () => {
+    const path = "/home/me/Pictures";
+    const entry = { taskId: "task-4", path, label: "Pictures", mode: "local_import" };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    const wrapper = await mountSidebar();
+    useFolderMappingStore().closeWizard();
+
+    await wrapper.vm.chooseLibraryFolder();
+
+    expect(useFolderMappingStore().wizardOpen).toBe(true);
+    expect(useFolderMappingStore().wizardResume).toEqual(entry);
+
+    wrapper.unmount();
+  });
 });

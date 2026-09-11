@@ -453,12 +453,6 @@ _LABEL_SINK_EXEMPT = {
         "async staging import of NEW pictures (#459) - sentinel Tag on freshly "
         "created rows that cannot yet be in a locked set"
     ),
-    ("pixlstash/tasks/watch_folder_import_task.py", "_run_task"): (
-        "watch-folder import of NEW pictures (sidecar description)"
-    ),
-    ("pixlstash/tasks/reference_folder_scan_task.py", "_build_picture"): (
-        "builds NEW picture rows during a reference-folder scan"
-    ),
     ("pixlstash/vault.py", "import_default_data"): (
         "logo / default-data import (new pictures)"
     ),

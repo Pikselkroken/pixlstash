@@ -428,7 +428,21 @@ sidebar accessory nobody was pointed at.
 **Every route reuses wiring App.vue already had.** `local-import` reaches
 `SideBar.startLocalImport`, `open-settings` reaches `SideBar.openSettingsDialog`
 (with `"workflows"`, where the ComfyUI URL lives), and `choose-folder` is the one
-new signal, for `SideBar.openReferenceFolderEditor`.
+new signal, for `SideBar.chooseLibraryFolder`.
+
+**A dismissed offer has a way back in.** `SideBar.chooseLibraryFolder` resumes
+this library's pending `local_import` entry if there is one, else re-inspects
+the library's own path and, when it holds pictures, opens the same
+`local_import` wizard the offer opens; only an empty folder falls through to
+the ordinary add. "Add a library" refuses the folder the library already is, so
+without this route a dismissed offer left no way to import those pictures at
+all, and the root scan no longer indexes them behind the owner's back (backend
+§25). The count the offer or the click last read lives in
+`useFolderMappingStore.rootPictureCount` (`rootPictureCountCapped` when the
+inspect stopped at its cap), and `LibraryEmptyState` reads it to say "Import
+the pictures already in this folder" with an `Import them…` button instead of
+"Use a folder you already have". A session reset forgets the count and closes
+the wizard along with the entry.
 
 **The empty library asks whether its own folder is empty.** The desktop's
 first-run setup creates the vault in whatever folder was chosen, and the web
@@ -924,13 +938,28 @@ with `match_existing: false`, because the library it would match against does
 not exist and some other one is active. Then the mapping and preview steps as
 before; only `Yes, build this library` (or `Organise later`, with no
 assignments) does `addLibrary`, saves a store entry with `autoCommit: true`,
-the accepted `assignments` and `pictureCount`, and starts the switch. After the
+the accepted `assignments`, the caption answers (`captions`) and
+`pictureCount`, and starts the switch. After the
 reload `SideBar` auto-opens the wizard on that entry, straight into the preview
 step, which commits on mount (`commitOnMount`) and immediately re-saves the
 entry without `autoCommit`, so a deferred or interrupted commit resumes as a
 plain "Finish organising…" and never commits twice. Cancel or the header close
 anywhere before the build cancels a running read, clears the entry and leaves
 nothing behind; a resumed entry is left alone, as its read is real.
+
+**The preview step asks about caption files.** A `local_import` read reports
+the caption-file patterns it found beside the pictures (`result.captions`, one
+row per suffix such as `.txt` or `_tags.txt`, with a file count and an excerpt,
+integration §20). `FolderMappingPreviewStep` lists them on a "Caption files
+beside your pictures" card, each pre-filled with the read's guess (Tags /
+Description / Ignore), and sends the answers as `captions` on the commit; the
+facts card counts the files read as tags, as descriptions and left unread. The
+answers are held in the wizard, not the step, so `Back to the mapping` keeps
+them, and they ride in the pending entry so a resumed commit sends what the
+owner chose rather than the read's guesses. `Organise later` answers "read
+nothing" (`[]`); a read from before the card existed has no `captions` array
+and the commit then sends no key at all, which the server treats as "probe the
+known conventions". A reference-mode commit never carries the key.
 
 A `Call it` field sits inside the addable card, prefilled from the verdict's
 `suggested_name` and left alone once the owner edits it. It is not decoration:

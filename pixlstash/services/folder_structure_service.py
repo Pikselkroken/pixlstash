@@ -63,6 +63,11 @@ import numpy as np
 from PIL import Image
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.caption_file_utils import (
+    SIDECAR_TYPE_DESCRIPTION,
+    is_safe_sidecar_suffix,
+    sniff_caption,
+)
 from pixlstash.utils.library_layout import Facet
 from pixlstash.utils.media_files import (
     SUPPORTED_IMAGE_EXTS,
@@ -92,6 +97,16 @@ MIN_FACE_SAMPLE = 5
 #: matters at level scope too: a level of one-picture folders would otherwise
 #: clear the 60% vote and be proposed as Set entire.
 MIN_SIDECAR_PICTURES = 3
+
+#: Caption files read per detected suffix to say what the pattern holds. A
+#: convention is one exporter writing every file the same way, so a handful
+#: settles it; at most two come from any one folder, so a suffix used for
+#: tags in one export and prose in another is judged across the tree.
+CAPTION_SAMPLES = 8
+_CAPTION_SAMPLES_PER_FOLDER = 2
+#: Distinct suffixes reported, most files first. More than this is stray
+#: notes, not conventions. Applied before any file is opened.
+MAX_CAPTION_PATTERNS = 12
 
 #: Below this many direct pictures the leaf and batch-numbering signals stay
 #: silent, for the reason `MIN_SIDECAR_PICTURES` does: two pictures and nothing
@@ -363,6 +378,10 @@ class FolderStructureRead:
         self._progress = progress or (lambda stage, processed, total: None)
         self._cancel = threading.Event()
         self._folders: list[_Folder] = []
+        #: lower-cased suffix -> {"suffix", "files", "folders", "samples"}:
+        #: every caption file the walk passed, grouped by the suffix after
+        #: its picture's stem. See `_collect_captions`.
+        self._captions: dict[str, dict[str, Any]] = {}
         self._truncated = False
         self._unreadable = 0
         self._skipped_hidden = 0
@@ -514,7 +533,6 @@ class FolderStructureRead:
                 parent_index=by_path.get(parent_path) if rel else None,
                 child_count=len(dirnames),
             )
-            lowered = {f.lower() for f in filenames}
             # `is_supported_media_file` drops our own `_thumb.webp` files, which
             # a library indexed before #1164 is full of, sitting beside every
             # original. Counting them made the total grow on every re-read
@@ -532,18 +550,119 @@ class FolderStructureRead:
                 and not is_hidden_entry(f)
                 and not is_pixlstash_thumbnail(f)
             )
-            for picture in folder.direct_pictures:
-                lowered_name = picture.lower()
-                stem = os.path.splitext(lowered_name)[0]
-                # Both conventions: `a.txt` beside `a.jpg`, and `a.jpg.txt`.
-                if any(
-                    stem + ext in lowered or lowered_name + ext in lowered
-                    for ext in _SIDECAR_EXTS
-                ):
-                    folder.with_sidecar += 1
+            self._collect_captions(dirpath, filenames, folder)
             by_path[dirpath] = folder.index
             self._folders.append(folder)
             self._progress("walking", len(self._folders), 0)
+
+    def _collect_captions(
+        self, dirpath: str, filenames: list[str], folder: _Folder
+    ) -> None:
+        """Group this folder's caption files by the suffix after the media stem.
+
+        A caption file is a non-media file with a caption extension whose name
+        starts with the stem of a media file in the same folder: ``a.txt``,
+        ``a_tags.txt`` and ``a.jpg.caption`` beside ``a.jpg`` are the suffixes
+        ``.txt``, ``_tags.txt`` and ``.jpg.caption``. Longest stem wins, so
+        ``foo_tags.txt`` beside both ``foo.png`` and ``foo_tags.png`` belongs
+        to the latter. Suffixes are grouped case-insensitively under the first
+        spelling seen. ``folder.with_sidecar`` (pictures with a caption file,
+        each counted once), the Set signal's evidence, comes from the same
+        pairing so the two cannot disagree.
+
+        ponytail: stems match by exact spelling, so a caption whose case
+        differs from its picture's is not paired; fold case here and in the
+        import if that shows up.
+        """
+        stems = {
+            os.path.splitext(name)[0]
+            for name in filenames
+            if not is_hidden_entry(name) and is_supported_media_file(name)
+        }
+        if not stems:
+            return
+        captioned: set[str] = set()
+        for name in sorted(filenames):
+            if (
+                is_hidden_entry(name)
+                or is_supported_media_file(name)
+                or os.path.splitext(name)[1].lower() not in _SIDECAR_EXTS
+            ):
+                continue
+            # Longest prefix that is a media stem: one set lookup per cut.
+            cut = next(
+                (i for i in range(len(name) - 1, 0, -1) if name[:i] in stems), None
+            )
+            if cut is None or not is_safe_sidecar_suffix(name[cut:]):
+                continue
+            suffix = name[cut:]
+            entry = self._captions.setdefault(
+                suffix.lower(),
+                {"suffix": suffix, "files": 0, "folders": set(), "samples": []},
+            )
+            captioned.add(name[:cut])
+            entry["files"] += 1
+            entry["folders"].add(folder.index)
+            samples = entry["samples"]
+            if (
+                len(samples) < CAPTION_SAMPLES
+                and sum(os.path.dirname(s) == dirpath for s in samples)
+                < _CAPTION_SAMPLES_PER_FOLDER
+            ):
+                samples.append(os.path.join(dirpath, name))
+        folder.with_sidecar = sum(
+            os.path.splitext(picture)[0] in captioned
+            for picture in folder.direct_pictures
+        )
+
+    def _caption_patterns(self) -> list[dict[str, Any]]:
+        """The caption conventions found, most files first, each one sniffed.
+
+        ``kind`` is the majority of the sampled files, a tie going to
+        description: a prose convention pre-filled as tags puts a sentence's
+        words on every picture, while the other mistake puts one tag list in
+        one description field. ``sample`` is an excerpt of a file of that
+        kind. A suffix none of whose samples read as a caption (binary, JSON,
+        markup) is left out. Only the first `MAX_CAPTION_PATTERNS` suffixes
+        are opened; a cancel or the deadline mid-sniff keeps what is
+        classified so far.
+        """
+        rows: list[dict[str, Any]] = []
+        ranked = sorted(
+            self._captions.values(), key=lambda e: (-e["files"], e["suffix"])
+        )
+        try:
+            for entry in ranked[:MAX_CAPTION_PATTERNS]:
+                self._checkpoint()
+                votes: Counter = Counter()
+                excerpts: dict[str, str] = {}
+                for path in entry["samples"]:
+                    sniffed = sniff_caption(path)
+                    if sniffed is None:
+                        continue
+                    votes[sniffed[0]] += 1
+                    excerpts.setdefault(sniffed[0], sniffed[1])
+                if not votes:
+                    continue
+                kind = max(
+                    votes, key=lambda k: (votes[k], k == SIDECAR_TYPE_DESCRIPTION)
+                )
+                rows.append(
+                    {
+                        "suffix": entry["suffix"],
+                        "kind": kind,
+                        "files": entry["files"],
+                        "folders": len(entry["folders"]),
+                        "sample": excerpts[kind],
+                    }
+                )
+        except ReadCancelled:
+            logger.info(
+                "Folder-structure read cancelled while reading caption files; "
+                "reporting the %d pattern(s) already classified",
+                len(rows),
+            )
+        return rows
 
     def _total_picture_counts(self) -> None:
         """Fill every folder's recursive count, deepest first.
@@ -702,11 +821,13 @@ class FolderStructureRead:
             )
 
         root = self._folders[0] if self._folders else None
+        captions = self._caption_patterns()
         # The filename lists were only ever input to the signals, and the route
         # holds this object for the process lifetime. A 28,000-picture library
         # would otherwise pin all 28,000 filenames until the next read.
         for folder in self._folders:
             folder.direct_pictures = []
+        self._captions = {}
         return {
             "root": {
                 "path": self._root,
@@ -735,6 +856,10 @@ class FolderStructureRead:
             # answers differently depending on whether models had loaded, and
             # the client cannot tell that from a library with nobody in it.
             "face_signal_ran": self._faces_ran,
+            # The caption-file conventions beside the pictures, most files
+            # first, for the owner to confirm as tags, description or ignore
+            # before the commit reads them (§20). Empty when there are none.
+            "captions": captions,
             "levels": level_docs,
         }
 

@@ -6,7 +6,6 @@
     :persistent="persistent"
     transition="dialog-bottom-transition"
     @update:model-value="(v) => !v && emit('close')"
-    @click:outside="emit('close')"
   >
     <div
       class="app-dialog"
@@ -64,6 +63,11 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["close", "accept"]);
+
+// `update:model-value` is the one close source. Vuetify emits `click:outside`
+// even on a persistent dialog (it only stops closing itself), which let a stray
+// click dismiss the folder-mapping wizard, and on a non-persistent one it
+// doubled the close `update:model-value` already reports.
 
 // Enter is inert wherever the key already means something: multiline fields,
 // buttons and links (native activation must win, so Enter on Cancel cancels),
