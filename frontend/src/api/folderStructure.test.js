@@ -16,7 +16,10 @@ vi.mock("../utils/apiClient", () => ({
 }));
 
 import { apiClient } from "../utils/apiClient";
-import { startFolderStructureCommit } from "./folderStructure";
+import {
+  captionAnswerFor,
+  startFolderStructureCommit,
+} from "./folderStructure";
 
 const ASSIGNMENTS = [{ relative_path: "Alice", kind: "person" }];
 const RESULT = {
@@ -132,5 +135,35 @@ describe("starting a folder-structure commit", () => {
     ]);
 
     expect(apiClient.post.mock.calls[0][1]).not.toHaveProperty("captions");
+  });
+});
+
+describe("captionAnswerFor", () => {
+  it("answers '[]' for a complete read, whatever it found", () => {
+    expect(captionAnswerFor({ captions: [], captions_complete: true })).toEqual(
+      [],
+    );
+    // `captions_complete` absent is complete: only `false` says it stopped.
+    expect(captionAnswerFor({ captions: [] })).toEqual([]);
+    expect(
+      captionAnswerFor({ captions: [{ suffix: ".txt", kind: "tags" }] }),
+    ).toEqual([]);
+  });
+
+  it("answers null for a read that stopped early", () => {
+    // Nobody could have been asked about the folders the walk never reached.
+    expect(
+      captionAnswerFor({ captions: [], captions_complete: false }),
+    ).toBeNull();
+  });
+
+  it("answers null for a read with no captions array at all", () => {
+    // From before the caption card: it sniffed nothing and asked nobody, so
+    // `[]` would claim "read nothing" for a walk that never looked. Only a
+    // result carrying the array is an answer source.
+    expect(captionAnswerFor({ picture_count: 5, levels: [] })).toBeNull();
+    expect(captionAnswerFor({ captions: null })).toBeNull();
+    expect(captionAnswerFor(null)).toBeNull();
+    expect(captionAnswerFor()).toBeNull();
   });
 });

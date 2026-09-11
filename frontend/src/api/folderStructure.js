@@ -63,6 +63,31 @@ export async function cancelFolderStructureRead(taskId) {
 }
 
 /**
+ * What a settled read answers about caption files on its own, for an owner who
+ * declined to decide - "Drop this, organise later", or a Preview with no
+ * pattern to ask about.
+ *
+ * A COMPLETE read answers `[]`: everything beside the pictures was sniffed, so
+ * "read nothing" is a real answer and the import does not probe. A PARTIAL one
+ * answers `null` - the walk stopped before the folders that hold the rest, so
+ * nobody could have been asked about those and the import probes the known
+ * conventions as it always did (§22).
+ *
+ * A result with no `captions` array at all is a read from before the caption
+ * card existed. It asked nobody either, so it answers `null` too: only a
+ * result that carries the array is a real answer source, and `[]` there would
+ * claim "read nothing" on behalf of a walk that never looked.
+ *
+ * @param {Object|null} [result] - the read's result.
+ * @returns {Array|null} `[]` or `null`, as `captions` is passed to
+ *   `startFolderStructureCommit`.
+ */
+export function captionAnswerFor(result) {
+  if (!Array.isArray(result?.captions)) return null;
+  return result.captions_complete === false ? null : [];
+}
+
+/**
  * Commit an accepted mapping over a settled read. Registers the read's root
  * for in-place indexing and creates the accepted projects/people/sets/tags -
  * no file is moved, renamed or copied.
