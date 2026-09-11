@@ -776,6 +776,11 @@ class FolderStructureRead:
                             "sample": excerpts[kind],
                         }
                     )
+                # After the samples, not only before each one: the deadline
+                # crossed while sniffing the last sample of the last suffix
+                # would otherwise never be seen, and the result would call
+                # itself complete having stopped early.
+                self._checkpoint()
         except ReadCancelled:
             # Cancelled or out of time part-way through the sniff. Report the
             # patterns already classified rather than losing them: the caller

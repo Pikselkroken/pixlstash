@@ -785,6 +785,33 @@ def test_more_suffixes_than_the_cap_examines_is_an_incomplete_caption_list(
     assert result["captions_complete"] is complete
 
 
+def test_a_deadline_crossed_on_the_last_sample_is_not_a_complete_read(monkeypatch):
+    """The sniff loop checks the clock *before* each sample, so the last one of
+    the last suffix ran with nothing left to notice it had overrun: the read
+    stopped early and still called itself complete."""
+    spec = {"": [], "shoot": ["a.jpg", "a_alpha.txt", "b.jpg", "b_alpha.txt"]}
+    read_box: dict = {}
+
+    def burn_the_clock_on_the_last_sniff(path):
+        read_box["sniffed"] += 1
+        if read_box["sniffed"] == 2:
+            read_box["read"]._deadline = time.monotonic() - 1
+        return ("tags", "1girl, solo")
+
+    monkeypatch.setattr(
+        folder_structure_service, "sniff_caption", burn_the_clock_on_the_last_sniff
+    )
+    with _tree(spec) as root:
+        read = FolderStructureRead(root)
+        read_box.update(read=read, sniffed=0)
+        result = read.run()
+
+    assert [row["suffix"] for row in result["captions"]] == ["_alpha.txt"], (
+        "the pattern it did classify is still reported"
+    )
+    assert result["captions_complete"] is False
+
+
 def test_a_tree_without_captions_reports_none():
     with _tree({"": [], "shoot": ["a.jpg", "b.jpg", "c.jpg"]}) as root:
         result = FolderStructureRead(root).run()
