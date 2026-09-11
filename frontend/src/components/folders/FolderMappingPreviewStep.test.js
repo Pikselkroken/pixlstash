@@ -4,7 +4,10 @@ import { mount, flushPromises } from "@vue/test-utils";
 const getFolderStructureCommitStatus = vi.fn();
 const startFolderStructureCommit = vi.fn();
 const stopFolderStructureCommit = vi.fn();
-vi.mock("../../api/folderStructure", () => ({
+// Partial: only the transport is stubbed. `captionAnswerFor` is the rule under
+// test here, so it has to be the real one.
+vi.mock("../../api/folderStructure", async (importOriginal) => ({
+  ...(await importOriginal()),
   getFolderStructureCommitStatus: (...a) =>
     getFolderStructureCommitStatus(...a),
   startFolderStructureCommit: (...a) => startFolderStructureCommit(...a),
@@ -102,13 +105,16 @@ describe("FolderMappingPreviewStep", () => {
     await later.trigger("click");
     await flushPromises();
 
+    // A reference folder is never asked about caption files and the commit
+    // refuses the pair with a 400, so the key is dropped either way; what the
+    // read answers with no `captions` array of its own is "nobody was asked".
     expect(startFolderStructureCommit).toHaveBeenCalledWith(
       "read-1",
       [],
       "",
       "reference",
       null,
-      [],
+      null,
     );
   });
 
@@ -600,6 +606,21 @@ describe("caption files beside the pictures", () => {
       await flushPromises();
 
       expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toEqual([]);
+    });
+
+    it("lets the import probe when the read predates the caption card", async () => {
+      // No `captions` array at all, so this read never sniffed for sidecars
+      // and there was nothing to ask about. `[]` would answer "read nothing"
+      // for a walk that never looked; only a result carrying the array is an
+      // answer source (§22).
+      const { captions, ...legacy } = READ_RESULT;
+      expect(captions).toHaveLength(2);
+      startFolderStructureCommit.mockResolvedValue({ task_id: "commit-1" });
+      const wrapper = mountImport({ commitOnMount: false, readResult: legacy });
+      await buttonWith(wrapper, "Yes, build this library").trigger("click");
+      await flushPromises();
+
+      expect(startFolderStructureCommit.mock.calls.at(-1)[5]).toBeNull();
     });
 
     it("answers '[]' when the same empty read got through the whole tree", async () => {

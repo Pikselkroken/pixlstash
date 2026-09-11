@@ -428,6 +428,24 @@ def parse_assignments(raw: list) -> list[Assignment]:
     return parsed
 
 
+def local_import_pending(session: Session) -> bool:
+    """Whether a ``local_import`` commit record is still pending.
+
+    The database half of ``vault.db.local_import_running``: what
+    ``Vault.__init__`` seeds the flag from, and what the settle path asks
+    before clearing it.
+    """
+    return (
+        session.exec(
+            select(FolderMappingCommit.id)
+            .where(FolderMappingCommit.mode == "local_import")
+            .where(FolderMappingCommit.state == STATE_PENDING)
+            .limit(1)
+        ).first()
+        is not None
+    )
+
+
 def record_pending_commit(
     server,
     *,
@@ -487,6 +505,13 @@ def record_pending_commit(
         )
         session.commit()
 
+    if mode == "local_import":
+        # BEFORE the row, and so before `local_import_pictures` walks: the
+        # root scan checks this flag after its own gate read and again per
+        # directory, so a commit that starts after that read is seen at the
+        # latest one directory later. Set first, written second, and the scan
+        # reading it stale can only be stale in the safe direction.
+        server.vault.db.local_import_running.set()
     server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
 
 
@@ -552,14 +577,21 @@ def settle_pending_commit(server, task_id: str, state: str) -> None:
     """
 
     def write(session: Session) -> None:
-        _settle_in_session(session, task_id, state)
+        _settle_in_session(server, session, task_id, state)
         session.commit()
 
     server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
 
 
-def _settle_in_session(session: Session, task_id: str, state: str) -> None:
-    """Settle the record on an open session, without committing it."""
+def _settle_in_session(server, session: Session, task_id: str, state: str) -> None:
+    """Settle the record on an open session, without committing it.
+
+    Also clears ``vault.db.local_import_running`` once no ``local_import``
+    record is pending any more - the read autoflushes, so it sees the row just
+    settled above. Cleared before the transaction commits, which is the safe
+    order: by the time anything settles, the pictures this flag protects are
+    already inserted.
+    """
     row = session.exec(
         select(FolderMappingCommit).where(FolderMappingCommit.task_id == task_id)
     ).first()
@@ -568,6 +600,8 @@ def _settle_in_session(session: Session, task_id: str, state: str) -> None:
     row.state = state
     row.updated_at = datetime.now(timezone.utc)
     session.add(row)
+    if not local_import_pending(session):
+        server.vault.db.local_import_running.clear()
 
 
 def record_commit_stage(server, task_id: str, stage: str) -> None:
@@ -1561,7 +1595,7 @@ def apply_mapping(
         _link_pictures(session, pictures, assignments, root_path, image_root, result)
         linked_ids.extend(int(pic.id) for pic in pictures)
         if task_id:
-            _settle_in_session(session, task_id, STATE_DONE)
+            _settle_in_session(server, session, task_id, STATE_DONE)
         session.commit()
         return result
 
@@ -1600,7 +1634,7 @@ def apply_local_mapping(
         result = CommitResult(pictures_indexed=len(pictures))
         _link_pictures(session, pictures, assignments, root_path, image_root, result)
         if task_id:
-            _settle_in_session(session, task_id, STATE_DONE)
+            _settle_in_session(server, session, task_id, STATE_DONE)
         session.commit()
         return result
 

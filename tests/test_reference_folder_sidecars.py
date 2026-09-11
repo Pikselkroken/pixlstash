@@ -100,6 +100,9 @@ def test_empty_named_tags_sidecar_is_recorded_and_falls_back_to_the_sentinel(tmp
     pic = Picture(file_path=str(img))
     assert attach_sidecars(pic, str(img)) == []
     assert pic.tags_file == str(tmp_path / "photo_tags.txt")
+    # The read succeeded - the file really is empty - so the mtime is stamped
+    # and the next scan skips it until the owner writes something.
+    assert pic.tags_file_mtime == os.stat(tmp_path / "photo_tags.txt").st_mtime
     assert (getattr(pic, "_sidecar_tags", None) or [TAG_PENDING_SENTINEL]) == [
         TAG_PENDING_SENTINEL
     ]
@@ -133,6 +136,11 @@ def test_an_unreadable_named_tags_sidecar_is_recorded_rather_than_reported_absen
         pic = Picture(file_path=str(img))
         assert attach_sidecars(pic, str(img)) == [], "nothing could be read"
         assert pic.tags_file == str(unreadable), "but the file is recorded"
+        # No mtime: it is what the scan compares to decide whether to re-read,
+        # so stamping the current one after a failed read would freeze the miss
+        # and the owner's confirmed tags would never arrive.
+        assert pic.tags_file_mtime is None
+        assert getattr(pic, "_sidecar_tags", None) is None
 
         # The name is the only thing left to go on once the content is gone,
         # and a bare `.txt` has none: it is decided by its content, so an
@@ -197,6 +205,39 @@ def test_description_takes_the_first_confirmed_file_with_content(tmp_path):
     attach_sidecars(pic, str(img), description_suffixes=["_description.txt", ".txt"])
     assert pic.description is None
     assert pic.description_file == str(tmp_path / "b_description.txt")
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or os.geteuid() == 0,
+    reason="chmod 000 does not deny a read to root, and not at all on Windows",
+)
+def test_an_unreadable_description_sidecar_leaves_its_mtime_unset(tmp_path):
+    """An unreadable description is recorded without an mtime, so it is retried.
+
+    The owner confirmed the suffix, so the file is opened rather than sniffed;
+    when the open fails the description is not applied and no mtime is stored,
+    which is what makes the next scan read it again once the permissions
+    recover. Stamping the mtime here loses the description permanently.
+    """
+    img = tmp_path / "c.png"
+    img.write_bytes(b"x")
+    unreadable = tmp_path / "c_description.txt"
+    _write(str(unreadable), "A cat on a windowsill.")
+    os.chmod(unreadable, 0o000)
+    try:
+        pic = Picture(file_path=str(img))
+        attach_sidecars(pic, str(img), description_suffixes=["_description.txt"])
+        assert pic.description_file == str(unreadable), "the file is recorded"
+        assert pic.description_file_mtime is None
+        assert pic.description is None, "nothing could be read"
+
+        os.chmod(unreadable, 0o644)
+        pic = Picture(file_path=str(img))
+        attach_sidecars(pic, str(img), description_suffixes=["_description.txt"])
+        assert pic.description == "A cat on a windowsill."
+        assert pic.description_file_mtime == os.stat(unreadable).st_mtime
+    finally:
+        os.chmod(unreadable, 0o644)
 
 
 def test_empty_bare_txt_is_not_a_caption(tmp_path):
@@ -624,6 +665,48 @@ def test_scan_reads_separate_tags_and_description_sidecars(server, tmp_path):
     assert pic.description == "A black cat sitting on a windowsill."
     assert pic.tags_file.endswith("_tags.txt")
     assert pic.description_file.endswith("_description.txt")
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or os.geteuid() == 0,
+    reason="chmod 000 does not deny a read to root, and not at all on Windows",
+)
+def test_scan_retries_a_sidecar_it_could_not_read(server, tmp_path):
+    """A failed re-read must not stamp the mtime, or the retry ends the retries.
+
+    `attach_sidecars` leaves the mtime unset so the next pass looks again; if
+    that pass records the current mtime after failing too, `(path, mtime)`
+    matches from then on and the file is never opened again. The owner's tags
+    are then gone for good and the tagger writes its own over them.
+    """
+    folder_dir = str(tmp_path / "refs")
+    folder_id = _make_folder(server, folder_dir)
+    img = _make_image(folder_dir, "locked.png")
+    tags_path = os.path.splitext(img)[0] + "_tags.txt"
+    _write(tags_path, "cat, black cat")
+    os.chmod(tags_path, 0o000)
+    try:
+        _run_scan(server, folder_id, folder_dir)
+        pic_id = server.vault.db.run_task(
+            lambda s: s.exec(
+                select(Picture.id).where(Picture.reference_folder_id == folder_id)
+            ).first()
+        )
+        pic = _picture(server, pic_id)
+        assert pic.tags_file == tags_path, "the file is recorded"
+        assert pic.tags_file_mtime is None
+        assert _picture_tags(server, pic_id) == [], "nothing was imported"
+
+        # A second pass while it is still unreadable must not settle either.
+        _run_scan(server, folder_id, folder_dir)
+        assert _picture(server, pic_id).tags_file_mtime is None
+
+        os.chmod(tags_path, 0o644)
+        _run_scan(server, folder_id, folder_dir)
+        assert _picture_tags(server, pic_id) == ["black cat", "cat"]
+        assert _picture(server, pic_id).tags_file_mtime == os.stat(tags_path).st_mtime
+    finally:
+        os.chmod(tags_path, 0o644)
 
 
 def test_scan_exports_missing_sidecars_when_sync_enabled(server, tmp_path):

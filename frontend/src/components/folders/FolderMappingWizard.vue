@@ -32,10 +32,14 @@ import { computed, ref, watch } from "vue";
 import { addLibrary } from "../../api/libraries";
 import {
   cancelFolderStructureRead,
+  captionAnswerFor,
   getFolderStructureReadStatus,
 } from "../../api/folderStructure";
 import { errorDetail } from "../../utils/apiError";
-import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
+import {
+  readIsPartial,
+  useFolderMappingStore,
+} from "../../stores/useFolderMappingStore";
 import {
   useLibrariesStore,
   useLibrarySwitchStore,
@@ -198,6 +202,18 @@ function onScanReady({ taskId, result }) {
   readTaskId.value = taskId;
   readResult.value = result;
   pictureCount.value = result.picture_count || 0;
+  // The empty-library flow opens this wizard on a library that already
+  // exists, so its live read never reaches `build()` - the only other place
+  // the count is saved. Without this the empty state keeps whatever the
+  // sidebar's uncapped inspect left behind and presents a partial read's
+  // floor as a total.
+  if (props.resume?.mode === "local_import") {
+    mappingStore.setRootPictureCount(
+      pictureCount.value,
+      readIsPartial(result),
+      mappingStore.rootCountEpoch,
+    );
+  }
   step.value = "mapping";
 }
 
@@ -215,16 +231,11 @@ function onMappingNext(built) {
  * The held caption answers go too: whatever the owner saw on the Preview's
  * card before coming back here, "organise later" is them declining to decide,
  * and the read's own guesses are not their answer. What replaces them is what
- * the read managed to see, the same rule the Preview step's `chosenCaptions`
- * applies. A COMPLETE read answers `[]` - everything beside the pictures was
- * sniffed, so declining to confirm any of it means nothing is read, which is
- * the owner's decision and is what keeps a metadata blob from being imported
- * as tags. A PARTIAL one answers `null`: the walk stopped before the folders
- * that hold the rest, nobody could have been asked about those, so the import
- * probes the known conventions as it always did (§22).
+ * the read managed to see - `captionAnswerFor`, the same rule the Preview
+ * step's `chosenCaptions` applies, a read from before the card included.
  */
 function later() {
-  const answered = readResult.value?.captions_complete === false ? null : [];
+  const answered = captionAnswerFor(readResult.value);
   captions.value = answered;
   if (!libraryExists.value) {
     build([], answered);
@@ -258,6 +269,9 @@ async function build(accepted, answered = null) {
       assignments: accepted,
       captions: answered,
       pictureCount: pictureCount.value,
+      // A partial read summed only the folders it reached, so the count it
+      // saves is a floor. The empty library's copy reads this to say so.
+      pictureCountCapped: readIsPartial(readResult.value),
       autoCommit: true,
     });
     emit("close");

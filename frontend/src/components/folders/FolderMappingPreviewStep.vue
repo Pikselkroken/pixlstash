@@ -9,6 +9,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 
 import {
+  captionAnswerFor,
   getFolderStructureCommitStatus,
   startFolderStructureCommit,
   stopFolderStructureCommit,
@@ -150,15 +151,14 @@ watch(
  *  mount, which is the one path nobody stands at, passes `props.captions`
  *  straight through instead.
  *
- *  With no rows and no saved answer the read decides: a COMPLETE one answers
- *  `[]`, "everything was sniffed and there is nothing to read". A PARTIAL one
- *  answers `null` - the walk stopped before the folders that hold the rest, so
- *  nobody was asked about them and the import probes as it always did (§22).
+ *  With no rows and no saved answer the read decides - see `captionAnswerFor`,
+ *  which is also what a read from before the card existed goes through: no
+ *  `captions` array is nobody asked, not a complete read of nothing.
  *  A saved `[]` is still an answer and stays `[]` either way. */
 function chosenCaptions() {
   if (props.mode !== "local_import") return [];
   if (!patterns.value.length)
-    return props.captions ?? (patternsPartial.value ? null : []);
+    return props.captions ?? captionAnswerFor(props.readResult);
   return patterns.value.map((row) => ({
     suffix: row.suffix,
     kind: answers[row.suffix] ?? row.kind,
@@ -340,15 +340,13 @@ async function commit(
  * mapping - which is what `stop=defer` does server-side.
  *
  * No assignments and no caption answers: this is the owner declining to
- * decide, and the read's guesses are not their answer. After a complete read
- * `[]` says "read nothing" rather than leaving the import to probe; after a
- * partial one nobody could have been asked about the unwalked part, so the
- * answer stays `null` and the import probes, as `chosenCaptions` and the
- * wizard's own `later()` do.
+ * decide, and the read's guesses are not their answer. What replaces them is
+ * whatever the read itself can answer - `captionAnswerFor`, the same rule
+ * `chosenCaptions` and the wizard's own `later()` apply.
  */
 async function organiseLater() {
   if (!committing.value) {
-    commit([], patternsPartial.value ? null : []);
+    commit([], captionAnswerFor(props.readResult));
     return;
   }
   try {

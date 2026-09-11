@@ -9,3 +9,6 @@
   is tagged by PixlStash as before. Before,
   the in-place import ("Add a library" on a folder holding pictures, and the
   first-run offer) skipped the files and tagged everything from scratch.
+- A caption file a reference folder could not open (its permissions, a file
+  locked by another program) is now read again on the next scan instead of
+  being treated as an empty caption and never looked at again.

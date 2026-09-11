@@ -14,6 +14,10 @@ import time
 
 import pytest
 from PIL import Image
+from pixlstash.db_models.folder_mapping_commit import (
+    STATE_DEFERRED,
+    FolderMappingCommit,
+)
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, Tag
@@ -46,6 +50,10 @@ def env():
             for task_type in _CONFLICTING_FINDERS:
                 srv.vault._planner_work_finders.pop(task_type)
             srv.vault._work_planner.detach_finders(_CONFLICTING_FINDERS)
+            # The root scan waits for the first-import offer to be answered
+            # (see test_root_scan_first_import.py); this module runs scans by
+            # hand on a vault that starts empty, so answer it once for all.
+            srv.vault.db.run_task(_answer_the_import_offer(srv))
             from starlette.testclient import TestClient
 
             owner = TestClient(srv.api, raise_server_exceptions=True)
@@ -55,6 +63,22 @@ def env():
             )
             assert login.status_code == 200, login.text
             yield {"server": srv, "owner": owner}
+
+
+def _answer_the_import_offer(server):
+    def answer(session: Session):
+        session.add(
+            FolderMappingCommit(
+                task_id="answered-by-test",
+                root_path=server.vault.image_root,
+                mode="local_import",
+                expected_pictures=0,
+                state=STATE_DEFERRED,
+            )
+        )
+        session.commit()
+
+    return answer
 
 
 def _settle(path):
@@ -895,8 +919,9 @@ def test_an_unreadable_tags_file_keeps_the_tags_and_retries_next_scan(env):
         _run_root_scan(server)
         _, _, _, tags_after = _picture(server, "denied/g.png")
         assert tags_after == ["dusk", "harbour"], "an unreadable file clears nothing"
-        assert _recorded(server, "denied/g.png")[0] == recorded_mtime, (
-            "and the recorded mtime is untouched, so the next scan retries"
+        assert _recorded(server, "denied/g.png")[0] is None, (
+            "and the recorded mtime is dropped, so the next scan retries even "
+            "when only the permissions change"
         )
 
         os.chmod(tags_file, 0o644)

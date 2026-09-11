@@ -4075,7 +4075,63 @@ and updates `file_path` on the existing row instead.
   deleted within the hour. `ReferenceFolderScanFinder` keeps the root's schedule
   itself (no `ReferenceFolder` row to stamp): due at boot, then every
   `_RESCAN_INTERVAL_S`, and immediately when `ReferenceFolderWatcher` — which
-  watches `image_root` under the id `None` — reports a change. Root mode differs
+  watches `image_root` under the id `None` — reports a change. **Due at boot
+  has one exception** (`root_import_answered`): a library that holds no
+  picture and has no *settled* `local_import` folder-mapping commit record is
+  not scanned. That is a library whose owner has not been asked what the
+  pictures in its folder are — the app asks when it loads an *empty* library
+  over a folder holding pictures (the first-run offer, "Add a library"), and
+  the boot scan used to answer first: a small library was indexed, tags read
+  by convention and all, before the screen came up, so the grid was no longer
+  empty and the mapping questions and the caption card never appeared. The
+  gate reads the **newest** `local_import` record: it lifts when that record
+  has settled as `done` or `deferred` ("organise later" is an answer: index
+  everything, map nothing), or on the first picture row when there is no
+  `local_import` record at all, and is asked again before every due scan
+  (a later import must be able to close it again). **Both halves of the
+  handoff ask it.** `ReferenceFolderScanFinder.first_import_answered` decides
+  whether a root scan is handed out at all; `ReferenceFolderScanTask._run_task`
+  asks again at start, before it walks anything, and that re-check is what
+  makes the handoff fail closed: `record_pending_commit` can write a pending
+  record between the finder's read and the runner starting the task, and a
+  task walking on that stale answer is the race the gate exists to prevent. A
+  re-check that finds the gate shut logs at info and returns without walking;
+  `_root_last_scanned` stays stamped, so `mark_root_due` or the next interval
+  is what asks again. **A second read cannot close the window after that
+  read**, which is what `vault.db.local_import_running` is for: a
+  `threading.Event` meaning "a `local_import` commit is pending", seeded from
+  the database by `Vault.__init__` (`local_import_pending`) so a
+  crash-resumed import is covered, set by `record_pending_commit` and cleared
+  by `_settle_in_session` once no `local_import` record is pending any more.
+  **The order is the mechanism.** `record_pending_commit` sets the flag
+  *before* it writes its row and therefore before `local_import_pictures`
+  walks; `ReferenceFolderScanTask` checks it *after* its own gate read and
+  again once per directory of its walk (`_import_started_mid_scan`, one
+  `is_set()` on an in-process flag, not a query). So a commit that starts after the scan's read is seen at the latest
+  one directory later, and the rows built in that one directory are reused by
+  the commit's own `insert()` rather than duplicated: the window is bounded to
+  a single directory instead of the whole walk, and it cannot be stale in the
+  direction that lets a scan keep walking during a live import. A scan that
+  stops this way logs at info, returns `skipped`, builds nothing further and
+  does not call `on_root_scanned`, so `MissingFilePurgeFinder` keeps waiting.
+  The database re-check stays alongside it for what an in-process flag cannot
+  see: a second process. A
+  newest record that is `pending`, `abandoned` or `superseded` (a pending
+  record a later reference commit replaced) holds the gate shut, uncached,
+  *over* the picture rows, because an unsettled `local_import`
+  commits every chunk, so it leaves pictures behind that nobody answered for.
+  A `pending` record is the commit still running, so it is the question rather
+  than the answer; counting it puts the 300-second root scan into a race with
+  it, where the scan builds its own rows with the sidecar probe, wins, and the
+  commit's `insert()` reuses them without ever applying the owner's caption
+  choices. `abandoned` is "bring nothing in", and its chunks stay indexed, so
+  reading them as the answer scans the root and imports the very files the
+  owner aborted; `superseded` was replaced by a newer record. Settled is read
+  before `abandoned`, so a later settled import outranks an earlier abandoned
+  one. An existing
+  library is unaffected; the one behaviour that changes is that an empty
+  library's first pictures arrive through the import offer rather than by
+  the watcher, which is the offer's whole purpose. Root mode differs
   from a reference folder exactly where `layout_move_service.LayoutRoot` says it
   does: pictures are the `reference_folder_id IS NULL` rows, `file_path` is
   written root-relative (`_stored`), the layout comes from `LibrarySettings`,
@@ -6328,6 +6384,24 @@ relationship and cannot be set on an unsaved row) as well as returning them.
 Each inserter writes those as `Tag` rows and puts a picture under the
 pending-tag sentinel only when *no sidecar tags were read* - no tags file, or
 an empty or unreadable one - so the tagger runs for it as before.
+
+**A file that would not open records its path but no mtime.** Whether a read
+succeeded and what it contained are two different facts, and the row keeps both:
+`tags_file`/`description_file` say a file is there, the mtime says when its
+content was last taken in. `read_caption_text` is what separates them - `None`
+only for an `OSError`, `""` for an empty file - and `attach_sidecars` reads
+through it, applying content only from a read that succeeded. Stamping the
+current mtime after a failed read is what makes the miss permanent: the next
+pass compares `(path, mtime)`, sees no change, and never opens the file again,
+so confirmed tags stay missing (and the tagger overwrites them with its own)
+and a confirmed description is lost - all from a chmod that has since been
+undone. A `None` mtime differs from every mtime on disk, so the file is read
+again next pass. `ReferenceFolderScanTask._reconcile_sidecar` holds the same
+line on the re-read, or the retry would immediately stamp the failure it was
+sent to recover from; it writes the pair only when it differs from what is
+stored, so a file that stays unreadable does not report a change every pass.
+`read_tags_sidecar`/`read_description_sidecar` still collapse the two for
+callers that only want content, and say so.
 
 Which files are read is the owner's answer to the read's `captions` (§24),
 carried on the commit as `CaptionPattern` rows (`parse_captions`, the same

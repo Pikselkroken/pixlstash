@@ -44,7 +44,10 @@ vi.mock("../../api/libraries", () => ({
   listLibraries: vi.fn(),
 }));
 
-vi.mock("../../api/folderStructure", () => ({
+// Partial: only the transport is stubbed. `captionAnswerFor` is the rule
+// `later()` applies, so it has to be the real one.
+vi.mock("../../api/folderStructure", async (importOriginal) => ({
+  ...(await importOriginal()),
   startFolderStructureRead: vi.fn(),
   getFolderStructureReadStatus: vi.fn(),
   cancelFolderStructureRead: vi.fn(),
@@ -71,7 +74,18 @@ const PICTURES = {
   suggested_name: "Generations",
 };
 
-const READ_RESULT = { picture_count: 5, folder_count: 2, levels: [] };
+// A read that got through the whole tree and found no caption pattern. The
+// empty `captions` array is what makes it a complete ANSWER ("nothing to
+// read") rather than a read from before the card existed - see LEGACY_RESULT.
+const READ_RESULT = {
+  picture_count: 5,
+  folder_count: 2,
+  levels: [],
+  captions: [],
+};
+// The same read as it came back before this feature: no `captions` key at all.
+// Nobody was asked, so nothing may answer on their behalf.
+const LEGACY_RESULT = { picture_count: 5, folder_count: 2, levels: [] };
 const ASSIGNMENTS = [{ relative_path: "Alice", kind: "person" }];
 
 /**
@@ -309,6 +323,7 @@ describe("building the library", () => {
       assignments: ASSIGNMENTS,
       captions: [],
       pictureCount: 5,
+      pictureCountCapped: false,
       autoCommit: true,
     });
     expect(setActiveLibrary).toHaveBeenCalledWith("uuid-new");
@@ -414,6 +429,34 @@ describe("building the library", () => {
     await settle();
     await wrapper.find("select").setValue("description");
     await button(wrapper, "Back to the mapping").trigger("click");
+    await settle();
+
+    await wrapper.find(".tree-stub .emit-later").trigger("click");
+    await settle();
+
+    expect(useFolderMappingStore().pending).toMatchObject({
+      assignments: [],
+      captions: null,
+      autoCommit: true,
+    });
+  });
+
+  it("'Drop this, organise later' probes when the read predates the card", async () => {
+    // A read that came back before the caption card existed carries no
+    // `captions` array, so it never sniffed for sidecars and asked nobody.
+    // Saving `[]` would answer "read nothing" on the owner's behalf and the
+    // commit after the switch would skip every sidecar the folders hold.
+    getFolderStructureReadStatus.mockResolvedValue({
+      status: "completed",
+      stage: "done",
+      processed: 2,
+      total: 2,
+      result: LEGACY_RESULT,
+    });
+    const wrapper = mountWizard();
+    await settle();
+    await bringThemIn(wrapper);
+    await button(wrapper, "Set up my library").trigger("click");
     await settle();
 
     await wrapper.find(".tree-stub .emit-later").trigger("click");
@@ -973,5 +1016,29 @@ describe("reopening", () => {
     expect(
       wrapper.find(".choose-step__field .app-input__field").element.value,
     ).toBe("");
+  });
+
+  it("records the live read's count, and that a partial one is a floor", async () => {
+    // This flow runs on a library that already exists, so it never reaches
+    // `build()` - the only other place the count is saved. The sidebar's own
+    // inspect says nothing about unreadable folders, so without this the
+    // empty state presents this floor as a total.
+    getFolderStructureReadStatus.mockResolvedValue({
+      status: "completed",
+      stage: "done",
+      processed: 2,
+      total: 2,
+      result: { ...READ_RESULT, unreadable_folders: 2 },
+    });
+    const wrapper = mountWizard({
+      resume: { path: "/home/me/Pictures/Family", mode: "local_import" },
+    });
+    await settle();
+    await button(wrapper, "Set up my library").trigger("click");
+    await settle();
+
+    const store = useFolderMappingStore();
+    expect(store.rootPictureCount).toBe(READ_RESULT.picture_count);
+    expect(store.rootPictureCountCapped).toBe(true);
   });
 });

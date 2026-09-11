@@ -5,18 +5,39 @@
  * says what it says.
  *
  * In short: three routes out rather than one, folder first and the only
- * accented one, and not a word about a "database". Presentational - every
+ * accented one, and not a word about a "database". It acts on nothing - every
  * route is emitted for the grid to place, including the chosen files, which
  * are handed up unfiltered because the grid already drops what PixlStash
- * cannot read for both drop paths.
+ * cannot read for both drop paths - but it does read one fact for itself, the
+ * root picture count in `useFolderMappingStore`, which decides its copy.
  */
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { VIcon } from "vuetify/components";
 
 import AppButton from "../widgets/AppButton.vue";
+import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
 import { IMPORT_FILE_ACCEPT } from "../../utils/media";
 
 const emit = defineEmits(["choose-folder", "add-files", "connect-comfyui"]);
+
+// The one fact this screen reads for itself: whether the library's own folder
+// already holds pictures. Then the first route is "import them", because
+// "choose a folder" would lead to "Add a library", which refuses the folder
+// this library already is - the state a dismissed import offer leaves.
+const mappingStore = useFolderMappingStore();
+const rootPictureCount = computed(() => mappingStore.rootPictureCount ?? 0);
+// The count stopped at a cap the server had to answer under, so it is a floor
+// and the sentence says so. Naming it as the total under-counts a big folder,
+// and the number this screen shows is the one the owner checks the import
+// against.
+const rootPictureCountCapped = computed(
+  () => mappingStore.rootPictureCountCapped === true,
+);
+// A capped count is a floor, so a capped zero is not an empty folder: the walk
+// ran out of entries before it reached a picture. The route in is the import
+// either way, and the copy says the folder was not fully counted rather than
+// naming a number as the total.
+const rootMayHoldPictures = computed(() => mappingStore.rootMayHoldPictures);
 
 const fileInput = ref(null);
 
@@ -63,7 +84,26 @@ function filesChosen(event) {
           <span class="library-empty__mark" aria-hidden="true">
             <v-icon size="19">mdi-folder-outline</v-icon>
           </span>
-          <span class="library-empty__text">
+          <span v-if="rootMayHoldPictures" class="library-empty__text">
+            <span class="library-empty__heading"
+              >Import the pictures already in this folder</span
+            >
+            <span v-if="rootPictureCountCapped" class="library-empty__detail">
+              Your library folder could not be fully counted; it
+              {{
+                rootPictureCount > 0
+                  ? `holds at least ${rootPictureCount.toLocaleString()} ${rootPictureCount === 1 ? "picture" : "pictures"}`
+                  : "may already hold pictures"
+              }}. They are read where they sit; nothing is moved.
+            </span>
+            <span v-else class="library-empty__detail">
+              {{ rootPictureCount.toLocaleString() }}
+              {{ rootPictureCount === 1 ? "picture is" : "pictures are" }}
+              in this library's folder. They are read where they sit; nothing
+              is moved.
+            </span>
+          </span>
+          <span v-else class="library-empty__text">
             <span class="library-empty__heading"
               >Use a folder you already have</span
             >
@@ -73,7 +113,7 @@ function filesChosen(event) {
             </span>
           </span>
           <AppButton size="sm" variant="primary" @click="emit('choose-folder')">
-            Choose a folder…
+            {{ rootMayHoldPictures ? "Import them…" : "Choose a folder…" }}
           </AppButton>
         </li>
 

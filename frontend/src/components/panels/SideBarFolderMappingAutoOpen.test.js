@@ -71,6 +71,7 @@ vi.mock("vue-router", async () => {
 
 import { isReadOnly, sessionContext } from "../../utils/apiClient";
 import SideBar from "./SideBar.vue";
+import LibraryEmptyState from "../views/LibraryEmptyState.vue";
 import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
 import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
@@ -106,6 +107,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Belt and braces for the parked-read tests: each deletes this itself, but
+  // a failing assertion returns before it does, and the leaked desktop shim
+  // then fails every test after it as well.
+  delete window.pixlstashDesktop;
   vi.restoreAllMocks();
 });
 
@@ -310,6 +315,107 @@ describe("the loose-pictures offer for an empty library", () => {
     wrapper.unmount();
   });
 
+  it("words a truncated parked read as a floor, not as a total", async () => {
+    // The read stopped at `MAX_FOLDERS` and summed only the folders it
+    // reached, so its `picture_count` is a floor exactly like the inspect
+    // endpoint's cap. Passed as an exact total, the empty state named a
+    // number the folder does not hold.
+    const path = "/home/me/Pictures";
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    window.pixlstashDesktop = {
+      takePendingMapping: async () => ({
+        path,
+        result: { levels: [], picture_count: 5000, truncated: true },
+      }),
+    };
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+
+    const empty = mount(LibraryEmptyState, { shallow: true });
+    expect(empty.text()).toContain(
+      "could not be fully counted; it holds at least 5,000 pictures",
+    );
+
+    empty.unmount();
+    delete window.pixlstashDesktop;
+    wrapper.unmount();
+  });
+
+  it("words a parked read that skipped unreadable folders as a floor too", async () => {
+    // `unreadable_folders > 0` means those subtrees are absent from the
+    // counts entirely (integration_architecture.md §20), so a zero here is an
+    // incomplete read, not an empty folder. Read as a total it sent the owner
+    // to "Add a library", which refuses the folder the library already is.
+    const path = "/home/me/Pictures";
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    window.pixlstashDesktop = {
+      takePendingMapping: async () => ({
+        path,
+        result: {
+          levels: [],
+          picture_count: 0,
+          truncated: false,
+          unreadable_folders: 2,
+        },
+      }),
+    };
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+
+    const mapping = useFolderMappingStore();
+    expect(mapping.rootMayHoldPictures).toBe(true);
+    expect(mapping.wizardResume).toMatchObject({ path, mode: "local_import" });
+    const empty = mount(LibraryEmptyState, { shallow: true });
+    expect(empty.text()).toContain(
+      "could not be fully counted; it may already hold pictures",
+    );
+
+    empty.unmount();
+    delete window.pixlstashDesktop;
+    wrapper.unmount();
+  });
+
+  it("opens the wizard on a capped count that reached no picture", async () => {
+    // count_media_files() can exhaust its entry cap on directories before it
+    // reaches any media (utils/media_files.py), so `picture_count: 0` with
+    // `picture_count_capped: true` is an unfinished walk, not an empty
+    // folder. Read as empty, the offer left the owner with "Add a library",
+    // which refuses the folder the library already is.
+    const path = "/home/me/Pictures";
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? Promise.resolve({
+            data: { picture_count: 0, picture_count_capped: true },
+          })
+        : Promise.resolve(respond()),
+    );
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+
+    const mapping = useFolderMappingStore();
+    expect(mapping.wizardResume).toEqual({ path, mode: "local_import" });
+    const empty = mount(LibraryEmptyState, { shallow: true });
+    expect(empty.text()).toContain(
+      "could not be fully counted; it may already hold pictures",
+    );
+
+    empty.unmount();
+    wrapper.unmount();
+  });
+
   it("still offers when a pending entry belongs to some other library", async () => {
     // The offer used to be gated on the raw `mappingStore.pending`, the same
     // unbounded localStorage flag the telemetry question was gated on. The
@@ -390,12 +496,56 @@ describe("the loose-pictures offer for an empty library", () => {
 
   it("stays quiet when the pending entry is this library's own", async () => {
     // The control: an entry the auto-open WILL act on must still suppress the
-    // offer, or the owner gets the wizard twice.
+    // offer, or the owner gets the wizard twice. The count is still filled -
+    // LibraryEmptyState words its button from it - but from a read that opens
+    // nothing.
     const path = "/home/me/Pictures";
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ taskId: "task-4", path, label: "Pictures", mode: "local_import" }),
-    );
+    const entry = {
+      taskId: "task-4",
+      path,
+      label: "Pictures",
+      mode: "local_import",
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    const inspect = vi.fn();
+    apiGet.mockImplementation((url) => {
+      if (url.includes("inspect")) {
+        inspect();
+        return Promise.resolve({ data: { picture_count: 12 } });
+      }
+      return Promise.resolve(respond());
+    });
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+    await wrapper.vm.offerLoosePictures();
+
+    expect(inspect).toHaveBeenCalledTimes(1);
+    expect(useFolderMappingStore().rootPictureCount).toBe(12);
+    // The auto-open's wizard, not a second one the offer put up.
+    expect(useFolderMappingStore().wizardResume).toEqual(entry);
+
+    wrapper.unmount();
+  });
+
+  it("fills the count from the entry's own read without asking again", async () => {
+    // "Add a library" saves the read's `pictureCount` with the entry. A page
+    // reloaded onto it left `rootPictureCount` null, so the empty state
+    // offered "Choose a folder…" for a folder full of pictures.
+    const path = "/home/me/Pictures";
+    const entry = {
+      taskId: "task-5",
+      path,
+      label: "Pictures",
+      mode: "local_import",
+      pictureCount: 7,
+      pictureCountCapped: false,
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
     activeLibraryAt(path);
     const libraries = useLibrariesStore();
     libraries.hasLoadedSuccessfully = true;
@@ -413,6 +563,43 @@ describe("the loose-pictures offer for an empty library", () => {
     await wrapper.vm.offerLoosePictures();
 
     expect(inspect).not.toHaveBeenCalled();
+    expect(useFolderMappingStore().rootPictureCount).toBe(7);
+    expect(useFolderMappingStore().wizardResume).toEqual(entry);
+
+    wrapper.unmount();
+  });
+
+  it("asks again for an entry saved before the count carried its cap", async () => {
+    // A legacy entry has a count but no `pictureCountCapped` and no result,
+    // so nothing says whether that count was a total or a floor. Showing it
+    // as a total after an upgrade would be a guess; the server is asked.
+    const path = "/home/me/Pictures";
+    const entry = {
+      taskId: "task-6",
+      path,
+      label: "Pictures",
+      mode: "local_import",
+      pictureCount: 7,
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    apiGet.mockImplementation((url) => {
+      if (url.includes("inspect")) {
+        return Promise.resolve({
+          data: { picture_count: 5000, picture_count_capped: true },
+        });
+      }
+      return Promise.resolve(respond());
+    });
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+
+    expect(useFolderMappingStore().rootPictureCount).toBe(5000);
+    expect(useFolderMappingStore().rootPictureCountCapped).toBe(true);
 
     wrapper.unmount();
   });
@@ -455,6 +642,56 @@ describe("the loose-pictures offer for an empty library", () => {
     wrapper.unmount();
   });
 
+  it("drops the parked read when the session changes while it is in flight", async () => {
+    // The parked read is an IPC round trip to the Electron shell, so a logout
+    // can land inside it. Its result is the outgoing owner's folder: it must
+    // open no wizard, and must not spend this session's one auto-open either,
+    // or the incoming owner's own pending entry is silently swallowed.
+    const path = "/home/me/Pictures";
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    let resolveParked;
+    window.pixlstashDesktop = {
+      takePendingMapping: () =>
+        new Promise((resolve) => {
+          resolveParked = resolve;
+        }),
+    };
+    const inspect = vi.fn();
+    apiGet.mockImplementation((url) => {
+      if (url.includes("inspect")) {
+        inspect();
+        return Promise.resolve({ data: { picture_count: 12 } });
+      }
+      return Promise.resolve(respond());
+    });
+    const wrapper = await mountSidebar();
+    const mapping = useFolderMappingStore();
+
+    const offer = wrapper.vm.offerLoosePictures();
+    await flushPromises();
+    mapping.resetForSession();
+    resolveParked({ path, result: { levels: [{ depth: 1, folders: [] }] } });
+    await offer;
+
+    expect(mapping.wizardOpen).toBe(false);
+    expect(mapping.wizardResume).toBe(null);
+    expect(inspect).not.toHaveBeenCalled();
+
+    // `autoOpenedPendingMapping` untouched: the new session's own entry still
+    // gets its auto-open.
+    const entry = { taskId: "", path, label: "Pictures", mode: "local_import" };
+    mapping.save(entry);
+    await flushPromises();
+    expect(mapping.wizardOpen).toBe(true);
+    expect(mapping.wizardResume).toEqual(entry);
+
+    delete window.pixlstashDesktop;
+    wrapper.unmount();
+  });
+
   it("ignores a parked read of some other folder", async () => {
     const path = "/home/me/Pictures";
     activeLibraryAt(path);
@@ -482,6 +719,224 @@ describe("the loose-pictures offer for an empty library", () => {
     });
 
     delete window.pixlstashDesktop;
+    wrapper.unmount();
+  });
+});
+
+describe("the empty library's Choose a folder button", () => {
+  async function mountWithManageableLibrary(path) {
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    return mountSidebar();
+  }
+
+  it("resumes an entry the refresh only just made matchable", async () => {
+    // `pendingForThisLibrary` compares the entry's path with the ACTIVE
+    // library's, so before the list has loaded it is null for every entry
+    // there is. Read once up front, that null was still the value the routing
+    // used after the refresh, and the click opened a fresh wizard over the
+    // folder it should have resumed - racing the auto-open watcher for it.
+    const path = "/home/me/Pictures";
+    const entry = {
+      taskId: "task-7",
+      path,
+      label: "Pictures",
+      mode: "local_import",
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    const inspect = vi.fn();
+    apiGet.mockImplementation((url) => {
+      if (url.includes("inspect")) {
+        inspect();
+        return Promise.resolve({ data: { picture_count: 12 } });
+      }
+      if (url === "/libraries") {
+        return Promise.resolve({
+          data: {
+            libraries: [{ id: 1, name: "lib", path, is_active: true }],
+            can_manage: true,
+          },
+        });
+      }
+      return Promise.resolve(respond());
+    });
+    const wrapper = await mountSidebar();
+    const mapping = useFolderMappingStore();
+    expect(mapping.wizardOpen).toBe(false);
+
+    await wrapper.vm.chooseLibraryFolder();
+
+    expect(mapping.wizardResume).toEqual(entry);
+    expect(inspect).not.toHaveBeenCalled();
+
+    wrapper.unmount();
+  });
+
+  it("leaves an entry the refresh only just made matchable to the auto-open", async () => {
+    // Same race on the offer path: read before the refresh, the entry was
+    // null, and the fresh offer then wrote `{ path, mode }` over the saved
+    // taskId, assignments and autoCommit the watcher was about to resume.
+    const path = "/home/me/Pictures";
+    const entry = {
+      taskId: "task-8",
+      path,
+      label: "Pictures",
+      mode: "local_import",
+      autoCommit: true,
+      pictureCount: 4,
+      pictureCountCapped: false,
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    const inspect = vi.fn();
+    apiGet.mockImplementation((url) => {
+      if (url.includes("inspect")) {
+        inspect();
+        return Promise.resolve({ data: { picture_count: 12 } });
+      }
+      if (url === "/libraries") {
+        return Promise.resolve({
+          data: {
+            libraries: [{ id: 1, name: "lib", path, is_active: true }],
+            can_manage: true,
+          },
+        });
+      }
+      return Promise.resolve(respond());
+    });
+    const wrapper = await mountSidebar();
+    const mapping = useFolderMappingStore();
+
+    await wrapper.vm.offerLoosePictures();
+    await flushPromises();
+
+    expect(mapping.wizardResume).toEqual(entry);
+    expect(mapping.rootPictureCount).toBe(4);
+    expect(inspect).not.toHaveBeenCalled();
+
+    wrapper.unmount();
+  });
+
+  it("re-inspects, so a root that has since filled up opens the wizard", async () => {
+    // A cached 0 from a load over an empty folder used to be permanent, and
+    // sent the owner to "Add a library", which refuses the folder the library
+    // already is.
+    const path = "/home/me/Pictures";
+    const wrapper = await mountWithManageableLibrary(path);
+    const mapping = useFolderMappingStore();
+    mapping.rootPictureCount = 0;
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? Promise.resolve({ data: { picture_count: 3 } })
+        : Promise.resolve(respond()),
+    );
+
+    await wrapper.vm.chooseLibraryFolder();
+
+    expect(mapping.rootPictureCount).toBe(3);
+    expect(mapping.wizardResume).toEqual({ path, mode: "local_import" });
+
+    wrapper.unmount();
+  });
+
+  it("opens the wizard on a capped count that reached no picture", async () => {
+    // Same unfinished walk as the offer's own case: a capped 0 is no evidence
+    // the folder is empty, so the click must not fall through to "Add a
+    // library", which refuses the folder the library already is.
+    const path = "/home/me/Pictures";
+    const wrapper = await mountWithManageableLibrary(path);
+    const mapping = useFolderMappingStore();
+    mapping.rootPictureCount = 0;
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? Promise.resolve({
+            data: { picture_count: 0, picture_count_capped: true },
+          })
+        : Promise.resolve(respond()),
+    );
+
+    await wrapper.vm.chooseLibraryFolder();
+
+    expect(mapping.rootMayHoldPictures).toBe(true);
+    expect(mapping.wizardResume).toEqual({ path, mode: "local_import" });
+
+    wrapper.unmount();
+  });
+
+  it("keeps the cached count and takes the old route when the inspect fails", async () => {
+    const path = "/home/me/Pictures";
+    const wrapper = await mountWithManageableLibrary(path);
+    const mapping = useFolderMappingStore();
+    mapping.rootPictureCount = 0;
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? Promise.reject(new Error("offline"))
+        : Promise.resolve(respond()),
+    );
+
+    await wrapper.vm.chooseLibraryFolder();
+
+    expect(mapping.rootPictureCount).toBe(0);
+    expect(mapping.wizardResume).toBe(null);
+
+    wrapper.unmount();
+  });
+
+  it("drops a count from an inspect that resolves after the session changed", async () => {
+    // Logout notifies the reset before App.vue unmounts, so an inspect the
+    // outgoing owner started can still resolve; its count belongs to the
+    // previous library and must not repopulate the next session.
+    const path = "/home/me/Pictures";
+    const wrapper = await mountWithManageableLibrary(path);
+    const mapping = useFolderMappingStore();
+    let resolveInspect;
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? new Promise((resolve) => {
+            resolveInspect = resolve;
+          })
+        : Promise.resolve(respond()),
+    );
+
+    const click = wrapper.vm.chooseLibraryFolder();
+    await flushPromises();
+    mapping.resetForSession();
+    resolveInspect({ data: { picture_count: 42 } });
+    await click;
+
+    expect(mapping.rootPictureCount).toBe(null);
+    expect(mapping.wizardResume).toBe(null);
+
+    wrapper.unmount();
+  });
+
+  it("opens nothing at all when the session changes under the inspect", async () => {
+    // The test above only proves the COUNT was dropped: `wizardResume` is null
+    // for the ordinary add too, which `openReferenceFolderEditor` opens with
+    // `wizardOpen` true. Dropping the count is not enough - the click has to
+    // stop, or the outgoing owner's folder gets a wizard in the new session.
+    const path = "/home/me/Pictures";
+    const wrapper = await mountWithManageableLibrary(path);
+    const mapping = useFolderMappingStore();
+    let resolveInspect;
+    apiGet.mockImplementation((url) =>
+      url.includes("inspect")
+        ? new Promise((resolve) => {
+            resolveInspect = resolve;
+          })
+        : Promise.resolve(respond()),
+    );
+
+    const click = wrapper.vm.chooseLibraryFolder();
+    await flushPromises();
+    mapping.resetForSession();
+    resolveInspect({ data: { picture_count: 42 } });
+    await click;
+
+    expect(mapping.wizardOpen).toBe(false);
+    expect(mapping.wizardResume).toBe(null);
+
     wrapper.unmount();
   });
 });

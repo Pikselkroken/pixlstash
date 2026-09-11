@@ -454,6 +454,16 @@ def attach_sidecars(
     decides what an empty list means - the scan and the local import both
     fall back to the pending-tag sentinel so the tagger runs instead.
 
+    **A file that would not open leaves its mtime ``None``.** The path is
+    still recorded, because a file is there, but the mtime is what the scan
+    compares against to decide whether to re-read: stamping the current one
+    after a failed read tells the next pass "already imported, unchanged", and
+    the confirmed tags are then missed forever (the tagger overwrites them)
+    and a confirmed description never arrives. ``None`` differs from any mtime
+    on disk, so the next scan reads the file again and picks the content up
+    once the permissions recover. Content is applied only from a read that
+    succeeded; an empty file still reads as empty and is honoured as such.
+
     Tags cannot be set on an unsaved `Picture` (they are a relationship), so
     any that were read are stashed on ``pic._sidecar_tags`` for the inserter
     to persist once the row has an id. Done here rather than by each caller:
@@ -487,14 +497,19 @@ def attach_sidecars(
         tags_paths = _existing_sidecars(file_path, tags_suffixes)
     tags: list[str] = []
     seen: set[str] = set()
+    tags_unread = False
     for path in tags_paths:
-        for tag in read_tags_sidecar(path):
+        text = read_caption_text(path)
+        if text is None:
+            tags_unread = True
+            continue
+        for tag in parse_caption_tags(text):
             if tag not in seen:
                 seen.add(tag)
                 tags.append(tag)
     if tags_paths:
         pic.tags_file = tags_paths[0]
-        pic.tags_file_mtime = get_sidecar_mtime(tags_paths[0])
+        pic.tags_file_mtime = None if tags_unread else get_sidecar_mtime(tags_paths[0])
 
     if description_suffixes is None:
         probed = resolve_typed_sidecar(file_path, SIDECAR_TYPE_DESCRIPTION, None)
@@ -504,9 +519,11 @@ def attach_sidecars(
     description_path = None
     description = None
     read_empty = False
+    description_unread = False
     for path in description_paths:
         raw = read_caption_text(path)
         if raw is None:
+            description_unread = True
             continue
         text = raw.strip()
         if text:
@@ -517,7 +534,11 @@ def attach_sidecars(
         description_path = description_paths[0]
     if description_path:
         pic.description_file = description_path
-        pic.description_file_mtime = get_sidecar_mtime(description_path)
+        # A file that would not open records no mtime, so the next scan reads
+        # it again rather than seeing "unchanged" and skipping it for good.
+        pic.description_file_mtime = (
+            None if description_unread else get_sidecar_mtime(description_path)
+        )
         if description:
             if overwrite_description or not pic.description:
                 pic.description = description
