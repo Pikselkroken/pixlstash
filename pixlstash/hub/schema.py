@@ -744,6 +744,14 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
             "ALTER TABLE library ADD COLUMN identity_migration_state TEXT "
             "NOT NULL DEFAULT 'not_required'"
         )
+    # When the first import into this folder started. While it is set, the
+    # library's database is still under its temporary name and the folder holds
+    # no vault.db: the row describes a library that does not exist yet, so the
+    # listings hide it and the switch refuses it. Cleared by the promotion.
+    # NULL for every library that already exists, which is the right answer for
+    # every row an older hub carries.
+    if "pending_import_at" not in columns:
+        conn.execute("ALTER TABLE library ADD COLUMN pending_import_at TEXT")
 
     # Telemetry consent landed on develop while the multi-library feature lane
     # already had v2 developer hubs. Identity now lives in the hub, so mirror

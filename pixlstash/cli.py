@@ -823,7 +823,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _cmd_list(registry: LibraryRegistry, _args: argparse.Namespace) -> int:
     """Print the registry, marking the active library and any unreachable one."""
-    libraries = registry.list_libraries()
+    libraries = registry.list_libraries(include_pending_import=False)
     if not libraries:
         print("No libraries are registered yet.")
         print(f"Add one with:  {invoked_as()} libraries attach /path/to/library")

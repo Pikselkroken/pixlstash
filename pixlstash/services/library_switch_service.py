@@ -458,6 +458,15 @@ class LibrarySwitchService:
         symlink repointed, and this is the moment a SQLite file gets opened with
         write authority and migrated. Cheap check, one real failure mode.
         """
+        # A library whose first import has not finished is not a library yet:
+        # its database is still under the temporary name, and the folder holds
+        # no vault.db for `validate_vault_folder` to find. The listings hide
+        # these rows, so this is the path a uuid typed by hand takes.
+        if target.pending_import_at:
+            raise LibrarySwitchError(
+                f'"{target.name}" is still being imported. It becomes a library '
+                "when that import finishes."
+            )
         resolved = resolve_path(target.path)
         if not os.path.isdir(resolved):
             raise LibrarySwitchError(

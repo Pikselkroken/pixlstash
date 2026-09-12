@@ -700,7 +700,7 @@ def _offer_a_usable_library(
 
     alternatives = [
         other
-        for other in registry.list_libraries()
+        for other in registry.list_libraries(include_pending_import=False)
         if other.uuid != library.uuid and _library_opens(other)
     ]
     chosen = prompt(library, reason, alternatives) if prompt and alternatives else None

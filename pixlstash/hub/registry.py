@@ -32,11 +32,20 @@ logger = get_logger(__name__)
 
 VAULT_FILENAME = "vault.db"
 
+#: What a library's database is called while its first import is still running.
+#:
+#: A folder holds ``vault.db`` only once the owner's answer took - a brand new
+#: empty library, or a first import that finished - so an import the owner
+#: aborts, or one a crash interrupts, leaves the folder exactly as PixlStash
+#: found it. Hidden, because the import walk and the library-root scan prune
+#: dot-entries, so the file can never be mistaken for content.
+TEMP_VAULT_FILENAME = ".vault.db.importing"
+
 # Every registry read selects the same columns, in the order
 # :meth:`LibraryRegistry._row_to_library` expects.
 _LIBRARY_COLUMNS = (
     "id, uuid, vault_uuid, settings_salt, identity_migration_state, name, path, created_at, attached_at, "
-    "detached_at, attached, is_active, notes"
+    "detached_at, attached, is_active, notes, pending_import_at"
 )
 
 # Tables every PixlStash vault has. ``alembic_version`` proves it went through
@@ -112,11 +121,21 @@ class Library:
     attached: bool = True
     detached_at: Optional[str] = None
     notes: Optional[str] = None
+    pending_import_at: Optional[str] = None
+
+    @property
+    def vault_filename(self) -> str:
+        """What this library's database file is called right now.
+
+        The temporary name until its first import finishes; ``vault.db``
+        thereafter, and for every library that was not made by an import.
+        """
+        return TEMP_VAULT_FILENAME if self.pending_import_at else VAULT_FILENAME
 
     @property
     def vault_path(self) -> str:
-        """Path of this library's ``vault.db``."""
-        return os.path.join(self.path, VAULT_FILENAME)
+        """Path of this library's database file."""
+        return os.path.join(self.path, self.vault_filename)
 
     @property
     def is_reachable(self) -> bool:
@@ -272,7 +291,12 @@ class LibraryRegistry:
         """Filesystem path of the hub this registry reads."""
         return self._hub.path
 
-    def list_libraries(self, *, include_detached: bool = False) -> list[Library]:
+    def list_libraries(
+        self,
+        *,
+        include_detached: bool = False,
+        include_pending_import: bool = True,
+    ) -> list[Library]:
         """Return the attached libraries, active first, then by name.
 
         Args:
@@ -280,8 +304,19 @@ class LibraryRegistry:
                 tokens survive a detach. Off by default: a detached library is
                 not part of this installation as far as the UI and the CLI are
                 concerned.
+            include_pending_import: Return libraries whose first import has not
+                finished. **On by default, and deliberately**: most callers ask
+                this question to decide whether a folder is spoken for -
+                :meth:`overlapping`, the folder inspection behind
+                ``POST /libraries``, the library-roots containment check - and
+                a pending library's folder is as spoken for as any other. Only
+                what the owner is *shown* passes False, because a library that
+                does not exist yet is not one they can pick.
         """
-        where = "" if include_detached else "WHERE attached = 1 "
+        clauses = [] if include_detached else ["attached = 1"]
+        if not include_pending_import:
+            clauses.append("pending_import_at IS NULL")
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
         rows = self._hub.fetchall(
             f"SELECT {_LIBRARY_COLUMNS} FROM library {where}"
             "ORDER BY is_active DESC, name COLLATE NOCASE"
@@ -464,22 +499,40 @@ class LibraryRegistry:
             unique_name=False,
         )
 
-    def create(self, folder: str, name: str | None = None) -> Library:
+    def create(
+        self, folder: str, name: str | None = None, *, pending_import: bool = False
+    ) -> Library:
         """Create a folder, initialise a fresh vault in it, and register it.
 
         The vault is built by the same code the server runs at startup, so a
         created library is indistinguishable from one the server made.
+
+        Args:
+            pending_import: Build the vault under :data:`TEMP_VAULT_FILENAME`
+                and mark the row pending, for a library that only exists if a
+                first import finishes. The folder gets no ``vault.db`` until
+                :meth:`finish_pending_import` renames it there, so an aborted
+                import leaves nothing behind.
 
         Raises:
             LibraryExistsError: The path or name is already registered, or the
                 folder already holds a vault (use ``attach``).
         """
         resolved = resolve_path(folder)
-        vault_path = os.path.join(resolved, VAULT_FILENAME)
-        if os.path.exists(vault_path):
+        filename = TEMP_VAULT_FILENAME if pending_import else VAULT_FILENAME
+        vault_path = os.path.join(resolved, filename)
+        if os.path.exists(os.path.join(resolved, VAULT_FILENAME)):
             raise LibraryExistsError(
                 f"{resolved} already contains a {VAULT_FILENAME}. Use `attach` "
                 "to register it."
+            )
+        # A leftover temporary vault is an import that died without its row -
+        # the startup sweep clears those. Refuse rather than open it: it may
+        # still be held by a live import this registry cannot see.
+        if os.path.exists(vault_path):
+            raise LibraryExistsError(
+                f"{resolved} already contains a {filename}, left by an import "
+                "that did not finish. Remove it and add the folder again."
             )
 
         # Before anything is written. `_register` would refuse the name at the
@@ -512,10 +565,31 @@ class LibraryRegistry:
         logger.info("Initialising a new vault at %s", vault_path)
         vault = VaultDatabase(vault_path)
         try:
-            registered = self._register(resolved, cleaned)
+            registered = self._register(
+                resolved, cleaned, pending_import=pending_import
+            )
         finally:
             vault.close()
         return registered
+
+    def finish_pending_import(self, name_or_id: str | int) -> Library:
+        """Clear the pending mark: this library's first import finished.
+
+        Called by the promotion, *after* the database file has been renamed onto
+        :data:`VAULT_FILENAME`. In that order, because :attr:`Library.vault_path`
+        reads the mark to decide which file it means: clearing it first would
+        point every reader at a ``vault.db`` that does not exist yet.
+        """
+        library = self.get(name_or_id)
+        with self._hub.transaction() as conn:
+            conn.execute(
+                "UPDATE library SET pending_import_at = NULL WHERE id = ?",
+                (library.id,),
+            )
+        logger.info(
+            "Library %s (id=%d) finished its first import", library.name, library.id
+        )
+        return self.get(library.id)
 
     def record_legacy_preparation(
         self, resolved_path: str, payload_digest: str, name: str = "Library 1"
@@ -744,6 +818,7 @@ class LibraryRegistry:
         identity_migration_state: str = "not_required",
         recovered_uuid: str | None = None,
         unique_name: bool = True,
+        pending_import: bool = False,
     ) -> Library:
         """Register a library, reviving a previously detached row when it fits.
 
@@ -823,7 +898,8 @@ class LibraryRegistry:
                 cursor = conn.execute(
                     "INSERT INTO library (uuid, vault_uuid, settings_salt, "
                     "identity_migration_state, name, path, created_at, "
-                    "attached_at, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "attached_at, is_active, pending_import_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         library_uuid,
                         fingerprint,
@@ -838,6 +914,7 @@ class LibraryRegistry:
                         now,
                         now,
                         1 if first_library else 0,
+                        now if pending_import else None,
                     ),
                 )
                 library_id = int(cursor.lastrowid)
@@ -1040,6 +1117,7 @@ class LibraryRegistry:
             attached=bool(row["attached"]),
             is_active=bool(row["is_active"]),
             notes=row["notes"],
+            pending_import_at=row["pending_import_at"],
         )
 
 

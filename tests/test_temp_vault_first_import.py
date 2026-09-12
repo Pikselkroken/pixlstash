@@ -10,15 +10,21 @@ See ``business/plans/pixlstash-temp-vault-first-import-plan.md``.
 
 import os
 
+import pytest
 from sqlmodel import select
 
 from pixlstash.db_models.picture import Picture
-from pixlstash.hub.registry import VAULT_FILENAME
+from pixlstash.hub.db import HubDatabase
+from pixlstash.hub.registry import (
+    TEMP_VAULT_FILENAME,
+    VAULT_FILENAME,
+    LibraryRegistry,
+)
+from pixlstash.services.library_switch_service import (
+    LibrarySwitchError,
+    LibrarySwitchService,
+)
 from pixlstash.vault import Vault
-
-#: What the first import's vault is called before it is promoted. Hidden, so
-#: the import walk and the root scan prune it as they do every dot-entry.
-TEMP_VAULT_FILENAME = ".vault.db.importing"
 
 
 def _index(vault, file_path: str) -> None:
@@ -79,3 +85,77 @@ def test_a_promoted_temporary_vault_opens_under_its_new_name(tmp_path):
 
     with Vault(str(image_root), disable_background_workers=True) as vault:
         assert _indexed(vault) == ["holiday/one.jpg"]
+
+
+class TestPendingImportRegistration:
+    """The hub row that says "this library only exists if the import finishes"."""
+
+    @pytest.fixture
+    def registry(self, tmp_path):
+        hub = HubDatabase(str(tmp_path / "hub.db"))
+        yield LibraryRegistry(hub)
+        hub.close()
+
+    def test_creating_one_writes_no_vault_db(self, registry, tmp_path):
+        folder = tmp_path / "folder-of-pictures"
+        folder.mkdir()
+
+        library = registry.create(str(folder), "Holiday", pending_import=True)
+
+        assert library.pending_import_at is not None
+        assert (folder / TEMP_VAULT_FILENAME).is_file()
+        assert not (folder / VAULT_FILENAME).exists()
+        # Everything that opens this library follows the mark to the right file.
+        assert library.vault_path == str(folder / TEMP_VAULT_FILENAME)
+        assert library.is_reachable
+
+    def test_an_ordinary_create_is_unchanged(self, registry, tmp_path):
+        folder = tmp_path / "empty-library"
+        folder.mkdir()
+
+        library = registry.create(str(folder), "Fresh")
+
+        assert library.pending_import_at is None
+        assert (folder / VAULT_FILENAME).is_file()
+        assert not (folder / TEMP_VAULT_FILENAME).exists()
+
+    def test_it_is_hidden_from_what_the_owner_is_shown(self, registry, tmp_path):
+        folder = tmp_path / "folder-of-pictures"
+        folder.mkdir()
+        registry.create(str(folder), "Holiday", pending_import=True)
+
+        assert registry.list_libraries(include_pending_import=False) == []
+        # But not from the checks that ask whether a folder is spoken for: the
+        # folder is as taken as any other library's while the import runs.
+        assert [lib.name for lib in registry.list_libraries()] == ["Holiday"]
+        inside = folder / "summer"
+        assert [lib.name for lib in registry.overlapping(str(inside))] == ["Holiday"]
+
+    def test_finishing_it_flips_the_row_to_the_permanent_name(self, registry, tmp_path):
+        folder = tmp_path / "folder-of-pictures"
+        folder.mkdir()
+        library = registry.create(str(folder), "Holiday", pending_import=True)
+        os.replace(folder / TEMP_VAULT_FILENAME, folder / VAULT_FILENAME)
+
+        finished = registry.finish_pending_import(library.id)
+
+        assert finished.pending_import_at is None
+        assert finished.vault_path == str(folder / VAULT_FILENAME)
+        assert [
+            lib.name for lib in registry.list_libraries(include_pending_import=False)
+        ] == ["Holiday"]
+
+    def test_the_switch_refuses_one(self, registry, tmp_path):
+        """The listings hide these rows, so this is the hand-typed-uuid path.
+
+        Called on an uninitialised instance deliberately: the guard runs before
+        `_revalidate` touches the server, and standing a real one up here would
+        cost a Server to assert a two-line refusal.
+        """
+        folder = tmp_path / "folder-of-pictures"
+        folder.mkdir()
+        library = registry.create(str(folder), "Holiday", pending_import=True)
+
+        service = LibrarySwitchService.__new__(LibrarySwitchService)
+        with pytest.raises(LibrarySwitchError, match="still being imported"):
+            service._revalidate(library)

@@ -291,7 +291,7 @@ def create_router(server) -> APIRouter:
     def list_libraries(request: Request):
         server.auth.ensure_secure_when_required(request)
         local = _caller_is_local(request)
-        libraries = server.library_registry.list_libraries()
+        libraries = server.library_registry.list_libraries(include_pending_import=False)
         return LibraryListResponse(
             libraries=[_to_response(library, local) for library in libraries],
             can_manage=local,
