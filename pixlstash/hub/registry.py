@@ -526,13 +526,14 @@ class LibraryRegistry:
                 f"{resolved} already contains a {VAULT_FILENAME}. Use `attach` "
                 "to register it."
             )
-        # A leftover temporary vault is an import that died without its row -
-        # the startup sweep clears those. Refuse rather than open it: it may
-        # still be held by a live import this registry cannot see.
+        # Either an import running right now - a second process, the CLI - or
+        # one that died without its row, which the startup sweep clears. Refuse
+        # rather than open it: this registry cannot tell the two apart, and the
+        # live one is holding that file.
         if os.path.exists(vault_path):
             raise LibraryExistsError(
-                f"{resolved} already contains a {filename}, left by an import "
-                "that did not finish. Remove it and add the folder again."
+                f"{resolved} is already being imported, or holds a {filename} "
+                "left by an import that did not finish."
             )
 
         # Before anything is written. `_register` would refuse the name at the
