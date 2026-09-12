@@ -62,6 +62,7 @@ from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.services.restore import RestoreService
+from pixlstash.hub.registry import VAULT_FILENAME
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 from pixlstash.utils.path_utils import LibraryRootsUnavailable
 
@@ -98,6 +99,7 @@ class Vault:
         insightface_model_pack: str = "buffalo_l",
         scrapheap_retention_days: Optional[int] = DEFAULT_RETENTION_DAYS,
         scrapheap_retention_reduced_at: Optional[datetime.datetime] = None,
+        db_filename: str = VAULT_FILENAME,
     ):
         """
         Initialize a Vault instance.
@@ -110,6 +112,11 @@ class Vault:
                 WorkPlanner and ReferenceFolderWatcher are not started and
                 no models are ever loaded.  Intended for read-only deployments
                 where all processing is already complete.
+            db_filename (str): Name of the database file inside *image_root*.
+                A folder holds ``vault.db`` only once the owner's answer took,
+                so a first import runs against a temporary name and is renamed
+                onto this one when it finishes. Every other caller wants the
+                default.
         """
         registered_hub = getattr(image_root, "hub", None)
         registered_library = getattr(image_root, "library", None)
@@ -128,7 +135,7 @@ class Vault:
             f"Image root path does not exist: {self.image_root}"
         )
 
-        self._db_path = os.path.join(self.image_root, "vault.db")
+        self._db_path = os.path.join(self.image_root, db_filename)
         if registered_hub is not None and registered_library is not None:
             from pixlstash.hub.bootstrap import (
                 finalize_library_connection,
