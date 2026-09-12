@@ -231,6 +231,31 @@ class TestListing:
         assert entry["uuid"]
         assert "is_active" in entry
 
+    def test_a_library_being_imported_is_named_but_not_listed(self, server, tmp_path):
+        """It cannot be switched to, so it is not in the list; the shell still
+        has to be able to say what the machine is busy with."""
+        registry = server.library_registry
+        original = registry.active_library()
+        folder = tmp_path / "holiday-snaps"
+        folder.mkdir()
+        pending = registry.create(
+            str(folder), f"Holiday {tmp_path.name}", pending_import=True
+        )
+        try:
+            registry.set_active(pending.id)
+            body = _owner(server).get(f"{API}/libraries").json()
+
+            assert body["importing_name"] == pending.name
+            assert pending.uuid not in [entry["uuid"] for entry in body["libraries"]], (
+                "a library that does not exist yet must not be offered"
+            )
+        finally:
+            if original:
+                registry.set_active(original.id)
+
+    def test_nothing_is_named_as_importing_when_nothing_is(self, server):
+        assert _owner(server).get(f"{API}/libraries").json()["importing_name"] is None
+
     def test_the_response_names_libraries_by_uuid_not_row_id(self, server):
         entry = _owner(server).get(f"{API}/libraries").json()["libraries"][0]
         assert "id" not in entry, "a row id must never be the client's handle"

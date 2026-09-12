@@ -127,6 +127,18 @@ class LibraryListResponse(BaseModel):
             "install path or a container name."
         ),
     )
+    importing_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "The name of the library currently being imported for the first "
+            "time, if there is one. Such a library is deliberately absent from "
+            "`libraries`: it does not exist until its import finishes, so it "
+            "cannot be switched to or managed. It is named here so the UI can "
+            "say what is going on where it would otherwise show the active "
+            "library's name. A name, never a path - it defaults to the folder's "
+            "own basename."
+        ),
+    )
 
 
 LibraryVerdict = Literal["attached", "overlaps", "vault", "pictures", "empty"]
@@ -292,6 +304,13 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         local = _caller_is_local(request)
         libraries = server.library_registry.list_libraries(include_pending_import=False)
+        # The library being imported is not in the list above and must not be:
+        # it cannot be switched to or managed until its import finishes. Its
+        # name still goes out, because the tab derives the active library from
+        # this list and would otherwise have nothing at all to show while the
+        # only library on the machine is being built.
+        active = server.library_registry.active_library()
+        importing = active.name if active and active.pending_import_at else None
         return LibraryListResponse(
             libraries=[_to_response(library, local) for library in libraries],
             can_manage=local,
@@ -299,6 +318,7 @@ def create_router(server) -> APIRouter:
             # The hub path only ever reaches a local caller, along with the
             # library paths beside it: it is host layout, same as those.
             cli_hint=cli_hint(hub_path=server.hub.path) if local else None,
+            importing_name=importing,
         )
 
     def _safe_folder(path: str) -> str:
