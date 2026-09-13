@@ -62,6 +62,7 @@ from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.services.restore import RestoreService
+from pixlstash.hub.registry import VAULT_FILENAME
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 from pixlstash.utils.path_utils import LibraryRootsUnavailable
 
@@ -98,6 +99,7 @@ class Vault:
         insightface_model_pack: str = "buffalo_l",
         scrapheap_retention_days: Optional[int] = DEFAULT_RETENTION_DAYS,
         scrapheap_retention_reduced_at: Optional[datetime.datetime] = None,
+        db_filename: Optional[str] = None,
     ):
         """
         Initialize a Vault instance.
@@ -110,6 +112,11 @@ class Vault:
                 WorkPlanner and ReferenceFolderWatcher are not started and
                 no models are ever loaded.  Intended for read-only deployments
                 where all processing is already complete.
+            db_filename (Optional[str]): Name of the database file inside
+                *image_root*. ``None`` takes it from the hub registration when
+                the vault is opened through one, which is what puts a library
+                still on its first import onto the temporary name without any
+                caller having to know. Falls back to ``vault.db``.
         """
         registered_hub = getattr(image_root, "hub", None)
         registered_library = getattr(image_root, "library", None)
@@ -128,7 +135,18 @@ class Vault:
             f"Image root path does not exist: {self.image_root}"
         )
 
-        self._db_path = os.path.join(self.image_root, "vault.db")
+        # The registration is the single source of truth for which file this
+        # library's database is: a first import runs against the temporary
+        # name and the promotion renames it. Reading it here means start-up,
+        # the library switch and the switch's own recovery path all open the
+        # right file without passing the name around.
+        if db_filename is None:
+            db_filename = (
+                registered_library.vault_filename
+                if registered_library is not None
+                else VAULT_FILENAME
+            )
+        self._db_path = os.path.join(self.image_root, db_filename)
         if registered_hub is not None and registered_library is not None:
             from pixlstash.hub.bootstrap import (
                 finalize_library_connection,

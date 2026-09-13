@@ -110,6 +110,44 @@ def is_supported_media_file(name_or_path: str) -> bool:
     return VideoUtils.is_video_file(name_or_path)
 
 
+def has_media_files(root: str, *, entry_cap: int = DEFAULT_ENTRY_CAP) -> bool:
+    """True as soon as one indexable file is found under *root*.
+
+    The question ``POST /libraries`` asks: does this folder hold pictures the
+    owner has not answered for yet, or is starting a library here the whole of
+    what they meant? It cannot use :func:`count_media_files` with a cap, because
+    that cap bounds directory entries *visited*, not matches found, so a small
+    one on a folder of documents returns zero and calls it empty.
+
+    Same walk and the same pruning as its sibling below - hidden directories
+    skipped, symlinked directories not followed - and it stops at the first
+    match, so the usual answer costs one directory read rather than a walk of
+    the whole library.
+    """
+    visited = 0
+
+    def _note(error: OSError) -> None:
+        logger.warning(
+            "Skipping %s while looking for pictures under %s: %s",
+            error.filename,
+            root,
+            error,
+        )
+
+    for _, dirnames, filenames in os.walk(root, onerror=_note):
+        dirnames[:] = [name for name in dirnames if not name.startswith(".")]
+        visited += len(dirnames)
+        for name in filenames:
+            if is_supported_media_file(name):
+                return True
+            visited += 1
+            if visited >= entry_cap:
+                return False
+        if visited >= entry_cap:
+            return False
+    return False
+
+
 def count_media_files(
     root: str, *, entry_cap: int = DEFAULT_ENTRY_CAP
 ) -> tuple[int, bool]:

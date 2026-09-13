@@ -1,4 +1,11 @@
-import { computed, markRaw, nextTick, onScopeDispose, ref, shallowRef } from "vue";
+import {
+  computed,
+  markRaw,
+  nextTick,
+  onScopeDispose,
+  ref,
+  shallowRef,
+} from "vue";
 import { defineStore } from "pinia";
 
 import { listLibraries, setActiveLibrary } from "../api/libraries";
@@ -18,6 +25,8 @@ export const useLibrariesStore = defineStore("libraries", () => {
   const canManage = ref(false);
   const cliHint = ref("");
   const inDocker = ref(false);
+  const importingName = ref("");
+  const importingUuid = ref("");
   const loading = ref(false);
   const loadError = ref("");
   const hasLoadedSuccessfully = ref(false);
@@ -42,13 +51,14 @@ export const useLibrariesStore = defineStore("libraries", () => {
       canManage.value = Boolean(body?.can_manage);
       cliHint.value = body?.cli_hint ?? "";
       inDocker.value = Boolean(body?.in_docker);
+      importingName.value = body?.importing_name ?? "";
+      importingUuid.value = body?.importing_uuid ?? "";
       hasLoadedSuccessfully.value = true;
     } catch (error) {
       if (startedAt !== epoch) return;
       hasLoadedSuccessfully.value = false;
       loadError.value =
-        errorDetail(error) ||
-        "Could not read the list of libraries.";
+        errorDetail(error) || "Could not read the list of libraries.";
     } finally {
       if (startedAt === epoch) loading.value = false;
     }
@@ -67,6 +77,8 @@ export const useLibrariesStore = defineStore("libraries", () => {
     canManage.value = false;
     cliHint.value = "";
     inDocker.value = false;
+    importingName.value = "";
+    importingUuid.value = "";
     loading.value = false;
     loadError.value = "";
     hasLoadedSuccessfully.value = false;
@@ -89,6 +101,8 @@ export const useLibrariesStore = defineStore("libraries", () => {
     loadError,
     hasLoadedSuccessfully,
     activeLibrary,
+    importingName,
+    importingUuid,
     refresh,
   };
 });
@@ -114,7 +128,8 @@ export const useLibrarySwitchStore = defineStore("library-switch", () => {
 
     targetLibrary.value = target;
     currentLibrary.value = current;
-    triggerElement.value = trigger instanceof HTMLElement ? markRaw(trigger) : null;
+    triggerElement.value =
+      trigger instanceof HTMLElement ? markRaw(trigger) : null;
     error.value = "";
     phase.value = "switching";
 
@@ -130,8 +145,7 @@ export const useLibrarySwitchStore = defineStore("library-switch", () => {
       reloadPage();
     } catch (requestError) {
       error.value =
-        errorDetail(requestError) ||
-        `Could not switch to ${target.name}.`;
+        errorDetail(requestError) || `Could not switch to ${target.name}.`;
       phase.value = "failed";
     }
   }

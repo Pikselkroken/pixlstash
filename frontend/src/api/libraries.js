@@ -10,7 +10,7 @@
 //
 // Per the §src/api rules the URL strings live only here.
 
-import { apiClient} from "../utils/apiClient";
+import { apiClient } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
 // Public, deployment-independent fallback for remote owners. Unlike cli_hint
@@ -116,4 +116,41 @@ export async function renameLibrary(uuid, name) {
  */
 export async function detachLibrary(uuid) {
   return unwrap(apiClient.delete(`${LIBRARIES_URL}/${uuid}`));
+}
+
+/**
+ * Finish a library whose first import has not run, without importing.
+ *
+ * "Start an empty library here": the temporary database is renamed onto
+ * `vault.db` and the folder becomes a library holding no pictures. This answer
+ * has to stay available whatever a folder contains - closing the question
+ * discards, so without it a folder of pictures the owner does not want indexed
+ * would be asked about forever.
+ *
+ * The library is closed and reopened under its new name, so every client is
+ * told to reload. A library that already exists is refused (409).
+ *
+ * @param {string} uuid
+ * @returns {Promise<Object>} the finished library, in the listing's shape.
+ */
+export async function promoteLibrary(uuid) {
+  return unwrap(apiClient.post(`${LIBRARIES_URL}/${uuid}/promote`));
+}
+
+/**
+ * Give a folder back: undo a first import the owner did not keep.
+ *
+ * Deletes the temporary database and the folders PixlStash made, drops the
+ * registration, and touches no picture file - the folder is left exactly as it
+ * was found, with no `vault.db` to make it read as a library next time. The
+ * session lands on a library of PixlStash's own.
+ *
+ * Only a library still on its first import can be discarded; a real one is
+ * refused (409) because discarding it would delete something the owner kept.
+ *
+ * @param {string} uuid
+ * @returns {Promise<Object>} the library the session landed on.
+ */
+export async function discardLibrary(uuid) {
+  return unwrap(apiClient.post(`${LIBRARIES_URL}/${uuid}/discard`));
 }

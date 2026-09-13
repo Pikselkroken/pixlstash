@@ -32,11 +32,45 @@ logger = get_logger(__name__)
 
 VAULT_FILENAME = "vault.db"
 
+#: What a library's database is called while its first import is still running.
+#:
+#: A folder holds ``vault.db`` only once the owner's answer took - a brand new
+#: empty library, or a first import that finished - so an import the owner
+#: aborts, or one a crash interrupts, leaves the folder exactly as PixlStash
+#: found it. Hidden, because the import walk and the library-root scan prune
+#: dot-entries, so the file can never be mistaken for content.
+TEMP_VAULT_FILENAME = ".vault.db.importing"
+
+#: Name of the library a discarded import lands on.
+SCRATCH_LIBRARY_NAME = "PixlStash"
+
+#: Everything PixlStash itself writes into a library's folder, beside the
+#: database, that is not one of the owner's pictures.
+#:
+#: Two callers need it and neither can reach the other's module: the discard
+#: (`library_switch_service`) and the start-up sweep (`hub.bootstrap`), which
+#: import each other's neighbours. It lives here for the same reason
+#: :data:`VAULT_FILENAME` does - these are the names PixlStash puts in a folder
+#: it was pointed at, and "the folder is exactly as we found it" is a claim
+#: about this list being complete.
+#:
+#: ``.pixlstash-thumbnails`` is spelled out rather than imported from
+#: ``image_utils``: that module pulls in OpenCV and PIL, and this one is on the
+#: CLI's and start-up's path. A test asserts the two agree.
+LIBRARY_MADE_ENTRIES = (
+    "snapshots",
+    "tmp",
+    ".pixlstash-thumbnails",
+    ".ref_thumbs",
+    ".staging",
+)
+
+
 # Every registry read selects the same columns, in the order
 # :meth:`LibraryRegistry._row_to_library` expects.
 _LIBRARY_COLUMNS = (
     "id, uuid, vault_uuid, settings_salt, identity_migration_state, name, path, created_at, attached_at, "
-    "detached_at, attached, is_active, notes"
+    "detached_at, attached, is_active, notes, pending_import_at"
 )
 
 # Tables every PixlStash vault has. ``alembic_version`` proves it went through
@@ -112,11 +146,21 @@ class Library:
     attached: bool = True
     detached_at: Optional[str] = None
     notes: Optional[str] = None
+    pending_import_at: Optional[str] = None
+
+    @property
+    def vault_filename(self) -> str:
+        """What this library's database file is called right now.
+
+        The temporary name until its first import finishes; ``vault.db``
+        thereafter, and for every library that was not made by an import.
+        """
+        return TEMP_VAULT_FILENAME if self.pending_import_at else VAULT_FILENAME
 
     @property
     def vault_path(self) -> str:
-        """Path of this library's ``vault.db``."""
-        return os.path.join(self.path, VAULT_FILENAME)
+        """Path of this library's database file."""
+        return os.path.join(self.path, self.vault_filename)
 
     @property
     def is_reachable(self) -> bool:
@@ -138,8 +182,8 @@ def resolve_path(folder: str) -> str:
     return os.path.realpath(os.path.abspath(os.path.expanduser(folder)))
 
 
-def validate_vault_folder(folder: str) -> str:
-    """Check that *folder* holds a usable vault and return its ``vault.db`` path.
+def validate_vault_folder(folder: str, *, filename: str = VAULT_FILENAME) -> str:
+    """Check that *folder* holds a usable vault and return its database path.
 
     Opened read-only and inspected through ``sqlite_master`` only: this must not
     migrate, write to, or otherwise touch a foreign vault, and it must not read
@@ -149,17 +193,22 @@ def validate_vault_folder(folder: str) -> str:
     pre-Alembic one it will stamp and upgrade - see
     :data:`_LEGACY_VAULT_MARKER_TABLES`.
 
+    Args:
+        filename: The database file to check, for a library whose first import
+            has not finished and whose database is therefore still under
+            :data:`TEMP_VAULT_FILENAME`. Defaults to the permanent name.
+
     Raises:
-        NotAVaultError: No folder, no ``vault.db``, unreadable, or missing the
+        NotAVaultError: No folder, no database file, unreadable, or missing the
             marker tables.
     """
     if not os.path.isdir(folder):
         raise NotAVaultError(f"{folder} is not a folder.")
 
-    vault_path = os.path.join(folder, VAULT_FILENAME)
+    vault_path = os.path.join(folder, filename)
     if not os.path.isfile(vault_path):
         raise NotAVaultError(
-            f"No {VAULT_FILENAME} in {folder}. Pick the folder that contains "
+            f"No {filename} in {folder}. Pick the folder that contains "
             f"it, or use `create` to start an empty library."
         )
 
@@ -272,7 +321,12 @@ class LibraryRegistry:
         """Filesystem path of the hub this registry reads."""
         return self._hub.path
 
-    def list_libraries(self, *, include_detached: bool = False) -> list[Library]:
+    def list_libraries(
+        self,
+        *,
+        include_detached: bool = False,
+        include_pending_import: bool = True,
+    ) -> list[Library]:
         """Return the attached libraries, active first, then by name.
 
         Args:
@@ -280,8 +334,19 @@ class LibraryRegistry:
                 tokens survive a detach. Off by default: a detached library is
                 not part of this installation as far as the UI and the CLI are
                 concerned.
+            include_pending_import: Return libraries whose first import has not
+                finished. **On by default, and deliberately**: most callers ask
+                this question to decide whether a folder is spoken for -
+                :meth:`overlapping`, the folder inspection behind
+                ``POST /libraries``, the library-roots containment check - and
+                a pending library's folder is as spoken for as any other. Only
+                what the owner is *shown* passes False, because a library that
+                does not exist yet is not one they can pick.
         """
-        where = "" if include_detached else "WHERE attached = 1 "
+        clauses = [] if include_detached else ["attached = 1"]
+        if not include_pending_import:
+            clauses.append("pending_import_at IS NULL")
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
         rows = self._hub.fetchall(
             f"SELECT {_LIBRARY_COLUMNS} FROM library {where}"
             "ORDER BY is_active DESC, name COLLATE NOCASE"
@@ -445,6 +510,8 @@ class LibraryRegistry:
         self,
         folder: str,
         name: str | None = None,
+        *,
+        pending_import: bool = False,
     ) -> Library:
         """Register a folder whose vault does not exist yet.
 
@@ -452,11 +519,21 @@ class LibraryRegistry:
         moments later, so requiring one here would be a chicken-and-egg failure.
         Everything else goes through :meth:`attach` or :meth:`create`, both of
         which insist on a real vault.
+
+        Args:
+            pending_import: The folder already holds pictures the owner has not
+                answered for, so the vault about to be created goes under
+                :data:`TEMP_VAULT_FILENAME`. The desktop's first run reaches
+                this path rather than ``POST /libraries``: it writes the chosen
+                folder into ``server-config.json`` and lets start-up register
+                it, so without this the whole temporary-vault rule would apply
+                to Settings and not to first run.
         """
         resolved = resolve_path(folder)
         return self._register(
             resolved,
             name or os.path.basename(resolved),
+            pending_import=pending_import,
             # Start-up must not die on a name. `bootstrap._register_first_library`
             # passes the hardcoded "Library 1" and does not catch
             # LibraryExistsError, so refusing here would turn a duplicate label -
@@ -464,22 +541,41 @@ class LibraryRegistry:
             unique_name=False,
         )
 
-    def create(self, folder: str, name: str | None = None) -> Library:
+    def create(
+        self, folder: str, name: str | None = None, *, pending_import: bool = False
+    ) -> Library:
         """Create a folder, initialise a fresh vault in it, and register it.
 
         The vault is built by the same code the server runs at startup, so a
         created library is indistinguishable from one the server made.
+
+        Args:
+            pending_import: Build the vault under :data:`TEMP_VAULT_FILENAME`
+                and mark the row pending, for a library that only exists if a
+                first import finishes. The folder gets no ``vault.db`` until
+                :meth:`finish_pending_import` renames it there, so an aborted
+                import leaves nothing behind.
 
         Raises:
             LibraryExistsError: The path or name is already registered, or the
                 folder already holds a vault (use ``attach``).
         """
         resolved = resolve_path(folder)
-        vault_path = os.path.join(resolved, VAULT_FILENAME)
-        if os.path.exists(vault_path):
+        filename = TEMP_VAULT_FILENAME if pending_import else VAULT_FILENAME
+        vault_path = os.path.join(resolved, filename)
+        if os.path.exists(os.path.join(resolved, VAULT_FILENAME)):
             raise LibraryExistsError(
                 f"{resolved} already contains a {VAULT_FILENAME}. Use `attach` "
                 "to register it."
+            )
+        # Either an import running right now - a second process, the CLI - or
+        # one that died without its row, which the startup sweep clears. Refuse
+        # rather than open it: this registry cannot tell the two apart, and the
+        # live one is holding that file.
+        if os.path.exists(vault_path):
+            raise LibraryExistsError(
+                f"{resolved} is already being imported, or holds a {filename} "
+                "left by an import that did not finish."
             )
 
         # Before anything is written. `_register` would refuse the name at the
@@ -512,10 +608,31 @@ class LibraryRegistry:
         logger.info("Initialising a new vault at %s", vault_path)
         vault = VaultDatabase(vault_path)
         try:
-            registered = self._register(resolved, cleaned)
+            registered = self._register(
+                resolved, cleaned, pending_import=pending_import
+            )
         finally:
             vault.close()
         return registered
+
+    def finish_pending_import(self, name_or_id: str | int) -> Library:
+        """Clear the pending mark: this library's first import finished.
+
+        Called by the promotion, *after* the database file has been renamed onto
+        :data:`VAULT_FILENAME`. In that order, because :attr:`Library.vault_path`
+        reads the mark to decide which file it means: clearing it first would
+        point every reader at a ``vault.db`` that does not exist yet.
+        """
+        library = self.get(name_or_id)
+        with self._hub.transaction() as conn:
+            conn.execute(
+                "UPDATE library SET pending_import_at = NULL WHERE id = ?",
+                (library.id,),
+            )
+        logger.info(
+            "Library %s (id=%d) finished its first import", library.name, library.id
+        )
+        return self.get(library.id)
 
     def record_legacy_preparation(
         self, resolved_path: str, payload_digest: str, name: str = "Library 1"
@@ -650,6 +767,54 @@ class LibraryRegistry:
         )
         return self.by_uuid(library.uuid)
 
+    def scratch_folder(self) -> str:
+        """Where a session goes when the folder it was using is given back.
+
+        Beside **this** hub, because the scratch library is the app's and not
+        the owner's: a discard has just handed their folder back, and landing
+        them in another folder of theirs would be picking one for them. Derived
+        from the hub in use rather than from the platform default, so a hub in
+        a temporary directory - a test, a second install - gets its own scratch
+        folder instead of reaching into the real one.
+
+        It is also the server's default ``image_root``, so on most installs
+        this is the library start-up already made and nothing new appears.
+        """
+        return os.path.join(os.path.dirname(self.hub_path), "images")
+
+    def forget(self, name_or_id: str | int, *, allow_active: bool = False) -> None:
+        """Delete a registration outright, for a library that never existed.
+
+        The counterpart to :meth:`detach`, which keeps the row precisely so an
+        attached-again folder revives its uuid and share links. There is
+        nothing here to revive: a discarded first import was never a library,
+        holds no share links, and a revived row would come back still pending.
+
+        The uuid is not reused - ``library_uuid_issued`` keeps every one this
+        hub ever minted - so a later library in the same folder gets a new
+        identity, which is what it is.
+
+        Args:
+            allow_active: Forget it even though it is marked active. For the
+                start-up sweep alone, which runs before any vault is opened -
+                and where the active row is exactly what needs forgetting,
+                because the desktop's first run makes the folder it asked about
+                the active library before the owner has answered.
+
+        Raises:
+            ActiveLibraryError: It is the active library and *allow_active* is
+                False. Move off it first; deleting the row underneath an open
+                vault would leave the server serving a library it cannot name.
+        """
+        library = self.get(name_or_id)
+        if library.is_active and not allow_active:
+            raise ActiveLibraryError(
+                f'Cannot forget "{library.name}": it is the active library.'
+            )
+        with self._hub.transaction() as conn:
+            conn.execute("DELETE FROM library WHERE id = ?", (library.id,))
+        logger.info("Forgot the registration for %s at %s", library.name, library.path)
+
     def set_active(self, name_or_id: str | int) -> Library:
         """Mark a library active and every other inactive, atomically.
 
@@ -744,6 +909,7 @@ class LibraryRegistry:
         identity_migration_state: str = "not_required",
         recovered_uuid: str | None = None,
         unique_name: bool = True,
+        pending_import: bool = False,
     ) -> Library:
         """Register a library, reviving a previously detached row when it fits.
 
@@ -823,7 +989,8 @@ class LibraryRegistry:
                 cursor = conn.execute(
                     "INSERT INTO library (uuid, vault_uuid, settings_salt, "
                     "identity_migration_state, name, path, created_at, "
-                    "attached_at, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "attached_at, is_active, pending_import_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         library_uuid,
                         fingerprint,
@@ -838,6 +1005,7 @@ class LibraryRegistry:
                         now,
                         now,
                         1 if first_library else 0,
+                        now if pending_import else None,
                     ),
                 )
                 library_id = int(cursor.lastrowid)
@@ -1040,6 +1208,7 @@ class LibraryRegistry:
             attached=bool(row["attached"]),
             is_active=bool(row["is_active"]),
             notes=row["notes"],
+            pending_import_at=row["pending_import_at"],
         )
 
 

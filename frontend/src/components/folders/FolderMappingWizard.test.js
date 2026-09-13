@@ -22,8 +22,10 @@ import FolderMappingPreviewStep from "./FolderMappingPreviewStep.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import {
   addLibrary,
+  discardLibrary,
   inspectLibraryPath,
   listLibraries,
+  promoteLibrary,
   setActiveLibrary,
 } from "../../api/libraries";
 import {
@@ -42,6 +44,8 @@ vi.mock("../../api/libraries", () => ({
   addLibrary: vi.fn(),
   setActiveLibrary: vi.fn(),
   listLibraries: vi.fn(),
+  promoteLibrary: vi.fn(),
+  discardLibrary: vi.fn(),
 }));
 
 vi.mock("../../api/folderStructure", () => ({
@@ -322,7 +326,9 @@ describe("building the library", () => {
       total: 2,
       result: {
         ...READ_RESULT,
-        captions: [{ suffix: ".txt", kind: "tags", files: 3, folders: 1, sample: "a" }],
+        captions: [
+          { suffix: ".txt", kind: "tags", files: 3, folders: 1, sample: "a" },
+        ],
       },
     });
     await bringThemIn(wrapper);
@@ -337,9 +343,9 @@ describe("building the library", () => {
     await wrapper.find(".tree-stub .emit-next").trigger("click");
     await settle();
 
-    expect(wrapper.find('select[aria-label="Read *.txt as"]').element.value).toBe(
-      "ignore",
-    );
+    expect(
+      wrapper.find('select[aria-label="Read *.txt as"]').element.value,
+    ).toBe("ignore");
     await button(wrapper, "Yes, build this library").trigger("click");
     await settle();
     expect(useFolderMappingStore().pending).toMatchObject({
@@ -764,5 +770,70 @@ describe("reopening", () => {
     expect(
       wrapper.find(".choose-step__field .app-input__field").element.value,
     ).toBe("");
+  });
+});
+
+// A folder waiting on the import question holds no vault.db yet, so every way
+// out of this dialog is an answer - see
+// business/plans/pixlstash-temp-vault-first-import-plan.md.
+describe("a folder still waiting on the question", () => {
+  function pending(uuid = "pending-uuid") {
+    const libraries = useLibrariesStore();
+    libraries.importingUuid = uuid;
+    libraries.importingName = "Generations";
+    return libraries;
+  }
+
+  it("gives the folder back when the dialog is closed", async () => {
+    pending();
+    discardLibrary.mockResolvedValue({ uuid: "scratch", name: "PixlStash" });
+    const wrapper = mountWizard();
+
+    await wrapper.findComponent(AppDialog).vm.$emit("close");
+    await settle();
+
+    expect(discardLibrary).toHaveBeenCalledWith("pending-uuid");
+    expect(reloadPage).toHaveBeenCalled();
+  });
+
+  it("leaves a real library alone when the dialog is closed", async () => {
+    const libraries = useLibrariesStore();
+    libraries.importingUuid = "";
+    const wrapper = mountWizard();
+
+    await wrapper.findComponent(AppDialog).vm.$emit("close");
+    await settle();
+
+    expect(discardLibrary).not.toHaveBeenCalled();
+  });
+
+  it("offers starting an empty library there instead, on every step", async () => {
+    pending();
+    promoteLibrary.mockResolvedValue({
+      uuid: "pending-uuid",
+      name: "Generations",
+    });
+    const wrapper = mountWizard();
+
+    const start = button(wrapper, "Start an empty library here");
+    expect(start, "the answer that must always be available").toBeTruthy();
+    await start.trigger("click");
+    await settle();
+
+    expect(promoteLibrary).toHaveBeenCalledWith("pending-uuid");
+    expect(discardLibrary).not.toHaveBeenCalled();
+    expect(reloadPage).toHaveBeenCalled();
+  });
+
+  it("says so rather than reloading when the folder cannot be finished", async () => {
+    pending();
+    promoteLibrary.mockRejectedValue(new Error("disk full"));
+    const wrapper = mountWizard();
+
+    await button(wrapper, "Start an empty library here").trigger("click");
+    await settle();
+
+    expect(wrapper.find(".mapping-wizard__error").exists()).toBe(true);
+    expect(reloadPage).not.toHaveBeenCalled();
   });
 });

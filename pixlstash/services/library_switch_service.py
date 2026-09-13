@@ -31,6 +31,9 @@ from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
 from pixlstash.hub.registry import (
+    LIBRARY_MADE_ENTRIES,
+    SCRATCH_LIBRARY_NAME as _SCRATCH_LIBRARY_NAME,
+    VAULT_FILENAME,
     Library,
     LibraryError,
     LibraryNotFoundError,
@@ -450,6 +453,272 @@ class LibrarySwitchService:
         logger.info("Active library is now %s (%s)", active.name, active.path)
         return active
 
+    def promote_pending_vault(self, library: Library) -> Library:
+        """Rename a finished first import's database onto ``vault.db``.
+
+        The library keeps its identity, its folder and every row it indexed;
+        only the file's name changes, and with it the fact that this folder now
+        holds a library at all. Called when an import finishes, and when the
+        owner answers "start an empty library here" instead of importing.
+
+        **This inverts the ordering the rest of this module is built on.** A
+        switch opens the incoming vault before retiring the outgoing one, so a
+        failed open costs nothing. A rename cannot work that way: the file must
+        be closed before it moves, on Windows it cannot even be renamed while a
+        handle is open, and there is no second vault to fall back to. So the
+        window between close and reopen is real, and the recovery is to reopen
+        whichever name the database now has - the rename either happened or it
+        did not, and both are openable states.
+
+        Raises:
+            LibrarySwitchError: The library is not pending, the rename failed,
+                or the database could not be reopened afterwards. The first two
+                leave the import unpromoted and the session serving it under
+                the temporary name, which is exactly where it already was.
+        """
+        if not library.pending_import_at:
+            raise LibrarySwitchError(
+                f'"{library.name}" is already a library; nothing to promote.'
+            )
+        if not self._lock.acquire(blocking=False):
+            raise LibrarySwitchError(
+                "Another library switch is already in progress. Try again in a moment."
+            )
+        try:
+            registry = self._server.library_registry
+            folder = resolve_path(library.path)
+            temporary = os.path.join(folder, library.vault_filename)
+            permanent = os.path.join(folder, VAULT_FILENAME)
+            if os.path.exists(permanent):
+                # Nothing can be promoted onto an existing library. Either the
+                # rename already happened and only the mark is stale - which
+                # the startup sweep settles - or this folder gained a vault
+                # from somewhere else while the import ran.
+                raise LibrarySwitchError(
+                    f"{permanent} already exists, so the import cannot be "
+                    "promoted onto it."
+                )
+
+            self._server.library_coordinator.begin_switch()
+            outgoing = self._server.vault
+            renamed = False
+            try:
+                clear_stats_cache()
+                clear_anomaly_region_cache()
+                clear_thumbnails = getattr(
+                    self._server, "_clear_thumbnail_runtime_cache", None
+                )
+                if clear_thumbnails is not None:
+                    clear_thumbnails()
+                # Closing joins the workers and drops the last connection, which
+                # is what lets SQLite clear -wal and -shm. Renaming the main
+                # file out from under a live WAL would lose every transaction
+                # still in it, so the sidecars are checked, not assumed.
+                outgoing.close()
+                leftovers = [
+                    name
+                    for name in (
+                        f"{library.vault_filename}-wal",
+                        f"{library.vault_filename}-shm",
+                    )
+                    if os.path.exists(os.path.join(folder, name))
+                ]
+                if leftovers:
+                    raise LibrarySwitchError(
+                        "The import's database still has "
+                        f"{', '.join(leftovers)} beside it after closing, so "
+                        "renaming it would lose what they hold."
+                    )
+                os.replace(temporary, permanent)
+                renamed = True
+                # After the rename, never before: `Library.vault_path` reads
+                # this mark to decide which file it means, so clearing it first
+                # would point every reader at a vault.db that is not there yet.
+                promoted = registry.finish_pending_import(library.id)
+            except Exception as exc:
+                # Reopen whichever name the database has now. The rename is the
+                # only step between the two, so this is a two-case recovery.
+                self._reopen_after_promotion(
+                    registry.by_uuid(library.uuid), renamed=renamed
+                )
+                if isinstance(exc, LibrarySwitchError):
+                    raise
+                raise LibrarySwitchError(
+                    f'Could not finish the import into "{library.name}": {exc}. '
+                    "Nothing was indexed twice and no picture was touched; the "
+                    "import can be finished again."
+                ) from exc
+
+            self._reopen_after_promotion(promoted, renamed=True)
+            logger.info(
+                "Promoted %s: its first import finished and %s is now %s",
+                promoted.name,
+                library.vault_filename,
+                VAULT_FILENAME,
+            )
+            return promoted
+        finally:
+            self._lock.release()
+
+    def discard_pending_library(self, library: Library) -> Library:
+        """Undo a first import: the folder goes back to being the owner's folder.
+
+        The answer to the import question was "no" - an abort, the wizard
+        closed, or a crash the startup sweep is clearing up - and a folder the
+        owner backed out of must be exactly as PixlStash found it. So this
+        deletes the temporary database, the thumbnails this import made, and
+        the registration, and leaves every picture file untouched.
+
+        The session lands on the scratch library, and the owner is asked about
+        a folder again. Switching first is not a nicety: the database cannot be
+        deleted while it is the one being served, and the switch is what drains
+        the workers off it.
+
+        Returns:
+            The library the session is now on.
+
+        Raises:
+            LibrarySwitchError: The library is not pending, or the session
+                could not be moved off it. Nothing is deleted in either case.
+        """
+        if not library.pending_import_at:
+            raise LibrarySwitchError(
+                f'"{library.name}" is a library, not an unfinished import; '
+                "discarding it would delete something the owner kept."
+            )
+        folder = resolve_path(library.path)
+        temporary = os.path.join(folder, library.vault_filename)
+
+        landed = self.switch_to_scratch_library(leaving=library)
+        # Only now: the vault is closed and nothing is serving out of it.
+        for name in (
+            library.vault_filename,
+            f"{library.vault_filename}-wal",
+            f"{library.vault_filename}-shm",
+        ):
+            path = os.path.join(folder, name)
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError as exc:
+                logger.warning(
+                    "Could not remove %s after the import was discarded: %s. "
+                    "It is a database of an import nobody kept and can be "
+                    "deleted by hand.",
+                    path,
+                    exc,
+                )
+        self._remove_what_we_made(folder)
+        self._server.library_registry.forget(library.id)
+        logger.info(
+            "Discarded the unfinished import into %s; %s is gone and the "
+            "folder is as it was",
+            folder,
+            os.path.basename(temporary),
+        )
+        return landed
+
+    def _remove_what_we_made(self, folder: str) -> None:
+        """Delete the folders PixlStash itself wrote into *folder*.
+
+        "Exactly as PixlStash found it" is the whole claim, and the thumbnail
+        cache is only the part people notice: opening a library also creates
+        ``snapshots/`` and ``tmp/``, which a test asserting the folder's
+        listing is what found out. Named entries only, never a sweep of
+        whatever looks generated - this runs on a folder full of the owner's
+        pictures, and a symlink one of these names points at is left alone.
+        """
+        for name in LIBRARY_MADE_ENTRIES:
+            path = os.path.join(folder, name)
+            if not os.path.isdir(path) or os.path.islink(path):
+                continue
+            try:
+                shutil.rmtree(path)
+            except OSError as exc:
+                logger.warning("Could not remove %s: %s", path, exc)
+
+    def switch_to_scratch_library(
+        self, *, leaving: Optional[Library] = None
+    ) -> Library:
+        """Move the session onto a library that is not the owner's folder.
+
+        Where a discard lands. The scratch library lives beside the hub in the
+        app's own directory, is created the first time it is needed and reused
+        after that, and is never deleted by a discard: it holds nothing worth
+        deleting. An empty library is also the screen that offers to point
+        PixlStash at a folder, which is the whole point of landing here.
+        """
+        registry = self._server.library_registry
+        folder = registry.scratch_folder()
+        resolved = resolve_path(folder)
+        existing = next(
+            (lib for lib in registry.list_libraries() if lib.path == resolved),
+            None,
+        )
+        if existing is None:
+            os.makedirs(folder, exist_ok=True)
+            # A vault already there and unregistered is a previous scratch
+            # library this hub has lost track of - a hub reset, a restore.
+            # Attaching keeps whatever is in it; creating would refuse.
+            if os.path.isfile(os.path.join(resolved, VAULT_FILENAME)):
+                existing = registry.attach(
+                    folder, _SCRATCH_LIBRARY_NAME, unique_name=False
+                )
+            else:
+                existing = registry.create(folder, _SCRATCH_LIBRARY_NAME)
+        if leaving is not None and existing.uuid == leaving.uuid:
+            raise LibrarySwitchError(
+                "The scratch library cannot be discarded; it is where a discard lands."
+            )
+        if existing.is_active:
+            return existing
+        return self.switch_to(existing.uuid)
+
+    def _reopen_after_promotion(self, library: Library, *, renamed: bool) -> None:
+        """Open *library* again and publish it, or take the server down trying.
+
+        There is no second vault to fall back on here - see
+        :meth:`promote_pending_vault` - so a failure to reopen is fatal in the
+        same way the switch's own unrecoverable branch is: the alternative is
+        serving requests against a closed handle.
+        """
+        try:
+            incoming = self._server.build_vault(
+                registered_vault_path(self._server.hub, library)
+            )
+            incoming.add_event_listener(self._server.handle_vault_event)
+            incoming.auth_service = self._server.auth
+            self._server.apply_user_settings_to_vault(incoming)
+            self._server.reconcile_library_settings(incoming, library)
+            _bring_up(incoming, "promoted" if renamed else "unpromoted")
+            self._server.vault = incoming
+            self._server.auth.vault_db = incoming.db
+            pre_switch_clients = self._server.claim_websockets_for_switch()
+            self._server.library_coordinator.publish_ready()
+            try:
+                self._server.close_websocket_snapshot_for_switch(pre_switch_clients)
+            except Exception:
+                logger.exception("Could not close every pre-promotion WebSocket")
+        except Exception as exc:
+            logger.critical(
+                "Could not reopen %s after its import finished",
+                library.name,
+                exc_info=True,
+            )
+            self._server.vault = None
+            self._server.auth.vault_db = None
+            self._server.library_coordinator.mark_unavailable()
+            try:
+                self._server.close_all_websockets_for_switch()
+            except Exception:
+                logger.exception("Could not close sockets in fatal state")
+            self._server.request_fatal_shutdown()
+            raise LibrarySwitchError(
+                f'The import into "{library.name}" finished, but PixlStash '
+                "could not reopen the library afterwards. Restart the server; "
+                "nothing was lost."
+            ) from exc
+
     def _revalidate(self, target: Library) -> str:
         """Re-check the registered path immediately before opening it.
 
@@ -465,8 +734,13 @@ class LibrarySwitchService:
                 "Reconnect the drive, or point the library at its new location, "
                 "then try again."
             )
+        # A library still on its first import is validated under the temporary
+        # name, because that is where its database is. It must stay openable:
+        # it is the library the owner just pointed at, and the import they are
+        # about to answer for runs against this very vault. What it must not be
+        # is *listed* as somewhere to switch to, which `list_libraries` handles.
         try:
-            vault_path = validate_vault_folder(resolved)
+            vault_path = validate_vault_folder(resolved, filename=target.vault_filename)
         except LibraryError as exc:
             raise LibrarySwitchError(
                 f'"{target.name}" no longer looks like a library: {exc}'

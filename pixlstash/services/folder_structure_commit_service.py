@@ -59,6 +59,7 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
+from pixlstash.hub.registry import LIBRARY_MADE_ENTRIES
 from pixlstash.db_models.character import Character
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.folder_mapping_commit import (
@@ -672,7 +673,14 @@ def register_reference_folder(
 #: (``.pixlstash-thumbnails``, the older ``.ref_thumbs``, ``.staging``). Found
 #: the hard way: an import of a library's
 #: own root indexed 24 set and face thumbnails as pictures.
-LIBRARY_OWN_FOLDERS = ("snapshots", "tmp")
+#: The entries in :data:`~pixlstash.hub.registry.LIBRARY_MADE_ENTRIES` a walk
+#: has to prune by name. The hidden ones are already pruned by the dot rule
+#: every walk here applies, so this is the same list minus those - derived
+#: rather than repeated, because a folder missing from one of the two lists
+#: is either indexed as if it were the owner's or left behind on a discard.
+LIBRARY_OWN_FOLDERS = tuple(
+    name for name in LIBRARY_MADE_ENTRIES if not name.startswith(".")
+)
 
 
 def library_own_folders(image_root: str) -> set[str]:

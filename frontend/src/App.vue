@@ -99,7 +99,7 @@ const tasksStore = useTasksStore();
 const operationStore = useOperationStore();
 const librariesStore = useLibrariesStore();
 const librarySwitchStore = useLibrarySwitchStore();
-const { activeLibrary } = storeToRefs(librariesStore);
+const { activeLibrary, importingName } = storeToRefs(librariesStore);
 const { overlayOpen: librarySwitchOverlayOpen } =
   storeToRefs(librarySwitchStore);
 const noticeStore = useNoticeStore();
@@ -337,9 +337,16 @@ const activeCategoryLabel = computed(() => {
   return "All Pictures";
 });
 
-const activeLibraryName = computed(() =>
-  isReadOnly.value ? "" : (activeLibrary.value?.name ?? ""),
-);
+// A library being imported for the first time is not in the registry listing
+// and has no active row: it is not a library until the import finishes. Naming
+// it here is what stops the shell showing a blank where a name belongs on the
+// one occasion the machine has nothing else to show.
+const activeLibraryName = computed(() => {
+  if (isReadOnly.value) return "";
+  const active = activeLibrary.value?.name;
+  if (active) return active;
+  return importingName.value ? `Importing ${importingName.value}` : "";
+});
 
 watch(
   activeLibraryName,

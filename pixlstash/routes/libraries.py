@@ -57,7 +57,7 @@ from pixlstash.hub.registry import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.library_switch_service import LibrarySwitchError
-from pixlstash.utils.media_files import count_media_files
+from pixlstash.utils.media_files import count_media_files, has_media_files
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 
 logger = get_logger(__name__)
@@ -125,6 +125,28 @@ class LibraryListResponse(BaseModel):
             "The exact command that runs the library CLI on this deployment. "
             "Present only for a local, LAN or Tailscale caller: it embeds an "
             "install path or a container name."
+        ),
+    )
+    importing_uuid: Optional[str] = Field(
+        default=None,
+        description=(
+            "Identity of the library being imported for the first time, if "
+            "there is one. The client needs it to answer the question it is "
+            "showing: finish the folder as an empty library "
+            "(`POST /libraries/{uuid}/promote`) or give it back "
+            "(`POST /libraries/{uuid}/discard`)."
+        ),
+    )
+    importing_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "The name of the library currently being imported for the first "
+            "time, if there is one. Such a library is deliberately absent from "
+            "`libraries`: it does not exist until its import finishes, so it "
+            "cannot be switched to or managed. It is named here so the UI can "
+            "say what is going on where it would otherwise show the active "
+            "library's name. A name, never a path - it defaults to the folder's "
+            "own basename."
         ),
     )
 
@@ -291,7 +313,14 @@ def create_router(server) -> APIRouter:
     def list_libraries(request: Request):
         server.auth.ensure_secure_when_required(request)
         local = _caller_is_local(request)
-        libraries = server.library_registry.list_libraries()
+        libraries = server.library_registry.list_libraries(include_pending_import=False)
+        # The library being imported is not in the list above and must not be:
+        # it cannot be switched to or managed until its import finishes. Its
+        # name still goes out, because the tab derives the active library from
+        # this list and would otherwise have nothing at all to show while the
+        # only library on the machine is being built.
+        active = server.library_registry.active_library()
+        importing = active if active and active.pending_import_at else None
         return LibraryListResponse(
             libraries=[_to_response(library, local) for library in libraries],
             can_manage=local,
@@ -299,6 +328,8 @@ def create_router(server) -> APIRouter:
             # The hub path only ever reaches a local caller, along with the
             # library paths beside it: it is host layout, same as those.
             cli_hint=cli_hint(hub_path=server.hub.path) if local else None,
+            importing_name=importing.name if importing else None,
+            importing_uuid=importing.uuid if importing else None,
         )
 
     def _safe_folder(path: str) -> str:
@@ -357,11 +388,12 @@ def create_router(server) -> APIRouter:
     def _count(folder: str, wanted: bool) -> tuple[int, bool]:
         """The folder's picture total, or ``(0, False)`` when nobody asked.
 
-        The empty branch is decided by ``found == 0``, so a skipped count always
-        lands on ``empty``. That is safe only because the caller that skips it -
-        ``POST /libraries`` re-checking the rule - treats ``empty``, ``pictures``
-        and ``vault`` identically: all three are ``can_add``, and only the two
-        refusals decided above the count change what it does.
+        A skipped count is a skipped *number*, not a skipped verdict: the
+        pictures/empty branch asks :func:`has_media_files` instead, which stops
+        at the first picture. It used to fall through to ``empty``, which was
+        safe only while ``POST /libraries`` treated the two identically - and it
+        no longer does, because a folder of pictures is the case that gets a
+        temporary vault.
         """
         return count_media_files(folder) if wanted else (0, False)
 
@@ -465,7 +497,7 @@ def create_router(server) -> APIRouter:
             )
 
         found, capped = _count(folder, count)
-        if found:
+        if found or (not count and has_media_files(folder)):
             return LibraryInspection(
                 verdict="pictures",
                 path=folder,
@@ -585,7 +617,16 @@ def create_router(server) -> APIRouter:
                 # the folder and insists on a real vault. `create` builds the
                 # vault with the same code the server runs at startup, so the
                 # row is usable the moment it appears.
-                library = registry.create(folder, name)
+                #
+                # A folder that already holds pictures gets its database under
+                # the temporary name: the owner has not answered the import
+                # question yet, and until they do, this folder must be exactly
+                # as they left it. An empty folder is a different act - "start a
+                # library here" is an answer in itself - so it gets `vault.db`
+                # straight away.
+                library = registry.create(
+                    folder, name, pending_import=verdict.verdict == "pictures"
+                )
         except LibraryExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except NotAVaultError as exc:
@@ -680,6 +721,69 @@ def create_router(server) -> APIRouter:
             library=_to_response(library, _caller_is_local(request)),
             inert_share_links=share_links,
         )
+
+    @router.post(
+        "/libraries/{library_uuid}/discard",
+        summary="Give a folder back: undo a first import",
+        description=(
+            "The answer to the import question was no. The temporary database "
+            "and the thumbnails the import made are deleted, the registration "
+            "is dropped, and **not one picture file is touched**: the folder is "
+            "left exactly as PixlStash found it, with no `vault.db` to make it "
+            "read as a library next time.\n\n"
+            "This is what closing the import question does, as well as "
+            "aborting it. The session lands on a library of PixlStash's own in "
+            "the app directory, which is the screen that offers to point it at "
+            "a folder again.\n\n"
+            "Only a library whose first import has not finished can be "
+            "discarded. A real library is refused, because discarding one "
+            "would delete something the owner kept - detach it instead."
+        ),
+        tags=["libraries"],
+        response_model=LibraryResponse,
+    )
+    def discard_library(request: Request, library_uuid: str):
+        server.auth.ensure_secure_when_required(request)
+        target = _by_uuid_or_404(library_uuid)
+        try:
+            landed = server.library_switch.discard_pending_library(target)
+        except LibrarySwitchError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except LibraryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _to_response(landed, _caller_is_local(request))
+
+    @router.post(
+        "/libraries/{library_uuid}/promote",
+        summary="Start an empty library here, without importing",
+        description=(
+            "Finishes a library whose first import has not run: its database is "
+            "renamed from the temporary name onto `vault.db`, and the folder "
+            "becomes a library holding no pictures.\n\n"
+            "This is the answer that has to stay available whatever a folder "
+            "contains. A folder that already holds pictures is offered an "
+            "import, and the owner who does not want one would otherwise have "
+            "no way to say so: closing the question discards, so without this "
+            "route they would be asked again and again with no way out.\n\n"
+            "Every connected client is told to reload, because the library is "
+            "closed and reopened under its new name. A library that is already "
+            "finished is refused - there is nothing to promote."
+        ),
+        tags=["libraries"],
+        response_model=LibraryResponse,
+    )
+    def promote_library(request: Request, library_uuid: str):
+        server.auth.ensure_secure_when_required(request)
+        target = _by_uuid_or_404(library_uuid)
+        try:
+            library = server.library_switch.promote_pending_vault(target)
+        except LibrarySwitchError as exc:
+            # 409 for the switch's own reason: the request was well-formed and
+            # the caller was allowed; the library could not be finished.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except LibraryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _to_response(library, _caller_is_local(request))
 
     @router.post(
         "/libraries/active",
