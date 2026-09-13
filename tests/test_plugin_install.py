@@ -1839,10 +1839,13 @@ def test_an_entry_without_a_usable_url_falls_back_to_name_and_version(
     requirements = tmp_path / "requirements.txt"
     requirements.write_text("flask\n", encoding="utf-8")
 
+    (change,) = plugin_install.resolve_requirements(requirements)
+    # The warning comes from reading `.pin`, not from resolving.
+    caplog.clear()
     with caplog.at_level("WARNING", logger="pixlstash.plugin_install"):
-        (change,) = plugin_install.resolve_requirements(requirements)
+        pin = change.pin
 
-    assert change.pin == "flask==3.1.3"
+    assert pin == "flask==3.1.3"
     fallback_warnings = [
         rec
         for rec in caplog.records
@@ -1850,11 +1853,15 @@ def test_an_entry_without_a_usable_url_falls_back_to_name_and_version(
         and "fell back to name==version" in rec.getMessage()
         and "flask" in rec.getMessage()
     ]
-    assert fallback_warnings, (
-        "fallback path did NOT emit a warning; an operator could silently install "
+    assert len(fallback_warnings) == 1, (
+        "fallback path must emit exactly one warning; without it an operator could "
+        "silently install "
         "from a non-pinned source (see pixlstash/plugin_install.py around the "
         "no-download_info.url branch and #1223)"
     )
+
+
+_FLASK_URL = "https://files.pythonhosted.org/packages/flask-3.1.3.tar.gz"
 
 
 def test_an_entry_with_a_url_does_not_emit_the_fallback_warning(
@@ -1866,10 +1873,8 @@ def test_an_entry_with_a_url_does_not_emit_the_fallback_warning(
             "flask",
             "3.1.3",
             {
-                "url": f"https://files.pythonhosted.org/packages/flask-3.1.3.tar.gz",
-                "archive_info": {
-                    "hashes": {"sha256": _SHA}
-                },
+                "url": _FLASK_URL,
+                "archive_info": {"hashes": {"sha256": _SHA}},
             },
             False,
         ),
@@ -1878,10 +1883,12 @@ def test_an_entry_with_a_url_does_not_emit_the_fallback_warning(
     requirements = tmp_path / "requirements.txt"
     requirements.write_text("flask\n", encoding="utf-8")
 
+    (change,) = plugin_install.resolve_requirements(requirements)
+    caplog.clear()
     with caplog.at_level("WARNING", logger="pixlstash.plugin_install"):
-        (change,) = plugin_install.resolve_requirements(requirements)
+        pin = change.pin
 
-    assert change.pin != "flask==3.1.3"  # not the fallback
+    assert pin == f"flask @ {_FLASK_URL}#sha256={_SHA}"
     fallback_warnings = [
         rec
         for rec in caplog.records

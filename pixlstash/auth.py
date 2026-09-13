@@ -232,6 +232,7 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/pictures/plugins",
         "/api/v1/reviews",
         "/api/v1/reviews/preview",
+        "/api/v1/server-config/ghost-retention",
         "/api/v1/server-config/scrapheap-retention",
         "/api/v1/server-config/scrapheap-retention/impact",
         "/api/v1/server-config/snapshots",

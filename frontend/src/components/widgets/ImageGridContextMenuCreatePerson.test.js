@@ -79,3 +79,36 @@ describe("create-character forwarding", () => {
     expect(wrapper.vm.$options.emits).toContain("create-character");
   });
 });
+
+describe("set and person flyout toggles (#1262)", () => {
+  it.each([
+    ["character", "added", "add-to-character"],
+    ["character", "removed", "remove-from-character"],
+    ["set", "added", "added-to-set"],
+  ])("forwards %s %s without closing the menu", (type, event, upward) => {
+    const wrapper = mountMenu();
+    const flyout = wrapper
+      .findAllComponents(AddToEntityControl)
+      .find((c) => c.props("type") === type);
+    const payload = { pictureIds: ["10"] };
+
+    flyout.vm.$emit(event, payload);
+
+    expect(wrapper.emitted(upward)).toEqual([[payload]]);
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
+
+  it("closes when the host changes the selection under the open menu", async () => {
+    const wrapper = mountMenu();
+    // The grid clears the selection after an add in the Unassigned view.
+    await wrapper.setProps({ selectedImageIds: [] });
+    expect(wrapper.emitted("close")).toBeTruthy();
+  });
+
+  it("does not close when it opens onto a new selection", async () => {
+    const wrapper = mountMenu();
+    await wrapper.setProps({ visible: false });
+    await wrapper.setProps({ visible: true, selectedImageIds: ["12"] });
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
+});

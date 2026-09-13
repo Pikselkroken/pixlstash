@@ -212,6 +212,14 @@ class ScrapheapDeleteResponse(BaseModel):
     skipped_restored: list[int] = []
     # Echoes the effective ``include_protected`` flag for this call.
     include_protected: bool = False
+    # The hub reach (§B4). Picture ghosts — a destroyed picture's thumbnail AND
+    # prompt — this purge RETAINED under the ghost-retention setting, and the
+    # ones it destroyed because the last picture covering their instance hash
+    # has just gone. Reported rather than only logged: the plan's stated failure
+    # mode for the cascade is "nothing on screen says it happened". Both 0 for a
+    # vault with no hub attached.
+    ghosts_kept: int = 0
+    ghosts_cascaded: int = 0
     # Snapshots that still contain metadata for the just-purged pictures, each
     # ``{id, kind, label, created_at, matched_count}``. The archives are not
     # scrubbed; the user can delete these snapshots to erase that metadata.
@@ -1468,6 +1476,8 @@ def register_routes(router, server):
             "skipped_locked": outcome.skipped_locked,
             "skipped_restored": outcome.skipped_restored,
             "include_protected": include_protected,
+            "ghosts_kept": outcome.ghosts_kept,
+            "ghosts_cascaded": outcome.ghosts_cascaded,
             "snapshots_with_deleted": snapshots_with_deleted,
         }
 

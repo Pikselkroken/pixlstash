@@ -93,7 +93,6 @@ body {
      surface's own ink (7.5 - 11.2:1 at rest, 5.05 - 8.3:1 hovered). */
   --active-text: rgb(var(--v-theme-on-surface));
 
-
   /* Drive-band capacity meter (#893). Three segments, so TWO adjacencies to
      keep readable: ours|other and other|free. `ours` is `primary` in both
      themes; it is the NEUTRAL that steps per theme.
@@ -139,7 +138,6 @@ body {
   --level-wash: 0.1;
   --active-bar: rgb(var(--v-theme-primary));
   --active-text: rgb(var(--v-theme-on-surface));
-
 
   /* Drive-band capacity meter (#893) - see the dark block above for the rule.
      Here the canvas is near-white, so the neutral goes to the DARK extreme,
