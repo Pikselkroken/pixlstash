@@ -12,7 +12,8 @@ if TYPE_CHECKING:
     from pixlstash.vault import Vault
 
 # How often to look. This is the normal path for every hard delete except the
-# scrapheap purge, so an uncovered ghost outlives its cover by about this long.
+# scrapheap purge, so an uncovered ghost outlives its cover by about this long
+# plus the time the task takes to drain the whole queue.
 # The probe is one indexed read of a table that is almost always empty.
 _CHECK_INTERVAL_S: float = 10.0
 

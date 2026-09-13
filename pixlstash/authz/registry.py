@@ -382,7 +382,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification=(
             "Owner privacy erase; DELETE is blocked for READ tokens, so only an "
-            "unscoped owner reaches it. Destroys every picture ghost in the hub "
+            "unscoped owner reaches it. Destroys the active library's picture ghosts "
             "(retained thumbnails and prompts of pictures the owner already "
             "destroyed) and nothing on disk, so it is owner data hygiene rather "
             "than a §16.3 host capability."

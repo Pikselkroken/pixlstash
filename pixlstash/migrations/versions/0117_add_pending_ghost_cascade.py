@@ -5,9 +5,13 @@ carries the same ``workflow_instance_hash`` (workflow implementation plan §B4).
 Six code paths hard-delete picture rows, with ORM deletes and core deletes alike,
 and asking each to remember the cascade is how four of them forgot. So the
 vault records the fact instead: a picture row that stops carrying an instance
-hash, because it was deleted or because it was re-hashed under a new rule,
-leaves that hash in ``pending_ghost_cascade``, and
+hash, because it was deleted or because it was re-hashed to a different value
+under a new rule, leaves that hash in ``pending_ghost_cascade``, and
 ``GhostCascadeFinder`` re-evaluates the hub's ghosts for it.
+
+A write of NULL is not a re-key. The extraction writes NULL for a file it could
+not read this time (an unplugged drive), and reading that as "the cover is gone"
+would erase ghosts whose picture is still in the library.
 
 ``seq`` is AUTOINCREMENT on purpose. The trigger re-queues an already-pending
 hash with ``INSERT OR REPLACE``, which gives it a new ``seq``, and the drain
@@ -55,7 +59,8 @@ _TRIGGERS = {
         CREATE TRIGGER IF NOT EXISTS trg_pending_ghost_cascade_picture_rehash
         AFTER UPDATE OF workflow_instance_hash ON picture
         WHEN OLD.workflow_instance_hash IS NOT NULL
-            AND OLD.workflow_instance_hash IS NOT NEW.workflow_instance_hash
+            AND NEW.workflow_instance_hash IS NOT NULL
+            AND OLD.workflow_instance_hash <> NEW.workflow_instance_hash
         BEGIN
             INSERT OR REPLACE INTO pending_ghost_cascade (instance_hash)
             VALUES (OLD.workflow_instance_hash);

@@ -1198,24 +1198,28 @@ def create_router(server) -> APIRouter:
 
     @router.delete(
         "/server-config/ghost-retention/ghosts",
-        summary="Erase every picture ghost",
+        summary="Erase the active library's picture ghosts",
         response_model=GhostEraseResponse,
         description=(
-            "Permanently destroys every picture ghost the hub holds, for every "
-            "library, including detached ones. Nothing that was destroyed can "
-            "be made again afterwards. The retention setting is unchanged, so "
-            "later purges keep ghosts again unless it is set to `off`."
+            "Permanently destroys every picture ghost the active library "
+            "holds. Nothing that was destroyed can be made again afterwards. "
+            "Other libraries' ghosts are untouched. The retention setting is "
+            "unchanged, so later purges keep ghosts again unless it is `off`."
         ),
     )
     def erase_picture_ghosts(request: Request):
         _ensure_secure_when_required(request)
         hub = getattr(server, "hub", None)
-        if hub is None:
+        library_uuid = getattr(server.vault, "library_uuid", None)
+        if hub is None or not library_uuid:
             raise HTTPException(
                 status_code=503,
-                detail="No hub is attached, so this machine holds no ghosts.",
+                detail="No hub-registered library is open, so there are no ghosts.",
             )
-        return {"status": "success", "ghosts_erased": hub_erase_picture_ghosts(hub)}
+        return {
+            "status": "success",
+            "ghosts_erased": hub_erase_picture_ghosts(hub, library_uuid),
+        }
 
     @router.get(
         "/server-config/scrapheap-retention/impact",

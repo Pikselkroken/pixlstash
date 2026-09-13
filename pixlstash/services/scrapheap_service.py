@@ -1735,12 +1735,13 @@ def purge_scrapheap_pictures(
         # settled them before the ghosts were written, and another path may have
         # removed their cover since the recheck. Queue them again so the cascade
         # looks once more with the ghosts in place.
+        purged = set(purged_ids)
         vault.db.run_task(
             enqueue_ghost_cascade_in_session,
             [
                 candidate.instance_hash
                 for candidate in ghost_context.candidates
-                if candidate.picture_id in purged_ids
+                if candidate.picture_id in purged
             ],
         )
     # Always the removal+reconcile pair, never the bare removal: the ledger rows

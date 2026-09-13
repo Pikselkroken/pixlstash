@@ -888,11 +888,10 @@ def test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt():
 
     The templated ones cannot be expressed in an exact-match frozenset at all.
     They used to be pinned here as a known gap; ``READ_BLOCKED_GET_PREFIXES``
-    closed it (#1293), so every templated locality-tier GET, and every templated
-    workflow-library GET, must now sit under a prefix. The other templated
-    ``OWNER_ONLY`` GETs are deliberately *not* required to - that tier grows
-    with ordinary feature work, and a requirement there would fail an unrelated
-    route addition with a message about a belt it cannot join.
+    closed it (#1293), so every templated owner-class GET must now sit under a
+    prefix. A new one under a path share tokens also use (``/pictures/{id}/…``)
+    cannot take a prefix; that is a real hole under the rollback, and this is
+    where it is decided rather than discovered.
 
     **``GET /adapters/{sha256}/file`` joined that set on 2026-08-15, and it is
     the sharpest member of it.** The other two serve a run listing and a preview
@@ -925,18 +924,9 @@ def test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt():
     )
 
     # The templated ones are held by READ_BLOCKED_GET_PREFIXES (#1293), which
-    # closed the gap this test used to pin as five known routes. Every templated
-    # locality-tier GET must now sit under a prefix, and so must the workflow
-    # library's, whose three templated reads were the reason for closing it.
-    tier = (AccessPolicy.LOCAL_OWNER_ONLY, AccessPolicy.LOOPBACK_OWNER_ONLY)
-    must_be_prefixed = {
-        path
-        for (method, path), rp in ROUTE_POLICIES.items()
-        if method == "GET"
-        and "{" in path
-        and (rp.policy in tier or path.startswith("/api/v1/workflows/"))
-    }
-    assert len(must_be_prefixed) >= 8, sorted(must_be_prefixed)
+    # closed the gap this test used to pin as five known routes.
+    must_be_prefixed = {path for path in owner_class_gets if "{" in path}
+    assert len(must_be_prefixed) >= 16, sorted(must_be_prefixed)
     uncovered = sorted(
         path
         for path in must_be_prefixed

@@ -646,6 +646,17 @@ def test_the_ghost_routes_are_the_owners_alone(workflow_env, monkeypatch):
             resource_id=workflow_env.character_id,
         ),
     }
+    record_picture_ghosts(
+        server.hub,
+        [
+            PictureGhost(
+                library_uuid=_h("another-library"),
+                pixel_sha="sha-other-library",
+                instance_hash=_h("authz"),
+                thumbnail=b"thumbnail-bytes",
+            )
+        ],
+    )
     base = f"{API}/server-config/ghost-retention"
     previously_enforcing = server.authz._enforcing
     server.authz._enforcing = True
@@ -660,7 +671,7 @@ def test_the_ghost_routes_are_the_owners_alone(workflow_env, monkeypatch):
             assert r.status_code == 403, f"{label} PATCH: {r.status_code} {r.text}"
             r = client.delete(f"{base}/ghosts")
             assert r.status_code == 403, f"{label} DELETE: {r.status_code} {r.text}"
-        assert _ghost_shas(server) == {"sha-authz"}
+        assert _ghost_shas(server) == {"sha-authz", "sha-other-library"}
         assert server.vault.ghost_retention == "covered"
 
         owner = workflow_env.owner
@@ -670,7 +681,8 @@ def test_the_ghost_routes_are_the_owners_alone(workflow_env, monkeypatch):
         r = owner.delete(f"{base}/ghosts")
         assert r.status_code == 200, r.text
         assert r.json()["ghosts_erased"] == 1
-        assert _ghost_shas(server) == set()
+        # The erase is the active library's: another library's ghost stays.
+        assert _ghost_shas(server) == {"sha-other-library"}
     finally:
         server.authz._enforcing = previously_enforcing
 
@@ -716,3 +728,10 @@ def test_removing_a_reference_folder_cascades_its_uncovered_ghosts(workflow_env)
     result = GhostCascadeTask(vault=server.vault)._run_task()
     assert result["destroyed"] == 1, result
     assert _ghost_shas(server) == {"sha-kept"}
+
+
+def test_a_hub_attached_vault_registers_the_ghost_cascade(workflow_env):
+    """Every cascade test above drives the task directly; this is what makes the
+    planner run it at all. The module detached the finders, so they are read
+    back from the planner's record of what it detached."""
+    assert "GhostCascadeFinder" in workflow_env.detached

@@ -415,7 +415,7 @@ The same module also serves the **v1.9 tiered Duplicates queue** — `GET /dedup
 | GET | `/server-config/scrapheap-retention/impact` | Preview a retention reduction: `would_purge_count` (excludes protected + locked; evaluated at the grace floor so it never understates) + `first_purge_at`. Pure read — applies nothing, stamps nothing, purges nothing. `0` when `days` is not lower than the current window |
 | GET | `/server-config/ghost-retention` | Which picture ghosts a purge may keep (`workflow_ghost_retention`, `workflow_ghost_retention_choices`). `covered` is the shipped default |
 | PATCH | `/server-config/ghost-retention` | Set the position (`off` / `covered` / `on`). Persists to `server-config.json` and takes effect on the next purge. Destroys nothing synchronously — clearing ghosts that are ALREADY held is the erase below |
-| DELETE | `/server-config/ghost-retention/ghosts` | Erase every picture ghost in the hub, every library included (`ghosts_erased`). Leaves the setting as it is |
+| DELETE | `/server-config/ghost-retention/ghosts` | Erase the active library's picture ghosts (`ghosts_erased`); other libraries' are untouched. Leaves the setting as it is |
 
 ### `reference_folders.py`, `import_folders.py`, `filesystem.py`
 CRUD for reference / import folders; filesystem browsing for picker dialogs.
@@ -3042,7 +3042,7 @@ startup missing-file cleanup (`maintenance.py`), reference-folder removal and
 its scan, and full-restore cleanup, with ORM and core deletes alike. When each
 had to remember the cascade, four did not. So migration `0117` puts two triggers
 on `picture`: a row deleted, or updated away from its `workflow_instance_hash`
-(a hash-rule bump re-extracting), queues the old hash in
+(a hash-rule bump re-extracting to a different, non-NULL value; a NULL write is an unreadable file, not a re-key), queues the old hash in
 `pending_ghost_cascade`. `GhostCascadeFinder` (every 10 s, hub-attached vaults
 only) runs `drain_ghost_cascade`, which reads a batch and its surviving cover,
 calls `cascade_uncovered_ghosts` (`off` destroys every ghost for the hash,
@@ -3058,11 +3058,13 @@ until it is opened through a hub.
 up, not the whole hub; the restore requeue is bounded by the ghosts.
 
 **Erasing is its own request.** `DELETE /server-config/ghost-retention/ghosts`
-destroys every ghost in the hub (`hub/workflows.erase_picture_ghosts`), and
+destroys the active library's ghosts (`hub/workflows.erase_picture_ghosts`), and
 `LibraryRegistry.forget` (a discarded first import) destroys that library's in
 the same transaction as its row. Detaching a library does not: detach keeps the
 registration so the same folder comes back with its uuid, and its vault still
-holds the pictures that cover those ghosts.
+holds the pictures that cover those ghosts; attaching it again and erasing is
+the way to clear them. Only one library's ghosts are ever erased per request,
+because credentials are pinned to the library they were minted in.
 
 **The counts are reported, not only logged.** `ScrapheapPurgeOutcome` carries
 `ghosts_kept` and `ghosts_cascaded` and `DELETE /pictures/scrapheap` returns
@@ -3706,7 +3708,7 @@ Exact:    /, /login, /logout, /check-session, /version,
 Prefix:   /assets/, /share/, /docs/
 ```
 
-In addition, every scoped token (any token for which `request.state.token_scope` is populated — i.e. any scope but `ALL`) is blocked from the `READ_BLOCKED_GET_PATHS` set — every untemplated GET the registry declares `owner_only`/`local_owner_only`/`loopback_owner_only`, derived rather than curated (§16.3), plus every GET under a `READ_BLOCKED_GET_PREFIXES` prefix, which covers the templated ones — and blocked from non-GET methods (except a small `READ_SAFE_POST_PATHS` allowlist) **unless its scope is named in `auth.WRITE_ENABLED_SCOPES`**. That set is the fail-closed hinge (issue #962): the check used to key on `scope == "READ"`, so any other string — a misconfigured row, a forged one, a scope added later — skipped the write refusal and reached every `*_SCOPED` mutation route, each of which is write-unreachable solely because of it. Write-ness is now granted by declaration, not by omission. `WRITE` is the one member and has no mint path; `create_token` still allowlists `ALL`/`READ`.
+In addition, every scoped token (any token for which `request.state.token_scope` is populated — i.e. any scope but `ALL`) is blocked from the `READ_BLOCKED_GET_PATHS` set — every untemplated GET the registry declares `owner_only`/`local_owner_only`/`loopback_owner_only`, derived rather than curated (§16.3), plus every GET under a `READ_BLOCKED_GET_PREFIXES` prefix, which is how the templated ones are held — and blocked from non-GET methods (except a small `READ_SAFE_POST_PATHS` allowlist) **unless its scope is named in `auth.WRITE_ENABLED_SCOPES`**. That set is the fail-closed hinge (issue #962): the check used to key on `scope == "READ"`, so any other string — a misconfigured row, a forged one, a scope added later — skipped the write refusal and reached every `*_SCOPED` mutation route, each of which is write-unreachable solely because of it. Write-ness is now granted by declaration, not by omission. `WRITE` is the one member and has no mint path; `create_token` still allowlists `ALL`/`READ`.
 
 **Sessions and the credentials that may create one.** `active_session_ids` maps a `session_id` cookie to a user id. Password and desktop sessions carry no library pin and follow a switch. A token-derived session additionally records the minting token's immutable `library_uuid` in `_library_uuid_by_session`; the central gate enforces it on every library-bound request, so exchanging a token for a cookie cannot launder away its pin. Three other rules govern sessions, all enforced in `auth.py`:
 
@@ -3870,7 +3872,7 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
     Three narrowings inside the handler, none of them the authz tier: only a `present` copy is served (`missing` says the scan looked and found nothing, `unreachable` says the drive is unplugged, and a forgotten folder leaves its rows **tombstoned rather than deleted** — so serving on any other state would hand out bytes from a folder the owner un-registered); a checkpoint hash is refused with the same 404 as the detail route beside it; and the join is contained with `path_is_within` even though neither half is caller-supplied, because on *this* route a `..` from a faulty scan or a restored hub would be an arbitrary-file reader rather than a wrong row — the same argument B7 makes for containing its writes. The containment is lexical first for the reason `path_is_within` documents: a model symlinked into a models directory is ordinary practice, and realpath-only containment refuses every one of them. A known hash with no readable copy is **409, not 404**, because "no such adapter" and "the file is not here right now" call for different behaviour from the caller. The digest is deliberately not re-verified on the way out: that reads every byte twice per request, and the caller addressed the file by the hash it can check itself. Both directions and both halves of the tier are pinned in `tests/test_model_shelf_api.py`; the share-token direction is asserted rather than reasoned about, because this is a **GET** and the `test_share_tokens_never_reach_a_folder_mutator` docstring warns in as many words that a GET on this tier is refused by the gate alone. Arithmetic, not judgement.
 
-    **Closed 2026-09-13 (#1293):** `READ_BLOCKED_GET_PREFIXES` now refuses every scoped-token GET under `/adapters/`, `/model-folders/`, `/models/` and `/workflows/`, each a prefix under which every declared GET is owner-class (`tests/test_architecture_guardrails.py::test_read_blocked_get_prefixes_cover_only_owner_class_gets`). The paragraph below is the history.
+    **Closed 2026-09-13 (#1293):** `READ_BLOCKED_GET_PREFIXES` now refuses every scoped-token GET under ten prefixes (`/adapters/`, `/dedup/`, `/model-folders/`, `/model-icons/`, `/models/`, `/operations/`, `/pictures/import/`, `/reviews/`, `/snapshots/`, `/workflows/`), each one under which every declared GET is owner-class, and every templated owner-class GET must sit under one (`test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt`) (`tests/test_architecture_guardrails.py::test_read_blocked_get_prefixes_cover_only_owner_class_gets`). The paragraph below is the history.
 
     **It is the third member of the templated `READ_BLOCKED_GET_PATHS` gap, and the sharpest.** The belt matches literal paths, so no templated locality GET can be on it; the two already there serve a run listing and a preview image, and this one streams model weights. Under the documented `AUTHZ_GATE_ENFORCING = False` rollback a share token would therefore not read a directory but download every adapter on the shelf. It is recorded rather than closed here because closing it means prefix matching in a belt every request passes through — its own change with its own review — and a bespoke `startswith` for one route is the special case that rots. The gate refuses it today, proved by mutation in `tests/test_model_shelf_api.py::test_no_share_token_can_download_a_model_file`; `tests/test_authz_host_capability_16_3.py::test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt` fails the build if a fourth is added without this decision being made again.
 

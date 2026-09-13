@@ -469,14 +469,22 @@ def ghost_instance_hashes(hub: HubDatabase, library_uuid: str) -> list[str]:
     ]
 
 
-def erase_picture_ghosts(hub: HubDatabase) -> int:
-    """Destroy every ghost the hub holds, for every library. Returns how many.
+def erase_picture_ghosts(hub: HubDatabase, library_uuid: str) -> int:
+    """Destroy every ghost one library holds. Returns how many.
 
-    The retention setting is install-wide, and so is this: it is what "erase
-    what is already kept" means, including ghosts of a detached library whose
-    vault is not open.
+    One library, like every other query here: credentials are pinned to the
+    library they were minted in, so an erase requested in one must not reach
+    another's. A detached library's ghosts are erased by attaching it again.
     """
     with hub.transaction() as conn:
-        removed = conn.execute("DELETE FROM workflow_picture_ghost").rowcount or 0
-    logger.info("Erased %d picture ghost(s) on request.", removed)
+        removed = (
+            conn.execute(
+                "DELETE FROM workflow_picture_ghost WHERE library_uuid = ?",
+                (library_uuid,),
+            ).rowcount
+            or 0
+        )
+    logger.info(
+        "Erased %d picture ghost(s) of library %s on request.", removed, library_uuid
+    )
     return removed

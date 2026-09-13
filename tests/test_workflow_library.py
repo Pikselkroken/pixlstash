@@ -2268,6 +2268,7 @@ def test_every_kind_of_hard_delete_queues_the_cascade(store):
         session.commit()
 
     store.vault.run_task(orm_delete)
+    assert pending_hashes(store) == [instance]
     assert cascade(store, GHOST_RETENTION_COVERED) == 0, "one cover is left"
     assert set(ghosts(store)) == {"sha-any"}
 
@@ -2314,9 +2315,32 @@ def test_a_rehash_queues_the_instance_hash_it_left(store):
     # Writing the same value back is not a re-hash and must queue nothing.
     store.vault.run_task(rehash, old)
     assert pending_hashes(store) == []
+    # Nor is NULL: the extraction writes it for a file it could not read this
+    # time, and the picture is still in the library.
+    store.vault.run_task(rehash, None)
+    assert pending_hashes(store) == []
+    store.vault.run_task(rehash, old)
     store.vault.run_task(rehash, "v2-" + old)
     assert cascade(store, GHOST_RETENTION_COVERED) == 1
     assert ghosts(store) == {}
+
+
+def test_the_migrated_vault_carries_both_cascade_triggers(store):
+    """The design rests on these. A later migration that rebuilds ``picture``
+    drops a table's triggers with it, and runs before this does."""
+    names = store.vault.run_immediate_read_task(
+        lambda session: (
+            session.execute(
+                sa_text("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+            )
+            .scalars()
+            .all()
+        )
+    )
+    assert {
+        "trg_pending_ghost_cascade_picture_delete",
+        "trg_pending_ghost_cascade_picture_rehash",
+    } <= set(names)
 
 
 def test_a_hash_requeued_during_a_drain_is_not_swallowed(store, monkeypatch):

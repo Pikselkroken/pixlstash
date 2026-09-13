@@ -2,7 +2,10 @@
 
 from typing import TYPE_CHECKING
 
-from pixlstash.services.workflow_ghost_service import drain_ghost_cascade
+from pixlstash.services.workflow_ghost_service import (
+    GHOST_CASCADE_BATCH,
+    drain_ghost_cascade,
+)
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
 
 if TYPE_CHECKING:
@@ -31,10 +34,18 @@ class GhostCascadeTask(BaseTask):
         return TaskPriority.HIGH
 
     def _run_task(self):
-        evaluated, destroyed = drain_ghost_cascade(
-            self._vault.db,
-            self._vault.hub,
-            self._vault.library_uuid,
-            self._vault.ghost_retention,
-        )
-        return {"evaluated": evaluated, "destroyed": destroyed}
+        # Batch after batch until the queue is empty: removing a large reference
+        # folder queues far more hashes than one batch, and one batch per finder
+        # interval would leave uncovered ghosts standing for an hour.
+        evaluated = destroyed = 0
+        while True:
+            batch, gone = drain_ghost_cascade(
+                self._vault.db,
+                self._vault.hub,
+                self._vault.library_uuid,
+                self._vault.ghost_retention,
+            )
+            evaluated += batch
+            destroyed += gone
+            if batch < GHOST_CASCADE_BATCH:
+                return {"evaluated": evaluated, "destroyed": destroyed}

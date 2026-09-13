@@ -62,7 +62,7 @@ paths remove rows whose files are gone or were never the library's to keep, so
 they never write a ghost; they only give up cover, which the queue handles.
 
 **Erasing is its own request.** ``DELETE /server-config/ghost-retention/ghosts``
-destroys every ghost the hub holds (:func:`pixlstash.hub.workflows.erase_picture_ghosts`),
+destroys the active library's ghosts (:func:`pixlstash.hub.workflows.erase_picture_ghosts`),
 and forgetting a library registration destroys that library's.
 
 **Forgetting reaches every derived copy, and here it does so structurally.** A
