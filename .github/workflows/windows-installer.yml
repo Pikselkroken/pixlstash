@@ -159,7 +159,7 @@ jobs:
           retention-days: 3
           if-no-files-found: ignore
       - name: Attach signed installer to release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
           files: signing/*.exe
@@ -188,7 +188,7 @@ jobs:
           ls signing/
           echo "::warning title=Unsigned Windows build::Certum code signing is not enabled (WINDOWS_SIGNING_ENABLED repo variable / windows-signing environment secrets). Attaching the Windows installer with an '-unsigned' suffix — SmartScreen will warn users. See docs/windows-signing-setup.md."
       - name: Attach unsigned installer to release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           # PAT, not GITHUB_TOKEN — see the comment on sign-windows-server.
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
