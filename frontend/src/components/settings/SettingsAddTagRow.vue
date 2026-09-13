@@ -8,7 +8,7 @@
         @enter="emit('add')"
       />
     </div>
-    <AppButton variant="primary_green" icon-left="plus" @click="emit('add')">
+    <AppButton variant="primary" icon-left="plus" @click="emit('add')">
       {{ btn }}
     </AppButton>
   </div>

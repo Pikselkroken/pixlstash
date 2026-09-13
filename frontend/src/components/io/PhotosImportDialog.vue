@@ -8,6 +8,8 @@ import {
 import { listProjects } from "../../api/projects.js";
 import { listImportFolders } from "../../api/folders.js";
 import ProjectEditor from "../editors/ProjectEditor.vue";
+import AppButton from "../widgets/AppButton.vue";
+import AppBarButton from "../widgets/AppBarButton.vue";
 
 import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
@@ -202,14 +204,13 @@ watch(dialogOpen, (isOpen) => {
 <template>
   <v-dialog v-model="dialogOpen" width="980">
     <div class="google-photos-shell">
-      <v-btn
-        icon
-        size="36px"
+      <AppBarButton
+        icon="close"
+        :icon-size="20"
         class="google-photos-close"
+        aria-label="Close"
         @click="dialogOpen = false"
-      >
-        <v-icon size="24px">mdi-close</v-icon>
-      </v-btn>
+      />
       <v-card class="google-photos-card">
         <v-card-title class="google-photos-title">
           <span class="import-title-text">Import photos to</span>
@@ -269,9 +270,9 @@ watch(dialogOpen, (isOpen) => {
                     :accept="IMPORT_FILE_ACCEPT"
                     @change="handleLocalChange"
                   />
-                  <v-btn variant="outlined" @click="openLocalPicker">
-                    Choose Files
-                  </v-btn>
+                  <AppButton variant="outline" @click="openLocalPicker">
+                    Choose files
+                  </AppButton>
                 </div>
               </div>
             </v-window-item>
@@ -390,10 +391,12 @@ watch(dialogOpen, (isOpen) => {
   padding: var(--space-5);
 }
 
+/* Inside the card's corner, not straddling it: the flat close has no fill of
+   its own to sit on the backdrop with. */
 .google-photos-close {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: var(--space-6);
+  right: var(--space-6);
   z-index: 2;
 }
 

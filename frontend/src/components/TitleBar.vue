@@ -14,6 +14,7 @@ import { computed } from "vue";
 import { useBreadcrumb } from "../composables/useBreadcrumb";
 import { useVersionCheck } from "../composables/useVersionCheck";
 import WordmarkLogo from "./WordmarkLogo.vue";
+import AppBarButton from "./widgets/AppBarButton.vue";
 
 const props = defineProps({
   installType: { type: String, default: "pip" },
@@ -124,15 +125,14 @@ const close = () => desktop?.windowClose?.();
           class="titlebar-update-warn"
           aria-hidden="true"
         >⚠️</span></a
-      ><button
-        type="button"
-        class="titlebar-update-dismiss"
+      >
+      <!-- no-drag is inherited from .titlebar-update. -->
+      <AppBarButton
+        icon="close"
         aria-label="Dismiss update alert"
         :title="`Dismiss v${latestVersion} update alert`"
         @click.prevent="dismissUpdateAlert"
-      >
-        &times;
-      </button>
+      />
     </div>
     <div v-if="!isMac" class="titlebar-controls">
       <button
@@ -407,22 +407,6 @@ const close = () => desktop?.windowClose?.();
 
 .titlebar-update-security--high:hover {
   color: rgba(var(--v-theme-error), 0.85);
-}
-
-.titlebar-update-dismiss {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  width: 12px;
-  height: 12px;
-  font-size: var(--text-2xs);
-  line-height: 1;
-  color: rgba(var(--v-theme-on-background), 0.5);
-}
-
-.titlebar-update-dismiss:hover {
-  color: rgba(var(--v-theme-on-background), 0.9);
 }
 
 .titlebar-controls {

@@ -24,6 +24,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { VIcon } from "vuetify/components";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import AppBarButton from "./AppBarButton.vue";
 import { NARROW_VIEWPORT_MAX_PX } from "../../utils/floatingBottom";
 
 const props = defineProps({
@@ -149,14 +150,12 @@ const hostEl = ref(null);
         >
           {{ card.action.label }}
         </button>
-        <button
-          type="button"
+        <AppBarButton
+          icon="close"
           class="notice-dismiss"
           aria-label="Dismiss notification"
           @click="store.dismiss(card.id)"
-        >
-          <v-icon size="16" aria-hidden="true">mdi-close</v-icon>
-        </button>
+        />
       </div>
     </TransitionGroup>
   </div>
@@ -312,32 +311,6 @@ const hostEl = ref(null);
   background: var(--hover-wash);
 }
 
-.notice-dismiss {
-  position: relative;
-  flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border-radius: var(--radius-sm);
-  color: rgba(var(--v-theme-on-surface), 0.7);
-}
-
-/* Hit area expanded to 40×40 (WCAG 2.5.8 floor is 24×24) without punching a
-   40px hole in the layout. */
-.notice-dismiss::before {
-  content: "";
-  position: absolute;
-  inset: -8px;
-}
-
-.notice-dismiss:hover {
-  color: rgb(var(--v-theme-on-surface));
-  background: var(--hover-wash);
-}
-
 /* ── Dark-surface variant (spec §2.5) ─────────────────────────────────────── */
 .notice-host--on-dark .notice-card {
   background: rgb(var(--v-theme-dark-surface));
@@ -352,8 +325,11 @@ const hostEl = ref(null);
 .notice-host--on-dark .notice-dismiss {
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
 }
+/* The bar control paints `toolbar-text`, a theme colour, which is wrong on a
+   card that stays dark in both themes. */
 .notice-host--on-dark .notice-dismiss:hover {
   color: rgb(var(--v-theme-on-dark-surface));
+  background: var(--hover-wash);
 }
 /* The hue swaps too, not just the alpha. A `dark-surface` stays dark in both
    themes, so the theme's own status hues are the wrong values on it - the light

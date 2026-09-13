@@ -12,6 +12,7 @@
 import { computed, ref, watch } from "vue";
 import { VIcon, VTooltip } from "vuetify/components";
 import AppSelect from "../widgets/AppSelect.vue";
+import AppButton from "../widgets/AppButton.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsInfoCard from "./SettingsInfoCard.vue";
 import RetentionReductionDialog from "../widgets/RetentionReductionDialog.vue";
@@ -240,14 +241,13 @@ function cancelReduction() {
         />
         <v-tooltip location="bottom" max-width="320" open-on-focus>
           <template #activator="{ props: tooltipProps }">
-            <button
+            <AppButton
               v-bind="tooltipProps"
-              type="button"
-              class="sr-info"
+              variant="ghost"
+              icon-only
+              icon-left="information-outline"
               :aria-label="tooltipAriaLabel"
-            >
-              <v-icon size="16">mdi-information-outline</v-icon>
-            </button>
+            />
           </template>
           <ul class="sr-tip">
             <li v-for="point in tooltipPoints" :key="point">{{ point }}</li>
@@ -289,7 +289,7 @@ function cancelReduction() {
 
 <style scoped>
 /* Select + its info affordance on one baseline; the button aligns to the field,
-   not to the uppercase field label above it. */
+   not to the uppercase field label above it. Both are --control-h tall. */
 .sr-row {
   display: flex;
   align-items: flex-end;
@@ -299,24 +299,6 @@ function cancelReduction() {
 .sr-select {
   max-width: 220px;
   flex: 0 1 220px;
-}
-
-.sr-info {
-  /* Matches the AppSelect field height so the two share a bottom edge. */
-  height: 27px;
-  width: 27px;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: rgba(var(--v-theme-on-surface), 0.6);
-  border-radius: var(--radius-sm);
-  transition: color var(--dur-1) var(--ease-standard);
-}
-
-.sr-info:hover {
-  color: rgb(var(--v-theme-on-surface));
-  background: var(--hover-wash);
 }
 
 .sr-tip {

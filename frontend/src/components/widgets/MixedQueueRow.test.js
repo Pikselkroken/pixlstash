@@ -221,7 +221,9 @@ describe("MixedQueueRow: the primary names its outcome", () => {
   });
 
   it("offers Compare over every member", () => {
-    expect(mountRow().find(".gcompare").text()).toContain("Compare all 5");
+    expect(mountRow().find('[data-testid="mixed-compare"]').text()).toContain(
+      "Compare all 5",
+    );
   });
 });
 
@@ -296,9 +298,10 @@ describe("MixedQueueRow: a frozen row", () => {
 
   it("does not offer the action column at all in a read-only session", () => {
     const wrapper = mountRow({ readOnly: true });
-    expect(wrapper.find(".gbtn").exists()).toBe(false);
+    expect(wrapper.find('[data-testid="mixed-resolve"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="mixed-keep"]').exists()).toBe(false);
     // Reading is not a verdict, so Compare stays.
-    expect(wrapper.find(".gcompare").exists()).toBe(true);
+    expect(wrapper.find('[data-testid="mixed-compare"]').exists()).toBe(true);
   });
 });
 

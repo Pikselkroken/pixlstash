@@ -30,11 +30,6 @@ const globalOpts = {
       "v-checkbox": true,
       "v-text-field": true,
       "v-progress-circular": true,
-      "v-btn": {
-        props: ["disabled"],
-        template:
-          "<button :disabled='disabled' @click=\"$emit('click')\"><slot /></button>",
-      },
     },
   },
 };

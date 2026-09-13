@@ -268,15 +268,13 @@
           {{ confirmLabel }}
         </AppButton>
 
-        <button
-          class="selbar-btn"
-          type="button"
+        <AppBarButton
+          shape="round"
+          icon="close"
           title="Clear the selection (Esc)"
           aria-label="Clear the selection"
           @click="clearSelection"
-        >
-          <v-icon size="18">mdi-close</v-icon>
-        </button>
+        />
       </div>
     </div>
 
@@ -325,6 +323,7 @@ import { VIcon, VMenu } from "vuetify/components";
 
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import AppButton from "../widgets/AppButton.vue";
+import AppBarButton from "../widgets/AppBarButton.vue";
 import { importRun, listRuns, runSampleUrl } from "../../api/modelImports";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";

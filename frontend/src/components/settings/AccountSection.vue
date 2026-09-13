@@ -469,7 +469,7 @@ watch(
           @enter="submitPasswordChange"
         />
         <AppButton
-          variant="primary_green"
+          variant="primary"
           :disabled="settingsLoading"
           @click="submitPasswordChange"
         >
@@ -575,7 +575,7 @@ watch(
     <SettingsSection title="API Tokens" class="account-tokens-section">
       <template #action>
         <AppButton
-          variant="primary_green"
+          variant="primary"
           size="sm"
           icon-left="plus"
           :disabled="tokensLoading"
@@ -777,7 +777,7 @@ watch(
         Cancel
       </AppButton>
       <AppButton
-        variant="primary_green"
+        variant="primary"
         icon-left="key-plus"
         :disabled="tokensLoading"
         @click="createUserToken"
@@ -830,7 +830,7 @@ watch(
       </template>
     </div>
     <template #footer>
-      <AppButton variant="primary_green" @click="tokenDialogOpen = false">
+      <AppButton variant="secondary" @click="tokenDialogOpen = false">
         Close
       </AppButton>
     </template>

@@ -78,17 +78,15 @@
       :offset="8"
     >
       <template #activator="{ props: menuProps }">
-        <button
+        <AppBarButton
+          shape="round"
+          icon="account-plus-outline"
           v-bind="menuProps"
-          class="selbar-btn"
-          type="button"
           data-verb="assign"
           aria-label="Assign to person or set"
           :disabled="!assignable.length"
           :title="assignTitle || 'Assign to person or set'"
-        >
-          <v-icon size="19">mdi-account-plus-outline</v-icon>
-        </button>
+        />
       </template>
       <div class="shelf-menu shelf-menu--assign">
         <AddToEntityControl
@@ -116,9 +114,9 @@
       </div>
     </v-menu>
 
-    <button
-      class="selbar-btn"
-      type="button"
+    <AppBarButton
+      shape="round"
+      icon="layers-outline"
       data-verb="stack"
       :aria-label="
         stackFuses ? 'Fuse these into one stack' : 'Stack these into one stack'
@@ -126,93 +124,78 @@
       :disabled="!stackable"
       :title="stackTitle"
       @click="emit('stack')"
-    >
-      <v-icon size="19">mdi-layers-outline</v-icon>
-    </button>
+    />
 
-    <button
-      class="selbar-btn"
-      type="button"
+    <AppBarButton
+      shape="round"
+      icon="layers-off-outline"
       data-verb="unstack"
       aria-label="Break this stack up"
       :disabled="!unstackable"
       :title="unstackTitle"
       @click="emit('unstack')"
-    >
-      <v-icon size="19">mdi-layers-off-outline</v-icon>
-    </button>
+    />
 
-    <button
-      class="selbar-btn"
-      type="button"
+    <AppBarButton
+      shape="round"
+      icon="folder-move-outline"
       data-verb="move"
       aria-label="Move to another folder"
       :disabled="!movable.length || moves.busy"
       :title="moveTitle"
       @click="emit('move')"
-    >
-      <v-icon size="19">mdi-folder-move-outline</v-icon>
-    </button>
+    />
 
     <!-- Rename rides along DISABLED rather than disappearing: a row of buttons
          that reflows as the selection grows is a row you have to re-read, and a
          disabled button with its reason in the tooltip teaches where the verb
          lives. -->
-    <button
-      class="selbar-btn"
-      type="button"
+    <AppBarButton
+      shape="round"
+      icon="pencil-outline"
       data-verb="rename"
       aria-label="Rename"
       :disabled="!single"
       :title="renameTitle"
       @click="emit('rename')"
-    >
-      <v-icon size="19">mdi-pencil-outline</v-icon>
-    </button>
+    />
 
-    <button
-      class="selbar-btn"
-      type="button"
+    <AppBarButton
+      shape="round"
+      icon="image-outline"
       data-verb="set-icon"
       aria-label="Set thumbnail"
       :title="iconTitle"
       @click="emit('set-icon')"
-    >
-      <v-icon size="19">mdi-image-outline</v-icon>
-    </button>
+    />
 
     <span class="selbar-sep"></span>
 
-    <button
-      class="selbar-btn"
-      type="button"
+    <AppBarButton
+      shape="round"
+      icon="playlist-remove"
       data-verb="forget"
       aria-label="Remove from shelf"
       :disabled="!forgettable.length"
       :title="forgetTitle"
       @click="emit('forget')"
-    >
-      <v-icon size="19">mdi-playlist-remove</v-icon>
-    </button>
+    />
 
     <!-- The one verb that destroys bytes, so it is the one verb drawn in the
          error colour. `aria-label` follows the modifier rather than staying
          fixed like the others': a screen-reader user holding Shift is being
          offered a different, unrecoverable operation, and a stable name would
          be the one place that did not say so. -->
-    <button
-      class="selbar-btn selbar-btn--danger"
-      type="button"
+    <AppBarButton
+      shape="round"
+      danger
+      :icon="shiftHeld ? 'delete-forever-outline' : 'delete-outline'"
       data-verb="delete"
       :aria-label="deleteLabel"
       :disabled="!deletable.length"
       :title="deleteTitle"
       @click="emit('delete', $event.shiftKey)"
-    >
-      <v-icon size="19">{{
-        shiftHeld ? "mdi-delete-forever-outline" : "mdi-delete-outline"
-      }}</v-icon>
-    </button>
+    />
 
     <v-menu
       v-model="moreMenuOpen"
@@ -222,18 +205,16 @@
       :offset="8"
     >
       <template #activator="{ props: menuProps }">
-        <button
+        <AppBarButton
+          shape="round"
+          icon="dots-horizontal"
           v-bind="menuProps"
-          class="selbar-btn"
-          type="button"
           data-verb="more"
           aria-label="More actions"
           aria-haspopup="menu"
           :aria-expanded="moreMenuOpen"
           title="More…"
-        >
-          <v-icon size="19">mdi-dots-horizontal</v-icon>
-        </button>
+        />
       </template>
       <VerbMenu :single="false" v-bind="verbHandlers" />
     </v-menu>
@@ -278,6 +259,7 @@
 import { computed, h, onMounted, onUnmounted, ref } from "vue";
 
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
+import AppBarButton from "../widgets/AppBarButton.vue";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";

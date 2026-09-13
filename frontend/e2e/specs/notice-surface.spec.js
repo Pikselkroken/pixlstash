@@ -379,19 +379,17 @@ test.describe('notice surface', () => {
     // user (a programmatic .focus() alone does not reliably match it).
     await page.keyboard.press('Tab')
     await expect(dismiss).toBeFocused()
-    const ring = await dismiss.evaluate((el) => getComputedStyle(el).boxShadow)
+    const ring = await dismiss.evaluate((el) => getComputedStyle(el).outlineStyle)
     expect(ring).not.toBe('none')
 
-    // Hit area: 24×24 visual box expanded to 40×40 (WCAG 2.5.8 floor is 24×24).
+    // Hit area: the 32px bar control (WCAG 2.5.8 floor is 24×24).
     const hit = await dismiss.evaluate((el) => {
       const b = el.getBoundingClientRect()
-      const before = getComputedStyle(el, '::before')
-      return { w: b.width, h: b.height, inset: before.inset }
+      return { w: b.width, h: b.height }
     })
-    // 23.9999… in Chromium: the 24px box is laid out sub-pixel.
-    expect(hit.w).toBeGreaterThanOrEqual(23.9)
-    expect(hit.h).toBeGreaterThanOrEqual(23.9)
-    expect(hit.inset).toBe('-8px') // ::before expansion → 40×40 (WCAG 2.5.8)
+    // Allow for sub-pixel layout in Chromium.
+    expect(hit.w).toBeGreaterThanOrEqual(31.9)
+    expect(hit.h).toBeGreaterThanOrEqual(31.9)
 
     await page.keyboard.press('Shift+Tab')
     await expect(action).toBeFocused()

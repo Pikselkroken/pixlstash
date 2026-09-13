@@ -512,7 +512,7 @@ watch(
             </template>
           </div>
           <AppButton
-            variant="primary_green"
+            variant="primary"
             size="sm"
             class="compute-apply-btn"
             :disabled="
@@ -641,7 +641,7 @@ watch(
         >
           <AppButton
             v-if="!item.installed"
-            variant="primary_green"
+            variant="primary"
             size="sm"
             :disabled="busy"
             :aria-label="`Install ${item.label}`"
@@ -652,7 +652,7 @@ watch(
           <template v-else>
             <AppButton
               v-if="!item.active"
-              variant="primary_green"
+              variant="primary"
               size="sm"
               :disabled="busy"
               :aria-label="`Use ${item.label}`"

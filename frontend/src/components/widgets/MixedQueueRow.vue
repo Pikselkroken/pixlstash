@@ -79,10 +79,11 @@
            it keeps its place in the tab order and the reason it points at stays
            reachable. The page owns the guard, so the press is answered rather
            than dead. -->
-      <button
+      <AppButton
         v-if="!readOnly"
-        type="button"
-        class="gbtn gbtn--stack"
+        :variant="focused ? 'primary' : 'outline'"
+        :icon-left="plan.icon"
+        data-testid="mixed-resolve"
         :tabindex="focused ? 0 : -1"
         :disabled="busy"
         aria-keyshortcuts="Enter"
@@ -90,10 +91,9 @@
         v-bind="primaryLockAttrs"
         @click.stop="emit('resolve')"
       >
-        <v-icon size="16">mdi-{{ plan.icon }}</v-icon>
-        <span>{{ plan.label }}</span>
+        {{ plan.label }}
         <kbd v-if="focused" aria-hidden="true">Enter</kbd>
-      </button>
+      </AppButton>
       <!-- Keep is what makes this list drainable. Without it the
            legitimate-but-odd stacks sit here forever and the page becomes
            ignorable. It changes no picture, so it is not undoable; the way back
@@ -109,10 +109,11 @@
            bulk primary could not name what it was about to do; a button that
            cannot name its outcome on this page is a button that must not act on
            twelve rows at once. -->
-      <button
+      <AppButton
         v-if="!readOnly"
-        type="button"
-        class="gbtn"
+        variant="outline"
+        icon-left="check"
+        data-testid="mixed-keep"
         :tabindex="focused ? 0 : -1"
         :disabled="busy"
         aria-keyshortcuts="K"
@@ -123,34 +124,33 @@
         "
         @click.stop="emit('keep')"
       >
-        <v-icon size="16">mdi-check</v-icon>
-        <span>{{ bulk ? `Keep ${selectionCount} stacks` : "Keep" }}</span>
+        {{ bulk ? `Keep ${selectionCount} stacks` : "Keep" }}
         <kbd v-if="showsKeepKey" aria-hidden="true">K</kbd>
-      </button>
-      <button
-        type="button"
-        class="gcompare"
+      </AppButton>
+      <AppButton
+        variant="ghost"
+        icon-left="compare-horizontal"
+        data-testid="mixed-compare"
         :tabindex="focused ? 0 : -1"
         @click.stop="emit('compare')"
       >
-        <v-icon size="15">mdi-compare-horizontal</v-icon>
-        <span>Compare all {{ members.length }}</span>
+        Compare all {{ members.length }}
         <kbd v-if="focused" aria-hidden="true">C</kbd>
-      </button>
+      </AppButton>
       <!-- Back to the review queue, but only when there is somewhere real to
            land: that queue is paged, and a shortcut that scrolled to a guessed
            row would be worse than one that is not offered. -->
-      <button
+      <AppButton
         v-if="canShowQueue"
-        type="button"
-        class="gcompare"
+        variant="ghost"
+        icon-left="format-list-checks"
+        data-testid="mixed-show-queue"
         :tabindex="focused ? 0 : -1"
         title="Show the duplicate group this stack appears in, back in the review queue."
         @click.stop="emit('show-queue')"
       >
-        <v-icon size="15">mdi-format-list-checks</v-icon>
-        <span>In the queue</span>
-      </button>
+        In the queue
+      </AppButton>
     </div>
   </div>
 </template>
@@ -182,6 +182,7 @@
 
 import { computed, useId } from "vue";
 
+import AppButton from "./AppButton.vue";
 import DedupPictureStrip from "./DedupPictureStrip.vue";
 import DedupWhyPills from "./DedupWhyPills.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
@@ -668,53 +669,10 @@ function onDblClick(event) {
   gap: var(--space-2);
 }
 
-.gbtn,
-.gcompare {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  height: 27px;
-  padding: 0 var(--space-4);
-  border-radius: var(--radius-md);
-  border: 1px solid rgb(var(--v-theme-border));
-  color: rgb(var(--v-theme-on-surface));
-  font-family: var(--font-ui);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  transition:
-    background var(--dur-1) var(--ease-standard),
-    border-color var(--dur-1) var(--ease-standard);
-}
-
-.gbtn:hover:not(:disabled):not([aria-disabled="true"]),
-.gcompare:hover {
-  background: var(--hover-wash);
-}
-
-.gbtn:disabled {
-  opacity: var(--opacity-disabled);
-  cursor: default;
-}
-
-/* A refused primary looks disabled and is still a tab stop, which is the whole
-   point of `aria-disabled`: the reason it points at has to be reachable. */
-.gbtn[aria-disabled="true"] {
-  opacity: var(--opacity-disabled);
-  cursor: not-allowed;
-}
-
-/* The primary fills only on the focused row, so the eye lands on the one button
-   `Enter` would press. ACCENT, not warning: warning marks evidence on this page
-   (the strangers) and accent marks action, and the two never swap. */
-.grow--focus .gbtn--stack {
-  background: rgb(var(--v-theme-accent));
-  border-color: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
-}
-
-.gcompare {
-  border-color: transparent;
-  color: rgba(var(--v-theme-on-surface), 0.75);
+/* Left-aligned like `DedupGroupRow`'s, not AppButton's centred default. A
+   refused primary (`aria-disabled`) takes AppButton's own disabled fade. */
+.gact > button {
+  justify-content: flex-start;
 }
 
 kbd {

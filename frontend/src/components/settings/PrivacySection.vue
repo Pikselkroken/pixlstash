@@ -41,23 +41,21 @@
         <code class="pv__id">{{
           identity && identity.available ? identity.install_id : "unavailable"
         }}</code>
-        <v-btn
-          size="small"
-          variant="tonal"
+        <AppButton
+          variant="secondary"
           :disabled="!identity || !identity.available"
           @click="copyId"
         >
           {{ copied ? "Copied" : "Copy" }}
-        </v-btn>
-        <v-btn
-          size="small"
-          variant="tonal"
+        </AppButton>
+        <AppButton
+          variant="secondary"
           :loading="recreating"
           :disabled="!identity || !identity.available"
           @click="confirmOpen = true"
         >
           Recreate ID
-        </v-btn>
+        </AppButton>
       </div>
       <p v-if="error" class="pv__error">{{ error }}</p>
     </SettingsFieldBlock>
@@ -76,9 +74,14 @@
           updating.
         </p>
         <div class="pv__confirm-actions">
-          <v-btn variant="tonal" @click="confirmOpen = false">Cancel</v-btn>
-          <v-btn variant="tonal" :loading="recreating" @click="doRecreate"
-            >Replace</v-btn
+          <AppButton variant="secondary" @click="confirmOpen = false"
+            >Cancel</AppButton
+          >
+          <AppButton
+            variant="primary"
+            :loading="recreating"
+            @click="doRecreate"
+            >Replace</AppButton
           >
         </div>
       </v-card>
@@ -88,7 +91,7 @@
 
 <script setup>
 import { onMounted, computed, ref, watch } from "vue";
-import { VBtn, VCard, VDialog, VSwitch } from "vuetify/components";
+import { VCard, VDialog, VSwitch } from "vuetify/components";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { patchUserConfig } from "../../api/config";
 import { getInstallId, recreateInstallId } from "../../api/telemetry";
@@ -96,6 +99,7 @@ import SettingsSection from "./SettingsSection.vue";
 import SettingsTwoCol from "./SettingsTwoCol.vue";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsFieldBlock from "./SettingsFieldBlock.vue";
+import AppButton from "../widgets/AppButton.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },

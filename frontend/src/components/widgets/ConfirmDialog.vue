@@ -66,7 +66,7 @@ onBeforeUnmount(unregisterConfirmHost);
       </AppButton>
       <AppButton
         ref="primaryButton"
-        :variant="activeConfirm?.options.danger ? 'danger' : 'primary_green'"
+        :variant="activeConfirm?.options.danger ? 'danger' : 'primary'"
         key-hint="enter"
         @click="settle(true)"
       >

@@ -24,7 +24,7 @@
       </AppButton>
       <AppButton
         size="sm"
-        variant="primary_green"
+        variant="primary"
         icon-left="folder-plus-outline"
         v-bind="blockedAttrs(addReason, REMOTE_NOTE_ID)"
         @click="onAdd"

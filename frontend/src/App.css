@@ -158,23 +158,6 @@ body {
   text-align: center;
 }
 
-.app-btn-base {
-  border-radius: var(--radius-md);
-  text-transform: none;
-  letter-spacing: 0.02em;
-  font-weight: var(--weight-medium);
-  box-shadow: none;
-  border: none;
-  background-color: transparent !important;
-  color: rgb(var(--v-theme-on-background)) !important;
-}
-
-.app-btn-base:hover,
-.app-btn-base:focus-visible {
-  box-shadow: none !important;
-  background-color: transparent !important;
-}
-
 @media (min-width: 850px) {
   /* Hide the in-flow sidebar when closed - but not the auto-hide overlay, which
      stays in the DOM (off-screen) so it can slide in. */
@@ -336,15 +319,15 @@ body {
   position: relative;
   z-index: 1;
 }
-/* Make disabled buttons more faded */
-.v-btn.v-btn--disabled,
-button[disabled] {
+/* Make disabled hand-rolled buttons more faded. The two button dialects own
+   their disabled state (`--opacity-disabled`, no filter) and their pending one,
+   which must not fade at all, so they are excluded rather than out-shouted. */
+button[disabled]:not(.app-btn):not(.bar-btn) {
   opacity: 0.35 !important;
   filter: grayscale(30%);
   pointer-events: none;
 }
 
-.v-btn:focus:not(:focus-visible),
 button:focus:not(:focus-visible) {
   outline: none !important;
   box-shadow: none !important;
@@ -430,44 +413,6 @@ button:focus:not(:focus-visible) {
 
 .selbar-chevron {
   margin-left: calc(var(--space-1) * -1);
-}
-
-/* Round, 34px, and the hover wash is the only thing that draws a box: a border
-   per verb would make seven of them into a fence. */
-.selbar-btn {
-  width: 34px;
-  height: 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-.selbar-btn:hover:not(:disabled) {
-  background: var(--hover-wash);
-}
-
-/* The only verb in the pill that destroys bytes. Colour is the whole signal -
-   no border, no fill - so it reads as one of the row rather than as a second
-   kind of control, and the hover wash is the error colour at the same weight
-   the neutral one uses. */
-.selbar-btn--danger {
-  color: rgb(var(--v-theme-error));
-}
-
-.selbar-btn--danger:hover:not(:disabled) {
-  background: rgba(var(--v-theme-error), 0.08);
-}
-
-/* Shown and dimmed rather than hidden, so the row of verbs never reflows under
-   the pointer as the selection grows. The reason is in the `title`. */
-.selbar-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
 }
 
 .selbar-sep {
@@ -1131,12 +1076,14 @@ kbd {
 }
 
 .bar-btn:hover:not(:disabled) {
-  background: rgba(var(--v-theme-toolbar-text), 0.1);
+  background: var(--hover-wash);
   color: rgb(var(--v-theme-toolbar-text));
 }
 
-.bar-btn--active {
-  color: rgb(var(--v-theme-primary));
+/* Olive marks, words stay text: an active bar button colours its glyph only.
+   `--selected-ink`, not `primary`, which measures 2.72:1 on dark chrome. */
+.bar-btn--active .v-icon {
+  color: var(--selected-ink);
 }
 
 .bar-btn--boxed {
@@ -1169,8 +1116,8 @@ kbd {
   cursor: progress;
 }
 
-/* Icon-only bar button */
-.bar-btn--icon {
+/* Icon-only bar button. Doubled class so it beats the split-pair padding. */
+.bar-btn.bar-btn--icon {
   width: var(--control-h-bar);
   height: var(--control-h-bar);
   padding: 0;
@@ -1291,10 +1238,9 @@ kbd {
 
 /* ── Open trigger state - the toolbar button while its menu is open ────────── */
 .bar-btn--open {
-  background: rgb(var(--v-theme-panel)) !important;
+  background: var(--hover-wash) !important;
   border: 1px solid rgb(var(--v-theme-border)) !important;
-  color: rgb(var(--v-theme-on-background)) !important;
-  border-radius: var(--radius-sm);
+  color: rgb(var(--v-theme-toolbar-text)) !important;
 }
 .bar-btn--open .bar-btn-chevron {
   transform: rotate(180deg);

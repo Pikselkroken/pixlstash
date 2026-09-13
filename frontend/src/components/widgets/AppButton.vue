@@ -45,8 +45,9 @@ import { computed, nextTick, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 const props = defineProps({
-  // primary (amber accent) | primary_green (olive) | secondary (neutral) |
-  // outline (bordered, no fill) | danger (error) | ghost (transparent)
+  // primary (amber accent, the key action) | secondary (neutral) |
+  // outline (bordered, no fill) | danger (error) | ghost (transparent).
+  // Amber acts, olive selects: there is no olive button.
   variant: { type: String, default: "secondary" },
   size: { type: String, default: "md" }, // md | sm
   iconLeft: { type: String, default: "" },
@@ -135,7 +136,7 @@ defineExpose({ focus });
     background var(--dur-1) var(--ease-standard),
     border-color var(--dur-1) var(--ease-standard),
     color var(--dur-1) var(--ease-standard),
-    filter var(--dur-1) var(--ease-standard);
+    background-image var(--dur-1) var(--ease-standard);
 }
 
 .app-btn--md {
@@ -191,31 +192,26 @@ defineExpose({ focus });
   cursor: progress;
 }
 
-/* Primary - amber accent, the key action. */
+/* Primary - amber accent, the key action. A filled control's hover darkens
+   the fill 20% (`--hover-shade`, a background-image), which leaves the label
+   alone and lifts white on amber from 3.41 to 5.03:1. */
 .app-btn--primary {
-  background: rgb(var(--v-theme-accent));
+  background-color: rgb(var(--v-theme-accent));
   color: rgb(var(--v-theme-on-accent));
 }
-.app-btn--primary:not(:disabled):not([aria-disabled="true"]):hover {
-  filter: brightness(1.08);
+.app-btn--primary:not(:disabled):not([aria-disabled="true"]):hover,
+.app-btn--danger:not(:disabled):not([aria-disabled="true"]):hover {
+  background-image: var(--hover-shade);
 }
 
-/* Primary green - olive primary, used for create/import affordances. */
-.app-btn--primary_green {
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-}
-.app-btn--primary_green:not(:disabled):not([aria-disabled="true"]):hover {
-  filter: brightness(1.08);
-}
-
-/* Secondary - neutral, bordered. The Cancel partner. */
+/* Secondary - neutral. The Cancel partner. Its hover lightens in dark and
+   darkens in light (`--hover-neutral`): a darkened grey on a dark panel vanishes. */
 .app-btn--secondary {
-  background: rgb(var(--v-theme-cancel-button));
+  background-color: rgb(var(--v-theme-cancel-button));
   color: rgb(var(--v-theme-cancel-button-text));
 }
 .app-btn--secondary:not(:disabled):not([aria-disabled="true"]):hover {
-  filter: brightness(1.08);
+  background-image: var(--hover-neutral);
 }
 
 /* Outline - the neutral without a fill, for the former outlined `v-btn` sites.
@@ -237,11 +233,8 @@ defineExpose({ focus });
    brighter in dark). Recorded because a stale contrast note is the kind of
    thing that gets "corrected" by changing the value instead of the note. */
 .app-btn--danger {
-  background: rgb(var(--v-theme-error));
+  background-color: rgb(var(--v-theme-error));
   color: rgb(var(--v-theme-on-error));
-}
-.app-btn--danger:not(:disabled):not([aria-disabled="true"]):hover {
-  filter: brightness(1.08);
 }
 
 /* Ghost - transparent, recedes until hovered. */

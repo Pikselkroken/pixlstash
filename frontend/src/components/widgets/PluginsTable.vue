@@ -18,6 +18,7 @@ import { computed, ref } from "vue";
 import { patchUserConfig } from "../../api/config";
 import TaggerPluginSettingsDialog from "./TaggerPluginSettingsDialog.vue";
 import { errorDetail } from "../../utils/apiError";
+import AppButton from "./AppButton.vue";
 
 const props = defineProps({
   /** Array of plugin objects from GET /taggers. */
@@ -187,11 +188,13 @@ function onParamsSaved({ name, params }) {
           </td>
 
           <td class="pt-col-actions">
-            <v-btn
-              variant="text"
-              size="x-small"
-              icon="mdi-cog"
+            <AppButton
+              variant="ghost"
+              size="sm"
+              icon-only
+              icon-left="cog"
               title="Plugin settings"
+              :aria-label="`${plugin.display_name} settings`"
               @click="openSettings(plugin)"
             />
           </td>

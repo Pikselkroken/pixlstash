@@ -29,31 +29,29 @@
               @keydown.enter="createFolder"
               @keydown.esc="cancelCreateFolder"
             />
-            <v-btn
-              class="browse-create-btn"
-              size="small"
-              variant="flat"
-              color="primary"
+            <AppButton
+              variant="primary"
+              size="sm"
               :loading="createFolderLoading"
               :disabled="!newFolderName.trim()"
               @click="createFolder"
             >
               Create
-            </v-btn>
-            <v-btn size="small" variant="text" @click="cancelCreateFolder">
+            </AppButton>
+            <AppButton size="sm" @click="cancelCreateFolder">
               Cancel
-            </v-btn>
+            </AppButton>
           </template>
-          <v-btn
+          <AppButton
             v-else
-            size="small"
-            variant="outlined"
-            prepend-icon="mdi-folder-plus-outline"
+            variant="outline"
+            size="sm"
+            icon-left="folder-plus-outline"
             :disabled="!browsePath"
             @click="startCreateFolder"
           >
             New folder
-          </v-btn>
+          </AppButton>
         </div>
         <div v-if="createFolderError" class="browse-create-error">
           {{ createFolderError }}
@@ -101,15 +99,14 @@
       </v-card-text>
       <v-card-actions class="browse-footer">
         <v-spacer></v-spacer>
-        <v-btn variant="text" @click="emit('close')">Cancel</v-btn>
-        <v-btn
-          variant="flat"
-          color="primary"
+        <AppButton @click="emit('close')">Cancel</AppButton>
+        <AppButton
+          variant="primary"
           :disabled="pickModelFile ? !pickedFile : !browsePath"
           @click="selectPath"
         >
           {{ selectedName ? `Select "${selectedName}"` : "Select" }}
-        </v-btn>
+        </AppButton>
       </v-card-actions>
     </v-card>
   </v-dialog>
@@ -123,6 +120,7 @@ import {
 } from "../../api/folders";
 import { useSubmitGuard } from "../../composables/useSubmitGuard";
 import { errorDetail } from "../../utils/apiError";
+import AppButton from "../widgets/AppButton.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -352,30 +350,6 @@ const { pending: createFolderLoading, run: createFolder } =
   color: rgb(var(--v-theme-error));
   padding: 6px 16px 0;
   font-size: 0.8rem;
-}
-
-/* Pending is not disabled (visual-language.md §11): the shared AppButton keeps
-   its label legible while busy, but this is a stock Vuetify v-btn, whose own
-   `--loading` styling sets `.v-btn__content { opacity: 0 }` - blanking "Create"
-   entirely instead of just dimming it. Restore it so this button matches the
-   pending contract the rest of #647's forms carry. */
-.browse-create-btn :deep(.v-btn--loading .v-btn__content),
-.browse-create-btn :deep(.v-btn--loading .v-btn__prepend),
-.browse-create-btn :deep(.v-btn--loading .v-btn__append) {
-  opacity: 1;
-}
-
-/* The spinner keeps spinning under reduced motion, the same fix AppButton takes
-   for its own mdi-spin icon: the global reset in design-tokens.css zeroes every
-   element's animation, which would freeze Vuetify's indeterminate spinner into a
-   static ring that reads as a rendering fault rather than "working". */
-@media (prefers-reduced-motion: reduce) {
-  .browse-create-btn :deep(.v-progress-circular--indeterminate > svg),
-  .browse-create-btn
-    :deep(.v-progress-circular--indeterminate .v-progress-circular__overlay) {
-    animation-duration: 1.4s !important;
-    animation-iteration-count: infinite !important;
-  }
 }
 
 .browse-entries {

@@ -11,7 +11,7 @@
       'bar-btn',
       `bar-btn--${shape}`,
       {
-        'bar-btn--icon': iconOnly,
+        'bar-btn--icon': iconOnly && !chevron,
         'bar-btn--active': active,
         'bar-btn--open': open,
         'bar-btn--danger': danger,

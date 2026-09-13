@@ -40,7 +40,7 @@ function mountTable(activePlugin, kind = "tag") {
       settings: { [`active_${kind}_plugin`]: activePlugin },
     },
     global: {
-      stubs: { TaggerPluginSettingsDialog: true, "v-btn": true, "v-tooltip": true },
+      stubs: { TaggerPluginSettingsDialog: true, "v-tooltip": true },
     },
   });
 }
@@ -148,7 +148,6 @@ describe("PluginsTable with no capable plugins", () => {
       global: {
         stubs: {
           TaggerPluginSettingsDialog: true,
-          "v-btn": true,
           "v-tooltip": true,
         },
       },

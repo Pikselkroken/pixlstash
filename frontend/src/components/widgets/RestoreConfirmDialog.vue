@@ -23,6 +23,8 @@ import {
   endFullRestoreRequest,
   reloadAfterFullRestore,
 } from "../../utils/fullRestoreTransition";
+import AppButton from "./AppButton.vue";
+import AppBarButton from "./AppBarButton.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -279,15 +281,13 @@ const canRestore = computed(
       <v-card-title class="restore-dialog-title">
         <v-icon size="20" class="mr-2">mdi-restore</v-icon>
         Restore from snapshot
-        <v-btn
-          icon
-          size="28px"
-          variant="text"
+        <AppBarButton
+          icon="close"
+          :icon-size="20"
           class="ml-auto"
+          aria-label="Close"
           @click="dialogOpen = false"
-        >
-          <v-icon size="18">mdi-close</v-icon>
-        </v-btn>
+        />
       </v-card-title>
 
       <v-card-text class="restore-dialog-body">
@@ -346,17 +346,16 @@ const canRestore = computed(
         <!-- ── Step 2: Preview ────────────────────────────────────────── -->
         <template v-else>
           <!-- Back button (only when we came through the picker) -->
-          <v-btn
+          <AppButton
             v-if="!props.snapshotId"
-            size="x-small"
-            variant="text"
-            density="compact"
+            variant="ghost"
+            size="sm"
+            icon-left="arrow-left"
             class="mb-3"
             @click="backToPicker"
           >
-            <v-icon size="14" class="mr-1">mdi-arrow-left</v-icon>
             Back
-          </v-btn>
+          </AppButton>
 
           <!-- Snapshot header -->
           <div v-if="preview" class="restore-preview-header">
@@ -537,24 +536,21 @@ const canRestore = computed(
         </div>
         <v-card-actions class="restore-dialog-actions">
           <v-spacer />
-          <v-btn
-            variant="text"
-            density="compact"
+          <AppButton
+            variant="secondary"
             :disabled="restoring"
             @click="declineRestoreDependencies"
           >
             No, cancel
-          </v-btn>
-          <v-btn
-            color="error"
-            density="compact"
-            variant="elevated"
+          </AppButton>
+          <AppButton
+            variant="danger"
+            icon-left="restore"
             :loading="restoring"
             @click="confirmRestoreDependencies"
           >
-            <v-icon size="15" class="mr-1">mdi-restore</v-icon>
             Yes, restore everything
-          </v-btn>
+          </AppButton>
         </v-card-actions>
       </template>
 
@@ -567,20 +563,18 @@ const canRestore = computed(
           {{ restoreError }}
         </div>
         <v-spacer v-else />
-        <v-btn variant="text" density="compact" @click="dialogOpen = false">
+        <AppButton variant="secondary" @click="dialogOpen = false">
           Cancel
-        </v-btn>
-        <v-btn
-          color="error"
-          density="compact"
-          variant="elevated"
+        </AppButton>
+        <AppButton
+          variant="danger"
+          icon-left="restore"
           :loading="restoring"
           :disabled="!canRestore"
           @click="handleRestore"
         >
-          <v-icon size="15" class="mr-1">mdi-restore</v-icon>
           Restore
-        </v-btn>
+        </AppButton>
       </v-card-actions>
     </v-card>
   </v-dialog>

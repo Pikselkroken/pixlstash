@@ -1972,24 +1972,6 @@ defineExpose({ focusTasksTab });
   background: transparent;
 }
 
-.stats-sidebar-close-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  padding: 0 var(--space-3);
-  height: 100%;
-  cursor: pointer;
-  color: rgba(var(--v-theme-on-surface), 0.4);
-  transition: color 0.12s;
-  border-radius: 0;
-  flex-shrink: 0;
-}
-.stats-sidebar-close-btn:hover {
-  color: rgba(var(--v-theme-on-surface), 0.75);
-}
-
 .stats-sidebar-content {
   flex: 1;
   min-width: 0;

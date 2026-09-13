@@ -214,22 +214,22 @@
            `Assign 14`, which was §7's intent. Ellipsising the whole label
            instead produced `Assign 2 t…`, a truncation mid-preposition that
            reads as a bug and loses the count's neighbour anyway. -->
-      <button
+      <AppButton
         v-if="assignTarget"
-        class="assign-btn"
-        type="button"
-        :disabled="assignCount === 0 || assignBusy"
+        variant="primary"
+        icon-left="account-check-outline"
+        :disabled="assignCount === 0"
+        :loading="assignBusy"
         :aria-label="assignAccessibleName"
         :title="assignAccessibleName"
         @click="$emit('assign')"
       >
-        <v-icon size="18">mdi-account-check-outline</v-icon>
         <span class="assign-label"
           >Assign {{ assignCount
           }}<span v-if="assignFromSelection"> selected</span
           ><span class="assign-target">to {{ assignTarget }}</span></span
         >
-      </button>
+      </AppButton>
 
       <button
         class="stack-btn clear-search-btn"
@@ -251,6 +251,7 @@
 
 <script setup>
 import { computed, onUnmounted, ref, useId, watch } from "vue";
+import AppButton from "./AppButton.vue";
 
 const props = defineProps({
   imagesLoading: { type: Boolean, default: false },
@@ -602,28 +603,6 @@ onUnmounted(() => {
   cursor: default;
 }
 
-.assign-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 40px;
-  padding: 0 var(--space-4);
-  border-radius: var(--radius-sm);
-  background: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
-  font-size: var(--text-base);
-  font-family: inherit;
-  font-weight: var(--weight-medium);
-  white-space: nowrap;
-}
-.assign-btn:hover:not(:disabled) {
-  filter: brightness(1.1);
-}
-.assign-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
 .assign-label {
   white-space: nowrap;
 }
@@ -695,8 +674,7 @@ onUnmounted(() => {
 }
 
 @media (hover: none) and (pointer: coarse) {
-  .stack-btn,
-  .assign-btn {
+  .stack-btn {
     height: var(--bar-height);
   }
   /* The one thing touch still needs from the old §7 rule: the panel's own

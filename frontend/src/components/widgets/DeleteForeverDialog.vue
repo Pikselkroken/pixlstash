@@ -23,6 +23,7 @@ import {
   buildLockedPurgeNote,
   deleteForeverDestroyCounts,
 } from "../../utils/lockedDelete.js";
+import AppButton from "./AppButton.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -183,23 +184,12 @@ function confirmDeleteUnprotected() {
       <template v-if="!hasProtected">
         <p>{{ standardBody }}</p>
         <div class="row">
-          <button type="button" class="btn btn-quiet" @click="requestCancel">
+          <AppButton variant="secondary" @click="requestCancel">
             Cancel
-          </button>
-          <button
-            type="button"
-            class="btn btn-danger"
-            :disabled="busy"
-            @click="confirmStandard"
-          >
-            <v-progress-circular
-              v-if="busy"
-              indeterminate
-              size="16"
-              width="2"
-            />
-            <template v-else>Delete forever</template>
-          </button>
+          </AppButton>
+          <AppButton variant="danger" :loading="busy" @click="confirmStandard">
+            Delete forever
+          </AppButton>
         </div>
       </template>
 
@@ -233,31 +223,24 @@ function confirmDeleteUnprotected() {
         </label>
 
         <div class="row row--wrap">
-          <button type="button" class="btn btn-quiet" @click="requestCancel">
+          <AppButton variant="secondary" @click="requestCancel">
             Cancel
-          </button>
-          <button
-            type="button"
-            class="btn btn-outline"
+          </AppButton>
+          <AppButton
+            variant="outline"
             :disabled="unprotectedCount === 0 || busy"
             @click="confirmDeleteUnprotected"
           >
             {{ deleteUnprotectedLabel }}
-          </button>
-          <button
-            type="button"
-            class="btn btn-danger"
-            :disabled="!typedOk || busy"
+          </AppButton>
+          <AppButton
+            variant="danger"
+            :disabled="!typedOk"
+            :loading="busy"
             @click="confirmDeleteAll"
           >
-            <v-progress-circular
-              v-if="busy"
-              indeterminate
-              size="16"
-              width="2"
-            />
-            <template v-else>{{ deleteAllLabel }}</template>
-          </button>
+            {{ deleteAllLabel }}
+          </AppButton>
         </div>
       </template>
     </div>
@@ -394,40 +377,5 @@ function confirmDeleteUnprotected() {
   outline: none;
   box-shadow: var(--focus-ring);
   border-color: rgba(var(--v-theme-accent), 0.55);
-}
-
-/* Action buttons - quiet cancel, outline unprotected-only, destructive delete-all. */
-.btn {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  padding: var(--space-3) var(--space-5);
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-}
-
-.btn:disabled {
-  /* The named token, same value: it is the one state the system lets fade. */
-  opacity: var(--opacity-disabled);
-  cursor: default;
-}
-
-.btn-quiet {
-  background: rgb(var(--v-theme-cancel-button));
-  color: rgb(var(--v-theme-cancel-button-text));
-}
-
-.btn-outline {
-  border: 1px solid rgb(var(--v-theme-border));
-  color: rgba(var(--v-theme-on-surface), 0.85);
-}
-
-.btn-danger {
-  background: rgba(var(--v-theme-error), 0.1);
-  border: 1px solid rgba(var(--v-theme-error), 0.55);
-  color: rgb(var(--v-theme-error));
 }
 </style>

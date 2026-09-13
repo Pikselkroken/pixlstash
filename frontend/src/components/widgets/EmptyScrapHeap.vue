@@ -2,13 +2,14 @@
   <div v-if="visible" class="selection-bar-overlay">
     <div class="selection-bar-content">
       <div class="selection-bar-left">
-        <button
-          class="restore-btn"
+        <AppButton
+          variant="primary"
+          size="sm"
           :disabled="restoreDisabled"
           @click="$emit('restore-scrapheap')"
         >
-          Restore All
-        </button>
+          Restore all
+        </AppButton>
         <!-- Active retention policy, stated where the action happens. Hidden
              until the policy is known so it never shows a guessed window. -->
         <p v-if="retentionLabel" class="retention-note">
@@ -28,13 +29,14 @@
         </p>
       </div>
       <div class="selection-bar-actions">
-        <button
-          class="delete-btn"
+        <AppButton
+          variant="danger"
+          size="sm"
           :disabled="disabled"
           @click="$emit('empty-scrapheap')"
         >
-          Empty Scrapheap
-        </button>
+          Empty scrapheap
+        </AppButton>
       </div>
     </div>
   </div>
@@ -48,6 +50,7 @@
  * navigation to Settings, so this component never touches the store or the API.
  */
 import { VIcon } from "vuetify/components";
+import AppButton from "./AppButton.vue";
 
 defineProps({
   visible: { type: Boolean, default: false },
@@ -136,40 +139,5 @@ defineEmits([
 
 .retention-note__change:hover {
   filter: brightness(1.15);
-}
-
-.restore-btn {
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  line-height: 1.4;
-  white-space: nowrap;
-}
-.restore-btn:hover {
-  filter: brightness(1.3);
-}
-.restore-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-.delete-btn {
-  background: rgb(var(--v-theme-error));
-  color: rgb(var(--v-theme-on-error));
-  padding: var(--space-1) var(--space-4);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  line-height: 1.4;
-  white-space: nowrap;
-}
-.delete-btn:hover {
-  filter: brightness(1.3);
-}
-.delete-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 </style>

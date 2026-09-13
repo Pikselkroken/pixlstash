@@ -199,15 +199,6 @@
   line-height: 1.5;
 }
 
-.sidebar-no-projects-btn :deep(.v-btn__content) {
-  font-size: var(--text-sm);
-  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-2);
-}
-
-.sidebar-no-projects-btn--folders {
-  min-width: 190px;
-}
-
 /* Project tree (Projects tab flat tree) */
 .sidebar-project-tree-add {
   display: flex;
@@ -460,11 +451,6 @@
 
 .sidebar-project-tree-files {
   padding-left: 0;
-}
-
-.sidebar-no-projects-btn--folders :deep(.v-btn__content) {
-  white-space: nowrap;
-  font-size: var(--text-sm);
 }
 
 .sidebar-collapsed-project-wrap {
@@ -2465,6 +2451,11 @@ button.sidebar-ctx-item:disabled:hover {
 
 .relocate-destination-row .v-text-field {
   flex: 1;
+}
+
+.relocate-browse-btn {
+  align-self: center;
+  flex-shrink: 0;
 }
 
 .relocate-warning {

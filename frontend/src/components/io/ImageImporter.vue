@@ -17,6 +17,7 @@ import {
 // import module owns the staging session, not the whole picture domain).
 import { restoreScrapheap } from "../../api/pictures";
 import { errorDetail } from "../../utils/apiError";
+import AppButton from "../widgets/AppButton.vue";
 
 // ── Async streaming-staging import (#459) ────────────────────────────────────
 // This component owns the two-phase import experience over the finalised
@@ -941,22 +942,20 @@ defineExpose({ startImport });
       <!-- Phase A holds exactly one action: Cancel. No close/minimize control
            exists; the safe path auto-hides. -->
       <div class="dlg-foot">
-        <button
+        <AppButton
           v-if="showCancelButton"
-          class="dlg-btn dlg-btn--danger"
-          type="button"
+          variant="danger"
           @click="handleCancelImport"
         >
           Cancel import
-        </button>
-        <button
+        </AppButton>
+        <AppButton
           v-if="importPhase === 'error'"
-          class="dlg-btn dlg-btn--quiet"
-          type="button"
+          variant="secondary"
           @click="dismissError"
         >
           Dismiss
-        </button>
+        </AppButton>
       </div>
     </div>
   </div>
@@ -1124,35 +1123,6 @@ defineExpose({ startImport });
   justify-content: flex-start;
   gap: var(--space-3);
   margin-top: var(--space-6);
-}
-
-.dlg-btn {
-  font: inherit;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  line-height: var(--leading-snug);
-  padding: var(--space-3) var(--space-5);
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  transition: filter var(--dur-1) var(--ease-standard);
-}
-
-.dlg-btn:hover {
-  filter: brightness(1.05);
-}
-
-.dlg-btn--danger {
-  background: rgba(var(--v-theme-error), 0.1);
-  border-color: rgba(var(--v-theme-error), 0.55);
-  color: rgb(var(--v-theme-error));
-}
-
-.dlg-btn--quiet {
-  background: rgb(var(--v-theme-cancel-button));
-  color: rgb(var(--v-theme-cancel-button-text));
 }
 </style>
 

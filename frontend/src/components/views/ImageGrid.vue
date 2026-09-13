@@ -204,17 +204,13 @@
           existing link will lose access immediately.
         </v-card-text>
         <v-card-actions style="padding: 8px 16px 16px">
-          <v-btn variant="text" @click="revokeSharesDialogOpen = false"
-            >Cancel</v-btn
+          <AppButton @click="revokeSharesDialogOpen = false"
+            >Cancel</AppButton
           >
           <v-spacer />
-          <v-btn
-            color="error"
-            variant="tonal"
-            @click="confirmRevokePictureShares"
-          >
+          <AppButton variant="danger" @click="confirmRevokePictureShares">
             Remove all shares
-          </v-btn>
+          </AppButton>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -243,13 +239,13 @@
           />
         </v-card-text>
         <v-card-actions style="padding: 8px 16px 16px">
-          <v-btn variant="text" @click="segmentDialogOpen = false"
-            >Cancel</v-btn
+          <AppButton @click="segmentDialogOpen = false"
+            >Cancel</AppButton
           >
           <v-spacer />
-          <v-btn color="primary" variant="tonal" @click="confirmSegment">
+          <AppButton variant="primary" @click="confirmSegment">
             Detect
-          </v-btn>
+          </AppButton>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -519,15 +515,14 @@
           <div class="empty-state-subtitle">
             {{ emptyStateSubtitle }}
           </div>
-          <v-btn
+          <AppButton
             v-if="canShowAllPicturesButton"
-            class="empty-state-action app-btn-base"
-            color="primary"
-            variant="elevated"
+            class="empty-state-action"
+            variant="primary"
             @click.stop="handleEmptyStateReset"
           >
-            Show All Pictures
-          </v-btn>
+            Show all pictures
+          </AppButton>
         </div>
       </div>
       <div
@@ -1016,20 +1011,12 @@
         browser.
       </span>
       <template #actions>
-        <v-btn
-          color="primary"
-          variant="text"
-          @click="handleGuestConsentAccepted"
-        >
+        <AppButton variant="ghost" @click="handleGuestConsentAccepted">
           Accept
-        </v-btn>
-        <v-btn
-          color="default"
-          variant="text"
-          @click="handleGuestConsentRejected"
-        >
+        </AppButton>
+        <AppButton variant="ghost" @click="handleGuestConsentRejected">
           No thanks
-        </v-btn>
+        </AppButton>
       </template>
     </v-snackbar>
 
@@ -1043,21 +1030,16 @@
     >
       <span>{{ impossibleSnackbarText }}</span>
       <template #actions>
-        <v-btn
+        <AppButton
           v-if="lastImpossibleRemoved.length"
-          color="primary"
-          variant="text"
+          variant="ghost"
           @click="handleUndoImpossibleTags"
         >
           Undo
-        </v-btn>
-        <v-btn
-          color="default"
-          variant="text"
-          @click="impossibleSnackbarVisible = false"
-        >
+        </AppButton>
+        <AppButton variant="ghost" @click="impossibleSnackbarVisible = false">
           Dismiss
-        </v-btn>
+        </AppButton>
       </template>
     </v-snackbar>
 
@@ -1238,6 +1220,7 @@ import Toolbar from "../panels/Toolbar.vue";
 import SelectionBar from "../panels/SelectionBar.vue";
 import GridActionPill from "../panels/GridActionPill.vue";
 import ActionReceipt from "../widgets/ActionReceipt.vue";
+import AppButton from "../widgets/AppButton.vue";
 import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
 import SearchResultBar from "../widgets/SearchResultBar.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";

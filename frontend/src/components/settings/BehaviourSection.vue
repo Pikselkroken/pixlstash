@@ -5,6 +5,7 @@ import { getWorkerProgress } from "../../api/workers";
 import { listTaggers, listTaggerPluginDiagnostics } from "../../api/taggers";
 import { VSlider, VSwitch } from "vuetify/components";
 import PluginsTable from "../widgets/PluginsTable.vue";
+import AppButton from "../widgets/AppButton.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsTwoCol from "./SettingsTwoCol.vue";
 import SettingsFieldBlock from "./SettingsFieldBlock.vue";
@@ -355,9 +356,14 @@ watch(
         </li>
       </ul>
       <div class="settings-tagger-plugin-help">
-        <v-btn variant="text" size="small" prepend-icon="mdi-help-circle-outline" @click="pluginInstallHelpOpen = true">
+        <AppButton
+          variant="ghost"
+          size="sm"
+          icon-left="help-circle-outline"
+          @click="pluginInstallHelpOpen = true"
+        >
           How to install plugins
-        </v-btn>
+        </AppButton>
       </div>
     </SettingsSection>
 
@@ -416,9 +422,9 @@ watch(
         </v-card-text>
         <v-card-actions class="plugin-install-actions">
           <v-spacer />
-          <v-btn variant="text" @click="pluginInstallHelpOpen = false">
+          <AppButton variant="secondary" @click="pluginInstallHelpOpen = false">
             Close
-          </v-btn>
+          </AppButton>
         </v-card-actions>
       </v-card>
     </v-dialog>

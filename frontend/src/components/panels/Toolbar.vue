@@ -2,17 +2,15 @@
   <div class="selection-bar-overlay">
     <div class="selection-bar-content">
       <div class="selection-bar-left">
-        <button
+        <AppBarButton
           v-if="sidebarStore.sidebarForcedHidden"
-          class="bar-btn bar-btn--icon tb-mobile-nav"
-          type="button"
+          class="tb-mobile-nav"
+          icon="menu"
           :aria-expanded="sidebarStore.sidebarVisible"
           aria-label="Open library navigation"
           title="Open library navigation"
           @click="sidebarStore.revealSidebar()"
-        >
-          <v-icon size="20">mdi-menu</v-icon>
-        </button>
+        />
         <div
           v-if="sidebarStore.sidebarForcedHidden"
           class="bar-separator tb-mobile-nav-separator"
@@ -31,31 +29,29 @@
               class="bar-split-button"
               :class="{ 'bar-split-button--open': gbSortMenuOpen }"
             >
-              <button
-                class="bar-btn bar-split-toggle"
-                type="button"
+              <AppBarButton
+                class="bar-split-toggle"
+                :icon="gbSortButtonIcon"
                 :title="gbDescendingModel ? 'Descending' : 'Ascending'"
+                :aria-label="gbDescendingModel ? 'Descending' : 'Ascending'"
                 :disabled="gbSortModel === LIKENESS_GROUPS_SORT_KEY_GB"
                 @click.stop="gbToggleSortDirection"
-              >
-                <v-icon size="19">{{ gbSortButtonIcon }}</v-icon>
-              </button>
-              <button
+              />
+              <AppBarButton
                 v-bind="menuProps"
-                class="bar-btn bar-split-menu"
-                type="button"
+                class="bar-split-menu"
+                prefix="Sort:"
+                :icon="gbSortTypeIcon"
+                chevron
                 :title="gbSortButtonLabel"
               >
-                <span class="bar-btn-prefix">Sort:</span>
-                <v-icon size="19">{{ gbSortTypeIcon }}</v-icon>
                 <span class="bar-btn-sort-type">{{ gbSortTypeName }}</span>
                 <span
                   v-if="gbSortSecondaryLabel"
                   class="bar-btn-sort-secondary"
                   >{{ gbSortSecondaryLabel }}</span
                 >
-                <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-              </button>
+              </AppBarButton>
             </div>
           </template>
           <div class="tbm gb-sort-panel">
@@ -109,14 +105,11 @@
               >
                 Open Duplicates
               </button>
-              <button
-                type="button"
-                class="gb-sort-migration-dismiss"
+              <AppBarButton
+                icon="close"
                 aria-label="Hide this notice"
                 @click="dedupMigrationNotice.dismiss()"
-              >
-                <v-icon size="16">mdi-close</v-icon>
-              </button>
+              />
             </div>
 
             <div class="tbm-section">
@@ -238,30 +231,22 @@
           transition="scale-transition"
         >
           <template #activator="{ props: menuProps }">
-            <button
+            <AppBarButton
               v-bind="menuProps"
-              class="bar-btn bar-btn--boxed"
-              :class="{
-                'bar-btn--active': filterStore.isActive && !gbFilterMenuOpen,
-                'bar-btn--open': gbFilterMenuOpen,
-              }"
-              type="button"
+              icon="filter"
+              chevron
+              :badge="
+                filterStore.activeCount > 0
+                  ? filterStore.activeCount > 99
+                    ? '99+'
+                    : filterStore.activeCount
+                  : null
+              "
+              :active="filterStore.isActive && !gbFilterMenuOpen"
+              :open="gbFilterMenuOpen"
               title="Filters"
-            >
-              <span class="bar-icon-badge-wrap">
-                <v-icon size="19">mdi-filter</v-icon>
-                <span
-                  v-if="filterStore.activeCount > 0"
-                  class="bar-filter-badge"
-                  >{{
-                    filterStore.activeCount > 99
-                      ? "99+"
-                      : filterStore.activeCount
-                  }}</span
-                >
-              </span>
-              <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-            </button>
+              aria-label="Filters"
+            />
           </template>
           <GbFilterPanel
             :selected-character="props.selectedCharacter"
@@ -279,16 +264,15 @@
           transition="scale-transition"
         >
           <template #activator="{ props: menuProps }">
-            <button
+            <AppBarButton
               v-bind="menuProps"
-              class="bar-btn bar-btn--boxed tb-fold-600"
-              :class="{ 'bar-btn--open': gbViewMenuOpen }"
-              type="button"
+              class="tb-fold-600"
+              icon="view-grid"
+              chevron
+              :open="gbViewMenuOpen"
               title="View options"
-            >
-              <v-icon size="19">mdi-view-grid</v-icon>
-              <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-            </button>
+              aria-label="View options"
+            />
           </template>
           <div class="tbm gb-view-panel">
             <span class="tbm-caret tbm-caret--end"></span>
@@ -391,19 +375,14 @@
           transition="scale-transition"
         >
           <template #activator="{ props: menuProps }">
-            <button
+            <AppBarButton
               v-bind="menuProps"
-              class="bar-btn bar-btn--icon"
-              :class="{
-                'bar-btn--active':
-                  searchStore.isSearchActive && !gbSearchMenuOpen,
-                'bar-btn--open': gbSearchMenuOpen,
-              }"
-              type="button"
+              icon="magnify"
+              :active="searchStore.isSearchActive && !gbSearchMenuOpen"
+              :open="gbSearchMenuOpen"
               title="Search (F)"
-            >
-              <v-icon size="20">mdi-magnify</v-icon>
-            </button>
+              aria-label="Search"
+            />
           </template>
           <div class="tbm gb-search-panel">
             <span class="tbm-caret tbm-caret--icon-center-end"></span>
@@ -459,15 +438,14 @@
           transition="scale-transition"
         >
           <template #activator="{ props: menuProps }">
-            <button
+            <AppBarButton
               v-bind="menuProps"
-              class="bar-btn bar-btn--icon tb-export-btn tb-fold-700"
-              :class="{ 'bar-btn--open': exportStore.exportMenuOpen }"
-              type="button"
+              class="tb-export-btn tb-fold-700"
+              icon="tray-arrow-down"
+              :open="exportStore.exportMenuOpen"
               :title="exportActionLabel('Export current grid to zip')"
-            >
-              <v-icon size="20">mdi-tray-arrow-down</v-icon>
-            </button>
+              :aria-label="exportActionLabel('Export current grid to zip')"
+            />
           </template>
           <TbExportPanel
             @confirm-export="emit('confirm-export-zip')"
@@ -485,15 +463,14 @@
           transition="scale-transition"
         >
           <template #activator="{ props: menuProps }">
-            <button
+            <AppBarButton
               v-bind="menuProps"
-              class="bar-btn bar-btn--icon tb-fold-700"
-              :class="{ 'bar-btn--open': tbImportMenuOpen }"
-              type="button"
+              class="tb-fold-700"
+              icon="cloud-upload-outline"
+              :open="tbImportMenuOpen"
               title="Import photos"
-            >
-              <v-icon size="20">mdi-cloud-upload-outline</v-icon>
-            </button>
+              aria-label="Import photos"
+            />
           </template>
           <TbImportPanel
             :open="tbImportMenuOpen"
@@ -519,16 +496,15 @@
           transition="scale-transition"
         >
           <template #activator="{ props: menuProps }">
-            <button
+            <AppBarButton
               v-bind="menuProps"
-              class="bar-btn bar-btn--icon tb-fold-700"
-              :class="{ 'bar-btn--open': tbComfyuiMenuOpen }"
-              type="button"
+              class="tb-fold-700"
+              icon="image-plus-outline"
+              :open="tbComfyuiMenuOpen"
               :disabled="isReadOnly"
               title="Generate new image with ComfyUI from a text prompt"
-            >
-              <v-icon size="20">mdi-image-plus-outline</v-icon>
-            </button>
+              aria-label="Generate new image with ComfyUI"
+            />
           </template>
           <TbComfyPanel
             :open="tbComfyuiMenuOpen"
@@ -609,15 +585,13 @@
              Visible at ALL widths (amendment #2): it is the review overlay's
              only visible entry point, and folding it into the left group's
              burger would cross the group boundary. -->
-        <button
-          class="bar-btn bar-btn--icon"
-          type="button"
+        <AppBarButton
+          icon="tag-check-outline"
           :disabled="isReadOnly"
           title="Review and fix tags"
+          aria-label="Review and fix tags"
           @click="reviewSessionsStore.overlayOpen = true"
-        >
-          <v-icon size="20">mdi-tag-check-outline</v-icon>
-        </button>
+        />
         <!-- ── Separator G-S4: view-local actions | app-wide chrome ─────
              The canonical toolbar tail, identical in every view that writes
              the operation log (not the model shelf, amendment #4):
@@ -662,6 +636,7 @@ import TbExportPanel from "./TbExportPanel.vue";
 import TbImportPanel from "./TbImportPanel.vue";
 import TbOverflowMenu from "./TbOverflowMenu.vue";
 import UndoControl from "./UndoControl.vue";
+import AppBarButton from "../widgets/AppBarButton.vue";
 import { useOneTimeNotice } from "../../composables/useOneTimeNotice";
 const props = defineProps({
   selectedCount: Number,
@@ -1191,11 +1166,6 @@ const gbCollapseAllStacksDisabled = computed(
 .gb-search-recent {
   padding-top: var(--space-4);
 }
-/* Icon-only triggers (e.g. Search) flag their open state in accent, matching the
-   design's IconTrigger; the labelled Sort/Filter/View triggers stay text-coloured. */
-.bar-btn--icon.bar-btn--open {
-  color: rgb(var(--v-theme-accent)) !important;
-}
 .gb-recent-list {
   display: flex;
   flex-direction: column;
@@ -1276,17 +1246,7 @@ const gbCollapseAllStacksDisabled = computed(
   text-underline-offset: 2px;
 }
 
-.gb-sort-migration-dismiss {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-  padding: var(--space-1);
-  color: rgba(var(--v-theme-on-surface), 0.7);
-}
-
-.gb-sort-migration-open:hover,
-.gb-sort-migration-dismiss:hover {
+.gb-sort-migration-open:hover {
   background: var(--hover-wash);
 }
 
@@ -1400,11 +1360,7 @@ const gbCollapseAllStacksDisabled = computed(
     padding: 0 var(--space-2);
   }
 
-  .bar-btn,
-  .bar-split-menu,
-  .clear-btn,
-  .delete-btn,
-  .stack-btn {
+  .bar-btn {
     min-height: 46px;
   }
 
@@ -1416,7 +1372,7 @@ const gbCollapseAllStacksDisabled = computed(
   .bar-split-toggle,
   .bar-separator,
   .tb-export-btn,
-  .bar-btn-chevron {
+  :deep(.bar-btn-chevron) {
     display: none;
   }
 
@@ -1440,26 +1396,8 @@ const gbCollapseAllStacksDisabled = computed(
 
 /* ── Responsive: progressive label dropping via container queries ─────────── */
 @container selbar (max-width: 960px) {
-  .bar-btn-prefix,
+  :deep(.bar-btn-prefix),
   .bar-btn-sort-type {
-    display: none;
-  }
-}
-
-@container selbar (max-width: 840px) {
-  .bar-btn-label--filter {
-    display: none;
-  }
-}
-
-@container selbar (max-width: 740px) {
-  .bar-btn-label--view {
-    display: none;
-  }
-}
-
-@container selbar (max-width: 580px) {
-  .visible-range-pill {
     display: none;
   }
 }

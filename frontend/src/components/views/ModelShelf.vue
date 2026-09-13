@@ -103,32 +103,28 @@
         transition="scale-transition"
       >
         <template #activator="{ props: menuProps }">
-          <button
+          <!-- A copy of a 6 GB checkpoint is not instant, and this button is
+               the only thing on screen that knows one is running: `loading`
+               turns the glyph into the spinner. -->
+          <AppBarButton
             ref="addBtnRef"
             v-bind="menuProps"
-            class="bar-btn bar-btn--accent shelf-fold-680"
-            type="button"
+            class="bar-btn--accent shelf-fold-680"
+            icon="plus"
+            chevron
+            :loading="adding"
             aria-haspopup="menu"
             :aria-expanded="addMenuOpen"
-            :aria-busy="adding || undefined"
             title="Add models to the shelf"
+            >Add</AppBarButton
           >
-            <!-- A copy of a 6 GB checkpoint is not instant, and this button is
-                 the only thing on screen that knows one is running. -->
-            <v-icon v-if="adding" size="19" class="mdi-spin"
-              >mdi-loading</v-icon
-            >
-            <v-icon v-else size="19">mdi-plus</v-icon>
-            <span>Add</span>
-            <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-          </button>
         </template>
         <div class="shelf-menu" role="menu">
           <button
             class="shelf-mi"
             type="button"
             role="menuitem"
-            @click="openFolders(addBtnRef)"
+            @click="openFolders(addBtnRef?.el)"
           >
             <v-icon size="16">mdi-folder-plus-outline</v-icon>
             <span>Add folder…</span>
@@ -137,7 +133,7 @@
             class="shelf-mi"
             type="button"
             role="menuitem"
-            @click="openAddFile(addBtnRef)"
+            @click="openAddFile(addBtnRef?.el)"
           >
             <v-icon size="16">mdi-file-plus-outline</v-icon>
             <span>Add file…</span>
@@ -155,7 +151,7 @@
               class="shelf-mi"
               type="button"
               role="menuitem"
-              @click="openAddSource(addBtnRef)"
+              @click="openAddSource(addBtnRef?.el)"
             >
               <AiToolkitIcon :size="16" />
               <span>Set ai-toolkit output folder…</span>
@@ -182,17 +178,15 @@
            `aria-haspopup="dialog"` on both, and `aria-expanded` on neither:
            focus moves into the dialog rather than into anything the button
            owns. -->
-      <button
+      <AppBarButton
         ref="foldersBtnRef"
-        class="bar-btn bar-btn--boxed shelf-fold-680"
-        type="button"
+        class="shelf-fold-680"
+        icon="folder-multiple-outline"
         title="Model folders - add, rescan, move or forget a folder"
         aria-label="Model folders"
         aria-haspopup="dialog"
-        @click="openFolders(foldersBtnRef)"
-      >
-        <v-icon size="19">mdi-folder-multiple-outline</v-icon>
-      </button>
+        @click="openFolders(foldersBtnRef?.el)"
+      />
 
       <!-- Where those two land when the bar runs out of width. Only the
            "opens something, writes nothing on the press" pair folds: the ⋯ is
@@ -294,19 +288,17 @@
             transition="scale-transition"
           >
             <template #activator="{ props: menuProps }">
-              <button
+              <AppBarButton
                 v-bind="menuProps"
-                class="bar-btn bar-btn--boxed"
-                :class="{ 'bar-btn--open': groupMenuOpen }"
-                type="button"
+                :icon="activeGroup.icon"
+                chevron
+                :open="groupMenuOpen"
                 aria-haspopup="dialog"
                 :aria-expanded="groupMenuOpen"
                 :title="groupButtonTitle"
               >
-                <v-icon size="19">{{ activeGroup.icon }}</v-icon>
                 <span class="bar-btn-value">{{ activeGroup.label }}</span>
-                <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-              </button>
+              </AppBarButton>
             </template>
             <ShelfSortPanel section="group" />
           </v-menu>
@@ -332,32 +324,27 @@
               >
                 <!-- The accessible name IS the current state and flips on press,
                  which is what a keyboard user hears when focus returns. -->
-                <button
-                  class="bar-btn bar-split-toggle"
-                  type="button"
+                <AppBarButton
+                  class="bar-split-toggle"
+                  :icon="directionIcon"
                   :title="directionLabel"
                   :aria-label="directionLabel"
                   @click.stop="toggleDirection"
-                >
-                  <v-icon size="19">{{ directionIcon }}</v-icon>
-                </button>
+                />
                 <!-- `aria-haspopup="dialog"`, not `menu`: the panel is a div of
                  grouped toggles, and claiming a menu would promise roving
                  arrow keys nothing implements. Matches SearchResultBar. -->
-                <button
+                <AppBarButton
                   v-bind="menuProps"
-                  class="bar-btn bar-split-menu"
-                  type="button"
+                  class="bar-split-menu"
+                  :icon="activeSort.icon"
+                  chevron
                   aria-haspopup="dialog"
                   :aria-expanded="sortMenuOpen"
                   :title="sortButtonTitle"
                 >
-                  <v-icon size="19">{{ activeSort.icon }}</v-icon>
                   <span class="bar-btn-value">{{ activeSort.label }}</span>
-                  <v-icon size="18" class="bar-btn-chevron"
-                    >mdi-menu-down</v-icon
-                  >
-                </button>
+                </AppBarButton>
               </div>
             </template>
             <ShelfSortPanel section="sort" />
@@ -380,24 +367,17 @@
              "why is this list short", and the result counts are already on the
              group headers. -->
             <template #activator="{ props: menuProps }">
-              <button
+              <AppBarButton
                 v-bind="menuProps"
-                class="bar-btn bar-btn--boxed"
-                :class="{
-                  'bar-btn--active': store.activeCount > 0 && !showMenuOpen,
-                  'bar-btn--open': showMenuOpen,
-                }"
-                type="button"
+                class="shelf-show-btn"
+                icon="filter-outline"
+                chevron
+                :badge="store.activeCount > 0 ? store.activeCount : null"
+                :active="store.activeCount > 0 && !showMenuOpen"
+                :open="showMenuOpen"
                 :title="showButtonTitle"
-              >
-                <span class="bar-icon-badge-wrap">
-                  <v-icon size="19">mdi-filter-outline</v-icon>
-                  <span v-if="store.activeCount > 0" class="bar-filter-badge">{{
-                    store.activeCount
-                  }}</span>
-                </span>
-                <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-              </button>
+                :aria-label="showButtonTitle"
+              />
             </template>
             <ShelfShowPanel />
           </v-menu>
@@ -481,15 +461,12 @@
         <v-icon size="16">mdi-power-plug-off-outline</v-icon>
         <span class="shelf-banner-text">{{ offlineNote }}</span>
         <span class="shelf-spacer"></span>
-        <button
-          class="shelf-banner-dismiss"
-          type="button"
+        <AppBarButton
+          icon="close"
           title="Dismiss"
           aria-label="Dismiss the offline notice"
           @click="offlineDismissed = true"
-        >
-          <v-icon size="15">mdi-close</v-icon>
-        </button>
+        />
       </p>
       <p v-if="store.loading" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
@@ -1442,6 +1419,7 @@ import FolderBrowser from "../editors/FolderBrowser.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import PicturePicker from "../widgets/PicturePicker.vue";
 import AppButton from "../widgets/AppButton.vue";
+import AppBarButton from "../widgets/AppBarButton.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
@@ -2653,7 +2631,7 @@ async function closeAddSource() {
   await nextTick();
   restoreFocus(
     returnTo,
-    addBtnRef.value,
+    addBtnRef.value?.el,
     overflowRef.value?.trigger?.(),
     rootEl.value,
   );
@@ -2703,7 +2681,7 @@ async function closeAddFile() {
   await nextTick();
   restoreFocus(
     returnTo,
-    addBtnRef.value,
+    addBtnRef.value?.el,
     overflowRef.value?.trigger?.(),
     rootEl.value,
   );
@@ -2771,7 +2749,7 @@ async function closeFolders() {
   // on the shelf root, rather than dropping focus to <body>.
   restoreFocus(
     returnTo,
-    foldersBtnRef.value,
+    foldersBtnRef.value?.el,
     overflowRef.value?.trigger?.(),
     rootEl.value,
   );
@@ -3967,7 +3945,7 @@ watch(
    one on ::before, where the reset lands - a frozen mdi-loading reads as a
    rendering fault rather than as "working". Same fix as `LoginScreen`. */
 @media (prefers-reduced-motion: reduce) {
-  .bar-btn .mdi-spin::before {
+  .bar-btn :deep(.mdi-spin::before) {
     animation-duration: 2s !important;
     animation-iteration-count: infinite !important;
   }
@@ -4383,25 +4361,6 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.shelf-banner-dismiss {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  flex: none;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: rgba(var(--v-theme-on-background), 0.7);
-  cursor: pointer;
-}
-
-.shelf-banner-dismiss:hover {
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-on-background));
 }
 
 /* ── Drive bands ───────────────────────────────────────────────────────────

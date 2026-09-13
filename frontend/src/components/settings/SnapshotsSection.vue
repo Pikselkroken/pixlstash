@@ -213,7 +213,7 @@ function handleRestore(cp) {
           @enter="handleCreate"
         />
         <AppButton
-          variant="primary_green"
+          variant="primary"
           icon-left="camera"
           :disabled="!!activeJob || creating"
           @click="handleCreate"

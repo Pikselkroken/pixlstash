@@ -22,14 +22,13 @@
         </div>
         <div class="app-dialog__actions">
           <slot name="header-right" />
-          <button
-            type="button"
-            class="app-dialog__close"
+          <AppBarButton
+            icon="close"
+            :icon-size="20"
             title="Close"
+            aria-label="Close"
             @click="emit('close')"
-          >
-            <v-icon size="20">mdi-close</v-icon>
-          </button>
+          />
         </div>
       </header>
       <div
@@ -45,7 +44,8 @@
 </template>
 
 <script setup>
-import { VDialog, VIcon } from "vuetify/components";
+import { VDialog } from "vuetify/components";
+import AppBarButton from "./AppBarButton.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -155,25 +155,6 @@ function onKeydown(e) {
   align-items: center;
   gap: var(--space-2);
   flex-shrink: 0;
-}
-
-.app-dialog__close {
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-md);
-  color: rgba(var(--v-theme-on-surface), 0.6);
-  transition:
-    background var(--dur-1) var(--ease-standard),
-    color var(--dur-1) var(--ease-standard);
-}
-
-.app-dialog__close:hover {
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-on-surface));
 }
 
 .app-dialog__body {

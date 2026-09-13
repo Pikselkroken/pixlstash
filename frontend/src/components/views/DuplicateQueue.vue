@@ -68,24 +68,20 @@
              is the way BACK: while the Decided page is showing, this button is
              the visible exit from a sub-page, so it stays on the bar and
              compresses to its arrow, which needs no label. -->
-        <button
+        <AppButton
           v-if="!store.showingMixed"
-          type="button"
-          class="qdecided"
-          :class="{
-            'qdecided--on': store.showingDecided,
-            'dq-fold-906': pageTogglesFold,
-          }"
+          :variant="store.showingDecided ? 'secondary' : 'outline'"
+          :icon-left="store.showingDecided ? 'arrow-left' : 'history'"
+          class="dq-bar-action"
+          :class="{ 'dq-fold-906': pageTogglesFold }"
           :title="decidedToggleLabel"
           :aria-label="decidedToggleLabel"
           :aria-pressed="store.showingDecided ? 'true' : 'false'"
+          data-testid="decided-toggle"
           @click="onToggleDecided"
         >
-          <v-icon size="15">{{
-            store.showingDecided ? "mdi-arrow-left" : "mdi-history"
-          }}</v-icon>
-          <span class="qdecided-label">{{ decidedToggleLabel }}</span>
-        </button>
+          <span class="dq-toggle-label">{{ decidedToggleLabel }}</span>
+        </AppButton>
 
         <!-- The THIRD page (design D5), and deliberately not a sidebar row:
              only a destination with a to-do count earns one, and 9 to 26
@@ -96,31 +92,26 @@
              The count rides on THIS toggle and never on the sidebar badge:
              that badge means "groups to review", and it is the one number in
              the app that has to stay trusted. -->
-        <button
+        <AppButton
           v-if="!store.showingDecided"
-          type="button"
-          class="qdecided"
-          :class="{
-            'qdecided--on': store.showingMixed,
-            'dq-fold-906': pageTogglesFold,
-          }"
+          :variant="store.showingMixed ? 'secondary' : 'outline'"
+          :icon-left="store.showingMixed ? 'arrow-left' : 'alert-outline'"
+          class="dq-bar-action"
+          :class="{ 'dq-fold-906': pageTogglesFold }"
           :title="mixedToggleTitle"
           :aria-label="mixedToggleTitle"
           :aria-pressed="store.showingMixed ? 'true' : 'false'"
           data-testid="mixed-toggle"
           @click="onToggleMixed"
         >
-          <v-icon size="15">{{
-            store.showingMixed ? "mdi-arrow-left" : "mdi-alert-outline"
-          }}</v-icon>
-          <span class="qdecided-label">{{ mixedToggleLabel }}</span>
+          <span class="dq-toggle-label">{{ mixedToggleLabel }}</span>
           <span
             v-if="!store.showingMixed && store.mixedTotal"
             class="qmixed-count"
             aria-hidden="true"
             >{{ store.mixedTotal.toLocaleString() }}</span
           >
-        </button>
+        </AppButton>
 
         <!-- The ⋯, and it stands where the controls it collapses stood: at the
              end of the toggle run, inside the group it serves (amendment #2's
@@ -202,20 +193,21 @@
                trigger's grammar), so the button carries its own accessible
                name at every width - without it the hidden span would leave
                the name empty (WCAG 4.1.2). -->
-          <button
+          <AppButton
             ref="tierButtonEl"
-            type="button"
-            class="dq-btn"
+            variant="outline"
+            icon-left="filter-outline"
+            class="dq-bar-action"
             :title="tierLabel"
             :aria-label="tierLabel"
             :aria-expanded="tierMenuOpen"
             aria-haspopup="true"
+            data-testid="dedup-tier-trigger"
             @click="toggleTierMenu"
           >
-            <v-icon size="16">mdi-filter-outline</v-icon>
             <span class="dq-tier-label">{{ tierLabel }}</span>
             <v-icon size="16">mdi-menu-down</v-icon>
-          </button>
+          </AppButton>
           <!-- Two menus behind one button. The tier gate says nothing about a
                decision already made - the server ignores it on the decided
                page entirely - so what a user reviewing decisions wants to
@@ -280,15 +272,16 @@
              an accent fill must stay a visible target. Full label → short
              "Auto-stack N" (≤1040) → icon + count (≤820), the sentence
              surviving as tooltip and accessible name throughout. -->
-        <button
+        <AppButton
           v-if="store.exactCount > 0 && !readOnly && !store.showingMixed"
-          type="button"
-          class="dq-btn dq-btn--accent"
+          variant="primary"
+          icon-left="flash-outline"
+          class="dq-bar-action"
           :title="autoStackLabel"
           :aria-label="autoStackLabel"
+          data-testid="auto-stack-trigger"
           @click="openAutoStack"
         >
-          <v-icon size="16">mdi-flash-outline</v-icon>
           <span class="dq-auto-full">{{ autoStackLabel }}</span>
           <span class="dq-auto-short" aria-hidden="true"
             >Auto-stack {{ store.exactCount.toLocaleString() }}</span
@@ -296,7 +289,7 @@
           <span class="dq-auto-count" aria-hidden="true">{{
             store.exactCount.toLocaleString()
           }}</span>
-        </button>
+        </AppButton>
 
         <!-- The app-wide chrome, the same components the grid's toolbar
              mounts: Duplicates replaces the grid (and with it that toolbar),
@@ -350,10 +343,12 @@
            is a claim about the library, and nobody asked. -->
       <div v-else-if="store.mixedError" class="dq-state" role="alert">
         Could not check the stacks. Nothing has changed.
-        <button type="button" class="qdecided" @click="store.loadMixedStacks()">
-          <v-icon size="15">mdi-refresh</v-icon>
-          Try again
-        </button>
+        <AppButton
+          variant="outline"
+          icon-left="refresh"
+          @click="store.loadMixedStacks()"
+          >Try again</AppButton
+        >
       </div>
 
       <div v-else-if="store.mixedStacks.length" class="mixed-list">
@@ -446,16 +441,15 @@
             @set-cursor="setMixedCursor(stack, $event)"
           />
         </div>
-        <button
+        <AppButton
           v-if="store.hasMoreMixed"
-          type="button"
-          class="qdecided mixed-more"
+          variant="outline"
+          icon-left="chevron-down"
+          class="mixed-more"
           :disabled="store.mixedLoading"
           @click="store.loadMoreMixedStacks()"
+          >Show more</AppButton
         >
-          <v-icon size="15">mdi-chevron-down</v-icon>
-          Show more
-        </button>
       </div>
 
       <!-- Mirrors the shipped "No decided groups" construction, and carries
@@ -471,10 +465,12 @@
           each other land here, and lowering the similarity slider is what
           decides how strict that is.
         </p>
-        <button type="button" class="qdecided" @click="onToggleMixed">
-          <v-icon size="15">mdi-arrow-left</v-icon>
-          Back to review
-        </button>
+        <AppButton
+          variant="outline"
+          icon-left="arrow-left"
+          @click="onToggleMixed"
+          >Back to review</AppButton
+        >
       </div>
     </div>
 
@@ -488,10 +484,12 @@
       role="alert"
     >
       Could not confirm the duplicate queue. Nothing has been marked clear.
-      <button type="button" class="qdecided" @click="store.loadFirstPage()">
-        <v-icon size="15">mdi-refresh</v-icon>
-        Try again
-      </button>
+      <AppButton
+        variant="outline"
+        icon-left="refresh"
+        @click="store.loadFirstPage()"
+        >Try again</AppButton
+      >
     </div>
 
     <div v-else-if="store.hasGroups" class="queue">
@@ -633,10 +631,12 @@
         Groups you stack or keep separate land here - from any session, not just
         this one - and every decision can be reviewed and cleared until you do.
       </p>
-      <button type="button" class="qdecided" @click="onToggleDecided">
-        <v-icon size="15">mdi-arrow-left</v-icon>
-        Back to review
-      </button>
+      <AppButton
+        variant="outline"
+        icon-left="arrow-left"
+        @click="onToggleDecided"
+        >Back to review</AppButton
+      >
     </div>
 
     <div v-else class="qdone">
@@ -652,10 +652,9 @@
       <!-- Always offered: decisions are SERVER state, remembered across
            sessions, so the way to them must not depend on this session's
            tally. An empty Decided page explains itself. -->
-      <button type="button" class="qdecided" @click="onToggleDecided">
-        <v-icon size="15">mdi-history</v-icon>
-        Review decided groups
-      </button>
+      <AppButton variant="outline" icon-left="history" @click="onToggleDecided"
+        >Review decided groups</AppButton
+      >
 
       <!-- The route to the stacks, offered only here: this is the end-of-task
            surface, and the toolbar would put it in front of someone mid-triage.
@@ -668,15 +667,13 @@
            one-click path from a satisfying "Queue clear" screen into a confirm
            for hundreds of deletions is how you get a bad afternoon. A real route
            push, so it is reloadable and Back returns to the queue. -->
-      <button
+      <AppButton
         v-if="hasLiveStacks"
-        type="button"
-        class="qdecided"
+        variant="outline"
+        icon-left="layers-outline"
         @click="onReviewStacks"
+        >Review your stacks</AppButton
       >
-        <v-icon size="15">mdi-layers-outline</v-icon>
-        Review your stacks
-      </button>
       <p v-if="hasLiveStacks" class="qdone-hint">
         {{ store.mixedLiveStackCount.toLocaleString() }}
         {{ store.mixedLiveStackCount === 1 ? "stack holds" : "stacks hold" }}
@@ -809,6 +806,7 @@ import DedupScopePill from "../widgets/DedupScopePill.vue";
 import DedupCompareDialog from "../widgets/DedupCompareDialog.vue";
 import DedupAutoStackDialog from "../widgets/DedupAutoStackDialog.vue";
 import ActionReceipt from "../widgets/ActionReceipt.vue";
+import AppButton from "../widgets/AppButton.vue";
 
 /**
  * How many rows beyond the anchors stay mounted.
@@ -3137,11 +3135,6 @@ defineExpose({ windowedGroups, tierLabel });
   min-width: 0;
 }
 
-/* The icons flank the ellipsis, never feed it. */
-.dq-btn .v-icon {
-  flex-shrink: 0;
-}
-
 .dq-tier-label {
   min-width: 0;
   overflow: hidden;
@@ -3155,33 +3148,25 @@ defineExpose({ windowedGroups, tierLabel });
   z-index: var(--z-dropdown);
 }
 
-.dq-btn {
-  display: inline-flex;
+/* The bar's AppButtons (the page toggles, the tier trigger, Auto-stack) join
+   the shrink chain. Structural no-wrap: under width pressure the LABEL
+   ellipsizes on one line; the 28px button (`--control-h`) and the 36px band,
+   which leaves it 3.5px either side, never grow. AppButton's label wrapper
+   becomes a flex row so the glyphs and the count flank the ellipsis and never
+   feed it. */
+.dq-bar-action {
+  min-width: 0;
+}
+
+.dq-bar-action :deep(.app-btn__label) {
+  display: flex;
   align-items: center;
   gap: var(--space-2);
-  /* Structural no-wrap: under width pressure the LABEL ellipsizes on one
-     line; the 27px button and the 36px band never grow. */
-  white-space: nowrap;
   min-width: 0;
-  height: 27px;
-  padding: 0 var(--space-4);
-  border-radius: var(--radius-md);
-  border: 1px solid rgb(var(--v-theme-border));
-  color: inherit;
-  font-family: var(--font-ui);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  transition: background var(--dur-1) var(--ease-standard);
 }
 
-.dq-btn:hover {
-  background: var(--hover-wash);
-}
-
-.dq-btn--accent {
-  background: rgb(var(--v-theme-accent));
-  border-color: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
+.dq-bar-action .v-icon {
+  flex-shrink: 0;
 }
 
 .queue {
@@ -3215,43 +3200,12 @@ defineExpose({ windowedGroups, tierLabel });
   white-space: nowrap;
 }
 
-/* The Decided toggle: same chrome as the toolbar buttons, pressed state
-   while the flip side is showing. */
-.qdecided {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  /* Same shrink chain as the tier button: between two rungs the label
-     ellipsizes on one line rather than the button overlapping its
-     neighbour. The glyph and the count never feed the ellipsis. */
-  min-width: 0;
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
-  font-size: var(--text-xs);
-  font-family: var(--font-ui);
-  color: inherit;
-  white-space: nowrap;
-  transition: background var(--dur-1) var(--ease-standard);
-}
-
-.qdecided .v-icon {
-  flex-shrink: 0;
-}
-
-.qdecided-label {
+/* The page toggles' labels: between two rungs they ellipsize on one line
+   rather than the button overlapping its neighbour. */
+.dq-toggle-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.qdecided:hover {
-  background: var(--hover-wash);
-}
-
-.qdecided--on {
-  background: var(--active-wash);
-  border-color: rgba(var(--v-theme-accent), 0.5);
 }
 
 /* The third page's count, on ITS toggle and nowhere else. It is deliberately
@@ -3431,11 +3385,6 @@ defineExpose({ windowedGroups, tierLabel });
   margin-top: var(--space-4);
 }
 
-.mixed-more:disabled {
-  opacity: var(--opacity-disabled);
-  cursor: default;
-}
-
 .qdone {
   display: flex;
   flex-direction: column;
@@ -3602,7 +3551,7 @@ defineExpose({ windowedGroups, tierLabel });
   .dq-overflow {
     display: flex;
   }
-  .qdecided-label {
+  .dq-toggle-label {
     display: none;
   }
 }

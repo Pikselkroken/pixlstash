@@ -670,7 +670,7 @@ describe("LibraryLayoutDialog", () => {
     // than a transparent Cancel. `secondary` is the neutral fill; `ghost` is
     // the transparent one.
     expect(buttons[0].attributes("data-variant")).toBe("secondary");
-    expect(buttons[1].attributes("data-variant")).toBe("primary_green");
+    expect(buttons[1].attributes("data-variant")).toBe("primary");
   });
 
   it("swaps the bar for a progress region and a stop while a move runs", async () => {
