@@ -157,8 +157,8 @@ def resolve_path(folder: str) -> str:
     return os.path.realpath(os.path.abspath(os.path.expanduser(folder)))
 
 
-def validate_vault_folder(folder: str) -> str:
-    """Check that *folder* holds a usable vault and return its ``vault.db`` path.
+def validate_vault_folder(folder: str, *, filename: str = VAULT_FILENAME) -> str:
+    """Check that *folder* holds a usable vault and return its database path.
 
     Opened read-only and inspected through ``sqlite_master`` only: this must not
     migrate, write to, or otherwise touch a foreign vault, and it must not read
@@ -168,17 +168,22 @@ def validate_vault_folder(folder: str) -> str:
     pre-Alembic one it will stamp and upgrade - see
     :data:`_LEGACY_VAULT_MARKER_TABLES`.
 
+    Args:
+        filename: The database file to check, for a library whose first import
+            has not finished and whose database is therefore still under
+            :data:`TEMP_VAULT_FILENAME`. Defaults to the permanent name.
+
     Raises:
-        NotAVaultError: No folder, no ``vault.db``, unreadable, or missing the
+        NotAVaultError: No folder, no database file, unreadable, or missing the
             marker tables.
     """
     if not os.path.isdir(folder):
         raise NotAVaultError(f"{folder} is not a folder.")
 
-    vault_path = os.path.join(folder, VAULT_FILENAME)
+    vault_path = os.path.join(folder, filename)
     if not os.path.isfile(vault_path):
         raise NotAVaultError(
-            f"No {VAULT_FILENAME} in {folder}. Pick the folder that contains "
+            f"No {filename} in {folder}. Pick the folder that contains "
             f"it, or use `create` to start an empty library."
         )
 

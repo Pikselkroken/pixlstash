@@ -57,7 +57,7 @@ from pixlstash.hub.registry import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.library_switch_service import LibrarySwitchError
-from pixlstash.utils.media_files import count_media_files
+from pixlstash.utils.media_files import count_media_files, has_media_files
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 
 logger = get_logger(__name__)
@@ -377,11 +377,12 @@ def create_router(server) -> APIRouter:
     def _count(folder: str, wanted: bool) -> tuple[int, bool]:
         """The folder's picture total, or ``(0, False)`` when nobody asked.
 
-        The empty branch is decided by ``found == 0``, so a skipped count always
-        lands on ``empty``. That is safe only because the caller that skips it -
-        ``POST /libraries`` re-checking the rule - treats ``empty``, ``pictures``
-        and ``vault`` identically: all three are ``can_add``, and only the two
-        refusals decided above the count change what it does.
+        A skipped count is a skipped *number*, not a skipped verdict: the
+        pictures/empty branch asks :func:`has_media_files` instead, which stops
+        at the first picture. It used to fall through to ``empty``, which was
+        safe only while ``POST /libraries`` treated the two identically - and it
+        no longer does, because a folder of pictures is the case that gets a
+        temporary vault.
         """
         return count_media_files(folder) if wanted else (0, False)
 
@@ -485,7 +486,7 @@ def create_router(server) -> APIRouter:
             )
 
         found, capped = _count(folder, count)
-        if found:
+        if found or (not count and has_media_files(folder)):
             return LibraryInspection(
                 verdict="pictures",
                 path=folder,
@@ -605,7 +606,16 @@ def create_router(server) -> APIRouter:
                 # the folder and insists on a real vault. `create` builds the
                 # vault with the same code the server runs at startup, so the
                 # row is usable the moment it appears.
-                library = registry.create(folder, name)
+                #
+                # A folder that already holds pictures gets its database under
+                # the temporary name: the owner has not answered the import
+                # question yet, and until they do, this folder must be exactly
+                # as they left it. An empty folder is a different act - "start a
+                # library here" is an answer in itself - so it gets `vault.db`
+                # straight away.
+                library = registry.create(
+                    folder, name, pending_import=verdict.verdict == "pictures"
+                )
         except LibraryExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except NotAVaultError as exc:

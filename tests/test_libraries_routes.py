@@ -20,8 +20,16 @@ from sqlmodel import Session, delete, select
 
 from pixlstash.db_models import Picture, User, UserToken
 from pixlstash.server import Server
-from pixlstash.hub.registry import VAULT_FILENAME, LibraryExistsError
-from pixlstash.utils.media_files import count_media_files, is_supported_media_file
+from pixlstash.hub.registry import (
+    TEMP_VAULT_FILENAME,
+    VAULT_FILENAME,
+    LibraryExistsError,
+)
+from pixlstash.utils.media_files import (
+    count_media_files,
+    has_media_files,
+    is_supported_media_file,
+)
 
 API = "/api/v1"
 
@@ -875,6 +883,38 @@ class TestAdding:
             )
         )
 
+    def test_a_folder_of_pictures_gets_no_vault_db_until_its_import_finishes(
+        self, server, added_libraries, tmp_path
+    ):
+        """The owner has not answered the import question yet.
+
+        Until they do, the folder is theirs and unchanged: a `vault.db` here
+        would make it read as "an existing library" the next time they added
+        it, for an import they may be about to abort.
+        """
+        folder = tmp_path / "holiday-snaps"
+        folder.mkdir()
+        _write_picture(folder / "beach.jpg")
+
+        library = added_libraries(_add(_owner(server), folder))
+
+        registered = server.library_registry.by_uuid(library["uuid"])
+        assert registered.pending_import_at is not None
+        assert not os.path.exists(os.path.join(registered.path, VAULT_FILENAME))
+        assert os.path.isfile(os.path.join(registered.path, TEMP_VAULT_FILENAME))
+        # Still openable: the import that promotes it runs against this vault.
+        assert registered.is_reachable is True
+
+    def test_an_empty_folder_is_an_answer_and_gets_its_vault_db_at_once(
+        self, server, added_libraries, tmp_path
+    ):
+        """ "Start a library here" is itself the answer, so nothing is pending."""
+        library = added_libraries(_add(_owner(server), tmp_path / "brand-new"))
+
+        registered = server.library_registry.by_uuid(library["uuid"])
+        assert registered.pending_import_at is None
+        assert os.path.isfile(os.path.join(registered.path, VAULT_FILENAME))
+
     def test_attaching_moves_renames_and_copies_no_file(
         self, server, added_libraries, tmp_path
     ):
@@ -1309,6 +1349,31 @@ class TestCountingMediaFiles:
             _write_picture(tmp_path / f"{index}.jpg")
 
         assert count_media_files(str(tmp_path)) == (3, False)
+
+    def test_holding_pictures_is_answered_without_counting_them(self, tmp_path):
+        """What `POST /libraries` asks before it decides on a temporary vault.
+
+        A cap cannot answer this: `count_media_files`'s cap bounds entries
+        *visited*, so a small one on a folder of documents returns zero and
+        reads as empty. This one stops at the first picture instead.
+        """
+        deep = tmp_path / "2024" / "mira"
+        deep.mkdir(parents=True)
+        for index in range(40):
+            (tmp_path / f"note-{index}.txt").write_text("not a picture")
+        _write_picture(deep / "01.jpg")
+
+        assert has_media_files(str(tmp_path)) is True
+        assert count_media_files(str(tmp_path), entry_cap=4) == (0, True), (
+            "the sibling a cap would have answered wrongly"
+        )
+
+    def test_a_folder_of_documents_holds_no_pictures(self, tmp_path):
+        (tmp_path / "notes.txt").write_text("not a picture")
+        (tmp_path / ".hidden").mkdir()
+        _write_picture(tmp_path / ".hidden" / "cached.jpg")
+
+        assert has_media_files(str(tmp_path)) is False
 
     def test_our_own_thumbnails_are_never_counted_as_pictures(self, tmp_path):
         """One indexed thumbnail earns a thumbnail, and that one earns another.

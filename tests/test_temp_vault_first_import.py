@@ -9,6 +9,7 @@ See ``business/plans/pixlstash-temp-vault-first-import-plan.md``.
 """
 
 import os
+from types import SimpleNamespace
 
 import pytest
 from sqlmodel import select
@@ -145,17 +146,36 @@ class TestPendingImportRegistration:
             lib.name for lib in registry.list_libraries(include_pending_import=False)
         ] == ["Holiday"]
 
-    def test_the_switch_refuses_one(self, registry, tmp_path):
-        """The listings hide these rows, so this is the hand-typed-uuid path.
+    def test_the_switch_opens_one_under_its_temporary_name(self, registry, tmp_path):
+        """It must stay openable: it is the library the owner just pointed at.
 
-        Called on an uninitialised instance deliberately: the guard runs before
-        `_revalidate` touches the server, and standing a real one up here would
-        cost a Server to assert a two-line refusal.
+        Hidden from the listings is the whole of "not switchable to". Refusing
+        to *open* one would make a folder of pictures impossible to set up,
+        because the import that promotes it runs against this very vault.
+
+        Built on an uninitialised instance deliberately: `_revalidate` reads
+        only `self._server.hub`, and a real Server costs 1.35 s to assert a
+        path.
         """
         folder = tmp_path / "folder-of-pictures"
         folder.mkdir()
         library = registry.create(str(folder), "Holiday", pending_import=True)
-
         service = LibrarySwitchService.__new__(LibrarySwitchService)
-        with pytest.raises(LibrarySwitchError, match="still being imported"):
+        service._server = SimpleNamespace(hub=object())
+
+        opened = service._revalidate(library)
+
+        assert str(opened) == library.path
+        assert opened.library.vault_filename == TEMP_VAULT_FILENAME
+
+    def test_the_switch_still_refuses_one_whose_file_is_gone(self, registry, tmp_path):
+        """So the check above is not passing for want of looking."""
+        folder = tmp_path / "folder-of-pictures"
+        folder.mkdir()
+        library = registry.create(str(folder), "Holiday", pending_import=True)
+        os.remove(folder / TEMP_VAULT_FILENAME)
+        service = LibrarySwitchService.__new__(LibrarySwitchService)
+        service._server = SimpleNamespace(hub=object())
+
+        with pytest.raises(LibrarySwitchError, match="no longer looks like"):
             service._revalidate(library)
