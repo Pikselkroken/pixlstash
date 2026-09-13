@@ -1208,7 +1208,6 @@ async function toggleCharacter(item) {
       statusMessage.value = `Removed from ${item.name}`;
       emit("removed", { characterId: item.id, pictureIds: ids });
       applyOptimisticMembership(item.key, "removed", ids);
-      closeMenu();
     } catch (e) {
       statusMessage.value = reportToggleFailure(e, "Failed to remove");
     }
@@ -1230,7 +1229,6 @@ async function toggleCharacter(item) {
         "added",
         idsToAdd.filter((id) => picturesWithFaces.value.has(String(id))),
       );
-      closeMenu();
     } catch (e) {
       statusMessage.value = reportToggleFailure(e, "Failed to assign");
     }

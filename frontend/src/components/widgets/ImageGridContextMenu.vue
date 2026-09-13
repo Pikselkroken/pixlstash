@@ -263,8 +263,8 @@
           :disabled="!selectedImageIds.length || !!groupingLockReason"
           :title="groupingLockReason || undefined"
           :readonly="isReadOnly"
-          @added="onAction('add-to-character', $event)"
-          @removed="onAction('remove-from-character', $event)"
+          @added="emit('add-to-character', $event)"
+          @removed="emit('remove-from-character', $event)"
           @create="delegateWith('create-character', $event)"
         />
         <AddToEntityControl
@@ -275,7 +275,7 @@
           :title="groupingLockReason || undefined"
           :readonly="isReadOnly"
           :locked-set-ids="lockedSetIds"
-          @added="onAction('added-to-set', $event)"
+          @added="emit('added-to-set', $event)"
         />
         <div class="ctx-sep" />
       </template>
@@ -1084,6 +1084,18 @@ async function onMenuKeydown(event) {
   // by stopping propagation.
   event.stopPropagation();
 }
+
+// The Set and Person flyouts keep this menu open across toggles (#1262), but
+// the grid may answer one by dropping the pictures from view and clearing the
+// selection (Unassigned view, the person's own view, a set being viewed). A
+// menu over a selection that changed while it was open is stale, so close it.
+// Only while it stays visible: opening the menu changes the selection too.
+watch(
+  [() => props.visible, () => (props.selectedImageIds || []).join(",")],
+  ([visible, ids], [wasVisible, oldIds]) => {
+    if (visible && wasVisible && ids !== oldIds) emit("close");
+  },
+);
 
 watch([() => props.x, () => props.y], () => {
   adjustedX.value = props.x;

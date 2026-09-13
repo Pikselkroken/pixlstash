@@ -23,6 +23,7 @@ vi.mock("../../api/characters", () => ({
   listCharacters: vi.fn(),
   getCharacterMembership: vi.fn(),
   addCharacterFaces: vi.fn(),
+  removeCharacterFaces: vi.fn(),
 }));
 vi.mock("../../api/pictureSets", () => ({
   listPictureSets: vi.fn(),
@@ -52,6 +53,7 @@ import {
   listCharacters,
   getCharacterMembership,
   addCharacterFaces,
+  removeCharacterFaces,
 } from "../../api/characters";
 import AddToEntityControl from "./AddToEntityControl.vue";
 
@@ -1199,6 +1201,36 @@ describe("membership after a write", () => {
 
     expect(addCharacterFaces).toHaveBeenCalled();
     expect(rowByName(w, "Grace").classes()).toContain("ate-item--checked");
+  });
+
+  it("stays open through a run of person assigns and removals (#1262)", async () => {
+    listCharacters.mockResolvedValue([
+      { id: 11, name: "Ada" },
+      { id: 12, name: "Grace" },
+    ]);
+    getCharacterMembership.mockResolvedValue({
+      character_assignments: { 11: ["101"] },
+      pictures_with_faces: ["101"],
+    });
+    addCharacterFaces.mockResolvedValue({});
+    removeCharacterFaces.mockResolvedValue({});
+
+    const w = await openCharacterMenu();
+    const click = async (name) => {
+      await rowByName(w, name).trigger("click");
+      await flushPromises();
+      await nextTick();
+    };
+
+    await click("Grace");
+    expect(addCharacterFaces).toHaveBeenCalled();
+    expect(w.find(".ate-menu").classes()).toContain("open");
+    expect(rowByName(w, "Grace").classes()).toContain("ate-item--checked");
+
+    await click("Ada");
+    expect(removeCharacterFaces).toHaveBeenCalled();
+    expect(w.find(".ate-menu").classes()).toContain("open");
+    expect(rowByName(w, "Ada").classes()).not.toContain("ate-item--checked");
   });
 
   it("ticks the remembered set when adding to it without the menu", async () => {
