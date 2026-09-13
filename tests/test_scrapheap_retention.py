@@ -3098,7 +3098,8 @@ def test_saving_a_ghost_position_reaches_the_vault_and_destroys_nothing(
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "ghostrefs"), "ghost-save.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200
     try:
         for position in ("off", "on", "covered"):
             resp = client.patch(
