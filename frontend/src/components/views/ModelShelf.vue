@@ -22,8 +22,8 @@
       can be undone. A ring around a model's mark says who it is assigned to. A
       name in italics has not been given one. A row that stands for a training
       run says how many files it holds; Right and Left open and close it.
-      Right-click a row for everything that can be done to it. Escape clears the
-      selection.
+      Right-click a row for everything that can be done to it, or a folder's
+      header to scan or move that folder. Escape clears the selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -55,19 +55,20 @@
            on one segment against mdi line art on the other unbalances a control
            that has to read as symmetric.
 
-           The selected segment FILLS, in a wash rather than the solid accent
-           `.tbm-seg` uses inside a menu - this one sits in a toolbar beside the
-           bar's one accent button, and two solid fills in one strip is what
-           made this bar read louder than the other two. Never a bolder label: a
-           bolder label is a wider label, so the pair resized on every switch and
-           shoved the whole left group sideways. -->
-      <div class="shelf-viewswitch" role="tablist" aria-label="Model view">
+           Drawn as the design system's `Segmented` track (`.tbm-seg`), but
+           keeps `tablist`/`tab`: unlike every other track in the app this one
+           switches which panel is on screen rather than setting a value. -->
+      <div
+        class="tbm-seg shelf-viewswitch"
+        role="tablist"
+        aria-label="Model view"
+      >
         <button
           id="shelf-tab-shelf"
           type="button"
           role="tab"
-          class="bar-btn shelf-viewseg"
-          :class="{ 'shelf-viewseg--on': isShelfTab }"
+          class="tbm-seg-btn shelf-viewseg"
+          :class="{ 'tbm-seg-btn--on shelf-viewseg--on': isShelfTab }"
           :aria-selected="isShelfTab"
           :aria-controls="isShelfTab ? 'shelf-panel-shelf' : undefined"
           :tabindex="isShelfTab ? 0 : -1"
@@ -80,8 +81,8 @@
           id="shelf-tab-runs"
           type="button"
           role="tab"
-          class="bar-btn shelf-viewseg"
-          :class="{ 'shelf-viewseg--on': !isShelfTab }"
+          class="tbm-seg-btn shelf-viewseg"
+          :class="{ 'tbm-seg-btn--on shelf-viewseg--on': !isShelfTab }"
           :aria-selected="!isShelfTab"
           :aria-controls="!isShelfTab ? 'shelf-panel-runs' : undefined"
           :tabindex="isShelfTab ? -1 : 0"
@@ -862,6 +863,8 @@
                 :aria-expanded="!store.isCollapsed(group.key)"
                 :aria-label="groupLabel(group)"
                 @click="store.toggleGroup(group.key)"
+                @contextmenu="openFolderMenu(group, $event)"
+                @keydown="onFolderHeaderKeydown(group, $event)"
                 @dragover="onGroupDragOver(group, $event)"
                 @dragleave="onGroupDragLeave(group)"
                 @drop="onGroupDrop(group, $event)"
@@ -1367,10 +1370,54 @@
          because they have runs to import, so showing them beats leaving a new
          tab to be discovered. -->
     <ModelFoldersDialog
+      ref="foldersDialogRef"
       :open="foldersOpen"
       @close="closeFolders"
       @source-added="showTab('runs')"
     />
+
+    <!-- A folder header's own menu (#1270): the two registry verbs that are
+         about one folder and need no selection. Anchored to the pointer like
+         the row menu. The gates, their reasons and the Move picker all belong
+         to the folders dialog, so the items ask it rather than keep a copy. -->
+    <v-menu
+      v-model="folderMenuOpen"
+      :target="folderMenuAt"
+      location="bottom end"
+      origin="top start"
+      :offset="2"
+    >
+      <div v-if="folderMenuFolder" class="shelf-menu" role="menu">
+        <button
+          v-if="foldersDialogRef?.canScan(folderMenuFolder)"
+          class="shelf-mi"
+          :class="{ 'shelf-mi--disabled': folderScanReason }"
+          type="button"
+          role="menuitem"
+          :disabled="Boolean(folderScanReason)"
+          :title="folderScanReason || undefined"
+          @click="rescanFromMenu"
+        >
+          <v-icon size="16">mdi-refresh</v-icon>
+          <span>{{
+            folderMenuFolder.last_checked ? "Rescan folder" : "Scan folder"
+          }}</span>
+        </button>
+        <button
+          v-if="folderMenuFolder.relocatable"
+          class="shelf-mi"
+          :class="{ 'shelf-mi--disabled': folderMoveReason }"
+          type="button"
+          role="menuitem"
+          :disabled="Boolean(folderMoveReason)"
+          :title="folderMoveReason || undefined"
+          @click="relocateFromMenu"
+        >
+          <v-icon size="16">mdi-folder-move-outline</v-icon>
+          <span>Move folder…</span>
+        </button>
+      </div>
+    </v-menu>
 
     <!-- The shipped host-path picker again, in its file mode. A server-side
          picker rather than an `<input type=file>`: the file is on the machine
@@ -1522,6 +1569,11 @@ const rootEl = ref(null);
 const showMenuOpen = ref(false);
 const sortMenuOpen = ref(false);
 const foldersOpen = ref(false);
+const foldersDialogRef = ref(null);
+const folderMenuOpen = ref(false);
+const folderMenuAt = ref([0, 0]);
+const folderMenuFolder = ref(null);
+const folderMenuInvoker = ref(null);
 const addMenuOpen = ref(false);
 const groupMenuOpen = ref(false);
 // The toolbar buttons behind the dialogs its left half opens, so focus has a
@@ -2758,6 +2810,71 @@ const overflowRef = ref(null);
 function openFolders(invoker) {
   folderInvoker.value = invoker;
   foldersOpen.value = true;
+}
+
+/** Why the open folder menu's Rescan is refused, or "" when it is not. */
+const folderScanReason = computed(() =>
+  folderMenuFolder.value
+    ? foldersDialogRef.value?.scanReason(folderMenuFolder.value) || ""
+    : "",
+);
+
+/** Why the open folder menu's Move is refused, or "" when it is not. */
+const folderMoveReason = computed(() =>
+  folderMenuFolder.value
+    ? foldersDialogRef.value?.relocateReason(folderMenuFolder.value) || ""
+    : "",
+);
+
+/**
+ * Open a folder header's menu, when the header is a registered folder with
+ * something to offer. Anything else keeps the browser's own menu rather than
+ * swallowing the right button for an empty one.
+ */
+function openFolderMenu(group, event) {
+  if (!Number.isInteger(group.folderId)) return;
+  const folder = foldersStore.folders.find(
+    (row) => Number(row.id) === group.folderId,
+  );
+  const dialog = foldersDialogRef.value;
+  if (!folder || !dialog || (!dialog.canScan(folder) && !folder.relocatable)) {
+    return;
+  }
+  event.preventDefault();
+  folderMenuFolder.value = folder;
+  folderMenuInvoker.value = event.currentTarget;
+  folderMenuAt.value = [event.clientX, event.clientY];
+  folderMenuOpen.value = true;
+}
+
+/**
+ * The context-menu key on a header, which does not reliably fire `contextmenu`
+ * and carries no pointer position when it does. Opened over the header's own
+ * box, the way `openMenuAtRow` does it for a row.
+ */
+function onFolderHeaderKeydown(group, event) {
+  if (!isMenuKey(event)) return;
+  const box = event.currentTarget.getBoundingClientRect();
+  openFolderMenu(group, {
+    preventDefault: () => event.preventDefault(),
+    currentTarget: event.currentTarget,
+    clientX: box.left + 24,
+    clientY: box.bottom,
+  });
+}
+
+/** Rescan from the header menu. The menu has no activator, so focus goes back by hand. */
+function rescanFromMenu() {
+  foldersDialogRef.value?.scan(folderMenuFolder.value);
+  folderMenuOpen.value = false;
+  folderMenuInvoker.value?.focus?.();
+}
+
+/** Move from the header menu: the dialog's own picker, focus back to the header. */
+function relocateFromMenu() {
+  folderMenuOpen.value = false;
+  folderInvoker.value = folderMenuInvoker.value;
+  foldersDialogRef.value?.relocate(folderMenuFolder.value);
 }
 
 async function closeFolders() {
@@ -4259,98 +4376,28 @@ watch(
    clickable; the pill inside it takes them back. */
 
 /* ── The view switcher ─────────────────────────────────────────────────────
-   A welded pair of `.bar-btn`s: gap 0, and the outer corners rounded the way
-   `.bar-split-toggle`/`.bar-split-menu` already do it. NO container border -
-   `--v-theme-border` against this chrome measures 1.28:1 light / 1.35:1 dark,
-   which is a box with no job. Adjacency at gap 0 is what groups them. */
-/* The shipped segmented control's vocabulary (`.tbm-seg`, `App.css`): a track
-   in `--v-theme-input-background` with a `--v-theme-border` hairline, holding
-   equal segments. The track fill is only 1.17:1 light / 1.13:1 dark against the
-   toolbar, so the HAIRLINE is what separates it - which is why the shipped
-   control carries one and why a track without it reads as nothing.
-
-   Welded rather than gapped, and pill rather than `--radius-md`: the outer
-   corners are fully round and the seam between the two is a straight line, so
-   the pair reads as one object with a division in it rather than as two
-   controls that happen to touch. */
+   The shipped segmented track (`.tbm-seg`, `App.css`), sized for this bar per
+   the design system's `Segmented`: zero gap between segments, 24px segments
+   with a minimum width, and `--elevation-1` on the selected one as the cue
+   beyond hue. `--space-1` of inset rather than the spec's `--space-2`, so the
+   track is 30px and sits inside the 36px band with room for a focus ring.
+   `tbm-seg-btn--on` fills in `primary` and carries no weight change, so
+   selecting a segment never resizes the pair (the guardrail in
+   `ModelShelf.test.js` holds `.shelf-viewseg--on` to that). */
 .shelf-viewswitch {
-  display: inline-flex;
   gap: 0;
-  background: rgb(var(--v-theme-input-background));
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-pill);
+  padding: var(--space-1);
 }
 
-/* 26px, not `.bar-btn`'s 32: this is the one control on any of the three bars
-   that wraps its buttons in a bordered track, so 32px segments made the switch
-   34px against every neighbour's 32. In the old 48px band that only misaligned
-   it; in the 36px band it also left 0.5px between the switch and the band edge,
-   so a focused segment's 3px ring painted over the first list row.
-
-   26 + 2×1px border = 28, matching `Add` beside it rather than the 32 of the
-   boxed buttons - and for the same reason `Add` moved: this switch and that
-   button are the only two objects on the bar that are visibly filled at rest,
-   so they are the only two whose height reads as a silhouette. 28 in a 36px
-   band leaves 3.5px above and below instead of 1.5. */
 .shelf-viewseg {
-  border-radius: 0;
-  height: 26px;
-  color: rgba(var(--v-theme-on-panel), 0.7);
+  flex: none;
+  min-width: 56px;
+  min-height: 24px;
+  height: 24px;
 }
 
-/* Round outwards, straight between. */
-/* No padding on the track, so a filled segment reaches the border rather than
-   floating inside a ring of track colour - which is what read as a wide inset
-   around the pair. The caps nest exactly because both are `--radius-pill`. */
-.shelf-viewseg:first-child {
-  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
-}
-
-.shelf-viewseg:last-child {
-  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-}
-
-.shelf-viewseg:not(.shelf-viewseg--on):hover {
-  color: rgb(var(--v-theme-on-panel));
-  background: var(--hover-wash);
-}
-
-/* The selected segment fills, and carries no weight change. A bolder label is a
-   wider label, so the pair resized on every switch and the whole left group
-   jumped - the fill says the same thing and costs no layout (and the guardrail
-   in `ModelShelf.test.js` holds this rule to any property that would).
-
-   A WASH and not the solid `primary` `.tbm-seg-btn--on` uses. That control
-   lives inside a menu panel, where a branded fill is the only thing on the
-   surface; here it sat in a 36px band beside `Add`, and two solid accents in
-   one strip is what made this bar read as louder than the other two. Every
-   other bar in the app runs on transparent buttons - ink and a hover wash,
-   nothing filled at rest.
-
-   The label leaves `on-primary` with the fill, because warm white on a 28%
-   tint does not measure; it goes to `toolbar-text` at FULL strength against the
-   0.7 its neighbour keeps. That step is not decoration - `.shelf-row--selected`
-   below states the rule this obeys: a wash alone is a hue, and it needs a
-   partner that survives greyscale and forced-colors. Here the partner is the
-   ink, since a pill cannot carry that rule's inset bar.
-
-   The two alphas live in `style.css` beside `--hover-wash` and `--active-wash`,
-   which is where every theme-varying value in this app is declared - including
-   the shelf's own drive-band meter colours. */
 .shelf-viewseg--on {
-  background: var(--shelf-viewseg-wash);
-  color: rgb(var(--v-theme-toolbar-text));
-}
-
-.shelf-viewseg--on:hover {
-  background: var(--shelf-viewseg-wash);
-  color: rgb(var(--v-theme-toolbar-text));
-}
-
-/* Raised so the focus ring is not clipped by the welded sibling. */
-.shelf-viewseg:focus-visible {
-  position: relative;
-  z-index: var(--z-raised);
+  box-shadow: var(--elevation-1);
 }
 
 /* The gap the count sits in is the bar's cluster gap, not a hair. */

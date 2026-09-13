@@ -455,3 +455,46 @@ describe("setting the ai-toolkit output folder", () => {
     });
   });
 });
+
+describe("what the shelf's folder header menu calls (#1270)", () => {
+  // The shelf mounts this dialog closed and calls these through a ref, so the
+  // exposed names are a contract its own suite can only stub.
+  beforeEach(() => {
+    rescanModelFolder.mockReset().mockResolvedValue({ status: "started" });
+    relocate.mockReset();
+    moveBusy = false;
+  });
+
+  it("scans a user folder and refuses a source folder", async () => {
+    const source = folder({ id: 7, kind: "source" });
+    const wrapper = await open([folder(), source]);
+    expect(wrapper.vm.canScan(folder())).toBe(true);
+    expect(wrapper.vm.canScan(source)).toBe(false);
+    wrapper.vm.scan(source);
+    expect(rescanModelFolder).not.toHaveBeenCalled();
+    wrapper.vm.scan(folder());
+    expect(rescanModelFolder).toHaveBeenCalledWith(1);
+  });
+
+  it("gives the remote reason and starts nothing from a remote session", async () => {
+    const wrapper = await open([folder()], { canManage: false });
+    expect(wrapper.vm.scanReason(folder())).toMatch(/machine running/);
+    wrapper.vm.scan(folder());
+    expect(rescanModelFolder).not.toHaveBeenCalled();
+  });
+
+  it("moves a folder through the picker, and refuses while a move runs", async () => {
+    const wrapper = await open([MANAGED]);
+    const browser = () => wrapper.findComponent({ name: "FolderBrowser" });
+    wrapper.vm.relocate(MANAGED);
+    await browser().vm.$emit("select", "/mnt/elsewhere");
+    expect(relocate).toHaveBeenCalledWith(2, "/mnt/elsewhere");
+
+    relocate.mockReset();
+    moveBusy = true;
+    expect(wrapper.vm.relocateReason(MANAGED)).toMatch(/already running/);
+    wrapper.vm.relocate(MANAGED);
+    await browser().vm.$emit("select", "/mnt/elsewhere");
+    expect(relocate).not.toHaveBeenCalled();
+  });
+});

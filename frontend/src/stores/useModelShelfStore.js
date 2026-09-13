@@ -217,6 +217,30 @@ function compareOn(a, b, key, direction) {
   );
 }
 
+/**
+ * What one copy of a model is called on disk, for a draw that stands for it.
+ *
+ * `model.filename` is whichever copy the scanner met first, so byte-identical
+ * files under different names (`ae.sft`, `ae.safetensors`) are one model with
+ * one filename, and every draw under the folder axis read as the first. The
+ * name follows too, unless somebody gave the model one.
+ *
+ * @param {Object} row - a shown row, carrying `name` from `modelName`.
+ * @param {Object} location - the one copy this draw stands for.
+ * @returns {{filename: string, name: Object}|{}} fields to spread over the row.
+ */
+export function copyName(row, location) {
+  const filename = String(location?.relpath || "")
+    .split(/[\\/]/)
+    .pop();
+  if (!filename || filename === row.filename) return {};
+  return {
+    filename,
+    name:
+      row.name?.state === "named" ? row.name : modelName({ ...row, filename }),
+  };
+}
+
 /** "1 model" / "12 models", so no receipt ever reads "1 models". */
 function modelCount(n) {
   return `${Number(n).toLocaleString()} ${n === 1 ? "model" : "models"}`;
@@ -1245,11 +1269,21 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
                 // appending it separates them and changes nothing for the
                 // single-copy rows that are the rest of the shelf.
                 rowKey: `${row.id}:${group.key}:${group.location.relpath}`,
+                ...copyName(row, group.location),
                 locState: locationState([group.location]),
                 locations: [group.location],
                 ...(row.members ? { members: narrow(row.members, group) } : {}),
               }
             : { ...row, rowKey: `${row.id}:${group.key}` },
+        );
+      }
+    }
+    // A draw named for its own copy can land out of name order, because the
+    // rows were sorted on the model's name before the fan-out.
+    if (axis === "folder" && view.sortKey === "name") {
+      for (const bucket of byKey.values()) {
+        bucket.rows.sort(
+          (a, b) => compareOn(a, b, "name", view.sortDirection) || a.id - b.id,
         );
       }
     }
