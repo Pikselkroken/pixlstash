@@ -314,6 +314,26 @@ Use two test folders: `reference_test/` (≥2 pre-existing images) and
 - [ ] Saving a new reference/import folder prompts for a container restart with an updated mount; the folder shows pending-restart status until then
 - [ ] After restart the folder transitions to active (or mount-error if invalid); a new file in the mounted `import_test/` is picked up automatically
 
+### 9.3 First import into a folder of pictures
+
+A first import writes to a temporary database and only becomes a library when
+it finishes. Use a **copy** of a folder with 50+ pictures, never an original,
+and list the folder (including hidden entries) before and after each check.
+The backend suite proves the discard at the API; these cover the real UI, a
+real process kill, and Windows file locking.
+
+Wrong in every check that does not keep the library: a `vault.db`, `.pixlstash-thumbnails/`,
+`snapshots/` or `tmp/` left behind, any picture missing or moved, or a
+half-imported library opening. If a picture is missing, stop and report it.
+
+- [ ] Settings → Libraries → add the folder, start the import, **Abort** part way — the folder listing matches the one taken before, and the app offers the folder again
+- [ ] Same, but close the import question without importing — same result as Abort
+- [ ] Same, but kill the server process part way (Task Manager / `kill -9`), then start it again — same result, and the app asks about the folder again instead of opening it
+- [ ] Let an import finish — the folder holds `vault.db` and no temporary database beside it, the grid loads without an error or a "switching library" message, and the title bar read "Importing <folder name>" while it ran
+- [ ] On a folder of pictures choose **Start an empty library here** — a `vault.db` appears and the library opens empty
+- [ ] Desktop first run: pick a folder of pictures in the first-run wizard, then quit the app during the import — on the next start the folder is unchanged and the question is asked again
+- [ ] Windows: finish an import with Windows Defender real-time protection on — the library opens normally. If the rename is ever refused, the app says "Could not finish the import into …", the temporary database is still in the folder with no `vault.db`, and finishing again works once the file is released; wrong if a library opens with no database or pictures are indexed twice
+
 ---
 
 ## 10. Grid Live-Update — manual remainder
