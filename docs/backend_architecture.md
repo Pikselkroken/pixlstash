@@ -6464,7 +6464,11 @@ may not equal, contain, or sit inside `image_root` or any other registered
 reference folder. This path used to check *nothing*, so a root that contained
 `image_root` (the commit route's own guard only refuses one equal to or inside
 it) or that swallowed another reference folder was accepted, and two scan tasks
-then each indexed the same files believing they owned them.
+then each indexed the same files believing they owned them. Both also apply
+the shared blocklist, `utils.library_roots.refuse_path_inside_a_library`, so a
+root inside a watch folder or another registered library is refused too; this
+path ignores the reference-folder roots there, since the conflict rule above
+owns those, including its own row on a resume.
 
 What does still differ is the answer to **an existing row at the same path**.
 `create_reference_folder` 409s outright. `register_reference_folder` reuses one

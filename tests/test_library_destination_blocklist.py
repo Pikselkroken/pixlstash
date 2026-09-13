@@ -36,6 +36,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from pixlstash.server import Server
+from pixlstash.services import folder_structure_commit_service as svc
 from pixlstash.utils.path_utils import LibraryRootsUnavailable
 
 
@@ -325,3 +326,40 @@ def test_detached_libraries_are_still_in_the_blocklist(server, workspace):
     server.library_registry.detach(detached.id)
 
     assert detached.path in library_roots.library_content_roots(server, server.vault)
+
+
+def test_a_reference_commit_refuses_a_folder_inside_a_watched_folder_or_library(
+    client, server, workspace
+):
+    """#1223 item 2: the folder-structure commit registers reference folders
+    through ``register_reference_folder``, not the route, and only ran
+    ``validate_reference_folder_conflicts`` - so it skipped the watch folders
+    and the other registered libraries this module's routes refuse.
+    """
+    watched = _mkdir(workspace, "watched-for-commit-clash")
+    added = _add_import_folder(
+        client, watched, "watched-for-commit-clash", delete_after_import=True
+    )
+    assert added.status_code == 200, added.text
+    with pytest.raises(svc.CommitError, match="part of your library"):
+        svc.register_reference_folder(server, _mkdir(watched, "pictures"))
+
+    other = server.library_registry.create(
+        os.path.join(workspace, "commit-target-library"), "CommitTarget"
+    )
+    with pytest.raises(svc.CommitError, match="part of your library"):
+        svc.register_reference_folder(server, _mkdir(other.path, "photos"))
+
+    # A reference folder's own row is the conflict check's business, not the
+    # blocklist's: registering its path again must not read as "part of your
+    # library", or a resumed commit could never adopt the row it made.
+    existing = _mkdir(workspace, "already-a-reference-folder")
+    assert _add_reference_folder(client, existing, "existing").status_code == 200
+    try:
+        svc.register_reference_folder(server, existing)
+    except svc.CommitError as exc:
+        assert "part of your library" not in str(exc), exc
+
+    # Positive control: a free folder still registers.
+    free = _mkdir(workspace, "free-commit-folder")
+    assert svc.register_reference_folder(server, free).folder == os.path.realpath(free)
