@@ -125,26 +125,27 @@
   --elevation-3: 0 4px 16px rgba(var(--v-theme-shadow), 0.22); /* popovers, floating panels */
   --elevation-4: 0 8px 28px rgba(var(--v-theme-shadow), 0.30); /* dialogs, lightbox chrome */
 
-  /* Focus ring - one definition, used on every focusable element. A SOLID 3px accent
-     stroke. This is the keyboard-user's lifeline; never remove an outline without
-     replacing it with this.
-
-     It is solid on purpose. The previous `rgba(accent, 0.55)` blended toward the
-     canvas and measured 1.96:1 in the light theme and 3.01:1 in dark, against the
-     3:1 focus-indicator floor (WCAG 1.4.11 / 2.4.11) - i.e. it failed outright in the
-     default theme, and would have fallen to 1.90 – 1.95:1 once the accent deepened for the
-     white-label rule (visual-language.md §4). At full opacity the ring measures
-     dark 3.61 / 3.23 / 3.76 and light 4.51 / 4.75 / 4.07 on
-     `background` / `surface` / `dark-surface` (light: sidebar) respectively.
+  /* Focus is INK (owner decision, 2026-09-13): a 2px `--focus-stroke` (the
+     text colour, per theme in style.css) drawn as `outline` with a 2px gap, so
+     the ring only ever meets the ground and never has to contrast with a fill.
+     Amber is the action fill and olive the selection, so an amber ring measured
+     1.27:1 against the Save button it surrounds and read as a second mark on a
+     selection. Ink measures 10.24:1 dark and 13.74:1 light at worst (on
+     `panel`). The one rule lives in style.css; a component does not paint its
+     own. A control that cannot take a gap (a 32px menu row flush in its menu)
+     uses the inset form, `--focus-ring-inset`, as a box-shadow.
      A focus ring is the one place in this system where "subtle" is a defect. */
-  --focus-ring: 0 0 0 3px rgb(var(--v-theme-accent));
+  --focus-width: 2px;
+  --focus-offset: 2px;
+  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
+  /* The legacy box-shadow form, for the rules that still draw focus that way.
+     Ink, not amber, so none of them carries a hue meanwhile. */
+  --focus-ring: 0 0 0 var(--focus-width) var(--focus-stroke);
 
-  /* The same accent as a GLOW rather than a stroke, for the one place a stroke
-     cannot sit: a Vuetify field, whose floating label rides ON the top border.
-     A 3px stroke there is a bar through the label. The 2px spread is still solid
-     accent, so the indicator keeps the contrast the ring was made solid for.
+  /* The ring as a GLOW rather than a stroke, for the one place a stroke cannot
+     sit: a Vuetify field, whose floating label rides ON the top border.
      `style.css` paints it beneath the label and clips it off the top edge. */
-  --focus-glow: 0 0 6px 2px rgb(var(--v-theme-accent));
+  --focus-glow: 0 0 6px 2px var(--focus-stroke);
 
   /* ---------------------------------------------------------------------------
      SCRIMS - translucent legibility backings for corner badges/chips that sit on

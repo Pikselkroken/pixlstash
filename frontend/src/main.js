@@ -103,8 +103,8 @@ const pixlStashLight = {
     // warmer, more-orange #c47a1e and now sits at 3.04:1: enough for the semibold
     // button label (AA large), so these fills stay label-only (buttons, chips,
     // rails, icons - never small body text on a canvas).
-    accent: "#c47a1e", // warm-white 3.04:1 (brightened from #9e6727)
-    "on-accent": "#f7f1ea",
+    accent: "#c47a1e", // white label 3.41:1 (brightened from #9e6727)
+    "on-accent": "#ffffff", // 3.41:1, an accepted exception; hover darkens the fill to 5.03:1 (buttons.md)
     "accent-bright": "#e08a2a", // brighter, more-orange amber glow: selection / active / focus (not a text/fill token)
     primary: "#567309", // warm-white 4.86:1 (olive)
     "on-primary": "#f7f1ea",
@@ -196,8 +196,8 @@ const pixlStashDark = {
     // (design-system parity, 2026-07-24). Same warm-white #f7f1ea label, same
     // contrast (primary 4.86:1, secondary 4.91:1, tertiary 4.85:1; accent
     // #c47a1e 3.04:1, AA-large for the semibold button label).
-    accent: "#c47a1e", // warm-white 3.04:1 (brightened, more orange)
-    "on-accent": "#f7f1ea",
+    accent: "#c47a1e", // white label 3.41:1 (brightened, more orange)
+    "on-accent": "#ffffff", // 3.41:1, an accepted exception; hover darkens the fill to 5.03:1 (buttons.md)
     "accent-bright": "#e08a2a", // brighter, more-orange amber glow: selection / active / focus (not a text/fill token)
     primary: "#567309", // warm-white 4.86:1 (olive)
     "on-primary": "#f7f1ea",
