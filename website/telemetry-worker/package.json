@@ -13,7 +13,8 @@
     "deploy": "wrangler deploy --no-x-provision --no-x-auto-create"
   },
   "overrides": {
-    "undici": "7.29.0"
+    "undici": "7.29.0",
+    "sharp": "0.35.4"
   },
   "devDependencies": {
     "miniflare": "https://registry.npmjs.org/miniflare/-/miniflare-5.20260730.0-alpha.tgz",
