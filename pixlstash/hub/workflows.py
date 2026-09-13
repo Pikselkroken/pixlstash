@@ -209,3 +209,130 @@ def recipes_for_topology(hub: HubDatabase, topology_hash: str) -> list[sqlite3.R
         "FROM workflow_recipe WHERE topology_hash = ? ORDER BY first_seen_at",
         (topology_hash,),
     )
+
+
+def topology_index(hub: HubDatabase) -> list[sqlite3.Row]:
+    """Every topology with the number of recipes filed under it.
+
+    The Workflows view's whole list in one query. A LEFT JOIN rather than a
+    subquery per row: 192 topologies over 617 recipes is small, and a topology
+    with no recipe is impossible today but reads as zero rather than vanishing
+    if one ever appears.
+    """
+    return hub.fetchall(
+        "SELECT t.topology_hash, t.hash_version, t.node_count, t.first_seen_at, "
+        "COUNT(r.structural_hash) AS variant_count "
+        "FROM workflow_topology t "
+        "LEFT JOIN workflow_recipe r ON r.topology_hash = t.topology_hash "
+        "GROUP BY t.topology_hash"
+    )
+
+
+def assets_by_topology(hub: HubDatabase) -> dict[str, list[sqlite3.Row]]:
+    """The readable asset names of every recipe, keyed by its topology.
+
+    One query for the whole list rather than one per row, for the same reason
+    :func:`topology_index` is one query. Names deleted by
+    :func:`forget_asset_names` are simply absent, which is what lets the view
+    say a workflow's models are no longer named rather than showing a blank.
+
+    **DISTINCT, and it is load-bearing rather than tidy.** The asset table is
+    keyed per RECIPE, so a topology's 159 variants naming the same checkpoint
+    contribute 159 identical rows -- which the list would render as one row's
+    Models cell and a caller counting them would read as 159 adapters. What a
+    topology names is the SET of files its variants reach for, so that is what
+    this returns.
+    """
+    rows = hub.fetchall(
+        "SELECT DISTINCT r.topology_hash, a.widget_name, a.normalized_filename "
+        "FROM workflow_recipe_asset a "
+        "JOIN workflow_recipe r ON r.structural_hash = a.structural_hash "
+        "ORDER BY a.widget_name, a.normalized_filename"
+    )
+    grouped: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        grouped.setdefault(row["topology_hash"], []).append(row)
+    return grouped
+
+
+def adapter_slots_by_topology(hub: HubDatabase) -> dict[str, int]:
+    """How many adapters ONE run of each topology loads.
+
+    The set of filenames a topology names cannot answer this: a family of 159
+    character LoRAs is 159 names and one slot, and a row built from the set
+    would describe itself as loading all of them at once.
+
+    **The max over a topology's recipes is exact, not an estimate.** A topology
+    is the graph alone -- node classes and named-input edges -- so every recipe
+    filed under one has the same number of ``lora_name`` inputs by construction.
+    The max is taken rather than any single recipe's count only because a recipe
+    whose names were forgotten contributes zero rows and must not drag the
+    answer down with it.
+
+    Returns:
+        ``{topology_hash: slots}``, with topologies whose recipes name no
+        adapter absent entirely rather than present with a zero.
+    """
+    rows = hub.fetchall(
+        "SELECT topology_hash, MAX(slots) AS slots FROM ("
+        "  SELECT r.topology_hash AS topology_hash, "
+        "         COUNT(DISTINCT a.normalized_filename) AS slots "
+        "  FROM workflow_recipe_asset a "
+        "  JOIN workflow_recipe r ON r.structural_hash = a.structural_hash "
+        "  WHERE a.widget_name LIKE '%lora%' "
+        "  GROUP BY r.topology_hash, a.structural_hash"
+        ") GROUP BY topology_hash"
+    )
+    return {row["topology_hash"]: row["slots"] for row in rows}
+
+
+def assets_for_topology_recipes(
+    hub: HubDatabase, topology_hash: str
+) -> dict[str, list[sqlite3.Row]]:
+    """Every recipe's asset names under one topology, keyed by recipe.
+
+    One query, not one per recipe. The row this whole shape exists for holds
+    159 variants, and calling :func:`assets_for_recipe` in a loop over it is the
+    161-query expand that :func:`assets_by_topology` was written to avoid on the
+    list beside it.
+    """
+    rows = hub.fetchall(
+        "SELECT a.structural_hash, a.widget_name, a.normalized_filename "
+        "FROM workflow_recipe_asset a "
+        "JOIN workflow_recipe r ON r.structural_hash = a.structural_hash "
+        "WHERE r.topology_hash = ? "
+        "ORDER BY a.widget_name, a.normalized_filename",
+        (topology_hash,),
+    )
+    grouped: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        grouped.setdefault(row["structural_hash"], []).append(row)
+    return grouped
+
+
+def topology_exists(hub: HubDatabase, topology_hash: str) -> bool:
+    """Whether this hub has heard of a topology at all."""
+    return (
+        hub.fetchone(
+            "SELECT 1 FROM workflow_topology WHERE topology_hash = ?",
+            (topology_hash,),
+        )
+        is not None
+    )
+
+
+def recipe_exists(hub: HubDatabase, structural_hash: str) -> bool:
+    """Whether this hub has heard of a recipe at all.
+
+    Asked separately from :func:`get_document` so an unreadable stored document
+    is not reported as an unknown workflow: the first is a fault worth a 500 and
+    a log line, the second is the ordinary answer for a hash from another
+    machine.
+    """
+    return (
+        hub.fetchone(
+            "SELECT 1 FROM workflow_recipe WHERE structural_hash = ?",
+            (structural_hash,),
+        )
+        is not None
+    )

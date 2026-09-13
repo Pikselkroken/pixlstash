@@ -242,6 +242,7 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/users/me/auth",
         "/api/v1/users/me/shared-resource-ids",
         "/api/v1/users/me/token",
+        "/api/v1/workflows",
     }
 )
 

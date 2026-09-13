@@ -1,4 +1,4 @@
-import { MODEL_SHELF_ROUTES } from "../router/routeNames";
+import { MODEL_SHELF_ROUTES, WORKFLOW_ROUTES } from "../router/routeNames";
 import { computed, nextTick, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { isReadOnly } from "../utils/apiClient";
@@ -407,6 +407,20 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     () => !isReadOnly.value && MODEL_SHELF_ROUTES.includes(route.name),
   );
 
+  // The workflow library is a destination on the same reasoning: it lists
+  // graphs the hub knows about, not pictures in the library, so it is a route
+  // rather than a selection. Read-only for the same reason too — every
+  // /workflows route is owner-only, so a READ session mounting it would only
+  // fire requests its credential can never satisfy.
+  const isWorkflowsView = computed(
+    () => !isReadOnly.value && WORKFLOW_ROUTES.includes(route.name),
+  );
+
+  /** Open the workflow library. */
+  function handleSelectWorkflows() {
+    pushAppRoute({ name: "workflows" });
+  }
+
   // …and a pasted /models URL is bounced to the library rather than left on a
   // route that renders the grid under a Models heading. The sidebar row cannot
   // reach this: it is inert for a READ session, so the only way in is an
@@ -435,6 +449,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
       if (
         readOnly &&
         (MODEL_SHELF_ROUTES.includes(name) ||
+          WORKFLOW_ROUTES.includes(name) ||
           name === "insights" ||
           name === "moves")
       )
@@ -548,9 +563,11 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     isModelsView,
     isInsightsView,
     isMovesView,
+    isWorkflowsView,
     handleSelectModels,
     handleSelectInsights,
     handleSelectMoves,
+    handleSelectWorkflows,
     handleInsightAction,
     handleSelectCharacter,
     handleSelectSet,
