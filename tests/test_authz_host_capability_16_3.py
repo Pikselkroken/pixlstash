@@ -168,10 +168,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_47_local_7_loopback():
+def test_host_capability_tier_split_is_49_local_7_loopback():
     """The loopback tier is the 5 file-manager spawns, the process restart and
-    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 52
-    routes carry a locality tier = 47 local + 7 loopback.
+    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 56
+    routes carry a locality tier = 49 local + 7 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -422,6 +422,14 @@ def test_host_capability_tier_split_is_47_local_7_loopback():
     the ``GET /server-config/layout`` argument. Neither takes a host path and
     neither spawns anything, so the loopback count is unchanged.
 
+    56 = 49 + 7 with the first-import pair: ``POST /libraries/{library_uuid}/
+    promote`` renames the import's temporary database onto ``vault.db`` and
+    ``POST /libraries/{library_uuid}/discard`` deletes it and the folders
+    PixlStash made. Each writes inside a host folder (``POST /libraries``'
+    class) and closes and reopens the active vault (``POST /libraries/active``'
+    class). Both take a registry uuid, never a path, and refuse any library not
+    on its first import. Neither spawns anything.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -435,7 +443,7 @@ def test_host_capability_tier_split_is_47_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 7, sorted(loopback)
-    assert len(local) == 47, sorted(local)
+    assert len(local) == 49, sorted(local)
 
 
 # ===========================================================================

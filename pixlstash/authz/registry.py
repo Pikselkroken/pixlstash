@@ -702,13 +702,13 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("GET", "/api/v1/folder-structure/commit/status"): RoutePolicy(
         _LOCAL,
-        library_independent=True,
-        justification="§16.3: carries the commit's result, the same host-path class as GET .../read/status; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1). `library_independent` for GET /libraries' reason: the state it reports lives on the Server, not in any vault, and it has to keep answering while the library is closed and reopened - which is exactly what the end of a first import does, and the only way its own client can be told so.",
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="§16.3: carries the commit's result, the same host-path class as GET .../read/status; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1). HUB_ONLY admission because the state it reports lives on the Server, not in any vault, and it has to keep answering while the library is closed and reopened - which is exactly what the end of a first import does. It keeps the library pin: what it returns is library content.",
     ),
     ("DELETE", "/api/v1/folder-structure/commit"): RoutePolicy(
         _LOCAL,
-        library_independent=True,
-        justification="§16.3: stops the owner's in-flight commit (abort, or 'organise later') - authority over another principal's operation, on the same tier as the route that starts it, exactly as DELETE .../read is to POST .../read; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1). `library_independent` alongside its status sibling: it writes one flag on server-held state and touches no vault, and refusing it mid-swap would leave the owner unable to stop work they can still see running.",
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="§16.3: stops the owner's in-flight commit (abort, or 'organise later') - authority over another principal's operation, on the same tier as the route that starts it, exactly as DELETE .../read is to POST .../read; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1). HUB_ONLY admission alongside its status sibling: it writes one flag on server-held state and touches no vault, and refusing it mid-swap would leave the owner unable to stop work they can still see running. It keeps the library pin.",
     ),
     # ── import_folders.py (§16.3 host-capability) ───────────────────────────
     (
