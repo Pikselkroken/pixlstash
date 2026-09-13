@@ -1145,7 +1145,7 @@ watch(
 }
 
 .account-token-pill--read {
-  color: rgb(var(--v-theme-info));
+  color: rgb(var(--v-theme-surface-info));
 }
 
 .account-token-sub {

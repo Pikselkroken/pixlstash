@@ -17,6 +17,7 @@ colors:
   olive: "#567309"
   raspberry: "#bb3566"
   teal: "#46707a"
+  violet: "#7c55ae"
   warm-near-black: "#23211d"
   warm-near-white: "#faf9f7"
   raised-white: "#ffffff"
@@ -29,7 +30,7 @@ colors:
   warning: "#e8912f"
   warning-on: "#1b1b1b"
   success: "#2a7d3e"
-  info: "#2f6690"
+  info: "#30558c"
 typography:
   display:
     fontFamily: "system-ui, -apple-system, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif"
@@ -131,13 +132,14 @@ Both a light and a dark theme are first-class and every decision must hold in bo
 
 ## Colors
 
-The palette is **unified across both themes**: the four brand hues and the four status colors are a single hex value shared by dark and light, each deep enough to carry the warm near-white label (`on-fill` #f7f1ea) at ≥4.5:1. Only the **neutrals** switch per theme. Warm neutrals carry ~95% of every screen, the photos are the color, and the brand hues are spent sparingly on top. Consumed as tokens (`var(--accent)`, `rgb(var(--v-theme-*))`), **never a hex literal in a component.**
+The palette is **unified across both themes**: the five brand hues and the four status colors are a single hex value shared by dark and light, each deep enough to carry the warm near-white label (`on-fill` #f7f1ea) at ≥4.5:1. Only the **neutrals** switch per theme. Warm neutrals carry ~95% of every screen, the photos are the color, and the brand hues are spent sparingly on top. Consumed as tokens (`var(--accent)`, `rgb(var(--v-theme-*))`), **never a hex literal in a component.**
 
 ### Brand
 - **Amber** (`accent` #c47a1e; glow #e08a2a): the one "safelight." The primary action, the selected/active state, focus ring, key emphasis. The accent was brightened from the old deep #9c6016 to this warmer, more-orange #c47a1e (2026-07-24) so it reads as amber, not brown; the brighter #e08a2a is used where amber is a *glow* not a fill (selection wash, focus ring, hover). Warm-white label contrast is ~3:1 — enough for the semibold button label (AA large), but drop to olive or dark text for small text on amber.
 - **Olive** (`primary` #567309): the "commit / go" action (Create, Apply, Save changes) and the good/high end of a scale (smart-score, tag coverage). Distinct from the default amber primary.
 - **Raspberry** (`secondary` #bb3566): category / identity (person accents, grouping chips). A label color, never an action.
 - **Teal** (`tertiary` #46707a): the quiet tertiary — a third category color, neutral-accent highlights, chart series.
+- **Violet** (`quaternary` #7c55ae): a fourth category color and chart series. Never an action or a selection. Kept apart from Info for colour-blind viewers by Info being darker, so do not lighten Info toward it.
 
 ### Neutral (switches per theme — `light / dark`)
 - **Text** #23211d / #f2e5da and **canvas** #faf9f7 / #1b1f24 — warm, never `#000`/`#fff`.
@@ -146,7 +148,7 @@ The palette is **unified across both themes**: the four brand hues and the four 
 - **Cancel** (neutral secondary): #e6e1d8 + warm-black (light) / #3a4047 + cream (dark).
 
 ### Status (semantic only)
-- **Error** #b0392b (warm brick) · **Warning** #e8912f (bright orange, **dark text** #1b1b1b) · **Success** #2a7d3e (forest) · **Info** #2f6690 (muted slate-blue). One token each; they appear only on their own meaning.
+- **Error** #b0392b (warm brick) · **Warning** #e8912f (bright orange, **dark text** #1b1b1b) · **Success** #2a7d3e (forest) · **Info** #30558c (deep blue; draw it as text or a rail with `surface-info`, which lifts it to #9fbce8 on dark). One token each; they appear only on their own meaning.
 
 ### Color usage policy
 Neutrals carry ~95% of the screen; never more than ~2–3 of these colors visible at once on a working screen.
@@ -157,6 +159,7 @@ Neutrals carry ~95% of the screen; never more than ~2–3 of these colors visibl
 | **Olive** (primary) | Commit / go | Create / Apply / Save; the good-high end of a scale | A generic button color |
 | **Raspberry** (secondary) | Category / identity | Person accents, grouping chips | Actions |
 | **Teal** (tertiary) | Quiet category | A third grouping color, neutral highlights, chart series | High emphasis |
+| **Violet** (quaternary) | Fourth category | A fourth grouping color, a fourth chart series | Actions; selection; the only cue that separates it from Info |
 | **Error** | Destructive / error | Delete, error states, penalised tags | Decoration; color alone |
 | **Warning** | Caution | Stale / needs-review, non-blocking warnings | Blocking errors |
 | **Success** | Success / complete | Done confirmations, completed reviews | A general action button |

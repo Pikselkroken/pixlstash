@@ -3,7 +3,8 @@
 > **⚠️ Colors superseded (2026-07-24).** The color system moved to the unified
 > "Camp B" palette: ONE brand palette shared by both themes with warm-white
 > `#f7f1ea` labels — accent/amber **`#c47a1e`** (glow `#e08a2a`), primary/olive
-> `#567309`, secondary/raspberry `#bb3566`, tertiary/teal `#46707a`. The canonical
+> `#567309`, secondary/raspberry `#bb3566`, tertiary/teal `#46707a`, quaternary/violet
+> `#7c55ae` (added 2026-09-13, with `info` moved to `#30558c`). The canonical
 > color sources are now **`frontend/DESIGN.md`** and the design-system
 > `tokens/colors.css`; the running values live in the Vuetify themes in
 > **`frontend/src/main.js`**. The color hexes, contrast tables, and per-theme

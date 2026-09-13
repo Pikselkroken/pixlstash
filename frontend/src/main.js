@@ -46,9 +46,9 @@ if (typeof window !== "undefined" && window.pixlstashDesktop) {
 // warm near-black ramp, never pure #000. Status hues are deepened so they hold
 // contrast on the light canvas - all four of them: `error` #cf3b30 (4.62:1 on
 // the canvas), `warning` #b8861f (3.09:1), `success` #2e7d32 (4.87:1) and `info`
-// #1a6ec4 (4.90:1). `success` and `info` were Material 500s until 2026-07 and
+// #30558c (7.12:1). `success` and `info` were Material 500s until 2026-07 and
 // measured 2.64:1 / 2.97:1, i.e. below the 3:1 UI floor, which made this comment
-// false for half the set.
+// false for half the set. `info` is shared with the dark theme since 2026-09.
 const pixlStashLight = {
   dark: false,
   colors: {
@@ -80,11 +80,11 @@ const pixlStashLight = {
     // text (`ReviewRail`'s Abort/Clear). Identical in both themes. Measured
     // 4.60:1 – 6.16:1 plain on `#242628`, 5.23:1 – 7.01:1 on `#181b20`.
     // Deep fill hues here would fail: `error` #b0392b reads 2.51:1, `info`
-    // #2f6690 2.48:1, `success` #2a7d3e 2.97:1.
+    // #30558c 2.03:1, `success` #2a7d3e 2.97:1.
     "dark-surface-error": "#c9786f",
     "dark-surface-warning": "#e8912f",
     "dark-surface-success": "#5d9c6c",
-    "dark-surface-info": "#6b92b0",
+    "dark-surface-info": "#6890cc",
     // The fifth member of the family, same rationale: `primary` as a FOREGROUND
     // on a dark card. This is the dark theme's outgoing bright olive - a good
     // foreground on a dark card and a bad fill under a white label, so it moves
@@ -112,6 +112,11 @@ const pixlStashLight = {
     "on-secondary": "#f7f1ea",
     tertiary: "#46707a", // warm-white 4.85:1 (teal)
     "on-tertiary": "#f7f1ea",
+    // Violet: the fourth identity hue (category, chart series), never an action
+    // or a selection. Sits in the brand band (OKLCH L .531, C .140) and stays
+    // apart from `info` for colour-blind viewers because `info` is darker.
+    quaternary: "#7c55ae", // warm-white 4.97:1 (violet)
+    "on-quaternary": "#f7f1ea",
     // ── Folder-level hues (LibraryLayoutDialog) ────────────────────────────
     // One hue per folder level in the layout builder, so Level 1 is visibly not
     // Level 2. They walk one arc - azure, indigo, magenta, plum - through the
@@ -148,8 +153,13 @@ const pixlStashLight = {
     // is not a house style, it is the only value that passes. Measured:
     error: "#b54538",
     "on-error": "#f7f1ea", //   4.83:1 (same value in both themes)
-    info: "#1a6ec4",
-    "on-info": "#ffffff", //    5.16:1
+    info: "#30558c",
+    "on-info": "#f7f1ea", //    6.68:1
+    // `info` as a FOREGROUND (text, rail, glyph) on this theme's own surfaces.
+    // The deep fill already clears them here (7.49:1 on #ffffff, 4.67:1 on a
+    // hovered `panel` row), so it is the same value; the dark theme lifts it. Use this, not `info`,
+    // whenever the hue is drawn rather than filled.
+    "surface-info": "#30558c",
     success: "#2e7d32",
     "on-success": "#ffffff", // 5.13:1
     warning: "#b8861f",
@@ -183,7 +193,7 @@ const pixlStashDark = {
     "dark-surface-error": "#c9786f",
     "dark-surface-warning": "#e8912f",
     "dark-surface-success": "#5d9c6c",
-    "dark-surface-info": "#6b92b0",
+    "dark-surface-info": "#6890cc",
     // Identical in both themes, like the four above. Keeps the retired bright
     // olive in service as a dark-card foreground (6.25:1 on #181b20).
     "dark-surface-primary": "#8EA604",
@@ -205,6 +215,11 @@ const pixlStashDark = {
     "on-secondary": "#f7f1ea",
     tertiary: "#46707a", // warm-white 4.85:1 (teal)
     "on-tertiary": "#f7f1ea",
+    // Violet: the fourth identity hue (category, chart series), never an action
+    // or a selection. Sits in the brand band (OKLCH L .531, C .140) and stays
+    // apart from `info` for colour-blind viewers because `info` is darker.
+    quaternary: "#7c55ae", // warm-white 4.97:1 (violet)
+    "on-quaternary": "#f7f1ea",
     // ── Folder-level hues (LibraryLayoutDialog) ────────────────────────────
     // One hue per folder level in the layout builder, so Level 1 is visibly not
     // Level 2. They walk one arc - azure, indigo, magenta, plum - through the
@@ -242,8 +257,13 @@ const pixlStashDark = {
     // for these values there. Measured on the SOLID fill:
     error: "#b54538",
     "on-error": "#f7f1ea", //   4.83:1
-    info: "#3b6f97",
-    "on-info": "#f7f1ea", //    4.79:1
+    info: "#30558c",
+    "on-info": "#f7f1ea", //    6.68:1
+    // `info` as a FOREGROUND on this theme's surfaces: the deep fill reads
+    // 1.98:1 on `surface` and 1.75:1 on `input-background`, so draw with this
+    // instead (6.77:1 on #2b3138, 4.20:1 on a hovered `panel` row). Mirrors the
+    // design system's `--surface-info`.
+    "surface-info": "#9fbce8",
     success: "#2a7d3e",
     "on-success": "#f7f1ea", // 4.57:1
     warning: "#e8912f",
