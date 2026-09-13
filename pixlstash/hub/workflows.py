@@ -455,3 +455,28 @@ def destroy_ghosts_for_instances(
             removed,
         )
     return removed
+
+
+def ghost_instance_hashes(hub: HubDatabase, library_uuid: str) -> list[str]:
+    """Every instance hash this library's ghosts lean on, for a full re-check."""
+    return [
+        row["instance_hash"]
+        for row in hub.fetchall(
+            "SELECT DISTINCT instance_hash FROM workflow_picture_ghost "
+            "WHERE library_uuid = ? ORDER BY instance_hash",
+            (library_uuid,),
+        )
+    ]
+
+
+def erase_picture_ghosts(hub: HubDatabase) -> int:
+    """Destroy every ghost the hub holds, for every library. Returns how many.
+
+    The retention setting is install-wide, and so is this: it is what "erase
+    what is already kept" means, including ghosts of a detached library whose
+    vault is not open.
+    """
+    with hub.transaction() as conn:
+        removed = conn.execute("DELETE FROM workflow_picture_ghost").rowcount or 0
+    logger.info("Erased %d picture ghost(s) on request.", removed)
+    return removed

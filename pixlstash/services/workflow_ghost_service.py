@@ -29,16 +29,24 @@ all**, which is the user's, expressed as a three-position setting.
 path rather than in a corner.** A ghost kept under ``covered`` is safe *because*
 a covering picture survives. Destroy the last picture carrying that instance hash
 and the ghost stops being covered — retroactively, with nothing on screen to say
-so. So every purge re-evaluates the ghosts leaning on the instance hashes it just
-destroyed, and destroys the ones that have lost their cover.
+so. So the ghosts leaning on every instance hash a picture row gives up are
+re-evaluated, and the ones that have lost their cover are destroyed.
 
-**Bounded on purpose, twice.** A purge re-evaluates the instance hashes it
-touched, not the whole hub — library-wide re-evaluation is Settings › Privacy's
-own purge (§F10), which the plan gates heavily precisely because it is
-unbounded. And every hub query here is scoped to ONE library: the cover that
-justifies a ghost is a picture in that library's vault, only one vault is live
-at a time, so a hub-global cascade would destroy ghosts another library still
-has cover for.
+**The vault queues that, not the callers.** Picture rows are hard-deleted by
+the scrapheap purge, the missing-file sweeps, reference-folder removal and scan,
+and restore cleanup, through ORM and core deletes alike. A cascade each of them
+had to remember is how four of them forgot, so a trigger does it instead
+(migration ``0117``): a row deleted, or re-hashed away from its instance hash,
+leaves that hash in ``pending_ghost_cascade``, and :func:`drain_ghost_cascade`
+(run by ``GhostCascadeFinder``) settles it against the hub. The queue is in the
+vault, so a crash between the delete and the hub write delays the cascade
+rather than losing it.
+
+**Bounded on purpose, twice.** A drain re-evaluates the instance hashes that
+were given up, not the whole hub. And every hub query here is scoped to ONE
+library: the cover that justifies a ghost is a picture in that library's vault,
+only one vault is live at a time, so a hub-global cascade would destroy ghosts
+another library still has cover for.
 
 **One race is narrowed rather than closed, and it is written down.** The vault
 and the hub are separate databases with no transaction spanning them, so the
@@ -47,10 +55,15 @@ being acted on. :func:`apply_purge_to_hub` re-reads it as late as it can and
 intersects the two answers, so both directions of the race fail toward retaining
 less.
 
-**This is a step inside the one destruction path, never a sibling of it.**
-``services/scrapheap_service.py`` owns everything that permanently destroys a
-soft-deleted picture; the functions here are called from inside it and from
-nowhere else.
+**Writing a ghost is a step inside the one destruction path that can.**
+``services/scrapheap_service.py`` owns permanently destroying a soft-deleted
+picture, and it is the only caller of :func:`apply_purge_to_hub`. The other
+paths remove rows whose files are gone or were never the library's to keep, so
+they never write a ghost; they only give up cover, which the queue handles.
+
+**Erasing is its own request.** ``DELETE /server-config/ghost-retention/ghosts``
+destroys every ghost the hub holds (:func:`pixlstash.hub.workflows.erase_picture_ghosts`),
+and forgetting a library registration destroys that library's.
 
 **Forgetting reaches every derived copy, and here it does so structurally.** A
 prompt lives in ``picture.comfyui_positive_prompt`` *and*, in vector form, in
@@ -70,12 +83,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from sqlalchemy import text
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture
 from pixlstash.hub.workflows import (
     PictureGhost,
     destroy_ghosts_for_instances,
+    ghost_instance_hashes,
     record_picture_ghosts,
 )
 from pixlstash.pixl_logging import get_logger
@@ -98,6 +113,10 @@ GHOST_RETENTION_CHOICES: tuple[str, ...] = (
     GHOST_RETENTION_COVERED,
     GHOST_RETENTION_ON,
 )
+
+# Queued instance hashes one drain settles. Each batch is one chunked vault read
+# and one chunked hub delete, so this bounds a task's duration, not correctness.
+GHOST_CASCADE_BATCH = 500
 
 # Settled by the owner, 2026-08-23: ``covered``. Near-zero marginal exposure, and
 # the commonest reclaim case (collapse a stack to its cover) works without a
@@ -305,13 +324,9 @@ def cascade_uncovered_ghosts(
 ) -> int:
     """Destroy the ghosts these destroyed pictures were covering. Returns how many.
 
-    **The cascade on its own, for the destruction paths that cannot write a
-    ghost.** ``MissingFilePurgeTask`` removes a picture row whose FILE has
-    already vanished from disk, so there is no thumbnail to retain and no ghost
-    it could ever create — but it can still remove the last picture carrying an
-    instance hash, and that un-covers every ghost leaning on it. Leaving that
-    path out would let the safe class decay into the unsafe one exactly where
-    nobody is looking, which is the failure library plan §5 names.
+    **The cascade on its own**, for :func:`drain_ghost_cascade`: whatever path
+    removed the rows, it can remove the last picture carrying an instance hash,
+    and that un-covers every ghost leaning on it.
 
     ``on`` never cascades — it keeps every ghost unconditionally, which is the
     whole of what that position promises. ``off`` destroys every ghost this
@@ -327,6 +342,101 @@ def cascade_uncovered_ghosts(
     else:
         doomed = destroyed_instance_hashes - surviving_instance_hashes
     return destroy_ghosts_for_instances(hub, library_uuid, sorted(doomed))
+
+
+def enqueue_ghost_cascade_in_session(
+    session: Session, instance_hashes: list[str]
+) -> None:
+    """Queue instance hashes for the cascade, as the vault's triggers do.
+
+    For the two cases no trigger sees: a purge that has just written ghosts
+    (their cover may have gone while it was writing), and a restore that swapped
+    the whole vault file. ``INSERT OR REPLACE`` gives an already-queued hash a
+    new ``seq``, so a drain in progress cannot swallow it.
+    """
+    for batch in chunked(sorted(set(instance_hashes))):
+        session.execute(
+            text(
+                "INSERT OR REPLACE INTO pending_ghost_cascade (instance_hash) "
+                "VALUES (:instance_hash)"
+            ),
+            [{"instance_hash": value} for value in batch],
+        )
+    session.commit()
+
+
+def drain_ghost_cascade(
+    vault_db,
+    hub,
+    library_uuid: Optional[str],
+    retention: str,
+    limit: int = GHOST_CASCADE_BATCH,
+) -> tuple[int, int]:
+    """Settle one batch of ``pending_ghost_cascade`` against the hub.
+
+    Reads the oldest queued instance hashes and which of them a surviving
+    picture still carries, destroys the ghosts that lost their cover, and only
+    then removes the rows it read. A crash in between re-runs the batch, which
+    is harmless: the cascade is idempotent.
+
+    Rows are removed by ``seq``, not by hash. A hash re-queued while this ran
+    (its last cover deleted after the read) has a newer ``seq`` and stays.
+
+    Returns:
+        ``(evaluated, destroyed)``: instance hashes settled and ghosts destroyed.
+    """
+
+    def read(session: Session):
+        rows = session.execute(
+            text(
+                "SELECT seq, instance_hash FROM pending_ghost_cascade "
+                "ORDER BY seq LIMIT :limit"
+            ),
+            {"limit": limit},
+        ).all()
+        hashes = [row.instance_hash for row in rows]
+        surviving = surviving_instance_hashes_in_session(session, hashes)
+        return hashes, surviving, (rows[-1].seq if rows else None)
+
+    hashes, surviving, last_seq = vault_db.run_immediate_read_task(read)
+    if last_seq is None:
+        return 0, 0
+    destroyed = cascade_uncovered_ghosts(
+        hub, library_uuid, retention, set(hashes), surviving
+    )
+
+    def dequeue(session: Session):
+        session.execute(
+            text("DELETE FROM pending_ghost_cascade WHERE seq <= :seq"),
+            {"seq": last_seq},
+        )
+        session.commit()
+
+    vault_db.run_task(dequeue)
+    if destroyed:
+        logger.info(
+            "Covered-ghost cascade (%s): %d instance hash(es) given up by picture "
+            "rows, %d ghost(s) destroyed",
+            retention,
+            len(hashes),
+            destroyed,
+        )
+    return len(hashes), destroyed
+
+
+def requeue_library_ghosts(vault_db, hub, library_uuid: Optional[str]) -> int:
+    """Queue every ghost this library holds for re-evaluation. Returns how many.
+
+    A full restore swaps the vault file, so the pictures it drops were never
+    deleted and no trigger fired for them. Re-evaluating every ghost is bounded
+    by the ghosts, not by the library, and restores are rare.
+    """
+    if hub is None or not library_uuid:
+        return 0
+    hashes = ghost_instance_hashes(hub, library_uuid)
+    if hashes:
+        vault_db.run_task(enqueue_ghost_cascade_in_session, hashes)
+    return len(hashes)
 
 
 def apply_purge_to_hub(

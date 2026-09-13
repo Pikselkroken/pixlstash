@@ -38,11 +38,14 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import delete
 
+from pixlstash import auth
 from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Picture, ReferenceFolder
+from pixlstash.hub.workflows import PictureGhost, record_picture_ghosts
 from pixlstash.server import Server
+from pixlstash.tasks.ghost_cascade_task import GhostCascadeTask
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
@@ -139,6 +142,7 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_recipe_graph")
         conn.execute("DELETE FROM workflow_recipe")
         conn.execute("DELETE FROM workflow_topology")
+        conn.execute("DELETE FROM workflow_picture_ghost")
         for topology, node_count, first_seen in (
             (BUSY_TOPOLOGY, 47, "2026-08-01T00:00:00Z"),
             (BINNED_TOPOLOGY, 12, "2026-08-03T00:00:00Z"),
@@ -546,3 +550,169 @@ def test_a_recipe_serves_its_stored_graph_and_says_it_will_not_run(workflow_env)
 def test_an_unknown_recipe_is_a_404(workflow_env):
     r = workflow_env.owner.get(f"{API}/workflows/recipes/{_h('nosuchrecipe')}/graph")
     assert r.status_code == 404, r.text
+
+
+# ===========================================================================
+# Hardening (#1293): the rollback belt, transport, and the ghost routes
+# ===========================================================================
+
+_TEMPLATED_PATHS = (
+    f"{API}/workflows/{BUSY_TOPOLOGY}/variants",
+    f"{API}/workflows/{BUSY_TOPOLOGY}/pictures",
+    f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph",
+)
+
+
+def test_the_templated_reads_stay_closed_with_the_gate_rolled_back(workflow_env):
+    """``AUTHZ_GATE_ENFORCING = False`` is a documented rollback, and the belt
+    that survives it used to match literal paths only, so these three answered
+    a share token. ``READ_BLOCKED_GET_PREFIXES`` is what refuses them now."""
+    server = workflow_env.server
+    unscoped = _bearer(server, _mint(workflow_env.owner, "rollback unscoped"))
+    scoped = _bearer(
+        server,
+        _mint(
+            workflow_env.owner,
+            "rollback scoped",
+            resource_type="character",
+            resource_id=workflow_env.character_id,
+        ),
+    )
+    previously_enforcing = server.authz._enforcing
+    server.authz._enforcing = False
+    try:
+        for client in (unscoped, scoped):
+            assert client.get(f"{API}/pictures").status_code == 200, (
+                "the token is dead; the refusals below would prove nothing"
+            )
+            for path in _TEMPLATED_PATHS:
+                assert_real_route(server.api, "GET", path)
+                r = client.get(path)
+                assert r.status_code == 403, f"GET {path}: {r.status_code} {r.text}"
+        for path in _TEMPLATED_PATHS:
+            r = workflow_env.owner.get(path)
+            assert r.status_code == 200, f"owner GET {path}: {r.status_code} {r.text}"
+    finally:
+        server.authz._enforcing = previously_enforcing
+
+
+def test_the_workflow_reads_refuse_remote_plaintext_under_require_ssl(
+    workflow_env, monkeypatch
+):
+    """The same transport rule as the model-shelf reads naming the same files."""
+    server = workflow_env.server
+    monkeypatch.setitem(server.auth._server_config, "require_ssl", True)
+    monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: "8.8.8.8")
+    for path in (f"{API}/workflows", *_TEMPLATED_PATHS):
+        r = workflow_env.owner.get(path)
+        assert r.status_code == 403 and "HTTPS is required" in r.text, (
+            f"GET {path}: {r.status_code} {r.text}"
+        )
+
+
+def _ghost(server, pixel_sha: str, instance_hash: str) -> PictureGhost:
+    return PictureGhost(
+        library_uuid=server.vault.library_uuid,
+        pixel_sha=pixel_sha,
+        instance_hash=instance_hash,
+        thumbnail=b"thumbnail-bytes",
+    )
+
+
+def _ghost_shas(server) -> set[str]:
+    return {
+        row["pixel_sha"]
+        for row in server.hub.fetchall("SELECT pixel_sha FROM workflow_picture_ghost")
+    }
+
+
+def test_the_ghost_routes_are_the_owners_alone(workflow_env, monkeypatch):
+    """Both directions on GET, PATCH and the erase, with the gate enforcing.
+
+    The GET belts are emptied so the refusal is measured at the gate rather
+    than at the middleware in front of it; PATCH and DELETE are refused to a
+    READ token before routing either way.
+    """
+    server = workflow_env.server
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
+    record_picture_ghosts(server.hub, [_ghost(server, "sha-authz", _h("authz"))])
+    tokens = {
+        "unscoped": _mint(workflow_env.owner, "ghost unscoped"),
+        "scoped": _mint(
+            workflow_env.owner,
+            "ghost scoped",
+            resource_type="character",
+            resource_id=workflow_env.character_id,
+        ),
+    }
+    base = f"{API}/server-config/ghost-retention"
+    previously_enforcing = server.authz._enforcing
+    server.authz._enforcing = True
+    try:
+        for label, token in tokens.items():
+            client = _bearer(server, token)
+            assert client.get(f"{API}/pictures").status_code == 200, label
+            r = client.get(base)
+            assert r.status_code == 403, f"{label} GET: {r.status_code} {r.text}"
+            assert "Owner-level" in r.text, f"{label} GET not refused by the gate"
+            r = client.patch(base, json={"workflow_ghost_retention": "on"})
+            assert r.status_code == 403, f"{label} PATCH: {r.status_code} {r.text}"
+            r = client.delete(f"{base}/ghosts")
+            assert r.status_code == 403, f"{label} DELETE: {r.status_code} {r.text}"
+        assert _ghost_shas(server) == {"sha-authz"}
+        assert server.vault.ghost_retention == "covered"
+
+        owner = workflow_env.owner
+        assert owner.get(base).status_code == 200
+        r = owner.patch(base, json={"workflow_ghost_retention": "covered"})
+        assert r.status_code == 200, r.text
+        r = owner.delete(f"{base}/ghosts")
+        assert r.status_code == 200, r.text
+        assert r.json()["ghosts_erased"] == 1
+        assert _ghost_shas(server) == set()
+    finally:
+        server.authz._enforcing = previously_enforcing
+
+
+def test_removing_a_reference_folder_cascades_its_uncovered_ghosts(workflow_env):
+    """The reported repro: a folder removal left an uncovered ghost behind.
+
+    Two ghosts, two instance hashes. The folder held the only picture carrying
+    one of them and one of two carrying the other, so exactly one ghost loses
+    its cover. The other staying is the positive control: a cascade that fired
+    on every hash the folder touched would pass the first assertion alone.
+    """
+    server = workflow_env.server
+    lost, kept = _h("folder-lost-instance"), _h("folder-kept-instance")
+    with tempfile.TemporaryDirectory() as folder_dir:
+
+        def insert(session):
+            folder = ReferenceFolder(folder=folder_dir, label="refs", status="active")
+            session.add(folder)
+            session.commit()
+            session.refresh(folder)
+            for name, instance in (("lost.png", lost), ("kept.png", kept)):
+                session.add(
+                    Picture(
+                        file_path=f"{folder_dir}/{name}",
+                        reference_folder_id=folder.id,
+                        workflow_instance_hash=instance,
+                    )
+                )
+            session.add(Picture(file_path="cover.png", workflow_instance_hash=kept))
+            session.commit()
+            return folder.id
+
+        folder_id = server.vault.db.run_task(insert)
+        record_picture_ghosts(
+            server.hub,
+            [_ghost(server, "sha-lost", lost), _ghost(server, "sha-kept", kept)],
+        )
+
+        r = workflow_env.owner.delete(f"{API}/reference-folders/{folder_id}")
+        assert r.status_code == 200, r.text
+
+    result = GhostCascadeTask(vault=server.vault)._run_task()
+    assert result["destroyed"] == 1, result
+    assert _ghost_shas(server) == {"sha-kept"}

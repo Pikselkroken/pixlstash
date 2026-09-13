@@ -13,6 +13,7 @@ from PIL import Image
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import User
+from pixlstash.hub.workflows import erase_picture_ghosts as hub_erase_picture_ghosts
 from pixlstash.db_models.tag import (
     DEFAULT_SMART_SCORE_PENALIZED_TAGS,
     DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
@@ -1166,8 +1167,8 @@ def create_router(server) -> APIRouter:
             "server-config.json.\n\n"
             "**Saving destroys nothing.** Lowering the position is a statement "
             "about what FUTURE purges may retain; clearing what is already held "
-            "is the separately confirmed purge in Settings › Privacy. Raising "
-            "it to `on` does not resurrect a ghost that was never written."
+            "is `DELETE /server-config/ghost-retention/ghosts`. Raising it to "
+            "`on` does not resurrect a ghost that was never written."
         ),
         responses={
             422: {"description": "workflow_ghost_retention is not off/covered/on."}
@@ -1190,6 +1191,31 @@ def create_router(server) -> APIRouter:
         if config_path:
             persist_server_config(config_path, server._server_config)
         return _ghost_retention_payload()
+
+    class GhostEraseResponse(BaseModel):
+        status: str
+        ghosts_erased: int
+
+    @router.delete(
+        "/server-config/ghost-retention/ghosts",
+        summary="Erase every picture ghost",
+        response_model=GhostEraseResponse,
+        description=(
+            "Permanently destroys every picture ghost the hub holds, for every "
+            "library, including detached ones. Nothing that was destroyed can "
+            "be made again afterwards. The retention setting is unchanged, so "
+            "later purges keep ghosts again unless it is set to `off`."
+        ),
+    )
+    def erase_picture_ghosts(request: Request):
+        _ensure_secure_when_required(request)
+        hub = getattr(server, "hub", None)
+        if hub is None:
+            raise HTTPException(
+                status_code=503,
+                detail="No hub is attached, so this machine holds no ghosts.",
+            )
+        return {"status": "success", "ghosts_erased": hub_erase_picture_ghosts(hub)}
 
     @router.get(
         "/server-config/scrapheap-retention/impact",

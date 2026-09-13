@@ -39,6 +39,7 @@ from pixlstash.db_models.picture_likeness import (
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.workflow_ghost_service import requeue_library_ghosts
 from pixlstash.utils.path_utils import resolve_path_within
 
 from ._models import (
@@ -731,6 +732,15 @@ class FullRestoreMixin:
             self._reset_auth_state()
             if auth_service is not None:
                 auth_service.reopen_auth_after_restore()
+            # The swap dropped every picture the snapshot did not have without
+            # deleting a row, so no trigger queued their instance hashes. Queue
+            # every ghost this library holds; the cascade re-checks each one's
+            # cover against the restored pictures.
+            requeue_library_ghosts(
+                db,
+                getattr(self._vault, "hub", None),
+                getattr(self._vault, "library_uuid", None),
+            )
         finally:
             if planner is not None:
                 planner.start()

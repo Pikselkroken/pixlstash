@@ -374,9 +374,18 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "Owner server-config write; PATCH is blocked for READ tokens, so "
             "only an unscoped owner reaches it. Sibling of PATCH "
             "/server-config/scrapheap-retention. It sets which picture ghosts "
-            "a purge may keep and performs NO destruction itself (the purge in "
-            "scrapheap_service is the only deleter), so the §16.3 "
+            "a purge may keep and performs NO destruction itself, so the §16.3 "
             "host-capability tiers do not apply."
+        ),
+    ),
+    ("DELETE", "/api/v1/server-config/ghost-retention/ghosts"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Owner privacy erase; DELETE is blocked for READ tokens, so only an "
+            "unscoped owner reaches it. Destroys every picture ghost in the hub "
+            "(retained thumbnails and prompts of pictures the owner already "
+            "destroyed) and nothing on disk, so it is owner data hygiene rather "
+            "than a §16.3 host capability."
         ),
     ),
     ("POST", "/api/v1/server-config/open"): RoutePolicy(

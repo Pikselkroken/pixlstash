@@ -34,6 +34,7 @@ import pytest
 
 from pixlstash.auth import (
     READ_BLOCKED_GET_PATHS,
+    READ_BLOCKED_GET_PREFIXES,
     is_local_ip,
     is_local_or_tailscale_ip,
     is_loopback_ip,
@@ -886,13 +887,12 @@ def test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt():
     owed by *tier*, not by someone grading the payload.
 
     The templated ones cannot be expressed in an exact-match frozenset at all.
-    The locality-tier ones are pinned as a known set rather than ignored: adding
-    a sixth fails here, and closing the gap needs prefix matching (the follow-up
-    recorded in ``tests/test_model_shelf_api.py`` and
-    ``docs/backend_architecture.md`` §16.3). The templated ``OWNER_ONLY`` GETs
-    are deliberately *not* pinned - that tier grows with ordinary feature work,
-    and a pin there would fail an unrelated route addition with a message about
-    a belt it cannot join.
+    They used to be pinned here as a known gap; ``READ_BLOCKED_GET_PREFIXES``
+    closed it (#1293), so every templated locality-tier GET, and every templated
+    workflow-library GET, must now sit under a prefix. The other templated
+    ``OWNER_ONLY`` GETs are deliberately *not* required to - that tier grows
+    with ordinary feature work, and a requirement there would fail an unrelated
+    route addition with a message about a belt it cannot join.
 
     **``GET /adapters/{sha256}/file`` joined that set on 2026-08-15, and it is
     the sharpest member of it.** The other two serve a run listing and a preview
@@ -924,20 +924,28 @@ def test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt():
         f"READ_BLOCKED_GET_PATHS in pixlstash/auth.py."
     )
 
+    # The templated ones are held by READ_BLOCKED_GET_PREFIXES (#1293), which
+    # closed the gap this test used to pin as five known routes. Every templated
+    # locality-tier GET must now sit under a prefix, and so must the workflow
+    # library's, whose three templated reads were the reason for closing it.
     tier = (AccessPolicy.LOCAL_OWNER_ONLY, AccessPolicy.LOOPBACK_OWNER_ONLY)
-    tier_gets = {
+    must_be_prefixed = {
         path
         for (method, path), rp in ROUTE_POLICIES.items()
-        if method == "GET" and rp.policy in tier
+        if method == "GET"
+        and "{" in path
+        and (rp.policy in tier or path.startswith("/api/v1/workflows/"))
     }
-    templated_gap = sorted(path for path in tier_gets if "{" in path)
-    assert templated_gap == [
-        "/api/v1/adapters/{sha256}/file",
-        "/api/v1/model-folders/{folder_id}/runs",
-        "/api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
-        "/api/v1/models/{model_id}/samples",
-        "/api/v1/models/{model_id}/samples/{filename}",
-    ], templated_gap
+    assert len(must_be_prefixed) >= 8, sorted(must_be_prefixed)
+    uncovered = sorted(
+        path
+        for path in must_be_prefixed
+        if not path.startswith(READ_BLOCKED_GET_PREFIXES)
+    )
+    assert uncovered == [], (
+        f"templated owner-class GETs no READ_BLOCKED_GET_PREFIXES entry covers: "
+        f"{uncovered}"
+    )
 
 
 # ---- LOOPBACK_OWNER_ONLY (7) - the flag-immune red line --------------------
