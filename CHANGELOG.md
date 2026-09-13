@@ -1,3 +1,120 @@
+# [1.11.2]
+
+- Caption files beside your pictures are read when a library is imported in
+  place. The import lists each naming pattern it found (`photo.txt`,
+  `photo_tags.txt`, `photo.caption`...) with a sample, and you say which hold
+  tags, which hold descriptions and which to leave alone. Pictures with a tags
+  file are not tagged from scratch.
+- Caption files beside the pictures in your library's own folder can now be
+  kept in sync, the way a reference folder's already are: a tags file and a
+  description file per picture, read back when edited on disk and written out
+  when edited in PixlStash. Settings, the open library's menu, "Caption
+  files..." turns it on or off and names the files.
+- PixlStash now watches your library folder itself, not only the folders you
+  point it at. Rename or move a picture in your file manager and it keeps its
+  tags, score, people and sets; drop one in and it is indexed; delete one and
+  it leaves the grid. A move into a folder named after a project, person or set
+  is offered in the pending-moves review.
+- Folder layouts: a picture with no project now goes into a `Global` folder at
+  the project level, so every person and set folder sits at the same depth. A
+  picture that later gains a project moves out of `Global` on its own.
+- The layout dialog now says which of project, person, set and tag actually
+  files a picture under the layout you picked, and its preview lists the
+  library folder itself, so the pictures nothing files are visible.
+- A watch folder can no longer sit inside one of your libraries, inside a
+  reference folder, or inside another watched folder. One set to delete after
+  import used to accept any of those, copy the pictures into the library you
+  had open and delete the originals.
+- Moving a reference folder now refuses a destination inside another library or
+  inside a watched folder, and says so before anything moves.
+- Export to folder now refuses a destination inside any of your libraries, not
+  only the one you are looking at. Everything exported into another library's
+  folder used to come back as a fresh set of pictures.
+- `libraries backup` now finds picture files in the library folder that
+  PixlStash has no record of and asks whether to include them. Enter keeps
+  them; `--skip-orphans` leaves them out, `--yes` includes them.
+- `plugins install --with-deps` now installs each dependency from the exact
+  artefact it resolved, instead of looking the package name up again. A
+  dependency pinned to a URL, to a VCS commit or to its own `--find-links`
+  directory used to be re-fetched by name, so what landed could be a different
+  project sharing that name. The listing says where each one came from.
+- `plugins install --with-deps` now lists the pip options a plugin's
+  `requirements.txt` reaches through an `-r` include. The include was shown,
+  but not the `--index-url` behind it that decides where packages come from.
+- `plugins install` now warns in the log when a dependency falls back to
+  pinning by name and version, so an unsafe pin is visible instead of reading
+  like a safe one.
+- Changed: first-run setup now finishes installing the GPU runtime before it
+  reads your library. The read used to run on the processor whatever hardware
+  you had, which on a large library took longer than waiting for the download.
+- When PixlStash is set to use the GPU and cannot find one, it refuses to start
+  rather than quietly using the processor, and says which file to edit to start
+  anyway.
+- PixlStash now says so when the WD14 tagger falls back to the CPU. It asked
+  onnxruntime what the build supports rather than what the tagger loaded, so a
+  GPU that could not be used looked like one that was.
+- Turning automatic tagging or captioning off is now a visible choice: a "None"
+  row at the top of the tagging and description model lists.
+- Clicking a subfolder in the sidebar now puts it in the address bar, so
+  reloading or sharing the link comes back to the subfolder.
+- Fixed: on macOS and Windows, renaming a project, person or set in a library
+  with a folder layout could lose every picture filed under it. The folder was
+  renamed on disk but PixlStash kept looking under the old name, and within the
+  hour forgot those pictures along with their tags, score, people and sets. The
+  picture files themselves were never touched.
+- Renaming to a different capitalisation of the same name now renames the
+  folder, instead of leaving it under the old spelling.
+- Fixed: turning remote access off now puts the server back on this machine
+  only. The setting it wrote was left behind, so starting PixlStash from the
+  command line later came up reachable from the network you had switched off.
+- Fixed: adding a library to a folder of pictures you already had no longer
+  changes that folder's permissions. The library database inside it is kept
+  private either way.
+- Fixed: a library database PixlStash cannot read right now - locked by another
+  program, on a full disk, or with its permissions changed - is no longer
+  offered "start over with an empty library database". A database that really
+  is damaged still gets the offer.
+- Fixed: on Windows, a picture named after a reserved device name - `NUL`,
+  `CON`, `COM1` and the rest - went missing from an export without a word. It
+  now exports under a name Windows can hold.
+- Fixed: one file PixlStash could not open - a damaged picture, a video it
+  could not make sense of, or something on a drive that had been unplugged -
+  could stop face-finding or tagging for the whole library, leaving everything
+  imported afterwards untagged.
+- Fixed: deleted pictures are no longer tagged. The "awaiting tagging" count
+  left them out while the tagger worked through them, so it could read zero
+  while your card stayed busy.
+- Fixed: background work no longer stalls re-checking files on a drive that has
+  gone away.
+- Fixed: reading a folder tree on the mapping screen no longer fights the
+  background workers for the GPU. The read used to alternate with queued
+  tagging, swapping models every batch; it now holds the workers back while it
+  runs, and hands them over on its own if it stalls.
+- Fixed: the first-run screen's "Reading your pictures" spent minutes on each
+  folder, so a library of a few hundred folders took over an hour and the
+  wizard gave up and started again. It now asks about several folders at a
+  time. The line also said "pictures" over a count of folders.
+- Fixed: a small library was sometimes indexed before the first-run import
+  offer appeared, so the folder-mapping questions were never asked. An empty
+  library over a folder that already holds pictures now offers "Import them".
+- Fixed: move a picture out of a laid-out folder in your file manager and it is
+  always offered in the pending-moves review. A background sweep could get
+  there first and quietly follow the move, leaving the picture with a project
+  or person its folder no longer said.
+- Fixed: the Moves Review screen's resolve button said only "Apply this move"
+  for an ambiguous move, naming nothing about what clicking it removes.
+- Fixed: a tagging or description model's parameters could revert. Saving
+  worked, but reopening the model's settings showed the values from before your
+  edit, and saving again put those back.
+- Fixed: adding a picture to a set or a person left that row unticked in the
+  menu until you closed and reopened it, so it looked as though nothing had
+  happened.
+- Fixed: an unfinished "add a folder" left behind by a library you no longer
+  have could stop the privacy question from being asked.
+- Keyboard: the folder-mapping wizard's folder list is one Tab stop with the
+  arrow keys moving inside it, and a library switch that fails puts focus back
+  on a control that still exists.
+
 # [1.11.0] [Security:High]
 
 - Settings → Libraries: add, rename and stop using libraries without the
