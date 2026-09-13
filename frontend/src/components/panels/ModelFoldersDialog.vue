@@ -322,6 +322,12 @@ function scannedLabel(folder) {
   return `Scanned ${relativeDate(folder.last_checked)}`;
 }
 
+/** Why this folder cannot be scanned right now, or "" when it can. */
+function scanReason(folder) {
+  if (remoteReason.value) return remoteReason.value;
+  return isScanning(folder) ? "This folder is being scanned right now." : "";
+}
+
 function forgetReason(folder) {
   if (remoteReason.value) return remoteReason.value;
   // Same guard and same reason as `relocateReason` below: forgetting deletes
@@ -435,7 +441,7 @@ function closeBrowser() {
 }
 
 function onScan(folder) {
-  if (remoteReason.value || isScanning(folder)) return;
+  if (!canScan(folder) || scanReason(folder)) return;
   store.scan(folder.id);
 }
 
@@ -444,9 +450,21 @@ function onForget(folder) {
   store.forget(folder);
 }
 
-// The registry is host data the dialog is the only reader of, so it is fetched
-// when the dialog opens rather than at startup. A scan started here keeps
-// polling in the store after the dialog closes.
+// The shelf's folder headers offer Rescan and Move from a context menu (#1270).
+// They call in here rather than keeping a second copy of the gates, and Move
+// works with the dialog closed because the picker is mounted beside it, not
+// inside it.
+defineExpose({
+  canScan,
+  scanReason,
+  relocateReason,
+  scan: onScan,
+  relocate: onRelocate,
+});
+
+// The registry is host data, re-read when the dialog opens so its rows are
+// current. A scan started here keeps polling in the store after the dialog
+// closes.
 watch(
   () => props.open,
   (isOpen) => {

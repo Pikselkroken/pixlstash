@@ -2256,6 +2256,72 @@ describe("duplicate copies", () => {
     expect(store.groups[0].rows.map((r) => r.copies)).toEqual([2]);
   });
 
+  it("names each copy's draw for its own file, in name order", async () => {
+    // Byte-identical files under three names are ONE model whose `filename` is
+    // whichever the scanner met first (#1270).
+    listAdapters.mockResolvedValue([
+      adapter({
+        id: 1,
+        display_name: null,
+        filename: "ae.sft",
+        locations: [
+          { state: "present", folder_path: "/m", relpath: "ae.sft" },
+          {
+            state: "present",
+            folder_path: "/m",
+            relpath: "vae/ae.safetensors",
+          },
+          {
+            state: "present",
+            folder_path: "/m",
+            relpath: "zImageTurbo_vae.st",
+          },
+        ],
+      }),
+      adapter({ id: 2, display_name: null, filename: "b.st" }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "folder", sortKey: "name", sortDirection: "asc" });
+    const drawn = store.groups[0].rows;
+    // `b.st`'s copy is `a.st`, so its draw sorts first although its model's
+    // own name sorts last.
+    expect(drawn.map((r) => r.filename)).toEqual([
+      "a.st",
+      "ae.sft",
+      "ae.safetensors",
+      "zImageTurbo_vae.st",
+    ]);
+    expect(drawn.map((r) => r.name.text)).toEqual([
+      "a",
+      "ae",
+      "ae",
+      "zImageTurbo vae",
+    ]);
+    // The model itself still carries one filename; only the draws differ.
+    expect(store.visibleRows.find((r) => r.id === 1).filename).toBe("ae.sft");
+  });
+
+  it("keeps a name somebody gave on every copy's draw", async () => {
+    listAdapters.mockResolvedValue([
+      adapter({
+        locations: [
+          { state: "present", folder_path: "/m", relpath: "a.st" },
+          { state: "present", folder_path: "/n", relpath: "other.st" },
+        ],
+      }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "folder" });
+    const drawn = store.groups.flatMap((g) => g.rows);
+    expect(drawn.map((r) => r.filename)).toEqual(["a.st", "other.st"]);
+    expect(drawn.map((r) => r.name.text)).toEqual([
+      "Cyanwood Style",
+      "Cyanwood Style",
+    ]);
+  });
+
   it("draws two copies in one folder under two keys, not one key twice", async () => {
     listAdapters.mockResolvedValue([
       adapter({

@@ -2091,6 +2091,139 @@ describe("what a folder header says about its folder (#899)", () => {
   });
 });
 
+describe("a folder header's context menu (#1270)", () => {
+  const scan = vi.fn();
+  const relocate = vi.fn();
+  // The dialog owns the gates and the Move picker; the header menu only asks.
+  // A stub that exposes the same surface keeps this suite about the menu.
+  let moveReason = "";
+  const dialogStub = {
+    name: "ModelFoldersDialog",
+    template: "<div />",
+    setup(_, { expose }) {
+      expose({
+        canScan: (folder) => folder.kind === "user",
+        scanReason: () => "",
+        relocateReason: () => moveReason,
+        scan,
+        relocate,
+      });
+    },
+  };
+
+  async function mountWithFolders(folders) {
+    scan.mockReset();
+    relocate.mockReset();
+    listModelFolders.mockResolvedValue(folders);
+    const rows = folders.map((folder, i) =>
+      adapter({
+        id: i + 1,
+        sha256: String(i + 1).repeat(64),
+        locations: [
+          {
+            state: "present",
+            folder_id: folder.id,
+            folder_path: folder.path,
+            relpath: "a.st",
+          },
+        ],
+      }),
+    );
+    // Attached, so the focus the menu hands back is a real one.
+    const wrapper = await mountShelf(rows, [], [], {
+      attachTo: document.body,
+      global: {
+        ...globalOpts.global,
+        stubs: { ...globalOpts.global.stubs, ModelFoldersDialog: dialogStub },
+      },
+    });
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
+    await wrapper.vm.$nextTick();
+    return wrapper;
+  }
+
+  const menuItems = (wrapper) =>
+    wrapper.findAll('[role="menuitem"]').filter((el) => {
+      const text = textOf(el);
+      return /^(Re)?[Ss]can folder$|^Move folder/.test(text);
+    });
+
+  it("offers Rescan and Move on a folder that can take both", async () => {
+    moveReason = "";
+    const folder = {
+      id: 1,
+      path: "/m",
+      kind: "user",
+      relocatable: true,
+      last_checked: "2026-01-01T00:00:00Z",
+      file_count: 1,
+    };
+    const wrapper = await mountWithFolders([folder]);
+    await wrapper.find(".shelf-group-btn").trigger("contextmenu");
+    const [rescan, move] = menuItems(wrapper);
+    expect(textOf(rescan)).toBe("Rescan folder");
+    expect(textOf(move)).toBe("Move folder…");
+
+    await rescan.trigger("click");
+    expect(scan).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }));
+    await move.trigger("click");
+    expect(relocate).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }));
+    wrapper.unmount();
+  });
+
+  it("disables a refused verb and says why", async () => {
+    moveReason = "A move is already running.";
+    const wrapper = await mountWithFolders([
+      { id: 1, path: "/m", kind: "user", relocatable: true, file_count: 1 },
+    ]);
+    await wrapper.find(".shelf-group-btn").trigger("contextmenu");
+    const move = menuItems(wrapper).find((el) =>
+      textOf(el).includes("Move folder"),
+    );
+    expect(move.attributes("disabled")).toBeDefined();
+    expect(move.attributes("title")).toBe("A move is already running.");
+    // A never-scanned folder is offered a Scan, not a Rescan.
+    expect(menuItems(wrapper).map(textOf)).toContain("Scan folder");
+    wrapper.unmount();
+  });
+
+  it("keeps the browser's menu on a folder with nothing to offer", async () => {
+    const wrapper = await mountWithFolders([
+      {
+        id: 1,
+        path: "/src",
+        kind: "source",
+        relocatable: false,
+        file_count: 1,
+      },
+    ]);
+    const event = new MouseEvent("contextmenu", { cancelable: true });
+    wrapper.find(".shelf-group-btn").element.dispatchEvent(event);
+    await wrapper.vm.$nextTick();
+    expect(event.defaultPrevented).toBe(false);
+    expect(menuItems(wrapper)).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("opens from the keyboard and gives focus back to the header", async () => {
+    moveReason = "";
+    const wrapper = await mountWithFolders([
+      { id: 1, path: "/m", kind: "user", relocatable: false, file_count: 1 },
+    ]);
+    const header = wrapper.find(".shelf-group-btn");
+    expect(menuItems(wrapper)).toHaveLength(0);
+    await header.trigger("keydown", { key: "F10", shiftKey: true });
+    const [rescan] = menuItems(wrapper);
+    expect(textOf(rescan)).toBe("Scan folder");
+
+    header.element.blur();
+    await rescan.trigger("click");
+    expect(scan).toHaveBeenCalled();
+    expect(document.activeElement).toBe(header.element);
+    wrapper.unmount();
+  });
+});
+
 describe("the group header's reserved column", () => {
   it("carries the axis glyph rather than an empty gap", async () => {
     // The width is reserved either way so the header's label lines up with the
