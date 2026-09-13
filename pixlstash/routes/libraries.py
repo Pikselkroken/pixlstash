@@ -712,6 +712,38 @@ def create_router(server) -> APIRouter:
         )
 
     @router.post(
+        "/libraries/{library_uuid}/promote",
+        summary="Start an empty library here, without importing",
+        description=(
+            "Finishes a library whose first import has not run: its database is "
+            "renamed from the temporary name onto `vault.db`, and the folder "
+            "becomes a library holding no pictures.\n\n"
+            "This is the answer that has to stay available whatever a folder "
+            "contains. A folder that already holds pictures is offered an "
+            "import, and the owner who does not want one would otherwise have "
+            "no way to say so: closing the question discards, so without this "
+            "route they would be asked again and again with no way out.\n\n"
+            "Every connected client is told to reload, because the library is "
+            "closed and reopened under its new name. A library that is already "
+            "finished is refused - there is nothing to promote."
+        ),
+        tags=["libraries"],
+        response_model=LibraryResponse,
+    )
+    def promote_library(request: Request, library_uuid: str):
+        server.auth.ensure_secure_when_required(request)
+        target = _by_uuid_or_404(library_uuid)
+        try:
+            library = server.library_switch.promote_pending_vault(target)
+        except LibrarySwitchError as exc:
+            # 409 for the switch's own reason: the request was well-formed and
+            # the caller was allowed; the library could not be finished.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except LibraryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _to_response(library, _caller_is_local(request))
+
+    @router.post(
         "/libraries/active",
         summary="Switch the active library",
         description=(

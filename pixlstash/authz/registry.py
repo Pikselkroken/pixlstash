@@ -414,6 +414,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         library_access=LibraryAccessMode.HUB_ONLY,
         justification="§16.3 tier for the POST /libraries/active reason rather than the path-authority one: it takes a registry uuid, never a host path, and removes no file - it clears the attached flag and keeps the row. What it exercises is authority over other principals' state, because every share link pointing at that library stops working until the folder is added again. The active library is refused by the registry; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    ("POST", "/api/v1/libraries/{library_uuid}/promote"): RoutePolicy(
+        _LOCAL,
+        library_access=LibraryAccessMode.SWITCH_WRITER,
+        justification="§16.3 for both reasons its siblings hold one each. It renames a file inside a host folder - the import's temporary database onto vault.db - which is POST /libraries' write-authority class; and it closes and reopens the active vault to do it, which resets every connected client's session exactly as POST /libraries/active does. It takes a registry uuid, never a caller-supplied path, and the file it renames is one PixlStash created itself; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("POST", "/api/v1/libraries/active"): RoutePolicy(
         _LOCAL,
         library_independent=True,
@@ -692,11 +697,13 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("GET", "/api/v1/folder-structure/commit/status"): RoutePolicy(
         _LOCAL,
-        justification="§16.3: carries the commit's result, the same host-path class as GET .../read/status; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        library_independent=True,
+        justification="§16.3: carries the commit's result, the same host-path class as GET .../read/status; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1). `library_independent` for GET /libraries' reason: the state it reports lives on the Server, not in any vault, and it has to keep answering while the library is closed and reopened - which is exactly what the end of a first import does, and the only way its own client can be told so.",
     ),
     ("DELETE", "/api/v1/folder-structure/commit"): RoutePolicy(
         _LOCAL,
-        justification="§16.3: stops the owner's in-flight commit (abort, or 'organise later') - authority over another principal's operation, on the same tier as the route that starts it, exactly as DELETE .../read is to POST .../read; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        library_independent=True,
+        justification="§16.3: stops the owner's in-flight commit (abort, or 'organise later') - authority over another principal's operation, on the same tier as the route that starts it, exactly as DELETE .../read is to POST .../read; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1). `library_independent` alongside its status sibling: it writes one flag on server-held state and touches no vault, and refusing it mid-swap would leave the owner unable to stop work they can still see running.",
     ),
     # ── import_folders.py (§16.3 host-capability) ───────────────────────────
     (

@@ -31,6 +31,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
 from pixlstash.hub.registry import (
+    VAULT_FILENAME,
     Library,
     LibraryError,
     LibraryNotFoundError,
@@ -449,6 +450,158 @@ class LibrarySwitchService:
         active = self._server.library_registry.by_uuid(target.uuid)
         logger.info("Active library is now %s (%s)", active.name, active.path)
         return active
+
+    def promote_pending_vault(self, library: Library) -> Library:
+        """Rename a finished first import's database onto ``vault.db``.
+
+        The library keeps its identity, its folder and every row it indexed;
+        only the file's name changes, and with it the fact that this folder now
+        holds a library at all. Called when an import finishes, and when the
+        owner answers "start an empty library here" instead of importing.
+
+        **This inverts the ordering the rest of this module is built on.** A
+        switch opens the incoming vault before retiring the outgoing one, so a
+        failed open costs nothing. A rename cannot work that way: the file must
+        be closed before it moves, on Windows it cannot even be renamed while a
+        handle is open, and there is no second vault to fall back to. So the
+        window between close and reopen is real, and the recovery is to reopen
+        whichever name the database now has - the rename either happened or it
+        did not, and both are openable states.
+
+        Raises:
+            LibrarySwitchError: The library is not pending, the rename failed,
+                or the database could not be reopened afterwards. The first two
+                leave the import unpromoted and the session serving it under
+                the temporary name, which is exactly where it already was.
+        """
+        if not library.pending_import_at:
+            raise LibrarySwitchError(
+                f'"{library.name}" is already a library; nothing to promote.'
+            )
+        if not self._lock.acquire(blocking=False):
+            raise LibrarySwitchError(
+                "Another library switch is already in progress. Try again in a moment."
+            )
+        try:
+            registry = self._server.library_registry
+            folder = resolve_path(library.path)
+            temporary = os.path.join(folder, library.vault_filename)
+            permanent = os.path.join(folder, VAULT_FILENAME)
+            if os.path.exists(permanent):
+                # Nothing can be promoted onto an existing library. Either the
+                # rename already happened and only the mark is stale - which
+                # the startup sweep settles - or this folder gained a vault
+                # from somewhere else while the import ran.
+                raise LibrarySwitchError(
+                    f"{permanent} already exists, so the import cannot be "
+                    "promoted onto it."
+                )
+
+            self._server.library_coordinator.begin_switch()
+            outgoing = self._server.vault
+            renamed = False
+            try:
+                clear_stats_cache()
+                clear_anomaly_region_cache()
+                clear_thumbnails = getattr(
+                    self._server, "_clear_thumbnail_runtime_cache", None
+                )
+                if clear_thumbnails is not None:
+                    clear_thumbnails()
+                # Closing joins the workers and drops the last connection, which
+                # is what lets SQLite clear -wal and -shm. Renaming the main
+                # file out from under a live WAL would lose every transaction
+                # still in it, so the sidecars are checked, not assumed.
+                outgoing.close()
+                leftovers = [
+                    name
+                    for name in (
+                        f"{library.vault_filename}-wal",
+                        f"{library.vault_filename}-shm",
+                    )
+                    if os.path.exists(os.path.join(folder, name))
+                ]
+                if leftovers:
+                    raise LibrarySwitchError(
+                        "The import's database still has "
+                        f"{', '.join(leftovers)} beside it after closing, so "
+                        "renaming it would lose what they hold."
+                    )
+                os.replace(temporary, permanent)
+                renamed = True
+                # After the rename, never before: `Library.vault_path` reads
+                # this mark to decide which file it means, so clearing it first
+                # would point every reader at a vault.db that is not there yet.
+                promoted = registry.finish_pending_import(library.id)
+            except Exception as exc:
+                # Reopen whichever name the database has now. The rename is the
+                # only step between the two, so this is a two-case recovery.
+                self._reopen_after_promotion(
+                    registry.by_uuid(library.uuid), renamed=renamed
+                )
+                if isinstance(exc, LibrarySwitchError):
+                    raise
+                raise LibrarySwitchError(
+                    f'Could not finish the import into "{library.name}": {exc}. '
+                    "Nothing was indexed twice and no picture was touched; the "
+                    "import can be finished again."
+                ) from exc
+
+            self._reopen_after_promotion(promoted, renamed=True)
+            logger.info(
+                "Promoted %s: its first import finished and %s is now %s",
+                promoted.name,
+                library.vault_filename,
+                VAULT_FILENAME,
+            )
+            return promoted
+        finally:
+            self._lock.release()
+
+    def _reopen_after_promotion(self, library: Library, *, renamed: bool) -> None:
+        """Open *library* again and publish it, or take the server down trying.
+
+        There is no second vault to fall back on here - see
+        :meth:`promote_pending_vault` - so a failure to reopen is fatal in the
+        same way the switch's own unrecoverable branch is: the alternative is
+        serving requests against a closed handle.
+        """
+        try:
+            incoming = self._server.build_vault(
+                registered_vault_path(self._server.hub, library)
+            )
+            incoming.add_event_listener(self._server.handle_vault_event)
+            incoming.auth_service = self._server.auth
+            self._server.apply_user_settings_to_vault(incoming)
+            self._server.reconcile_library_settings(incoming, library)
+            _bring_up(incoming, "promoted" if renamed else "unpromoted")
+            self._server.vault = incoming
+            self._server.auth.vault_db = incoming.db
+            pre_switch_clients = self._server.claim_websockets_for_switch()
+            self._server.library_coordinator.publish_ready()
+            try:
+                self._server.close_websocket_snapshot_for_switch(pre_switch_clients)
+            except Exception:
+                logger.exception("Could not close every pre-promotion WebSocket")
+        except Exception as exc:
+            logger.critical(
+                "Could not reopen %s after its import finished",
+                library.name,
+                exc_info=True,
+            )
+            self._server.vault = None
+            self._server.auth.vault_db = None
+            self._server.library_coordinator.mark_unavailable()
+            try:
+                self._server.close_all_websockets_for_switch()
+            except Exception:
+                logger.exception("Could not close sockets in fatal state")
+            self._server.request_fatal_shutdown()
+            raise LibrarySwitchError(
+                f'The import into "{library.name}" finished, but PixlStash '
+                "could not reopen the library afterwards. Restart the server; "
+                "nothing was lost."
+            ) from exc
 
     def _revalidate(self, target: Library) -> str:
         """Re-check the registered path immediately before opening it.

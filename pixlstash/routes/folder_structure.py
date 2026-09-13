@@ -575,6 +575,71 @@ def create_router(server) -> APIRouter:
             )
         finally:
             server.library_coordinator.release_read(lease)
+        # Outside the lease, deliberately. Promotion closes and reopens the
+        # vault through the switch machinery, and `begin_switch` waits for
+        # readers of this generation to drain - including the lease this very
+        # thread held until the line above. Promoting inside it would wait
+        # thirty seconds on itself and then refuse.
+        _finish_the_first_import(task_id)
+
+    def _promotion_owed(mode: str) -> bool:
+        """Whether finishing this commit is also what makes the folder a library.
+
+        Only a `local_import` into a library still on its first import: a
+        reference-folder commit never had a temporary vault, and an abort or a
+        stop is an answer of the other kind, handled by the discard path.
+        """
+        if mode != "local_import":
+            return False
+        library = server.library_registry.active_library()
+        return bool(library and library.pending_import_at)
+
+    def _finish_the_first_import(task_id: str) -> None:
+        """Promote the temporary vault, then report the commit completed.
+
+        **In that order, and that is the whole point of this function.** The
+        promotion closes and reopens the library, so a client told `completed`
+        before it ran would send its next request into a 503 - and the
+        folder-mapping wizard's own tests found exactly that. The import is not
+        finished until the folder holds a library.
+
+        Runs outside the commit's read lease: `begin_switch` drains readers of
+        the current generation, and that lease was one of them.
+        """
+        with server.folder_structure_commit_lock:
+            state = server.folder_structure_commit
+            owed = bool(
+                state and state["task_id"] == task_id and state["stage"] == "finishing"
+            )
+        if not owed:
+            return
+        library = server.library_registry.active_library()
+        try:
+            if library is None or not library.pending_import_at:
+                raise RuntimeError("the library finished its import already")
+            server.library_switch.promote_pending_vault(library)
+        except Exception as exc:
+            # The pictures are indexed and the mapping is applied - only the
+            # rename did not happen, so the folder still holds no vault.db.
+            # Saying `completed` would claim a library that is not there.
+            logger.exception(
+                "The import finished but the library could not be: %s", exc
+            )
+            with server.folder_structure_commit_lock:
+                state = server.folder_structure_commit
+                if state and state["task_id"] == task_id:
+                    state["stage"] = "done"
+                    state["status"] = "failed"
+                    state["error"] = (
+                        "Your pictures were indexed, but the library could not "
+                        f"be finished: {exc}"
+                    )
+            return
+        with server.folder_structure_commit_lock:
+            state = server.folder_structure_commit
+            if state and state["task_id"] == task_id:
+                state["stage"] = "done"
+                state["status"] = "completed"
 
     def _run_commit_holding_the_library(
         task_id: str,
@@ -700,8 +765,14 @@ def create_router(server) -> APIRouter:
             if not state or state["task_id"] != task_id:
                 return
             state["result"] = result.as_dict()
-            state["stage"] = "done"
-            state["status"] = "completed"
+            if _promotion_owed(mode):
+                # Not `completed` yet: `_finish_the_first_import` promotes the
+                # temporary vault and reports the commit finished once the
+                # folder actually holds a library.
+                state["stage"] = "finishing"
+            else:
+                state["stage"] = "done"
+                state["status"] = "completed"
         server.vault.notify(
             EventType.CHANGED_PICTURES,
             {"source": "folder-structure-commit", "change_kind": "updated"},

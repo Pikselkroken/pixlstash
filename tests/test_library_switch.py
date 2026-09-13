@@ -12,6 +12,7 @@ not apply), and until it succeeds nothing has been given up.
 import os
 import sqlite3
 import tempfile
+from pathlib import Path
 import threading
 import time
 
@@ -19,7 +20,11 @@ import pytest
 from sqlmodel import delete, select
 
 from pixlstash.db_models import Picture
-from pixlstash.hub.registry import read_vault_uuid
+from pixlstash.hub.registry import (
+    TEMP_VAULT_FILENAME,
+    VAULT_FILENAME,
+    read_vault_uuid,
+)
 from pixlstash.server import Server
 from pixlstash.services.library_switch_service import (
     LibrarySwitchError,
@@ -861,3 +866,119 @@ def _clean_pictures(server):
     server.vault.db.run_task(
         lambda session: (session.exec(delete(Picture)), session.commit())
     )
+
+
+class TestPromotingAFirstImport:
+    """A folder becomes a library when the import into it finishes.
+
+    Until then its database sits under a temporary name, so an abort leaves
+    the folder exactly as PixlStash found it - see
+    business/plans/pixlstash-temp-vault-first-import-plan.md.
+    """
+
+    @pytest.fixture
+    def pending_library(self, server, tmp_path):
+        """A library mid-first-import, made active as the real flow makes it."""
+        original = server.library_registry.active_library()
+        folder = tmp_path / "holiday-snaps"
+        folder.mkdir()
+        library = server.library_registry.create(
+            str(folder), f"Holiday {tmp_path.name}", pending_import=True
+        )
+        server.library_switch.switch_to(library.uuid)
+        yield server.library_registry.by_uuid(library.uuid)
+        server.library_switch.switch_to(original.uuid)
+
+    def test_promoting_renames_the_database_and_keeps_what_was_indexed(
+        self, server, pending_library
+    ):
+        folder = Path(pending_library.path)
+        server.vault.db.run_task(
+            lambda session: (
+                session.add(Picture(file_path="beach.jpg", pixel_sha="b" * 40)),
+                session.commit(),
+            )
+        )
+        assert (folder / TEMP_VAULT_FILENAME).is_file()
+        assert not (folder / VAULT_FILENAME).exists()
+
+        promoted = server.library_switch.promote_pending_vault(pending_library)
+
+        assert promoted.pending_import_at is None
+        assert (folder / VAULT_FILENAME).is_file()
+        assert not (folder / TEMP_VAULT_FILENAME).exists()
+        # Reopened, serving, and carrying every row the import wrote.
+        assert server.vault.image_root == pending_library.path
+        assert server.auth.vault_db is server.vault.db
+        assert _picture_count(server) == 1
+
+    def test_a_promoted_library_is_one_the_owner_can_see(self, server, pending_library):
+        assert pending_library.uuid not in [
+            lib.uuid
+            for lib in server.library_registry.list_libraries(
+                include_pending_import=False
+            )
+        ]
+
+        server.library_switch.promote_pending_vault(pending_library)
+
+        assert pending_library.uuid in [
+            lib.uuid
+            for lib in server.library_registry.list_libraries(
+                include_pending_import=False
+            )
+        ]
+
+    def test_an_ordinary_library_has_nothing_to_promote(self, server):
+        active = server.library_registry.active_library()
+
+        with pytest.raises(LibrarySwitchError, match="already a library"):
+            server.library_switch.promote_pending_vault(active)
+
+    def test_it_refuses_to_rename_over_a_vault_that_is_already_there(
+        self, server, pending_library
+    ):
+        """Nothing is promoted onto an existing library, whatever the mark says."""
+        (Path(pending_library.path) / VAULT_FILENAME).write_bytes(b"not mine")
+
+        with pytest.raises(LibrarySwitchError, match="already exists"):
+            server.library_switch.promote_pending_vault(pending_library)
+
+        # Refused before anything closed: the session is still serving.
+        assert server.vault.image_root == pending_library.path
+        assert (
+            server.library_registry.by_uuid(pending_library.uuid).pending_import_at
+            is not None
+        )
+
+    def test_a_failed_rename_leaves_the_import_where_it_was(
+        self, server, pending_library, monkeypatch
+    ):
+        """The window between closing and reopening, with the rename lost.
+
+        Windows makes this reachable for real: a scanner holding the file makes
+        `os.replace` fail. The library must come back under the temporary name,
+        still pending, still serving - not vanish because the mark said
+        `vault.db` while the file was still the other one.
+        """
+        folder = Path(pending_library.path)
+        real_replace = os.replace
+
+        def refuse_this_one(src, dst, *args, **kwargs):
+            if str(src) == str(folder / TEMP_VAULT_FILENAME):
+                raise OSError("held by another process")
+            return real_replace(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(os, "replace", refuse_this_one)
+
+        with pytest.raises(LibrarySwitchError, match="could not be finished|held by"):
+            server.library_switch.promote_pending_vault(pending_library)
+
+        monkeypatch.undo()
+        still = server.library_registry.by_uuid(pending_library.uuid)
+        assert still.pending_import_at is not None, "the import is not finished"
+        assert (folder / TEMP_VAULT_FILENAME).is_file()
+        assert not (folder / VAULT_FILENAME).exists()
+        # Reopened under the name the file actually has: the session survives.
+        assert server.vault.image_root == pending_library.path
+        assert server.auth.vault_db is server.vault.db
