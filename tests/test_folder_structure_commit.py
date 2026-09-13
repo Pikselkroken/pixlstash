@@ -1562,8 +1562,9 @@ def test_a_reference_commit_refuses_a_root_that_swallows_another(owner_env):
 
     # The direction the commit route's own guard misses: a root ABOVE the
     # library's own storage, which would index every managed picture a second
-    # time under an absolute path.
-    with pytest.raises(svc.CommitError, match="PixlStash data folder"):
+    # time under an absolute path. Refused as overlapping the library's folder,
+    # which runs before the conflict check's own "data folder" refusal (#1223).
+    with pytest.raises(svc.CommitError, match="overlaps a library"):
         svc.register_reference_folder(
             server, os.path.dirname(os.path.normpath(server.vault.image_root))
         )

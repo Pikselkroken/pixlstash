@@ -57,7 +57,13 @@ from pixlstash.hub.registry import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.library_switch_service import LibrarySwitchError
+from pixlstash.utils.library_roots import (
+    LIBRARY_OVERLAPS_FOLDER_DETAIL,
+    ROOTS_UNAVAILABLE_DETAIL,
+    watch_and_reference_folders,
+)
 from pixlstash.utils.media_files import count_media_files, has_media_files
+from pixlstash.utils.path_utils import LibraryRootsUnavailable, path_is_within
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 
 logger = get_logger(__name__)
@@ -168,7 +174,8 @@ class LibraryInspection(BaseModel):
     verdict: LibraryVerdict = Field(
         description=(
             "attached: this exact folder is already registered. overlaps: a "
-            "registered library contains it, or it contains one. vault: it "
+            "registered library, or one of the active library's watch or "
+            "reference folders, contains it, or it contains one. vault: it "
             "holds a vault nothing is using - attach it. pictures: a folder of "
             "pictures with no vault. empty: no pictures and no vault."
         )
@@ -477,6 +484,45 @@ def create_router(server) -> APIRouter:
                 ),
                 suggested_name=suggested,
                 library=_to_response(other, include_path),
+            )
+
+        # A library inside, or around, one of this library's watch or reference
+        # folders would index or move the files that folder imports or scans
+        # (#1223). Only the active library's folders are known here; another
+        # library's live in its own vault. With no library open (a failed
+        # switch) there are no folders to read, and adding a library may be the
+        # way out of that state.
+        try:
+            folders = (
+                watch_and_reference_folders(server.vault)
+                if server.vault is not None
+                else []
+            )
+        except LibraryRootsUnavailable as exc:
+            logger.warning(
+                "Could not read the watch and reference folders to inspect %s: %s",
+                folder,
+                exc,
+            )
+            return LibraryInspection(
+                verdict="overlaps",
+                path=folder,
+                can_add=False,
+                headline="Could not check this folder",
+                detail=ROOTS_UNAVAILABLE_DETAIL,
+                suggested_name=suggested,
+            )
+        if any(
+            path_is_within(folder, other) or path_is_within(other, folder)
+            for other in folders
+        ):
+            return LibraryInspection(
+                verdict="overlaps",
+                path=folder,
+                can_add=False,
+                headline="Overlaps a watch or reference folder",
+                detail=LIBRARY_OVERLAPS_FOLDER_DETAIL,
+                suggested_name=suggested,
             )
 
         if _holds_vault(folder):

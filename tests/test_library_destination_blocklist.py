@@ -104,19 +104,19 @@ def _add_import_folder(client, folder, label, *, delete_after_import=False):
     )
 
 
-def test_import_folder_refuses_a_folder_inside_another_library(
+def test_watch_and_reference_folders_refuse_overlapping_another_library(
     client, server, workspace
 ):
     """A watch folder pointed at a second registered library empties it.
 
     The watcher copies every file it finds into the *active* library and, with
     ``delete_after_import``, unlinks the original - so the other library's
-    ``Picture`` rows end up pointing at files that no longer exist. The route
-    only ever checked the active vault's ``image_root``, which is not that
-    library.
+    ``Picture`` rows end up pointing at files that no longer exist. A watch
+    folder *containing* that library reaches the same files (#1223).
     """
+    parent = _mkdir(workspace, "parent-of-watched-second-library")
     other = server.library_registry.create(
-        os.path.join(workspace, "watched-second-library"), "WatchedSecond"
+        os.path.join(parent, "watched-second-library"), "WatchedSecond"
     )
     inside_other = _mkdir(other.path, "photos")
 
@@ -124,65 +124,52 @@ def test_import_folder_refuses_a_folder_inside_another_library(
         client, inside_other, "into-another-library", delete_after_import=True
     )
     assert refused.status_code == 409, refused.text
-    assert "part of your library" in refused.json().get("detail", "")
+    assert "overlaps a library" in refused.json().get("detail", "")
+
+    around = _add_import_folder(client, parent, "around-another-library")
+    assert around.status_code == 409, around.text
+    assert "overlaps a library" in around.json().get("detail", "")
+
+    # The reference-folder routes apply the same rule, both ways round.
+    for folder in (_mkdir(other.path, "ref-photos"), parent):
+        refused = _add_reference_folder(client, folder, "ref-over-another-library")
+        assert refused.status_code == 409, refused.text
+        assert "overlaps a library" in refused.json().get("detail", "")
+    repointable = _mkdir(workspace, "repoint-toward-another-library")
+    added = _add_reference_folder(client, repointable, "repoint-toward")
+    assert added.status_code == 200, added.text
+    repointed = client.patch(
+        f"/reference-folders/{added.json()['id']}",
+        json={"folder": _mkdir(other.path, "repointed")},
+    )
+    assert repointed.status_code == 409, repointed.text
+    assert "overlaps a library" in repointed.json().get("detail", "")
 
     # Positive control: a folder in no library is still accepted, with the same
     # `delete_after_import` flag. Refusing every watch folder would satisfy the
-    # assertion above and break the feature.
+    # assertions above and break the feature.
     free = _mkdir(workspace, "free-watch-folder")
     accepted = _add_import_folder(client, free, "free", delete_after_import=True)
     assert accepted.status_code == 200, accepted.text
     assert accepted.json()["folder"] == free
 
 
-def test_import_folder_refuses_a_folder_inside_a_reference_folder(client, workspace):
-    """A reference folder is scanned in place; a watch folder over it imports
-    and (with ``delete_after_import``) deletes the very files that scan indexes.
-    Neither subsystem knew about the other."""
-    reference = _mkdir(workspace, "reference-for-watch-clash")
-    added = _add_reference_folder(client, reference, "ref-for-watch-clash")
-    assert added.status_code == 200, added.text
-
-    refused = _add_import_folder(
-        client,
-        _mkdir(reference, "incoming"),
-        "over-a-reference-folder",
-        delete_after_import=True,
+def test_watch_and_reference_folders_may_overlap_each_other(client, workspace):
+    """Watch and reference folders may nest inside each other, either way
+    round (#1223): only a library's folder is out of bounds for them."""
+    reference = _mkdir(workspace, "reference-with-watch-inside")
+    assert _add_reference_folder(client, reference, "ref-outer").status_code == 200
+    watch_inside = _add_import_folder(
+        client, _mkdir(reference, "incoming"), "watch-inside-ref"
     )
-    assert refused.status_code == 409, refused.text
-    assert "part of your library" in refused.json().get("detail", "")
+    assert watch_inside.status_code == 200, watch_inside.text
 
-    # Positive control: a sibling of that reference folder, not inside it.
-    sibling = _mkdir(workspace, "reference-for-watch-clash-sibling")
-    accepted = _add_import_folder(client, sibling, "sibling")
-    assert accepted.status_code == 200, accepted.text
-
-
-def test_reference_folder_refuses_a_folder_inside_a_watched_folder(client, workspace):
-    """The mirror of the test above, from the other route.
-
-    ``validate_reference_folder_conflicts`` compares against ``image_root`` and
-    the other reference-folder rows only, so a reference folder laid over a
-    ``delete_after_import`` watch folder was accepted.
-    """
-    watched = _mkdir(workspace, "watched-for-reference-clash")
-    added = _add_import_folder(
-        client, watched, "watched-for-ref-clash", delete_after_import=True
+    watched = _mkdir(workspace, "watch-with-reference-inside")
+    assert _add_import_folder(client, watched, "watch-outer").status_code == 200
+    reference_inside = _add_reference_folder(
+        client, _mkdir(watched, "pictures"), "ref-inside-watch"
     )
-    assert added.status_code == 200, added.text
-
-    refused = _add_reference_folder(
-        client, _mkdir(watched, "pictures"), "over-a-watch-folder"
-    )
-    assert refused.status_code == 409, refused.text
-    assert "part of your library" in refused.json().get("detail", "")
-
-    # Positive control: an ordinary folder is still accepted as a reference
-    # folder in the same environment.
-    free = _mkdir(workspace, "free-reference-folder")
-    accepted = _add_reference_folder(client, free, "free-ref")
-    assert accepted.status_code == 200, accepted.text
-    assert accepted.json()["folder"] == free
+    assert reference_inside.status_code == 200, reference_inside.text
 
 
 def test_relocating_a_reference_folder_into_another_library_is_refused(
@@ -212,7 +199,7 @@ def test_relocating_a_reference_folder_into_another_library_is_refused(
         json={"destination_folder": into_other},
     )
     assert refused.status_code == 409, refused.text
-    assert "part of your library" in refused.json().get("detail", "")
+    assert "overlaps a library" in refused.json().get("detail", "")
     # The refusal must come before the first move, not after some of them.
     assert os.path.isfile(os.path.join(source, "a-file.txt")), (
         "nothing may be moved on a refusal"
@@ -328,38 +315,62 @@ def test_detached_libraries_are_still_in_the_blocklist(server, workspace):
     assert detached.path in library_roots.library_content_roots(server, server.vault)
 
 
-def test_a_reference_commit_refuses_a_folder_inside_a_watched_folder_or_library(
+def test_a_reference_commit_refuses_a_folder_overlapping_a_library(
     client, server, workspace
 ):
     """#1223 item 2: the folder-structure commit registers reference folders
-    through ``register_reference_folder``, not the route, and only ran
-    ``validate_reference_folder_conflicts`` - so it skipped the watch folders
-    and the other registered libraries this module's routes refuse.
+    through ``register_reference_folder``, not the route, and so skipped the
+    route's refusal of a folder overlapping another registered library.
     """
-    watched = _mkdir(workspace, "watched-for-commit-clash")
-    added = _add_import_folder(
-        client, watched, "watched-for-commit-clash", delete_after_import=True
-    )
-    assert added.status_code == 200, added.text
-    with pytest.raises(svc.CommitError, match="part of your library"):
-        svc.register_reference_folder(server, _mkdir(watched, "pictures"))
-
+    parent = _mkdir(workspace, "parent-of-commit-target-library")
     other = server.library_registry.create(
-        os.path.join(workspace, "commit-target-library"), "CommitTarget"
+        os.path.join(parent, "commit-target-library"), "CommitTarget"
     )
-    with pytest.raises(svc.CommitError, match="part of your library"):
+    with pytest.raises(svc.CommitError, match="overlaps a library"):
         svc.register_reference_folder(server, _mkdir(other.path, "photos"))
+    with pytest.raises(svc.CommitError, match="overlaps a library"):
+        svc.register_reference_folder(server, parent)
 
-    # A reference folder's own row is the conflict check's business, not the
-    # blocklist's: registering its path again must not read as "part of your
-    # library", or a resumed commit could never adopt the row it made.
-    existing = _mkdir(workspace, "already-a-reference-folder")
-    assert _add_reference_folder(client, existing, "existing").status_code == 200
-    try:
-        svc.register_reference_folder(server, existing)
-    except svc.CommitError as exc:
-        assert "part of your library" not in str(exc), exc
-
-    # Positive control: a free folder still registers.
+    # Positive controls: inside a watch folder is allowed, as is a free folder.
+    watched = _mkdir(workspace, "watched-for-commit")
+    assert _add_import_folder(client, watched, "watched-for-commit").status_code == 200
+    inside_watch = _mkdir(watched, "pictures")
+    assert svc.register_reference_folder(server, inside_watch).folder == (
+        os.path.realpath(inside_watch)
+    )
     free = _mkdir(workspace, "free-commit-folder")
     assert svc.register_reference_folder(server, free).folder == os.path.realpath(free)
+
+
+def test_a_library_may_not_overlap_a_watch_or_reference_folder(client, workspace):
+    """The reverse rule (#1223): ``POST /libraries`` refuses a library inside,
+    or around, one of this library's watch or reference folders, and the
+    picker's inspection says so before the Add button is offered."""
+    watched = _mkdir(workspace, "watch-holding-a-library")
+    assert _add_import_folder(client, watched, "watch-holding").status_code == 200
+    reference = _mkdir(workspace, "reference-holding-a-library")
+    assert _add_reference_folder(client, reference, "ref-holding").status_code == 200
+
+    around = _mkdir(workspace, "around-a-watch-folder")
+    assert (
+        _add_import_folder(
+            client, _mkdir(around, "incoming"), "watch-in-around"
+        ).status_code
+        == 200
+    )
+
+    for folder in (
+        _mkdir(watched, "library"),
+        _mkdir(reference, "library"),
+        around,
+    ):
+        inspected = client.get("/libraries/inspect", params={"path": folder})
+        assert inspected.status_code == 200, inspected.text
+        assert inspected.json()["can_add"] is False, inspected.json()
+        refused = client.post("/libraries", json={"path": folder})
+        assert refused.status_code == 409, refused.text
+        assert "watch or reference folders" in refused.json().get("detail", "")
+
+    # Positive control: a free folder is still added.
+    free = _mkdir(workspace, "free-library-folder")
+    assert client.post("/libraries", json={"path": free}).status_code == 201

@@ -1488,7 +1488,7 @@ This rule is enforced by **`tests/test_architecture_guardrails.py::test_services
 | [utils/caption_file_utils.py](../pixlstash/utils/caption_file_utils.py) | Sidecar `.txt` caption I/O |
 | [utils/face_tags.py](../pixlstash/utils/face_tags.py) | Face-derived tag helpers |
 | [utils/library_layout.py](../pixlstash/utils/library_layout.py) | The library layout model — `render` / `is_true` (§13) |
-| [utils/library_roots.py](../pixlstash/utils/library_roots.py) | The single list of directories this installation reads or writes as library content, and the refusal every route that writes or moves files into a caller-named folder shares (#1206 item 1) |
+| [utils/library_roots.py](../pixlstash/utils/library_roots.py) | The directories this installation reads or writes as library content, and the two rules that read them: the folder export may write inside none of them (#1206 item 1); a watch or reference folder may overlap another watch or reference folder but not a library's folder, and `POST /libraries` refuses a library overlapping one of the active library's watch or reference folders (#1223) |
 | [utils/path_mapper.py](../pixlstash/utils/path_mapper.py) | Host↔container path translation |
 | [utils/host_path_utils.py](../pixlstash/utils/host_path_utils.py) | Host-aware path resolution |
 | [utils/reference_folder_watcher.py](../pixlstash/utils/reference_folder_watcher.py) | watchdog-based folder monitoring |
@@ -3473,7 +3473,9 @@ refusals, and `can_add` is the only field a client branches on. The order is
 load-bearing: `attached` and `overlaps` are decided before anything else,
 because a folder already covered by a library is covered whatever else it also
 is, and offering to add a vault nested inside one would leave two libraries
-indexing the same pictures.
+indexing the same pictures. `overlaps` also covers a folder inside, or around,
+one of the active library's watch or reference folders (#1223); only the active
+library's are known, since another library's live in its own vault.
 
 **The two routes that take a path resolve it before they validate it.**
 `validate_reference_folder_path` compares against a literal blocklist, so
@@ -6464,11 +6466,10 @@ may not equal, contain, or sit inside `image_root` or any other registered
 reference folder. This path used to check *nothing*, so a root that contained
 `image_root` (the commit route's own guard only refuses one equal to or inside
 it) or that swallowed another reference folder was accepted, and two scan tasks
-then each indexed the same files believing they owned them. Both also apply
-the shared blocklist, `utils.library_roots.refuse_path_inside_a_library`, so a
-root inside a watch folder or another registered library is refused too; this
-path ignores the reference-folder roots there, since the conflict rule above
-owns those, including its own row on a resume.
+then each indexed the same files believing they owned them. Both also call
+`utils.library_roots.refuse_folder_overlapping_a_library`, so a root that
+equals, sits inside or contains another registered library is refused too. A
+root overlapping a watch folder is allowed.
 
 What does still differ is the answer to **an existing row at the same path**.
 `create_reference_folder` 409s outright. `register_reference_folder` reuses one
