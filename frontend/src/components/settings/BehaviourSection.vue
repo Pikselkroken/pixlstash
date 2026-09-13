@@ -329,8 +329,7 @@ watch(
             v-else
             kind="tag"
             :plugins="taggerPlugins"
-            :settings="taggerSettings"
-            @update:settings="(s) => (taggerSettings = s)"
+            v-model:settings="taggerSettings"
           />
         </SettingsFieldBlock>
         <SettingsFieldBlock class="tagger-col" title="Description plugin" top>
@@ -341,8 +340,7 @@ watch(
             v-else
             kind="description"
             :plugins="taggerPlugins"
-            :settings="taggerSettings"
-            @update:settings="(s) => (taggerSettings = s)"
+            v-model:settings="taggerSettings"
           />
         </SettingsFieldBlock>
       </SettingsTwoCol>

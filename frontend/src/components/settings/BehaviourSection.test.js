@@ -110,14 +110,14 @@ describe("BehaviourSection plugin installation help", () => {
 describe("BehaviourSection keeps the plugin tables in sync", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  // `taggerSettings` is a ref, and inside a <script setup> template refs are
-  // auto-unwrapped — so `taggerSettings.value = s` in a template handler sets a
-  // property called "value" ON the settings object instead of replacing the
-  // ref's contents. The parent's copy then never moves.
+  // Both tables bind `v-model:settings`. A hand-written handler here once did
+  // `taggerSettings.value = s`, which in a <script setup> template sets a
+  // property called "value" ON the settings object (refs are auto-unwrapped),
+  // so the parent's copy never moved.
   //
   // Asserted at the prop boundary rather than through a rendered radio:
   // PluginsTable is stubbed in this suite, and what is under test is the
-  // parent's handler, not the child's markup.
+  // parent's binding, not the child's markup.
   it("passes an updated settings object back down to the tables", async () => {
     const { listTaggers } = await import("../../api/taggers");
     listTaggers.mockResolvedValue({
@@ -142,9 +142,9 @@ describe("BehaviourSection keeps the plugin tables in sync", () => {
     expect(after.props("settings")).toEqual({ active_tag_plugin: null });
   });
 
-  // The description table has its own copy of the same handler, and the bug
-  // was in both. Reverting only that one left the suite green, so it needs its
-  // own assertion rather than riding on the tag table's.
+  // The description table has its own binding, and the bug was once in both.
+  // Breaking only that one would leave the tag test green, so it needs its own
+  // assertion rather than riding on the tag table's.
   it("does the same for the description table's handler", async () => {
     const { listTaggers } = await import("../../api/taggers");
     listTaggers.mockResolvedValue({
