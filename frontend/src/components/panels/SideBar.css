@@ -128,13 +128,15 @@
   }
 }
 
+/* Olive marks, words stay text: the underline is the selection, the label ink. */
 .sidebar-view-tab.active {
   background: transparent;
-  color: rgb(var(--v-theme-accent));
-  border-bottom-color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-sidebar-text));
+  border-bottom-color: var(--selected-ink);
 }
 
-.sidebar-view-tab:hover:not(.active) {
+.sidebar-view-tab:hover {
+  background: var(--hover-wash);
   color: rgb(var(--v-theme-sidebar-text));
 }
 
@@ -219,7 +221,7 @@
 
 .sidebar-project-tree-add:hover {
   color: rgb(var(--v-theme-sidebar-text));
-  background: rgba(var(--v-theme-accent), 0.08);
+  background: var(--hover-wash);
 }
 
 .sidebar-project-tree-node {
@@ -251,9 +253,7 @@
 }
 
 .sidebar-project-tree-row:hover {
-  background:
-    linear-gradient(var(--hover-wash), var(--hover-wash)),
-    rgba(var(--v-theme-sidebar-text), 0.05);
+  background: var(--hover-wash);
   color: rgb(var(--v-theme-sidebar-text));
 }
 
@@ -267,7 +267,6 @@
 /* Drop-target highlight (drag pictures onto a project to assign them) -
    mirrors .sidebar-list-item.droppable used by character/set rows. */
 .sidebar-project-tree-row.droppable {
-  filter: brightness(1.2);
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
 }
@@ -281,8 +280,8 @@
 /* Drop-target highlight while dragging a character/set onto a project */
 .sidebar-project-tree-row.project-move-target,
 .sidebar-project-tree-subsection.project-move-target {
-  background: rgba(var(--v-theme-primary), 0.22);
-  outline: 2px dashed rgb(var(--v-theme-primary));
+  background: var(--active-wash);
+  outline: 2px dashed var(--active-bar);
   outline-offset: -2px;
   border-radius: var(--radius-sm);
 }
@@ -406,7 +405,7 @@
 }
 
 .sidebar-project-tree-subheader:hover {
-  background: rgba(var(--v-theme-accent), 0.08);
+  background: var(--hover-wash);
   color: rgb(var(--v-theme-sidebar-text));
 }
 
@@ -485,10 +484,10 @@
    it with padding the base already carried, moving the label 3px on select. */
 .sidebar-collapsed-project-menu .sidebar-project-menu-item.active,
 .sidebar-collapsed-project-submenu .sidebar-project-menu-item.active {
-  background: rgba(var(--v-theme-primary), 0.18);
-  color: rgb(var(--v-theme-on-primary));
+  background: var(--active-wash);
+  color: var(--active-text);
   font-weight: 600;
-  border-left-color: rgb(var(--v-theme-primary));
+  border-left-color: var(--active-bar);
 }
 
 .sidebar-collapsed-project-submenu {
@@ -515,7 +514,7 @@
 }
 
 .sidebar-project-menu-has-sub.sub-open {
-  background: rgba(var(--v-theme-accent), 0.06);
+  background: var(--hover-wash);
 }
 
 .sidebar-project-menu-chevron {
@@ -597,12 +596,17 @@
 }
 
 .sidebar-collapsed-flyout-item:hover {
-  background: rgba(var(--v-theme-tertiary), 0.25);
+  background: var(--hover-wash);
 }
 
 .sidebar-collapsed-flyout-item.active {
-  background: rgba(var(--v-theme-primary), 0.15);
-  color: rgb(var(--v-theme-on-primary));
+  background: var(--active-wash);
+  color: var(--active-text);
+}
+
+.sidebar-collapsed-flyout-item.active:hover {
+  background:
+    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
 }
 
 .sidebar-collapsed-flyout-thumb {
@@ -645,7 +649,7 @@
 
 .sidebar-collapsed-flyout-item-actions .v-icon:hover {
   opacity: 1;
-  background: rgba(var(--v-theme-tertiary), 0.35);
+  background: var(--hover-wash);
 }
 
 .sidebar-project-menu-section-label {
@@ -657,11 +661,11 @@
   color: rgb(var(--v-theme-sidebar-text));
 }
 
-/* The project menu's background is a 38% `tertiary` TINT over `sidebar`, not a
-   solid `tertiary` fill, so `on-tertiary` is the wrong foreground here: an
-   `on-<x>` token is authored against a solid, full-opacity `<x>` fill and is
-   simply a different colour on a tint (measured 1.43-1.70:1 in light). On a
-   tint the foreground is the surface's own. See design-system-handoff.md §9.2. */
+/* An `on-<x>` token is authored against a solid, full-opacity `<x>` fill and is
+   a different colour on a tint (`on-tertiary` on the old 30% tertiary selection
+   measured 1.35:1 in light). On a wash the foreground is the surface's own ink,
+   so selection here is `--active-wash` + `--active-text`, like every row. See
+   design-system-handoff.md §9.2. */
 .sidebar-project-menu-item {
   display: flex;
   align-items: center;
@@ -685,14 +689,20 @@
 }
 
 .sidebar-project-menu-item:hover {
-  background: rgba(var(--v-theme-accent), 0.08);
+  background: var(--hover-wash);
   color: rgb(var(--v-theme-on-surface));
 }
 
 .sidebar-project-menu-item.active {
-  background: rgba(var(--v-theme-tertiary), 0.3);
-  color: rgb(var(--v-theme-on-surface));
+  background: var(--active-wash);
+  color: var(--active-text);
+  border-left-color: var(--active-bar);
   font-weight: 600;
+}
+
+.sidebar-project-menu-item.active:hover {
+  background:
+    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
 }
 
 .sidebar-project-menu-item-label {
@@ -719,7 +729,7 @@
 }
 
 .sidebar-project-menu-add:hover {
-  background: rgba(var(--v-theme-accent), 0.08);
+  background: var(--hover-wash);
   color: rgb(var(--v-theme-on-surface));
 }
 
@@ -776,9 +786,13 @@
   touch-action: none;
   transition: background 0.15s ease;
 }
-.sidebar-resize-handle:hover,
+.sidebar-resize-handle:hover {
+  background: var(--hover-wash);
+}
+
+/* Flush against the rail's clipped edge, so the ring is drawn inset. */
 .sidebar-resize-handle:focus-visible {
-  background: rgba(var(--v-theme-accent), 0.4);
+  box-shadow: var(--focus-ring-inset);
   outline: none;
 }
 
@@ -862,7 +876,6 @@
   display: flex;
   align-items: center;
   border-radius: var(--radius-md);
-  outline: none;
 }
 
 .sidebar-brand-logo-link:hover .sidebar-brand-logo {
@@ -971,7 +984,7 @@
   width: 3px;
   height: 60%;
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: rgb(var(--v-theme-primary));
+  background: var(--active-bar);
   transition: transform 0.18s ease;
   pointer-events: none;
   z-index: 1;
@@ -1074,14 +1087,6 @@
   height: calc(var(--sidebar-thumb-size) * 0.42) !important;
 }
 
-.sidebar-collapsed-item--add:hover {
-  background: rgba(var(--v-theme-primary), 0.18) !important;
-  border-color: rgba(var(--v-theme-primary), 0.5) !important;
-  color: rgb(var(--v-theme-primary)) !important;
-  filter: none !important;
-  box-shadow: none !important;
-}
-
 .sidebar-collapsed-item.droppable {
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
@@ -1089,9 +1094,7 @@
 }
 
 .sidebar-collapsed-item:hover {
-  filter: brightness(1.03);
-  background-color: rgba(var(--v-theme-accent), 0.18);
-  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-accent), 0.22);
+  background-color: var(--hover-wash);
 }
 
 .sidebar-collapsed-item--has-flyout {
@@ -1147,20 +1150,8 @@
   cursor: pointer;
 }
 
-.sidebar-section-toggle:focus-visible,
-.sidebar-list-item:focus-visible,
-.sidebar-collapsed-item:focus-visible,
-.sidebar-collapsed-flyout-item:focus-visible,
-.sidebar-project-menu-item:focus-visible,
-.sidebar-header-actions button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  position: relative;
-  z-index: 1;
-}
-
 .sidebar-section-header--collapsible:hover {
-  background: rgba(var(--v-theme-accent), 0.08);
+  background: var(--hover-wash);
   color: rgb(var(--v-theme-sidebar-text));
 }
 
@@ -1201,13 +1192,16 @@
   border-bottom: 0;
 }
 
-/* Inset, not the token's outer ring: these rows run edge to edge in the
-   sidebar, so an outer 3px stroke is clipped on both sides. Same colour, same
-   width - `inset var(--focus-ring)` expands to `inset 0 0 0 3px accent`. */
+/* Inset, not the global outline: these rows run edge to edge in the sidebar or
+   a menu, so an outer ring with its gap is clipped on both sides. Everything
+   else here (the dock's icons, header actions) takes the global ring. */
+.sidebar-section-toggle:focus-visible,
 .sidebar-list-item:focus-visible,
-.sidebar-collapsed-item:focus-visible {
+.sidebar-collapsed-flyout-item:focus-visible,
+.sidebar-project-menu-item:focus-visible,
+.sidebar-ctx-item:focus-visible {
+  box-shadow: var(--focus-ring-inset);
   outline: none;
-  box-shadow: inset var(--focus-ring);
 }
 
 .sidebar-scroll {
@@ -1351,7 +1345,6 @@
 }
 
 .sidebar-list-item.droppable {
-  filter: brightness(1.2);
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
 }
@@ -1551,10 +1544,6 @@
   transform: scale(1.04);
 }
 
-.sidebar-list-item:hover .sidebar-character-thumb {
-  border-color: rgba(var(--v-theme-accent), 0.6);
-}
-
 .sidebar-collapsed-item {
   position: relative;
   overflow: hidden;
@@ -1705,6 +1694,11 @@
   pointer-events: none;
 }
 
+/* No olive glyph on the olive selection wash. */
+.sidebar-list-item.active .sidebar-shared-icon {
+  color: var(--active-text);
+}
+
 .sidebar-lock-icon {
   color: rgba(var(--v-theme-on-surface), 0.55);
   flex-shrink: 0;
@@ -1753,12 +1747,11 @@
 }
 
 .add-character-inline:hover {
-  background: rgba(var(--v-theme-accent), 0.85);
-  color: rgb(var(--v-theme-on-primary)) !important;
+  background: var(--hover-wash);
 }
 
 .clear-selection-inline {
-  color: rgb(var(--v-theme-primary)) !important;
+  color: rgb(var(--v-theme-sidebar-text)) !important;
   font-size: var(--text-base);
   cursor: pointer;
   background: transparent;
@@ -1775,7 +1768,7 @@
 }
 
 .clear-selection-inline:hover {
-  background: rgba(var(--v-theme-primary), 0.15);
+  background: var(--hover-wash);
 }
 
 .edit-character-inline,
@@ -1800,8 +1793,7 @@
 
 .edit-character-inline:hover,
 .edit-set-inline:hover {
-  background: rgba(var(--v-theme-primary), 0.15);
-  color: rgb(var(--v-theme-primary)) !important;
+  background: var(--hover-wash);
 }
 
 .delete-character-inline {
@@ -1963,12 +1955,7 @@
 }
 
 .sidebar-folder-section-header:hover {
-  background:
-    linear-gradient(
-      rgba(var(--v-theme-accent), 0.08),
-      rgba(var(--v-theme-accent), 0.08)
-    ),
-    rgba(var(--v-theme-sidebar-text), 0.05);
+  background: var(--hover-wash);
   color: rgb(var(--v-theme-sidebar-text));
 }
 
@@ -1998,7 +1985,6 @@
 
 .sidebar-folder-section-edit-btn:hover {
   opacity: 1;
-  color: rgb(var(--v-theme-primary));
 }
 
 .sidebar-folder-root {
@@ -2037,13 +2023,13 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: inherit;
   opacity: 0.72;
 }
 
 .sidebar-folder-action-btn:hover {
-  background: rgba(var(--v-theme-accent), 0.18);
+  background: var(--hover-wash);
   opacity: 1;
 }
 
@@ -2131,7 +2117,7 @@
 }
 
 .sidebar-ctx-item:hover {
-  background: rgba(var(--v-theme-on-surface), 0.08);
+  background: var(--hover-wash);
 }
 
 .sidebar-ctx-item--danger {
@@ -2234,12 +2220,12 @@ button.sidebar-ctx-item:disabled:hover {
 }
 
 .sidebar-ctx-icon-btn--cards-large:hover {
-  background: rgba(var(--v-theme-on-surface), 0.08);
+  background: var(--hover-wash);
 }
 
 .sidebar-ctx-icon-btn--cards-large.selected {
-  border-color: rgba(var(--v-theme-on-surface), 0.65);
-  background: rgba(var(--v-theme-on-surface), 0.1);
+  border-color: var(--active-bar);
+  background: var(--active-wash);
 }
 
 .sidebar-ctx-icon-grid {
@@ -2281,12 +2267,12 @@ button.sidebar-ctx-item:disabled:hover {
 }
 
 .sidebar-ctx-icon-btn:hover {
-  background: rgba(var(--v-theme-on-surface), 0.08);
+  background: var(--hover-wash);
 }
 
 .sidebar-ctx-icon-btn.selected {
-  border-color: rgba(var(--v-theme-on-surface), 0.65);
-  background: rgba(var(--v-theme-on-surface), 0.1);
+  border-color: var(--active-bar);
+  background: var(--active-wash);
 }
 
 .sidebar-ctx-color-section-header {
@@ -2312,7 +2298,6 @@ button.sidebar-ctx-item:disabled:hover {
   height: 26px;
   border-radius: var(--radius-md);
   border: 2px solid transparent;
-  outline: none;
   padding: 0;
   box-sizing: border-box;
   aspect-ratio: 1 / 1;
@@ -2378,8 +2363,7 @@ button.sidebar-ctx-item:disabled:hover {
 }
 
 .folder-type-option:hover {
-  border-color: rgba(var(--v-theme-primary), 0.6);
-  background: rgba(var(--v-theme-primary), 0.08);
+  background: var(--hover-wash);
 }
 
 .folder-type-option-text {

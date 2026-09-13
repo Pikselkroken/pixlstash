@@ -431,14 +431,10 @@ watch(dialogOpen, (isOpen) => {
   border-color: rgba(var(--v-theme-primary), 0.5);
 }
 
-.import-project-select :deep(.v-field--focused .v-field__outline__start),
-.import-project-select :deep(.v-field--focused .v-field__outline__notch),
-.import-project-select :deep(.v-field--focused .v-field__outline__end) {
-  border-color: rgb(var(--v-theme-primary));
-}
-
+/* The project reads as chosen: olive in the wash and the edge, ink in the words
+   and the chevron, never olive on olive. Focus is the global ring. */
 .import-project-select :deep(.v-field__input) {
-  color: rgb(var(--v-theme-primary));
+  color: var(--active-text);
   font-weight: var(--weight-semibold);
   font-size: var(--text-md);
   min-height: unset;
@@ -447,7 +443,7 @@ watch(dialogOpen, (isOpen) => {
 }
 
 .import-project-select :deep(.v-field) {
-  background: rgba(var(--v-theme-primary), 0.1);
+  background: var(--active-wash);
   border-radius: var(--radius-md);
 }
 
@@ -458,12 +454,12 @@ watch(dialogOpen, (isOpen) => {
 }
 
 .import-project-select :deep(.v-select__selection-text) {
-  color: rgb(var(--v-theme-primary));
+  color: var(--active-text);
   font-weight: var(--weight-semibold);
 }
 
 .import-project-select :deep(.v-field__append-inner .v-icon) {
-  color: rgb(var(--v-theme-primary));
+  color: var(--active-text);
   opacity: 0.8;
 }
 
@@ -531,8 +527,8 @@ watch(dialogOpen, (isOpen) => {
 }
 
 .local-import-dropzone.is-dragging {
-  border-color: rgba(var(--v-theme-primary), 0.7);
-  background: rgba(var(--v-theme-primary), 0.08);
+  border-color: var(--active-bar);
+  background: var(--active-wash);
 }
 
 .local-import-dropzone-text {

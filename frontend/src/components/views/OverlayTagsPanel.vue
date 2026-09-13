@@ -1038,7 +1038,7 @@ defineExpose({
 }
 
 .section-header--collapsible:hover {
-  opacity: 0.85;
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .section-header {
@@ -1066,6 +1066,10 @@ defineExpose({
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+.section-meta-btn:hover:not(:disabled) {
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .section-meta-btn:disabled {
@@ -1248,7 +1252,7 @@ defineExpose({
 
 .tag-drop-zone--active {
   border-color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 
 /* Secondary list: cap it so a long rejection set cannot push Metadata out of
@@ -1273,14 +1277,14 @@ defineExpose({
 .tag-delete-btn {
   margin: 0;
   padding: var(--space-1);
-  color: rgb(var(--v-theme-primary));
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
   font-size: 0.8em; /* relative em scale, not absolute px; no token */
   line-height: 1;
   vertical-align: middle;
 }
 
 .tag-delete-btn:hover {
-  color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .tag-add-input {
@@ -1317,9 +1321,14 @@ defineExpose({
   text-overflow: ellipsis;
 }
 
-.tag-autocomplete-dropdown--hover-enabled .tag-autocomplete-item:hover,
+/* The dropdown is dark in both themes: hover is the dark-surface ink wash, the
+   highlighted suggestion the dark-surface olive. */
+.tag-autocomplete-dropdown--hover-enabled .tag-autocomplete-item:hover {
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+}
+
 .tag-autocomplete-item--active {
-  background: rgba(var(--v-theme-primary), 0.22);
+  background: rgba(var(--v-theme-dark-surface-primary), 0.2);
   color: rgb(var(--v-theme-on-dark-surface));
 }
 

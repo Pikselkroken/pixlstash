@@ -156,7 +156,7 @@ const MAX_THUMB_RATIO = 2.4;
  * @property {string} [title] - the tooltip: the gesture, and the key when the
  *   row is focused.
  * @property {boolean} [pressed] - `aria-pressed`, when the tile is a toggle.
- * @property {boolean} [cover] - draws the accent border.
+ * @property {boolean} [cover] - draws the selection (olive) border.
  * @property {boolean} [marked] - draws the warning border: this tile is
  *   evidence the row's primary button is about to act on.
  * @property {boolean} [out] - left out of the stack; the IMAGE fades.
@@ -330,7 +330,7 @@ watch(
 }
 
 /* The member cursor: a RAIL, not a ring.
-   The tile's border already carries two meanings (accent = cover, warning =
+   The tile's border already carries two meanings (olive = cover, warning =
    marked as a stranger) and a third would be a third colour on one edge nobody
    could read. The rail sits outside the tile's box entirely, so it composes
    with either border instead of competing with it. */
@@ -362,7 +362,7 @@ watch(
 }
 
 .gthumb--cover {
-  border-color: rgb(var(--v-theme-accent));
+  border-color: var(--active-bar);
 }
 
 /* Marked as a stranger: the tile the primary button is about to move out.

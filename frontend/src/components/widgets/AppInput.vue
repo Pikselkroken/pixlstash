@@ -1,7 +1,7 @@
 <template>
   <label class="app-input">
     <FieldLabel v-if="label">{{ label }}</FieldLabel>
-    <div class="app-input__wrap" :class="{ 'app-input__wrap--focus': focused }">
+    <div class="app-input__wrap">
       <v-icon v-if="icon" size="18" class="app-input__icon"
         >mdi-{{ icon }}</v-icon
       >
@@ -13,11 +13,7 @@
         :placeholder="placeholder"
         :disabled="disabled"
         @input="emit('update:modelValue', $event.target.value)"
-        @focus="focused = true"
-        @blur="
-          focused = false;
-          emit('blur');
-        "
+        @blur="emit('blur')"
         @keydown.enter="emit('enter')"
       />
     </div>
@@ -40,7 +36,6 @@ defineProps({
 
 const emit = defineEmits(["update:modelValue", "enter", "blur"]);
 
-const focused = ref(false);
 const inputRef = ref(null);
 
 defineExpose({
@@ -63,11 +58,13 @@ defineExpose({
   border-radius: var(--radius-md);
   padding: 0 var(--space-3);
   height: 27px;
-  transition: border-color var(--dur-1) var(--ease-standard);
 }
 
-.app-input__wrap--focus {
-  border-color: rgb(var(--v-theme-accent));
+/* The field inside is borderless and outline-free, so the wrap draws the
+   global ink ring for it. */
+.app-input__wrap:has(.app-input__field:focus-visible) {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
 }
 
 .app-input__icon {

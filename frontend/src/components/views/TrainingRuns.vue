@@ -839,17 +839,19 @@ function batchReceipt(imported, failed) {
   border-color: rgb(var(--v-theme-border));
 }
 
+/* The global ink outline, drawn inside the card: the grid is the scroll
+   container, so an outside ring on the first row would be clipped. An outline
+   rather than the inset shadow, so it cannot fight the checked rail. */
 .tr-card:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
+  outline-offset: calc(var(--focus-width) * -1);
 }
 
 /* The shelf row's own recipe, verbatim: a `--rail-w` rail down the left edge.
    The same object, which is the strongest cue that these are two views of one
    shelf - and it survives desaturation, which a wash alone does not. */
 .tr-card--checked {
-  border-color: rgb(var(--v-theme-primary));
-  box-shadow: inset var(--rail-w) 0 0 rgb(var(--v-theme-primary));
+  border-color: var(--active-bar);
+  box-shadow: inset var(--rail-w) 0 0 var(--active-bar);
 }
 
 .tr-card-shot {
@@ -904,8 +906,8 @@ function batchReceipt(imported, failed) {
 }
 
 .tr-card--checked .tr-card-check {
-  background: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
   opacity: 1;
 }
 
@@ -921,7 +923,7 @@ function batchReceipt(imported, failed) {
    being judged. (The photo grid does wash its whole tile - legal there, because
    the user already knows the photo.) */
 .tr-card--checked .tr-card-body {
-  background: rgba(var(--v-theme-primary), 0.12);
+  background: var(--active-wash);
 }
 
 .tr-card-name {

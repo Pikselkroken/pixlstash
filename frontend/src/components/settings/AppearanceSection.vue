@@ -293,14 +293,14 @@ async function clearGuestSession() {
     <div class="appearance-switch-row">
       <v-switch
         v-model="sidebarAutoHideModel"
-        color="accent"
+        color="primary"
         density="compact"
         hide-details
         label="Auto hide sidebar"
       />
       <v-switch
         v-model="showKeyboardHintModel"
-        color="accent"
+        color="primary"
         density="compact"
         hide-details
         label="Show keyboard shortcut indicator"
@@ -358,7 +358,7 @@ async function clearGuestSession() {
 }
 
 /* Thumbnail-layout radiogroup: a two-option segmented control mirroring the
-   Sidebar Width toggle's token treatment (accent border + wash when active),
+   Sidebar Width toggle's token treatment (olive edge + wash when active),
    built as a real radiogroup for keyboard/AT. */
 .thumb-layout-row {
   display: flex;
@@ -397,7 +397,7 @@ async function clearGuestSession() {
   font-weight: var(--weight-semibold);
 }
 /* Mini layout illustration: an even grid (square) vs uneven justified rows.
-   currentColor → accent when the option is active (mirrors the Sidebar Width .swi). */
+   currentColor, so it follows the option's ink (mirrors the Sidebar Width .swi). */
 .tli {
   width: 64px;
   height: 40px;
@@ -450,12 +450,12 @@ async function clearGuestSession() {
   flex: 2;
 }
 .thumb-layout-opt:hover {
-  background: rgba(var(--v-theme-on-surface), 0.08);
+  background: var(--hover-wash);
 }
 .thumb-layout-opt.active {
-  border-color: rgb(var(--v-theme-accent));
-  background: rgba(var(--v-theme-accent), 0.1);
-  color: rgb(var(--v-theme-accent));
+  border-color: var(--active-bar);
+  background: var(--active-wash);
+  color: var(--active-text);
 }
 .thumb-layout-opt.disabled,
 .thumb-layout-opt:disabled {
@@ -496,16 +496,16 @@ async function clearGuestSession() {
     color 0.12s;
 }
 .sidebar-width-opt:hover {
-  background: rgba(var(--v-theme-on-surface), 0.08);
+  background: var(--hover-wash);
 }
 .sidebar-width-opt.active {
-  border-color: rgb(var(--v-theme-accent));
-  background: rgba(var(--v-theme-accent), 0.1);
-  color: rgb(var(--v-theme-accent));
+  border-color: var(--active-bar);
+  background: var(--active-wash);
+  color: var(--active-text);
 }
 /* Mini layout illustration: a window frame with a filled left rail (wide for
-   full, narrow for dock) over a dotted content area. currentColor → accent when
-   the option is active. */
+   full, narrow for dock) over a dotted content area. currentColor, so it follows
+   the option's ink: no olive glyph on the olive selection wash. */
 .swi {
   display: flex;
   width: 64px;

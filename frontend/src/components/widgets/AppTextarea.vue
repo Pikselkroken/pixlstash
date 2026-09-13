@@ -3,20 +3,16 @@
     <FieldLabel v-if="label">{{ label }}</FieldLabel>
     <textarea
       class="app-textarea__field"
-      :class="{ 'app-textarea__field--focus': focused }"
       :value="modelValue"
       :placeholder="placeholder"
       :rows="rows"
       :disabled="disabled"
       @input="emit('update:modelValue', $event.target.value)"
-      @focus="focused = true"
-      @blur="focused = false"
     />
   </label>
 </template>
 
 <script setup>
-import { ref } from "vue";
 import FieldLabel from "./FieldLabel.vue";
 
 defineProps({
@@ -28,7 +24,6 @@ defineProps({
 });
 
 const emit = defineEmits(["update:modelValue"]);
-const focused = ref(false);
 </script>
 
 <style scoped>
@@ -47,12 +42,6 @@ const focused = ref(false);
   font-size: var(--text-base);
   line-height: var(--leading-snug);
   padding: var(--space-2) var(--space-3);
-  outline: none;
-  transition: border-color var(--dur-1) var(--ease-standard);
-}
-
-.app-textarea__field--focus {
-  border-color: rgb(var(--v-theme-accent));
 }
 
 .app-textarea__field::placeholder {

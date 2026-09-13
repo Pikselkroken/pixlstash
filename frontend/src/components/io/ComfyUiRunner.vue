@@ -1080,9 +1080,16 @@ defineExpose({
     background 0.15s;
 }
 
+/* On the red card an error-hued hover vanished; step the card's own ink wash
+   up instead, as ProgressOverlay's failed card does. */
 .comfyui-abort-btn:hover:not(:disabled) {
   opacity: 1;
-  background: rgba(var(--v-theme-error), 0.7);
+  background: rgba(var(--v-theme-on-dark-surface), 0.28);
+}
+
+/* Dark (or red) in both themes: the global ring's width and gap, this ink. */
+.comfyui-abort-btn:focus-visible {
+  outline-color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .comfyui-abort-btn:disabled {

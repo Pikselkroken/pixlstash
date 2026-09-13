@@ -1309,7 +1309,13 @@ async function copyToClipboard(value, successMessage) {
 }
 
 .editor-sync-header:hover {
-  background: rgba(var(--v-theme-primary), 0.1);
+  background: var(--hover-wash);
+}
+
+/* Flush inside a section that clips its overflow: the ring goes inside. */
+.editor-sync-header:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-inset);
 }
 
 .editor-sync-summary {

@@ -2321,7 +2321,7 @@ undo by accident:
 - **The name is a field, and the affordance is not hover-only.** The dashed rule
   and the pencil appear on `.shelf-row:hover` **and** `:focus-within`, or a
   keyboard reader would have no sign the name is editable. Editing happens
-  **inline** — a bordered input with `--focus-ring`, committed on Enter or on
+  **inline** — a bordered input with the focus ring, committed on Enter or on
   blur, abandoned on Escape, writing through `store.editModelIds(ids, changes)`
   (the selection-free half of `editSelected`) and taking a stack cover's whole
   run, since the members share one name. The keyboard path is **F2 on the row**
@@ -2395,7 +2395,7 @@ shared and cached, never a lookup per attachment.
   37 dots and reads as a faded solid ring.
 - **The ring is a pseudo-element with a 2px gap**, never a border (which would
   push the picture in and make an assigned mark a different size from an
-  unassigned one) and never an outline (which would fight `--focus-ring`). The
+  unassigned one) and never an outline (which would fight the focus ring). The
   gap is doing the real work: a ring drawn against an arbitrary thumbnail is one
   contrast problem per image, and detached, its inner edge sits on the row
   background — a known colour in both themes. That is also why `ModelMark` is

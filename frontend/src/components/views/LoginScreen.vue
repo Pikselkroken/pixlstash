@@ -220,12 +220,18 @@ const { pending: submitting, run: handleLogin } = useSubmitGuard(submitLogin);
   font-size: var(--text-lg);
   line-height: 1;
   padding: var(--space-2);
+  border-radius: var(--radius-sm);
 }
 
-.password-toggle:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: var(--radius-sm);
+.password-toggle:hover {
+  color: rgb(var(--v-theme-on-dark-surface));
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+}
+
+/* Dark in both themes, so the global ink ring (the theme's `on-surface`) would be
+   dark-on-dark in the light theme: keep its width and gap, take this ground's ink. */
+.login-screen :focus-visible {
+  outline-color: rgb(var(--v-theme-on-dark-surface));
 }
 
 form {
@@ -244,8 +250,12 @@ form {
   padding: var(--space-3);
   font-size: var(--text-md);
   border-radius: var(--radius-sm);
-  background-color: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
+  background-color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-accent));
+}
+
+.login-button:not(:disabled):hover {
+  background-image: var(--hover-shade);
 }
 
 /* Pending is not disabled: the login button only ever goes disabled because a

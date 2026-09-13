@@ -258,8 +258,18 @@ const announcement = computed(() => {
   color: rgb(var(--v-theme-on-error));
 }
 
-.progress-overlay--error .progress-overlay__abort:not(:disabled):hover {
-  background: rgba(var(--v-theme-on-error), 0.28);
-  filter: none;
+/* AppButton's filled hover is a `--hover-shade` background-image; darkening a
+   translucent ink wash on red reads as nothing, so this one steps the wash up
+   instead. The selector repeats AppButton's `:not()` pair so it outranks the
+   shade rather than tying with it on source order. */
+.progress-overlay--error
+  .progress-overlay__abort:not(:disabled):not([aria-disabled="true"]):hover {
+  background-color: rgba(var(--v-theme-on-error), 0.28);
+  background-image: none;
+}
+
+/* Dark (or red) in both themes: the global ring's width and gap, this ground's ink. */
+.progress-overlay :focus-visible {
+  outline-color: rgb(var(--v-theme-on-dark-surface));
 }
 </style>

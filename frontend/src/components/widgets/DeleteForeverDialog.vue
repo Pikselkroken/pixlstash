@@ -372,10 +372,4 @@ function confirmDeleteUnprotected() {
   padding: var(--space-2) var(--space-3);
   letter-spacing: 0.08em;
 }
-
-.type-confirm-input:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  border-color: rgba(var(--v-theme-accent), 0.55);
-}
 </style>

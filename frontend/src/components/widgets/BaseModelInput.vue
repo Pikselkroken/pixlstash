@@ -306,9 +306,22 @@ defineExpose({
   text-overflow: ellipsis;
 }
 
-.bmi-item:hover,
+.bmi-item:hover {
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+}
+
+/* The keyboard's current option is a selection on a dark menu: the dark-surface
+   olive wash. Hover layers over it rather than replacing it. */
 .bmi-item--active {
-  background: rgba(var(--v-theme-primary), 0.22);
+  background: rgba(var(--v-theme-dark-surface-primary), 0.2);
+}
+
+.bmi-item--active:hover {
+  background: linear-gradient(
+      rgba(var(--v-theme-on-dark-surface), 0.16),
+      rgba(var(--v-theme-on-dark-surface), 0.16)
+    )
+    rgba(var(--v-theme-dark-surface-primary), 0.2);
 }
 
 .bmi-hint {

@@ -614,7 +614,9 @@ onMounted(() => {
   padding: var(--space-2) var(--space-4);
   border-left: 3px solid rgb(var(--v-theme-accent));
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: var(--hover-wash);
+  /* A resting callout tint, not a hover: it borrowed the hover token back when
+     that was amber at 0.14, and keeps that look. */
+  background: rgba(var(--v-theme-accent), 0.14);
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-background), 0.7);
 }

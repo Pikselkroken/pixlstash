@@ -276,7 +276,7 @@ watch(
     >
       <v-switch
         v-model="keepModelsInMemory"
-        color="accent"
+        color="primary"
         density="compact"
         hide-details
         :disabled="keepModelsInMemoryLoading"
@@ -299,7 +299,7 @@ watch(
             :step="VRAM_BUDGET_STEP_GB"
             hide-details
             density="compact"
-            color="accent"
+            color="primary"
             track-color="rgba(var(--v-theme-on-surface), 0.2)"
             :disabled="maxVramGbLoading || maxVramGbHydrating"
           />
@@ -546,17 +546,12 @@ watch(
   font-weight: var(--weight-medium);
   text-decoration: underline;
   text-underline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .plugin-catalogue-link:hover,
 .plugin-catalogue-link:active {
   text-decoration-thickness: 2px;
-}
-
-.plugin-catalogue-link:focus-visible {
-  border-radius: var(--radius-sm);
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .plugin-install-commands {

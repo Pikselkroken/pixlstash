@@ -631,7 +631,7 @@ const canRestore = computed(
 }
 
 .restore-picker-row:hover {
-  background: rgba(var(--v-theme-primary), 0.07);
+  background: var(--hover-wash);
 }
 
 .restore-picker-row--disabled {

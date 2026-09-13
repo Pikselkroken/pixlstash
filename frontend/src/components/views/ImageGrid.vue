@@ -359,14 +359,14 @@
         }}
       </span>
       <span class="multi-select-toolbar__spacer"></span>
-      <button
+      <AppBarButton
         class="multi-select-toolbar__clear"
+        icon="selection-off"
         title="Clear selection"
         @click="emit('clear-multi-selection')"
       >
-        <v-icon size="16">mdi-selection-off</v-icon>
         Deselect All
-      </button>
+      </AppBarButton>
     </div>
     <ProgressOverlay
       :visible="exportProgress.visible"
@@ -447,13 +447,14 @@
         "
         class="pending-imports-pill-anchor"
       >
-        <button
+        <AppButton
           v-if="wsStore.pendingExternalImportCount > 0"
           class="pending-imports-pill"
+          variant="primary"
+          icon-left="image-plus-outline"
           data-testid="pending-imports-pill"
           @click="emit('load-pending-imports')"
         >
-          <v-icon :size="16" aria-hidden="true">mdi-image-plus-outline</v-icon>
           {{ wsStore.pendingExternalImportCount }}
           {{
             wsStore.pendingExternalImportCount === 1
@@ -461,16 +462,17 @@
               : "new pictures"
           }}
           - Load
-        </button>
-        <button
+        </AppButton>
+        <AppButton
           v-if="wsStore.sortChangedExternalCount > 0"
           class="pending-imports-pill"
+          variant="primary"
+          icon-left="refresh"
           data-testid="sort-changed-pill"
           @click="emit('load-sort-changed')"
         >
-          <v-icon :size="16" aria-hidden="true">mdi-refresh</v-icon>
           View changed externally - Refresh
-        </button>
+        </AppButton>
       </div>
       <div v-if="dragOverlayVisible" class="drag-overlay">
         <div class="drag-overlay-message">{{ dragOverlayMessage }}</div>
@@ -1220,6 +1222,7 @@ import Toolbar from "../panels/Toolbar.vue";
 import SelectionBar from "../panels/SelectionBar.vue";
 import GridActionPill from "../panels/GridActionPill.vue";
 import ActionReceipt from "../widgets/ActionReceipt.vue";
+import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
 import SearchResultBar from "../widgets/SearchResultBar.vue";

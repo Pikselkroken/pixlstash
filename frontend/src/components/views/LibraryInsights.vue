@@ -325,7 +325,9 @@ onMounted(load);
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-md);
-  background: var(--hover-wash);
+  /* A resting callout tint, not a hover: it borrowed the hover token back when
+     that was amber at 0.14, and keeps that look. */
+  background: rgba(var(--v-theme-accent), 0.14);
   color: rgb(var(--v-theme-accent));
 }
 
@@ -386,7 +388,9 @@ onMounted(load);
   padding: var(--space-3) var(--space-5);
   border-left: 3px solid rgb(var(--v-theme-accent));
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: var(--hover-wash);
+  /* A resting callout tint, not a hover: it borrowed the hover token back when
+     that was amber at 0.14, and keeps that look. */
+  background: rgba(var(--v-theme-accent), 0.14);
   font-size: var(--text-sm);
   line-height: var(--leading-body);
   color: rgba(var(--v-theme-on-background), 0.7);

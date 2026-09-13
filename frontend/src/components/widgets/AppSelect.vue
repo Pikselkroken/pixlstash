@@ -110,10 +110,6 @@ function toggleValue(value, checked) {
   border-radius: var(--radius-md);
 }
 
-.app-select__multiple:focus-within {
-  border-color: rgb(var(--v-theme-accent));
-}
-
 .app-select__multiple-option {
   display: flex;
   align-items: center;
@@ -128,7 +124,7 @@ function toggleValue(value, checked) {
 }
 
 .app-select__multiple-option:hover {
-  background: rgba(var(--v-theme-on-surface), 0.06);
+  background: var(--hover-wash);
 }
 
 .app-select__multiple-option--disabled {
@@ -137,7 +133,7 @@ function toggleValue(value, checked) {
 }
 
 .app-select__multiple-option input {
-  accent-color: rgb(var(--v-theme-accent));
+  accent-color: rgb(var(--v-theme-primary));
 }
 
 .app-select__empty {
@@ -160,12 +156,6 @@ function toggleValue(value, checked) {
   font-weight: var(--weight-medium);
   padding: 0 38px 0 var(--space-4);
   cursor: pointer;
-  outline: none;
-  transition: border-color var(--dur-1) var(--ease-standard);
-}
-
-.app-select__field:focus {
-  border-color: rgb(var(--v-theme-accent));
 }
 
 .app-select__field--compact {

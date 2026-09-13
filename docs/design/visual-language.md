@@ -661,7 +661,7 @@ The photos are the hero. The chrome frames them; it does not compete.
 - **Consistent aspect handling.** Tiles share a radius (`--radius-md`) and a restrained
   border. No per-tile bespoke framing.
 - **States are designed, not defaulted.** Every tile has a real hover, a real selected
-  state (`--active-wash` / `--active-bar`), and a focus state (`--focus-ring`). The
+  state (`--active-wash` / `--active-bar`), and a focus state (the ink ring, §11). The
   selected state is how bulk work feels confident; make it unambiguous.
 - **Empty, loading, error.** Use the existing `Empty.png` / `EmptyTrash.png` art for
   empty states with a `--text-2xl` Tiny5 headline and a `--text-sm` line of guidance.

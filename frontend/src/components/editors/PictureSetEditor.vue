@@ -463,8 +463,8 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 }
 
 .lock-row__checkbox:checked {
-  background: rgb(var(--v-theme-accent));
-  border-color: rgb(var(--v-theme-accent));
+  background: rgb(var(--v-theme-primary));
+  border-color: rgb(var(--v-theme-primary));
 }
 
 .lock-row__checkbox:checked::after {
@@ -472,7 +472,7 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   width: 5px;
   height: 9px;
   margin-top: -2px;
-  border: solid rgb(var(--v-theme-on-accent));
+  border: solid rgb(var(--v-theme-on-primary));
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
@@ -590,7 +590,7 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 }
 
 .icon-btn--cards-large.selected {
-  border-color: rgb(var(--v-theme-accent));
+  border-color: var(--active-bar);
   background: var(--active-wash);
 }
 
@@ -623,8 +623,8 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 }
 
 .icon-btn {
-  width: 32px;
-  height: 32px;
+  width: var(--control-h-bar);
+  height: var(--control-h-bar);
   border-radius: var(--radius-sm);
   border: 2px solid transparent;
   display: flex;
@@ -649,8 +649,15 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 }
 
 .icon-btn.selected {
-  border-color: rgb(var(--v-theme-accent));
+  border-color: var(--active-bar);
   background: var(--active-wash);
+}
+
+/* The grid scrolls and packs its cells 4px apart, so an outset ring would be
+   clipped at its edges. */
+.icon-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-inset);
 }
 
 .color-grid {
@@ -673,7 +680,6 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   height: 30px;
   border-radius: var(--radius-sm);
   border: 2px solid transparent;
-  outline: none;
   padding: 0;
   box-sizing: border-box;
   aspect-ratio: 1 / 1;

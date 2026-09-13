@@ -4,19 +4,19 @@
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(var(--v-theme-accent), 0.2);
+  background: var(--active-wash);
   z-index: 20;
   display: flex;
   align-items: center;
   justify-content: center;
   pointer-events: none;
-  border: 8px solid rgb(var(--v-theme-accent));
+  border: 8px solid var(--active-bar);
   border-radius: 16px;
   box-sizing: border-box;
   transition:
     border-color 0.2s,
     background 0.2s;
-  color: rgb(var(--v-theme-on-accent));
+  color: var(--active-text);
   font-size: 3em;
   font-weight: bold;
 }
@@ -317,32 +317,12 @@
   pointer-events: none;
 }
 
+/* An AppButton primary (the Load action); this only lifts it off the grid it
+   floats over. */
 .pending-imports-pill {
   pointer-events: all;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  padding: var(--space-3) var(--space-5);
-  border-radius: var(--radius-pill);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  cursor: pointer;
-  border: none;
-  user-select: none;
   box-shadow: var(--elevation-2);
   white-space: nowrap;
-  transition: box-shadow var(--dur-1) var(--ease-standard);
-}
-
-.pending-imports-pill:hover {
-  box-shadow: var(--elevation-3);
-}
-
-.pending-imports-pill:focus-visible {
-  outline: none;
-  box-shadow: var(--elevation-2), var(--focus-ring);
 }
 
 .grid-scroll-wrapper {
@@ -470,12 +450,17 @@
   border: 0 solid transparent;
 }
 
-.image-card:focus {
+/* A tile sits flush against its neighbours (a 2px seam, or none in compact
+   mode), so the gapped global outline would land on them. The ring is the inset
+   form, on the container's overlay layer (the hover glow's `::after`, z 22),
+   because in justified and compact modes the image covers the whole card. */
+.image-card:focus-visible {
   outline: none;
 }
 
-.image-card:focus-visible .thumbnail-card {
-  box-shadow: var(--focus-ring);
+.image-card:focus-visible .thumbnail-container::after {
+  opacity: 1;
+  box-shadow: var(--focus-ring-inset);
 }
 
 .face-bbox-overlay--interactive {
@@ -487,9 +472,10 @@
   pointer-events: auto;
 }
 
+/* Inset: the box is drawn over the photo and its edge is the face's edge. */
 .face-bbox-overlay--interactive:focus-visible {
   outline: none;
-  box-shadow: var(--focus-ring);
+  box-shadow: var(--focus-ring-inset);
 }
 
 .image-card:hover {
@@ -504,8 +490,8 @@
   bottom: 32px;
   width: 6px;
   border-radius: 999px;
-  background: rgba(var(--v-theme-accent), 0.95);
-  box-shadow: 0 2px 8px rgba(var(--v-theme-accent), 0.45);
+  background: var(--active-bar);
+  box-shadow: var(--elevation-2);
   pointer-events: none;
   z-index: 6;
 }
@@ -647,7 +633,7 @@
   position: absolute;
   inset: 0;
   border-radius: 8px;
-  box-shadow: inset 0 0 12px 4px rgba(var(--v-theme-accent), 0.3);
+  box-shadow: inset 0 0 12px 4px var(--hover-wash);
   opacity: 0;
   transition: opacity 0.15s ease;
   z-index: 22;
@@ -769,12 +755,12 @@
 .thumbnail-img:hover {
   box-shadow:
     1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3),
-    inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
+    inset 0 0 4px 4px var(--hover-wash);
 }
 .stack-hover-active .thumbnail-img {
   box-shadow:
     1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3),
-    inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
+    inset 0 0 4px 4px var(--hover-wash);
 }
 .thumbnail-card {
   width: 100%;
@@ -794,7 +780,7 @@
   box-shadow: none;
 }
 .compact-mode .thumbnail-img:hover {
-  box-shadow: inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
+  box-shadow: inset 0 0 4px 4px var(--hover-wash);
 }
 
 /* Justified mode: the tiles are a wall, not a set of cards, so they drop the
@@ -814,7 +800,7 @@
 }
 .image-grid--justified .thumbnail-img:hover,
 .image-grid--justified .stack-hover-active .thumbnail-img {
-  box-shadow: inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
+  box-shadow: inset 0 0 4px 4px var(--hover-wash);
 }
 .image-grid--justified .thumbnail-container::after,
 .image-grid--justified .selection-overlay,
@@ -1034,7 +1020,6 @@
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  outline: none;
   appearance: auto;
   flex: 0 0 auto;
 }
@@ -1076,26 +1061,13 @@
   color: rgb(var(--v-theme-on-surface-variant));
   font-size: 13px;
   cursor: pointer;
-  outline: none;
   appearance: auto;
   flex: 0 0 auto;
 }
 
 .multi-select-toolbar__clear {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: 100%;
-  padding: 0 14px;
-  border-left: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  color: rgb(var(--v-theme-on-surface-variant));
-  font-size: 13px;
   flex: 0 0 auto;
-  transition: background 0.15s;
-}
-
-.multi-select-toolbar__clear:hover {
-  background: rgba(var(--v-theme-on-surface), 0.08);
+  margin-right: var(--space-1);
 }
 
 @media (max-width: 900px) {

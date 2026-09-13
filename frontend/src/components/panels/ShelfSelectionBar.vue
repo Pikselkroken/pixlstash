@@ -1097,6 +1097,11 @@ defineExpose({
   color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
+/* The current value's check is the olive mark; its words stay ink. */
+.shelf-mi[aria-checked="true"] > .v-icon {
+  color: var(--selected-ink);
+}
+
 /* The destructive row. Both the label and its glyph take the error colour: the
    menu is a list of neutral verbs and this is the one that cannot be undone. */
 .shelf-mi--danger,
@@ -1151,7 +1156,7 @@ defineExpose({
    strength. Every one of those is wrong beside a `.shelf-mi`, and the indent is
    only the one that is obvious - the two Assign rows also drew a square hover
    wash in a menu of rounded ones, in neutral grey where every neighbour uses
-   the accent `--hover-wash`.
+   the `--hover-wash` token.
 
    `.ate` is repeated to reach (0,4,0). The rule being overridden is SCOPED, so
    it compiles to `.ate--flyout .ate-btn[data-v-…]` and counts three - which is

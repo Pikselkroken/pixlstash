@@ -2443,7 +2443,13 @@ function onZoomContextMenu() {
 }
 
 .dc-zoom:hover {
-  color: rgb(var(--v-theme-accent));
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+}
+
+/* It sits on the photo scrim in both themes, so its focus ring is the on-dark
+   ink rather than the theme's. */
+.dc-zoom:focus-visible {
+  outline-color: rgb(var(--v-theme-on-dark-surface));
 }
 
 /* ── The compact meta grid: two columns, label over value ─────────────────── */
@@ -2563,16 +2569,11 @@ function onZoomContextMenu() {
   font: inherit;
   font-variant-numeric: tabular-nums;
   text-align: left;
+  border-radius: var(--radius-sm);
 }
 
 .dc-expand:hover {
-  color: rgb(var(--v-theme-accent));
-}
-
-.dc-expand:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: var(--radius-sm);
+  background: var(--hover-wash);
 }
 
 /* ── The expansion band ────────────────────────────────────────────────────
@@ -2693,14 +2694,21 @@ function onZoomContextMenu() {
 }
 
 .dc-zv-flip button:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 
+/* The picture on screen, and the snap stop the zoom sits at, are SELECTED, not
+   actions: the dark-surface olive edge and wash, words in the surface's ink. */
 .dc-zv .dc-zv-on {
-  background: rgb(var(--v-theme-accent));
-  border-color: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
+  background: rgba(var(--v-theme-dark-surface-primary), 0.2);
+  border-color: rgb(var(--v-theme-dark-surface-primary));
+  color: #fff;
   font-weight: var(--weight-semibold);
+}
+
+/* Near-black in both themes, so the theme's ink ring would vanish in light. */
+.dc-zv :focus-visible {
+  outline-color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .dc-flag--zv {
@@ -2739,7 +2747,7 @@ function onZoomContextMenu() {
 }
 
 .dc-zv-mode button:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 
 /* The live magnification, in the photo-tool convention (100% = 1:1). Same
@@ -2766,7 +2774,7 @@ function onZoomContextMenu() {
 }
 
 .dc-zv-close:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
   color: #fff;
 }
 

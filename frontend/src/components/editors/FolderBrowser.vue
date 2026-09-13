@@ -381,7 +381,7 @@ const { pending: createFolderLoading, run: createFolder } =
 }
 
 .browse-entry:hover:not(.browse-entry--disabled) {
-  background: rgba(var(--v-theme-primary), 0.06);
+  background: var(--hover-wash);
 }
 
 .browse-entry--up {
@@ -397,8 +397,8 @@ const { pending: createFolderLoading, run: createFolder } =
 /* The picked file in file mode. A wash plus a left bar, the same pair the shelf
    marks a selected row with, so selection reads the same way in both places. */
 .browse-entry--picked {
-  background: rgba(var(--v-theme-primary), 0.12);
-  box-shadow: inset 3px 0 0 rgb(var(--v-theme-primary));
+  background: var(--active-wash);
+  box-shadow: inset 3px 0 0 var(--active-bar);
 }
 
 .browse-entry-name {

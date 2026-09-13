@@ -539,7 +539,7 @@ function onDblClick(event) {
 
 .grow--focus {
   background: var(--active-wash);
-  border-color: rgba(var(--v-theme-accent), 0.4);
+  border-color: var(--active-bar);
 }
 
 .grow--focus::before {
@@ -548,15 +548,11 @@ function onDblClick(event) {
   inset: 0 auto 0 0;
   width: var(--rail-w);
   border-radius: var(--radius-md) 0 0 var(--radius-md);
-  background: rgb(var(--v-theme-accent));
+  background: var(--active-bar);
 }
 
 .grow--selected {
-  border-color: rgba(var(--v-theme-accent), 0.55);
-  background: var(--hover-wash);
-}
-
-.grow--selected.grow--focus {
+  border-color: var(--active-bar);
   background: var(--active-wash);
 }
 
@@ -577,7 +573,7 @@ function onDblClick(event) {
 }
 
 .gcaret {
-  color: rgb(var(--v-theme-accent));
+  color: var(--active-text);
   flex-shrink: 0;
   align-self: center;
   margin-left: calc(-1 * var(--space-2));

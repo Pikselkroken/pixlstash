@@ -478,13 +478,7 @@
            first two offer Reset. -->
       <div v-else-if="store.nothingSelected" class="shelf-state">
         <p>Nothing is selected in Show.</p>
-        <button
-          class="tbm-action tbm-action--secondary"
-          type="button"
-          @click="store.resetFilters()"
-        >
-          Reset filters
-        </button>
+        <AppButton @click="store.resetFilters()">Reset filters</AppButton>
       </div>
       <!-- Ahead of the terminal state, and gated on the selection rather than
            on `rows`: a narrowed selection only FETCHES the blocks it asks for,
@@ -498,13 +492,7 @@
         class="shelf-state"
       >
         <p>No models match these filters.</p>
-        <button
-          class="tbm-action tbm-action--secondary"
-          type="button"
-          @click="store.resetFilters()"
-        >
-          Reset filters
-        </button>
+        <AppButton @click="store.resetFilters()">Reset filters</AppButton>
       </div>
       <div v-else-if="!store.visibleRows.length" class="shelf-state">
         <p>No models found.</p>
@@ -512,15 +500,14 @@
           PixlStash lists what it finds in the model folders registered on this
           machine. Add the folder where you keep them.
         </p>
-        <button
+        <AppButton
           ref="emptyFoldersBtnRef"
-          class="tbm-action tbm-action--primary"
-          type="button"
+          variant="primary"
           aria-haspopup="dialog"
-          @click="openFolders(emptyFoldersBtnRef)"
+          @click="openFolders(emptyFoldersBtnRef?.$el)"
         >
           Add a model folder
-        </button>
+        </AppButton>
       </div>
 
       <!-- The row itself is not a focus stop unless it holds the roving one:
@@ -4151,8 +4138,9 @@ watch(
 
 /* The one filled button in the bar. It is the only control here with a result
    behind it - everything else changes what you are looking at - and that is
-   what the fill says. `on-primary` and not the surface ink: this is a solid
-   primary fill, which is the pairing that measures (§4).
+   what the fill says. Amber acts, olive selects: the key action's fill is
+   `accent` with its `on-accent` label, and a filled control's hover darkens
+   (`--hover-shade`) rather than taking the transparent buttons' wash.
 
    28px, not `.bar-btn`'s 32, and `--radius-sm` rather than the nothing it
    inherited. A filled control is the only kind whose box you can actually see:
@@ -4165,16 +4153,22 @@ watch(
    at a radius (0) that is not on the scale (§6). */
 .shelf-toolbar .bar-btn--accent {
   gap: var(--space-2);
-  height: 28px;
+  height: var(--control-h);
   border-radius: var(--radius-sm);
-  border-color: rgb(var(--v-theme-primary));
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
+  border-color: rgb(var(--v-theme-accent));
+  background: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-accent));
   font-weight: var(--weight-medium);
 }
 
+.shelf-toolbar .bar-btn--accent:hover:not(:disabled) {
+  background-color: rgb(var(--v-theme-accent));
+  background-image: var(--hover-shade);
+  color: rgb(var(--v-theme-on-accent));
+}
+
 .shelf-toolbar .bar-btn--accent :deep(.v-icon) {
-  color: rgb(var(--v-theme-on-primary));
+  color: rgb(var(--v-theme-on-accent));
 }
 
 /* Group and Sort carry their current VALUE as the label: their glyphs are
@@ -4305,30 +4299,23 @@ watch(
    other bar in the app runs on transparent buttons - ink and a hover wash,
    nothing filled at rest.
 
-   The label leaves `on-primary` with the fill, because warm white on a 28%
-   tint does not measure; it goes to `toolbar-text` at FULL strength against the
-   0.7 its neighbour keeps. That step is not decoration - `.shelf-row--selected`
+   The wash is the shared olive selection wash, `--active-wash`, so this pick-one
+   reads selected the way every other one does. The label goes to
+   `toolbar-text` - the bar's own ink - at FULL strength against the 0.7 its
+   neighbour keeps; never olive text on the olive wash. That step is not decoration - `.shelf-row--selected`
    below states the rule this obeys: a wash alone is a hue, and it needs a
    partner that survives greyscale and forced-colors. Here the partner is the
    ink, since a pill cannot carry that rule's inset bar.
-
-   The two alphas live in `style.css` beside `--hover-wash` and `--active-wash`,
-   which is where every theme-varying value in this app is declared - including
-   the shelf's own drive-band meter colours. */
+ */
 .shelf-viewseg--on {
-  background: var(--shelf-viewseg-wash);
+  background: var(--active-wash);
   color: rgb(var(--v-theme-toolbar-text));
 }
 
 .shelf-viewseg--on:hover {
-  background: var(--shelf-viewseg-wash);
+  background:
+    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
   color: rgb(var(--v-theme-toolbar-text));
-}
-
-/* Raised so the focus ring is not clipped by the welded sibling. */
-.shelf-viewseg:focus-visible {
-  position: relative;
-  z-index: var(--z-raised);
 }
 
 /* The gap the count sits in is the bar's cluster gap, not a hair. */
@@ -4450,8 +4437,8 @@ watch(
    the shelf has one drop treatment and a second dialect on the outer level
    would read as a different kind of target rather than the same one. */
 .shelf-band--drop {
-  background: rgba(var(--v-theme-primary), 0.12);
-  box-shadow: inset 0 0 0 2px rgba(var(--v-theme-primary), 0.65);
+  background: var(--active-wash);
+  box-shadow: inset 0 0 0 2px var(--active-bar);
 }
 
 /* The refusal, while the pointer is still down. `no-drop` is the same cursor
@@ -4675,6 +4662,7 @@ watch(
   height: 100%;
   padding: 0;
   border: 0;
+  border-radius: var(--radius-sm);
   background: none;
   cursor: pointer;
   transition: color var(--dur-1) var(--ease-standard);
@@ -4686,12 +4674,6 @@ watch(
 
 button.shelf-head-cell:hover {
   color: rgb(var(--v-theme-on-surface));
-}
-
-.shelf-head-cell:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: var(--radius-sm);
 }
 
 /* The sorted column is named in full ink with an arrow beside it. Both halves
@@ -4739,6 +4721,7 @@ button.shelf-head-cell:hover {
   bottom: 0;
   left: calc(var(--space-6) / -2 - var(--space-4) / 2);
   width: var(--space-6);
+  border-radius: var(--radius-sm);
   cursor: col-resize;
   touch-action: none;
 }
@@ -4763,17 +4746,12 @@ button.shelf-head-cell:hover {
 
 /* Colour only, never width: the hairline is `left: 50%` on the seam, so
    growing it would slide the line sideways under the pointer at the moment
-   the reader is aiming at it. */
+   the reader is aiming at it. Full ink, not a hue: hover and a drag in
+   progress are neither an action nor a selection. */
 .shelf-head-grip:hover::after,
 .shelf-head-grip--on::after,
 .shelf-head-grip:focus-visible::after {
-  background: rgb(var(--v-theme-primary));
-}
-
-.shelf-head-grip:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-on-background));
 }
 
 /* The key, once for the view. Wraps rather than scrolls: four short pairs at a
@@ -4886,10 +4864,10 @@ button.shelf-head-cell:hover {
 /* The drop affordance keeps the tier rail beside it rather than replacing it:
    which folder this is does not stop being true while a drag is over it. */
 .shelf-group-btn--drop {
-  background: rgba(var(--v-theme-primary), 0.12);
+  background: var(--active-wash);
   box-shadow:
     inset 3px 0 0 var(--shelf-rail, transparent),
-    inset 0 0 0 2px rgba(var(--v-theme-primary), 0.65);
+    inset 0 0 0 2px var(--active-bar);
 }
 
 .shelf-group-chevron {
@@ -4955,17 +4933,18 @@ button.shelf-head-cell:hover {
   background: var(--hover-wash);
 }
 
+/* The global ink outline, drawn inside: a flush row in a scroller has no room
+   for the gap. */
 .shelf-row:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-primary));
-  outline-offset: -2px;
+  outline-offset: calc(var(--focus-width) * -1);
 }
 
 /* A wash and an inset bar, not a border: a 1px outline on a selected row
    shifts every glyph in it by a pixel, and 200 selected rows would shimmer as
    the list scrolls. The bar is the greyscale half - the wash alone is a hue. */
 .shelf-row--selected {
-  background: rgba(var(--v-theme-primary), 0.12);
-  box-shadow: inset 3px 0 0 rgb(var(--v-theme-primary));
+  background: var(--active-wash);
+  box-shadow: inset 3px 0 0 var(--active-bar);
 }
 
 /* ── The three kinds of absence ────────────────────────────────────────────
@@ -5129,12 +5108,6 @@ button.shelf-head-cell:hover {
   border-radius: var(--radius-sm);
 }
 
-.shelf-row-rename:focus,
-.shelf-row-base-edit:focus {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 /* The absence glyph leads the name line, because it changes what everything
    after it means: the name is still true, the file behind it is not there. */
 .shelf-row-loc {
@@ -5202,7 +5175,7 @@ button.shelf-head-cell:hover {
 }
 
 .shelf-stack-badge:hover {
-  border-color: rgb(var(--v-theme-primary));
+  background-image: var(--hover-neutral);
 }
 
 .shelf-stack-badge .v-icon {

@@ -135,12 +135,15 @@
      own. A control that cannot take a gap (a 32px menu row flush in its menu)
      uses the inset form, `--focus-ring-inset`, as a box-shadow.
      A focus ring is the one place in this system where "subtle" is a defect. */
+  /* Declared here as well as per theme in style.css: a custom property holding
+     var() resolves where it is DECLARED, so `--focus-ring-inset` below needs a stroke
+     on :root, where Vuetify also writes the active theme's colours. */
+  --focus-stroke: rgb(var(--v-theme-on-surface));
   --focus-width: 2px;
   --focus-offset: 2px;
+  /* Restated beside every `--focus-stroke` override (the theme blocks in
+     style.css, the lightbox), for the same resolve-where-declared reason. */
   --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
-  /* The legacy box-shadow form, for the rules that still draw focus that way.
-     Ink, not amber, so none of them carries a hue meanwhile. */
-  --focus-ring: 0 0 0 var(--focus-width) var(--focus-stroke);
 
   /* The ring as a GLOW rather than a stroke, for the one place a stroke cannot
      sit: a Vuetify field, whose floating label rides ON the top border.

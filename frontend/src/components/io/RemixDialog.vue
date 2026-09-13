@@ -1075,7 +1075,9 @@ async function submit() {
   margin: 0;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
-  background: var(--hover-wash);
+  /* A resting callout tint, not a hover: it borrowed the hover token back when
+     that was amber at 0.14, and keeps that look. */
+  background: rgba(var(--v-theme-accent), 0.14);
   font-size: var(--text-sm);
   line-height: var(--leading-snug);
   color: rgba(var(--v-theme-on-surface), 0.8);
@@ -1086,12 +1088,7 @@ async function submit() {
   font: inherit;
   font-weight: var(--weight-semibold);
   color: rgb(var(--v-theme-accent));
-}
-
-.remix-link:focus-visible {
-  outline: none;
   border-radius: var(--radius-sm);
-  box-shadow: var(--focus-ring);
 }
 
 .remix-link:disabled {
@@ -1128,7 +1125,7 @@ async function submit() {
 
 .remix-mode--on {
   background: var(--active-wash);
-  border-color: rgb(var(--v-theme-accent));
+  border-color: var(--active-bar);
 }
 
 /* "Offered, with a warning" - deliberately NOT --off: this row can still be
@@ -1138,7 +1135,7 @@ async function submit() {
 }
 
 .remix-mode--caution.remix-mode--on {
-  border-color: rgb(var(--v-theme-accent));
+  border-color: var(--active-bar);
 }
 
 .remix-mode-icon {
@@ -1277,12 +1274,7 @@ async function submit() {
   cursor: pointer;
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.8);
-}
-
-.remix-summary:focus-visible {
-  outline: none;
   border-radius: var(--radius-sm);
-  box-shadow: var(--focus-ring);
 }
 
 .remix-recipe {
@@ -1381,11 +1373,18 @@ async function submit() {
 
 .remix-seg-btn:hover {
   background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+/* The track clips its overflow, so the ring goes inside the segment. */
+.remix-seg-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-inset);
 }
 
 .remix-seg-btn--on {
   background: var(--active-wash);
-  color: rgb(var(--v-theme-on-surface));
+  color: var(--active-text);
   font-weight: var(--weight-medium);
 }
 

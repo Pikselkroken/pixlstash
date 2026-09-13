@@ -91,7 +91,7 @@ const thresholdPercent = computed(() => Math.round(props.threshold * 100));
 .dth-input {
   flex: 1;
   min-width: 0;
-  accent-color: rgb(var(--v-theme-accent));
+  accent-color: rgb(var(--v-theme-primary));
 }
 
 .dth-input:disabled {

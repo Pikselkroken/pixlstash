@@ -2207,7 +2207,6 @@ defineExpose({ focusTasksTab });
 
 .bar-row {
   cursor: pointer;
-  outline: none;
 }
 
 .bar-row:hover .bar-rect {
@@ -2273,19 +2272,15 @@ defineExpose({ focusTasksTab });
   cursor: pointer;
   border-radius: var(--radius-sm);
   padding: var(--space-1) var(--space-1);
-  outline: none;
 }
 .cooc-item:hover {
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  color: rgba(var(--v-theme-on-surface), 0.9);
-}
-.cooc-item:focus-visible {
-  box-shadow: 0 0 0 1px rgba(var(--v-theme-primary), 0.5);
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .cooc-item--active {
-  background: rgba(var(--v-theme-primary), 0.12);
-  color: rgba(var(--v-theme-on-surface), 0.9);
+  background: var(--active-wash);
+  color: var(--active-text);
 }
 
 .tag-penalised {
@@ -2339,8 +2334,8 @@ defineExpose({ focusTasksTab });
   flex-shrink: 0;
 }
 .stats-clear-btn:hover {
-  background: rgba(var(--v-theme-on-surface), 0.08);
-  color: rgba(var(--v-theme-on-surface), 0.9);
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .conf-tag-selector {
@@ -2363,7 +2358,6 @@ defineExpose({ focusTasksTab });
   padding: var(--space-1) var(--space-2);
   cursor: pointer;
   max-width: 108px;
-  outline: none;
   appearance: none;
 }
 /* The popup list is native chrome: without an explicit fill it paints the
@@ -2375,9 +2369,6 @@ defineExpose({ focusTasksTab });
 }
 .conf-tag-select:hover {
   border-color: rgba(var(--v-theme-on-surface), 0.3);
-}
-.conf-tag-select:focus {
-  border-color: rgba(var(--v-theme-primary), 0.6);
 }
 
 .stats-tab-btn {
@@ -2399,11 +2390,13 @@ defineExpose({ focusTasksTab });
   letter-spacing: 0.06em;
 }
 .stats-tab-btn:hover {
-  color: rgba(var(--v-theme-on-surface), 0.75);
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
 }
+/* Olive marks, words stay ink: the underline carries the selection. */
 .stats-tab-btn.active {
-  color: rgba(var(--v-theme-primary), 1);
-  border-bottom-color: rgba(var(--v-theme-primary), 0.85);
+  color: var(--active-text);
+  border-bottom-color: var(--selected-ink);
 }
 
 /* ── Agreement matrix ──────────────────────────────────────────────────────
@@ -2450,7 +2443,7 @@ defineExpose({ focusTasksTab });
   stroke: rgba(var(--v-theme-on-surface), 0.45);
 }
 .agreement-cell--selected .agreement-cell-outline {
-  stroke: rgb(var(--v-theme-primary));
+  stroke: var(--active-bar);
   stroke-width: 2;
 }
 /* The indicator is the SVG stroke below, not a ring: opt out of both halves of
@@ -2460,7 +2453,7 @@ defineExpose({ focusTasksTab });
   box-shadow: none;
 }
 .agreement-cell:focus-visible .agreement-cell-outline {
-  stroke: rgb(var(--v-theme-accent));
+  stroke: var(--focus-stroke);
   stroke-width: 2;
 }
 .agreement-count {
@@ -2518,12 +2511,8 @@ defineExpose({ focusTasksTab });
   align-items: center;
   margin-left: var(--space-1);
   color: rgba(var(--v-theme-on-surface), 0.45);
-  cursor: help;
-}
-.stats-info-dot:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
   border-radius: var(--radius-sm);
+  cursor: help;
 }
 
 /* ── Tasks tab ─────────────────────────────────────────────────────────────── */

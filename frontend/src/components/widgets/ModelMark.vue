@@ -238,7 +238,7 @@ const ringClass = computed(() =>
 /* ── The assignment ring ───────────────────────────────────────────────────
    A pseudo-element, deliberately not a border (which would push the picture in
    and make an assigned mark a different size from an unassigned one) and not an
-   outline (which would fight `--focus-ring` on the row).
+   outline (which would fight the focus outline on the row).
 
    The 2px GAP is what makes it legible. A ring drawn directly against an
    arbitrary thumbnail is not one contrast problem but one per image; detached,

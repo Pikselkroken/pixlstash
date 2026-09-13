@@ -137,7 +137,9 @@ defineEmits([
   border-radius: var(--radius-sm);
 }
 
-.retention-note__change:hover {
-  filter: brightness(1.15);
+/* The note clips its overflow, which would cut an outset ring. */
+.retention-note__change:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-inset);
 }
 </style>

@@ -70,10 +70,13 @@
              compresses to its arrow, which needs no label. -->
         <AppButton
           v-if="!store.showingMixed"
-          :variant="store.showingDecided ? 'secondary' : 'outline'"
+          variant="outline"
           :icon-left="store.showingDecided ? 'arrow-left' : 'history'"
           class="dq-bar-action"
-          :class="{ 'dq-fold-906': pageTogglesFold }"
+          :class="{
+            'dq-fold-906': pageTogglesFold,
+            'dq-bar-action--on': store.showingDecided,
+          }"
           :title="decidedToggleLabel"
           :aria-label="decidedToggleLabel"
           :aria-pressed="store.showingDecided ? 'true' : 'false'"
@@ -94,10 +97,13 @@
              the app that has to stay trusted. -->
         <AppButton
           v-if="!store.showingDecided"
-          :variant="store.showingMixed ? 'secondary' : 'outline'"
+          variant="outline"
           :icon-left="store.showingMixed ? 'arrow-left' : 'alert-outline'"
           class="dq-bar-action"
-          :class="{ 'dq-fold-906': pageTogglesFold }"
+          :class="{
+            'dq-fold-906': pageTogglesFold,
+            'dq-bar-action--on': store.showingMixed,
+          }"
           :title="mixedToggleTitle"
           :aria-label="mixedToggleTitle"
           :aria-pressed="store.showingMixed ? 'true' : 'false'"
@@ -3169,6 +3175,22 @@ defineExpose({ windowedGroups, tierLabel });
   flex-shrink: 0;
 }
 
+/* A page toggle that is ON is a chosen page, not a pressed action: olive
+   selects. The wash and the edge carry the olive; label and glyph stay ink
+   (no olive on olive). The hover layers the ink wash over the selection
+   rather than replacing it, so the toggle never looks off under the pointer. */
+.dq-bar-action.dq-bar-action--on {
+  background: var(--active-wash);
+  border-color: var(--active-bar);
+  color: var(--active-text);
+}
+.dq-bar-action.dq-bar-action--on:not(:disabled):not(
+    [aria-disabled="true"]
+  ):hover {
+  background: linear-gradient(var(--hover-wash), var(--hover-wash))
+    var(--active-wash);
+}
+
 .queue {
   display: flex;
   flex-direction: column;
@@ -3234,14 +3256,14 @@ defineExpose({ windowedGroups, tierLabel });
   padding: var(--space-2) var(--space-5) 0;
 }
 
-/* The bulk-scope chip: accent-washed so it reads as state, not decoration -
+/* The bulk-scope chip: selection-washed so it reads as state, not decoration -
    while it shows, a verdict on any selected row takes the whole selection. */
 .qselchip {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-1) var(--space-3);
-  border: 1px solid rgba(var(--v-theme-accent), 0.5);
+  border: 1px solid var(--active-bar);
   border-radius: var(--radius-pill);
   background: var(--active-wash);
   font-size: var(--text-xs);
@@ -3252,13 +3274,9 @@ defineExpose({ windowedGroups, tierLabel });
   padding: 0;
   font: inherit;
   font-weight: var(--weight-semibold);
-  color: rgb(var(--v-theme-accent));
-}
-
-.qselclear:focus-visible {
-  outline: none;
+  color: var(--active-text);
+  text-decoration: underline;
   border-radius: var(--radius-sm);
-  box-shadow: var(--focus-ring);
 }
 
 .qlist {

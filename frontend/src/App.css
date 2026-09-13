@@ -108,49 +108,6 @@ body {
   position: relative;
 }
 
-.export-dialog-close {
-  position: absolute;
-  top: -16px;
-  right: -16px;
-  background-color: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  z-index: 2;
-}
-
-.export-dialog-close:hover {
-  background-color: rgb(var(--v-theme-accent));
-}
-
-/* Plain global stylesheet: ':deep()' is a Vue scoped-style construct and does
-   nothing here (global rules already cross component boundaries), so it is
-   dropped. Keeping it makes lightningcss reject ':deep' as an invalid
-   pseudo-class at build time. */
-.export-dialog-card .v-card-text {
-  padding: var(--space-4) var(--space-5) var(--space-3);
-}
-
-.export-dialog-card .v-card-actions {
-  padding: var(--space-3) var(--space-5) var(--space-4);
-  gap: var(--space-4);
-}
-
-.export-btn-cancel {
-  background: rgb(var(--v-theme-cancel-button));
-  color: rgb(var(--v-theme-cancel-button-text));
-  font-weight: var(--weight-medium);
-}
-
-.export-btn-confirm {
-  background: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
-  font-weight: var(--weight-medium);
-}
-
-.export-btn-cancel:hover,
-.export-btn-confirm:hover {
-  filter: brightness(1.2);
-}
-
 .empty-state {
   color: rgba(var(--v-theme-on-background), 0.6);
   font-size: var(--text-lg);
@@ -276,8 +233,7 @@ body {
     color 0.15s ease;
 }
 .sidebar-hover-trigger:hover .sidebar-hover-trigger-tab {
-  background: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
+  background-image: var(--hover-shade);
 }
 
 @media (max-width: 640px) {
@@ -582,7 +538,7 @@ kbd {
   border-bottom: 1px solid rgb(var(--v-theme-divider));
 }
 .tbm-header-icon {
-  color: rgb(var(--v-theme-accent));
+  opacity: var(--opacity-text-secondary);
   flex-shrink: 0;
 }
 .tbm-title {
@@ -752,16 +708,13 @@ kbd {
   flex: 0 0 auto;
   font-size: var(--text-xs);
 }
-/* Selected overlay toggle: a semi-transparent primary wash + primary border,
-   not the solid olive fill (the border space is already reserved by the base
-   1px transparent border, so selecting never changes the box size). */
+/* Selected overlay toggle: the olive selection wash and edge, words and icon in
+   ink - no olive on olive (the border space is already reserved by the base 1px
+   transparent border, so selecting never changes the box size). */
 .tbm-toggle--vertical.tbm-toggle--on {
-  background: rgba(var(--v-theme-primary), 0.18);
-  border-color: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-panel));
-}
-.tbm-toggle--vertical.tbm-toggle--on .tbm-toggle-icon {
-  color: rgb(var(--v-theme-primary));
+  background: var(--active-wash);
+  border-color: var(--active-bar);
+  color: var(--active-text);
 }
 
 /* ── Outline toggle-button group (Any / Has face / No face …) ──────────────
@@ -798,7 +751,7 @@ kbd {
   color: rgb(var(--v-theme-on-primary));
 }
 .tbm-btn--on:hover {
-  background: rgb(var(--v-theme-primary));
+  background-image: var(--hover-shade);
 }
 
 /* ── Segmented control (track + equal segments) ───────────────────────────── */
@@ -829,13 +782,15 @@ kbd {
 }
 .tbm-seg-btn:hover {
   color: rgb(var(--v-theme-on-panel));
+  background: var(--hover-wash);
 }
-.tbm-seg-btn--on {
+.tbm-seg-btn--on,
+.tbm-seg-btn--on:hover {
   color: rgb(var(--v-theme-on-primary));
   background: rgb(var(--v-theme-primary));
 }
 .tbm-seg-btn--on:hover {
-  color: rgb(var(--v-theme-on-primary));
+  background-image: var(--hover-shade);
 }
 
 /* ── Checkbox row ─────────────────────────────────────────────────────────── */
@@ -878,17 +833,11 @@ kbd {
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-  outline: none;
   box-sizing: border-box;
   transition: border-color var(--dur-1) var(--ease-standard);
 }
 .tbm-input--with-icon {
   padding-left: calc(var(--space-5) + var(--space-4));
-}
-/* Focus: a single thin accent border - not the olive border plus a thick accent
-   ring stacked (that read as an awkward double outline). */
-.tbm-input:focus {
-  border-color: rgb(var(--v-theme-accent));
 }
 
 /* ── Numeric field (mono) ─────────────────────────────────────────────────── */
@@ -902,11 +851,7 @@ kbd {
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-  outline: none;
   box-sizing: border-box;
-}
-.tbm-num:focus {
-  border-color: rgb(var(--v-theme-accent));
 }
 
 /* ── Solid action button (primary / secondary) ────────────────────────────── */
@@ -922,15 +867,18 @@ kbd {
   font-weight: var(--weight-medium);
   border-radius: var(--radius-md);
   white-space: nowrap;
-  transition: filter var(--dur-1) var(--ease-standard);
+  transition: background var(--dur-1) var(--ease-standard);
 }
-.tbm-action:hover {
-  filter: brightness(1.06);
+.tbm-action--primary:not(:disabled):hover {
+  background-image: var(--hover-shade);
+}
+.tbm-action--secondary:not(:disabled):hover,
+.tbm-action--outline:not(:disabled):hover {
+  background: var(--hover-wash);
 }
 .tbm-action:disabled {
-  opacity: 0.38;
+  opacity: var(--opacity-disabled);
   cursor: default;
-  filter: none;
 }
 .tbm-action--primary {
   background: rgb(var(--v-theme-primary));
@@ -976,12 +924,8 @@ kbd {
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
   cursor: pointer;
-  outline: none;
   box-sizing: border-box;
   transition: border-color var(--dur-1) var(--ease-standard);
-}
-.tbm-select:focus {
-  border-color: rgb(var(--v-theme-accent));
 }
 .tbm-select:disabled {
   opacity: 0.5;
@@ -1009,12 +953,8 @@ kbd {
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-  outline: none;
   box-sizing: border-box;
   transition: border-color var(--dur-1) var(--ease-standard);
-}
-.tbm-textarea:focus {
-  border-color: rgb(var(--v-theme-accent));
 }
 
 /* ── Ghost (text) button - header actions like Clear / direction ──────────── */
@@ -1168,8 +1108,9 @@ kbd {
   position: absolute;
   top: -5px;
   right: -7px;
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
+  /* A count is information, not a selection or an action: neutral. */
+  background: rgb(var(--v-theme-cancel-button));
+  color: rgb(var(--v-theme-cancel-button-text));
   border-radius: var(--radius-pill);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);

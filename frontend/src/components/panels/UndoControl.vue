@@ -442,13 +442,8 @@ defineExpose({
   background: var(--active-wash);
   box-shadow: inset var(--space-1) 0 0 0 var(--active-bar);
 }
-/* Focus must still win over the range highlight, or a keyboard user loses the
-   cursor inside the previewed block. */
-.uc-row--willundo:focus-visible {
-  box-shadow:
-    inset var(--space-1) 0 0 0 var(--active-bar),
-    var(--focus-ring);
-}
+/* Focus inside the previewed block needs no rule of its own: the global ink
+   outline draws outside the row, so it stays visible over the range wash. */
 
 /* Undone steps: visible, struck through, inert. Mirrors the shortcuts dialog's
    own disabled-row treatment rather than inventing a second one. */

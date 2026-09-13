@@ -651,7 +651,7 @@ watch(
               <td class="account-token-wm">
                 <v-switch
                   :model-value="token.watermark"
-                  color="accent"
+                  color="primary"
                   density="compact"
                   hide-details
                   class="account-token-wm-switch"
@@ -760,7 +760,7 @@ watch(
       <v-switch
         v-if="tokenScope === 'READ'"
         v-model="tokenWatermark"
-        color="accent"
+        color="primary"
         density="compact"
         hide-details
         label="Apply watermark"
@@ -1008,9 +1008,11 @@ watch(
     background var(--dur-1) var(--ease-standard);
 }
 
+/* `background-color`, not the shorthand: the shorthand would reset the
+   watermark preview's `background-size` while hovered. */
 .wm-drop__target:hover:not(:disabled) {
-  border-color: rgb(var(--v-theme-accent));
-  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
+  background-color: var(--hover-wash);
 }
 
 .wm-drop__target:disabled {

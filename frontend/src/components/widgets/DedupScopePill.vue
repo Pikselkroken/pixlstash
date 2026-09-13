@@ -47,16 +47,16 @@ const countText = computed(() =>
 </template>
 
 <style scoped>
-/* An accent tint rather than a solid accent fill: the pill is a standing state,
-   not a call to action, and the label has to stay `on-surface` body text. */
+/* The selection wash rather than a fill: the pill is a chosen scope, a standing
+   state and not a call to action, so olive selects and the label stays ink. */
 .scope-pill {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
   border-radius: var(--radius-pill);
-  background: rgba(var(--v-theme-accent), 0.14);
-  border: 1px solid rgba(var(--v-theme-accent), 0.4);
+  background: var(--active-wash);
+  border: 1px solid var(--active-bar);
   font-size: var(--text-sm);
   line-height: var(--leading-snug);
   color: rgb(var(--v-theme-on-surface));

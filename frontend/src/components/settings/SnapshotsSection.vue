@@ -196,7 +196,7 @@ function handleRestore(cp) {
           label="Automatic snapshots"
           density="compact"
           hide-details
-          color="accent"
+          color="primary"
           @update:model-value="handleToggleDailySnapshots($event)"
         />
       </div>

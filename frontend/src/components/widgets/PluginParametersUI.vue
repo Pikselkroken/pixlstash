@@ -331,11 +331,9 @@ function emitValue() {
   font-size: var(--text-xs);
 }
 
-.plugin-ui-input:focus-visible,
-.plugin-run-select:focus-visible,
+/* On the dark overlay: the global ring's width and gap, that ground's ink. */
 .overlay-comfy-select:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
+  outline-color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .plugin-ui--auto .plugin-ui-input {

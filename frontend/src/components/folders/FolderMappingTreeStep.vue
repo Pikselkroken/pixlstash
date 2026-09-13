@@ -652,16 +652,19 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
   color: var(--active-text);
 }
 
+/* Flush in its list, so the ring cannot take the gap: the inset form. */
 .map-tree__row:focus-visible {
-  box-shadow: inset var(--focus-ring);
+  box-shadow: var(--focus-ring-inset);
+  outline: none;
 }
 
 .map-tree__lead {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
+/* No olive glyph on the olive wash: the selected row's icon takes its ink. */
 .map-tree__row--sel .map-tree__lead {
-  color: var(--active-bar);
+  color: var(--active-text);
 }
 
 .map-tree__name {

@@ -246,7 +246,7 @@ function onFilmstripWheel(event) {
 }
 
 .filmstrip-thumb-image-active {
-  box-shadow: 0 0 0 4px rgba(var(--v-theme-accent), 0.9);
+  box-shadow: 0 0 0 4px rgb(var(--v-theme-dark-surface-primary));
   z-index: 2;
 }
 

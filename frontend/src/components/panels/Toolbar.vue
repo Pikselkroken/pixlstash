@@ -98,13 +98,13 @@
                 Looking for Likeness Groups? Duplicates now has its own place in
                 the sidebar, with a count and a one-key review queue.
               </span>
-              <button
-                type="button"
+              <AppButton
+                size="sm"
                 class="gb-sort-migration-open"
                 @click="openDuplicatesFromNotice"
               >
                 Open Duplicates
-              </button>
+              </AppButton>
               <AppBarButton
                 icon="close"
                 aria-label="Hide this notice"
@@ -637,6 +637,7 @@ import TbImportPanel from "./TbImportPanel.vue";
 import TbOverflowMenu from "./TbOverflowMenu.vue";
 import UndoControl from "./UndoControl.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
+import AppButton from "../widgets/AppButton.vue";
 import { useOneTimeNotice } from "../../composables/useOneTimeNotice";
 const props = defineProps({
   selectedCount: Number,
@@ -1235,21 +1236,6 @@ const gbCollapseAllStacksDisabled = computed(
   min-width: 0;
 }
 
-.gb-sort-migration-open {
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  color: rgb(var(--v-theme-on-surface));
-  font-family: inherit;
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.gb-sort-migration-open:hover {
-  background: var(--hover-wash);
-}
-
 .gb-sort-search-note {
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-panel), 0.7);
@@ -1287,14 +1273,17 @@ const gbCollapseAllStacksDisabled = computed(
   background: var(--hover-wash);
 }
 
+/* A chosen option: the olive selection wash, words in the surface's ink. Hover
+   layers the ink wash over it rather than replacing it. */
 .gb-sim-btn--on {
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
+  background: var(--active-wash);
+  color: var(--active-text);
   font-weight: var(--weight-semibold);
 }
 
 .gb-sim-btn--on:hover {
-  background: rgb(var(--v-theme-primary));
+  background:
+    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
 }
 
 .gb-sim-avatar {
@@ -1391,7 +1380,7 @@ const gbCollapseAllStacksDisabled = computed(
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  color: rgb(var(--v-theme-primary));
+  color: inherit;
 }
 
 /* ── Responsive: progressive label dropping via container queries ─────────── */

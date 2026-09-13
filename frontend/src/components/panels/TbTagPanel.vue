@@ -206,14 +206,14 @@
           {{ suggestionStatus }}
         </p>
         <div class="plugin-menu-actions">
-          <button
-            class="stack-btn"
-            type="button"
-            :disabled="!tagInput.trim() || tagLoading"
+          <AppButton
+            variant="primary"
+            :disabled="!tagInput.trim()"
+            :loading="tagLoading"
             @click="applyTag"
           >
-            {{ tagLoading ? "Applying..." : "Apply to All" }}
-          </button>
+            Apply to All
+          </AppButton>
         </div>
         <div v-if="tagError" class="plugin-menu-error" role="alert">
           {{ tagError }}
@@ -224,38 +224,28 @@
         <div v-if="!isReadOnly" class="tag-autogen-section">
           <div class="tag-new-label">Auto-generate</div>
           <div class="plugin-menu-actions tag-autogen-row">
-            <button
-              class="stack-btn stack-btn--secondary"
-              type="button"
-              :disabled="generateTagsLoading"
+            <AppButton
+              :loading="generateTagsLoading"
               :title="`Reset and regenerate tags for all ${selectedCount} selected image${selectedCount !== 1 ? 's' : ''}`"
               @click="generateTagsForAll()"
             >
-              <v-icon v-if="generateTagsLoading" size="14" class="spin"
-                >mdi-loading</v-icon
-              >
-              {{
-                generateTagsLoading
-                  ? "Queuing..."
-                  : "Generate tags with default tagger"
-              }}
-            </button>
+              Generate tags with default tagger
+            </AppButton>
             <v-menu
               v-model="taggerMenuOpen"
               :close-on-content-click="true"
               location="bottom end"
             >
               <template #activator="{ props: menuProps }">
-                <button
-                  class="stack-btn stack-btn--secondary stack-btn--icon-only"
-                  type="button"
+                <AppButton
+                  icon-left="chevron-down"
+                  icon-only
                   title="Generate tags with a specific tagger..."
+                  aria-label="Generate tags with a specific tagger"
                   :disabled="generateTagsLoading"
                   v-bind="menuProps"
                   @click="fetchTaggerPlugins"
-                >
-                  <v-icon size="14">mdi-chevron-down</v-icon>
-                </button>
+                />
               </template>
               <v-list density="compact" min-width="180">
                 <v-list-item
@@ -344,6 +334,7 @@ import { listTaggers } from "../../api/taggers";
 import { getUserConfig } from "../../api/config";
 import { isSentinelTag, formatSentinelTag } from "../../utils/tags.js";
 import { errorDetail } from "../../utils/apiError";
+import AppButton from "../widgets/AppButton.vue";
 
 const MAX_TAG_FETCH = 100;
 const MAX_PREVIEW_IMAGES = 16;
@@ -1118,12 +1109,6 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   gap: var(--space-2);
 }
 
-.stack-btn--icon-only {
-  padding: 0 var(--space-3);
-  min-width: unset;
-  flex-shrink: 0;
-}
-
 .plugin-menu-error {
   margin-top: var(--space-3);
   color: rgb(var(--v-theme-error));
@@ -1146,11 +1131,6 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   color: rgb(var(--v-theme-on-background));
   padding: 0 var(--space-3);
   font-size: var(--text-base);
-  outline: none;
-}
-
-.tag-menu-input:focus {
-  border-color: rgba(var(--v-theme-primary), 0.8);
 }
 
 .tag-data-loading {
@@ -1226,17 +1206,17 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 }
 
 .tag-chips-row--drop-target {
-  outline: 2px dashed rgba(var(--v-theme-primary), 0.55);
+  outline: 2px dashed var(--active-bar);
   outline-offset: 3px;
-  background: rgba(var(--v-theme-primary), 0.06);
+  background: var(--active-wash);
   border-radius: var(--radius-md);
 }
 
 .tag-drop-collapsed-zone {
   height: 36px;
   border-radius: var(--radius-md);
-  border: 2px dashed rgba(var(--v-theme-primary), 0.55);
-  background: rgba(var(--v-theme-primary), 0.06);
+  border: 2px dashed var(--active-bar);
+  background: var(--active-wash);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1283,9 +1263,8 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 
 .tag-chip--some:hover:not(:disabled) {
   opacity: 1;
-  background: rgba(var(--v-theme-primary), 0.12);
+  background: var(--hover-wash);
   border-style: solid;
-  border-color: rgba(var(--v-theme-primary), 0.45);
 }
 
 .tag-chip--penalised {
@@ -1334,9 +1313,8 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 
 .tag-chip--prediction:hover:not(:disabled) {
   opacity: 1;
-  background: rgba(var(--v-theme-primary), 0.14);
+  background: var(--hover-wash);
   border-style: solid;
-  border-color: rgba(var(--v-theme-primary), 0.55);
 }
 
 .tag-chip-count {
@@ -1404,9 +1382,12 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   text-overflow: ellipsis;
 }
 
-.sb-tag-autocomplete-item:hover,
+.sb-tag-autocomplete-item:hover {
+  background: var(--hover-wash);
+}
 .sb-tag-autocomplete-item--active {
-  background: rgba(var(--v-theme-primary), 0.22);
+  background: var(--active-wash);
+  color: var(--active-text);
 }
 
 .sb-tag-autocomplete-tab-hint {
@@ -1523,53 +1504,9 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   min-width: 340px;
 }
 
-.stack-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: rgb(var(--v-theme-on-background));
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-base);
-  font-family: inherit;
-  height: 40px;
-  white-space: nowrap;
-}
-
-.stack-btn:hover:not(:disabled) {
-  background: rgba(var(--v-theme-on-background), 0.12);
-}
-
-.stack-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.stack-btn--secondary {
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.25);
-}
-
-.stack-btn--secondary:hover:not(:disabled) {
-  border-color: rgba(var(--v-theme-primary), 0.5);
-  background: rgba(var(--v-theme-primary), 0.08);
-}
-
 .tag-autogen-section {
   margin-top: var(--space-4);
   border-top: 1px solid rgba(var(--v-theme-on-surface), 0.1);
   padding-top: var(--space-3);
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.spin {
-  animation: spin 0.8s linear infinite;
 }
 </style>

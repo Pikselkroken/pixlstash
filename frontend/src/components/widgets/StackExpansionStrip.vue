@@ -33,16 +33,14 @@
         <span v-if="isCover(member.id)" class="sxcv">Cover</span>
       </button>
 
-      <button
+      <AppBarButton
         v-if="!readOnly && showUnstack"
-        type="button"
-        class="sxbtn"
+        icon="call-split"
         data-testid="stack-unstack"
         @click.stop="emit('unstack')"
       >
-        <v-icon size="16">mdi-call-split</v-icon>
-        <span>Unstack</span>
-      </button>
+        Unstack
+      </AppBarButton>
     </div>
   </div>
 </template>
@@ -90,6 +88,7 @@
 import { computed } from "vue";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
+import AppBarButton from "./AppBarButton.vue";
 
 const props = defineProps({
   /** Members in the stack, including any not rendered in this strip. */
@@ -259,11 +258,16 @@ function onPick(member) {
 /* The cover is flagged twice, by edge and by label, so it survives both a
    colour-blind read and a glance at a strip of near-identical frames. */
 .sxthumb--cover {
-  border-color: rgb(var(--v-theme-accent));
+  border-color: var(--active-bar);
 }
 
 /* Read-only keeps the pictures at full strength: the strip is still worth
    looking at when there is nothing to press. Only the cursor changes. */
+/* Unstack sits in the scrolling row, so it must not be squeezed by it. */
+.sxrow > .bar-btn {
+  flex: 0 0 auto;
+}
+
 .sxthumb:disabled {
   cursor: default;
 }
@@ -291,27 +295,5 @@ function onPick(member) {
   line-height: var(--leading-snug);
   text-transform: uppercase;
   letter-spacing: var(--tracking-label);
-}
-
-/* Ghost: taking a stack apart is a reversal, not the strip's headline action,
-   so it reads as available rather than inviting. */
-.sxbtn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: 0 0 auto;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  color: rgba(var(--v-theme-on-surface), 0.75);
-  font-family: var(--font-ui);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  line-height: var(--leading-snug);
-  transition: background var(--dur-1) var(--ease-standard);
-}
-
-.sxbtn:hover {
-  background: var(--hover-wash);
 }
 </style>

@@ -258,8 +258,10 @@ onUnmounted(() => {
   white-space: nowrap;
   transition: background 0.12s;
 }
+/* One hover for every decision, Yes and No included: the dark-surface ink
+   wash. Their hue lives on the border and the verb, not on the hover. */
 .rs-decide-btn:hover:not(:disabled):not([aria-disabled="true"]) {
-  background: rgba(var(--v-theme-on-dark-surface), 0.14);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 /* Same treatment for both: `disabled` (the 300ms key-slip hold) and
    `aria-disabled` (a lock, which stays focusable so its reason is reachable). */
@@ -335,17 +337,11 @@ onUnmounted(() => {
 .rs-decide-btn--yes .rs-decide-verb {
   color: rgb(var(--v-theme-primary));
 }
-.rs-decide-btn--yes:hover:not(:disabled) {
-  background: color-mix(in srgb, rgb(var(--v-theme-primary)) 12%, transparent);
-}
 .rs-decide-btn--no {
   border-color: color-mix(in srgb, rgb(var(--v-theme-dark-surface-error)) 45%, transparent);
 }
 .rs-decide-btn--no .rs-decide-verb {
   color: rgb(var(--v-theme-dark-surface-error));
-}
-.rs-decide-btn--no:hover:not(:disabled) {
-  background: color-mix(in srgb, rgb(var(--v-theme-dark-surface-error)) 12%, transparent);
 }
 
 .rs-decide-sep {
@@ -369,8 +365,9 @@ onUnmounted(() => {
   user-select: none;
   white-space: nowrap;
 }
+/* The checked box is the mark; the words stay ink. */
 .rs-gamify--on {
-  color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 .rs-gamify input {
   width: 15px;

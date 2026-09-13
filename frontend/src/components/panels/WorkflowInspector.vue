@@ -130,14 +130,14 @@
               </span>
             </div>
           </div>
-          <button
+          <AppButton
             v-else-if="row.variants > 1"
+            size="sm"
             class="wfins-action"
-            type="button"
             @click="store.toggleOpen(row.topology_hash)"
           >
             Read its {{ row.variants }} variants
-          </button>
+          </AppButton>
           <p v-else class="wfins-quiet wfins-note">
             One variant: this graph was only ever bound to one set of models.
           </p>
@@ -178,13 +178,13 @@
             <!-- The failure has a way out of it. Without this the only retry is
                  selecting another workflow and coming back, which nothing on
                  screen tells anybody. -->
-            <button
+            <AppButton
+              size="sm"
               class="wfins-action"
-              type="button"
               @click="store.loadSamples(row.topology_hash)"
             >
               Try again
-            </button>
+            </AppButton>
           </template>
           <p v-else class="wfins-quiet wfins-note">
             Nothing this workflow made is still in the library. The workflow
@@ -229,6 +229,7 @@ import {
   modelSummary,
   workflowDescriptor,
 } from "../../utils/workflowShelf";
+import AppButton from "../widgets/AppButton.vue";
 
 const store = useWorkflowShelfStore();
 const sidebarStore = useSidebarStore();
@@ -426,16 +427,19 @@ watch(
   cursor: pointer;
   transition:
     color var(--dur-1) var(--ease-standard),
+    background var(--dur-1) var(--ease-standard),
     border-color var(--dur-1) var(--ease-standard);
 }
 
 .wfins-tab-btn:hover:not(:disabled) {
-  color: rgba(var(--v-theme-on-surface), 0.75);
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
 }
 
+/* Olive marks, words stay text: the underline carries the selection. */
 .wfins-tab-btn.active {
-  color: rgba(var(--v-theme-primary), 1);
-  border-bottom-color: rgba(var(--v-theme-primary), 0.85);
+  color: rgb(var(--v-theme-on-surface));
+  border-bottom-color: var(--selected-ink);
 }
 
 /* Dimmed rather than removed: the panel keeps its shape when a workflow has
@@ -593,24 +597,8 @@ watch(
   display: block;
 }
 
-.wfins-tile:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-primary));
-  outline-offset: -2px;
-}
-
 .wfins-action {
   align-self: flex-start;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: inherit;
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-
-.wfins-action:hover {
-  background: var(--hover-wash);
 }
 
 .wfins-quiet {

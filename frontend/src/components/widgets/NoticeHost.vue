@@ -326,10 +326,17 @@ const hostEl = ref(null);
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
 }
 /* The bar control paints `toolbar-text`, a theme colour, which is wrong on a
-   card that stays dark in both themes. */
+   card that stays dark in both themes, and so are the theme's hover wash and
+   focus ink. */
 .notice-host--on-dark .notice-dismiss:hover {
   color: rgb(var(--v-theme-on-dark-surface));
-  background: var(--hover-wash);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+}
+.notice-host--on-dark .notice-action:hover {
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+}
+.notice-host--on-dark :focus-visible {
+  outline-color: rgb(var(--v-theme-on-dark-surface));
 }
 /* The hue swaps too, not just the alpha. A `dark-surface` stays dark in both
    themes, so the theme's own status hues are the wrong values on it - the light

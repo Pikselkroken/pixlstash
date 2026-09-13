@@ -995,14 +995,15 @@ onMounted(() => store.fetchRows());
   background: var(--hover-wash);
 }
 
+/* Flush rows in a scrolling list have no room for the global ring's gap, so
+   the same ink outline is drawn inside the row instead. */
 .wfshelf-row:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-primary));
-  outline-offset: -2px;
+  outline-offset: calc(var(--focus-width) * -1);
 }
 
 .wfshelf-row--selected {
   background: var(--active-wash);
-  border-left-color: rgb(var(--v-theme-accent));
+  border-left-color: var(--active-bar);
 }
 
 .wfshelf-row--variant {

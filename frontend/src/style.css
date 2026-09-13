@@ -82,6 +82,8 @@ body {
   --selected-ink: rgb(var(--v-theme-dark-surface-primary));
   /* Focus is ink (design-tokens.css). */
   --focus-stroke: rgb(var(--v-theme-on-surface));
+  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
+  --focus-glow: 0 0 6px 2px var(--focus-stroke);
   /* Tint alpha behind a folder-level dropdown (LibraryLayoutDialog). Deeper
      than light: 0.10 over the dark `input-background` is a smudge, 0.14 gives
      the same 1.28 luminance step off the field that 0.10 gives on white. */
@@ -91,14 +93,6 @@ body {
      surface's own ink (7.5 - 11.2:1 at rest, 5.05 - 8.3:1 hovered). */
   --active-text: rgb(var(--v-theme-on-surface));
 
-  /* The model shelf's view switch, whose selected segment is a wash rather than
-     a solid fill (`.shelf-viewseg--on`). Not `--active-wash`: that one selects
-     in the warm accent on light and the olive on dark, and this control keeps
-     one hue in both because it sits beside the bar's olive `Add` and a warm
-     chip next to it would read as a second, different accent. The +.06 over
-     light is the same compensation the line above makes, for the same reason -
-     the deepened olive needs more of itself to register on the dark track. */
-  --shelf-viewseg-wash: rgba(var(--v-theme-primary), 0.34);
 
   /* Drive-band capacity meter (#893). Three segments, so TWO adjacencies to
      keep readable: ours|other and other|free. `ours` is `primary` in both
@@ -139,14 +133,13 @@ body {
   --active-wash: rgba(var(--v-theme-primary), 0.16);
   --selected-ink: rgb(var(--v-theme-primary));
   --focus-stroke: rgb(var(--v-theme-on-surface));
+  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
+  --focus-glow: 0 0 6px 2px var(--focus-stroke);
   /* See the dark block above. */
   --level-wash: 0.1;
   --active-bar: rgb(var(--v-theme-primary));
   --active-text: rgb(var(--v-theme-on-surface));
 
-  /* See the dark block above: this control holds one hue across both themes,
-     so it stays olive here rather than following `--active-wash` into accent. */
-  --shelf-viewseg-wash: rgba(var(--v-theme-primary), 0.28);
 
   /* Drive-band capacity meter (#893) - see the dark block above for the rule.
      Here the canvas is near-white, so the neutral goes to the DARK extreme,

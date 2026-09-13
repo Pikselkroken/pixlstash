@@ -23,6 +23,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useTasksStore } from "../../stores/useTasksStore";
 import AppBarButton from "../widgets/AppBarButton.vue";
+import AppButton from "../widgets/AppButton.vue";
 
 // The worker-type value the backend keys the thumbnail-regen snapshot under.
 const THUMBNAIL_WORKER_KEY = "ThumbnailGenerationTask";
@@ -199,14 +200,14 @@ function viewProgress() {
         >{{ currentLabel }} / {{ totalLabel }}</span
       >
 
-      <button
+      <AppButton
         v-if="!isDone"
-        type="button"
+        size="sm"
         class="tub-view"
         @click="viewProgress"
       >
         View progress
-      </button>
+      </AppButton>
 
       <AppBarButton
         icon="close"
@@ -290,16 +291,6 @@ function viewProgress() {
 .tub-view {
   flex: none;
   margin-left: auto;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  color: rgb(var(--v-theme-primary));
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  font-family: inherit;
-}
-
-.tub-view:hover {
-  background: rgba(var(--v-theme-primary), 0.1);
 }
 
 /* When there is no "View progress" button (the done beat), the dismiss button

@@ -17,7 +17,13 @@
 }
 
 .ctx-item:hover:not(:disabled) {
-  background: rgba(var(--v-theme-on-surface), 0.08);
+  background: var(--hover-wash);
+}
+
+/* A row flush inside its menu cannot take the global outline's gap. */
+.ctx-item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-inset);
 }
 
 .ctx-item:disabled {
@@ -121,7 +127,11 @@
 }
 
 .image-ctx-menu--on-dark .ctx-item:hover:not(:disabled) {
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+}
+
+.image-ctx-menu--on-dark .ctx-item:focus-visible {
+  box-shadow: inset 0 0 0 var(--focus-width) rgb(var(--v-theme-on-dark-surface));
 }
 
 .image-ctx-menu--on-dark .ctx-sep {

@@ -395,7 +395,7 @@ watch(
         >
           <v-switch
             v-model="serverDraft.enabled"
-            color="accent"
+            color="primary"
             density="compact"
             hide-details
             :disabled="busy"
@@ -443,7 +443,7 @@ watch(
           >
             <v-switch
               v-model="serverDraft.ssl"
-              color="accent"
+              color="primary"
               density="compact"
               hide-details
               :disabled="!serverDraft.enabled || busy"
@@ -539,7 +539,7 @@ watch(
         >
           <v-switch
             :model-value="hideToTrayOnClose"
-            color="accent"
+            color="primary"
             density="compact"
             hide-details
             @update:model-value="setHideToTray($event)"
@@ -551,7 +551,7 @@ watch(
         >
           <v-switch
             v-model="checkForUpdatesModel"
-            color="accent"
+            color="primary"
             density="compact"
             hide-details
           />
@@ -567,7 +567,7 @@ watch(
       >
         <v-switch
           :model-value="shellCommand"
-          color="accent"
+          color="primary"
           density="compact"
           hide-details
           @update:model-value="setShellCommand($event)"
@@ -815,11 +815,6 @@ watch(
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.06);
   color: inherit;
-  outline: none;
-}
-
-.owner-input:focus {
-  border-color: rgb(var(--v-theme-primary));
 }
 
 .owner-password-field {
@@ -839,6 +834,12 @@ watch(
   align-items: center;
   color: rgba(var(--v-theme-on-surface), 0.7);
   padding: var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.owner-password-toggle:hover {
+  color: rgb(var(--v-theme-on-surface));
+  background: var(--hover-wash);
 }
 
 .settings-error {

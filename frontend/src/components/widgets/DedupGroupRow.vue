@@ -992,7 +992,7 @@ function onDblClick(event) {
    so it cannot shift the row's layout when the focus moves. */
 .grow--focus {
   background: var(--active-wash);
-  border-color: rgba(var(--v-theme-accent), 0.4);
+  border-color: var(--active-bar);
 }
 
 .grow--focus::before {
@@ -1001,17 +1001,13 @@ function onDblClick(event) {
   inset: 0 auto 0 0;
   width: 3px;
   border-radius: var(--radius-md) 0 0 var(--radius-md);
-  background: rgb(var(--v-theme-accent));
+  background: var(--active-bar);
 }
 
-/* Part of a multi-selection: the same accent family as the focus treatment,
-   one step quieter - no left bar, that stays the keyboard cursor's. */
+/* Part of a multi-selection: the same olive selection as the focus treatment,
+   minus the left bar, which stays the keyboard cursor's. */
 .grow--selected {
-  border-color: rgba(var(--v-theme-accent), 0.55);
-  background: var(--hover-wash);
-}
-
-.grow--selected.grow--focus {
+  border-color: var(--active-bar);
   background: var(--active-wash);
 }
 
@@ -1025,7 +1021,7 @@ function onDblClick(event) {
 }
 
 .gcaret {
-  color: rgb(var(--v-theme-accent));
+  color: var(--active-text);
   flex-shrink: 0;
   align-self: center;
   margin-left: calc(-1 * var(--space-2));

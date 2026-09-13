@@ -190,6 +190,7 @@
             <AppBarButton
               v-bind="menuProps"
               class="selection-menu-trigger"
+              shape="round"
               icon="image-multiple-outline"
               chevron
               :disabled="selectedCount === 0 && selectedFaceCount === 0"
@@ -281,6 +282,7 @@
             impossibleSources.length > 0
           "
           class="clear-impossible-btn"
+          shape="round"
           icon="tag-off-outline"
           :loading="clearingImpossible"
           :title="`Strip the impossible tags from the ${selectedCount} selected picture(s)`"
@@ -292,6 +294,7 @@
         </AppBarButton>
         <AppBarButton
           icon="selection-off"
+          shape="round"
           :disabled="!hasSelection"
           :title="clearTitle"
           :aria-label="clearTitle"
@@ -304,6 +307,7 @@
              sits in the same surface as the bulk Assign write. -->
         <AppBarButton
           class="delete-btn"
+          shape="round"
           icon="delete"
           danger
           :disabled="!hasSelection || isReadOnly"
@@ -855,7 +859,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 }
 
 .plugin-run-select {
-  height: 32px;
+  height: var(--control-h-bar);
   width: 100%;
   border-radius: 4px;
   border: 1px solid rgba(var(--v-theme-primary), 0.4);

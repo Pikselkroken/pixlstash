@@ -300,7 +300,7 @@ watch(
       <div class="smart-score-filter-toggle">
         <v-switch
           v-model="applyTagFilter"
-          color="accent"
+          color="primary"
           density="compact"
           hide-details
           :disabled="applyTagFilterLoading"

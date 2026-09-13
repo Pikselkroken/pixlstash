@@ -291,17 +291,18 @@ watch(
 }
 
 .tc__opt:hover {
-  border-color: rgb(var(--v-theme-accent));
-  background: rgba(var(--v-theme-accent), 0.06);
+  background: var(--hover-wash);
 }
 
 .tc__opt[aria-checked="true"] {
-  border-color: rgb(var(--v-theme-accent));
-  background: rgba(var(--v-theme-accent), 0.1);
+  border-color: var(--active-bar);
+  background: var(--active-wash);
+  color: var(--active-text);
 }
 
+/* Takes the card's ink: amber is the action, and an olive mark on the chosen
+   card's olive wash would be olive on olive. */
 .tc__mark {
-  color: rgb(var(--v-theme-accent));
   width: 48px;
   height: 26px;
 }

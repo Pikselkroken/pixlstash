@@ -7,7 +7,7 @@
       >
         <v-switch
           v-model="checkForUpdatesModel"
-          color="accent"
+          color="primary"
           density="compact"
           hide-details
         />
@@ -22,7 +22,7 @@
       >
         <v-switch
           v-model="installIdModel"
-          color="accent"
+          color="primary"
           density="compact"
           hide-details
         />
