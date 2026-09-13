@@ -127,6 +127,16 @@ class LibraryListResponse(BaseModel):
             "install path or a container name."
         ),
     )
+    importing_uuid: Optional[str] = Field(
+        default=None,
+        description=(
+            "Identity of the library being imported for the first time, if "
+            "there is one. The client needs it to answer the question it is "
+            "showing: finish the folder as an empty library "
+            "(`POST /libraries/{uuid}/promote`) or give it back "
+            "(`POST /libraries/{uuid}/discard`)."
+        ),
+    )
     importing_name: Optional[str] = Field(
         default=None,
         description=(
@@ -310,7 +320,7 @@ def create_router(server) -> APIRouter:
         # this list and would otherwise have nothing at all to show while the
         # only library on the machine is being built.
         active = server.library_registry.active_library()
-        importing = active.name if active and active.pending_import_at else None
+        importing = active if active and active.pending_import_at else None
         return LibraryListResponse(
             libraries=[_to_response(library, local) for library in libraries],
             can_manage=local,
@@ -318,7 +328,8 @@ def create_router(server) -> APIRouter:
             # The hub path only ever reaches a local caller, along with the
             # library paths beside it: it is host layout, same as those.
             cli_hint=cli_hint(hub_path=server.hub.path) if local else None,
-            importing_name=importing,
+            importing_name=importing.name if importing else None,
+            importing_uuid=importing.uuid if importing else None,
         )
 
     def _safe_folder(path: str) -> str:
@@ -710,6 +721,37 @@ def create_router(server) -> APIRouter:
             library=_to_response(library, _caller_is_local(request)),
             inert_share_links=share_links,
         )
+
+    @router.post(
+        "/libraries/{library_uuid}/discard",
+        summary="Give a folder back: undo a first import",
+        description=(
+            "The answer to the import question was no. The temporary database "
+            "and the thumbnails the import made are deleted, the registration "
+            "is dropped, and **not one picture file is touched**: the folder is "
+            "left exactly as PixlStash found it, with no `vault.db` to make it "
+            "read as a library next time.\n\n"
+            "This is what closing the import question does, as well as "
+            "aborting it. The session lands on a library of PixlStash's own in "
+            "the app directory, which is the screen that offers to point it at "
+            "a folder again.\n\n"
+            "Only a library whose first import has not finished can be "
+            "discarded. A real library is refused, because discarding one "
+            "would delete something the owner kept - detach it instead."
+        ),
+        tags=["libraries"],
+        response_model=LibraryResponse,
+    )
+    def discard_library(request: Request, library_uuid: str):
+        server.auth.ensure_secure_when_required(request)
+        target = _by_uuid_or_404(library_uuid)
+        try:
+            landed = server.library_switch.discard_pending_library(target)
+        except LibrarySwitchError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except LibraryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _to_response(landed, _caller_is_local(request))
 
     @router.post(
         "/libraries/{library_uuid}/promote",

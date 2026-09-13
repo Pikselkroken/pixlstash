@@ -41,6 +41,31 @@ VAULT_FILENAME = "vault.db"
 #: dot-entries, so the file can never be mistaken for content.
 TEMP_VAULT_FILENAME = ".vault.db.importing"
 
+#: Name of the library a discarded import lands on.
+SCRATCH_LIBRARY_NAME = "PixlStash"
+
+#: Everything PixlStash itself writes into a library's folder, beside the
+#: database, that is not one of the owner's pictures.
+#:
+#: Two callers need it and neither can reach the other's module: the discard
+#: (`library_switch_service`) and the start-up sweep (`hub.bootstrap`), which
+#: import each other's neighbours. It lives here for the same reason
+#: :data:`VAULT_FILENAME` does - these are the names PixlStash puts in a folder
+#: it was pointed at, and "the folder is exactly as we found it" is a claim
+#: about this list being complete.
+#:
+#: ``.pixlstash-thumbnails`` is spelled out rather than imported from
+#: ``image_utils``: that module pulls in OpenCV and PIL, and this one is on the
+#: CLI's and start-up's path. A test asserts the two agree.
+LIBRARY_MADE_ENTRIES = (
+    "snapshots",
+    "tmp",
+    ".pixlstash-thumbnails",
+    ".ref_thumbs",
+    ".staging",
+)
+
+
 # Every registry read selects the same columns, in the order
 # :meth:`LibraryRegistry._row_to_library` expects.
 _LIBRARY_COLUMNS = (
@@ -485,6 +510,8 @@ class LibraryRegistry:
         self,
         folder: str,
         name: str | None = None,
+        *,
+        pending_import: bool = False,
     ) -> Library:
         """Register a folder whose vault does not exist yet.
 
@@ -492,11 +519,21 @@ class LibraryRegistry:
         moments later, so requiring one here would be a chicken-and-egg failure.
         Everything else goes through :meth:`attach` or :meth:`create`, both of
         which insist on a real vault.
+
+        Args:
+            pending_import: The folder already holds pictures the owner has not
+                answered for, so the vault about to be created goes under
+                :data:`TEMP_VAULT_FILENAME`. The desktop's first run reaches
+                this path rather than ``POST /libraries``: it writes the chosen
+                folder into ``server-config.json`` and lets start-up register
+                it, so without this the whole temporary-vault rule would apply
+                to Settings and not to first run.
         """
         resolved = resolve_path(folder)
         return self._register(
             resolved,
             name or os.path.basename(resolved),
+            pending_import=pending_import,
             # Start-up must not die on a name. `bootstrap._register_first_library`
             # passes the hardcoded "Library 1" and does not catch
             # LibraryExistsError, so refusing here would turn a duplicate label -
@@ -729,6 +766,54 @@ class LibraryRegistry:
             self._token_count(library.uuid),
         )
         return self.by_uuid(library.uuid)
+
+    def scratch_folder(self) -> str:
+        """Where a session goes when the folder it was using is given back.
+
+        Beside **this** hub, because the scratch library is the app's and not
+        the owner's: a discard has just handed their folder back, and landing
+        them in another folder of theirs would be picking one for them. Derived
+        from the hub in use rather than from the platform default, so a hub in
+        a temporary directory - a test, a second install - gets its own scratch
+        folder instead of reaching into the real one.
+
+        It is also the server's default ``image_root``, so on most installs
+        this is the library start-up already made and nothing new appears.
+        """
+        return os.path.join(os.path.dirname(self.hub_path), "images")
+
+    def forget(self, name_or_id: str | int, *, allow_active: bool = False) -> None:
+        """Delete a registration outright, for a library that never existed.
+
+        The counterpart to :meth:`detach`, which keeps the row precisely so an
+        attached-again folder revives its uuid and share links. There is
+        nothing here to revive: a discarded first import was never a library,
+        holds no share links, and a revived row would come back still pending.
+
+        The uuid is not reused - ``library_uuid_issued`` keeps every one this
+        hub ever minted - so a later library in the same folder gets a new
+        identity, which is what it is.
+
+        Args:
+            allow_active: Forget it even though it is marked active. For the
+                start-up sweep alone, which runs before any vault is opened -
+                and where the active row is exactly what needs forgetting,
+                because the desktop's first run makes the folder it asked about
+                the active library before the owner has answered.
+
+        Raises:
+            ActiveLibraryError: It is the active library and *allow_active* is
+                False. Move off it first; deleting the row underneath an open
+                vault would leave the server serving a library it cannot name.
+        """
+        library = self.get(name_or_id)
+        if library.is_active and not allow_active:
+            raise ActiveLibraryError(
+                f'Cannot forget "{library.name}": it is the active library.'
+            )
+        with self._hub.transaction() as conn:
+            conn.execute("DELETE FROM library WHERE id = ?", (library.id,))
+        logger.info("Forgot the registration for %s at %s", library.name, library.path)
 
     def set_active(self, name_or_id: str | int) -> Library:
         """Mark a library active and every other inactive, atomically.

@@ -31,6 +31,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
 from pixlstash.hub.registry import (
+    LIBRARY_MADE_ENTRIES,
+    SCRATCH_LIBRARY_NAME as _SCRATCH_LIBRARY_NAME,
     VAULT_FILENAME,
     Library,
     LibraryError,
@@ -557,6 +559,120 @@ class LibrarySwitchService:
             return promoted
         finally:
             self._lock.release()
+
+    def discard_pending_library(self, library: Library) -> Library:
+        """Undo a first import: the folder goes back to being the owner's folder.
+
+        The answer to the import question was "no" - an abort, the wizard
+        closed, or a crash the startup sweep is clearing up - and a folder the
+        owner backed out of must be exactly as PixlStash found it. So this
+        deletes the temporary database, the thumbnails this import made, and
+        the registration, and leaves every picture file untouched.
+
+        The session lands on the scratch library, and the owner is asked about
+        a folder again. Switching first is not a nicety: the database cannot be
+        deleted while it is the one being served, and the switch is what drains
+        the workers off it.
+
+        Returns:
+            The library the session is now on.
+
+        Raises:
+            LibrarySwitchError: The library is not pending, or the session
+                could not be moved off it. Nothing is deleted in either case.
+        """
+        if not library.pending_import_at:
+            raise LibrarySwitchError(
+                f'"{library.name}" is a library, not an unfinished import; '
+                "discarding it would delete something the owner kept."
+            )
+        folder = resolve_path(library.path)
+        temporary = os.path.join(folder, library.vault_filename)
+
+        landed = self.switch_to_scratch_library(leaving=library)
+        # Only now: the vault is closed and nothing is serving out of it.
+        for name in (
+            library.vault_filename,
+            f"{library.vault_filename}-wal",
+            f"{library.vault_filename}-shm",
+        ):
+            path = os.path.join(folder, name)
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError as exc:
+                logger.warning(
+                    "Could not remove %s after the import was discarded: %s. "
+                    "It is a database of an import nobody kept and can be "
+                    "deleted by hand.",
+                    path,
+                    exc,
+                )
+        self._remove_what_we_made(folder)
+        self._server.library_registry.forget(library.id)
+        logger.info(
+            "Discarded the unfinished import into %s; %s is gone and the "
+            "folder is as it was",
+            folder,
+            os.path.basename(temporary),
+        )
+        return landed
+
+    def _remove_what_we_made(self, folder: str) -> None:
+        """Delete the folders PixlStash itself wrote into *folder*.
+
+        "Exactly as PixlStash found it" is the whole claim, and the thumbnail
+        cache is only the part people notice: opening a library also creates
+        ``snapshots/`` and ``tmp/``, which a test asserting the folder's
+        listing is what found out. Named entries only, never a sweep of
+        whatever looks generated - this runs on a folder full of the owner's
+        pictures, and a symlink one of these names points at is left alone.
+        """
+        for name in LIBRARY_MADE_ENTRIES:
+            path = os.path.join(folder, name)
+            if not os.path.isdir(path) or os.path.islink(path):
+                continue
+            try:
+                shutil.rmtree(path)
+            except OSError as exc:
+                logger.warning("Could not remove %s: %s", path, exc)
+
+    def switch_to_scratch_library(
+        self, *, leaving: Optional[Library] = None
+    ) -> Library:
+        """Move the session onto a library that is not the owner's folder.
+
+        Where a discard lands. The scratch library lives beside the hub in the
+        app's own directory, is created the first time it is needed and reused
+        after that, and is never deleted by a discard: it holds nothing worth
+        deleting. An empty library is also the screen that offers to point
+        PixlStash at a folder, which is the whole point of landing here.
+        """
+        registry = self._server.library_registry
+        folder = registry.scratch_folder()
+        resolved = resolve_path(folder)
+        existing = next(
+            (lib for lib in registry.list_libraries() if lib.path == resolved),
+            None,
+        )
+        if existing is None:
+            os.makedirs(folder, exist_ok=True)
+            # A vault already there and unregistered is a previous scratch
+            # library this hub has lost track of - a hub reset, a restore.
+            # Attaching keeps whatever is in it; creating would refuse.
+            if os.path.isfile(os.path.join(resolved, VAULT_FILENAME)):
+                existing = registry.attach(
+                    folder, _SCRATCH_LIBRARY_NAME, unique_name=False
+                )
+            else:
+                existing = registry.create(folder, _SCRATCH_LIBRARY_NAME)
+        if leaving is not None and existing.uuid == leaving.uuid:
+            raise LibrarySwitchError(
+                "The scratch library cannot be discarded; it is where a discard lands."
+            )
+        if existing.is_active:
+            return existing
+        return self.switch_to(existing.uuid)
 
     def _reopen_after_promotion(self, library: Library, *, renamed: bool) -> None:
         """Open *library* again and publish it, or take the server down trying.

@@ -414,6 +414,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         library_access=LibraryAccessMode.HUB_ONLY,
         justification="§16.3 tier for the POST /libraries/active reason rather than the path-authority one: it takes a registry uuid, never a host path, and removes no file - it clears the attached flag and keeps the row. What it exercises is authority over other principals' state, because every share link pointing at that library stops working until the folder is added again. The active library is refused by the registry; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    ("POST", "/api/v1/libraries/{library_uuid}/discard"): RoutePolicy(
+        _LOCAL,
+        library_access=LibraryAccessMode.SWITCH_WRITER,
+        justification="§16.3 and the strictest reading of it: it DELETES files inside a host folder - the import's temporary database and the thumbnail cache PixlStash wrote - and closes and reopens the active vault to do it. Both halves are already on this tier (POST /libraries for write authority inside a folder, POST /libraries/active for resetting every client's session). It takes a registry uuid, never a caller-supplied path, and the registry refuses anything but a library still on its first import, so the only files it can reach are ones PixlStash created itself and the owner never kept. No picture file is touched; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("POST", "/api/v1/libraries/{library_uuid}/promote"): RoutePolicy(
         _LOCAL,
         library_access=LibraryAccessMode.SWITCH_WRITER,

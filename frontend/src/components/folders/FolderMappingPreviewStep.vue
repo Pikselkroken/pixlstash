@@ -293,7 +293,14 @@ async function organiseLater() {
   }
 }
 
-/** Give up on the import. What was indexed before now stays indexed. */
+/**
+ * Give up on the import: the folder goes back to being the owner's.
+ *
+ * The server discards the whole first import when this is the folder's first
+ * one - its temporary database and the folders PixlStash made - and not one
+ * picture file is touched. The session lands on an empty library, which is
+ * where the folder question is asked again.
+ */
 async function abort() {
   try {
     await stopFolderStructureCommit(commitTaskId.value, "abort");
@@ -363,17 +370,16 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div
-      v-if="patterns.length && !committing"
-      class="preview-step__card"
-    >
-      <div class="preview-step__card-title">Caption files beside your pictures</div>
+    <div v-if="patterns.length && !committing" class="preview-step__card">
+      <div class="preview-step__card-title">
+        Caption files beside your pictures
+      </div>
       <p class="preview-step__card-lead">
         Text files named after a picture are read as its tags or description,
         and stay in step with your edits from then on. Confirming a pattern
-        turns caption files on for this library's whole picture folder, not
-        only the one you are importing, and writes a file beside every picture
-        that already has tags or a description. Check each pattern.
+        turns caption files on for this library's whole picture folder, not only
+        the one you are importing, and writes a file beside every picture that
+        already has tags or a description. Check each pattern.
       </p>
       <ul class="preview-step__captions">
         <li
@@ -435,7 +441,9 @@ onUnmounted(() => {
           >
           {{ captionFilesAsTags.toLocaleString() }} caption
           {{ captionFilesAsTags === 1 ? "file is" : "files are" }} read as tags;
-          {{ captionFilesAsTags === 1 ? "that picture is" : "those pictures are" }}
+          {{
+            captionFilesAsTags === 1 ? "that picture is" : "those pictures are"
+          }}
           not tagged from scratch
         </div>
         <div v-if="captionFilesAsDescriptions" class="preview-step__fact">
@@ -520,8 +528,9 @@ onUnmounted(() => {
     <p class="preview-step__actions-note">
       <template v-if="committing">
         Organise later keeps every picture indexed so far and leaves the folder
-        mapping for another day. Abort gives up on the import - nothing already
-        indexed is removed, and no file is touched either way.
+        mapping for another day. Abort gives the folder back: PixlStash removes
+        what it put there and leaves your pictures untouched, exactly as it
+        found them.
       </template>
       <template v-else>
         Organise later brings the pictures in now and leaves naming the folders

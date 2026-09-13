@@ -20,6 +20,7 @@ import pytest
 from sqlmodel import delete, select
 
 from pixlstash.db_models import Picture
+from pixlstash.utils.image_processing.image_utils import THUMBNAIL_DIR_NAME
 from pixlstash.hub.registry import (
     TEMP_VAULT_FILENAME,
     VAULT_FILENAME,
@@ -982,3 +983,69 @@ class TestPromotingAFirstImport:
         # Reopened under the name the file actually has: the session survives.
         assert server.vault.image_root == pending_library.path
         assert server.auth.vault_db is server.vault.db
+
+
+class TestDiscardingAFirstImport:
+    """The answer was no, so the folder goes back to being the owner's."""
+
+    @pytest.fixture
+    def pending_library(self, server, tmp_path):
+        original = server.library_registry.active_library()
+        folder = tmp_path / "holiday-snaps"
+        folder.mkdir()
+        (folder / "beach.jpg").write_bytes(b"not really a jpeg, but a file")
+        library = server.library_registry.create(
+            str(folder), f"Holiday {tmp_path.name}", pending_import=True
+        )
+        server.library_switch.switch_to(library.uuid)
+        yield server.library_registry.by_uuid(library.uuid)
+        if server.library_registry.active_library().uuid != original.uuid:
+            server.library_switch.switch_to(original.uuid)
+
+    def test_discarding_leaves_the_folder_exactly_as_it_was(
+        self, server, pending_library
+    ):
+        folder = Path(pending_library.path)
+        (folder / THUMBNAIL_DIR_NAME).mkdir()
+        (folder / THUMBNAIL_DIR_NAME / "beach_thumb.webp").write_bytes(b"thumb")
+
+        server.library_switch.discard_pending_library(pending_library)
+
+        assert sorted(p.name for p in folder.iterdir()) == ["beach.jpg"], (
+            "the owner's picture, and nothing else PixlStash left behind"
+        )
+        assert (folder / "beach.jpg").read_bytes() == b"not really a jpeg, but a file"
+        assert server.library_registry.by_uuid(pending_library.uuid) is None
+
+    def test_the_session_lands_on_a_library_that_is_not_that_folder(
+        self, server, pending_library
+    ):
+        landed = server.library_switch.discard_pending_library(pending_library)
+
+        assert landed.path != pending_library.path
+        assert server.vault.image_root == landed.path
+        assert server.auth.vault_db is server.vault.db
+        assert landed.pending_import_at is None
+
+    def test_a_real_library_is_never_discarded(self, server):
+        """Discarding one would delete something the owner kept."""
+        active = server.library_registry.active_library()
+
+        with pytest.raises(LibrarySwitchError, match="not an unfinished import"):
+            server.library_switch.discard_pending_library(active)
+
+    def test_adding_the_same_folder_again_offers_it_as_pictures(
+        self, server, pending_library
+    ):
+        """The loop closes: no vault.db means it reads as a folder again."""
+        folder = Path(pending_library.path)
+
+        server.library_switch.discard_pending_library(pending_library)
+
+        assert not (folder / VAULT_FILENAME).exists()
+        assert not (folder / TEMP_VAULT_FILENAME).exists()
+        again = server.library_registry.create(
+            str(folder), f"Second go {folder.name}", pending_import=True
+        )
+        assert again.pending_import_at is not None
+        server.library_registry.forget(again.id)

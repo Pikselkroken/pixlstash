@@ -15,8 +15,10 @@ import pytest
 from sqlmodel import select
 
 from pixlstash.db_models.picture import Picture
+from pixlstash.hub.bootstrap import _sweep_unfinished_imports
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.registry import (
+    LIBRARY_MADE_ENTRIES,
     TEMP_VAULT_FILENAME,
     VAULT_FILENAME,
     LibraryRegistry,
@@ -25,6 +27,10 @@ from pixlstash.services.library_switch_service import (
     LibrarySwitchError,
     LibrarySwitchService,
 )
+from pixlstash.services.folder_structure_commit_service import (
+    LIBRARY_OWN_FOLDERS,
+)
+from pixlstash.utils.image_processing.image_utils import THUMBNAIL_DIR_NAME
 from pixlstash.vault import Vault
 
 
@@ -179,3 +185,74 @@ class TestPendingImportRegistration:
 
         with pytest.raises(LibrarySwitchError, match="no longer looks like"):
             service._revalidate(library)
+
+
+class TestTheStartupSweep:
+    """A crash mid-import must end like the abort it effectively was."""
+
+    @pytest.fixture
+    def registry(self, tmp_path):
+        hub = HubDatabase(str(tmp_path / "hub.db"))
+        yield LibraryRegistry(hub)
+        hub.close()
+
+    def test_an_import_that_never_finished_gives_the_folder_back(
+        self, registry, tmp_path
+    ):
+        folder = tmp_path / "folder-of-pictures"
+        folder.mkdir()
+        (folder / "beach.jpg").write_bytes(b"a picture")
+        library = registry.create(str(folder), "Holiday", pending_import=True)
+        (folder / THUMBNAIL_DIR_NAME).mkdir()
+        (folder / "snapshots").mkdir()
+
+        _sweep_unfinished_imports(registry)
+
+        assert sorted(p.name for p in folder.iterdir()) == ["beach.jpg"]
+        assert registry.by_uuid(library.uuid) is None
+
+    def test_a_rename_that_landed_before_the_crash_is_just_finished(
+        self, registry, tmp_path
+    ):
+        """The mark is stale, not the library: it is real and must be kept."""
+        folder = tmp_path / "folder-of-pictures"
+        folder.mkdir()
+        library = registry.create(str(folder), "Holiday", pending_import=True)
+        os.replace(folder / TEMP_VAULT_FILENAME, folder / VAULT_FILENAME)
+
+        _sweep_unfinished_imports(registry)
+
+        swept = registry.by_uuid(library.uuid)
+        assert swept is not None, "a real library must never be swept away"
+        assert swept.pending_import_at is None
+        assert (folder / VAULT_FILENAME).is_file()
+
+    def test_an_ordinary_library_is_left_alone(self, registry, tmp_path):
+        folder = tmp_path / "library"
+        folder.mkdir()
+        (folder / "kept.jpg").write_bytes(b"a picture")
+        library = registry.create(str(folder), "Real")
+        (folder / THUMBNAIL_DIR_NAME).mkdir()
+
+        _sweep_unfinished_imports(registry)
+
+        assert registry.by_uuid(library.uuid) is not None
+        assert (folder / VAULT_FILENAME).is_file()
+        assert (folder / THUMBNAIL_DIR_NAME).is_dir(), "not ours to clean up"
+
+
+def test_the_made_entries_list_agrees_with_the_thumbnail_cache_it_names():
+    """`.pixlstash-thumbnails` is spelled out in two modules; they must match.
+
+    `hub.registry` cannot import `image_utils` - that module pulls in OpenCV
+    and PIL, and the registry is on the CLI's and start-up's path - so the name
+    is repeated there deliberately. A rename that missed one copy would leave
+    every discarded import's thumbnail cache sitting in the owner's folder,
+    silently, with every test still green.
+    """
+    assert THUMBNAIL_DIR_NAME in LIBRARY_MADE_ENTRIES
+
+
+def test_every_folder_a_walk_prunes_is_one_a_discard_removes():
+    """The narrower list is derived, so this is a check that it stayed derived."""
+    assert set(LIBRARY_OWN_FOLDERS) <= set(LIBRARY_MADE_ENTRIES)
