@@ -1015,7 +1015,7 @@ kbd {
   position: relative;
 }
 
-.bar-btn:hover:not(:disabled) {
+.bar-btn:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--hover-wash);
   color: rgb(var(--v-theme-toolbar-text));
 }
@@ -1038,16 +1038,17 @@ kbd {
 /* Colour is the whole signal - no border, no fill - so a destructive verb reads
    as one of the row rather than as a second kind of control. */
 .bar-btn--danger,
-.bar-btn--danger:hover:not(:disabled) {
+.bar-btn--danger:hover:not(:disabled):not([aria-disabled="true"]) {
   color: rgb(var(--v-theme-error));
 }
-.bar-btn--danger:hover:not(:disabled) {
+.bar-btn--danger:hover:not(:disabled):not([aria-disabled="true"]) {
   background: rgba(var(--v-theme-error), 0.08);
 }
 
 /* Shown and dimmed rather than hidden, so a row of verbs never reflows under
    the pointer as a selection grows. Pending is not disabled: it stays legible. */
-.bar-btn:disabled {
+.bar-btn:disabled,
+.bar-btn[aria-disabled="true"] {
   opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }

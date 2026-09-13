@@ -104,18 +104,21 @@
       >
         <template #activator="{ props: menuProps }">
           <!-- A copy of a 6 GB checkpoint is not instant, and this button is
-               the only thing on screen that knows one is running: `loading`
-               turns the glyph into the spinner. -->
+               the only thing on screen that knows one is running, so the glyph
+               becomes the spinner. Not `loading`: that disables the button, and
+               the menu's other rows (Add folder, ai-toolkit) stay usable while
+               a file copies; only Add file refuses. -->
           <AppBarButton
             ref="addBtnRef"
             v-bind="menuProps"
             class="bar-btn--accent shelf-fold-680"
-            icon="plus"
+            :icon="adding ? '' : 'plus'"
             chevron
-            :loading="adding"
+            :aria-busy="adding || undefined"
             aria-haspopup="menu"
             :aria-expanded="addMenuOpen"
             title="Add models to the shelf"
+            ><v-icon v-if="adding" size="18" class="mdi-spin">mdi-loading</v-icon
             >Add</AppBarButton
           >
         </template>

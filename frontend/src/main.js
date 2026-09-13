@@ -97,11 +97,12 @@ const pixlStashLight = {
     "on-background": "#23211d",
     // ── The action-fill tier (unified Camp B palette) ───────────────────────
     // ONE brand palette shared by both themes (design-system parity, 2026-07-24):
-    // the same four brand hues in light and dark, each carrying the warm near-white
-    // label #f7f1ea (never pure #fff). Label contrast: primary 4.86:1, secondary
-    // 4.91:1, tertiary 4.85:1 - all AA. The amber `accent` was brightened to a
-    // warmer, more-orange #c47a1e and now sits at 3.04:1: enough for the semibold
-    // button label (AA large), so these fills stay label-only (buttons, chips,
+    // the same four brand hues in light and dark. Olive, raspberry and teal carry
+    // the warm near-white label #f7f1ea: primary 4.86:1, secondary 4.91:1,
+    // tertiary 4.85:1 - all AA. The amber `accent` #c47a1e carries pure white at
+    // 3.41:1, an accepted exception for one short word on a 28px key action
+    // (docs/design/buttons.md); its hover darkens to 5.03:1. These fills stay
+    // label-only (buttons, chips,
     // rails, icons - never small body text on a canvas).
     accent: "#c47a1e", // white label 3.41:1 (brightened from #9e6727)
     "on-accent": "#ffffff", // 3.41:1, an accepted exception; hover darkens the fill to 5.03:1 (buttons.md)
@@ -193,9 +194,9 @@ const pixlStashDark = {
     "on-background": "#f2e5da",
     // ── The action-fill tier (unified Camp B palette) ───────────────────────
     // Identical to the light theme by design - one brand palette in both themes
-    // (design-system parity, 2026-07-24). Same warm-white #f7f1ea label, same
-    // contrast (primary 4.86:1, secondary 4.91:1, tertiary 4.85:1; accent
-    // #c47a1e 3.04:1, AA-large for the semibold button label).
+    // (design-system parity, 2026-07-24). Same labels, same contrast (primary
+    // 4.86:1, secondary 4.91:1, tertiary 4.85:1 on #f7f1ea; accent #c47a1e 3.41:1
+    // on pure white, the accepted key-action exception).
     accent: "#c47a1e", // white label 3.41:1 (brightened, more orange)
     "on-accent": "#ffffff", // 3.41:1, an accepted exception; hover darkens the fill to 5.03:1 (buttons.md)
     "accent-bright": "#e08a2a", // brighter, more-orange amber glow: selection / active / focus (not a text/fill token)
