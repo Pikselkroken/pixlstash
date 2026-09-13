@@ -229,7 +229,7 @@ Decompose by domain first, then fan out. **Independent** sub-tasks run concurren
 - **Install dependencies:** `pip install -e .`
 - **Run server:** `python -m pixlstash.app`
 - **Run tests:** `python -m pytest -s -vvv --fast-captions`
-- **Check formatting:** `ruff check pixlstash`
+- **Check formatting:** `ruff check pixlstash tests scripts && ruff format --check pixlstash tests scripts`
 - **Build frontend:** `npm run build` (in `frontend/`)
 - **Dev frontend:** `npm run dev` (in `frontend/`)
 

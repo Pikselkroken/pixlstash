@@ -103,7 +103,8 @@ jobs:
 
       - name: Check formatting with ruff
         run: |
-          ruff check pixlstash
+          ruff check pixlstash tests scripts
+          ruff format --check pixlstash tests scripts
 
       - name: Check backend_architecture.md is up to date
         run: |
