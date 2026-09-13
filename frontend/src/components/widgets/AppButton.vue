@@ -6,7 +6,11 @@
       'app-btn',
       `app-btn--${variant}`,
       `app-btn--${size}`,
-      { 'app-btn--icon-only': iconOnly, 'app-btn--loading': loading },
+      {
+        'app-btn--icon-only': iconOnly,
+        'app-btn--loading': loading,
+        'app-btn--block': block,
+      },
     ]"
     :disabled="disabled || loading"
     :aria-busy="loading ? 'true' : undefined"
@@ -42,11 +46,13 @@ import { VIcon } from "vuetify/components";
 
 const props = defineProps({
   // primary (amber accent) | primary_green (olive) | secondary (neutral) |
-  // danger (error) | ghost (transparent)
+  // outline (bordered, no fill) | danger (error) | ghost (transparent)
   variant: { type: String, default: "secondary" },
   size: { type: String, default: "md" }, // md | sm
   iconLeft: { type: String, default: "" },
   iconOnly: { type: Boolean, default: false },
+  // Full width of its container, for a panel-width key action.
+  block: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   // Pending / in-flight. NOT the same thing as `disabled`: "working", not "not
   // allowed" (visual-language.md §11). Forces the button disabled so a second
@@ -123,7 +129,7 @@ defineExpose({ focus });
   font-family: var(--font-ui);
   font-weight: var(--weight-medium);
   border: 1px solid transparent;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   white-space: nowrap;
   transition:
     background var(--dur-1) var(--ease-standard),
@@ -133,24 +139,29 @@ defineExpose({ focus });
 }
 
 .app-btn--md {
-  height: 27px;
+  height: var(--control-h);
   padding: 0 var(--space-5);
   font-size: var(--text-base);
 }
 
 .app-btn--sm {
-  height: 23px;
+  height: var(--control-h-sm);
   padding: 0 var(--space-4);
   font-size: var(--text-sm);
 }
 
 .app-btn--icon-only.app-btn--md {
-  width: 27px;
+  width: var(--control-h);
   padding: 0;
 }
 .app-btn--icon-only.app-btn--sm {
-  width: 23px;
+  width: var(--control-h-sm);
   padding: 0;
+}
+
+.app-btn--block {
+  display: flex;
+  width: 100%;
 }
 
 /* Both spellings of "not allowed" fade the same way. `aria-disabled`, not the
@@ -205,6 +216,17 @@ defineExpose({ focus });
 }
 .app-btn--secondary:not(:disabled):not([aria-disabled="true"]):hover {
   filter: brightness(1.08);
+}
+
+/* Outline - the neutral without a fill, for the former outlined `v-btn` sites.
+   Whether these fold into the filled neutral is still open (buttons.md). */
+.app-btn--outline {
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface));
+  border-color: rgb(var(--v-theme-border));
+}
+.app-btn--outline:not(:disabled):not([aria-disabled="true"]):hover {
+  background: var(--hover-wash);
 }
 
 /* Danger: destructive. `on-error`, not a hardcoded #fff. Both themes author

@@ -1114,6 +1114,9 @@ kbd {
   padding: 0 var(--space-3);
   font-size: var(--text-base);
   font-family: inherit;
+  /* Regular, not medium: chrome does not compete with content. */
+  font-weight: var(--weight-regular);
+  cursor: pointer;
   /* Icons and labels take the sidebar's treatment: the toolbar-text token
      (identical to sidebar-text) at the sidebar's muted alpha, brightening on
      hover/active - so the toolbar and sidebar chrome read as one strip. */
@@ -1122,12 +1125,12 @@ kbd {
      border) does not change the box size and make the button jump. */
   border: 1px solid transparent;
   box-sizing: border-box;
-  height: 32px;
+  height: var(--control-h-bar);
   white-space: nowrap;
   position: relative;
 }
 
-.bar-btn:hover {
+.bar-btn:hover:not(:disabled) {
   background: rgba(var(--v-theme-toolbar-text), 0.1);
   color: rgb(var(--v-theme-toolbar-text));
 }
@@ -1140,10 +1143,36 @@ kbd {
   border-radius: var(--radius-sm);
 }
 
+/* The selection pill's verbs: a square verb fights a round container. */
+.bar-btn--round {
+  border-radius: var(--radius-pill);
+}
+
+/* Colour is the whole signal - no border, no fill - so a destructive verb reads
+   as one of the row rather than as a second kind of control. */
+.bar-btn--danger,
+.bar-btn--danger:hover:not(:disabled) {
+  color: rgb(var(--v-theme-error));
+}
+.bar-btn--danger:hover:not(:disabled) {
+  background: rgba(var(--v-theme-error), 0.08);
+}
+
+/* Shown and dimmed rather than hidden, so a row of verbs never reflows under
+   the pointer as a selection grows. Pending is not disabled: it stays legible. */
+.bar-btn:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+}
+.bar-btn--loading:disabled {
+  opacity: 1;
+  cursor: progress;
+}
+
 /* Icon-only bar button */
 .bar-btn--icon {
-  width: 32px;
-  height: 32px;
+  width: var(--control-h-bar);
+  height: var(--control-h-bar);
   padding: 0;
   display: flex;
   align-items: center;

@@ -58,12 +58,23 @@
                            sidebar overrides it from its thumbnail slider. */
 
   /* ---------------------------------------------------------------------------
+     CONTROL HEIGHT - the two button dialects (buttons.md). A raised control
+     (`AppButton`, and the fields beside it) is --control-h, compact
+     --control-h-sm, which is also the WCAG 2.2 24px pointer floor. A flat bar
+     control (`AppBarButton`: toolbar, selection bar, close) is --control-h-bar,
+     2px inside the 36px toolbar band on either side.
+     --------------------------------------------------------------------------- */
+  --control-h: 28px;
+  --control-h-sm: 24px;
+  --control-h-bar: 32px;
+
+  /* ---------------------------------------------------------------------------
      RADIUS - four steps and a pill. The audit found 14 distinct radii
      (2/3/4/5/6/8/9/10/12/14/16/18/999/9999). Collapse to these. 9999 was a typo
      for the pill; use `--radius-pill`.
      --------------------------------------------------------------------------- */
-  --radius-sm: 4px;     /* dense controls: chips, small buttons, inputs in tight UI */
-  --radius-md: 8px;     /* default: cards, inputs, menus, image tiles */
+  --radius-sm: 4px;     /* the control tier: buttons, inputs, selects, chips, kbd */
+  --radius-md: 8px;     /* the surface tier: cards, menus, image tiles */
   --radius-lg: 12px;    /* dialogs, panels, popovers */
   --radius-pill: 999px; /* fully-rounded: toggles, status pills, avatar ring */
 
