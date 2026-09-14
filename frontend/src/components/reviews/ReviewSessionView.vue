@@ -798,7 +798,7 @@ defineExpose({ handleKey });
 .rs-xp-points {
   font-size: var(--text-2xs);
   font-weight: var(--weight-bold);
-  color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-dark-surface));
   font-variant-numeric: tabular-nums;
 }
 .rs-xp-streak {
@@ -807,7 +807,7 @@ defineExpose({ handleKey });
   gap: 2px;
   font-size: var(--text-2xs);
   font-weight: var(--weight-bold);
-  color: rgb(var(--v-theme-tertiary));
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 /* `progress.locked` - the suspects this review is holding back. Warning-toned

@@ -330,18 +330,21 @@ button:focus:not(:focus-visible) {
    ancestor and not fixed.
    ------------------------------------------------------------------------ */
 /* ── The pill ──────────────────────────────────────────────────────────────
-   Positioned by the shelf, which is the only thing that knows where its list
-   ends; this owns the object and not its place. `--elevation-4` and the pill
-   radius are what make it read as floating ABOVE the rows rather than as a
-   docked strip the list stops at. */
+   ONE selection pill for every surface that selects things (shell contract
+   rule 9): the photo grid (`GridActionPill`), the model shelf and the training
+   runs all wear this class. Count first, then round `AppBarButton` verbs,
+   destructive last. Each host positions it, because only the host knows where
+   its list ends; this owns the object and not its place. `--elevation-4` and
+   the pill radius are what make it read as floating ABOVE the content rather
+   than as a docked strip the content stops at. */
 .selbar {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  background: rgb(var(--v-theme-surface));
-  color: rgb(var(--v-theme-on-surface));
-  border: 1px solid rgb(var(--v-theme-divider));
+  background: rgb(var(--v-theme-panel));
+  color: rgb(var(--v-theme-on-panel));
+  border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-pill);
   box-shadow: var(--elevation-4);
 }
@@ -364,7 +367,7 @@ button:focus:not(:focus-visible) {
 .selbar-size {
   font-size: var(--text-xs);
   font-weight: var(--weight-regular);
-  color: rgba(var(--v-theme-on-surface), 0.7);
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
 }
 
 .selbar-chevron {
@@ -373,7 +376,8 @@ button:focus:not(:focus-visible) {
 
 .selbar-sep {
   width: 1px;
-  height: 22px;
+  height: var(--rule-h);
+  margin: 0 var(--space-1);
   background: rgb(var(--v-theme-divider));
 }
 
@@ -385,7 +389,7 @@ button:focus:not(:focus-visible) {
   display: flex;
   justify-content: center;
   pointer-events: none;
-  z-index: var(--z-sticky);
+  z-index: var(--z-floating);
 }
 
 .selbar-float > * {
@@ -462,7 +466,7 @@ button:focus:not(:focus-visible) {
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: var(--tracking-label);
-  opacity: 0.5;
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
 }
 .shortcut-disabled td {
   opacity: 0.35;
@@ -597,7 +601,7 @@ kbd {
   font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
-  color: rgba(var(--v-theme-on-panel), 0.55);
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
   margin-bottom: var(--space-3);
 }
 .tbm-label--right {
@@ -673,7 +677,6 @@ kbd {
 }
 .tbm-toggle-end {
   margin-left: auto;
-  color: rgb(var(--v-theme-on-primary));
   display: inline-flex;
   flex-shrink: 0;
 }

@@ -858,7 +858,7 @@ function batchReceipt(imported, failed) {
    shelf - and it survives desaturation, which a wash alone does not. */
 .tr-card--checked {
   border-color: var(--active-bar);
-  box-shadow: inset var(--rail-w) 0 0 var(--active-bar);
+  box-shadow: var(--selection-edge);
 }
 
 .tr-card-shot {

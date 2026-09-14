@@ -360,6 +360,6 @@ watch(
 }
 
 .smart-score-status--success {
-  color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-surface));
 }
 </style>

@@ -4920,7 +4920,7 @@ button.shelf-head-cell:hover {
 
 .shelf-group-btn--managed,
 .shelf-group-btn--builtin {
-  --shelf-rail: rgb(var(--v-theme-info));
+  --shelf-rail: rgb(var(--v-theme-surface-info));
 }
 
 /* An unplugged drive: muted ink and a muted rail, and deliberately NEVER the
@@ -5019,7 +5019,7 @@ button.shelf-head-cell:hover {
    the list scrolls. The bar is the greyscale half - the wash alone is a hue. */
 .shelf-row--selected {
   background: var(--active-wash);
-  box-shadow: inset 3px 0 0 var(--active-bar);
+  box-shadow: var(--selection-edge);
 }
 
 /* ── The three kinds of absence ────────────────────────────────────────────

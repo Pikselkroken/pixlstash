@@ -55,6 +55,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from PIL import Image
+from fastapi import HTTPException
 from sqlalchemy import func
 from sqlmodel import Session, select
 
@@ -94,6 +95,10 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.library_layout import Facet
 from pixlstash.utils.media_files import is_hidden_entry, is_supported_media_file
+from pixlstash.utils.library_roots import (
+    holding_folder_overlap_lock,
+    refuse_folder_overlapping_a_library,
+)
 from pixlstash.utils.path_utils import path_is_within
 from pixlstash.utils.reference_folder_validator import (
     canonical_path,
@@ -576,6 +581,7 @@ def _commit_owns_this_root(
     )
 
 
+@holding_folder_overlap_lock
 def register_reference_folder(
     server,
     root_path: str,
@@ -614,6 +620,13 @@ def register_reference_folder(
     error = validate_reference_folder_path(root_path)
     if error:
         raise CommitError(error)
+    # The rule the "add a reference folder" route also applies: no overlap with
+    # another registered library, which the conflict check below does not know
+    # about (#1223). Before the DB task, because it reads the registry.
+    try:
+        refuse_folder_overlapping_a_library(root_path, server, server.vault)
+    except HTTPException as exc:
+        raise CommitError(exc.detail) from exc
     image_root = os.path.normpath(getattr(server.vault, "image_root", "") or "")
 
     def fetch_or_create(session: Session) -> ReferenceFolder:

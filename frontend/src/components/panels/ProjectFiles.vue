@@ -604,7 +604,7 @@ onMounted(() => {
 
 .pf-url-meta {
   font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-accent), 0.6);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   margin-top: var(--space-2);
   line-height: 1.3;
   word-break: break-all;

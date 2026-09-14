@@ -110,8 +110,9 @@ to the app root), not a constant. It must be measured because the pill wraps, gr
 coarse pointers, and changes height with its own content. `56px` is the fallback for the
 first frame, and it is a measured current value, not a new design token.
 
-So: pill hidden → the stack rests at `--space-5` (16px). Pill visible → 16 + 54 + 8 =
-**78px**, i.e. the stack sits exactly `--space-3` above the pill's top edge and can never
+So: pill hidden → the stack rests at `--space-5` (16px). Pill visible → 16 + pill height + 8
+(54px tall when this was written, so **78px**; the shared `.selbar` surface of #1301 took
+4px off it, and the height is measured, so nothing here needs retuning), i.e. the stack sits exactly `--space-3` above the pill's top edge and can never
 touch it. When the pill appears while notices are on screen, the stack rises at `--dur-2`
 / `--ease-standard`; when it goes, the stack settles back.
 
@@ -714,7 +715,7 @@ moves pixels somewhere; the list is the record of where to look.
 |---|---|---|
 | 1 | handoff §6 misdescribes `SelectionBar` | **FIXED** — §6 now names both bar shapes |
 | 2 | `SelectionBar` is in `panels/`, not `widgets/` | **FIXED** — corrected in §6 and visual-language §13 |
-| 3 | hardcoded cold shadows (4 sites) | **FIXED** — pill and menu → `--elevation-3`, the three `ImageGrid` pills → `--elevation-2` |
+| 3 | hardcoded cold shadows (4 sites) | **FIXED** — pill and menu → `--elevation-3` (the pill has since moved to the shared `.selbar` at `--elevation-4`, #1301), the three `ImageGrid` pills → `--elevation-2` |
 | 4 | off-grid / `em` values in `SelectionBar` | **FIXED** except block padding — see below |
 | 5 | `.selbar-pop` raw `0.22s ease` | **FIXED** — split into decelerate-in / accelerate-out |
 | 6 | `.remove-btn` broken `on-warning` | **FIXED** — the token is now authored (4.95 / 5.53) |
@@ -726,7 +727,7 @@ moves pixels somewhere; the list is the record of where to look.
 
 **Carried, deliberately:**
 
-- **`SelectionBar`'s block padding (`6px`)** stays off-grid. It sets the pill's occupied
+- **`SelectionBar`'s block padding (`6px`)** stayed off-grid (since settled at `--space-2` by the shared `.selbar`, #1301). It sets the pill's occupied
   *height*, and that dimension belongs to the UI/UX-gated action-bar reconciliation
   (visual-language §5/§13: the 34 / 40 / 48 / 56px drift). Moving it piecemeal pre-empts
   that decision. Its inline padding, gap, radii, shadow and type are all on tokens.

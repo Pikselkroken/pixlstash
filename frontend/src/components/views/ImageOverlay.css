@@ -106,7 +106,7 @@
 }
 
 .overlay-close {
-  background: rgba(var(--v-theme-primary), 0.7);
+  background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
   padding: 6px 14px;
   border-radius: var(--radius-sm);
@@ -341,7 +341,7 @@
 }
 
 .overlay-comfy-run {
-  background: rgba(var(--v-theme-primary), 0.8);
+  background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
   padding: 6px var(--space-4);
   border-radius: var(--radius-pill);
@@ -675,17 +675,13 @@
   color: rgb(var(--v-theme-on-dark-surface));
 }
 
+/* Type and ink come from the shared `.section-label`; this is layout only. */
 .section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   margin-bottom: var(--space-2);
   padding: var(--space-1) 0;
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
 .rejected-threshold-label {

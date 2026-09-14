@@ -929,7 +929,7 @@ watch(
 
 .account-success {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-surface));
 }
 
 /* ── Sharing + Watermark ──────────────────────────────────────────────── */
@@ -1158,7 +1158,7 @@ watch(
 }
 
 .account-token-pill--read {
-  color: rgb(var(--v-theme-info));
+  color: rgb(var(--v-theme-surface-info));
 }
 
 .account-token-sub {

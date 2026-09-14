@@ -756,7 +756,7 @@
 
           <div class="sidebar-section sidebar-section--faces">
             <div
-              class="section-header section-header--collapsible"
+              class="section-header section-header--collapsible section-label section-label--on-dark"
               @click="facesCollapsed = !facesCollapsed"
             >
               <span>Faces</span>

@@ -584,7 +584,7 @@ def _point_hub_at(hub_copy: str, plan: RestorePlan) -> None:
                 f"The archived hub has no registration for {plan.library_uuid}, "
                 "so the restored library could not be activated."
             )
-        registry.relocate(library.id, plan.library_folder)
+        registry.relocate(library.id, plan.library_folder, check_folder_overlap=False)
         registry.set_active(library.id)
     except LibraryError as exc:
         raise RestoreError(f"Could not activate the restored library: {exc}") from exc
