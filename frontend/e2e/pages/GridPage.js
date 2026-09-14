@@ -186,12 +186,14 @@ export class GridPage {
 
   /**
    * A context-menu action item by its visible label. The Project / Person / Set
-   * flyout rows are `.ctx-item` too and sit (hidden) before the actions, so
-   * they are excluded or a set named like an action would match first.
+   * flyout rows are `.ctx-item` too and sit (hidden) before the actions, and so
+   * is each flyout's own trigger (`.ate-btn.ctx-item`), whose label is the
+   * assigned entity's name. Both are excluded or a set named like an action
+   * would match first.
    */
   contextMenuItem(label) {
     return this.contextMenu
-      .locator('.ctx-item:not(.ate-menu .ctx-item)', { hasText: label })
+      .locator('.ctx-item:not(.ate-menu .ctx-item):not(.ate-btn)', { hasText: label })
       .first()
   }
 

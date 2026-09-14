@@ -436,7 +436,11 @@ export const scenes = [
       await settings.openTab('Libraries')
       const row = page.locator('.library-row:not(.library-row--active)').first()
       await row.locator('.library-row__more').click()
-      await expect(page.getByRole('menu')).toBeVisible()
+      // Named, not `getByRole('menu')`: the shared surface puts `role=menu` on
+      // every open menu, and a bare role query is strict-mode ambiguous.
+      await expect(
+        page.getByRole('menuitem', { name: 'Open this library' }),
+      ).toBeVisible()
       await page.waitForTimeout(300)
       return settings.card
     },
