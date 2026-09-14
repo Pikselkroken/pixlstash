@@ -6,9 +6,11 @@ host. The tests that need a real Apple Metal GPU are marked and skip without one
 
 import contextlib
 import gc
+import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import threading
 import types
@@ -727,6 +729,418 @@ def test_tagger_promotes_to_fp16_on_real_metal(tmp_path):
         assert service._dtype is torch.float16
     finally:
         service.unload()
+
+
+# --------------------------------------------------------------------------- #
+# Florence-2 loads straight onto Metal in fp16, and caps its batch by memory
+# --------------------------------------------------------------------------- #
+
+
+def test_florence_loads_straight_onto_metal_in_fp16(monkeypatch):
+    """Metal gets the CUDA treatment: one fp16 load onto the device, GPU batch.
+
+    What this asserts is the device and dtype ``_load_model`` is asked for.
+    Whether that load survives on real Metal, where it relies on
+    configure_metal_model_loading keeping transformers' loader on one thread,
+    is test_florence_loads_onto_real_metal_in_fp16's to show.
+    """
+    import torch
+
+    from pixlstash.tagger_plugins.florence2 import (
+        FLORENCE_BATCH_SIZE_CPU,
+        FLORENCE_BATCH_SIZE_GPU,
+        Florence2Service,
+    )
+
+    loaded_on = []
+    service = Florence2Service(device="mps")
+    # As an earlier load on the CPU leaves it, so the batch asserted below is
+    # the one this load sets rather than the one __init__ seeds.
+    service._batch_size = FLORENCE_BATCH_SIZE_CPU
+    monkeypatch.setattr(
+        service,
+        "_load_model",
+        lambda device, dtype: loaded_on.append((str(device), dtype)),
+    )
+    service._init()
+
+    assert loaded_on == [("mps", torch.float16)]
+    assert service._batch_size == FLORENCE_BATCH_SIZE_GPU
+    assert service._last_fallback_reason is None
+
+
+def test_a_failed_metal_load_falls_back_to_the_cpu(monkeypatch, caplog):
+    """A Metal load that raises is a fallback, exactly as on CUDA.
+
+    The reachable case is an MPS OOM while large-ft's weights are placed.
+    """
+    import torch
+
+    from pixlstash.tagger_plugins.florence2 import (
+        FLORENCE_BATCH_SIZE_CPU,
+        Florence2Service,
+    )
+
+    loaded_on = []
+    service = Florence2Service(device="mps")
+
+    def _fake_load(device, dtype):
+        # Recorded, not asserted: _init catches Exception, so an assert in
+        # here would be swallowed and resurface as a confusing failure below.
+        loaded_on.append((str(device), dtype))
+        if device.type == "mps":
+            raise RuntimeError(MPS_OOM_MESSAGE)
+        service._model = object()
+        service._processor = object()
+        service._model_device = device
+        service._dtype = dtype
+
+    monkeypatch.setattr(service, "_load_model", _fake_load)
+    with caplog.at_level("WARNING"):
+        service._init()
+
+    assert loaded_on == [("mps", torch.float16), ("cpu", torch.float32)]
+    assert service.is_loaded()
+    assert service._model_device == torch.device("cpu")
+    assert service._batch_size == FLORENCE_BATCH_SIZE_CPU, (
+        "the CPU constant, not the GPU one __init__ seeds for mps"
+    )
+    assert service._last_fallback_reason.startswith("init_metal_load_failed:")
+    assert "Failed to load Florence-2" not in caplog.text
+
+
+def test_a_failed_metal_load_is_released_before_the_cpu_load(monkeypatch):
+    """What a failed Metal load placed must be gone before the CPU copy loads.
+
+    The caught exception's traceback keeps the failed load's frames, and with
+    them the weights already on Metal - on Apple Silicon, the same memory the
+    CPU copy loads into.
+    """
+    from pixlstash.tagger_plugins.florence2 import Florence2Service
+
+    class _PlacedWeights:
+        """Stands in for the tensors the failed load had put on Metal."""
+
+    placed = []
+    alive_at_cpu_load = []
+    service = Florence2Service(device="mps")
+
+    def _fake_load(device, dtype):
+        if device.type == "mps":
+            weights = _PlacedWeights()
+            placed.append(weakref.ref(weights))
+            raise RuntimeError(MPS_OOM_MESSAGE)
+        alive_at_cpu_load.append(placed[0]() is not None)
+        service._model = object()
+        service._processor = object()
+        service._model_device = device
+
+    monkeypatch.setattr(service, "_load_model", _fake_load)
+    service._init()
+
+    assert placed, "the Metal load was never attempted"
+    assert alive_at_cpu_load == [False], (
+        "the failed Metal load's weights were still referenced when the CPU "
+        "copy started loading"
+    )
+
+
+def _florence_failing_mid_pass_on_metal(monkeypatch, tmp_path):
+    """A Florence service on Metal whose forward pass fails with an MPS OOM.
+
+    Its CPU load records whether the failed pass's model and device inputs
+    were still alive when it started, and how many flushes reaching Metal ran
+    before it, then loads a working stand-in so the retry completes.
+    """
+    import torch
+
+    from pixlstash.tagger_plugins import florence2 as fl
+
+    image_path = tmp_path / "a.png"
+    Image.new("RGB", (8, 8)).save(image_path)
+
+    class _DeviceTensor:
+        """Stands in for an input tensor on Metal."""
+
+    class _Processor:
+        tokenizer = types.SimpleNamespace(pad_token_id=0)
+
+        def __call__(self, **kwargs):
+            return {"input_ids": None, "pixel_values": None}
+
+        def batch_decode(self, ids, skip_special_tokens=False):
+            return ["<text>"]
+
+    class _MetalModel:
+        def generate(self, **kwargs):
+            raise RuntimeError(MPS_OOM_MESSAGE)
+
+    class _CpuModel:
+        def generate(self, **kwargs):
+            return torch.zeros(1, 2, dtype=torch.long)
+
+    input_refs = []
+
+    def _move(inputs, device, dtype):
+        tensor = _DeviceTensor()
+        input_refs.append(weakref.ref(tensor))
+        return {"input_ids": tensor, "pixel_values": tensor}
+
+    monkeypatch.setattr(fl, "_move_inputs_to_device", _move)
+
+    metal_flushes = []
+
+    def _flush(device=None):
+        # Not the real flush, which would call into Metal on a Mac.
+        if device is None or str(device).split(":", 1)[0] == "mps":
+            metal_flushes.append(device)
+        return False
+
+    monkeypatch.setattr(fl, "empty_device_cache", _flush)
+
+    service = fl.Florence2Service(device="mps")
+    service._model = _MetalModel()
+    service._processor = _Processor()
+    service._model_device = torch.device("mps")
+    service._dtype = torch.float16
+    model_ref = weakref.ref(service._model)
+    monkeypatch.setattr(service, "_parse_caption", lambda text: "a caption")
+    monkeypatch.setattr(
+        service,
+        "_parse_detections",
+        lambda text, token, size: [("cat", [0, 0, 1, 1], None)],
+    )
+
+    alive_at_cpu_load = []
+
+    def _fake_load(device, dtype):
+        alive_at_cpu_load.append(
+            {
+                "model": model_ref() is not None,
+                "metal_inputs": [ref() is not None for ref in input_refs],
+                "metal_flushes": len(metal_flushes),
+            }
+        )
+        service._model = _CpuModel()
+        service._processor = _Processor()
+        service._model_device = device
+        service._dtype = dtype
+
+    monkeypatch.setattr(service, "_load_model", _fake_load)
+    return service, str(image_path), alive_at_cpu_load
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(lambda s, p: {p: s.generate_caption(p)}, id="caption"),
+        pytest.param(lambda s, p: s.generate_captions_batch([p]), id="captions_batch"),
+        pytest.param(lambda s, p: s.detect_objects([p]), id="detect_objects"),
+    ],
+)
+def test_the_failed_metal_pass_is_released_before_the_cpu_reload(
+    monkeypatch, tmp_path, call
+):
+    """_reload_on_cpu must not load the CPU copy beside the Metal model.
+
+    Setting ``_model`` to None is not enough: the exception being handled
+    keeps every frame of the failed pass, and with them the Metal model and
+    its inputs, for as long as the CPU copy takes to load. Measured with base
+    in fp32 failing mid-batch: 1.37 GiB still allocated on Metal as the CPU
+    load began, 0 once the frames are cleared. The captions and detection
+    batch frames are still running when the reload starts, so their own
+    inputs have to be dropped by hand.
+    """
+    service, path, alive_at_cpu_load = _florence_failing_mid_pass_on_metal(
+        monkeypatch, tmp_path
+    )
+
+    results = call(service, path)
+
+    assert results.get(path), "the CPU retry has to produce the result"
+    assert service._last_fallback_reason.startswith("runtime_gpu_inference_failed:")
+    assert len(alive_at_cpu_load) == 1, alive_at_cpu_load
+    assert alive_at_cpu_load[0]["model"] is False, (
+        "the Metal model was still referenced when the CPU copy started loading"
+    )
+    assert alive_at_cpu_load[0]["metal_inputs"] == [False], (
+        "the failed pass's Metal inputs were still referenced when the CPU copy "
+        "started loading"
+    )
+    assert alive_at_cpu_load[0]["metal_flushes"] == 1, (
+        "the Metal allocator cache was not flushed once before the CPU copy loaded"
+    )
+
+
+#: What torch.mps.recommended_max_memory() reports on the 32 GB M1 Pro the
+#: Metal figures were measured on, and an arbitrary smaller working set.
+M1_PRO_32GB_WORKING_SET = 26_800_603_136
+SMALLER_WORKING_SET = 11_453_251_584
+
+
+@pytest.mark.parametrize(
+    "variant, working_set, expected",
+    [
+        # (25559 MiB * 0.5 - 1787) // 240 = 45, above the 32 of the GPU batch.
+        ("base", M1_PRO_32GB_WORKING_SET, 32),
+        # (25559 * 0.5 - 3049) // 469 = 20: large-ft's fp16 batch of 32 peaked
+        # at 14.5 GiB there, and 16 ran it within 2% as fast.
+        ("large-ft", M1_PRO_32GB_WORKING_SET, 20),
+        # (10922 * 0.5 - 1787) // 240 = 15.
+        ("base", SMALLER_WORKING_SET, 15),
+        # (10922 * 0.5 - 3049) // 469 = 5.
+        ("large-ft", SMALLER_WORKING_SET, 5),
+        # A budget smaller than the model still captions, one image at a time.
+        ("large-ft", 4 * 1024**3, 1),
+    ],
+)
+def test_florence_caps_its_metal_batch_by_memory(
+    monkeypatch, variant, working_set, expected
+):
+    """Metal's batch comes from its working set, not the CUDA constant.
+
+    At 32 images fp32 peaked at 13.9 GiB for base and 26.2 GiB for large-ft on
+    a 24.96 GiB working set, and the machine swapped. The expected values are
+    written out, not recomputed, so a change to the formula or its figures
+    has to change them on purpose.
+    """
+    import torch
+
+    from pixlstash.tagger_plugins.florence2 import Florence2Service
+
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    monkeypatch.setattr(
+        torch.mps, "recommended_max_memory", lambda: working_set, raising=False
+    )
+    service = Florence2Service(device="mps", max_concurrent_fn=lambda: 64)
+    service.set_model_variant(variant)
+
+    assert service.description_batch_size() == expected
+
+
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
+def test_florence_never_asks_metal_for_memory_off_metal(monkeypatch, device):
+    """CUDA and CPU hosts must not call into torch.mps at all."""
+    import torch
+
+    from pixlstash.tagger_plugins.florence2 import Florence2Service
+
+    metal_queries = []
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: device == "cuda")
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    monkeypatch.setattr(
+        torch.mps,
+        "recommended_max_memory",
+        lambda: metal_queries.append(device) or M1_PRO_32GB_WORKING_SET,
+        raising=False,
+    )
+    service = Florence2Service(device=device)
+    monkeypatch.setattr(service, "_load_model", lambda _device, _dtype: None)
+    service._init()
+    service.description_batch_size()
+
+    assert metal_queries == []
+
+
+def test_florence_still_uses_cuda_when_available(monkeypatch):
+    """CUDA loads in fp16 with the GPU batch, capped by the VRAM budget.
+
+    The dtype, the batch and the cap are asserted beside the device: each can
+    change while the device stays cuda.
+    """
+    import torch
+
+    from pixlstash.tagger_plugins.florence2 import (
+        FLORENCE_BASE_VRAM_MB,
+        FLORENCE_BATCH_SIZE_CPU,
+        FLORENCE_BATCH_SIZE_GPU,
+        FLORENCE_PER_IMAGE_VRAM_MB,
+        Florence2Service,
+    )
+
+    if not torch.cuda.is_available():
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+    loaded_on = []
+    vram_caps = []
+    service = Florence2Service(
+        device="cuda",
+        max_concurrent_fn=lambda: 64,
+        vram_cap_fn=lambda base_mb, per_item_mb: (
+            vram_caps.append((base_mb, per_item_mb)) or 7
+        ),
+    )
+    # As an earlier load on the CPU leaves it; see the Metal test above.
+    service._batch_size = FLORENCE_BATCH_SIZE_CPU
+    monkeypatch.setattr(
+        service,
+        "_load_model",
+        lambda device, dtype: loaded_on.append((str(device), dtype)),
+    )
+    service._init()
+
+    assert loaded_on == [("cuda", torch.float16)]
+    assert service._batch_size == FLORENCE_BATCH_SIZE_GPU
+    assert service._last_fallback_reason is None
+    assert service.description_batch_size() == 7
+    assert vram_caps == [(FLORENCE_BASE_VRAM_MB, FLORENCE_PER_IMAGE_VRAM_MB)]
+
+
+_FLORENCE_ON_METAL_SCRIPT = """
+import json
+
+from pixlstash.utils.device_utils import configure_metal_model_loading
+
+configure_metal_model_loading()
+
+from pixlstash.tagger_plugins.florence2 import Florence2Service
+
+service = Florence2Service(device="mps")
+service._init()
+model = service._model
+tensors = [] if model is None else [*model.parameters(), *model.buffers()]
+print(
+    json.dumps(
+        {
+            "loaded": service.is_loaded(),
+            "fallback": service._last_fallback_reason,
+            "model_device": str(service._model_device),
+            "dtype": str(service._dtype),
+            "tensors": sorted({f"{t.device.type}:{t.dtype}" for t in tensors}),
+        }
+    )
+)
+"""
+
+
+@pytest.mark.skipif(not _mps_present(), reason="requires an Apple Metal GPU")
+def test_florence_loads_onto_real_metal_in_fp16():
+    """The real load, in its own process: a Metal crash fails this test
+    instead of taking pytest down with it."""
+    import pixlstash
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(pixlstash.__file__)))
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        path for path in (repo_root, env.get("PYTHONPATH")) if path
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", _FLORENCE_ON_METAL_SCRIPT],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env=env,
+    )
+
+    assert proc.returncode == 0, (
+        f"the Florence-2 load exited with {proc.returncode}:\n{proc.stderr[-4000:]}"
+    )
+    report = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert report["loaded"], proc.stderr[-4000:]
+    assert report["fallback"] is None
+    assert report["model_device"] == "mps"
+    assert report["dtype"] == "torch.float16"
+    assert report["tensors"] == ["mps:torch.float16"]
 
 
 @pytest.mark.parametrize(

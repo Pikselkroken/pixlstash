@@ -16,6 +16,7 @@ if TYPE_CHECKING:  # annotations only - see the function-local import note below
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TaggerPlugin
+from pixlstash.utils.device_utils import empty_device_cache, is_metal
 from pixlstash.utils.model_utils import from_pretrained_local_first
 from pixlstash.utils.vram_utils import is_device_error, is_vram_oom
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -37,23 +38,35 @@ FLORENCE_OCR_NUM_BEAMS = (
 )
 FLORENCE_MODEL_REVISION = "00921df66db728a9ceb750f5eca43e5c203a2051"
 
+#: Share of the working set ``torch.mps.recommended_max_memory()`` reports that
+#: one Florence-2 batch may peak at on Metal. The rest is left to the process's
+#: other resident models and to whatever else on the machine uses the GPU.
+FLORENCE_METAL_MEMORY_FRACTION = 0.5
+
 # Selectable Florence-2 checkpoints. One setting drives BOTH captioning and
 # object detection (Segment) - the service is shared, and loading two variants
 # side by side would double the VRAM for no benefit (issue #512). Every entry
 # pins a revision: an unpinned HuggingFace ref is a silent supply-chain change.
 # `vram_mb` is the model footprint the VRAM gate charges before a batch runs;
 # it MUST follow the chosen variant or the gate under-counts and we spill.
+# `metal_base_mb` + `metal_per_image_mb` * batch bounds the process footprint
+# during one fp16 caption batch on Metal: the line through the peaks measured
+# at batch 8 and 16 (M1 Pro, torch 2.13), which lies above the one at 32.
 FLORENCE_MODEL_VARIANTS: dict[str, dict] = {
     "base": {
         "model": "florence-community/Florence-2-base",
         "revision": FLORENCE_MODEL_REVISION,
         "vram_mb": FLORENCE_BASE_VRAM_MB,
+        "metal_base_mb": 1787,
+        "metal_per_image_mb": 240,
         "label": "Base (0.23B, ~900 MB)",
     },
     "large-ft": {
         "model": "florence-community/Florence-2-large-ft",
         "revision": "26b734a54fdfbf9c398351eedfabb7f27fc470b7",
         "vram_mb": FLORENCE_LARGE_FT_VRAM_MB,
+        "metal_base_mb": 3049,
+        "metal_per_image_mb": 469,
         "label": "Large fine-tuned (0.77B, ~2.6 GB)",
     },
 }
@@ -150,6 +163,28 @@ def _words_from_ocr_regions(quad_boxes, labels, image_size) -> list:
     return [words for _, _, words in lines]
 
 
+def _metal_working_set_mb(device) -> Optional[int]:
+    """Return Metal's recommended working set in MiB when *device* is Metal.
+
+    Returns:
+        ``torch.mps.recommended_max_memory()`` in MiB, or None when *device* is
+        not Metal or this torch has no Metal device - CUDA and CPU hosts never
+        call into ``torch.mps``.
+    """
+    if not is_metal(device):
+        return None
+    import torch
+
+    if not torch.backends.mps.is_available():
+        logger.debug(
+            "Florence-2 was given device %s, but Metal is unavailable; "
+            "no Metal batch cap.",
+            device,
+        )
+        return None
+    return int(torch.mps.recommended_max_memory() // (1024 * 1024))
+
+
 def _move_inputs_to_device(inputs: dict, device, dtype) -> dict:
     """Move a HuggingFace processor output dict to *device*/*dtype*."""
     import torch
@@ -183,6 +218,8 @@ class Florence2Service:
         _model_revision: Pinned HuggingFace revision for ``_model_name``.
         _base_vram_mb: Model footprint in MB for the active variant.
         _batch_size: Active batch size for GPU inference.
+        _metal_working_set_mb: Metal's recommended working set in MiB, or None
+            off Metal.
         _max_tokens: Maximum new tokens per generated caption.
         _last_fallback_reason: Description of the last GPU-to-CPU fallback.
         _last_fallback_at: Unix timestamp of the last GPU-to-CPU fallback.
@@ -222,6 +259,10 @@ class Florence2Service:
         self._batch_size = (
             FLORENCE_BATCH_SIZE_CPU if device == "cpu" else FLORENCE_BATCH_SIZE_GPU
         )
+        # A constant of the device, read once: description_batch_size() runs on
+        # the description finder's thread every planning cycle, and we don't
+        # need that thread calling into Metal.
+        self._metal_working_set_mb = _metal_working_set_mb(device)
         self._max_tokens = 40 if fast_captions else 120
         self._last_fallback_reason: Optional[str] = None
         self._last_fallback_at: Optional[float] = None
@@ -314,7 +355,11 @@ class Florence2Service:
             self._processor = None
 
     def description_batch_size(self) -> int:
-        """Return the VRAM-constrained batch size for caption generation."""
+        """Return the memory-constrained batch size for caption generation.
+
+        CUDA is capped by the configured VRAM budget, Metal by its share of
+        the recommended working set (:meth:`_metal_batch_cap`).
+        """
         max_concurrent = max(1, int(self._max_concurrent_fn()))
         base_batch = min(max_concurrent, max(1, int(self._batch_size)))
         if self._device == "cuda":
@@ -322,6 +367,8 @@ class Florence2Service:
                 base_batch,
                 self._vram_cap_fn(self._base_vram_mb, FLORENCE_PER_IMAGE_VRAM_MB),
             )
+        elif self._metal_working_set_mb is not None:
+            base_batch = min(base_batch, self._metal_batch_cap())
         return max(1, base_batch)
 
     def state_info(self) -> dict:
@@ -483,6 +530,9 @@ class Florence2Service:
                     "Florence-2 batch captioning failed on GPU (%s); retrying on CPU.",
                     e,
                 )
+                # This frame is still running, so _release_model cannot drop
+                # the failed pass's device tensors; do it before the CPU load.
+                inputs = None
                 if self._reload_on_cpu(cause=e):
                     return self.generate_captions_batch(
                         image_paths, _retry_on_cpu=False, stop_event=stop_event
@@ -616,6 +666,9 @@ class Florence2Service:
                 logger.warning(
                     "Florence-2 detection failed on GPU (%s); retrying on CPU.", e
                 )
+                # This frame is still running, so _release_model cannot drop
+                # the failed pass's device tensors; do it before the CPU load.
+                inputs = None
                 if self._reload_on_cpu(cause=e):
                     return self.detect_objects(
                         image_paths,
@@ -723,6 +776,9 @@ class Florence2Service:
                 logger.warning(
                     "Florence-2 text reading failed on GPU (%s); retrying on CPU.", e
                 )
+                # This frame is still running, so _release_model cannot drop
+                # the failed pass's device tensors; do it before the CPU load.
+                inputs = None
                 if self._reload_on_cpu(cause=e):
                     return self.read_text(
                         image_paths,
@@ -773,13 +829,9 @@ class Florence2Service:
                     self._batch_size = FLORENCE_BATCH_SIZE_GPU
                     logger.debug("Florence-2 loaded successfully on GPU (~500MB VRAM)")
                 except Exception as gpu_error:
-                    self._record_fallback("init_gpu_load_failed", gpu_error)
-                    logger.warning(
-                        "GPU loading failed, falling back to CPU: %s", gpu_error
+                    self._load_on_cpu_after_failure(
+                        torch.device("cuda"), "init_gpu_load_failed", gpu_error
                     )
-                    self._load_model(torch.device("cpu"), torch.float32)
-                    self._batch_size = FLORENCE_BATCH_SIZE_CPU
-                    logger.debug("Florence-2 loaded successfully on CPU")
             elif requested_device.type == "cuda":
                 unavailable = RuntimeError(
                     "CUDA was explicitly requested but torch.cuda.is_available() is false"
@@ -792,6 +844,19 @@ class Florence2Service:
                 self._load_model(torch.device("cpu"), torch.float32)
                 self._batch_size = FLORENCE_BATCH_SIZE_CPU
                 logger.debug("Florence-2 loaded successfully on CPU")
+            elif requested_device.type == "mps":
+                # Straight onto Metal in fp16, as on CUDA. The load runs on
+                # this thread (see _load_model) and fp16 is the checkpoint's
+                # own dtype, so nothing is cast on Metal while it loads.
+                try:
+                    logger.debug("Attempting to load Florence-2 on Metal with FP16...")
+                    self._load_model(torch.device("mps"), torch.float16)
+                    self._batch_size = FLORENCE_BATCH_SIZE_GPU
+                    logger.debug("Florence-2 loaded successfully on Metal")
+                except Exception as metal_error:
+                    self._load_on_cpu_after_failure(
+                        torch.device("mps"), "init_metal_load_failed", metal_error
+                    )
             else:
                 # Preserve explicitly supported non-CUDA accelerators rather
                 # than silently changing their device. CUDA is special-cased
@@ -803,6 +868,46 @@ class Florence2Service:
             logger.error("Failed to load Florence-2: %s", e)
             logger.error("Try: pip install --upgrade transformers")
 
+    def _metal_batch_cap(self) -> int:
+        """Return the largest batch whose peak fits Florence-2's Metal budget.
+
+        ``floor((working_set_mb * FLORENCE_METAL_MEMORY_FRACTION -
+        metal_base_mb) / metal_per_image_mb)``, and at least 1, with the two
+        per-variant figures from :data:`FLORENCE_MODEL_VARIANTS`.
+        """
+        spec = FLORENCE_MODEL_VARIANTS[self._model_variant]
+        budget_mb = self._metal_working_set_mb * FLORENCE_METAL_MEMORY_FRACTION
+        return max(
+            1, int((budget_mb - spec["metal_base_mb"]) // spec["metal_per_image_mb"])
+        )
+
+    def _load_on_cpu_after_failure(
+        self, device: torch.device, phase: str, error: Exception
+    ) -> None:
+        """Load Florence-2 on the CPU after an accelerator failed to take it.
+
+        A device that cannot take the model is a fallback, not a failed load:
+        the fallback is recorded, whatever the failed load had placed on the
+        device is released, and the model loads on the CPU in FP32.
+
+        Args:
+            device: The accelerator the load was meant for.
+            phase: Fallback label recorded in ``state_info``.
+            error: The exception the accelerator load raised.
+        """
+        import torch
+
+        self._record_fallback(phase, error)
+        logger.warning(
+            "Loading Florence-2 on %s failed, falling back to CPU: %s",
+            device.type,
+            error,
+        )
+        self._release_model(error)
+        self._load_model(torch.device("cpu"), torch.float32)
+        self._batch_size = FLORENCE_BATCH_SIZE_CPU
+        logger.debug("Florence-2 loaded successfully on CPU")
+
     def _load_model(self, device: torch.device, dtype) -> None:
         import torch
 
@@ -811,10 +916,13 @@ class Florence2Service:
         if not isinstance(device, torch.device):
             device = torch.device(device)
 
-        # device_map routes loading through Accelerate, which correctly handles
-        # Florence-2's tied weights (lm_head / embed_tokens) and places all
-        # tensors on the target device during from_pretrained - no post-load
-        # .to() call is needed, eliminating "Cannot copy out of meta tensor".
+        # A single-device map makes from_pretrained materialise each tensor on
+        # *device* as it reads the checkpoint, so the model needs no .to()
+        # afterwards. Wherever Metal exists, configure_metal_model_loading has
+        # set HF_DEACTIVATE_ASYNC_LOAD - unless the owner's own value was
+        # already in the environment, which it keeps and warns about - so that
+        # loader normally runs on the calling thread instead of transformers'
+        # pool (docs/apple-metal-thread-safety.md).
         device_map = str(device)
 
         self._processor = from_pretrained_local_first(
@@ -841,15 +949,36 @@ class Florence2Service:
                     "SDPA not supported, falling back to eager attention: %s", e
                 )
 
-        # lm_head and embed_tokens are tied weights absent from the checkpoint.
-        # Accelerate leaves them on the meta device after dispatch; tie_weights()
-        # resolves their references to the already-materialised shared embedding.
+        # lm_head and both embed_tokens are absent from the checkpoint and share
+        # its one embedding. from_pretrained already ties them (transformers
+        # 5.16: this call moves no storage), and tie_weights() ties them
+        # against the model's config wherever a release does not.
         model.tie_weights()
         model.eval()
 
         self._model = model
         self._model_device = device
         self._dtype = dtype
+
+    def _release_model(self, cause: Optional[BaseException] = None) -> None:
+        """Drop the model and hand its device memory back before a CPU load.
+
+        Clearing ``self._model`` alone frees nothing while an exception is
+        still held: its traceback keeps every frame the failure unwound
+        through, and those frames hold the model's modules, the failed pass's
+        activations, or the weights a failed load had already placed. On Apple
+        Silicon that is the same memory the CPU copy is about to load into.
+        Clearing the finished frames releases them. The frame that caught
+        *cause* is still running, so its own device tensors are its to drop.
+
+        Args:
+            cause: The exception that led here, or None.
+        """
+        if cause is not None:
+            traceback.clear_frames(cause.__traceback__)
+        self._model = None
+        self._processor = None
+        empty_device_cache()
 
     def _record_fallback(self, phase: str, error: Exception) -> None:
         reason = f"{phase}: {type(error).__name__}: {error}"
@@ -866,10 +995,7 @@ class Florence2Service:
         if cause is not None:
             self._record_fallback("runtime_gpu_inference_failed", cause)
         try:
-            self._model = None
-            self._processor = None
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            self._release_model(cause)
             self._load_model(torch.device("cpu"), torch.float32)
             self._batch_size = FLORENCE_BATCH_SIZE_CPU
             logger.debug("Florence-2 reloaded on CPU")
@@ -1015,7 +1141,7 @@ class Florence2Plugin(TaggerPlugin):
         Must be called before any other method.
 
         Args:
-            device: Inference device string (``"cuda"`` or ``"cpu"``).
+            device: Inference device string (``"cuda"``, ``"mps"`` or ``"cpu"``).
             fast_captions: When ``True`` enables lower-quality / faster mode.
             force_cpu_fn: Zero-argument callable returning ``True`` when CPU
                 inference should be forced regardless of ``device``.
