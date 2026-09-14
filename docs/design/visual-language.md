@@ -115,12 +115,18 @@ much as size** — a 14px 600-weight label in full-strength text over a 13px 400
 secondary in 60% text separates cleanly without changing point size.
 
 ### The section label
-The recurring uppercase label is already a global class. Use it; do not re-roll it:
+The recurring uppercase label is already a global class. Use it; do not re-roll it.
+It is the app's one voice for "here is a group": inspector sections, the lightbox
+panels, menu headings. A Title Case heading naming a group is drift (Settings still has
+two levels of them, waiting on its own screen design).
 ```css
 .section-label { /* in style.css */
   font-size: var(--text-2xs); font-weight: var(--weight-semibold);
   text-transform: uppercase; letter-spacing: var(--tracking-label);
-  color: rgba(var(--v-theme-on-surface), 0.7);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary)); /* 0.7 */
+}
+.section-label--on-dark { /* the lightbox: dark in both themes */
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
 }
 ```
 The alpha is `0.7` because 11px semibold is **small** text under §4 and owes 4.5:1;
@@ -604,7 +610,7 @@ warm canvas. Stop. Use the ladder:
 | `--elevation-1` | resting cards, hovered grid tiles |
 | `--elevation-2` | menus, dropdowns, raised controls |
 | `--elevation-3` | popovers, floating panels |
-| `--elevation-4` | dialogs, lightbox chrome |
+| `--elevation-4` | dialogs, lightbox chrome, the floating selection pill |
 
 In **dark mode**, lean on lightness for elevation and keep shadows subtle; a heavy
 shadow on a dark surface just muddies. In **light mode**, the warm shadow does the
@@ -889,9 +895,10 @@ bar** — is one pattern. It reuses the grid; only the bar changes.
   full width, at height **`--bar-height`** (48px).
 - **The shipped `SelectionBar.vue` is not this bar** — do not use it as the reference
   for the full-width pattern. It lives in `components/panels/` (not `widgets/`) and is
-  a **floating centred pill**: `--radius-pill`, `rgba(surface, .86)` with
-  `backdrop-filter: blur(12px)`, `--elevation-3`, `bottom: var(--space-5)` inside
-  `.grid-content-area`, sized to its content rather than to the viewport. That is
+  a **floating centred pill**: the shared `.selbar` surface (`--panel`, 1px `--border`,
+  `--radius-pill`, `--elevation-4`; issue #1301), `bottom: var(--space-5)` inside
+  `.grid-content-area`, sized to its content rather than to the viewport. The model
+  shelf and the training runs wear the same `.selbar`. That is
   deliberate for a bulk-selection affordance over a photo grid, and it is also why it
   owns `--floating-bottom-h` for the notice stack (`notice-surface.md` §2.2). Whether
   it converges on the full-width pattern or stays a pill is the **One band** open item
