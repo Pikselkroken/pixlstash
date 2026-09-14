@@ -587,8 +587,9 @@ watch(showComfyuiControls, (shown) => {
 
 const validComfyWorkflows = computed(() => {
   if (!Array.isArray(comfyuiWorkflows.value)) return [];
+  // What run_i2i accepts, not workflow_type, until runs use detection (#1307).
   return comfyuiWorkflows.value.filter(
-    (workflow) => workflow?.workflow_type === "i2i",
+    (workflow) => !workflow?.missing_placeholders?.includes("{{image_path}}"),
   );
 });
 

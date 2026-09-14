@@ -855,7 +855,10 @@ async function loadTemplates(generation, imageId, backendUrl) {
     const data = await listWorkflows({ baseUrl: backendUrl });
     if (!isCurrentLoad(generation, imageId)) return;
     const all = Array.isArray(data?.workflows) ? data.workflows : [];
-    templates.value = all.filter((w) => w?.valid && w?.workflow_type === "i2i");
+    // What run_i2i accepts, not workflow_type, until runs use detection (#1307).
+    templates.value = all.filter(
+      (w) => w?.valid && !w?.missing_placeholders?.includes("{{image_path}}"),
+    );
     if (!templates.value.some((w) => w.name === selectedWorkflow.value)) {
       selectedWorkflow.value = templates.value[0]?.name || "";
     }

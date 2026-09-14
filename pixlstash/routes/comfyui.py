@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import json
 import os
 import threading
@@ -189,22 +190,52 @@ def _resolve_fixed_seed(payload: dict, max_seed: int = MAX_SEED) -> int | None:
     return seed_int
 
 
-def _find_placeholder_usage(payload: dict) -> tuple[bool, list[str]]:
+def _missing_placeholders(payload: dict) -> list[str]:
     dump = json.dumps(payload, ensure_ascii=False)
-    missing = []
-    if PLACEHOLDER_IMAGE not in dump:
-        missing.append(PLACEHOLDER_IMAGE)
-    if PLACEHOLDER_CAPTION not in dump:
-        missing.append(PLACEHOLDER_CAPTION)
-    is_t2i = PLACEHOLDER_IMAGE in missing
-    if is_t2i:
-        # t2i workflow: valid when the caption placeholder is present
-        valid = PLACEHOLDER_CAPTION not in missing
-    else:
-        # i2i workflow: valid as long as image placeholder is present;
-        # caption is optional (hidden in UI when absent)
-        valid = True
-    return valid, missing
+    return [
+        placeholder
+        for placeholder in (PLACEHOLDER_IMAGE, PLACEHOLDER_CAPTION)
+        if placeholder not in dump
+    ]
+
+
+# ponytail: one entry per file version; stale versions age out of the LRU.
+@functools.lru_cache(maxsize=512)
+def _describe_workflow(path: str, source: str, mtime_ns: int, size: int) -> dict:
+    """List metadata for one workflow file, recomputed only when the file changes.
+
+    Keyed on mtime and size so detection runs once per file version, and a file
+    that stays broken is logged once rather than on every menu open.
+    """
+    try:
+        payload = _load_workflow_json(path)
+        missing = _missing_placeholders(payload)
+    except Exception as exc:
+        logger.warning("Failed to read %s workflow %s: %s", source, path, exc)
+        return {
+            "valid": False,
+            "missing_placeholders": [PLACEHOLDER_IMAGE, PLACEHOLDER_CAPTION],
+            "workflow_type": "t2i",
+        }
+    try:
+        detected = detect_workflow_io(payload)
+    except Exception as exc:
+        logger.warning(
+            "Failed to detect inputs of %s workflow %s, listing it invalid: %s",
+            source,
+            path,
+            exc,
+        )
+        return {
+            "valid": False,
+            "missing_placeholders": missing,
+            "workflow_type": "t2i",
+        }
+    return {
+        "valid": detected.valid,
+        "missing_placeholders": missing,
+        "workflow_type": detected.workflow_type,
+    }
 
 
 def _resolve_picture_file(server, pic_id: int) -> str:
@@ -664,7 +695,7 @@ def create_router(server) -> APIRouter:
         description="Lists discovered built-in and user workflows. A workflow is valid when it has a save node, and i2i when it has a picture input.",
         response_model=ComfyUIWorkflowListResponse,
     )
-    async def list_comfyui_workflows():
+    def list_comfyui_workflows():
         workflows = []
         seen = set()
         for source, folder in _workflow_dirs():
@@ -677,29 +708,22 @@ def create_router(server) -> APIRouter:
                     continue
                 seen.add(entry)
                 path = os.path.join(folder, entry)
-                valid = False
-                missing = [PLACEHOLDER_IMAGE, PLACEHOLDER_CAPTION]
-                workflow_type = "t2i"
                 try:
-                    payload = _load_workflow_json(path)
-                    missing = _find_placeholder_usage(payload)[1]
-                    detected = detect_workflow_io(payload)
-                    valid = detected.valid
-                    workflow_type = detected.workflow_type
-                except Exception as exc:
+                    stat = os.stat(path)
+                except OSError as exc:
                     logger.warning(
-                        "Failed to read or detect workflow %s, listing it invalid: %s",
-                        entry,
-                        exc,
+                        "Failed to stat %s workflow %s: %s", source, path, exc
                     )
+                    continue
+                described = _describe_workflow(
+                    path, source, stat.st_mtime_ns, stat.st_size
+                )
                 workflows.append(
                     {
                         "name": entry,
                         "display_name": os.path.splitext(entry)[0],
-                        "valid": valid,
-                        "missing_placeholders": missing,
                         "source": source,
-                        "workflow_type": workflow_type,
+                        **described,
                     }
                 )
         workflows.sort(key=lambda item: item.get("name", ""))
@@ -793,7 +817,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Workflow not found")
 
         workflow_payload = _load_workflow_json(workflow_path)
-        _valid, missing = _find_placeholder_usage(workflow_payload)
+        missing = _missing_placeholders(workflow_payload)
         # Refused even when the caption placeholder makes the workflow a valid
         # t2i: without the image placeholder the selected picture never reaches
         # the graph, and its output would be stacked onto a picture it ignored.

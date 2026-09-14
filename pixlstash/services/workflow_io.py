@@ -15,13 +15,15 @@ Prompts are found by following each guider's own ``positive`` / ``negative``
 inputs upstream, through conditioning-only nodes (``ReferenceLatent``,
 ``ControlNetApplyAdvanced``, ...), to the text encoder that feeds them. A path
 through ``ConditioningZeroOut`` carries no prompt: that is how a model without
-a negative prompt is wired.
+a negative prompt is wired. A path that ends anywhere else is reported as not
+found, never as no prompt.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
+from pixlstash.services.comfyui_recipe_service import INPUT_IMAGE_FIELDS
 from pixlstash.services.comfyui_service import SAVE_NODE_CLASSES
 from pixlstash.services.workflow_hash import (
     ReducedNode,
@@ -30,6 +32,12 @@ from pixlstash.services.workflow_hash import (
 )
 
 _PROMPT_SIDES = ("positive", "negative")
+
+# Loaders the name rule below misses.
+_PICTURE_INPUT_CLASSES = frozenset(INPUT_IMAGE_FIELDS) | {
+    "PixlStashPictureLoader",
+    "Image Load",
+}
 
 
 @dataclass(frozen=True)
@@ -40,11 +48,11 @@ class WorkflowIO:
     namespaced by its subgraph instances the same way.
     """
 
-    save_nodes: list[str] = field(default_factory=list)
-    picture_inputs: list[str] = field(default_factory=list)
-    positive_prompts: list[str] = field(default_factory=list)
-    negative_prompts: list[str] = field(default_factory=list)
-    ambiguities: list[str] = field(default_factory=list)
+    save_nodes: tuple[str, ...] = ()
+    picture_inputs: tuple[str, ...] = ()
+    positive_prompts: tuple[str, ...] = ()
+    negative_prompts: tuple[str, ...] = ()
+    ambiguities: tuple[str, ...] = ()
 
     @property
     def valid(self) -> bool:
@@ -78,14 +86,27 @@ def detect_workflow_io(document: dict) -> WorkflowIO:
     else:
         nodes = reduce_api_graph(document)
 
-    # The classes output collection imports from, so `valid` means runnable.
-    save_nodes = sorted(
-        key for key, node in nodes.items() if node.class_type in SAVE_NODE_CLASSES
+    # Output collection (_extract_output_node_ids) takes an explicit choice
+    # first, whatever its class, and falls back to the save classes.
+    chosen = document.get("pixlstash_output_nodes") or document.get(
+        "pixlstash_output_node"
     )
-    # ponytail: name rule (LoadImage, LoadImageMask, LoadImageFromPath, ...);
-    # a loader named otherwise is not found until object_info types it.
+    if chosen is not None:
+        chosen = {
+            str(key) for key in (chosen if isinstance(chosen, list) else [chosen])
+        }
+        save_nodes = sorted(key for key in nodes if key in chosen)
+    else:
+        save_nodes = sorted(
+            key for key, node in nodes.items() if node.class_type in SAVE_NODE_CLASSES
+        )
+    # ponytail: name rule plus a known-class list; a loader named otherwise is
+    # not found until object_info types it (#1306).
     picture_inputs = sorted(
-        key for key, node in nodes.items() if "LoadImage" in node.class_type
+        key
+        for key, node in nodes.items()
+        if "loadimage" in node.class_type.lower().replace(" ", "")
+        or node.class_type in _PICTURE_INPUT_CLASSES
     )
     ambiguities = []
     if len(save_nodes) > 1:
@@ -100,8 +121,8 @@ def detect_workflow_io(document: dict) -> WorkflowIO:
         readings[guider_id] = tuple(
             _prompts_for(nodes, guider_id, side) for side in _PROMPT_SIDES
         )
-    positive: list[str] = []
-    negative: list[str] = []
+    positive: tuple[str, ...] = ()
+    negative: tuple[str, ...] = ()
     distinct = set(readings.values())
     if len(distinct) > 1:
         ambiguities.append(
@@ -109,17 +130,21 @@ def detect_workflow_io(document: dict) -> WorkflowIO:
             f"{', '.join(sorted(readings))}"
         )
     elif distinct:
-        positive, negative = (list(ids) for ids in distinct.pop())
-        for side, ids in (("positive", positive), ("negative", negative)):
-            if len(ids) > 1:
+        sides = dict(zip(_PROMPT_SIDES, distinct.pop()))
+        for side, ids in sides.items():
+            if ids is None:
+                ambiguities.append(f"{side} prompt not found")
+                sides[side] = ()
+            elif len(ids) > 1:
                 ambiguities.append(f"{len(ids)} {side} prompts: {', '.join(ids)}")
+        positive, negative = sides["positive"], sides["negative"]
 
     return WorkflowIO(
-        save_nodes=save_nodes,
-        picture_inputs=picture_inputs,
+        save_nodes=tuple(save_nodes),
+        picture_inputs=tuple(picture_inputs),
         positive_prompts=positive,
         negative_prompts=negative,
-        ambiguities=ambiguities,
+        ambiguities=tuple(ambiguities),
     )
 
 
@@ -155,30 +180,46 @@ def _guiders(nodes: dict[str, ReducedNode]) -> list[str]:
     )
 
 
-def _prompts_for(nodes: dict[str, ReducedNode], guider_id: str, side: str) -> tuple:
-    """The text encoders reached from one side of a guider, sorted."""
+def _prompts_for(
+    nodes: dict[str, ReducedNode], guider_id: str, side: str
+) -> tuple[str, ...] | None:
+    """The text encoders reached from one side of a guider, sorted.
+
+    ``None`` when a path ends somewhere that is neither an encoder nor a
+    ``ConditioningZeroOut``: the prompt is unknown, not absent.
+    """
     start = _prompt_inputs(nodes[guider_id]).get(side)
     found = set()
     pending = [start] if start else []
     seen = set()
     while pending:
         key, slot = pending.pop()
-        if (key, slot) in seen or key not in nodes:
+        if (key, slot) in seen:
             continue
         seen.add((key, slot))
-        node = nodes[key]
+        node = nodes.get(key)
+        if node is None:
+            return None
         if "TextEncode" in node.class_type:
             found.add(key)
             continue
         if node.class_type == "ConditioningZeroOut":
             continue
-        # A node emitting both sides (ControlNetApplyAdvanced) orders them
-        # positive, negative: follow the input matching the output we came from.
         by_name = {name: (source, s) for name, source, s in node.inputs}
         if "positive" in by_name and "negative" in by_name:
+            # Conditioning nodes (ControlNetApplyAdvanced) emit positive on slot
+            # 0 and negative on 1. A node that also takes a model is a sampler
+            # from a pack (KSampler (Efficient)) with its own output layout.
+            if "model" in by_name or slot > 1:
+                return None
             pending.append(by_name["positive" if slot == 0 else "negative"])
             continue
-        pending.extend(
-            (source, s) for name, source, s in node.inputs if "conditioning" in name
-        )
+        upstream = [
+            (source, s)
+            for name, source, s in node.inputs
+            if _is_conditioning_input(name)
+        ]
+        if not upstream:
+            return None
+        pending.extend(upstream)
     return tuple(sorted(found))
