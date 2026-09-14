@@ -377,9 +377,9 @@ function triggerLocalImport(files) {
   max-width: 48%;
   flex-shrink: 0;
 }
+/* Height from the base (--control-h); only width and type are local. */
 .tb-import-project .tbm-select {
   width: 100%;
-  min-height: 34px;
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   text-overflow: ellipsis;
