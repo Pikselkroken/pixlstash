@@ -120,6 +120,19 @@ test.describe('star rating', () => {
     await expect.poll(() => filledStars(gridStars)).toBe(GRID_RATING)
     await written
 
+    // The grid rebuilds its cards from the rows it last fetched: expanding or
+    // collapsing stacks does, and so does a stack-count refresh a WS event
+    // triggers while a fresh grid settles. The score has to be in those rows
+    // too, or the rebuild empties the stars the click just filled (the timing-
+    // dependent failure this test used to show). Force one rebuild here.
+    await grid.openViewMenu()
+    const expandAll = page.getByRole('button', { name: 'Expand all' })
+    const collapseAll = page.getByRole('button', { name: 'Collapse all' })
+    await ((await expandAll.isEnabled()) ? expandAll : collapseAll).click()
+    await page.keyboard.press('Escape')
+    await card.hover()
+    await expect.poll(() => filledStars(gridStars)).toBe(GRID_RATING)
+
     // Reload: the rating round-tripped to the backend and still shows in the
     // grid badge.
     await page.reload()
@@ -132,5 +145,61 @@ test.describe('star rating', () => {
     // The overlay for the same picture shows the same filled-star count.
     await overlay.openFromGrid(cardAfter)
     await expect.poll(() => overlay.filledStarCount()).toBe(GRID_RATING)
+  })
+
+  // A thumbnail batch copies the cards it covers before its request and used
+  // to write that copy back when it answered, so a rating made while a batch
+  // was out came back as the old score, with the backend holding the new one.
+  // A fresh grid runs batches for a while, which is when this test clicks.
+  test('a grid rating survives a thumbnail batch that was in flight (§6)', async ({
+    page,
+    grid,
+    overlay,
+    apiContext,
+  }) => {
+    await grid.goto()
+    await grid.waitForThumbnailLoaded()
+    await overlay.openFromGrid(grid.thumbnails.nth(2))
+    const pictureId = openPictureId(page)
+    await resetScore(apiContext, pictureId)
+
+    await page.goto('/')
+    await grid.waitForThumbnailLoaded()
+    const card = grid.card(pictureId)
+    const stars = card.locator('.star-overlay--compact .v-icon')
+    await card.hover()
+    await expect(stars.first()).toBeVisible()
+
+    // Hold the next batch. Expanding or collapsing all stacks refetches the
+    // visible range, so one starts now and waits here.
+    let release
+    const held = new Promise((resolve) => (release = resolve))
+    let batchOut = false
+    await page.route('**/api/v1/pictures/thumbnails', async (route) => {
+      batchOut = true
+      await held
+      await route.continue()
+    })
+    await grid.openViewMenu()
+    const expandAll = page.getByRole('button', { name: 'Expand all' })
+    const collapseAll = page.getByRole('button', { name: 'Collapse all' })
+    await ((await expandAll.isEnabled()) ? expandAll : collapseAll).click()
+    await page.keyboard.press('Escape')
+    await expect.poll(() => batchOut).toBe(true)
+
+    await card.hover()
+    const written = scoreWritten(page)
+    await stars.nth(GRID_RATING - 1).click()
+    await written
+    await expect.poll(() => filledStars(stars)).toBe(GRID_RATING)
+
+    const landed = page.waitForResponse((res) =>
+      res.url().includes('/api/v1/pictures/thumbnails'),
+    )
+    release()
+    await landed
+    await card.hover()
+    await expect.poll(() => filledStars(stars)).toBe(GRID_RATING)
+    await page.unroute('**/api/v1/pictures/thumbnails')
   })
 })

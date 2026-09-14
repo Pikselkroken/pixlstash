@@ -6959,6 +6959,20 @@ function handleImageCardFocus(image) {
 // ============================================================
 // THUMBNAIL BATCH FETCH
 // ============================================================
+// The card fields a thumbnail batch is the authority for; everything else on a
+// card belongs to whoever last wrote it.
+const THUMBNAIL_BATCH_FIELDS = [
+  "thumbnail",
+  "thumbnail_width",
+  "thumbnail_height",
+  "square_crop_x",
+  "square_crop_y",
+  "square_crop_side",
+  "faces",
+  "detections",
+  "penalised_tags",
+];
+
 async function fetchThumbnailsBatch(start, end, meta = {}) {
   if (start === undefined || start === null) {
     start = renderStart.value;
@@ -7168,7 +7182,18 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
         targetIndex = moved;
       }
       img.idx = targetIndex;
-      allGridImages.value[targetIndex] = img;
+      // Merge what the batch owns into the card as it is NOW, rather than put
+      // back the copy taken before the await: anything that changed while the
+      // request was out (a star click, a tag, a stack count) lives on the
+      // current card, and writing the stale copy over it reverted the rating
+      // just made with the backend already holding the new one.
+      const currentCard = allGridImages.value[targetIndex];
+      const merged = { ...currentCard, idx: targetIndex };
+      for (const field of THUMBNAIL_BATCH_FIELDS) merged[field] = img[field];
+      // A batch that carried no URL keeps what the card has now.
+      merged.thumbnail = img.thumbnail ?? currentCard?.thumbnail ?? null;
+      merged.score = currentCard?.score ?? 0;
+      allGridImages.value[targetIndex] = merged;
       if (img.thumbnail) {
         clearThumbnailRetry(img.id);
       } else {
