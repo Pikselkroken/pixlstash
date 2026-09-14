@@ -36,6 +36,7 @@ from pixlstash.services.comfyui_recipe_service import (
     sanitize_prompt_graph,
     unchecked_preflight,
 )
+from pixlstash.services.workflow_io import detect_workflow_io
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.stacking import (
@@ -373,7 +374,7 @@ def _inspect_recipe(comfyui_url: str, prompt_graph: dict) -> tuple[dict, list[di
 
 
 class ComfyUIWorkflowItemResponse(BaseModel):
-    """A single discovered ComfyUI workflow with placeholder validation metadata."""
+    """A single discovered ComfyUI workflow. ``valid`` and ``workflow_type`` are detected from the graph."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -660,7 +661,7 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/comfyui/workflows",
         summary="List ComfyUI workflows",
-        description="Lists discovered built-in and user workflows with placeholder validation metadata.",
+        description="Lists discovered built-in and user workflows. A workflow is valid when it has a save node, and i2i when it has a picture input.",
         response_model=ComfyUIWorkflowListResponse,
     )
     async def list_comfyui_workflows():
@@ -676,13 +677,21 @@ def create_router(server) -> APIRouter:
                     continue
                 seen.add(entry)
                 path = os.path.join(folder, entry)
+                valid = False
+                missing = [PLACEHOLDER_IMAGE, PLACEHOLDER_CAPTION]
+                workflow_type = "t2i"
                 try:
                     payload = _load_workflow_json(path)
-                    valid, missing = _find_placeholder_usage(payload)
+                    missing = _find_placeholder_usage(payload)[1]
+                    detected = detect_workflow_io(payload)
+                    valid = detected.valid
+                    workflow_type = detected.workflow_type
                 except Exception as exc:
-                    logger.warning("Failed to read workflow %s: %s", entry, exc)
-                    valid = False
-                    missing = [PLACEHOLDER_IMAGE, PLACEHOLDER_CAPTION]
+                    logger.warning(
+                        "Failed to read or detect workflow %s, listing it invalid: %s",
+                        entry,
+                        exc,
+                    )
                 workflows.append(
                     {
                         "name": entry,
@@ -690,9 +699,7 @@ def create_router(server) -> APIRouter:
                         "valid": valid,
                         "missing_placeholders": missing,
                         "source": source,
-                        "workflow_type": "t2i"
-                        if PLACEHOLDER_IMAGE in missing
-                        else "i2i",
+                        "workflow_type": workflow_type,
                     }
                 )
         workflows.sort(key=lambda item: item.get("name", ""))
@@ -786,8 +793,11 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Workflow not found")
 
         workflow_payload = _load_workflow_json(workflow_path)
-        valid, missing = _find_placeholder_usage(workflow_payload)
-        if not valid and PLACEHOLDER_IMAGE in missing:
+        _valid, missing = _find_placeholder_usage(workflow_payload)
+        # Refused even when the caption placeholder makes the workflow a valid
+        # t2i: without the image placeholder the selected picture never reaches
+        # the graph, and its output would be stacked onto a picture it ignored.
+        if PLACEHOLDER_IMAGE in missing:
             raise HTTPException(
                 status_code=400,
                 detail=f"Workflow missing placeholders: {', '.join(missing)}",
