@@ -66,7 +66,10 @@ const props = defineProps({
   ariaLabel: { type: String, default: "" },
 });
 
-const emit = defineEmits(["update:modelValue"]);
+// `pick` fires for every click, the current value included, like OptionRows:
+// a group whose value has SLACK (the zoom snaps match within 1%) reads as
+// already selected while the thing it names is off the stop.
+const emit = defineEmits(["update:modelValue", "pick"]);
 
 const tabStop = computed(() => tabStopId(props.options, props.modelValue));
 
@@ -77,6 +80,7 @@ function iconName(icon) {
 function select(option) {
   if (props.disabled || option.disabled) return;
   if (option.id !== props.modelValue) emit("update:modelValue", option.id);
+  emit("pick", option.id);
 }
 
 function onKeydown(event) {

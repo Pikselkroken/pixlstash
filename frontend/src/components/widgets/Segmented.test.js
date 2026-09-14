@@ -127,6 +127,13 @@ describe("Segmented", () => {
     expect(radio.find("i").text()).toBe("mdi-view-grid");
     expect(radio.find(".seg__label").exists()).toBe(false);
   });
+
+  it("picks on a click of the current value, so a snap stop can re-snap", async () => {
+    const w = mount(Segmented, { props: { options: OPTIONS, modelValue: "a" } });
+    await w.findAll('[role="radio"]')[0].trigger("click");
+    expect(w.emitted("pick")).toEqual([["a"]]);
+    expect(w.emitted("update:modelValue")).toBeUndefined();
+  });
 });
 
 describe("OptionRows", () => {
