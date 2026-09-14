@@ -884,6 +884,36 @@ def test_read_blocked_get_paths_name_declared_owner_class_gets():
     )
 
 
+def test_read_blocked_get_prefixes_cover_only_owner_class_gets():
+    """A prefix on the belt may never swallow a route a share token may read.
+
+    ``READ_BLOCKED_GET_PREFIXES`` refuses every scoped-token GET under a prefix,
+    so one that also covered a scoped or public GET would break share links
+    outright, and one that covers nothing protects nothing while reading as
+    protection. Both directions are derived from ``ROUTE_POLICIES``.
+    """
+    from pixlstash.auth import READ_BLOCKED_GET_PREFIXES
+    from pixlstash.authz.gate import OWNER_CLASS_POLICIES
+    from pixlstash.authz.registry import ROUTE_POLICIES
+
+    problems = []
+    for prefix in READ_BLOCKED_GET_PREFIXES:
+        assert prefix.endswith("/"), f"{prefix!r} would also match sibling names"
+        under = {
+            path: route_policy.policy
+            for (method, path), route_policy in ROUTE_POLICIES.items()
+            if method == "GET" and path.startswith(prefix)
+        }
+        if not under:
+            problems.append(f"  {prefix} covers no declared GET")
+        problems.extend(
+            f"  {prefix} swallows {path} ({policy.name})"
+            for path, policy in sorted(under.items())
+            if policy not in OWNER_CLASS_POLICIES
+        )
+    assert not problems, "\n".join(problems)
+
+
 # ---------------------------------------------------------------------------
 # Guardrail: the written coverage matrix matches the registry, row for row
 # ---------------------------------------------------------------------------

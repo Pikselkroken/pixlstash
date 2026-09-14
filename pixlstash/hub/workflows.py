@@ -455,3 +455,36 @@ def destroy_ghosts_for_instances(
             removed,
         )
     return removed
+
+
+def ghost_instance_hashes(hub: HubDatabase, library_uuid: str) -> list[str]:
+    """Every instance hash this library's ghosts lean on, for a full re-check."""
+    return [
+        row["instance_hash"]
+        for row in hub.fetchall(
+            "SELECT DISTINCT instance_hash FROM workflow_picture_ghost "
+            "WHERE library_uuid = ? ORDER BY instance_hash",
+            (library_uuid,),
+        )
+    ]
+
+
+def erase_picture_ghosts(hub: HubDatabase, library_uuid: str) -> int:
+    """Destroy every ghost one library holds. Returns how many.
+
+    One library, like every other query here: credentials are pinned to the
+    library they were minted in, so an erase requested in one must not reach
+    another's. A detached library's ghosts are erased by attaching it again.
+    """
+    with hub.transaction() as conn:
+        removed = (
+            conn.execute(
+                "DELETE FROM workflow_picture_ghost WHERE library_uuid = ?",
+                (library_uuid,),
+            ).rowcount
+            or 0
+        )
+    logger.info(
+        "Erased %d picture ghost(s) of library %s on request.", removed, library_uuid
+    )
+    return removed
