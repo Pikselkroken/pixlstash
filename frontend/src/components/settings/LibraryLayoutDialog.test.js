@@ -21,12 +21,6 @@ vi.mock("vuetify/components", () => ({
     template:
       '<label><input type="checkbox" :checked="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', $event.target.checked)" />{{ label }}</label>',
   },
-  VTextField: {
-    props: { modelValue: String, disabled: Boolean },
-    emits: ["update:modelValue"],
-    template:
-      '<input :value="modelValue" :disabled="disabled" @input="$emit(\'update:modelValue\', $event.target.value)" />',
-  },
   VSelect: {
     name: "v-select",
     // Typed rather than a name list: Vuetify declares these Boolean, so a bare
@@ -522,7 +516,7 @@ describe("LibraryLayoutDialog", () => {
     await flushPromises();
     setLayoutSettings.mockClear();
 
-    await wrapper.find(".layout-unfiled__name").setValue("Loose");
+    await wrapper.find(".layout-unfiled__name input").setValue("Loose");
     await vi.advanceTimersByTimeAsync(600);
     await flushPromises();
     expect(setLayoutSettings).toHaveBeenCalledWith({ layoutUnfiled: "Loose" });

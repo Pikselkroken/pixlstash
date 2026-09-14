@@ -18,6 +18,7 @@ import FolderTreeNode from "../editors/FolderTreeNode.vue";
 import FolderEditor from "../editors/FolderEditor.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import AppButton from "../widgets/AppButton.vue";
+import AppInput from "../widgets/AppInput.vue";
 import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
 import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
@@ -4700,13 +4701,13 @@ defineExpose({
         <div class="relocate-path-block">
           <div class="relocate-path-label">Destination folder</div>
           <div class="relocate-destination-row">
-            <v-text-field
+            <AppInput
               v-model="referenceFolderRelocateDestination"
-              density="comfortable"
-              variant="filled"
-              hide-details
               readonly
+              mono
+              aria-label="Destination folder"
               placeholder="Choose an empty folder"
+              class="relocate-destination-input"
             />
             <AppButton
               variant="outline"

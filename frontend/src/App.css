@@ -671,12 +671,6 @@ kbd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tbm-toggle-end {
-  margin-left: auto;
-  color: rgb(var(--v-theme-on-primary));
-  display: inline-flex;
-  flex-shrink: 0;
-}
 .tbm-toggle--on {
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
@@ -825,14 +819,14 @@ kbd {
 }
 .tbm-input {
   width: 100%;
-  min-height: 36px;
+  height: var(--control-h);
   padding: 0 var(--space-3);
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-panel));
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   box-sizing: border-box;
   transition: border-color var(--dur-1) var(--ease-standard);
 }
@@ -843,14 +837,14 @@ kbd {
 /* ── Numeric field (mono) ─────────────────────────────────────────────────── */
 .tbm-num {
   width: 58px;
-  min-height: 36px;
+  height: var(--control-h);
   text-align: center;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-panel));
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   box-sizing: border-box;
 }
 
@@ -914,7 +908,7 @@ kbd {
   appearance: none;
   -webkit-appearance: none;
   width: 100%;
-  min-height: 40px;
+  height: var(--control-h);
   padding: 0 var(--space-7) 0 var(--space-4);
   font-family: var(--font-ui);
   font-size: var(--text-base);
@@ -922,7 +916,7 @@ kbd {
   color: rgb(var(--v-theme-on-panel));
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   box-sizing: border-box;
   transition: border-color var(--dur-1) var(--ease-standard);
@@ -952,7 +946,7 @@ kbd {
   color: rgb(var(--v-theme-on-panel));
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   box-sizing: border-box;
   transition: border-color var(--dur-1) var(--ease-standard);
 }

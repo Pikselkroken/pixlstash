@@ -431,6 +431,7 @@ watch(
                 :model-value="String(serverDraft.port)"
                 :min="1024"
                 :max="65535"
+                mono
                 :disabled="!serverDraft.enabled || busy"
                 @update:model-value="serverDraft.port = Number($event)"
               />

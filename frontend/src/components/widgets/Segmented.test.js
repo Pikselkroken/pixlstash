@@ -1,0 +1,108 @@
+// Segmented and OptionRows - the two pick-one shapes (docs/design/buttons.md).
+
+import { describe, it, expect, vi } from "vitest";
+import { mount } from "@vue/test-utils";
+
+vi.mock("vuetify/components", () => ({
+  VIcon: { name: "v-icon", template: "<i><slot /></i>" },
+}));
+
+import Segmented from "./Segmented.vue";
+import OptionRows from "./OptionRows.vue";
+
+const OPTIONS = [
+  { id: "a", label: "Alpha", icon: "alpha" },
+  { id: "b", label: "Beta", icon: "beta", disabled: true },
+  { id: "c", label: "Gamma", icon: "gamma" },
+];
+
+describe.each([
+  ["Segmented", Segmented],
+  ["OptionRows", OptionRows],
+])("%s radiogroup contract", (_, Component) => {
+  it("marks exactly the selected option checked and gives it the one tab stop", () => {
+    const w = mount(Component, {
+      props: { options: OPTIONS, modelValue: "c", ariaLabel: "Pick" },
+    });
+    expect(w.attributes("role")).toBe("radiogroup");
+    expect(w.attributes("aria-label")).toBe("Pick");
+    const radios = w.findAll('[role="radio"]');
+    expect(radios.map((r) => r.attributes("aria-checked"))).toEqual([
+      "false",
+      "false",
+      "true",
+    ]);
+    expect(radios.map((r) => r.attributes("tabindex"))).toEqual([
+      "-1",
+      "-1",
+      "0",
+    ]);
+  });
+
+  it("puts the tab stop on the first live option when nothing is selected", () => {
+    const w = mount(Component, {
+      props: { options: [OPTIONS[1], OPTIONS[2]], modelValue: null },
+    });
+    const radios = w.findAll('[role="radio"]');
+    expect(radios.map((r) => r.attributes("tabindex"))).toEqual(["-1", "0"]);
+  });
+
+  it("selects on click, and not again for the current value", async () => {
+    const w = mount(Component, { props: { options: OPTIONS, modelValue: "a" } });
+    const radios = w.findAll('[role="radio"]');
+    await radios[0].trigger("click");
+    expect(w.emitted("update:modelValue")).toBeUndefined();
+    await radios[2].trigger("click");
+    expect(w.emitted("update:modelValue")).toEqual([["c"]]);
+  });
+
+  it("arrows select as they move, skip disabled options and wrap", async () => {
+    const w = mount(Component, {
+      props: { options: OPTIONS, modelValue: "a" },
+      attachTo: document.body,
+    });
+    await w.trigger("keydown", { key: "ArrowRight" });
+    expect(w.emitted("update:modelValue")[0]).toEqual(["c"]);
+    await w.setProps({ modelValue: "c" });
+    await w.trigger("keydown", { key: "ArrowDown" });
+    expect(w.emitted("update:modelValue")[1]).toEqual(["a"]);
+    await w.trigger("keydown", { key: "ArrowLeft" });
+    expect(w.emitted("update:modelValue")[2]).toEqual(["a"]);
+    await w.trigger("keydown", { key: "Enter" });
+    expect(w.emitted("update:modelValue")).toHaveLength(3);
+    w.unmount();
+  });
+});
+
+describe("Segmented", () => {
+  it("fills the selected segment and draws icons only where the variant asks", () => {
+    const labelOnly = mount(Segmented, {
+      props: { options: OPTIONS, modelValue: "a" },
+    });
+    expect(labelOnly.find(".seg__opt--on").text()).toBe("Alpha");
+    expect(labelOnly.find("i").exists()).toBe(false);
+
+    const iconOnly = mount(Segmented, {
+      props: {
+        options: [{ id: "g", icon: "view-grid", title: "Grid" }],
+        variant: "icon",
+      },
+    });
+    const radio = iconOnly.find('[role="radio"]');
+    expect(radio.attributes("aria-label")).toBe("Grid");
+    expect(radio.find("i").text()).toBe("mdi-view-grid");
+    expect(radio.find(".seg__label").exists()).toBe(false);
+  });
+});
+
+describe("OptionRows", () => {
+  it("takes no fill: the selected row carries a trailing check and nothing else does", () => {
+    const w = mount(OptionRows, {
+      props: { options: OPTIONS, modelValue: "c" },
+    });
+    const rows = w.findAll('[role="radio"]');
+    expect(rows[2].find(".optrow__check").exists()).toBe(true);
+    expect(rows[0].find(".optrow__check").exists()).toBe(false);
+    expect(w.findAll(".optrow__check")).toHaveLength(1);
+  });
+});

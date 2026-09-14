@@ -68,6 +68,13 @@
   --control-h-sm: 24px;
   --control-h-bar: 32px;
 
+  /* SEGMENTED TRACK, stacked variant (buttons.md, "Pick one"): a media box
+     above the label, for a picker whose icon draws the shape of the outcome.
+     8 + 40 + 4 + 16 + 8 = 76, and the track adds --space-2 either side. The
+     flat track is --control-h-bar: 4 + --control-h-sm + 4. */
+  --seg-stacked-h: 76px;
+  --seg-media-h: 40px;
+
   /* ---------------------------------------------------------------------------
      RADIUS - four steps and a pill. The audit found 14 distinct radii
      (2/3/4/5/6/8/9/10/12/14/16/18/999/9999). Collapse to these. 9999 was a typo

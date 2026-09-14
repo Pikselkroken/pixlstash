@@ -229,11 +229,9 @@
             Leave the label empty for dense object detection, or type a phrase
             to detect only that (e.g. "dog").
           </div>
-          <v-text-field
+          <AppInput
             v-model="segmentPrompt"
             label="Label (optional)"
-            density="comfortable"
-            hide-details
             autofocus
             @keydown.enter.stop.prevent="confirmSegment"
           />
@@ -1224,6 +1222,7 @@ import GridActionPill from "../panels/GridActionPill.vue";
 import ActionReceipt from "../widgets/ActionReceipt.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
+import AppInput from "../widgets/AppInput.vue";
 import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
 import SearchResultBar from "../widgets/SearchResultBar.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";

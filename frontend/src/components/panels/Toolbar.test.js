@@ -327,7 +327,7 @@ describe("Toolbar - Recently changed stacks", () => {
     const stacked = mountToolbar();
     await openSortMenu(stacked);
     expect(stacked.text()).toContain("Recently changed stacks");
-    const badge = stacked.find(".tbm-toggle-filter-badge");
+    const badge = stacked.find(".gb-sort-filter-badge");
     expect(badge.exists()).toBe(true);
     expect(badge.attributes("title")).toBe(
       "Only available when viewing stacks",

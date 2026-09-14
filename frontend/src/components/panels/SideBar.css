@@ -2429,16 +2429,16 @@ button.sidebar-ctx-item:disabled:hover {
 
 .relocate-destination-row {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  align-items: center;
+  gap: var(--space-3);
 }
 
-.relocate-destination-row .v-text-field {
+.relocate-destination-input {
   flex: 1;
+  min-width: 0;
 }
 
 .relocate-browse-btn {
-  align-self: center;
   flex-shrink: 0;
 }
 
