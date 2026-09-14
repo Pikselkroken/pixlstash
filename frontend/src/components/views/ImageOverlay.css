@@ -106,7 +106,7 @@
 }
 
 .overlay-close {
-  background: rgba(var(--v-theme-primary), 0.7);
+  background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
   padding: 6px 14px;
   border-radius: var(--radius-sm);
@@ -341,7 +341,7 @@
 }
 
 .overlay-comfy-run {
-  background: rgba(var(--v-theme-primary), 0.8);
+  background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
   padding: 6px var(--space-4);
   border-radius: var(--radius-pill);

@@ -1102,7 +1102,7 @@ function netDelta(row) {
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   font-weight: var(--weight-medium);
-  color: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-surface));
   border: 1px solid rgb(var(--v-theme-primary));
   border-radius: var(--radius-pill);
   padding: 0 var(--space-2);

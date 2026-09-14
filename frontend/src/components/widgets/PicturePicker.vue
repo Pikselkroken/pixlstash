@@ -599,7 +599,6 @@ watch(
 }
 .pp-more {
   font-size: var(--text-2xs);
-  color: rgb(var(--v-theme-accent));
 }
 
 .pp-main {
