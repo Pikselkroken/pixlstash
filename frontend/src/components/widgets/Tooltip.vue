@@ -194,6 +194,8 @@ onMounted(() => {
   el?.addEventListener("mouseenter", arm);
   el?.addEventListener("focusin", onFocusIn);
   el?.addEventListener("focusout", onFocusOut);
+  el?.addEventListener("mousedown", onPress);
+  el?.addEventListener("mouseleave", onRelease);
 });
 
 // ── The description ───────────────────────────────────────────────────────
@@ -246,6 +248,8 @@ onBeforeUnmount(() => {
     el.removeEventListener("mouseenter", arm);
     el.removeEventListener("focusin", onFocusIn);
     el.removeEventListener("focusout", onFocusOut);
+    el.removeEventListener("mousedown", onPress);
+    el.removeEventListener("mouseleave", onRelease);
   }
   if (unmountHost) {
     const own = tokens(unmountHost.getAttribute("aria-describedby")).filter(
@@ -272,14 +276,17 @@ onUnmounted(() => {
 const activatorProps = computed(() => ({
   "aria-describedby": ownDescribedby.value,
   onFocus,
-  // Pressing the control is using it: a tip left open over a menu the press
-  // just opened would sit in its first row, hoverable and in the way.
-  onMousedown: close,
+  onMousedown: onPress,
+  onMouseleave: onRelease,
 }));
 
 const registration = { host, close };
 
 watch(open, (isOpen) => {
+  if (isOpen && pressed) {
+    open.value = false;
+    return;
+  }
   if (!isOpen) {
     openTips.delete(registration);
     document.removeEventListener("keydown", onDocumentKeydown);
@@ -307,6 +314,23 @@ watch(open, (isOpen) => {
 function onFocus(e) {
   if (props.disabled || !(props.text || slots.default)) return;
   if (e.target?.matches?.(":focus-visible")) open.value = true;
+}
+
+// Pressing the control is using it, and the tip stays shut until the pointer
+// leaves, as a native `title` does. Closing on the press alone is not enough:
+// the pointer is still over the control, so the hover delay that was already
+// running reopens the tip a moment later, over the menu the press just opened
+// (a right-click on a sidebar row), where its hoverable surface takes the
+// click meant for a menu row.
+let pressed = false;
+
+function onPress() {
+  pressed = true;
+  close();
+}
+
+function onRelease() {
+  pressed = false;
 }
 
 function close() {

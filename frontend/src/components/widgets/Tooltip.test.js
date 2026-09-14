@@ -193,4 +193,33 @@ describe("Tooltip", () => {
     expect(tip().props("modelValue")).toBe(false);
     w.unmount();
   });
+
+  // A right-click on a row opens a menu under a pointer that is still on the
+  // row; the hover delay already running must not put the tip back over the
+  // menu, where its hoverable surface would take a menu row's click.
+  it("stays shut after a press until the pointer leaves the control", async () => {
+    const w = mountHost(
+      `<button>Row<Tooltip text="Row tip" activator="parent" /></button>`,
+    );
+    await flushPromises();
+    const btn = w.find("button");
+    const tip = () => w.findComponent(components.VTooltip);
+    await btn.trigger("mouseenter");
+    await settle();
+    expect(tip().props("modelValue")).toBe(true);
+
+    await btn.trigger("mousedown", { button: 2 });
+    await flushPromises();
+    expect(tip().props("modelValue")).toBe(false);
+    // Vuetify's hover timer firing again with the pointer still on the row.
+    await btn.trigger("mouseenter");
+    await settle();
+    expect(tip().props("modelValue")).toBe(false);
+
+    await btn.trigger("mouseleave");
+    await btn.trigger("mouseenter");
+    await settle();
+    expect(tip().props("modelValue")).toBe(true);
+    w.unmount();
+  });
 });
