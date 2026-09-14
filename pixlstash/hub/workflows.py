@@ -488,3 +488,70 @@ def erase_picture_ghosts(hub: HubDatabase, library_uuid: str) -> int:
         "Erased %d picture ghost(s) of library %s on request.", removed, library_uuid
     )
     return removed
+
+
+# ---------------------------------------------------------------------------
+# How each picture input is filled (implementation plan §F3)
+# ---------------------------------------------------------------------------
+
+
+def input_modes_by_workflow(
+    hub: HubDatabase, library_uuid: str
+) -> dict[str, list[sqlite3.Row]]:
+    """Every stored picture-input mode in one library, keyed by workflow file.
+
+    One query for the whole workflow list, which asks every file whether it has
+    a Selection input.
+    """
+    grouped: dict[str, list[sqlite3.Row]] = {}
+    for row in hub.fetchall(
+        "SELECT workflow_name, node_id, mode, pixel_sha FROM workflow_picture_input "
+        "WHERE library_uuid = ? ORDER BY workflow_name, node_id",
+        (library_uuid,),
+    ):
+        grouped.setdefault(row["workflow_name"], []).append(row)
+    return grouped
+
+
+def replace_input_modes(
+    hub: HubDatabase,
+    library_uuid: str,
+    workflow_name: str,
+    modes: list[tuple[str, str, Optional[str]]],
+) -> None:
+    """Store one workflow's modes whole, as ``(node_id, mode, pixel_sha)``.
+
+    Replaced rather than merged: the caller sends every input, and a merge would
+    keep a second Selection row the new set moved elsewhere.
+    """
+    with hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM workflow_picture_input "
+            "WHERE library_uuid = ? AND workflow_name = ?",
+            (library_uuid, workflow_name),
+        )
+        conn.executemany(
+            "INSERT INTO workflow_picture_input "
+            "(library_uuid, workflow_name, node_id, mode, pixel_sha) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [
+                (library_uuid, workflow_name, node_id, mode, pixel_sha)
+                for node_id, mode, pixel_sha in modes
+            ],
+        )
+
+
+def forget_input_modes(hub: HubDatabase, workflow_name: str) -> int:
+    """Drop a deleted workflow file's modes in every library. Returns how many.
+
+    Every library, unlike the reads: the file is one per machine, so once it is
+    gone no library's setup for it describes anything.
+    """
+    with hub.transaction() as conn:
+        return (
+            conn.execute(
+                "DELETE FROM workflow_picture_input WHERE workflow_name = ?",
+                (workflow_name,),
+            ).rowcount
+            or 0
+        )

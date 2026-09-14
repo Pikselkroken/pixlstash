@@ -36,7 +36,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import delete
+from sqlmodel import delete, select
 
 from pixlstash import auth
 from pixlstash.authz.policy import AccessPolicy
@@ -44,6 +44,7 @@ from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, ReferenceFolder
 from pixlstash.hub.workflows import PictureGhost, record_picture_ghosts
+import pixlstash.routes.comfyui as comfyui_module
 from pixlstash.server import Server
 from pixlstash.tasks.ghost_cascade_task import GhostCascadeTask
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
@@ -143,6 +144,7 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_recipe")
         conn.execute("DELETE FROM workflow_topology")
         conn.execute("DELETE FROM workflow_picture_ghost")
+        conn.execute("DELETE FROM workflow_picture_input")
         for topology, node_count, first_seen in (
             (BUSY_TOPOLOGY, 47, "2026-08-01T00:00:00Z"),
             (BINNED_TOPOLOGY, 12, "2026-08-03T00:00:00Z"),
@@ -735,3 +737,236 @@ def test_a_hub_attached_vault_registers_the_ghost_cascade(workflow_env):
     planner run it at all. The module detached the finders, so they are read
     back from the planner's record of what it detached."""
     assert "GhostCascadeFinder" in workflow_env.detached
+
+
+# ===========================================================================
+# How each picture input is filled (#1305)
+# ===========================================================================
+
+_INPUT_ROUTES = (
+    ("GET", "/api/v1/comfyui/workflows/{workflow_name}/inputs"),
+    ("PUT", "/api/v1/comfyui/workflows/{workflow_name}/inputs"),
+)
+
+
+@pytest.fixture
+def edit_workflow(tmp_path, monkeypatch):
+    """One two-input workflow file in a user folder of its own.
+
+    The real user folder is shared by every checkout on the machine, so the
+    routes are pointed at a temporary one rather than written into it.
+    """
+    graph = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "{{image_path}}"}},
+        "2": {
+            "class_type": "LoadImage",
+            "inputs": {"image": "Logo.png"},
+            "_meta": {"title": "Reference"},
+        },
+        "3": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+    }
+    (tmp_path / "edit.json").write_text(json.dumps(graph), encoding="utf-8")
+    monkeypatch.setattr(comfyui_module, "_workflow_dirs", lambda: [("user", tmp_path)])
+    monkeypatch.setattr(comfyui_module, "_workflow_user_dir", lambda: str(tmp_path))
+    comfyui_module._describe_workflow.cache_clear()
+    return f"{API}/comfyui/workflows/edit.json/inputs"
+
+
+def _picture_with_sha(server, file_path: str, pixel_sha: str) -> int:
+    def write(session):
+        picture = session.exec(
+            select(Picture).where(Picture.file_path == file_path)
+        ).one()
+        picture.pixel_sha = pixel_sha
+        session.add(picture)
+        session.commit()
+        return picture.id
+
+    return server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+
+
+def _by_node(body) -> dict:
+    return {item["node_id"]: item for item in body["inputs"]}
+
+
+def test_the_input_routes_are_declared_owner_only():
+    for key in _INPUT_ROUTES:
+        assert ROUTE_POLICIES[key].policy is AccessPolicy.OWNER_ONLY, key
+
+
+def test_no_scoped_token_can_read_or_set_a_workflows_inputs(
+    workflow_env, edit_workflow
+):
+    """The setup names Fixed pictures by id, so a share token gets neither half.
+
+    The belts are emptied so the GET is refused by the gate's declaration, not
+    by the middleware in front of it.
+    """
+    server = workflow_env.server
+    token = _mint(
+        workflow_env.owner,
+        "inputs scope probe",
+        resource_type="character",
+        resource_id=workflow_env.character_id,
+    )
+    client = _bearer(server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, "the token is dead"
+    assert_real_route(server.api, "GET", edit_workflow)
+    assert_real_route(server.api, "PUT", edit_workflow)
+    body = {
+        "inputs": [
+            {"node_id": "1", "mode": "picker"},
+            {"node_id": "2", "mode": "picker"},
+        ]
+    }
+    previously_enforcing = server.authz._enforcing
+    server.authz._enforcing = True
+    try:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+            patch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
+            r = client.get(edit_workflow)
+            assert r.status_code == 403 and "Owner-level" in r.text, r.text
+        assert client.put(edit_workflow, json=body).status_code == 403
+        # The refusal wrote nothing: the owner still reads the defaults.
+        owner_view = _by_node(workflow_env.owner.get(edit_workflow).json())
+        assert owner_view["1"]["mode"] == "selection"
+    finally:
+        server.authz._enforcing = previously_enforcing
+
+
+def test_an_unconfigured_workflow_reads_its_defaults_with_titles(
+    workflow_env, edit_workflow
+):
+    r = workflow_env.owner.get(edit_workflow)
+    assert r.status_code == 200, r.text
+    assert r.json()["inputs"] == [
+        {
+            "node_id": "1",
+            "title": "LoadImage",
+            "mode": "selection",
+            "picture_id": None,
+            "picture_missing": False,
+        },
+        {
+            "node_id": "2",
+            "title": "Reference",
+            "mode": "picker",
+            "picture_id": None,
+            "picture_missing": False,
+        },
+    ]
+
+
+def test_a_fixed_picture_is_kept_by_content_and_leaves_the_selection_pill(
+    workflow_env, edit_workflow
+):
+    server, owner = workflow_env.server, workflow_env.owner
+    picture_id = _picture_with_sha(server, "busy_one.png", "sha-fixed-reference")
+    r = owner.put(
+        edit_workflow,
+        json={
+            "inputs": [
+                {"node_id": "1", "mode": "picker"},
+                {"node_id": "2", "mode": "fixed", "picture_id": picture_id},
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert _by_node(r.json())["2"]["picture_id"] == picture_id
+    assert (
+        server.hub.fetchone(
+            "SELECT pixel_sha FROM workflow_picture_input WHERE node_id = '2'"
+        )["pixel_sha"]
+        == "sha-fixed-reference"
+    )
+    listed = {
+        item["name"]: item
+        for item in owner.get(f"{API}/comfyui/workflows").json()["workflows"]
+    }
+    assert listed["edit.json"]["has_selection_input"] is False
+
+    # Moving the picture to the Scrapheap leaves the input saying so.
+    def bin_it(session):
+        picture = session.get(Picture, picture_id)
+        picture.deleted = True
+        session.add(picture)
+        session.commit()
+
+    server.vault.db.run_task(bin_it, priority=DBPriority.IMMEDIATE)
+    fixed = _by_node(owner.get(edit_workflow).json())["2"]
+    assert (fixed["picture_id"], fixed["picture_missing"]) == (None, True)
+
+    # Changing the other input keeps the Fixed one's picture, missing or not.
+    r = owner.put(
+        edit_workflow,
+        json={
+            "inputs": [
+                {"node_id": "1", "mode": "selection"},
+                {"node_id": "2", "mode": "fixed"},
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert (
+        server.hub.fetchone(
+            "SELECT pixel_sha FROM workflow_picture_input WHERE node_id = '2'"
+        )["pixel_sha"]
+        == "sha-fixed-reference"
+    )
+
+
+def test_a_bad_setup_writes_nothing(workflow_env, edit_workflow):
+    owner = workflow_env.owner
+    two_selections = {
+        "inputs": [
+            {"node_id": "1", "mode": "selection"},
+            {"node_id": "2", "mode": "selection"},
+        ]
+    }
+    assert owner.put(edit_workflow, json=two_selections).status_code == 400
+    unknown_picture = {
+        "inputs": [
+            {"node_id": "1", "mode": "selection"},
+            {"node_id": "2", "mode": "fixed", "picture_id": 987654},
+        ]
+    }
+    assert owner.put(edit_workflow, json=unknown_picture).status_code == 404
+    # A Fixed input with no picture of its own to keep.
+    no_picture = {
+        "inputs": [
+            {"node_id": "1", "mode": "selection"},
+            {"node_id": "2", "mode": "fixed"},
+        ]
+    }
+    assert owner.put(edit_workflow, json=no_picture).status_code == 400
+    assert (
+        workflow_env.server.hub.fetchone(
+            "SELECT COUNT(*) AS n FROM workflow_picture_input"
+        )["n"]
+        == 0
+    )
+    missing = f"{API}/comfyui/workflows/nosuch.json/inputs"
+    assert owner.get(missing).status_code == 404
+
+
+def test_deleting_a_workflow_forgets_its_setup(workflow_env, edit_workflow):
+    owner = workflow_env.owner
+    r = owner.put(
+        edit_workflow,
+        json={
+            "inputs": [
+                {"node_id": "1", "mode": "picker"},
+                {"node_id": "2", "mode": "selection"},
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    r = owner.delete(f"{API}/comfyui/workflows/edit.json")
+    assert r.status_code == 200, r.text
+    assert (
+        workflow_env.server.hub.fetchone(
+            "SELECT COUNT(*) AS n FROM workflow_picture_input"
+        )["n"]
+        == 0
+    )

@@ -425,6 +425,8 @@ List workflows; execute a workflow against a picture; replay the workflow a pict
 
 **Detection, not placeholders, classifies a workflow.** `GET /comfyui/workflows` takes `valid` and `workflow_type` from `detect_workflow_io` (`services/workflow_io.py`): a save node makes a workflow valid (the output collection's own rule: an explicit `pixlstash_output_nodes` choice, else `SAVE_NODE_CLASSES`), a picture input (a `*LoadImage*` class, case-insensitive, or a known loader such as `PixlStashPictureLoader`) makes it `i2i`. Each file is described once per `(path, mtime, size)`, so opening a menu does not re-reduce every graph. `missing_placeholders` is still reported, and the run routes still substitute placeholders until runs use detection (#1307). **Until then the ComfyUI menus choose workflows by `missing_placeholders`, not `workflow_type`**, because that is what the run routes accept: a caption-only workflow with a fixed reference `LoadImage` lists as `i2i` yet only `run_t2i` can run it. `run_i2i` refuses any workflow without `{{image_path}}`, since its output would be stacked onto a picture the graph never read.
 
+**How each picture input is filled (#1305).** Every detected picture input of a saved workflow file has a mode: `selection` (the grid's selection fills it; at most one per workflow), `picker` (asked at run time) or `fixed` (one picture chosen at setup). `GET` / `PUT /comfyui/workflows/{workflow_name}/inputs` (both `OWNER_ONLY`) read and replace the setup; the resolution and validation rules live in `services/workflow_inputs.py`. The modes are stored in the hub's `workflow_picture_input`, beside the file and never in it. Inputs nothing stored names default to Picker, except that with nothing stored (or a stored Selection naming a node the file has lost) the input carrying `{{image_path}}`, else the lowest node id, is Selection. `PUT` names every input exactly once; a `fixed` entry sends a `picture_id` to choose a picture, or none to keep the one already stored, even one that has since left the library, so changing another input never drops it. `GET /comfyui/workflows` reports `has_selection_input` (a Selection input, and until #1307 the `{{image_path}}` placeholder `run_i2i` fills), and the selection pill, the overlay's ComfyUI menu and Remix's templates leave out a workflow without one. `run_i2i` refuses it as well. A workflow whose `{{image_path}}` sits on a loader detection does not recognise has no detected input and stays offered on its placeholder. **The run routes do not read the modes yet**: a Picker or Fixed input still runs with the value in the file until runs fill inputs by mode (#1307). Until then a workflow set up with no Selection input can be run from nowhere: the toolbar and `run_t2i` still refuse a file carrying `{{image_path}}`, and the inspector says so.
+
 **Two chunks, one of them executable.** A ComfyUI-generated PNG embeds *both* a `workflow` chunk (the UI node graph, for reopening in the editor) and a `prompt` chunk (the resolved API-format graph the server actually executed). Only the `prompt` chunk is submittable to `POST /prompt`.
 
 - `find_comfy_workflow` (`utils/comfyui_utilities.py`) reads the **UI** chunk and drives display only (`GET /comfyui/pictures/{id}/workflow`, the overlay's workflow inspector, the `ComfyUIExtractionTask` backfill). As a lowest-priority display fallback it also accepts the `prompt` chunk (issue #628): PixlStash-generated PNGs deliberately embed **nothing** in the `workflow` chunk — `_submit_comfyui_prompt` must not put the API graph there, because the ComfyUI frontend feeds that chunk to `loadGraphData` unguarded on drag-in — so ComfyUI's own `prompt` chunk is the only displayable graph such files carry. A genuine UI `workflow` chunk always wins over the fallback, and `is_comfy_workflow` filters out plain-text `prompt` values from other tools.
@@ -2963,6 +2965,16 @@ is careful about. Every hub query here is scoped to one library.
 outlive a recipe that was never filed (an unwritable hub, or a graph the hash
 layer refused), and a reference that could abort the write would trade a privacy
 record for referential tidiness.
+
+**`workflow_picture_input` is the other library-keyed table**, for the same
+reason: it stores how each picture input of a saved workflow file is filled
+(§5 `comfyui.py`), keyed `(library_uuid, workflow_name, node_id)`. A Fixed input
+names its picture by `pixel_sha`, never by vault id, because the id is reused on
+the next import; a CHECK holds that a `fixed` row has one and no other row does.
+Keying the modes by library too costs a second library its own setup and never
+hands it a picture it does not hold. Rows naming a node the file no longer has
+are ignored rather than pruned; deleting the file drops its rows in every
+library.
 
 **Retention is a three-position setting, `workflow_ghost_retention`, default
 `covered`** (`services/workflow_ghost_service.py`, settled with the owner

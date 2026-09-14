@@ -678,6 +678,33 @@ CREATE TABLE IF NOT EXISTS workflow_picture_ghost (
 )
 """
 
+# How each picture input of a runnable workflow file is filled (implementation
+# plan §F3): by the grid's selection, by a picker at run time, or by one picture
+# fixed here. Stored BESIDE the workflow and keyed by node id, never written
+# into the file (§1 rule 1).
+#
+# Keyed by library as well as by file, for the ghost table's reason: a Fixed
+# picture is a picture in ONE vault, and a vault id means nothing in another.
+# It is named by ``pixel_sha`` rather than by id because SQLite reuses a vault
+# id the moment the next import lands. The modes travel with the library too,
+# which costs a second library its own setup and never hands it a picture it
+# does not hold.
+#
+# No row for a workflow means "never configured" and the defaults apply. Rows
+# for nodes the file no longer has are ignored rather than pruned, so replacing
+# a file with a version that still has the node keeps its setting.
+_V2_WORKFLOW_PICTURE_INPUT = """
+CREATE TABLE IF NOT EXISTS workflow_picture_input (
+    library_uuid   TEXT NOT NULL,
+    workflow_name  TEXT NOT NULL,
+    node_id        TEXT NOT NULL,
+    mode           TEXT NOT NULL CHECK (mode IN ('selection', 'picker', 'fixed')),
+    pixel_sha      TEXT,
+    CHECK ((mode = 'fixed') = (pixel_sha IS NOT NULL)),
+    PRIMARY KEY (library_uuid, workflow_name, node_id)
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -701,6 +728,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_RECIPE_GRAPH,
     _V2_WORKFLOW_RECIPE_ASSET,
     _V2_WORKFLOW_PICTURE_GHOST,
+    _V2_WORKFLOW_PICTURE_INPUT,
     *_V2_WORKFLOW_INDEXES,
 )
 

@@ -1420,6 +1420,14 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Delete workflow; DELETE blocked for READ tokens; owner only",
     ),
+    ("GET", "/api/v1/comfyui/workflows/{workflow_name}/inputs"): RoutePolicy(
+        _OWNER,
+        justification="Workflow setup; names the Fixed pictures by id; owner only",
+    ),
+    ("PUT", "/api/v1/comfyui/workflows/{workflow_name}/inputs"): RoutePolicy(
+        _OWNER,
+        justification="Workflow setup; PUT blocked for READ tokens; owner only",
+    ),
     ("POST", "/api/v1/comfyui/abort"): RoutePolicy(
         _OWNER,
         justification="Abort generation; POST blocked for READ tokens; owner only",
