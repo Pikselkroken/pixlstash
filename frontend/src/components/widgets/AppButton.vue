@@ -14,9 +14,20 @@
     ]"
     :disabled="disabled || loading"
     :aria-busy="loading ? 'true' : undefined"
-    :title="title"
+    :aria-label="iconOnly && tooltip ? tooltip : undefined"
     :aria-keyshortcuts="keyShortcut"
   >
+    <!-- One string, both jobs: an icon-only button's tooltip is also its
+         name, so the two cannot drift. An explicit `aria-label` still wins
+         (fallthrough attrs override this binding) where they differ on
+         purpose; on a labelled button the tip describes instead. -->
+    <Tooltip
+      v-if="tooltip"
+      :text="tooltip"
+      activator="parent"
+      :location="tooltipLocation"
+      :describe="!iconOnly"
+    />
     <!-- `icon` overrides `iconLeft` for the rare glyph that is not in mdi (the
          ai-toolkit mark). Loading still wins over both: a spinner replacing the
          icon is how this button says it is busy, whichever glyph it wears. -->
@@ -43,6 +54,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   // primary (amber accent, the key action) | secondary (neutral) |
@@ -61,7 +73,10 @@ const props = defineProps({
   // spinner, and leaves the label alone. There is deliberately no loading-text
   // prop: the label is the accessible name and must not change mid-flight.
   loading: { type: Boolean, default: false },
-  title: { type: String, default: "" },
+  // The tip, and an icon-only button's accessible name (docs/design/buttons.md,
+  // "Tooltips"). Never a native `title`: that reaches neither keyboard nor touch.
+  tooltip: { type: String, default: "" },
+  tooltipLocation: { type: String, default: "top" },
   // The visible shortcut affordance from the dialog keyboard contract:
   // "enter" wears ↵ and "esc" wears Esc; any other single key (e.g. "s" on
   // the dedup Keep separate) wears its own uppercase label. A shortcut shown
