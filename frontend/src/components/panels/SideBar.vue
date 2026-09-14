@@ -476,6 +476,10 @@ function openCharacterMoveMenu(event) {
   if (el) {
     characterMenuPos.value = _moveMenuPos(el.getBoundingClientRect());
   }
+  // One move menu at a time: both are `.sidebar-move-menu`, and the outside
+  // click handler spares the other trigger, so both could stay open and focus
+  // would land in whichever teleported first.
+  setMoveMenuOpen.value = false;
   characterMoveMenuOpen.value = !characterMoveMenuOpen.value;
   if (characterMoveMenuOpen.value) _focusMoveMenu();
 }
@@ -485,6 +489,7 @@ function openSetMoveMenu(event) {
   if (el) {
     setMenuPos.value = _moveMenuPos(el.getBoundingClientRect());
   }
+  characterMoveMenuOpen.value = false;
   setMoveMenuOpen.value = !setMoveMenuOpen.value;
   if (setMoveMenuOpen.value) _focusMoveMenu();
 }
