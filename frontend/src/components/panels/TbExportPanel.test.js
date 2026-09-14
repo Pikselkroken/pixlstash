@@ -15,7 +15,16 @@ import { useExportStore } from "../../stores/useExportStore";
 function mountPanel() {
   return mount(TbExportPanel, {
     attachTo: document.body,
-    global: { stubs: { "v-icon": true, "v-checkbox": true, Tooltip: true } },
+    global: {
+      stubs: {
+        "v-icon": true,
+        "v-checkbox": true,
+        Tooltip: true,
+        // The picker's chrome is Vuetify's VDialog, which needs an installed
+        // Vuetify; the test is about the panel's wiring, not the dialog.
+        AppDialog: { template: '<div><slot /><slot name="footer" /></div>' },
+      },
+    },
   });
 }
 

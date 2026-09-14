@@ -2,7 +2,7 @@
   <AppDialog
     :open="open"
     :title="isExisting ? 'Edit person' : 'New person'"
-    :width="isExisting ? 720 : 480"
+    :size="isExisting ? 'lg' : 'md'"
     @close="emit('close')"
   >
     <!-- Two columns rather than one tall stack, so the form stops outgrowing
@@ -155,8 +155,8 @@
            dialog out from under a leave transition still playing. Same reason
            the id comes from the latched local copy: the host nulls the prop on
            the way out. Spans both columns: its cards auto-fill at 180px, so a
-           full-width row holds three of them instead of one (670px of inner
-           width - 720 less the border and the --space-6 padding - against a
+           full-width row holds three of them instead of one (686px of inner
+           width - 720 less the border and the --space-5 padding - against a
            180px minimum track and a --space-3 gap). -->
       <AdapterTray
         v-if="openCount > 0"
@@ -235,7 +235,7 @@ const props = defineProps({
 
 // An existing person is the only case with a right column: reference images are
 // `v-if`'d on the id and the adapter tray renders nothing without one. Creating
-// therefore keeps the 480 single-column dialog rather than a 720 one with an
+// therefore keeps the `md` single-column dialog rather than an `lg` one with an
 // empty half. Written by the watcher below rather than computed off the prop -
 // see the note there for why the close path must not recompute it.
 const isExisting = ref(false);
@@ -369,7 +369,7 @@ async function fetchReferencePictures(characterId, requestId) {
 // `character` in the same tick they set `open` false
 // (`SideBar.closeCharacterEditor`) while Vuetify keeps the body mounted for the
 // leave transition, so anything recomputed here plays out on screen: the dialog
-// would snap 720 → 480 and lose its right column, and emptying the list would
+// would snap lg → md and lose its right column, and emptying the list would
 // put "No reference images yet" under a person who has them, for the length of
 // the animation. Leave the closing dialog exactly as the user last saw it; the
 // next open recomputes everything before it is visible.
@@ -586,8 +586,8 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 }
 
 /* Vuetify caps the dialog at `calc(100% - 48px)`, so it stops being 720 wide
-   below a 768px viewport and each column falls under the ~300px the fields
-   want (299px at a 720px viewport). 720 is where that is unambiguous. Drop to
+   below a 768px viewport and each column closes in on the ~300px the fields
+   want (~307px at a 720px viewport). 720 is where that is unambiguous. Drop to
    the single column the editor has always had - and give the reference block
    back the rule that separates it from the fields stacked above it there. */
 @media (max-width: 720px) {

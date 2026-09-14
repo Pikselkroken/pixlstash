@@ -2,7 +2,7 @@
   <AppDialog
     :open="open"
     :title="isExistingSet ? 'Edit picture set' : 'New picture set'"
-    :width="720"
+    size="lg"
     @close="emit('close')"
   >
     <!-- Two columns rather than one tall stack, so the form stops outgrowing
@@ -451,8 +451,8 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 }
 
 /* Vuetify caps the dialog at `calc(100% - 48px)`, so it stops being 720 wide
-   below a 768px viewport and each column falls under the ~300px the fields
-   want (299px at a 720px viewport). 720 is where that is unambiguous. Drop to
+   below a 768px viewport and each column closes in on the ~300px the fields
+   want (~307px at a 720px viewport). 720 is where that is unambiguous. Drop to
    the single column the editor has always had; the appearance row's own
    `flex-wrap` keeps handling the narrower cases from there. */
 @media (max-width: 720px) {

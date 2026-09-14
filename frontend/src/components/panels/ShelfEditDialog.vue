@@ -3,7 +3,6 @@
     :open="Boolean(verb)"
     :title="title"
     :subtitle="subtitle"
-    :width="480"
     @close="emit('close')"
   >
     <!-- Rename and Set base model are one field each; Set kind is a choice plus
@@ -314,7 +313,6 @@ async function submit() {
 <style scoped>
 .sed-field {
   display: block;
-  margin-bottom: var(--space-5);
 }
 
 .sed-fieldset {

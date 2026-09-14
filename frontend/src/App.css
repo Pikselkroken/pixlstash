@@ -435,18 +435,6 @@ button:focus:not(:focus-visible) {
 }
 
 /* Keyboard shortcuts dialog */
-.shortcuts-dialog {
-  background: rgb(var(--v-theme-panel));
-  color: rgb(var(--v-theme-on-panel));
-}
-.shortcuts-dialog-title {
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-  padding-bottom: var(--space-2);
-}
-.shortcuts-dialog-body {
-  padding-top: 0;
-}
 .shortcuts-table {
   width: 100%;
   border-collapse: collapse;

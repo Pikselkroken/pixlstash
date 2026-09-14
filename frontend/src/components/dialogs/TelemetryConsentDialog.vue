@@ -1,87 +1,86 @@
 <template>
-  <v-dialog :model-value="open" max-width="736" @update:model-value="onDismiss">
-    <v-card class="tc">
-      <h2 class="tc__title">
-        {{ isUpgrade ? "One new thing in 1.9" : "What may PixlStash send?" }}
-      </h2>
-
-      <p class="tc__lede">
-        <template v-if="isUpgrade">
-          <template v-if="updateChecksEnabled">
-            You already have update checks turned on. You could help PixlStash
-            improve by sending a random number alongside them. Nothing else
-            about your setup changes either way.
-          </template>
-          <template v-else>
-            You chose not to check for updates. That stays unchanged. You could
-            still help PixlStash improve by sending a random number once a day.
-          </template>
+  <AppDialog
+    :open="open"
+    size="lg"
+    :title="isUpgrade ? 'One new thing in 1.9' : 'What may PixlStash send?'"
+    @close="onDismiss(false)"
+  >
+    <p class="tc__lede">
+      <template v-if="isUpgrade">
+        <template v-if="updateChecksEnabled">
+          You already have update checks turned on. You could help PixlStash
+          improve by sending a random number alongside them. Nothing else
+          about your setup changes either way.
         </template>
         <template v-else>
-          PixlStash can check pixlstash.dev once a day for a new version.
-          Several past releases fixed critical security bugs, so I'd suggest
-          leaving this on. You could also help PixlStash improve by sending a
-          random number alongside it.
+          You chose not to check for updates. That stays unchanged. You could
+          still help PixlStash improve by sending a random number once a day.
         </template>
-      </p>
+      </template>
+      <template v-else>
+        PixlStash can check pixlstash.dev once a day for a new version.
+        Several past releases fixed critical security bugs, so I'd suggest
+        leaving this on. You could also help PixlStash improve by sending a
+        random number alongside it.
+      </template>
+    </p>
 
-      <!-- radiogroup, not a set of buttons: the three are mutually exclusive
-           answers to one question, so arrow keys move between them and the
-           group is a single tab stop. -->
-      <div
-        ref="groupEl"
-        class="tc__options"
-        :class="{ 'tc__options--two': options.length === 2 }"
-        role="radiogroup"
-        :aria-label="
-          isUpgrade ? 'Whether to add a random ID' : 'What PixlStash may send'
-        "
+    <!-- radiogroup, not a set of buttons: the three are mutually exclusive
+         answers to one question, so arrow keys move between them and the
+         group is a single tab stop. -->
+    <div
+      ref="groupEl"
+      class="tc__options"
+      :class="{ 'tc__options--two': options.length === 2 }"
+      role="radiogroup"
+      :aria-label="
+        isUpgrade ? 'Whether to add a random ID' : 'What PixlStash may send'
+      "
+    >
+      <button
+        v-for="(opt, i) in options"
+        :key="opt.key"
+        type="button"
+        role="radio"
+        class="tc__opt"
+        :aria-checked="selected === i"
+        :tabindex="selected === i || (selected === null && i === 0) ? 0 : -1"
+        @click="select(i)"
+        @mouseenter="preview = opt.key"
+        @mouseleave="preview = null"
+        @focus="preview = opt.key"
+        @blur="preview = null"
+        @keydown="onKeydown($event, i)"
       >
-        <button
-          v-for="(opt, i) in options"
-          :key="opt.key"
-          type="button"
-          role="radio"
-          class="tc__opt"
-          :aria-checked="selected === i"
-          :tabindex="selected === i || (selected === null && i === 0) ? 0 : -1"
-          @click="select(i)"
-          @mouseenter="preview = opt.key"
-          @mouseleave="preview = null"
-          @focus="preview = opt.key"
-          @blur="preview = null"
-          @keydown="onKeydown($event, i)"
-        >
-          <TelemetryOptionMark class="tc__mark" :variant="opt.key" />
-          <span class="tc__opt-name">{{ opt.name }}</span>
-          <p class="tc__opt-desc">{{ opt.desc }}</p>
-        </button>
-      </div>
+        <TelemetryOptionMark class="tc__mark" :variant="opt.key" />
+        <span class="tc__opt-name">{{ opt.name }}</span>
+        <p class="tc__opt-desc">{{ opt.desc }}</p>
+      </button>
+    </div>
 
-      <TelemetryPayloadPreview
-        :variant="shownVariant"
-        :version="version"
-        :install-type="installType"
-        :is-new-install="isNewInstall"
-      />
+    <TelemetryPayloadPreview
+      :variant="shownVariant"
+      :version="version"
+      :install-type="installType"
+      :is-new-install="isNewInstall"
+    />
 
-      <p class="tc__never">
-        <strong>Never sent:</strong>
-        your images &middot; your tags, captions or filenames &middot; your
-        search queries &middot; your file paths
-      </p>
+    <p class="tc__never">
+      <strong>Never sent:</strong>
+      your images &middot; your tags, captions or filenames &middot; your
+      search queries &middot; your file paths
+    </p>
 
-      <p class="tc__foot">
-        You can change this any time in Settings, and regenerate the random ID
-        whenever you like.
-      </p>
-    </v-card>
-  </v-dialog>
+    <p class="tc__foot">
+      You can change this any time in Settings, and regenerate the random ID
+      whenever you like.
+    </p>
+  </AppDialog>
 </template>
 
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
-import { VCard, VDialog } from "vuetify/components";
+import AppDialog from "../widgets/AppDialog.vue";
 import TelemetryOptionMark from "../widgets/TelemetryOptionMark.vue";
 import TelemetryPayloadPreview from "../widgets/TelemetryPayloadPreview.vue";
 
@@ -233,20 +232,6 @@ watch(
 </script>
 
 <style scoped>
-.tc {
-  padding: var(--space-6);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.tc__title {
-  font-size: var(--text-lg);
-  line-height: var(--leading-tight);
-  font-weight: var(--weight-semibold);
-  margin: 0;
-}
-
 .tc__lede {
   margin: 0;
   font-size: var(--text-base);

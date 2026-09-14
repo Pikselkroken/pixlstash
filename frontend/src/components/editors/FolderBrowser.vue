@@ -1,116 +1,119 @@
 <template>
-  <v-dialog :model-value="open" max-width="720" @update:model-value="!$event && emit('close')">
-    <v-card class="browser-card">
-      <v-card-title class="browser-header">{{
-        pickModelFile ? "Choose a model file" : "Browse for Folder"
-      }}</v-card-title>
-      <v-card-text style="padding: 0">
-        <div class="browse-path-bar">
-          <v-icon size="16" style="opacity: 0.6; margin-right: 4px">mdi-folder</v-icon>
-          <span class="browse-path-text">{{ browsePath }}</span>
-          <v-checkbox
-            v-model="browseShowHidden"
-            label="Show hidden"
-            density="compact"
-            hide-details
-            class="browse-hidden-toggle"
+  <AppDialog
+    :open="open"
+    size="lg"
+    :title="pickModelFile ? 'Choose a model file' : 'Browse for folder'"
+    :pad-body="false"
+    @close="emit('close')"
+    @accept="onAccept"
+  >
+    <!-- Flush body: the path bar and rows run edge to edge with their own
+         padding, so one column wrapper stands in for the padded body. -->
+    <div class="browse-body">
+      <div class="browse-path-bar">
+        <v-icon size="16" class="browse-path-icon">mdi-folder</v-icon>
+        <span class="browse-path-text">{{ browsePath }}</span>
+        <v-checkbox
+          v-model="browseShowHidden"
+          label="Show hidden"
+          density="compact"
+          hide-details
+          class="browse-hidden-toggle"
+        />
+      </div>
+      <div v-if="allowCreateFolder" class="browse-create-bar">
+        <template v-if="creatingFolder">
+          <AppInput
+            ref="createFolderInputRef"
+            v-model="newFolderName"
+            label="New folder name"
+            mono
+            class="browse-create-input"
+            :error="Boolean(createFolderError)"
+            @enter="createFolder"
+            @keydown.esc.stop="cancelCreateFolder"
           />
-        </div>
-        <div v-if="allowCreateFolder" class="browse-create-bar">
-          <template v-if="creatingFolder">
-            <AppInput
-              ref="createFolderInputRef"
-              v-model="newFolderName"
-              label="New folder name"
-              mono
-              class="browse-create-input"
-              :error="Boolean(createFolderError)"
-              @enter="createFolder"
-              @keydown.esc="cancelCreateFolder"
-            />
-            <AppButton
-              variant="primary"
-              :loading="createFolderLoading"
-              :disabled="!newFolderName.trim()"
-              @click="createFolder"
-            >
-              Create
-            </AppButton>
-            <AppButton @click="cancelCreateFolder">
-              Cancel
-            </AppButton>
-          </template>
           <AppButton
-            v-else
-            variant="outline"
-            size="sm"
-            icon-left="folder-plus-outline"
-            :disabled="!browsePath"
-            @click="startCreateFolder"
+            variant="primary"
+            :loading="createFolderLoading"
+            :disabled="!newFolderName.trim()"
+            @click="createFolder"
           >
-            New folder
+            Create
           </AppButton>
-        </div>
-        <div v-if="createFolderError" class="browse-create-error">
-          {{ createFolderError }}
-        </div>
-        <div class="browse-entries">
-          <div v-if="browseLoading" class="browse-loading">
-            <v-progress-circular indeterminate size="24" />
-          </div>
-          <div v-else-if="browseError" class="browse-error">
-            {{ browseError }}
-          </div>
-          <template v-else>
-            <div
-              v-if="browsePath && browsePath !== '/'"
-              class="browse-entry browse-entry--up"
-              @click="browseUp"
-            >
-              <v-icon size="16">mdi-arrow-up</v-icon>
-              <span class="browse-entry-name">..</span>
-            </div>
-            <div
-              v-for="entry in browseEntries"
-              :key="entry.path"
-              class="browse-entry"
-              :class="{
-                'browse-entry--disabled': !!entryDisabledReason(entry.path),
-                'browse-entry--picked': entry.path === pickedFile,
-              }"
-              @click="entryClick(entry)"
-            >
-              <Tooltip
-                :text="entryDisabledReason(entry.path) || entry.path"
-                activator="parent"
-              />
-              <v-icon size="16">{{
-                entry.is_file ? "mdi-file-outline" : "mdi-folder"
-              }}</v-icon>
-              <span class="browse-entry-name">{{ entry.name }}</span>
-              <span
-                v-if="entryDisabledReason(entry.path)"
-                class="browse-entry-reason"
-              >
-                {{ entryDisabledReason(entry.path) }}
-              </span>
-            </div>
-          </template>
-        </div>
-      </v-card-text>
-      <v-card-actions class="browse-footer">
-        <v-spacer></v-spacer>
-        <AppButton @click="emit('close')">Cancel</AppButton>
+          <AppButton @click="cancelCreateFolder">
+            Cancel
+          </AppButton>
+        </template>
         <AppButton
-          variant="primary"
-          :disabled="pickModelFile ? !pickedFile : !browsePath"
-          @click="selectPath"
+          v-else
+          variant="outline"
+          size="sm"
+          icon-left="folder-plus-outline"
+          :disabled="!browsePath"
+          @click="startCreateFolder"
         >
-          {{ selectedName ? `Select "${selectedName}"` : "Select" }}
+          New folder
         </AppButton>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+      </div>
+      <div v-if="createFolderError" class="browse-create-error">
+        {{ createFolderError }}
+      </div>
+      <div class="browse-entries">
+        <div v-if="browseLoading" class="browse-loading">
+          <v-progress-circular indeterminate size="24" />
+        </div>
+        <div v-else-if="browseError" class="browse-error">
+          {{ browseError }}
+        </div>
+        <template v-else>
+          <div
+            v-if="browsePath && browsePath !== '/'"
+            class="browse-entry browse-entry--up"
+            @click="browseUp"
+          >
+            <v-icon size="16">mdi-arrow-up</v-icon>
+            <span class="browse-entry-name">..</span>
+          </div>
+          <div
+            v-for="entry in browseEntries"
+            :key="entry.path"
+            class="browse-entry"
+            :class="{
+              'browse-entry--disabled': !!entryDisabledReason(entry.path),
+              'browse-entry--picked': entry.path === pickedFile,
+            }"
+            @click="entryClick(entry)"
+          >
+            <Tooltip
+              :text="entryDisabledReason(entry.path) || entry.path"
+              activator="parent"
+            />
+            <v-icon size="16">{{
+              entry.is_file ? "mdi-file-outline" : "mdi-folder"
+            }}</v-icon>
+            <span class="browse-entry-name">{{ entry.name }}</span>
+            <span
+              v-if="entryDisabledReason(entry.path)"
+              class="browse-entry-reason"
+            >
+              {{ entryDisabledReason(entry.path) }}
+            </span>
+          </div>
+        </template>
+      </div>
+    </div>
+    <template #footer>
+      <AppButton variant="secondary" @click="emit('close')">Cancel</AppButton>
+      <AppButton
+        variant="primary"
+        :disabled="pickModelFile ? !pickedFile : !browsePath"
+        @click="selectPath"
+      >
+        {{ selectedName ? `Select "${selectedName}"` : "Select" }}
+      </AppButton>
+    </template>
+  </AppDialog>
 </template>
 
 <script setup>
@@ -119,10 +122,11 @@ import {
   browseFilesystem,
   createFilesystemFolder,
 } from "../../api/folders";
+import Tooltip from "../widgets/Tooltip.vue";
 import { useSubmitGuard } from "../../composables/useSubmitGuard";
 import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
-import Tooltip from "../widgets/Tooltip.vue";
+import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
 
 const props = defineProps({
@@ -262,6 +266,13 @@ function selectPath() {
   emit("close");
 }
 
+// Plain Enter selects, except while naming a new folder: that field's own
+// Enter creates the folder, and must not also confirm the dialog.
+function onAccept() {
+  if (creatingFolder.value) return;
+  selectPath();
+}
+
 function startCreateFolder() {
   creatingFolder.value = true;
   newFolderName.value = "";
@@ -304,14 +315,15 @@ const { pending: createFolderLoading, run: createFolder } =
 </script>
 
 <style scoped>
-.browser-card {
-  overflow: hidden;
+.browse-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
 }
 
-.browser-header {
-  font-size: var(--text-lg);
-  font-weight: var(--weight-semibold);
-  padding: var(--space-6) var(--space-6) var(--space-3);
+.browse-path-icon {
+  opacity: 0.6;
 }
 
 .browse-path-bar {
@@ -340,8 +352,8 @@ const { pending: createFolderLoading, run: createFolder } =
 .browse-create-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.16);
 }
 
@@ -357,7 +369,7 @@ const { pending: createFolderLoading, run: createFolder } =
 
 .browse-create-error {
   color: rgb(var(--v-theme-error));
-  padding: 6px 16px 0;
+  padding: var(--space-2) var(--space-5) 0;
   font-size: var(--text-sm);
 }
 
@@ -422,9 +434,5 @@ const { pending: createFolderLoading, run: createFolder } =
   opacity: var(--opacity-text-secondary);
   font-style: italic;
   flex-shrink: 0;
-}
-
-.browse-footer {
-  padding: var(--space-4) var(--space-6) var(--space-5);
 }
 </style>

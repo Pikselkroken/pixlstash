@@ -81,6 +81,9 @@ const globalOpts = {
       TbTagPanel: true,
       UndoControl: true,
       TbGlobalActions: true,
+      // The real Export/Import panels host AppDialogs, whose VDialog needs an
+      // installed Vuetify; these tests are about the toolbar's menus.
+      AppDialog: true,
     },
   },
 };

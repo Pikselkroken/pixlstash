@@ -3,7 +3,7 @@
     :open="open"
     title="Choose a picture"
     :subtitle="subtitle"
-    :width="820"
+    size="xl"
     :pad-body="false"
     @close="emit('close')"
     @accept="use"

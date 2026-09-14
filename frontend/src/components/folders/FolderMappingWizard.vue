@@ -348,7 +348,7 @@ function onCommitted(result) {
         ? 'Point PixlStash at a folder. Nothing inside it is moved.'
         : ''
     "
-    :width="840"
+    size="xl"
     :pad-body="step !== 'mapping'"
     :persistent="true"
     @close="close"
@@ -422,14 +422,14 @@ function onCommitted(result) {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin: 0 0 var(--space-3);
+  margin: 0;
   color: var(--text-secondary);
   font-size: var(--text-sm);
 }
 
 .mapping-wizard__error {
   /* The mapping step's body is flush; the padding is the dialog's own. */
-  margin: 0 0 var(--space-4);
+  margin: 0;
   flex-shrink: 0;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-sm);

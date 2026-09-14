@@ -189,64 +189,48 @@
     />
 
     <!-- ── Revoke picture shares confirm dialog ───────────────── -->
-    <v-dialog v-model="revokeSharesDialogOpen" max-width="380">
-      <v-card>
-        <v-card-title style="font-size: var(--text-md); padding: 16px 20px 8px">
-          <v-icon size="16" style="margin-right: 6px; opacity: 0.7"
-            >mdi-link-variant-off</v-icon
-          >
+    <AppDialog
+      :open="revokeSharesDialogOpen"
+      title="Remove all shares"
+      size="sm"
+      @close="revokeSharesDialogOpen = false"
+    >
+      <p class="grid-dialog-text">
+        This will revoke all active share links for this image. Anyone with an
+        existing link will lose access immediately.
+      </p>
+      <template #footer>
+        <AppButton variant="secondary" @click="revokeSharesDialogOpen = false">
+          Cancel
+        </AppButton>
+        <AppButton variant="danger" @click="confirmRevokePictureShares">
           Remove all shares
-        </v-card-title>
-        <v-card-text
-          style="padding: 0 20px 12px; font-size: var(--text-base); opacity: 0.85"
-        >
-          This will revoke all active share links for this image. Anyone with an
-          existing link will lose access immediately.
-        </v-card-text>
-        <v-card-actions style="padding: 8px 16px 16px">
-          <AppButton @click="revokeSharesDialogOpen = false"
-            >Cancel</AppButton
-          >
-          <v-spacer />
-          <AppButton variant="danger" @click="confirmRevokePictureShares">
-            Remove all shares
-          </AppButton>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
+        </AppButton>
+      </template>
+    </AppDialog>
 
     <!-- ── Segment (object detection) dialog ─────────────────── -->
-    <v-dialog v-model="segmentDialogOpen" max-width="420">
-      <v-card>
-        <v-card-title style="font-size: var(--text-md); padding: 16px 20px 8px">
-          <v-icon size="16" style="margin-right: 6px; opacity: 0.7"
-            >mdi-shape-outline</v-icon
-          >
-          Detect objects
-        </v-card-title>
-        <v-card-text style="padding: 0 20px 4px">
-          <div style="font-size: var(--text-base); opacity: 0.85; margin-bottom: 10px">
-            Leave the label empty for dense object detection, or type a phrase
-            to detect only that (e.g. "dog").
-          </div>
-          <AppInput
-            v-model="segmentPrompt"
-            label="Label (optional)"
-            autofocus
-            @keydown.enter.stop.prevent="confirmSegment"
-          />
-        </v-card-text>
-        <v-card-actions style="padding: 8px 16px 16px">
-          <AppButton @click="segmentDialogOpen = false"
-            >Cancel</AppButton
-          >
-          <v-spacer />
-          <AppButton variant="primary" @click="confirmSegment">
-            Detect
-          </AppButton>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
+    <AppDialog
+      :open="segmentDialogOpen"
+      title="Detect objects"
+      size="sm"
+      @close="segmentDialogOpen = false"
+      @accept="confirmSegment"
+    >
+      <p class="grid-dialog-text">
+        Leave the label empty for dense object detection, or type a phrase to
+        detect only that (e.g. "dog").
+      </p>
+      <AppInput v-model="segmentPrompt" label="Label (optional)" autofocus />
+      <template #footer>
+        <AppButton variant="secondary" @click="segmentDialogOpen = false">
+          Cancel
+        </AppButton>
+        <AppButton variant="primary" @click="confirmSegment">
+          Detect
+        </AppButton>
+      </template>
+    </AppDialog>
 
     <!-- ── Share picture dialog ──────────────────────────────── -->
     <ShareDialog
@@ -1234,6 +1218,7 @@ import ActionReceipt from "../widgets/ActionReceipt.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
 import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
 import SearchResultBar from "../widgets/SearchResultBar.vue";

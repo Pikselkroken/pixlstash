@@ -293,6 +293,15 @@
      width. */
   --notice-max-w: 420px;
 
+  /* Dialog widths: four steps and nothing else (docs/design/buttons.md,
+     approved 2026-09-12). 44 dialogs had hand-typed 16 widths between 380 and
+     980; these are the clusters they formed. `md` is AppDialog's default. A
+     layout fixture, like --sidebar-width, so not off the spacing scale. */
+  --dialog-w-sm: 420px; /* a confirm, or one field and two verbs */
+  --dialog-w-md: 520px; /* the default: a short form */
+  --dialog-w-lg: 720px; /* a list, a tree, two columns */
+  --dialog-w-xl: 840px; /* the settings and picker shells */
+
   /* Tooltip (buttons.md, "Tooltips"). The one surface is `Tooltip.vue`.
      `--tooltip-delay` is a starting value, not a measurement: Vuetify's own
      default is no delay at all, so a tip strobed open as the pointer crossed a

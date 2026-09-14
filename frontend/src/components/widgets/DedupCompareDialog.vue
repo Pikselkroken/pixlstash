@@ -2611,7 +2611,6 @@ function onZoomContextMenu() {
    it is the flexible child and gives up the height, so opening a band never
    squeezes the band itself into a scrolling sliver. */
 .dc-expansion {
-  margin-top: var(--space-4);
   flex-shrink: 0;
 }
 
@@ -2632,7 +2631,6 @@ function onZoomContextMenu() {
    own two rules itself: the strip above is the flexible child and gives up the
    height, which is what stops this line being squeezed into a scrolling sliver. */
 .dc-mixed-error {
-  margin-top: var(--space-4);
   flex-shrink: 0;
 }
 
@@ -2675,7 +2673,6 @@ function onZoomContextMenu() {
 
 /* ── Why pills ───────────────────────────────────────────────────────────── */
 .dc-why {
-  margin-top: var(--space-4);
   flex-shrink: 0;
 }
 

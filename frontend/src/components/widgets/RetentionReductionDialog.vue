@@ -13,10 +13,11 @@
  * grace period out rather than destroying immediately, so a normal confirm is
  * proportionate.
  *
- * The card mirrors `DeleteForeverDialog.vue` so it carries no new visual
- * vocabulary.
+ * Same `AppDialog` chrome as `DeleteForeverDialog.vue`, so it carries no new
+ * visual vocabulary.
  */
 import AppButton from "./AppButton.vue";
+import AppDialog from "./AppDialog.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -45,10 +46,11 @@ function requestCancel() {
   emit("update:open", false);
 }
 
-// Vuetify emits update:model-value(false) for Escape and scrim clicks; both are
-// cancel. The parent closes the dialog on confirm, so we don't self-close.
-function onModelValue(value) {
-  if (!value) requestCancel();
+// Escape, the scrim and the close button all route here. While the save is in
+// flight Cancel is disabled, so the other ways out are too.
+function onClose() {
+  if (props.busy) return;
+  requestCancel();
 }
 
 function requestConfirm() {
@@ -58,66 +60,45 @@ function requestConfirm() {
 </script>
 
 <template>
-  <v-dialog
-    :model-value="open"
-    max-width="440"
-    @update:model-value="onModelValue"
+  <!-- Destructive: no @accept, Enter never schedules the deletion. -->
+  <AppDialog
+    :open="open"
+    role="alertdialog"
+    :title="props.title"
+    size="sm"
+    :persistent="busy"
+    @close="onClose"
   >
-    <div class="confirm" role="alertdialog" :aria-label="props.title">
-      <h4>{{ props.title }}</h4>
-      <p>{{ props.body }}</p>
+    <p class="retention-body">{{ props.body }}</p>
 
-      <div v-if="props.warning" class="purge-warn">
-        <v-icon size="18">{{
-          props.unverified ? "mdi-help-circle-outline" : "mdi-alert-outline"
-        }}</v-icon>
-        <span>{{ props.warning }}</span>
-      </div>
-
-      <div class="row">
-        <AppButton
-          variant="secondary"
-          autofocus
-          :disabled="busy"
-          @click="requestCancel"
-        >
-          Cancel
-        </AppButton>
-        <AppButton variant="danger" :loading="busy" @click="requestConfirm">
-          {{ props.confirmLabel }}
-        </AppButton>
-      </div>
+    <div v-if="props.warning" class="purge-warn">
+      <v-icon size="18">{{
+        props.unverified ? "mdi-help-circle-outline" : "mdi-alert-outline"
+      }}</v-icon>
+      <span>{{ props.warning }}</span>
     </div>
-  </v-dialog>
+
+    <template #footer>
+      <AppButton
+        variant="secondary"
+        autofocus
+        :disabled="busy"
+        @click="requestCancel"
+      >
+        Cancel
+      </AppButton>
+      <AppButton variant="danger" :loading="busy" @click="requestConfirm">
+        {{ props.confirmLabel }}
+      </AppButton>
+    </template>
+  </AppDialog>
 </template>
 
 <style scoped>
-/* Same card as DeleteForeverDialog - standard dialog pattern, tokenized. */
-.confirm {
-  background: rgb(var(--v-theme-surface));
-  color: rgb(var(--v-theme-on-surface));
-  border-radius: var(--radius-lg);
-  box-shadow: var(--elevation-4);
-  padding: var(--space-7);
-}
-
-.confirm h4 {
-  font-size: var(--text-lg);
-  font-weight: var(--weight-semibold);
-  line-height: var(--leading-tight);
-  margin: 0 0 var(--space-3);
-}
-
-.confirm p {
+.retention-body {
   font-size: var(--text-md);
   color: rgba(var(--v-theme-on-surface), 0.8);
-  margin: 0 0 var(--space-5);
-}
-
-.confirm .row {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-3);
+  margin: 0;
 }
 
 /* Irreversibility panel - `error`-tinted, matching `.ref-warn` in
@@ -126,7 +107,6 @@ function requestConfirm() {
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
-  margin: 0 0 var(--space-6);
   border: 1px solid rgba(var(--v-theme-error), 0.5);
   background: rgba(var(--v-theme-error), 0.08);
   border-radius: var(--radius-md);
