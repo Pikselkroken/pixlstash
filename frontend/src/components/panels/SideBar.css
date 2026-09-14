@@ -615,7 +615,7 @@
   scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
   box-sizing: border-box;
   /* One rule for "chrome rail meets the grid canvas", shared with
-     `.stats-sidebar`'s border-left so both rails present the same edge. */
+     the inspector's (`AppInspector`) border-left so both rails present the same edge. */
   border-right: 1px solid rgb(var(--v-theme-border));
 }
 
@@ -759,7 +759,7 @@
 .sidebar-update-available {
   font-size: var(--text-2xs);
   line-height: 1;
-  color: rgba(var(--v-theme-accent), 0.8);
+  color: rgb(var(--v-theme-sidebar-text));
   text-decoration: none;
   white-space: nowrap;
 }
@@ -1427,7 +1427,7 @@
   margin-right: var(--space-2);
   border-radius: var(--radius-sm);
   color: rgb(var(--v-theme-on-primary));
-  background: rgba(var(--v-theme-primary), 0.7);
+  background: rgb(var(--v-theme-primary));
   position: relative;
   top: -2px;
 }
@@ -1624,7 +1624,7 @@
 .sidebar-inline-notice {
   position: fixed;
   transform: translateY(-50%);
-  background: rgba(var(--v-theme-secondary), 0.75);
+  background: rgb(var(--v-theme-secondary));
   color: rgb(var(--v-theme-on-secondary));
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-pill);
@@ -2159,7 +2159,7 @@
 
 .relocate-result {
   font-size: 0.8rem;
-  color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .relocate-actions {

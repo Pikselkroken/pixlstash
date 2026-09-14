@@ -20,6 +20,8 @@ detached library still lists correctly against a hub that has the recipes.
 picture-, set- or project-scoped token would disclose the size of the whole
 library one workflow at a time. The same goes for the picture ids the rail's
 tiles are made of. Declared in ``pixlstash/authz/registry.py``, never inline.
+They also refuse remote plaintext under ``require_ssl``, like the model-shelf
+reads that name the same model files.
 
 **Nothing here mutates.** Naming a workflow, forgetting its ghosts and running
 one are later steps (§F3, §F10, §F5); this module is the view's read side and
@@ -30,7 +32,7 @@ from __future__ import annotations
 
 import re
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from pixlstash.hub.workflows import (
@@ -207,7 +209,8 @@ def create_router(server) -> APIRouter:
         ),
         response_model=WorkflowLibrary,
     )
-    def list_workflows():
+    def list_workflows(request: Request):
+        server.auth.ensure_secure_when_required(request)
         hub = _hub()
         topologies = topology_index(hub)
         assets = assets_by_topology(hub)
@@ -245,7 +248,8 @@ def create_router(server) -> APIRouter:
         response_model=list[WorkflowVariant],
         responses={404: {"description": "This machine has no such topology."}},
     )
-    def list_variants(topology_hash: str):
+    def list_variants(request: Request, topology_hash: str):
+        server.auth.ensure_secure_when_required(request)
         _require_hash(topology_hash, "topology_hash")
         hub = _hub()
         if not topology_exists(hub, topology_hash):
@@ -279,6 +283,7 @@ def create_router(server) -> APIRouter:
         response_model=list[int],
     )
     def list_workflow_pictures(
+        request: Request,
         topology_hash: str,
         limit: int = Query(
             6,
@@ -287,6 +292,7 @@ def create_router(server) -> APIRouter:
             description="How many ids to return, newest first.",
         ),
     ):
+        server.auth.ensure_secure_when_required(request)
         _require_hash(topology_hash, "topology_hash")
         return read_topology_picture_ids(server.vault, topology_hash, limit)
 
@@ -301,7 +307,8 @@ def create_router(server) -> APIRouter:
         response_model=WorkflowGraph,
         responses={404: {"description": "This machine has no such recipe."}},
     )
-    def get_recipe_graph(structural_hash: str):
+    def get_recipe_graph(request: Request, structural_hash: str):
+        server.auth.ensure_secure_when_required(request)
         _require_hash(structural_hash, "structural_hash")
         hub = _hub()
         if not recipe_exists(hub, structural_hash):

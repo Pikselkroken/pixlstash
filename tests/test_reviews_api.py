@@ -17,6 +17,7 @@ from PIL import Image
 import numpy as np
 from sqlmodel import SQLModel, delete, select
 
+from pixlstash import auth
 from pixlstash.db_models import (
     Picture,
     PictureSetMember,
@@ -1353,12 +1354,18 @@ def test_scoped_token_cannot_read_review_detail(client, server, token):
     assert owner_resp.json()["id"] == rid
 
 
-def test_scoped_token_cannot_read_review_suggestions(client, server, token):
+def test_scoped_token_cannot_read_review_suggestions(
+    client, server, token, monkeypatch
+):
     """The one new data-egress path in the locked-sets work.
 
     The owner side additionally asserts the cards still carry ``locked_sets``,
     so the 403 above cannot be "fixed" by quietly emptying the payload.
+
+    The middleware's ``/reviews/`` prefix belt is emptied for the test, or it
+    would refuse the token before the gate this test is about ever runs.
     """
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
     rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
     bearer = TestClient(server.api)
     headers = {"Authorization": f"Bearer {token}"}

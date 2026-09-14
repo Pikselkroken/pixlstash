@@ -5052,7 +5052,7 @@ defineExpose({
             </button>
             <div
               v-if="referenceFolders.length"
-              class="ctx-label"
+              class="section-label ctx-label"
               role="presentation"
             >
               Reference Folders
@@ -5087,7 +5087,7 @@ defineExpose({
             </button>
             <div
               v-if="importFolders.length"
-              class="ctx-label"
+              class="section-label ctx-label"
               role="presentation"
             >
               Import Folders
@@ -7025,7 +7025,7 @@ defineExpose({
                                 v-for="group in projectMenuCharacterGroups"
                                 :key="group.label"
                               >
-                                <div class="ctx-label" role="presentation">
+                                <div class="section-label ctx-label" role="presentation">
                                   {{ group.label }}
                                 </div>
                                 <div
@@ -7245,7 +7245,7 @@ defineExpose({
                                 v-for="group in projectMenuSetGroups"
                                 :key="group.label"
                               >
-                                <div class="ctx-label" role="presentation">
+                                <div class="section-label ctx-label" role="presentation">
                                   {{ group.label }}
                                 </div>
                                 <div

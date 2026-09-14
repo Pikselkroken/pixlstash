@@ -51,6 +51,7 @@ from pixlstash.hub.registry import (
     LibraryError,
     LibraryExistsError,
     LibraryNotFoundError,
+    LibraryOverlapError,
     NotAVaultError,
     resolve_path,
     validate_vault_folder,
@@ -168,7 +169,8 @@ class LibraryInspection(BaseModel):
     verdict: LibraryVerdict = Field(
         description=(
             "attached: this exact folder is already registered. overlaps: a "
-            "registered library contains it, or it contains one. vault: it "
+            "registered library, or a watch or reference folder of any "
+            "registered library, contains it, or it contains one. vault: it "
             "holds a vault nothing is using - attach it. pictures: a folder of "
             "pictures with no vault. empty: no pictures and no vault."
         )
@@ -479,6 +481,29 @@ def create_router(server) -> APIRouter:
                 library=_to_response(other, include_path),
             )
 
+        # Said here so the picker shows it before offering Add; `create` and
+        # `attach` re-check under the lock, which is what actually holds.
+        try:
+            registry.refuse_overlapping_watch_or_reference_folder(folder)
+        except LibraryOverlapError as exc:
+            return LibraryInspection(
+                verdict="overlaps",
+                path=folder,
+                can_add=False,
+                headline="Overlaps a watch or reference folder",
+                detail=str(exc),
+                suggested_name=suggested,
+            )
+        except LibraryError as exc:
+            return LibraryInspection(
+                verdict="overlaps",
+                path=folder,
+                can_add=False,
+                headline="Could not check this folder",
+                detail=str(exc),
+                suggested_name=suggested,
+            )
+
         if _holds_vault(folder):
             found, capped = _count(folder, count)
             return LibraryInspection(
@@ -627,7 +652,7 @@ def create_router(server) -> APIRouter:
                 library = registry.create(
                     folder, name, pending_import=verdict.verdict == "pictures"
                 )
-        except LibraryExistsError as exc:
+        except (LibraryExistsError, LibraryOverlapError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except NotAVaultError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

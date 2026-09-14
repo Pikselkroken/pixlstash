@@ -1,199 +1,157 @@
 <template>
-  <div class="wfins" :class="{ collapsed: !sidebarStore.statsOpen }">
-    <div v-if="sidebarStore.statsOpen" class="wfins-content">
-      <div class="wfins-header">
-        <div class="wfins-title-row">
-          <span class="wfins-title-text">
-            <v-icon size="13" class="wfins-title-icon"
-              >mdi-sitemap-outline</v-icon
-            >
-            Inspector
-          </span>
-        </div>
-        <!-- The tab strip names the SUBJECT, never the view, so Workflow sits
-             where Model and Pictures sit — and the second tab is always the way
-             out to the pictures, which is what makes the rail navigable rather
-             than terminal. -->
-        <div class="wfins-tabs">
-          <button
-            class="wfins-tab-btn"
-            :class="{ active: tab === 'workflow' }"
-            type="button"
-            @click="tab = 'workflow'"
-          >
-            <v-icon size="12">mdi-sitemap-outline</v-icon>
-            Workflow
-          </button>
-          <button
-            class="wfins-tab-btn"
-            :class="{ active: tab === 'pictures' }"
-            type="button"
-            :disabled="!hasPictures"
-            :title="
-              hasPictures
-                ? undefined
-                : 'Nothing this workflow made is still in the library'
-            "
-            @click="tab = 'pictures'"
-          >
-            <v-icon size="12">mdi-image-multiple-outline</v-icon>
-            Pictures
-          </button>
+  <AppInspector
+    v-model="tab"
+    class="wfins"
+    label="Inspector"
+    :open="sidebarStore.statsOpen"
+    :tabs="tabs"
+  >
+    <p v-if="!row" class="wfins-empty">
+      Pick a workflow to see what it is made of.
+    </p>
+
+    <template v-else-if="tab === 'workflow'">
+      <div class="inspector-section">
+        <span class="section-label">Selected</span>
+        <div class="wfins-field">
+          <div class="wfins-name">{{ descriptor }}</div>
+          <div class="wfins-mono">
+            {{ variantLine }}<template v-if="base"> · {{ base }}</template>
+          </div>
         </div>
       </div>
 
-      <p v-if="!row" class="wfins-empty">
-        Pick a workflow to see what it is made of.
-      </p>
-
-      <template v-else-if="tab === 'workflow'">
-        <div class="wfins-section">
-          <span class="wfins-section-title">Selected</span>
-          <div class="wfins-field">
-            <div class="wfins-name">{{ descriptor }}</div>
-            <div class="wfins-mono">
-              {{ variantLine }}<template v-if="base"> · {{ base }}</template>
-            </div>
+      <div class="inspector-section">
+        <span class="section-label">Details</span>
+        <dl class="inspector-kv">
+          <div>
+            <dt>Nodes</dt>
+            <dd>{{ groupedNumber(row.node_count) }}</dd>
           </div>
-        </div>
-
-        <div class="wfins-section">
-          <span class="wfins-section-title">Details</span>
-          <dl class="wfins-kv">
-            <div>
-              <dt>Nodes</dt>
-              <dd>{{ groupedNumber(row.node_count) }}</dd>
-            </div>
-            <div>
-              <dt>Variants</dt>
-              <dd>{{ groupedNumber(row.variants) }}</dd>
-            </div>
-            <div>
-              <dt>Pictures</dt>
-              <dd>
-                <span v-if="row.pictures">{{
-                  groupedNumber(row.pictures)
-                }}</span>
-                <span v-else class="wfins-quiet">none kept</span>
-              </dd>
-            </div>
-            <div>
-              <dt>Last used</dt>
-              <dd>
-                <span v-if="row.last_used">{{ day(row.last_used) }}</span>
-                <span v-else class="wfins-quiet">—</span>
-              </dd>
-            </div>
-            <div>
-              <dt>First seen</dt>
-              <dd>{{ day(row.first_seen_at) }}</dd>
-            </div>
-          </dl>
-        </div>
-
-        <div class="wfins-section">
-          <span class="wfins-section-title">Models</span>
-          <div v-if="models.length" class="wfins-chips">
-            <span
-              v-for="model in models"
-              :key="model.name"
-              class="wfins-chip"
-              :title="model.name"
-              >{{ modelStem(model.name) }}</span
-            >
+          <div>
+            <dt>Variants</dt>
+            <dd>{{ groupedNumber(row.variants) }}</dd>
           </div>
-          <!-- Empty is a state, and it says only what is true. A recipe whose
+          <div>
+            <dt>Pictures</dt>
+            <dd>
+              <span v-if="row.pictures">{{ groupedNumber(row.pictures) }}</span>
+              <span v-else class="wfins-quiet">none kept</span>
+            </dd>
+          </div>
+          <div>
+            <dt>Last used</dt>
+            <dd>
+              <span v-if="row.last_used">{{ day(row.last_used) }}</span>
+              <span v-else class="wfins-quiet">—</span>
+            </dd>
+          </div>
+          <div>
+            <dt>First seen</dt>
+            <dd>{{ day(row.first_seen_at) }}</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div class="inspector-section">
+        <span class="section-label">Models</span>
+        <div v-if="models.length" class="wfins-chips">
+          <span
+            v-for="model in models"
+            :key="model.name"
+            class="wfins-chip"
+            :title="model.name"
+            >{{ modelStem(model.name) }}</span
+          >
+        </div>
+        <!-- Empty is a state, and it says only what is true. A recipe whose
                asset rows were deleted keeps its graph and loses the ability to
                say which models it used — but nothing in the payload separates
                that from a graph that names no model, so neither is claimed. -->
-          <p v-else class="wfins-quiet wfins-note">
-            This workflow's model names are not recorded. The graph still says a
-            model goes here, and no longer says which.
-          </p>
-        </div>
+        <p v-else class="wfins-quiet wfins-note">
+          This workflow's model names are not recorded. The graph still says a
+          model goes here, and no longer says which.
+        </p>
+      </div>
 
-        <div class="wfins-section">
-          <span class="wfins-section-title">Variants</span>
-          <div v-if="variantBars.length" class="wfins-bars">
-            <div v-for="bar in variantBars" :key="bar.key" class="wfins-bar">
-              <span class="wfins-bar-label" :title="bar.label">{{
-                bar.label
+      <div class="inspector-section">
+        <span class="section-label">Variants</span>
+        <div v-if="variantBars.length" class="wfins-bars">
+          <div v-for="bar in variantBars" :key="bar.key" class="wfins-bar">
+            <span class="wfins-bar-label" :title="bar.label">{{
+              bar.label
+            }}</span>
+            <span class="wfins-bar-track">
+              <span class="wfins-bar-fill" :style="{ width: bar.width }"></span>
+              <span class="wfins-bar-value num">{{
+                groupedNumber(bar.value)
               }}</span>
-              <span class="wfins-bar-track">
-                <span
-                  class="wfins-bar-fill"
-                  :style="{ width: bar.width }"
-                ></span>
-                <span class="wfins-bar-value num">{{
-                  groupedNumber(bar.value)
-                }}</span>
-              </span>
-            </div>
+            </span>
           </div>
-          <AppButton
-            v-else-if="row.variants > 1"
-            size="sm"
-            class="wfins-action"
-            @click="store.toggleOpen(row.topology_hash)"
-          >
-            Read its {{ row.variants }} variants
-          </AppButton>
-          <p v-else class="wfins-quiet wfins-note">
-            One variant: this graph was only ever bound to one set of models.
-          </p>
         </div>
-      </template>
+        <AppButton
+          v-else-if="row.variants > 1"
+          size="sm"
+          class="wfins-action"
+          @click="store.toggleOpen(row.topology_hash)"
+        >
+          Read its {{ row.variants }} variants
+        </AppButton>
+        <p v-else class="wfins-quiet wfins-note">
+          One variant: this graph was only ever bound to one set of models.
+        </p>
+      </div>
+    </template>
 
-      <template v-else>
-        <div class="wfins-section">
-          <span class="wfins-section-title">Made with it</span>
-          <div v-if="sampleIds.length" class="wfins-tiles">
-            <button
-              v-for="id in sampleIds"
-              :key="id"
-              class="wfins-tile"
-              type="button"
-              :title="`Open picture ${id}`"
-              @click="openPicture(id)"
-            >
-              <img :src="thumbUrl(id)" alt="" loading="lazy" />
-            </button>
-          </div>
-          <!-- Three sentences, not one, because the difference matters: this
+    <template v-else>
+      <div class="inspector-section">
+        <span class="section-label">Made with it</span>
+        <div v-if="sampleIds.length" class="wfins-tiles">
+          <button
+            v-for="id in sampleIds"
+            :key="id"
+            class="wfins-tile"
+            type="button"
+            :title="`Open picture ${id}`"
+            @click="openPicture(id)"
+          >
+            <img :src="thumbUrl(id)" alt="" loading="lazy" />
+          </button>
+        </div>
+        <!-- Three sentences, not one, because the difference matters: this
                workflow outlived its pictures, we have not read them yet, or we
                tried and could not. Saying "nothing is left" when the request
                simply failed is the one thing this panel must not do — and
                saying "reading…" for ever when it already came back empty-handed
                is how the first version of that fix failed. -->
-          <p v-else-if="samplesPending" class="wfins-quiet wfins-note">
-            Reading its pictures…
+        <p v-else-if="samplesPending" class="wfins-quiet wfins-note">
+          Reading its pictures…
+        </p>
+        <template v-else-if="samplesFailed">
+          <p class="wfins-quiet wfins-note">
+            Could not read its pictures just now.<template v-if="hasPictures">
+              The library still has {{ groupedNumber(row.pictures) }} of
+              them.</template
+            >
           </p>
-          <template v-else-if="samplesFailed">
-            <p class="wfins-quiet wfins-note">
-              Could not read its pictures just now.<template v-if="hasPictures">
-                The library still has {{ groupedNumber(row.pictures) }} of
-                them.</template
-              >
-            </p>
-            <!-- The failure has a way out of it. Without this the only retry is
+          <!-- The failure has a way out of it. Without this the only retry is
                  selecting another workflow and coming back, which nothing on
                  screen tells anybody. -->
-            <AppButton
-              size="sm"
-              class="wfins-action"
-              @click="store.loadSamples(row.topology_hash)"
-            >
-              Try again
-            </AppButton>
-          </template>
-          <p v-else class="wfins-quiet wfins-note">
-            Nothing this workflow made is still in the library. The workflow
-            itself is kept whole.
-          </p>
-        </div>
-      </template>
-    </div>
-  </div>
+          <AppButton
+            size="sm"
+            class="wfins-action"
+            @click="store.loadSamples(row.topology_hash)"
+          >
+            Try again
+          </AppButton>
+        </template>
+        <p v-else class="wfins-quiet wfins-note">
+          Nothing this workflow made is still in the library. The workflow
+          itself is kept whole.
+        </p>
+      </div>
+    </template>
+  </AppInspector>
 </template>
 
 <script setup>
@@ -230,6 +188,7 @@ import {
   workflowDescriptor,
 } from "../../utils/workflowShelf";
 import AppButton from "../widgets/AppButton.vue";
+import AppInspector from "../widgets/AppInspector.vue";
 
 const store = useWorkflowShelfStore();
 const sidebarStore = useSidebarStore();
@@ -257,6 +216,22 @@ const sampleIds = computed(() =>
 );
 
 const hasPictures = computed(() => Boolean(row.value?.pictures));
+
+// The tab strip names the SUBJECT, never the view, so Workflow sits where Model
+// and Pictures sit, and the second tab is always the way out to the pictures,
+// which is what makes the rail navigable rather than terminal.
+const tabs = computed(() => [
+  { value: "workflow", label: "Workflow", icon: "mdi-sitemap-outline" },
+  {
+    value: "pictures",
+    label: "Pictures",
+    icon: "mdi-image-multiple-outline",
+    disabled: !hasPictures.value,
+    title: hasPictures.value
+      ? undefined
+      : "Nothing this workflow made is still in the library",
+  },
+]);
 
 /**
  * Whether the tiles are still on their way.
@@ -333,142 +308,6 @@ watch(
 </script>
 
 <style scoped>
-/* The stats rail's own box, so the two panels present the same edge onto the
-   canvas and the same collapse. */
-.wfins {
-  position: relative;
-  width: var(--stats-panel-w);
-  min-width: var(--stats-panel-w);
-  max-width: var(--stats-panel-w);
-  height: 100%;
-  display: flex;
-  flex-direction: row;
-  flex-shrink: 0;
-  border-left: 1px solid rgb(var(--v-theme-border));
-  background: rgb(var(--v-theme-sidebar));
-  transition:
-    width var(--dur-1) var(--ease-standard),
-    min-width var(--dur-1) var(--ease-standard),
-    border-color var(--dur-1) var(--ease-standard);
-  overflow: hidden;
-}
-
-.wfins.collapsed {
-  width: 0;
-  min-width: 0;
-  max-width: 0;
-  border-left-color: transparent;
-  overflow: hidden;
-}
-
-.wfins-content {
-  flex: 1;
-  min-width: 0;
-  padding: 0 var(--space-3) var(--space-4) var(--space-3);
-  overflow-y: auto;
-  overflow-x: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.wfins-header {
-  display: flex;
-  flex-direction: column;
-  margin-bottom: var(--space-2);
-  /* The toolbar's height, so the three header bands line up across the app. */
-  height: 36px;
-  flex-shrink: 0;
-}
-
-.wfins-title-row {
-  display: flex;
-  align-items: center;
-  flex: 1;
-  padding: 0 var(--space-2) 0 var(--space-3);
-}
-
-.wfins-title-text {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-  color: rgba(var(--v-theme-on-surface), 0.5);
-}
-
-.wfins-title-icon {
-  color: rgba(var(--v-theme-on-surface), 0.4);
-}
-
-.wfins-tabs {
-  display: flex;
-  align-items: stretch;
-  flex-shrink: 0;
-}
-
-.wfins-tab-btn {
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-medium);
-  padding: 0 var(--space-3);
-  background: none;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  color: rgba(var(--v-theme-on-surface), 0.45);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
-  cursor: pointer;
-  transition:
-    color var(--dur-1) var(--ease-standard),
-    background var(--dur-1) var(--ease-standard),
-    border-color var(--dur-1) var(--ease-standard);
-}
-
-.wfins-tab-btn:hover:not(:disabled) {
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-on-surface));
-}
-
-/* Olive marks, words stay text: the underline carries the selection. */
-.wfins-tab-btn.active {
-  color: rgb(var(--v-theme-on-surface));
-  border-bottom-color: var(--selected-ink);
-}
-
-/* Dimmed rather than removed: the panel keeps its shape when a workflow has
-   outlived everything it made. */
-.wfins-tab-btn:disabled {
-  opacity: var(--opacity-disabled);
-  cursor: default;
-}
-
-.wfins-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding-bottom: var(--space-3);
-  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.07);
-}
-
-.wfins-section:last-child {
-  border-bottom: 0;
-}
-
-.wfins-section-title {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-  color: rgba(var(--v-theme-on-surface), 0.45);
-}
-
 .wfins-field {
   background: rgba(var(--v-theme-on-surface), 0.04);
   border: 1px solid rgb(var(--v-theme-divider));
@@ -486,25 +325,6 @@ watch(
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-.wfins-kv {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-4) var(--space-3);
-  margin: 0;
-}
-
-.wfins-kv dt {
-  margin: 0;
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-.wfins-kv dd {
-  margin: 0;
-  font-size: var(--text-sm);
-  font-variant-numeric: tabular-nums;
 }
 
 .wfins-chips {
@@ -613,7 +433,7 @@ watch(
 
 .wfins-empty {
   margin: 0;
-  padding: var(--space-4) var(--space-3);
+  padding: var(--space-2) 0;
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }

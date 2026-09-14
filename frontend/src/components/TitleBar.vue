@@ -358,7 +358,7 @@ const close = () => desktop?.windowClose?.();
   align-items: center;
   font-size: var(--text-2xs);
   line-height: 1;
-  color: rgba(var(--v-theme-accent), 0.95);
+  color: rgb(var(--v-theme-on-background));
   text-decoration: none;
   white-space: nowrap;
 }

@@ -29,6 +29,7 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
+from sqlalchemy import text as sa_text
 from sqlalchemy.exc import OperationalError
 from sqlmodel import delete as sqlmodel_delete, select
 
@@ -68,7 +69,10 @@ from pixlstash.services.workflow_ghost_service import (
     GhostPurgeContext,
     apply_purge_to_hub,
     collect_ghost_candidates_in_session,
+    drain_ghost_cascade,
+    enqueue_ghost_cascade_in_session,
     read_ghost_retention,
+    requeue_library_ghosts,
     surviving_instance_hashes_in_session,
 )
 from pixlstash.tasks.comfyui_extraction_task import ComfyUIExtractionTask
@@ -1113,6 +1117,8 @@ def _wipe_pictures(session):
     # test's destroyed path change what the next test's purge owns.
     session.exec(sqlmodel_delete(DeletedFileLog))
     session.exec(sqlmodel_delete(Picture))
+    # After the pictures: deleting them is what fills it.
+    session.execute(sa_text("DELETE FROM pending_ghost_cascade"))
     session.commit()
 
 
@@ -1479,6 +1485,24 @@ LIBRARY = "11111111-2222-4333-8444-555555555555"
 OTHER_LIBRARY = "99999999-8888-4777-8666-555555555555"
 
 
+def cascade(store, retention, library_uuid=LIBRARY):
+    """Settle the vault's queued instance hashes, as ``GhostCascadeTask`` does."""
+    return drain_ghost_cascade(store.vault, store.hub, library_uuid, retention)[1]
+
+
+def pending_hashes(store):
+    """What ``pending_ghost_cascade`` holds, oldest first."""
+    return store.vault.run_immediate_read_task(
+        lambda session: (
+            session.execute(
+                sa_text("SELECT instance_hash FROM pending_ghost_cascade ORDER BY seq")
+            )
+            .scalars()
+            .all()
+        )
+    )
+
+
 def purge(store, picture_ids, *, retention, library_uuid=LIBRARY):
     """Run THE destruction path against the shared store.
 
@@ -1783,13 +1807,12 @@ def test_a_vault_with_no_hub_purges_without_reaching_for_one(store):
 
 
 def test_the_missing_file_purge_cascades_too(store):
-    """The OTHER path that removes a picture row for good (§B4).
+    """A path that removes a picture row for good without writing ghosts (§B4).
 
     ``MissingFilePurgeTask`` never writes a ghost — the file it purges is
     already gone from disk, so there is no thumbnail to keep — but it can
-    destroy the last picture covering an instance hash. Leaving it out of the
-    cascade would let the safe class decay into the unsafe one exactly where
-    nobody is looking, which is the failure library plan §5 names.
+    destroy the last picture covering an instance hash. It knows nothing about
+    ghosts: the vault's delete trigger queues the hash, and the drain settles it.
     """
     member = write_png(Path(store.image_root), "mfp-a.png", api=api_graph(TXT2IMG))
     cover = write_png(
@@ -1804,17 +1827,13 @@ def test_the_missing_file_purge_cascades_too(store):
     # The cover's file vanishes from under the library — a sync agent, a moved
     # folder — which is what this task exists to reconcile.
     os.remove(os.path.join(store.image_root, cover))
-    task = MissingFilePurgeTask(
-        database=store.vault,
-        pictures=[read_picture(store, cover_id)],
-        hub=store.hub,
-        library_uuid=LIBRARY,
-        ghost_retention=GHOST_RETENTION_COVERED,
-    )
-    result = task._run_task()
+    result = MissingFilePurgeTask(
+        database=store.vault, pictures=[read_picture(store, cover_id)]
+    )._run_task()
+    cascaded = cascade(store, GHOST_RETENTION_COVERED)
 
     assert result["purged"] == 1
-    assert result["ghosts_cascaded"] == 1
+    assert cascaded == 1
     assert ghosts(store) == {}
 
 
@@ -1849,15 +1868,12 @@ def test_the_missing_file_purge_leaves_a_still_covered_ghost_alone(store):
     # is still covered and must survive.
     os.remove(os.path.join(store.image_root, unrelated))
     result = MissingFilePurgeTask(
-        database=store.vault,
-        pictures=[read_picture(store, other_id)],
-        hub=store.hub,
-        library_uuid=LIBRARY,
-        ghost_retention=GHOST_RETENTION_COVERED,
+        database=store.vault, pictures=[read_picture(store, other_id)]
     )._run_task()
+    cascaded = cascade(store, GHOST_RETENTION_COVERED)
 
     assert result["purged"] == 1
-    assert result["ghosts_cascaded"] == 0
+    assert cascaded == 0
     assert set(ghosts(store)) == {"sha-mfp-keep"}
 
 
@@ -1966,15 +1982,12 @@ def test_the_missing_file_purge_never_cascades_at_on(store):
 
     os.remove(os.path.join(store.image_root, cover))
     result = MissingFilePurgeTask(
-        database=store.vault,
-        pictures=[read_picture(store, cover_id)],
-        hub=store.hub,
-        library_uuid=LIBRARY,
-        ghost_retention=GHOST_RETENTION_ON,
+        database=store.vault, pictures=[read_picture(store, cover_id)]
     )._run_task()
+    cascaded = cascade(store, GHOST_RETENTION_ON)
 
     assert result["purged"] == 1
-    assert result["ghosts_cascaded"] == 0
+    assert cascaded == 0
     assert set(ghosts(store)) == {"sha-on-mfp"}
 
 
@@ -2000,14 +2013,12 @@ def test_the_missing_file_purge_clears_ghosts_at_off(store):
 
     os.remove(os.path.join(store.image_root, cover))
     result = MissingFilePurgeTask(
-        database=store.vault,
-        pictures=[read_picture(store, cover_id)],
-        hub=store.hub,
-        library_uuid=LIBRARY,
-        ghost_retention=GHOST_RETENTION_OFF,
+        database=store.vault, pictures=[read_picture(store, cover_id)]
     )._run_task()
+    cascaded = cascade(store, GHOST_RETENTION_OFF)
 
-    assert result["ghosts_cascaded"] == 1
+    assert result["purged"] == 1
+    assert cascaded == 1
     assert ghosts(store) == {}
 
 
@@ -2224,3 +2235,191 @@ def test_the_store_itself_refuses_a_ghost_with_no_thumbnail(store):
                 (LIBRARY, "sha-half-ghost", "some-instance", "a secret prompt"),
             )
     assert ghosts(store) == {}
+
+
+def test_every_kind_of_hard_delete_queues_the_cascade(store):
+    """The trigger, not the caller, is what the cascade depends on (#1293).
+
+    Four paths forgot it when each had to remember. So both statement shapes the
+    code base deletes pictures with, an ORM ``session.delete`` and a core
+    ``DELETE``, are driven here with no ghost code anywhere near them.
+    """
+    names = [
+        write_png(Path(store.image_root), f"any-{n}.png", api=api_graph(TXT2IMG))
+        for n in ("a", "b")
+    ]
+    ids = [add_picture(store, name) for name in names]
+    run_extraction(store, ids)
+    instance = read_picture(store, ids[0]).workflow_instance_hash
+    record_picture_ghosts(
+        store.hub,
+        [
+            PictureGhost(
+                library_uuid=LIBRARY,
+                pixel_sha="sha-any",
+                instance_hash=instance,
+                thumbnail=b"thumbnail-bytes",
+            )
+        ],
+    )
+
+    def orm_delete(session):
+        session.delete(session.get(Picture, ids[0]))
+        session.commit()
+
+    store.vault.run_task(orm_delete)
+    assert pending_hashes(store) == [instance]
+    assert cascade(store, GHOST_RETENTION_COVERED) == 0, "one cover is left"
+    assert set(ghosts(store)) == {"sha-any"}
+
+    def core_delete(session):
+        session.exec(sqlmodel_delete(Picture).where(Picture.id == ids[1]))
+        session.commit()
+
+    store.vault.run_task(core_delete)
+    assert cascade(store, GHOST_RETENTION_COVERED) == 1
+    assert ghosts(store) == {}
+
+
+def test_a_rehash_queues_the_instance_hash_it_left(store):
+    """A hash-version bump re-extracts and moves every picture to a new hash.
+
+    A ghost keyed on the old one matches no picture any more, so it has lost
+    its cover exactly as if the picture had gone.
+    """
+    name = write_png(Path(store.image_root), "rehash.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+    run_extraction(store, [picture_id])
+    old = read_picture(store, picture_id).workflow_instance_hash
+    record_picture_ghosts(
+        store.hub,
+        [
+            PictureGhost(
+                library_uuid=LIBRARY,
+                pixel_sha="sha-rehash",
+                instance_hash=old,
+                thumbnail=b"thumbnail-bytes",
+            )
+        ],
+    )
+
+    def rehash(session, value):
+        # A core UPDATE, because the ORM skips a write that changes nothing and
+        # the same-value case below would then test the ORM, not the trigger.
+        session.execute(
+            sa_text("UPDATE picture SET workflow_instance_hash = :v WHERE id = :id"),
+            {"v": value, "id": picture_id},
+        )
+        session.commit()
+
+    # Writing the same value back is not a re-hash and must queue nothing.
+    store.vault.run_task(rehash, old)
+    assert pending_hashes(store) == []
+    # Nor is NULL: the extraction writes it for a file it could not read this
+    # time, and the picture is still in the library.
+    store.vault.run_task(rehash, None)
+    assert pending_hashes(store) == []
+    store.vault.run_task(rehash, old)
+    store.vault.run_task(rehash, "v2-" + old)
+    assert cascade(store, GHOST_RETENTION_COVERED) == 1
+    assert ghosts(store) == {}
+
+
+def test_the_migrated_vault_carries_both_cascade_triggers(store):
+    """The design rests on these. A later migration that rebuilds ``picture``
+    drops a table's triggers with it, and runs before this does."""
+    names = store.vault.run_immediate_read_task(
+        lambda session: (
+            session.execute(
+                sa_text("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+            )
+            .scalars()
+            .all()
+        )
+    )
+    assert {
+        "trg_pending_ghost_cascade_picture_delete",
+        "trg_pending_ghost_cascade_picture_rehash",
+    } <= set(names)
+
+
+def test_a_hash_requeued_during_a_drain_is_not_swallowed(store, monkeypatch):
+    """The drain removes what it read by ``seq``, never by hash.
+
+    Otherwise a cover deleted between the drain's read and its dequeue would
+    queue a hash that is already queued, and the dequeue would take it with the
+    stale row. The requeue is injected at the one point in between.
+    """
+    from pixlstash.services import workflow_ghost_service
+
+    instance = "requeued-instance"
+    store.vault.run_task(enqueue_ghost_cascade_in_session, [instance])
+    real = workflow_ghost_service.cascade_uncovered_ghosts
+
+    def cascade_then_requeue(*args, **kwargs):
+        store.vault.run_task(enqueue_ghost_cascade_in_session, [instance])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(
+        workflow_ghost_service, "cascade_uncovered_ghosts", cascade_then_requeue
+    )
+    assert cascade(store, GHOST_RETENTION_COVERED) == 0
+    assert pending_hashes(store) == [instance]
+
+
+def test_a_restore_requeues_every_ghost_for_a_recheck(store):
+    """A full restore swaps the vault file, so no trigger sees what it dropped.
+
+    Here nothing was ever queued for the ghost's instance hash and no picture
+    carries it, which is what a swap leaves behind.
+    """
+    record_picture_ghosts(
+        store.hub,
+        [
+            PictureGhost(
+                library_uuid=LIBRARY,
+                pixel_sha="sha-swapped-away",
+                instance_hash="swapped-away-instance",
+                thumbnail=b"thumbnail-bytes",
+            ),
+            PictureGhost(
+                library_uuid=OTHER_LIBRARY,
+                pixel_sha="sha-other-library",
+                instance_hash="swapped-away-instance",
+                thumbnail=b"thumbnail-bytes",
+            ),
+        ],
+    )
+    assert cascade(store, GHOST_RETENTION_COVERED) == 0
+
+    assert requeue_library_ghosts(store.vault, store.hub, LIBRARY) == 1
+    assert cascade(store, GHOST_RETENTION_COVERED) == 1
+    assert set(ghosts(store)) == {"sha-other-library"}
+
+
+def test_a_purge_that_kept_ghosts_queues_their_hashes_again(store, monkeypatch):
+    """A drain that ran between the purge's DELETE and its ghost write settled
+    the hash with no ghost in place. The purge queues it again afterwards, so
+    the cascade looks once more with the ghost there to judge."""
+    from pixlstash.services import scrapheap_service
+
+    member = write_png(Path(store.image_root), "requeue-a.png", api=api_graph(TXT2IMG))
+    cover = write_png(
+        Path(store.image_root),
+        "requeue-b.png",
+        api=api_graph(edited(TXT2IMG, 5, seed=59)),
+    )
+    member_id, cover_id = (add_picture(store, name) for name in (member, cover))
+    run_extraction(store, [member_id, cover_id])
+    instance = read_picture(store, member_id).workflow_instance_hash
+    scrapheap(store, member_id, pixel_sha="sha-requeue")
+    real = scrapheap_service.apply_purge_to_hub
+
+    def drain_first(*args, **kwargs):
+        assert cascade(store, GHOST_RETENTION_COVERED) == 0
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(scrapheap_service, "apply_purge_to_hub", drain_first)
+    assert purge(store, [member_id], retention=GHOST_RETENTION_COVERED).ghosts_kept == 1
+
+    assert pending_hashes(store) == [instance]

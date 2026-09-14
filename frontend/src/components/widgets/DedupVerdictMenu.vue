@@ -2,7 +2,7 @@
   <div class="vmenu" role="group" aria-label="Which decisions to show">
     <div class="vm-head">
       <v-icon size="16">mdi-filter-outline</v-icon>
-      <span class="vm-title">Show</span>
+      <span class="section-label">Show</span>
       <span class="vm-sp"></span>
       <span class="vm-count">{{ groupCountLabel }}</span>
     </div>
@@ -141,14 +141,6 @@ function formatCount(value) {
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-}
-
-.vm-title {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
-  color: rgba(var(--v-theme-on-surface), 0.5);
 }
 
 .vm-sp {

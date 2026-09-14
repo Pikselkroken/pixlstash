@@ -662,10 +662,15 @@ class LibrarySwitchService:
             # Attaching keeps whatever is in it; creating would refuse.
             if os.path.isfile(os.path.join(resolved, VAULT_FILENAME)):
                 existing = registry.attach(
-                    folder, _SCRATCH_LIBRARY_NAME, unique_name=False
+                    folder,
+                    _SCRATCH_LIBRARY_NAME,
+                    unique_name=False,
+                    check_folder_overlap=False,
                 )
             else:
-                existing = registry.create(folder, _SCRATCH_LIBRARY_NAME)
+                existing = registry.create(
+                    folder, _SCRATCH_LIBRARY_NAME, check_folder_overlap=False
+                )
         if leaving is not None and existing.uuid == leaving.uuid:
             raise LibrarySwitchError(
                 "The scratch library cannot be discarded; it is where a discard lands."
