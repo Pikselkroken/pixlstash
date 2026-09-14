@@ -484,16 +484,20 @@ class ExportUtils:
         elif query:
             logger.debug("Exporting pictures using search query: {}".format(query))
 
-            def find_by_text(session, query):
-                words = re.findall(r"\b\w+\b", query.lower())
-                query_full = "A photo of " + query
+            words = re.findall(r"\b\w+\b", query.lower())
+            query_full = "A photo of " + query
+            # Encoded on this thread, not inside the database task, so the
+            # model call never holds the DB writer thread.
+            query_embedding = server.vault.generate_text_embedding(query_full)
+
+            def find_by_text(session):
                 return [
                     r[0]
                     for r in Picture.semantic_search(
                         session,
                         query_full,
                         words,
-                        text_to_embedding=server.vault.generate_text_embedding,
+                        query_embedding=query_embedding,
                         offset=0,
                         limit=sys.maxsize,
                         threshold=threshold,
@@ -502,7 +506,7 @@ class ExportUtils:
                     )
                 ]
 
-            pics = server.vault.db.run_task(find_by_text, query)
+            pics = server.vault.db.run_task(find_by_text)
         else:
             logger.debug("Exporting pictures using list filters")
             from pixlstash.routes.pictures import select_pictures_for_listing

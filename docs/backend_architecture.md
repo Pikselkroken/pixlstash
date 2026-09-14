@@ -1692,6 +1692,7 @@ The fix is an additive column, `public_id`: 128 bits of randomness as lowercase 
 
 - File-based **SQLite** at `{image_root}/vault.db`
 - All writes are serialised through `VaultDatabase`'s task queue (single writer); reads run in parallel.
+- **No model inference runs inside a database task.** An encode on the writer thread blocks every write for the length of the model call. Encode on the calling thread first and pass the result in as a value: text search (`GET /pictures/search`) and export by query encode their query before `db.run_task`, and `Picture.semantic_search` takes the SBERT and CLIP embeddings as `query_embedding` / `clip_query_embedding`. `tests/test_server.py` asserts both routes encode off the writer thread.
 
 ### Stored path containment (#776)
 

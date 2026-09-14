@@ -20,7 +20,7 @@ from sqlmodel import (
     select,
     Session,
 )
-from typing import ClassVar, Optional, List, Union, TYPE_CHECKING
+from typing import ClassVar, Optional, List, Tuple, Union, TYPE_CHECKING
 
 from .character import Character
 from .entity_project import (
@@ -683,8 +683,8 @@ class Picture(SQLModel, table=True):
         session: Session,
         query: str,
         query_words: List[str],
-        text_to_embedding: callable,
-        clip_text_to_embedding: callable = None,
+        query_embedding: Optional[np.ndarray],
+        clip_query_embedding: Optional[np.ndarray] = None,
         fuzzy_weight: float = 0.5,
         embedding_weight: float = 0.5,
         text_match_weight: float = 0.0,
@@ -707,39 +707,77 @@ class Picture(SQLModel, table=True):
         tags_filter: Optional[List[str]] = None,
         tags_rejected_filter: Optional[List[str]] = None,
         stack_state: Optional[str] = None,
-    ) -> List["Picture"]:
-        """
-        Hybrid semantic search: combines fuzzy tag search (levenshtein SQL function) and embedding similarity (cosine_similarity SQL function).
-        Orders by combined score in SQL.
+    ) -> List[Tuple["Picture", float]]:
+        """Hybrid semantic search, ordered by combined score in SQL.
+
+        Combines fuzzy tag search (the ``levenshtein_with_id`` SQL function)
+        with embedding similarity (the ``cosine_similarity`` SQL function).
 
         Text read out of a picture adds ``text_match_weight`` when every query
         word appears in it (``ocr_text_match``), and nothing otherwise, so a
         picture full of words gains nothing on searches its words do not answer.
         The search route passes ``database.OCR_TEXT_MATCH_WEIGHT``.
+
+        The query embeddings are passed in as values because this runs inside a
+        database task: encoding here would hold the single DB writer thread for
+        the length of a model call. Callers encode the query on their own thread
+        before queuing the search.
+
+        Args:
+            session: Session the query runs on.
+            query: The query text, used for logging.
+            query_words: Words matched against each picture's tags.
+            query_embedding: SBERT embedding of the query, compared with
+                ``Picture.text_embedding``. ``None`` leaves text similarity out
+                of the score.
+            clip_query_embedding: CLIP text embedding of the query, compared
+                with ``Picture.image_embedding``. ``None`` leaves image
+                similarity out of the score.
+            fuzzy_weight: Weight of the fuzzy tag score.
+            embedding_weight: Weight of the embedding score.
+            text_match_weight: Score added when the picture's read text
+                contains every query word.
+            threshold: Minimum combined score a picture must reach.
+            offset: Rows to skip after ordering.
+            limit: Maximum rows to return.
+            format: Formats to keep.
+            select_fields: Picture fields to load; ``id`` is always included.
+            include_deleted: Include soft-deleted pictures.
+            only_deleted: Return only soft-deleted pictures.
+            include_unimported: Include pictures that are not yet imported.
+            candidate_ids: Restrict the search to these picture ids. An empty
+                list returns no results.
+            min_score: Minimum picture score.
+            max_score: Maximum picture score.
+            unscored: Keep only pictures whose score is unset or 0.
+            smart_score_bucket: Smart-score bucket to keep.
+            resolution_bucket: Resolution bucket to keep.
+            comfyui_models_filter: ComfyUI models a picture must use, all of them.
+            comfyui_loras_filter: ComfyUI LoRAs a picture must use, all of them.
+            tags_filter: Tags a picture must carry, all of them.
+            tags_rejected_filter: Tags a picture must not carry.
+            stack_state: Stack-state predicate, as ``PredicateFilter`` reads it.
+
+        Returns:
+            ``(picture, combined_score)`` pairs in descending score order,
+            limited to non-zero scores at or above ``threshold``.
         """
         if candidate_ids is not None and not candidate_ids:
             return []
         # Imported lazily to avoid a circular import (predicate_filter imports Picture).
         from pixlstash.utils.query.predicate_filter import PredicateFilter
 
-        # 1. Generate SBERT embedding for tag search (Text-to-Text)
-        query_embedding = text_to_embedding(query)
+        # 1. SBERT embedding for tag search (Text-to-Text)
         if query_embedding is None:
             logger.warning("Semantic search: Failed to generate SBERT embedding.")
             query_embedding_bytes = None
         else:
             query_embedding_bytes = query_embedding.tobytes()
 
-        # 2. Generate CLIP embedding for visual search (Text-to-Image)
-        if clip_text_to_embedding:
-            clip_query_embedding = clip_text_to_embedding(query)
-            clip_query_embedding_bytes = (
-                clip_query_embedding.tobytes()
-                if clip_query_embedding is not None
-                else None
-            )
-        else:
-            clip_query_embedding_bytes = None
+        # 2. CLIP embedding for visual search (Text-to-Image)
+        clip_query_embedding_bytes = (
+            clip_query_embedding.tobytes() if clip_query_embedding is not None else None
+        )
 
         logger.debug(
             f"Performing semantic search for query='{query}' and query_words={query_words} with fuzzy_weight={fuzzy_weight}, embedding_weight={embedding_weight}"
