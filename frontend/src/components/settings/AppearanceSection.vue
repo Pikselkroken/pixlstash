@@ -173,60 +173,69 @@ async function clearGuestSession() {
       />
     </SettingsSection>
 
+    <!-- Thumbnail layout + Sidebar Width share one row, side by side. The grid
+         flows by column, so each setting's title, desc and control line up
+         with its neighbour's. -->
     <SettingsSection>
-      <div class="thumb-layout-row">
-        <span class="thumb-layout-label"
-          >Thumbnail layout</span
-        >
-        <Segmented
-          :model-value="props.thumbnailMode ?? 'square'"
-          :options="thumbnailModeOptions"
-          variant="stacked"
-          aria-label="Thumbnail layout"
-          @update:model-value="(id) => emit('update:thumbnail-mode', id)"
-        >
-          <template #media="{ option }">
-            <span
-              v-if="option.id === 'square'"
-              class="tli tli--square"
-              aria-hidden="true"
-              ><i></i><i></i><i></i><i></i><i></i><i></i
-            ></span>
-            <span v-else class="tli tli--just" aria-hidden="true"
-              ><span class="tli-row"><i></i><i></i><i></i></span
-              ><span class="tli-row"><i></i><i></i></span
-            ></span>
-          </template>
-        </Segmented>
-        <p v-if="justifiedDisabled" class="thumb-layout-notice" role="status">
-          Available when thumbnails finish updating<template
-            v-if="thumbnailRegen.total"
+      <div class="pair-set">
+        <div class="pair-title">Thumbnail layout</div>
+        <div class="pair-desc">How pictures sit in the grid.</div>
+        <div class="pair-body">
+          <Segmented
+            class="pair-seg"
+            full
+            :model-value="props.thumbnailMode ?? 'square'"
+            :options="thumbnailModeOptions"
+            variant="stacked"
+            aria-label="Thumbnail layout"
+            @update:model-value="(id) => emit('update:thumbnail-mode', id)"
           >
-            ({{ thumbnailRegen.current.toLocaleString() }} of
-            {{ thumbnailRegen.total.toLocaleString() }})</template
-          >.
-        </p>
-      </div>
-    </SettingsSection>
+            <template #media="{ option }">
+              <span
+                v-if="option.id === 'square'"
+                class="tli tli--square"
+                aria-hidden="true"
+                ><i></i><i></i><i></i><i></i><i></i><i></i
+              ></span>
+              <span v-else class="tli tli--just" aria-hidden="true"
+                ><span class="tli-row"><i></i><i></i><i></i></span
+                ><span class="tli-row"><i></i><i></i></span
+              ></span>
+            </template>
+          </Segmented>
+          <p v-if="justifiedDisabled" class="thumb-layout-notice" role="status">
+            Available when thumbnails finish updating<template
+              v-if="thumbnailRegen.total"
+            >
+              ({{ thumbnailRegen.current.toLocaleString() }} of
+              {{ thumbnailRegen.total.toLocaleString() }})</template
+            >.
+          </p>
+        </div>
 
-    <SettingsSection
-      title="Sidebar Width"
-      desc="Show the sidebar at full width or as a narrow icon dock."
-    >
-      <Segmented
-        :model-value="sidebarStore.sidebarDocked ? 'dock' : 'full'"
-        :options="SIDEBAR_WIDTH_OPTIONS"
-        variant="stacked"
-        aria-label="Sidebar width"
-        @update:model-value="(id) => sidebarStore.setSidebarDocked(id === 'dock')"
-      >
-        <template #media="{ option }">
-          <span :class="['swi', `swi--${option.id}`]" aria-hidden="true">
-            <span class="swi-rail"></span>
-            <span class="swi-content"></span>
-          </span>
-        </template>
-      </Segmented>
+        <div class="pair-title">Sidebar Width</div>
+        <div class="pair-desc">Full width, or a narrow icon dock.</div>
+        <div class="pair-body">
+          <Segmented
+            class="pair-seg"
+            full
+            :model-value="sidebarStore.sidebarDocked ? 'dock' : 'full'"
+            :options="SIDEBAR_WIDTH_OPTIONS"
+            variant="stacked"
+            aria-label="Sidebar width"
+            @update:model-value="
+              (id) => sidebarStore.setSidebarDocked(id === 'dock')
+            "
+          >
+            <template #media="{ option }">
+              <span :class="['swi', `swi--${option.id}`]" aria-hidden="true">
+                <span class="swi-rail"></span>
+                <span class="swi-content"></span>
+              </span>
+            </template>
+          </Segmented>
+        </div>
+      </div>
     </SettingsSection>
 
     <div class="appearance-selects">
@@ -309,15 +318,36 @@ async function clearGuestSession() {
   margin-top: var(--space-2);
 }
 
-.thumb-layout-row {
+/* Two settings in one row: three rows (title, desc, control) flowed by column,
+   so the titles, descs and controls align across the pair. Title and desc
+   mirror SettingsSection's own. */
+.pair-set {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto auto;
+  grid-auto-flow: column;
+  column-gap: var(--space-7);
+  align-items: start;
+}
+.pair-title {
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-base);
+  margin-bottom: var(--space-2);
+}
+.pair-desc {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.65);
+  line-height: var(--leading-snug);
+  margin-bottom: var(--space-3);
+}
+.pair-body {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  min-width: 0;
 }
-.thumb-layout-label {
-  font-size: var(--text-base);
-  font-weight: var(--weight-medium);
-  color: rgb(var(--v-theme-on-surface));
+.pair-seg {
+  max-width: 320px;
 }
 /* Mini layout illustration: an even grid (square) vs uneven justified rows.
    currentColor, so it follows the option's ink (mirrors the Sidebar Width .swi). */
@@ -397,15 +427,14 @@ async function clearGuestSession() {
   flex-shrink: 0;
 }
 .swi--full .swi-rail {
-  width: 20px;
+  width: 28%;
 }
 .swi--dock .swi-rail {
-  width: 9px;
+  width: 11%;
 }
 .swi-content {
   flex: 1;
-  background: radial-gradient(currentColor 1px, transparent 1.5px) 0 0 / 10px
-    10px;
-  opacity: 0.35;
+  background: radial-gradient(currentColor 1px, transparent 1.5px) 0 0 / 7px 7px;
+  opacity: 0.45;
 }
 </style>
