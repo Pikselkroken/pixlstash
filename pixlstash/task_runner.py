@@ -15,6 +15,12 @@ from datetime import datetime, UTC
 from .event_types import EventType
 from .pixl_logging import get_logger
 from .tasks.base_task import BaseTask, QueueType, TaskPriority, TaskStatus
+from .tasks.gpu_call_task import GpuCallTask
+from .utils.device_utils import (
+    metal_present,
+    register_metal_thread,
+    unregister_metal_thread,
+)
 from .utils.vram_utils import empty_cuda_cache
 
 
@@ -24,6 +30,15 @@ logger = get_logger(__name__)
 class TaskCancelledError(RuntimeError):
     """Raised by ``TaskRunner.submit_and_wait`` when a task is cancelled
     before it had a chance to complete (e.g. the runner was stopped)."""
+
+
+class TaskRunnerNotRunningError(RuntimeError):
+    """The runner cannot take the work: it is stopped, was never started, or
+    its GPU worker thread has died.
+
+    A ``RuntimeError`` so callers that already catch one keep working; its own
+    type lets a route tell "no worker to run on" apart from a ``RuntimeError``
+    raised by the model itself."""
 
 
 class TaskRunner:
@@ -43,6 +58,17 @@ class TaskRunner:
     # an interactive ``submit_and_wait`` (face detection, character likeness)
     # queues behind this and has a 60 s budget. Two pauses is the worst case.
     VRAM_OOM_RETRY_PAUSE_S = 5.0
+
+    # How long ``stop()`` waits for each worker thread to exit.
+    STOP_JOIN_TIMEOUT_S = 60.0
+
+    # How long ``run_on_gpu_worker`` waits for a call by default.
+    GPU_CALL_TIMEOUT_S = 60.0
+
+    # How often a caller waiting in ``run_on_gpu_worker`` checks that the GPU
+    # worker is still alive, so a dead worker ends the wait within this long
+    # rather than at the timeout, or never when there is none.
+    GPU_CALL_LIVENESS_POLL_S = 0.25
 
     # Cache nvidia-smi results: (timestamp, value). A fresh query is only made
     # if the cached value is older than this many seconds, preventing all 4
@@ -74,10 +100,13 @@ class TaskRunner:
         )
         # GPU queue: serviced by exactly ONE dedicated thread so GPU tasks are
         # never concurrent.  Priority ordering ensures high-priority tasks
-        # (e.g. face extraction) always run before lower-priority ones.
+        # (e.g. face extraction) always run before lower-priority ones.  On
+        # Apple Metal that thread is also the only one allowed to touch the
+        # device; see ``run_on_gpu_worker``.
         self._gpu_queue: queue.PriorityQueue[tuple[int, int, BaseTask]] = (
             queue.PriorityQueue()
         )
+        self._gpu_worker_thread: Optional[threading.Thread] = None
         self._queue_seq = itertools.count()
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -571,6 +600,9 @@ class TaskRunner:
             name=f"{self._name}-gpu",
             daemon=True,
         )
+        # Recorded before it starts, so the first task it runs already sees it.
+        self._gpu_worker_thread = gpu_worker
+        register_metal_thread(gpu_worker)
         gpu_worker.start()
         self._threads.append(gpu_worker)
 
@@ -612,17 +644,38 @@ class TaskRunner:
             self._queue.put((TaskPriority.HIGH, next(self._queue_seq), _StopTask()))
         self._gpu_queue.put((TaskPriority.HIGH, next(self._queue_seq), _StopTask()))
         for t in self._threads:
-            t.join(timeout=60)
+            t.join(timeout=self.STOP_JOIN_TIMEOUT_S)
             if t.is_alive():
                 logger.warning(
                     "TaskRunner %s worker %s did not stop within timeout.",
                     self._name,
                     t.name,
                 )
+        gpu_worker = self._gpu_worker_thread
+        if gpu_worker is None:
+            return
+        if gpu_worker.is_alive():
+            # Still running a task that ignored the cancel. On Apple Metal it
+            # may be using the device, so it stays the one thread allowed to:
+            # clearing the registration would let the stopping thread unload
+            # models under it, and a new runner start a second Metal worker.
+            # The worker clears the registration itself when it exits (_run).
+            # Off Metal the join above has already warned.
+            if metal_present():
+                logger.warning(
+                    "TaskRunner %s GPU worker %s is still running after %.0fs; it "
+                    "stays registered as the Apple Metal thread until it exits.",
+                    self._name,
+                    gpu_worker.name,
+                    self.STOP_JOIN_TIMEOUT_S,
+                )
+            return
+        unregister_metal_thread(gpu_worker)
+        self._gpu_worker_thread = None
 
     def submit(self, task: BaseTask) -> str:
         if self._closed or self._stop.is_set():
-            raise RuntimeError(f"TaskRunner {self._name} is stopped.")
+            raise TaskRunnerNotRunningError(f"TaskRunner {self._name} is stopped.")
         try:
             task.on_queued()
         except Exception as exc:
@@ -680,6 +733,134 @@ class TaskRunner:
         if task.status == TaskStatus.FAILED:
             raise RuntimeError(f"Task {task.id} ({task.type}) failed: {task.error}")
         return task.result
+
+    def is_gpu_worker_thread(self) -> bool:
+        """True when called from this runner's GPU worker thread."""
+        worker = self._gpu_worker_thread
+        return worker is not None and threading.current_thread() is worker
+
+    def run_on_gpu_worker(
+        self,
+        fn: Callable[..., Any],
+        /,
+        *args: Any,
+        timeout_s: Optional[float] = GPU_CALL_TIMEOUT_S,
+        retry_vram_oom: bool = True,
+        collect_garbage_after: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        """Call ``fn(*args, **kwargs)`` on the GPU worker thread and return its result.
+
+        This is how code that is not a task gets its device work onto the one
+        thread that runs GPU tasks. On Apple Metal that is a correctness rule,
+        not a scheduling preference: torch crashes or hangs when two threads
+        use Metal at once (``docs/apple-metal-thread-safety.md``).
+
+        Called from the GPU worker itself - a GPU task using a helper that
+        routes through here - *fn* runs inline, because queueing it would wait
+        on the very thread doing the waiting. From any other thread *fn* is
+        wrapped in a :class:`~pixlstash.tasks.gpu_call_task.GpuCallTask` at
+        ``URGENT`` priority and this call blocks until it settles, so call it
+        off the event loop. A runner that is stopped, was never started, or
+        whose GPU worker has died raises rather than running *fn* on the
+        calling thread.
+
+        A call still queued when *timeout_s* runs out is cancelled and never
+        runs; one that has already started runs to the end with nobody waiting
+        for it. The wait also ends, within ``GPU_CALL_LIVENESS_POLL_S``, when
+        the worker dies with the call unfinished, so a call with no timeout
+        cannot wait for ever on a worker that is gone.
+
+        Args:
+            fn: The callable to run. Positional-only, so *kwargs* may carry a
+                parameter named ``fn``.
+            *args: Positional arguments for *fn*.
+            timeout_s: Seconds to wait for the call to finish, or ``None`` to
+                wait for as long as the worker is alive. Ignored inline.
+            retry_vram_oom: Whether a GPU out-of-memory error calls *fn* again
+                (see ``GpuCallTask``). Ignored inline.
+            collect_garbage_after: Whether the worker collects garbage after
+                *fn* returns, as it always does after *fn* raises (see
+                ``GpuCallTask``). Ignored inline.
+            **kwargs: Keyword arguments for *fn*.
+
+        Returns:
+            Whatever *fn* returned.
+
+        Raises:
+            TaskRunnerNotRunningError: The runner is stopped or was never
+                started, or its GPU worker died before or while the call
+                waited for it.
+            RuntimeError: The call settled neither completed, cancelled nor
+                with an exception, which ``GpuCallTask`` does not do.
+            TimeoutError: The call did not finish within *timeout_s* seconds.
+            TaskCancelledError: The call was cancelled before it ran, e.g.
+                because the runner stopped while it was queued.
+            BaseException: Whatever *fn* raised, unwrapped, after any GPU
+                out-of-memory retries (see ``GpuCallTask``). ``SystemExit``
+                and ``KeyboardInterrupt`` reach the caller too, and the worker
+                keeps running.
+        """
+        if self.is_gpu_worker_thread():
+            return fn(*args, **kwargs)
+        worker = self._gpu_worker_thread
+        if worker is None:
+            # Never started, or stopped: queued, the call would wait out the
+            # whole timeout for a worker that is not coming.
+            raise TaskRunnerNotRunningError(
+                f"TaskRunner {self._name} is stopped or was never started; "
+                "there is no GPU worker to run the call on."
+            )
+        if not worker.is_alive():
+            raise TaskRunnerNotRunningError(
+                f"TaskRunner {self._name} GPU worker {worker.name!r} is no longer "
+                "running; nothing will run the call."
+            )
+
+        task = GpuCallTask(
+            fn,
+            args,
+            kwargs,
+            retry_vram_oom=retry_vram_oom,
+            collect_garbage_after=collect_garbage_after,
+        )
+        self.submit(task)
+        deadline = None if timeout_s is None else time.monotonic() + timeout_s
+        while not task._done_event.is_set():
+            if deadline is None:
+                wait_s = self.GPU_CALL_LIVENESS_POLL_S
+            else:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    # Only takes effect if the worker has not started it yet:
+                    # ``run()`` checks the cancel event once, before the first
+                    # attempt.
+                    task.on_cancel()
+                    raise TimeoutError(
+                        f"Task {task.id} ({task.type}) did not complete within "
+                        f"{timeout_s}s"
+                    )
+                wait_s = min(remaining, self.GPU_CALL_LIVENESS_POLL_S)
+            if task._done_event.wait(timeout=wait_s):
+                break
+            if not worker.is_alive() and not task._done_event.is_set():
+                task.on_cancel()
+                raise TaskRunnerNotRunningError(
+                    f"TaskRunner {self._name} GPU worker {worker.name!r} stopped "
+                    f"running before task {task.id} ({task.type}) completed."
+                )
+        if task.status == TaskStatus.COMPLETED:
+            return task.result
+        if task.status == TaskStatus.CANCELLED:
+            raise TaskCancelledError(
+                f"Task {task.id} ({task.type}) was cancelled before completion"
+            )
+        if task.exception is not None:
+            raise task.exception
+        raise RuntimeError(
+            f"Task {task.id} ({task.type}) ended {task.status.value} without a "
+            f"result or an exception: {task.error}"
+        )
 
     def is_running(self) -> bool:
         return any(t.is_alive() for t in self._threads)
@@ -767,11 +948,14 @@ class TaskRunner:
             finally:
                 with self._active_task_lock:
                     self._active_tasks.pop(thread_ident, None)
-                # Always flush PyTorch's CUDA allocator cache after a GPU-queue
-                # task so that activation tensors (data, not models) are returned
-                # promptly.  CPU-queue tasks only flush when they held a VRAM
-                # reservation.
-                if task.queue_type == QueueType.GPU:
+                # Flush PyTorch's allocator cache after a GPU-queue task so that
+                # activation tensors (data, not models) are returned promptly,
+                # unless the task opts out (``FLUSH_DEVICE_CACHE_AFTER_RUN``).
+                # CPU-queue tasks only flush when they held a VRAM reservation.
+                if (
+                    task.queue_type == QueueType.GPU
+                    and task.FLUSH_DEVICE_CACHE_AFTER_RUN
+                ):
                     # Collect first: memory held in reference cycles is freed
                     # only by gc, so a flush before it returns none of it.
                     gc.collect()
@@ -828,6 +1012,15 @@ class TaskRunner:
                     elapsed_s,
                 )
                 self._fire_task_complete_callbacks(task, error)
+        current = threading.current_thread()
+        if current is self._gpu_worker_thread:
+            # Reached only by leaving the loop because the runner stopped: a
+            # worker killed by an exception the loop does not catch (one that
+            # is not an ``Exception``, raised outside ``BaseTask.run``'s
+            # handling of ``_run_task``, such as by a completion callback)
+            # stays registered, so Metal stays refused (``ensure_metal_thread``).
+            # This is what clears a worker that outlived ``stop()``'s join.
+            unregister_metal_thread(current)
         logger.debug("TaskRunner %s stopped.", self._name)
 
     def _fire_task_complete_callbacks(

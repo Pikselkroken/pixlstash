@@ -11,6 +11,7 @@ import threading
 
 import numpy as np
 
+from pixlstash.utils.device_utils import ensure_metal_thread
 from pixlstash.utils.model_utils import load_sentence_transformer
 from pixlstash.utils.vram_utils import is_device_error
 
@@ -76,7 +77,12 @@ class SBertService:
 
         Returns:
             List of numpy arrays, one per input text.
+
+        Raises:
+            RuntimeError: On Apple Metal, called from a thread other than the
+                task runner's GPU worker (``ensure_metal_thread``).
         """
+        ensure_metal_thread(self._device)
         self.ensure_ready()
         logger.debug(
             "Generating SBERT embeddings for %d texts on device: %s",

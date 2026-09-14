@@ -24,6 +24,7 @@ if TYPE_CHECKING:  # annotations only - see the function-local import note below
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
 from pixlstash.utils.device_utils import (
     empty_device_cache,
+    ensure_metal_thread,
     is_accelerator,
 )
 from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
@@ -831,9 +832,12 @@ class PixlStashTaggerService:
             diffuse/non-localisable activations.
 
         Raises:
-            RuntimeError: If the model is not loaded.
+            RuntimeError: If the model is not loaded, or on Apple Metal when
+                called from a thread other than the task runner's GPU worker
+                (``ensure_metal_thread``).
             UnknownAnomalyLabel: If ``label`` is not a label the model knows.
         """
+        ensure_metal_thread(self._device)
         if self._model is None or self._label_to_idx is None:
             raise RuntimeError("PixlStash tagger model is not loaded")
         label_idx = self.resolve_label_index(label)

@@ -5,6 +5,7 @@ host. The tests that need a real Apple Metal GPU are marked and skip without one
 """
 
 import contextlib
+import functools
 import gc
 import json
 import logging
@@ -13,6 +14,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import types
 import warnings
 import weakref
@@ -23,6 +25,10 @@ from PIL import Image
 
 import pixlstash.inference.model_lifecycle as model_lifecycle_module
 import pixlstash.startup_checks as sc
+import pixlstash.task_runner as task_runner_module
+from pixlstash.database import VaultDatabase
+from pixlstash.image_plugins.base import ImagePlugin
+from pixlstash.image_plugins.service import _run_plugin
 from pixlstash.inference.engine import InferenceEngine
 from pixlstash.inference.model_lifecycle import ModelLifecycleManager
 from pixlstash.inference.vram_budget import MAX_CONCURRENT_GPU_IMAGES, VramBudget
@@ -30,16 +36,26 @@ from pixlstash.inference.workflows.tagging import (
     _MAX_CONCURRENT_CPU as TAGGING_MAX_CONCURRENT_CPU,
     TaggingWorkflow,
 )
+from pixlstash.services import library_switch_service
 from pixlstash.startup_checks import StartupCheckOutcome, StartupChecks
+from pixlstash.tagger_plugins.pixlstash_tagger import PixlStashTaggerService
 from pixlstash.task_runner import (
+    TaskCancelledError,
     TaskRunner,
+    TaskRunnerNotRunningError,
 )
 from pixlstash.tasks.base_task import (
     BaseTask,
     QueueType,
     TaskInterruptedError,
+    TaskPriority,
     TaskStatus,
 )
+from pixlstash.tasks.face_extraction_task import FaceExtractionTask
+from pixlstash.tasks.gpu_call_task import GpuCallTask
+from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
+from pixlstash.tasks.tag_task import TagTask
+from pixlstash.utils import device_utils
 from pixlstash.utils.device_utils import (
     ACCELERATORS,
     HF_ASYNC_LOAD_ENV,
@@ -47,9 +63,13 @@ from pixlstash.utils.device_utils import (
     configure_metal_model_loading,
     detect_device,
     empty_device_cache,
+    ensure_metal_thread,
     is_accelerator,
+    register_metal_thread,
+    registered_metal_thread,
 )
 from pixlstash.utils.vram_utils import _DEVICE_FAULTS, is_device_error, is_vram_oom
+from pixlstash.vault import Vault
 
 # The MPS_* messages are what torch 2.13 raises on Apple Metal; sizes vary.
 MPS_UNIMPLEMENTED_OP_MESSAGE = (
@@ -122,6 +142,18 @@ def fake_torch(monkeypatch):
         return mod
 
     return apply
+
+
+@pytest.fixture(autouse=True)
+def no_metal_thread_from_elsewhere(monkeypatch):
+    """Start every test with no GPU worker registered as the Metal thread.
+
+    The registration is process-wide, and a runner another module left running
+    would make every ``mps`` service call here fail the thread guard. Tests
+    that need a registration start a runner of their own, and the value that
+    was there before is put back afterwards.
+    """
+    monkeypatch.setattr(device_utils, "_metal_thread", None)
 
 
 # --------------------------------------------------------------------------- #
@@ -2651,6 +2683,11 @@ def test_the_engine_configures_weight_loading_before_any_service(monkeypatch):
     assert order == ["configure", "service"]
 
 
+# --------------------------------------------------------------------------- #
+# Metal work runs on the GPU worker thread
+# --------------------------------------------------------------------------- #
+
+
 @pytest.fixture
 def gpu_runner():
     """A started ``TaskRunner``, stopped when the test ends.
@@ -2685,6 +2722,247 @@ class _ThreadProbeTask(BaseTask):
 
     def _run_task(self):
         return threading.current_thread()
+
+
+def _gpu_worker_of(runner):
+    """The GPU worker thread, found the way every GPU task finds it."""
+    return runner.submit_and_wait(_ThreadProbeTask(), timeout_s=10)
+
+
+def _hold_the_gpu_worker(runner):
+    """Occupy the GPU worker until the returned event is set.
+
+    Returns:
+        ``(release, holder)``: set *release*, then join *holder*.
+    """
+    release = threading.Event()
+    started = threading.Event()
+
+    def hold():
+        started.set()
+        release.wait(10)
+
+    holder = threading.Thread(
+        target=runner.run_on_gpu_worker, args=(hold,), kwargs={"timeout_s": 20}
+    )
+    holder.start()
+    assert started.wait(10), "the holding call never reached the GPU worker"
+    return release, holder
+
+
+class _WorkerEndingTask(BaseTask):
+    """A GPU task whose own ``run`` ends the GPU worker thread with ``SystemExit``.
+
+    ``BaseTask.run`` records a ``SystemExit`` from ``_run_task`` as the task's
+    failure, so this overrides ``run`` itself: the runner's loop catches only
+    ``Exception``, and one that is not, raised outside that handling, is how a
+    worker can still die.
+
+    Args:
+        release: When given, the task holds the worker until it is set.
+    """
+
+    def __init__(self, release=None):
+        super().__init__(task_type="WorkerEndingTask")
+        self.release = release
+        self.reached = threading.Event()
+
+    @property
+    def queue_type(self) -> QueueType:
+        return QueueType.GPU
+
+    def run(self, on_vram_oom=None):
+        self.reached.set()
+        if self.release is not None:
+            self.release.wait(10)
+        sys.exit()
+
+    def _run_task(self):
+        raise AssertionError("run() is overridden, so _run_task never runs")
+
+
+def _end_the_gpu_worker(runner):
+    """End *runner*'s GPU worker and return the thread, once it has exited."""
+    worker = _gpu_worker_of(runner)
+    runner.submit(_WorkerEndingTask())
+    worker.join(10)
+    assert not worker.is_alive(), "the GPU worker did not end"
+    return worker
+
+
+def test_a_call_runs_on_the_gpu_worker_thread(gpu_runner):
+    worker = _gpu_worker_of(gpu_runner)
+
+    ran_on, total = gpu_runner.run_on_gpu_worker(
+        lambda a, b=0: (threading.current_thread(), a + b), 2, b=3, timeout_s=10
+    )
+
+    assert ran_on is worker
+    assert ran_on is not threading.current_thread()
+    assert total == 5
+    assert gpu_runner.is_gpu_worker_thread() is False
+
+
+def test_a_call_made_on_the_gpu_worker_runs_inline(gpu_runner):
+    """A GPU task using a routed helper must not queue behind itself.
+
+    Queued, the inner call waits on the worker that is busy waiting for it,
+    and times out.
+    """
+    worker = _gpu_worker_of(gpu_runner)
+
+    def nested():
+        assert gpu_runner.is_gpu_worker_thread()
+        return gpu_runner.run_on_gpu_worker(threading.current_thread, timeout_s=2)
+
+    assert gpu_runner.run_on_gpu_worker(nested, timeout_s=10) is worker
+
+
+def test_an_exception_from_the_call_reaches_the_caller_unwrapped(gpu_runner):
+    """The caller gets what *fn* raised, not a RuntimeError carrying its text.
+
+    A route that called an encoder directly keeps its ``except`` clauses.
+    """
+
+    class _BadQuery(ValueError):
+        pass
+
+    error = _BadQuery("query is empty")
+
+    def encode():
+        raise error
+
+    with pytest.raises(_BadQuery) as raised:
+        gpu_runner.run_on_gpu_worker(encode, timeout_s=10)
+    assert raised.value is error
+
+
+def test_a_gpu_oom_in_a_call_is_retried(gpu_runner, monkeypatch):
+    monkeypatch.setattr(TaskRunner, "VRAM_OOM_RETRY_PAUSE_S", 0.0)
+    calls = []
+
+    def encode():
+        calls.append(threading.current_thread())
+        if len(calls) == 1:
+            raise RuntimeError(MPS_OOM_MESSAGE)
+        return "embedding"
+
+    assert gpu_runner.run_on_gpu_worker(encode, timeout_s=10) == "embedding"
+    assert len(calls) == 2
+
+
+def test_a_lasting_gpu_oom_reaches_the_caller_as_itself(gpu_runner, monkeypatch):
+    """After the last attempt the OOM is still classifiable by the caller."""
+    monkeypatch.setattr(TaskRunner, "VRAM_OOM_RETRY_PAUSE_S", 0.0)
+    oom = RuntimeError(MPS_OOM_MESSAGE)
+    calls = []
+
+    def encode():
+        calls.append(1)
+        raise oom
+
+    with pytest.raises(RuntimeError) as raised:
+        gpu_runner.run_on_gpu_worker(encode, timeout_s=10)
+
+    assert raised.value is oom
+    assert len(calls) == GpuCallTask.VRAM_OOM_ATTEMPTS == 3
+
+
+def test_a_call_that_opts_out_of_the_oom_retry_is_called_once(gpu_runner, monkeypatch):
+    monkeypatch.setattr(TaskRunner, "VRAM_OOM_RETRY_PAUSE_S", 0.0)
+    oom = RuntimeError(MPS_OOM_MESSAGE)
+    calls = []
+
+    def run():
+        calls.append(1)
+        raise oom
+
+    with pytest.raises(RuntimeError) as raised:
+        gpu_runner.run_on_gpu_worker(run, timeout_s=10, retry_vram_oom=False)
+
+    assert raised.value is oom
+    assert len(calls) == 1
+
+
+def test_a_stopped_runner_raises_instead_of_calling_inline():
+    runner = TaskRunner(name="gpu-call-stopped")
+    runner.start()
+    runner.stop()
+    ran = []
+
+    with pytest.raises(RuntimeError, match="stopped"):
+        runner.run_on_gpu_worker(ran.append, "ran", timeout_s=1)
+    assert ran == []
+
+
+def test_a_call_still_queued_when_the_runner_stops_is_cancelled(gpu_runner):
+    release, holder = _hold_the_gpu_worker(gpu_runner)
+    outcome = []
+
+    def queue_a_call():
+        try:
+            outcome.append(gpu_runner.run_on_gpu_worker(lambda: "ran", timeout_s=10))
+        except Exception as exc:
+            outcome.append(exc)
+
+    caller = threading.Thread(target=queue_a_call)
+    stopper = threading.Thread(target=gpu_runner.stop)
+    try:
+        caller.start()
+        deadline = time.monotonic() + 10
+        while gpu_runner._gpu_queue.qsize() == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        # stop() drains the queue before it joins the worker, so the queued
+        # call is settled while the worker is still held.
+        stopper.start()
+        caller.join(10)
+    finally:
+        release.set()
+        holder.join(10)
+        if stopper.ident is not None:
+            stopper.join(10)
+
+    assert len(outcome) == 1
+    assert isinstance(outcome[0], TaskCancelledError)
+
+
+def test_a_call_that_times_out_raises_and_never_runs(gpu_runner):
+    release, holder = _hold_the_gpu_worker(gpu_runner)
+    ran = []
+    try:
+        with pytest.raises(TimeoutError):
+            gpu_runner.run_on_gpu_worker(ran.append, "late", timeout_s=0.2)
+    finally:
+        release.set()
+        holder.join(10)
+
+    # Queued after the abandoned call, so its return means the worker got past it.
+    gpu_runner.run_on_gpu_worker(lambda: None, timeout_s=10)
+    assert ran == [], "a call its caller gave up on must not run later"
+
+
+@pytest.mark.parametrize("interrupt", [SystemExit(3), KeyboardInterrupt()])
+def test_a_call_that_raises_an_exit_reaches_the_caller_and_the_worker_runs_on(
+    gpu_runner, interrupt
+):
+    """A plugin's ``sys.exit()`` must not end the one thread GPU work runs on.
+
+    A ``KeyboardInterrupt`` raised on the worker is code raising it, never the
+    owner's Ctrl+C: only the main thread receives ``SIGINT``.
+    """
+    worker = _gpu_worker_of(gpu_runner)
+
+    def end_the_thread():
+        raise interrupt
+
+    with pytest.raises(type(interrupt)) as raised:
+        gpu_runner.run_on_gpu_worker(end_the_thread, timeout_s=10)
+
+    assert raised.value is interrupt
+    assert worker.is_alive(), "the GPU worker thread ended"
+    assert gpu_runner.run_on_gpu_worker(threading.current_thread, timeout_s=10) is (
+        worker
+    ), "the next call did not run on the same GPU worker"
 
 
 class _ExitingTask(BaseTask):
@@ -2758,3 +3036,1352 @@ def test_a_task_that_raises_an_exit_fails_and_its_worker_runs_on(
     assert task.id in logged[0]
     assert "ExitingTask" in logged[0]
     assert type(interrupt).__name__ in logged[0]
+
+
+def test_a_call_task_names_its_function_without_rendering_its_arguments():
+    """Naming the call must not touch what the call carries.
+
+    ``Vault._run_on_device_thread`` wraps every routed call in a
+    ``functools.partial``, and the task is built on the calling thread. A
+    ``repr`` of the bound arguments would run there, and a Metal tensor's
+    copies it to the CPU - the off-worker Metal use this task exists to keep
+    out.
+    """
+
+    class _UnrenderableTensor:
+        def __repr__(self):
+            raise AssertionError("the task rendered one of the call's arguments")
+
+    def encode_query(_tensor):
+        return None
+
+    task = GpuCallTask(functools.partial(encode_query, _UnrenderableTensor()))
+
+    assert task.params["fn"].endswith("encode_query")
+
+
+def test_a_call_task_is_never_held_by_the_vram_gate(monkeypatch):
+    """Nothing may park a call on its way to the worker or send it elsewhere.
+
+    ``TaskRunner._run`` skips the VRAM gate for GPU-queue tasks. Were the gate
+    consulted anyway, a call must still pass at once: the budget here is
+    exceeded and other work holds a reservation, so a task with any VRAM
+    estimate would wait for as long as the runner runs.
+    """
+    task = GpuCallTask(lambda: None)
+    assert task.queue_type == QueueType.GPU
+    assert task.priority == TaskPriority.URGENT
+    assert task.allow_cpu_spillover() is False
+
+    runner = TaskRunner(name="gpu-call-gate")
+    runner._max_vram_usage_mb = 1024
+    runner._vram_reserved_mb = 512
+    monkeypatch.setattr(
+        TaskRunner, "_get_process_vram_mb", classmethod(lambda cls: 4096)
+    )
+    reserved = []
+    gate = threading.Thread(
+        target=lambda: reserved.append(runner._wait_for_vram_budget(task)),
+        daemon=True,
+    )
+    gate.start()
+    gate.join(2)
+    held = gate.is_alive()
+    runner._stop.set()  # lets a gate that did hold the call give up
+    gate.join(2)
+
+    assert not held, "the VRAM gate held a GPU call back"
+    assert reserved == [0]
+
+
+def test_a_runner_that_was_never_started_raises_at_once():
+    """No worker is coming, so the call must not wait out its timeout first."""
+    runner = TaskRunner(name="gpu-call-unstarted")
+    ran = []
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="never started"):
+        runner.run_on_gpu_worker(ran.append, "ran", timeout_s=2)
+
+    assert time.monotonic() - started < 1.0
+    assert ran == []
+
+
+def test_a_call_task_skips_the_flush_an_ordinary_gpu_task_gets(gpu_runner, monkeypatch):
+    """The post-task cache flush is for batches, not for a query encode.
+
+    Each flush is counted once the worker has finished the task's ``finally``:
+    a call queued after it returns only once the worker has dequeued it, which
+    is after that ``finally`` ran. The calls used as barriers are call tasks
+    themselves, so they add nothing to the count.
+    """
+    flushes = []
+    monkeypatch.setattr(
+        task_runner_module,
+        "empty_cuda_cache",
+        lambda: flushes.append(threading.current_thread()) or False,
+    )
+
+    worker = _gpu_worker_of(gpu_runner)
+    gpu_runner.run_on_gpu_worker(lambda: None, timeout_s=10)
+    assert flushes == [worker], "an ordinary GPU task must still flush after it"
+
+    for _ in range(3):
+        gpu_runner.run_on_gpu_worker(lambda: None, timeout_s=10)
+    assert flushes == [worker], "a call task must not flush after it runs"
+
+
+class _CyclicGarbageTask(BaseTask):
+    """An ordinary GPU task that leaves a reference cycle behind as garbage."""
+
+    def __init__(self):
+        super().__init__(task_type="CyclicGarbageTask")
+        self.garbage_ref = None
+
+    @property
+    def queue_type(self) -> QueueType:
+        return QueueType.GPU
+
+    def _run_task(self):
+        garbage = _CyclicModel()
+        self.garbage_ref = weakref.ref(garbage)
+
+
+def test_the_runner_collects_a_gpu_tasks_garbage_before_flushing(
+    gpu_runner, monkeypatch
+):
+    """Tensors a task left in reference cycles are freed before the flush.
+
+    The call queued after the task returns once the worker has run the task's
+    ``finally``, where the collection and the flush are.
+    """
+    task = _CyclicGarbageTask()
+    alive_at_flush = []
+    monkeypatch.setattr(
+        task_runner_module,
+        "empty_cuda_cache",
+        lambda: alive_at_flush.append(task.garbage_ref() is not None) or False,
+    )
+
+    with _only_explicit_collections():
+        gpu_runner.submit_and_wait(task, timeout_s=10)
+        gpu_runner.run_on_gpu_worker(lambda: None, timeout_s=10)
+
+    assert alive_at_flush == [False], (
+        "the runner flushed the device cache while the task's garbage was alive"
+    )
+
+
+class _FreedOn:
+    """Stands in for a Metal tensor: records the thread that frees it."""
+
+    def __init__(self, freed_on):
+        self._freed_on = freed_on
+
+    def __del__(self):
+        self._freed_on.append(threading.current_thread())
+
+
+class _CyclicFreedOn(_FreedOn):
+    """A :class:`_FreedOn` in a reference cycle, as a loaded model often is."""
+
+    def __init__(self, freed_on):
+        super().__init__(freed_on)
+        self.self_reference = self
+
+
+def _fail_holding(held_type, freed_on):
+    held = held_type(freed_on)  # noqa: F841 - what the failed pass's frame holds
+    raise RuntimeError("the pass failed")
+
+
+def _fail_holding_under_a_wrapper(held_type, freed_on):
+    """Fail the way a plugin that reports failures as its own error does."""
+    try:
+        _fail_holding(held_type, freed_on)
+    except RuntimeError as exc:
+        raise ValueError("the plugin failed") from exc
+
+
+@pytest.mark.parametrize("held_type", [_FreedOn, _CyclicFreedOn])
+@pytest.mark.parametrize("fail", [_fail_holding, _fail_holding_under_a_wrapper])
+def test_what_a_failed_call_held_is_freed_on_the_gpu_worker(
+    gpu_runner, fail, held_type
+):
+    """The caller keeps the error, and would free its frames' tensors itself.
+
+    Freed before the caller wakes, so the error is still alive when this checks.
+    Automatic collection is off, so a cycle is freed only by the worker's own
+    collection.
+    """
+    worker = _gpu_worker_of(gpu_runner)
+    vault = _routing_vault(gpu_runner, "mps")
+    freed_on = []
+
+    with _only_explicit_collections():
+        with pytest.raises((RuntimeError, ValueError), match="failed") as raised:
+            vault.run_inference(fail, held_type, freed_on)
+        assert freed_on == [worker], (
+            f"freed on {freed_on} while the caller held {raised.value!r}"
+        )
+
+
+def _run_a_cyclic_model(freed_on):
+    model = _CyclicFreedOn(freed_on)  # noqa: F841 - garbage once this returns
+
+
+def test_a_long_calls_garbage_is_collected_on_the_gpu_worker(gpu_runner):
+    """A plugin run whose model sits in a reference cycle leaves it as garbage."""
+    worker = _gpu_worker_of(gpu_runner)
+    vault = _routing_vault(gpu_runner, "mps")
+    freed_on = []
+
+    with _only_explicit_collections():
+        vault.run_long_inference(_run_a_cyclic_model, freed_on)
+        assert freed_on == [worker]
+
+
+# --------------------------------------------------------------------------- #
+# The Metal thread guard
+# --------------------------------------------------------------------------- #
+
+
+def test_the_guard_refuses_metal_off_the_gpu_worker(gpu_runner):
+    worker = _gpu_worker_of(gpu_runner)
+    assert registered_metal_thread() is worker
+
+    for device in ("mps", "mps:0", types.SimpleNamespace(type="mps")):
+        with pytest.raises(RuntimeError) as raised:
+            ensure_metal_thread(device)
+        message = str(raised.value)
+        assert repr(threading.current_thread().name) in message
+        assert repr(worker.name) in message
+        assert "Vault.run_inference" in message
+
+
+def test_the_guard_allows_metal_on_the_gpu_worker(gpu_runner):
+    outcome = gpu_runner.run_on_gpu_worker(ensure_metal_thread, "mps", timeout_s=10)
+    assert outcome is None
+
+
+def test_the_guard_ignores_every_other_device(gpu_runner):
+    for device in ("cuda", "cuda:0", "cpu", None):
+        ensure_metal_thread(device)
+    # Positive control: the same thread, with the same runner, is refused Metal.
+    with pytest.raises(RuntimeError, match="Vault.run_inference"):
+        ensure_metal_thread("mps")
+
+
+def test_the_guard_is_silent_with_no_running_task_runner():
+    """The CLI tools and tests without a runner have no worker to race."""
+    ensure_metal_thread("mps")
+
+    runner = TaskRunner(name="guard-lifecycle")
+    runner.start()
+    try:
+        with pytest.raises(RuntimeError, match="Vault.run_inference"):
+            ensure_metal_thread("mps")
+    finally:
+        runner.stop()
+
+    assert registered_metal_thread() is None
+    ensure_metal_thread("mps")
+
+
+def test_a_stopping_runner_leaves_a_newer_registration_alone():
+    first = TaskRunner(name="guard-first")
+    second = TaskRunner(name="guard-second")
+    first.start()
+    try:
+        second.start()
+        try:
+            newer = second._gpu_worker_thread
+            assert registered_metal_thread() is newer
+            first.stop()
+            assert registered_metal_thread() is newer
+        finally:
+            second.stop()
+    finally:
+        first.stop()
+    assert registered_metal_thread() is None
+
+
+def test_metal_present_reads_the_torch_already_loaded(monkeypatch, fake_torch, caplog):
+    import builtins
+
+    # With no torch loaded it must not import one: an import would answer from
+    # the real torch, which on a Mac says Metal is there and elsewhere happens
+    # to agree with "no".
+    real_import = builtins.__import__
+    imported = []
+
+    def record_torch_imports(name, *args, **kwargs):
+        if name == "torch" or name.startswith("torch."):
+            imported.append(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.delitem(sys.modules, "torch", raising=False)
+    monkeypatch.setattr(builtins, "__import__", record_torch_imports)
+    assert device_utils.metal_present() is False
+    assert imported == []
+    monkeypatch.setattr(builtins, "__import__", real_import)
+
+    fake_torch(_fake_torch(mps=True))
+    assert device_utils.metal_present() is True
+
+    fake_torch(_fake_torch(mps_raises=RuntimeError("Metal is broken")))
+    with caplog.at_level(logging.WARNING):
+        assert device_utils.metal_present() is False
+    assert any("Metal is broken" in message for message in _device_warnings(caplog))
+
+
+@pytest.mark.parametrize("metal", [True, False])
+def test_a_replaced_gpu_worker_warns_about_metal_only_where_it_exists(
+    fake_torch, caplog, metal
+):
+    """Off Metal the registration guards nothing, so replacing it says nothing."""
+    fake_torch(_fake_torch(mps=metal))
+    release = threading.Event()
+    previous = threading.Thread(target=release.wait, args=(10,), name="old-gpu")
+    incoming = threading.Thread(target=lambda: None, name="new-gpu")
+    previous.start()
+    try:
+        with caplog.at_level(logging.WARNING):
+            register_metal_thread(previous)
+            register_metal_thread(incoming)
+    finally:
+        release.set()
+        previous.join(10)
+
+    assert registered_metal_thread() is incoming
+    replaced = [m for m in _device_warnings(caplog) if "replaces" in m]
+    assert len(replaced) == (1 if metal else 0), replaced
+
+
+class _NeverUnloaded:
+    """A service whose unload must not be reached."""
+
+    def __init__(self):
+        self.unloads = 0
+
+    def unload(self):
+        self.unloads += 1
+
+
+def _metal_entry_points(monkeypatch):
+    """``name -> (call, reached)`` for every entry point that carries the guard.
+
+    *call* uses the service on ``mps``; *reached* says whether it got past the
+    guard to its model, its load or its unloads. SBERT and CLIP start
+    unloaded, so a guard placed after their ``ensure_ready`` shows up as a
+    load; the tagger's model is present, since ``localize_anomaly`` refuses an
+    unloaded one rather than loading it.
+    """
+    from pixlstash.tagger_plugins import sbert as sbert_module
+
+    clip = _loaded_clip("mps", RuntimeError("unused"))
+    sbert = _loaded_sbert(monkeypatch, "mps", RuntimeError("unused"))
+    unloaded = _NeverUnloaded()
+    lifecycle = ModelLifecycleManager(device="mps")
+    tagger = PixlStashTaggerService.__new__(PixlStashTaggerService)
+    tagger._device = "mps"
+    tagger._model = object()
+    tagger._label_to_idx = {}
+    sbert_calls = []
+    sbert_model = sbert._model
+    real_sbert_encode = sbert_model.encode
+    sbert_model.encode = lambda texts, **kw: (
+        sbert_calls.append(texts) or real_sbert_encode(texts, **kw)
+    )
+    tokens = []
+    clip._tokenizer = lambda texts: tokens.append(texts) or _FakeTensor()
+    clip_model = clip._model
+    clip_parts = (clip._model, clip._preprocess, clip._tokenizer)
+    loads = []
+
+    def load_clip():
+        loads.append("clip")
+        clip._model, clip._preprocess, clip._tokenizer = clip_parts
+
+    clip._load = load_clip
+    clip.unload()
+    monkeypatch.setattr(
+        sbert_module,
+        "load_sentence_transformer",
+        lambda *a, **kw: loads.append("sbert") or sbert_model,
+    )
+    sbert.unload()
+    tagger_calls = []
+    tagger.resolve_label_index = lambda label: tagger_calls.append(label)
+    return {
+        "sbert.encode": (
+            lambda: sbert.encode(["a caption"]),
+            lambda: loads or sbert_calls,
+        ),
+        "clip.encode_text": (
+            lambda: clip.encode_text("a query"),
+            lambda: loads or tokens,
+        ),
+        "clip.encode_image_batch": (
+            lambda: clip.encode_image_batch([object()]),
+            lambda: loads or clip_model.calls,
+        ),
+        "clip.encode_image_crops": (
+            lambda: clip.encode_image_crops([object()]),
+            lambda: loads or clip_model.calls,
+        ),
+        "lifecycle.aggressive_unload": (
+            lambda: lifecycle.aggressive_unload(clip_service=unloaded),
+            lambda: unloaded.unloads,
+        ),
+        "lifecycle.safe_idle_unload": (
+            lambda: lifecycle.safe_idle_unload(clip_service=unloaded),
+            lambda: unloaded.unloads,
+        ),
+        "tagger.localize_anomaly": (
+            lambda: tagger.localize_anomaly(Image.new("RGB", (4, 4)), "hand"),
+            lambda: tagger_calls,
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "entry_point",
+    [
+        "sbert.encode",
+        "clip.encode_text",
+        "clip.encode_image_batch",
+        "clip.encode_image_crops",
+        "lifecycle.aggressive_unload",
+        "lifecycle.safe_idle_unload",
+        "tagger.localize_anomaly",
+    ],
+)
+def test_a_metal_entry_point_refuses_a_thread_that_is_not_the_gpu_worker(
+    entry_point, gpu_runner, fake_torch, monkeypatch
+):
+    """The guard fires before a model loads or runs, or anything is unloaded."""
+    fake_torch(_tensor_torch(cuda=False, mps=True))
+    call, reached = _metal_entry_points(monkeypatch)[entry_point]
+
+    with pytest.raises(RuntimeError, match="Vault.run_inference"):
+        call()
+    assert not reached(), f"{entry_point} used the model before refusing"
+
+    # Positive control: on the worker the guard lets it through to the model.
+    # What the fake model does next is not the point, so an error it raises
+    # is fine as long as it is not the guard's.
+    def on_the_worker():
+        try:
+            call()
+        except Exception as exc:
+            assert "Vault.run_inference" not in str(exc), exc
+
+    gpu_runner.run_on_gpu_worker(on_the_worker, timeout_s=10)
+    assert reached(), f"{entry_point} did not reach its model on the GPU worker"
+
+
+class _RecordingEngine:
+    """An engine carrying only the device the routing reads."""
+
+    def __init__(self, device):
+        self.device = device
+
+
+def _routing_vault(runner, device):
+    """A Vault carrying only what the routing reads: a runner and an engine.
+
+    Built without ``__init__``, which opens a database and plans work; the
+    methods under test are the real ones.
+    """
+    vault = Vault.__new__(Vault)
+    vault._task_runner = runner
+    vault._engine = _RecordingEngine(device)
+    return vault
+
+
+def test_run_inference_keeps_keyword_arguments_for_the_call(gpu_runner):
+    """A ``timeout_s`` meant for *fn* is not taken for the runner's own."""
+    vault = _routing_vault(gpu_runner, "mps")
+
+    assert vault.run_inference(lambda timeout_s: timeout_s, timeout_s=0.001) == 0.001
+
+
+class _BlockingUnloadEngine:
+    """An engine whose idle unload waits until the test lets it finish."""
+
+    def __init__(self, device):
+        self.device = device
+        self.release = threading.Event()
+        self.started = threading.Event()
+        self.finished = threading.Event()
+        self.thread = None
+
+    def aggressive_unload(self):
+        self.thread = threading.current_thread()
+        self.started.set()
+        self.release.wait(5)
+        self.finished.set()
+
+
+def _wait_until_the_worker_is_idle(runner):
+    """Wait for the worker to finish the ``finally`` of the task it last ran.
+
+    A waiter wakes when the task settles, slightly before the runner drops it
+    from its active set, and the idle unload skips itself while that set holds
+    a GPU task.
+    """
+    deadline = time.monotonic() + 10
+    while runner.has_active_gpu_tasks():
+        assert time.monotonic() < deadline, "the GPU worker never went idle"
+        time.sleep(0.01)
+
+
+def _idle_vault(runner, device):
+    vault = _routing_vault(runner, device)
+    vault._engine = _BlockingUnloadEngine(device)
+    vault._keep_models_in_memory = False
+    vault._last_aggressive_unload_at = 0.0
+    return vault
+
+
+def test_the_idle_unload_is_queued_to_the_gpu_worker_on_metal(gpu_runner):
+    """It frees models and flushes Metal, from a thread answering a poll."""
+    worker = _gpu_worker_of(gpu_runner)
+    _wait_until_the_worker_is_idle(gpu_runner)
+    vault = _idle_vault(gpu_runner, "mps")
+    engine = vault._engine
+
+    try:
+        vault._maybe_aggressive_unload({})
+        assert not engine.finished.is_set(), (
+            "the progress poll waited for the unload instead of queueing it"
+        )
+        assert engine.started.wait(10), "the queued unload never ran"
+    finally:
+        engine.release.set()
+    assert engine.finished.wait(10)
+    assert engine.thread is worker, f"the unload ran on {engine.thread.name}"
+    assert vault._last_aggressive_unload_at > 0.0
+
+
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
+def test_the_idle_unload_stays_inline_off_metal(gpu_runner, device):
+    vault = _idle_vault(gpu_runner, device)
+    engine = vault._engine
+    engine.release.set()
+
+    vault._maybe_aggressive_unload({})
+
+    assert engine.finished.is_set()
+    assert engine.thread is threading.current_thread()
+
+
+def test_the_idle_unload_is_not_run_inline_when_the_runner_is_stopped(caplog):
+    runner = TaskRunner(name="idle-unload-stopped")
+    runner.start()
+    runner.stop()
+    vault = _idle_vault(runner, "mps")
+    engine = vault._engine
+    engine.release.set()
+
+    with caplog.at_level(logging.WARNING):
+        vault._maybe_aggressive_unload({})
+
+    assert engine.thread is None, "the unload ran with no GPU worker to run it"
+    assert vault._last_aggressive_unload_at == 0.0
+    assert any("task runner is stopped" in r.getMessage() for r in caplog.records)
+
+
+# --------------------------------------------------------------------------- #
+# Background work that loaded or flushed off the GPU worker
+# --------------------------------------------------------------------------- #
+
+
+class _PreloadRecordingWorkflow:
+    def __init__(self, device):
+        self._engine = types.SimpleNamespace(device=device)
+        self.preloads = []
+
+    def ensure_active_plugin_ready(self, engine_override=None):
+        self.preloads.append(threading.current_thread())
+
+
+def test_a_tag_task_on_metal_leaves_its_model_load_to_the_gpu_worker():
+    workflow = _PreloadRecordingWorkflow("mps")
+    task = TagTask(database=None, tagging_workflow=workflow, pictures=[])
+
+    task.on_queued()
+    task.on_cancel()
+
+    assert workflow.preloads == []
+    assert task._model_preload_thread is None
+
+
+def test_a_tag_task_off_metal_still_preloads_its_model_on_queue():
+    """Positive control: the queue-time preload that keeps CUDA's worker busy."""
+    workflow = _PreloadRecordingWorkflow("cuda")
+    task = TagTask(database=None, tagging_workflow=workflow, pictures=[])
+
+    task.on_queued()
+    task.on_cancel()
+
+    assert len(workflow.preloads) == 1
+    assert workflow.preloads[0] is not threading.current_thread()
+
+
+def test_releasing_insightface_flushes_cuda_but_never_metal(fake_torch):
+    """The release also runs on the planner thread, from the finder's drain."""
+    flushed = []
+    torch = fake_torch(_fake_torch(cuda=True, mps=True))
+    torch.cuda.empty_cache = lambda: flushed.append("cuda")
+    torch.mps.empty_cache = lambda: flushed.append("mps")
+
+    FaceExtractionTask.release_detection_models()
+
+    assert flushed == ["cuda"]
+
+
+# --------------------------------------------------------------------------- #
+# A GPU worker that dies, or outlives its runner's stop
+# --------------------------------------------------------------------------- #
+
+
+# The worker thread dying of the SystemExit is the situation under test.
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_a_call_to_a_dead_gpu_worker_raises_at_once(gpu_runner):
+    """Queued, the call would wait out its whole timeout for nobody."""
+    worker = _end_the_gpu_worker(gpu_runner)
+    ran = []
+
+    started = time.monotonic()
+    with pytest.raises(TaskRunnerNotRunningError) as raised:
+        gpu_runner.run_on_gpu_worker(ran.append, "ran", timeout_s=5)
+
+    assert time.monotonic() - started < 1.0
+    assert repr(worker.name) in str(raised.value)
+    assert ran == []
+    assert gpu_runner._gpu_queue.qsize() == 0, (
+        "the call was queued for a worker that will never take it"
+    )
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_a_call_waiting_without_a_timeout_ends_when_the_worker_dies(gpu_runner):
+    """The call queued behind the task that kills the worker must not wait for ever."""
+    release = threading.Event()
+    ending = _WorkerEndingTask(release)
+    gpu_runner.submit(ending)
+    assert ending.reached.wait(10), "the ending task never reached the GPU worker"
+    ran = []
+    outcome = []
+
+    def wait_with_no_timeout():
+        try:
+            outcome.append(
+                gpu_runner.run_on_gpu_worker(ran.append, "ran", timeout_s=None)
+            )
+        except Exception as exc:
+            outcome.append(exc)
+
+    waiter = threading.Thread(target=wait_with_no_timeout, daemon=True)
+    waiter.start()
+    deadline = time.monotonic() + 10
+    while gpu_runner._gpu_queue.qsize() == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    release.set()
+    waiter.join(10)
+
+    assert not waiter.is_alive(), "the call kept waiting on a GPU worker that died"
+    assert len(outcome) == 1
+    assert isinstance(outcome[0], TaskRunnerNotRunningError), outcome
+    assert ran == []
+
+
+def test_the_guard_says_so_when_the_registered_worker_has_died():
+    """A dead worker still refuses Metal, rather than letting every thread in."""
+    dead = threading.Thread(target=lambda: None, name="dead-gpu-worker")
+    dead.start()
+    dead.join()
+    register_metal_thread(dead)
+
+    with pytest.raises(RuntimeError) as raised:
+        ensure_metal_thread("mps")
+
+    message = str(raised.value)
+    assert "no longer running" in message
+    assert repr("dead-gpu-worker") in message
+    ensure_metal_thread("cpu")
+
+
+def test_a_gpu_worker_that_outlives_stop_stays_the_metal_thread(monkeypatch):
+    """Clearing it would let the stopping thread unload models under it."""
+    monkeypatch.setattr(TaskRunner, "STOP_JOIN_TIMEOUT_S", 0.2)
+    runner = TaskRunner(name="guard-lingering")
+    runner.start()
+    worker = _gpu_worker_of(runner)
+    release, holder = _hold_the_gpu_worker(runner)
+    unloaded = _NeverUnloaded()
+    try:
+        runner.stop()
+
+        assert worker.is_alive()
+        assert registered_metal_thread() is worker
+        with pytest.raises(RuntimeError, match="Vault.run_inference"):
+            ModelLifecycleManager(device="mps").aggressive_unload(clip_service=unloaded)
+        assert unloaded.unloads == 0
+        with pytest.raises(TaskRunnerNotRunningError):
+            runner.run_on_gpu_worker(lambda: None, timeout_s=1)
+    finally:
+        release.set()
+        holder.join(10)
+    worker.join(10)
+
+    assert not worker.is_alive()
+    assert registered_metal_thread() is None, (
+        "the worker did not clear its registration when it finally exited"
+    )
+
+
+@pytest.mark.parametrize("metal", [True, False])
+def test_a_gpu_worker_that_outlives_stop_names_metal_only_where_it_exists(
+    monkeypatch, fake_torch, caplog, metal
+):
+    monkeypatch.setattr(TaskRunner, "STOP_JOIN_TIMEOUT_S", 0.2)
+    runner = TaskRunner(name="guard-lingering-log")
+    runner.start()
+    worker = _gpu_worker_of(runner)
+    release, holder = _hold_the_gpu_worker(runner)
+    fake_torch(_fake_torch(mps=metal))
+    try:
+        with caplog.at_level(logging.WARNING, logger=task_runner_module.__name__):
+            runner.stop()
+        assert worker.is_alive()
+    finally:
+        release.set()
+        holder.join(10)
+    worker.join(10)
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == task_runner_module.__name__
+    ]
+    assert any(
+        worker.name in m and "did not stop within timeout" in m for m in messages
+    ), messages
+    named = [m for m in messages if "Apple Metal" in m]
+    assert len(named) == (1 if metal else 0), named
+
+
+class _ClosableEngine:
+    """An engine that records the thread each close ran on."""
+
+    def __init__(self, device):
+        self.device = device
+        self.closes: list[threading.Thread] = []
+
+    def close(self):
+        self.closes.append(threading.current_thread())
+
+
+class _ClosableDb:
+    def __init__(self):
+        self.closes = 0
+        self.collected: list[bool] = []
+
+    def close(self, collect_garbage=True):
+        self.closes += 1
+        self.collected.append(collect_garbage)
+
+
+class _RecordingPart:
+    """A planner or watcher stand-in that counts its starts and stops.
+
+    Args:
+        start_error: Raised by ``start`` when given.
+        stop_needs_start: Makes ``stop`` raise when ``start`` never ran, as a
+            watchdog observer does.
+    """
+
+    def __init__(self, start_error=None, stop_needs_start=False):
+        self.start_error = start_error
+        self.stop_needs_start = stop_needs_start
+        self.starts = 0
+        self.stops = 0
+
+    def start(self):
+        if self.start_error is not None:
+            raise self.start_error
+        self.starts += 1
+
+    def stop(self):
+        self.stops += 1
+        if self.stop_needs_start and not self.starts:
+            raise RuntimeError("cannot join thread before it is started")
+
+
+def _lifecycle_vault(runner, device, *, started):
+    """A Vault carrying only what ``start`` and ``stop`` read.
+
+    Built without ``__init__``, which opens a database and plans work; the
+    methods under test are the real ones.
+    """
+    vault = Vault.__new__(Vault)
+    vault.image_root = "library-under-test"
+    vault._changed_tags_notify_lock = threading.Lock()
+    vault._changed_tags_flush_timer = None
+    vault._changed_tags_pending_ids = set()
+    vault._closed = False
+    vault._started = started
+    vault._disable_background_workers = False
+    vault._task_runner = runner
+    vault._work_planner = _RecordingPart()
+    vault._ref_folder_watcher = _RecordingPart(stop_needs_start=True)
+    vault._start_existing_folder_watches = lambda: None
+    vault._engine = _ClosableEngine(device)
+    vault.db = _ClosableDb()
+    return vault
+
+
+@pytest.fixture
+def model_releases(monkeypatch):
+    """Record the class-level model releases ``Vault.stop`` makes."""
+    releases = []
+    monkeypatch.setattr(
+        FaceExtractionTask,
+        "release_detection_models",
+        classmethod(lambda cls: releases.append("insightface")),
+    )
+    monkeypatch.setattr(
+        ImageEmbeddingTask,
+        "release_models",
+        classmethod(lambda cls: releases.append("aesthetic")),
+    )
+    monkeypatch.setattr(Vault, "_engines_left_loaded", [])
+    return releases
+
+
+@pytest.mark.parametrize("device", ["mps", "cpu"])
+def test_vault_stop_leaves_models_loaded_while_a_metal_worker_runs(
+    device, model_releases, monkeypatch, caplog
+):
+    """Unloading from the stopping thread would race the worker on Metal."""
+    monkeypatch.setattr(TaskRunner, "STOP_JOIN_TIMEOUT_S", 0.2)
+    runner = TaskRunner(name="vault-lingering")
+    runner.start()
+    worker = _gpu_worker_of(runner)
+    release, holder = _hold_the_gpu_worker(runner)
+    vault = _lifecycle_vault(runner, device, started=True)
+    vault._work_planner.start()
+    vault._ref_folder_watcher.start()
+    engine, db = vault._engine, vault.db
+    try:
+        with caplog.at_level(logging.WARNING):
+            vault.stop()
+        assert worker.is_alive()
+    finally:
+        release.set()
+        holder.join(10)
+        worker.join(10)
+
+    assert db.closes == 1
+    assert vault._engine is None
+    if device == "mps":
+        assert engine.closes == [], "the engine was closed beside a Metal worker"
+        assert db.collected == [False], "the close collected garbage beside the worker"
+        assert model_releases == []
+        assert Vault._engines_left_loaded == [(engine, worker)]
+        assert any(
+            worker.name in r.getMessage()
+            and "leaves its models loaded" in r.getMessage()
+            for r in caplog.records
+        )
+    else:
+        # Off Metal nothing changes: the close runs here, as it always did.
+        assert engine.closes == [threading.current_thread()]
+        assert db.collected == [True]
+        assert model_releases == ["insightface", "aesthetic"]
+        assert Vault._engines_left_loaded == []
+
+    # Positive control: once the worker has gone, a Metal engine closes here.
+    later = _lifecycle_vault(None, "mps", started=False)
+    later_engine, later_db = later._engine, later.db
+    later.stop()
+    assert later_engine.closes == [threading.current_thread()]
+    assert later_db.collected == [True]
+
+
+@pytest.mark.parametrize("collect", [True, False])
+def test_the_database_close_collects_garbage_only_when_asked(
+    tmp_path, monkeypatch, collect
+):
+    """``Vault.stop`` asks it not to while a GPU worker still runs on Metal."""
+    db = VaultDatabase(str(tmp_path / "vault.db"))
+    here = threading.current_thread()
+    collections = []
+    real_collect = gc.collect
+    monkeypatch.setattr(
+        gc,
+        "collect",
+        lambda *a, **k: (
+            collections.append(threading.current_thread()) or real_collect(*a, **k)
+        ),
+    )
+
+    db.close(collect_garbage=collect)
+
+    assert (here in collections) is collect
+
+
+def test_a_later_start_closes_an_engine_left_loaded_once_its_worker_exited(
+    model_releases,
+):
+    """Only on the new GPU worker, and only for an engine whose worker is gone.
+
+    An engine whose worker still runs stays held: closing it would use Metal
+    beside that worker.
+    """
+    exited = threading.Thread(target=lambda: None, name="exited-gpu-worker")
+    exited.start()
+    exited.join()
+    closable = _ClosableEngine("mps")
+    still_running = threading.Event()
+    running = threading.Thread(
+        target=still_running.wait, args=(10,), name="running-gpu-worker", daemon=True
+    )
+    running.start()
+    kept = _ClosableEngine("mps")
+    Vault._engines_left_loaded.extend([(closable, exited), (kept, running)])
+    runner = TaskRunner(name="vault-closes-left-engines")
+    vault = _lifecycle_vault(runner, "mps", started=False)
+    try:
+        vault.start()
+        worker = runner._gpu_worker_thread
+        # Queued after the close, so its return means the close has run.
+        runner.run_on_gpu_worker(lambda: None, timeout_s=10)
+
+        assert closable.closes == [worker]
+        assert kept.closes == []
+        assert Vault._engines_left_loaded == [(kept, running)]
+        assert model_releases == [], "class-level models this vault uses were released"
+    finally:
+        still_running.set()
+        running.join(10)
+        runner.stop()
+
+
+def test_a_left_engine_whose_close_was_cancelled_is_still_held(model_releases):
+    """Dropped when the close was queued, the engine would be freed by whoever
+    drained the queue, with its models still on Metal."""
+    exited = threading.Thread(target=lambda: None, name="exited-gpu-worker")
+    exited.start()
+    exited.join()
+    engine = _ClosableEngine("mps")
+    Vault._engines_left_loaded.append((engine, exited))
+    runner = TaskRunner(name="vault-left-engine-cancelled")
+    holding = threading.Event()
+    release = threading.Event()
+
+    def hold():
+        holding.set()
+        release.wait(10)
+
+    # Queued before the runner starts and ahead of the close, so the worker is
+    # busy with it when the close is queued.
+    runner.submit(GpuCallTask(hold))
+    vault = _lifecycle_vault(runner, "mps", started=False)
+    try:
+        vault.start()
+        assert holding.wait(10), "the holding call never reached the GPU worker"
+        assert runner.cancel_pending_tasks() == 1
+        release.set()
+        runner.run_on_gpu_worker(lambda: None, timeout_s=10)
+
+        assert engine.closes == []
+        assert Vault._engines_left_loaded == [(engine, exited)]
+    finally:
+        release.set()
+        runner.stop()
+
+
+class _FailingCloseEngine(_ClosableEngine):
+    def close(self):
+        super().close()
+        raise RuntimeError("the engine would not close")
+
+
+def test_vault_stop_closes_the_database_even_when_the_engine_close_fails(
+    model_releases,
+):
+    vault = _lifecycle_vault(None, "cpu", started=False)
+    vault._engine = _FailingCloseEngine("cpu")
+    db = vault.db
+
+    with pytest.raises(RuntimeError, match="would not close"):
+        vault.stop()
+
+    assert db.closes == 1
+    assert vault.db is None
+
+
+def test_a_vault_on_metal_will_not_start_beside_a_gpu_worker_still_running(
+    model_releases, monkeypatch, fake_torch
+):
+    """Two GPU workers would use Metal at once; after the wait it refuses."""
+    fake_torch(_fake_torch(mps=True))
+    monkeypatch.setattr(Vault, "PREVIOUS_METAL_WORKER_WAIT_S", 0.2)
+    stuck = threading.Event()
+    previous = threading.Thread(
+        target=stuck.wait, args=(10,), name="earlier-runner-gpu", daemon=True
+    )
+    previous.start()
+    register_metal_thread(previous)
+    runner = TaskRunner(name="vault-refused")
+    vault = _lifecycle_vault(runner, "mps", started=False)
+    engine, db = vault._engine, vault.db
+    try:
+        with pytest.raises(RuntimeError, match="earlier-runner-gpu"):
+            vault.start()
+
+        assert not runner.is_running(), "a second GPU worker was started"
+        assert registered_metal_thread() is previous
+        assert vault._work_planner.starts == 0
+        # The failed start closes the vault, still without unloading beside it.
+        assert db.closes == 1
+        assert engine.closes == []
+    finally:
+        stuck.set()
+        previous.join(10)
+        runner.stop()
+
+
+def test_a_vault_on_metal_starts_once_the_previous_gpu_worker_exits(
+    monkeypatch, fake_torch
+):
+    fake_torch(_fake_torch(mps=True))
+    monkeypatch.setattr(Vault, "PREVIOUS_METAL_WORKER_WAIT_S", 10.0)
+    previous = threading.Thread(
+        target=time.sleep, args=(0.3,), name="earlier-runner-gpu", daemon=True
+    )
+    previous.start()
+    register_metal_thread(previous)
+    runner = TaskRunner(name="vault-after-wait")
+    vault = _lifecycle_vault(runner, "mps", started=False)
+    try:
+        vault.start()
+
+        assert not previous.is_alive()
+        assert runner.is_running()
+        assert registered_metal_thread() is runner._gpu_worker_thread
+        assert vault._started is True
+    finally:
+        runner.stop()
+
+
+def test_a_vault_off_metal_does_not_wait_for_an_earlier_gpu_worker(
+    monkeypatch, fake_torch
+):
+    """A host without Metal starts as it always did."""
+    fake_torch(_fake_torch(cuda=True, mps=False))
+    monkeypatch.setattr(Vault, "PREVIOUS_METAL_WORKER_WAIT_S", 10.0)
+    stuck = threading.Event()
+    previous = threading.Thread(
+        target=stuck.wait, args=(10,), name="earlier-runner-gpu", daemon=True
+    )
+    previous.start()
+    register_metal_thread(previous)
+    runner = TaskRunner(name="vault-cuda")
+    vault = _lifecycle_vault(runner, "cuda", started=False)
+    try:
+        started = time.monotonic()
+        vault.start()
+
+        assert time.monotonic() - started < 2.0
+        assert runner.is_running()
+    finally:
+        runner.stop()
+        stuck.set()
+        previous.join(10)
+
+
+@pytest.mark.parametrize("engine_device", [None, "cpu"])
+def test_a_vault_waits_for_an_earlier_gpu_worker_wherever_metal_exists(
+    model_releases, monkeypatch, fake_torch, engine_device
+):
+    """Not only a vault whose engine is on Metal.
+
+    An engine whose build failed can be built later, and an image plugin run
+    before it exists uses Metal on its own; a Mac forced onto the CPU still has
+    Metal for a plugin to reach.
+    """
+    fake_torch(_fake_torch(mps=True))
+    monkeypatch.setattr(Vault, "PREVIOUS_METAL_WORKER_WAIT_S", 0.2)
+    stuck = threading.Event()
+    previous = threading.Thread(
+        target=stuck.wait, args=(10,), name="earlier-runner-gpu", daemon=True
+    )
+    previous.start()
+    register_metal_thread(previous)
+    runner = TaskRunner(name="vault-no-metal-engine")
+    vault = _lifecycle_vault(runner, "cpu", started=False)
+    if engine_device is None:
+        vault._engine = None
+    try:
+        with pytest.raises(RuntimeError, match="earlier-runner-gpu"):
+            vault.start()
+
+        assert not runner.is_running(), "a second GPU worker was started"
+        assert registered_metal_thread() is previous
+    finally:
+        stuck.set()
+        previous.join(10)
+        runner.stop()
+
+
+def test_a_library_switch_waits_for_an_earlier_gpu_worker_before_building_the_engine():
+    """Building the engine reads Metal's working set beside that worker."""
+    calls = []
+
+    class _Vault:
+        def wait_for_previous_metal_worker(self):
+            calls.append("wait")
+
+        def ensure_ready(self):
+            calls.append("build")
+
+        def start(self):
+            calls.append("start")
+
+    library_switch_service._bring_up(_Vault(), "incoming")
+
+    assert calls == ["wait", "build", "start"]
+
+    class _StuckVault(_Vault):
+        def wait_for_previous_metal_worker(self):
+            calls.append("wait")
+            raise RuntimeError("GPU worker 'earlier-runner-gpu' is still running")
+
+    calls.clear()
+    with pytest.raises(RuntimeError, match="earlier-runner-gpu"):
+        library_switch_service._bring_up(_StuckVault(), "incoming")
+    assert calls == ["wait"], "the engine was built beside the earlier worker"
+
+
+def test_a_vault_that_fails_to_start_stops_its_runner_and_closes_its_database(
+    model_releases, caplog
+):
+    """Left running, the runner keeps its worker registered and the close trips
+    the Metal guard before the database is reached."""
+    runner = TaskRunner(name="vault-failed-start")
+    vault = _lifecycle_vault(runner, "mps", started=False)
+    planner = vault._work_planner
+    watcher = _RecordingPart(
+        start_error=RuntimeError("watcher would not start"), stop_needs_start=True
+    )
+    vault._ref_folder_watcher = watcher
+    engine, db = vault._engine, vault.db
+    try:
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(RuntimeError, match="watcher would not start"):
+                vault.start()
+
+        assert not runner.is_running(), "the task runner was left running"
+        assert registered_metal_thread() is None
+        assert planner.stops == 1, "the work planner was left running"
+        assert watcher.stops == 0, "a watcher that never started was stopped"
+        assert db.closes == 1
+        assert vault.db is None
+        assert engine.closes == [threading.current_thread()]
+        assert vault._started is False
+        assert any("failed to start" in r.getMessage() for r in caplog.records)
+    finally:
+        runner.stop()
+
+
+# --------------------------------------------------------------------------- #
+# Image plugins run on the GPU worker on Metal
+# --------------------------------------------------------------------------- #
+
+
+class _ThreadProbePlugin(ImagePlugin):
+    """Records the thread ``run`` and ``run_video`` ran on, and reports once.
+
+    Each takes *delay_s*.
+    """
+
+    name = "thread_probe"
+    supports_videos = True
+
+    def __init__(self, delay_s=0.0):
+        self.delay_s = delay_s
+        self.threads: dict[str, threading.Thread] = {}
+
+    def parameter_schema(self):
+        return []
+
+    def run(
+        self,
+        images,
+        parameters=None,
+        progress_callback=None,
+        error_callback=None,
+        captions=None,
+    ):
+        self.threads["run"] = threading.current_thread()
+        time.sleep(self.delay_s)
+        self.report_progress(progress_callback, current=1, total=1, message="probed")
+        self.report_error(error_callback, index=0, message="probe error")
+        return [image.copy() for image in images]
+
+    def run_video(
+        self, source_path, parameters=None, progress_callback=None, error_callback=None
+    ):
+        self.threads["run_video"] = threading.current_thread()
+        time.sleep(self.delay_s)
+        return b"video", ".mp4"
+
+
+def _run_probe_plugin(vault, plugin):
+    """Run *plugin* over one still and one video; return what the callbacks saw."""
+    image = Image.new("RGB", (4, 4))
+    loaded = [
+        (None, image, "PNG", "still.png"),
+        (None, image, "MP4", "clip.mp4"),
+    ]
+    reported = []
+    outputs = _run_plugin(
+        types.SimpleNamespace(vault=vault),
+        plugin,
+        loaded,
+        {},
+        ["", ""],
+        lambda payload: reported.append(("progress", threading.current_thread())),
+        lambda payload: reported.append(("error", threading.current_thread())),
+    )
+    assert len(outputs) == 2
+    assert outputs[1] == (b"video", ".mp4")
+    return reported
+
+
+def test_an_image_plugin_runs_on_the_gpu_worker_on_metal(gpu_runner):
+    """An upscaler built on torch would otherwise use Metal off the worker."""
+    worker = _gpu_worker_of(gpu_runner)
+    plugin = _ThreadProbePlugin()
+
+    reported = _run_probe_plugin(_routing_vault(gpu_runner, "mps"), plugin)
+
+    assert plugin.threads == {"run": worker, "run_video": worker}
+    assert reported == [("progress", worker), ("error", worker)]
+
+
+@pytest.mark.parametrize("metal", [True, False])
+def test_an_image_plugin_with_no_engine_runs_on_the_gpu_worker_where_metal_exists(
+    gpu_runner, fake_torch, metal
+):
+    """A vault whose engine build failed has no device to read.
+
+    The plugin picks its own device, Metal on a Mac, so the plugin has to
+    reach the worker there; a host without Metal keeps it inline.
+    """
+    fake_torch(_fake_torch(mps=metal))
+    worker = _gpu_worker_of(gpu_runner)
+    vault = _routing_vault(gpu_runner, "mps")
+    vault._engine = None
+    plugin = _ThreadProbePlugin()
+
+    _run_probe_plugin(vault, plugin)
+
+    expected = worker if metal else threading.current_thread()
+    assert plugin.threads == {"run": expected, "run_video": expected}
+
+
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
+def test_an_image_plugin_stays_on_the_calling_thread_off_metal(gpu_runner, device):
+    plugin = _ThreadProbePlugin()
+    here = threading.current_thread()
+
+    reported = _run_probe_plugin(_routing_vault(gpu_runner, device), plugin)
+
+    assert plugin.threads == {"run": here, "run_video": here}
+    assert reported == [("progress", here), ("error", here)]
+
+
+class _OutOfMemoryPlugin(_ThreadProbePlugin):
+    """Reports progress, then runs out of GPU memory, on every run of either kind."""
+
+    name = "out_of_memory"
+
+    def __init__(self):
+        super().__init__()
+        self.runs = 0
+
+    def run(
+        self,
+        images,
+        parameters=None,
+        progress_callback=None,
+        error_callback=None,
+        captions=None,
+    ):
+        self.runs += 1
+        self.report_progress(progress_callback, current=1, total=2, message="half")
+        raise RuntimeError(MPS_OOM_MESSAGE)
+
+    def run_video(
+        self, source_path, parameters=None, progress_callback=None, error_callback=None
+    ):
+        return self.run([source_path], parameters, progress_callback, error_callback)
+
+
+#: One input of each kind the plugin service routes separately.
+_PLUGIN_INPUTS = [
+    pytest.param(("PNG", "still.png"), id="still"),
+    pytest.param(("MP4", "clip.mp4"), id="video"),
+]
+
+
+@pytest.mark.parametrize("source", _PLUGIN_INPUTS)
+def test_an_image_plugin_run_is_not_retried_on_a_gpu_oom(
+    gpu_runner, monkeypatch, source
+):
+    """A retry would run the whole plugin again and report its progress twice."""
+    monkeypatch.setattr(TaskRunner, "VRAM_OOM_RETRY_PAUSE_S", 0.0)
+    plugin = _OutOfMemoryPlugin()
+    reported = []
+
+    with pytest.raises(RuntimeError, match="MPS backend out of memory"):
+        _run_plugin(
+            types.SimpleNamespace(vault=_routing_vault(gpu_runner, "mps")),
+            plugin,
+            [(None, Image.new("RGB", (4, 4)), *source)],
+            {},
+            [""],
+            reported.append,
+            reported.append,
+        )
+
+    assert plugin.runs == 1, f"the plugin ran {plugin.runs} times"
+    assert len(reported) == 1
+
+
+def test_an_image_plugin_run_is_not_cut_off_by_the_call_timeout(
+    gpu_runner, monkeypatch
+):
+    """A plugin over many pictures outlasts the timeout a query encode gets.
+
+    The still and the video each take longer than the timeout, so either call
+    routed with one fails here.
+    """
+    monkeypatch.setattr(TaskRunner, "GPU_CALL_TIMEOUT_S", 0.2)
+    vault = _routing_vault(gpu_runner, "mps")
+    # Positive control: the same wait through run_inference does time out.
+    with pytest.raises(TimeoutError):
+        vault.run_inference(time.sleep, 0.6)
+    gpu_runner.run_on_gpu_worker(lambda: None, timeout_s=10)
+    plugin = _ThreadProbePlugin(delay_s=0.6)
+
+    reported = _run_probe_plugin(vault, plugin)
+
+    assert set(plugin.threads) == {"run", "run_video"}
+    assert [kind for kind, _thread in reported] == ["progress", "error"]

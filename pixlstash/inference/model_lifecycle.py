@@ -1,4 +1,4 @@
-"""Model lifecycle management: load ordering, idle unload, CUDA cleanup."""
+"""Model lifecycle management: load ordering, idle unload, device cleanup."""
 
 from __future__ import annotations
 
@@ -6,7 +6,11 @@ import gc
 import threading
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.device_utils import empty_device_cache, is_metal
+from pixlstash.utils.device_utils import (
+    empty_device_cache,
+    ensure_metal_thread,
+    is_metal,
+)
 from pixlstash.utils.model_utils import trim_process_memory
 
 logger = get_logger(__name__)
@@ -23,7 +27,9 @@ class ModelLifecycleManager:
     The key policy encoded here is that Florence-2 stays resident across
     ``safe_idle_unload`` because its reload is expensive and fragile.
         CLIP, WD14, SBERT, and the PixlStash tagger are released on idle.
-        device: Inference device (``"cuda"`` or ``"cpu"``).
+        device: Inference device (``"cuda"``, ``"mps"`` or ``"cpu"``). On
+            ``mps`` it also decides that an unload must run on the GPU worker
+            (``ensure_metal_thread``).
     """
 
     def __init__(self, device: str) -> None:
@@ -86,7 +92,13 @@ class ModelLifecycleManager:
             sbert_service: Optional :class:`SBertService` to unload.
             pixlstash_tagger_service: Optional :class:`PixlStashTaggerService` to unload.
             florence_service: Optional :class:`Florence2Service` to unload.
+
+        Raises:
+            RuntimeError: On Apple Metal, called from a thread other than the
+                task runner's GPU worker (``ensure_metal_thread``), before
+                anything is unloaded.
         """
+        ensure_metal_thread(self._device)
         logger.warning("ModelLifecycleManager.aggressive_unload() called.")
         try:
             if clip_service is not None:
@@ -128,7 +140,13 @@ class ModelLifecycleManager:
             wd14_service: Optional :class:`WD14Service` to unload.
             sbert_service: Optional :class:`SBertService` to unload.
             pixlstash_tagger_service: Optional :class:`PixlStashTaggerService` to unload.
+
+        Raises:
+            RuntimeError: On Apple Metal, called from a thread other than the
+                task runner's GPU worker (``ensure_metal_thread``), before
+                anything is unloaded.
         """
+        ensure_metal_thread(self._device)
         logger.warning(
             "ModelLifecycleManager.safe_idle_unload() called, releasing non-captioning models."
         )

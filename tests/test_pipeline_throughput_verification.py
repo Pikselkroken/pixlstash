@@ -463,16 +463,24 @@ def test_the_idle_sweep_releases_the_models_only_when_progress_is_polled(env):
         assert tagger.is_loaded(), f"{active} was torn down on drain"
         assert vault._engine.clip_service.is_loaded()
 
+        # On Apple Metal the poll queues the sweep to the GPU worker instead of
+        # running it; a call queued behind it returns once it has run. On CUDA
+        # and the CPU the sweep already ran inline and this returns at once.
+        def wait_for_a_queued_sweep():
+            vault._task_runner.run_on_gpu_worker(lambda: None, timeout_s=60)
+
         # Rate-limited from the last sweep, not timed from idleness: a poll
         # inside the interval is a no-op even though every worker is idle.
         vault._last_aggressive_unload_at = time.time()
         vault.get_worker_progress()
+        wait_for_a_queued_sweep()
         assert tagger.is_loaded()
 
         vault._last_aggressive_unload_at = (
             time.time() - vault.AGGRESSIVE_UNLOAD_INTERVAL - 1
         )
         vault.get_worker_progress()
+        wait_for_a_queued_sweep()
         assert not tagger.is_loaded(), f"{active} survived the idle sweep"
         assert not vault._engine.clip_service.is_loaded()
         assert FaceExtractionTask._global_insightface_app is None

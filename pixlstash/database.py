@@ -1137,9 +1137,15 @@ class VaultDatabase:
     def is_open(self) -> bool:
         return not self._closed and self._engine is not None
 
-    def close(self):
+    def close(self, collect_garbage: bool = True):
         """
         Cleanly close the database engine and stop the worker thread.
+
+        Args:
+            collect_garbage: Whether to run ``gc.collect()`` once closed.
+                ``Vault.stop`` passes ``False`` while a GPU worker it could not
+                stop still runs on Apple Metal: a collection here would free
+                that worker's garbage, Metal tensors included, on this thread.
         """
         import gc
 
@@ -1198,7 +1204,8 @@ class VaultDatabase:
                     )
                 self._location_guard = None
 
-        gc.collect()
+        if collect_garbage:
+            gc.collect()
         logger.info("VaultDatabase.close called, resources released.")
 
     # --- Queued API ---

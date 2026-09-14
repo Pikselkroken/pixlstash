@@ -553,6 +553,93 @@ def _set_source_picture_ids_on_new_outputs(
     server.vault.db.run_task(update)
 
 
+def _run_plugin(
+    server,
+    plugin: ImagePlugin,
+    loaded: list[tuple[Picture, Image.Image, str, str]],
+    params: dict[str, Any],
+    captions: list[str],
+    progress_cb,
+    error_cb,
+) -> list[Any]:
+    """Run *plugin* over the loaded inputs and return one output per input.
+
+    Videos go to ``run_video`` when the plugin overrides it; everything else,
+    including a video frame for a plugin that does not, goes to one ``run``
+    call.
+
+    Both calls go through ``Vault.run_long_inference``. Nothing in the plugin
+    API says whether a plugin uses the GPU, and an upscaler built on torch
+    would use Apple Metal from this thread while the GPU worker runs models,
+    which crashes torch (``docs/apple-metal-thread-safety.md``). So with the
+    engine on Metal, or with no engine on a Mac with Metal, every plugin runs
+    on the GPU worker, a PIL-only filter included, behind the GPU task already
+    running; on CUDA and the CPU it runs here. *progress_cb* and *error_cb*
+    are therefore called on the GPU worker on Metal; they publish through
+    ``Vault.notify``, which any thread may call, and append to lists nobody
+    reads until the plugin returns. There is no timeout: the run
+    was started by the user, reports its own progress, and can outlast any
+    fixed limit. Nor is a GPU out-of-memory error retried: a retry would run
+    the plugin again from the start and report its progress and errors a
+    second time.
+
+    Args:
+        server: Application server; its vault routes the calls.
+        plugin: The plugin to run.
+        loaded: ``(picture, image, source format, source path)`` per input.
+        params: Parameter values for the plugin.
+        captions: One caption per entry in *loaded*.
+        progress_cb: Progress callback handed to the plugin.
+        error_cb: Error callback handed to the plugin.
+
+    Returns:
+        One output per entry in *loaded*, in order; ``None`` where the plugin
+        produced nothing.
+
+    Raises:
+        ValueError: ``run`` returned a different number of images than it was
+            given.
+    """
+    outputs: list[Any] = [None] * len(loaded)
+    image_indices: list[int] = []
+    image_inputs: list[Image.Image] = []
+
+    for idx, (_pic, pil_image, source_format, source_path) in enumerate(loaded):
+        if source_format in _VIDEO_FORMATS and plugin.supports_videos:
+            if type(plugin).run_video is not ImagePlugin.run_video:
+                outputs[idx] = server.vault.run_long_inference(
+                    plugin.run_video,
+                    source_path,
+                    parameters=params,
+                    progress_callback=progress_cb,
+                    error_callback=error_cb,
+                )
+            else:
+                image_indices.append(idx)
+                image_inputs.append(pil_image)
+        else:
+            image_indices.append(idx)
+            image_inputs.append(pil_image)
+
+    if image_inputs:
+        input_captions = [captions[i] for i in image_indices]
+        image_outputs = server.vault.run_long_inference(
+            plugin.run,
+            image_inputs,
+            parameters=params,
+            progress_callback=progress_cb,
+            error_callback=error_cb,
+            captions=input_captions,
+        )
+        if len(image_outputs) != len(image_inputs):
+            raise ValueError(
+                f"Plugin '{plugin.name}' returned {len(image_outputs)} images for {len(image_inputs)} inputs"
+            )
+        for out_idx, loaded_idx in enumerate(image_indices):
+            outputs[loaded_idx] = image_outputs[out_idx]
+    return outputs
+
+
 def apply_plugin_to_pictures(
     server,
     plugin: ImagePlugin,
@@ -587,41 +674,9 @@ def apply_plugin_to_pictures(
         if error_reporter is not None:
             error_reporter(payload)
 
-    outputs: list[Any] = [None] * len(loaded)
-    image_indices: list[int] = []
-    image_inputs: list[Image.Image] = []
-
-    for idx, (_pic, pil_image, source_format, source_path) in enumerate(loaded):
-        if source_format in _VIDEO_FORMATS and plugin.supports_videos:
-            if type(plugin).run_video is not ImagePlugin.run_video:
-                outputs[idx] = plugin.run_video(
-                    source_path,
-                    parameters=params,
-                    progress_callback=progress_cb,
-                    error_callback=error_cb,
-                )
-            else:
-                image_indices.append(idx)
-                image_inputs.append(pil_image)
-        else:
-            image_indices.append(idx)
-            image_inputs.append(pil_image)
-
-    if image_inputs:
-        input_captions = [resolved_captions[i] for i in image_indices]
-        image_outputs = plugin.run(
-            image_inputs,
-            parameters=params,
-            progress_callback=progress_cb,
-            error_callback=error_cb,
-            captions=input_captions,
-        )
-        if len(image_outputs) != len(image_inputs):
-            raise ValueError(
-                f"Plugin '{plugin.name}' returned {len(image_outputs)} images for {len(image_inputs)} inputs"
-            )
-        for out_idx, loaded_idx in enumerate(image_indices):
-            outputs[loaded_idx] = image_outputs[out_idx]
+    outputs = _run_plugin(
+        server, plugin, loaded, params, resolved_captions, progress_cb, error_cb
+    )
 
     if any(output is None for output in outputs):
         raise ValueError(

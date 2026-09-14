@@ -167,8 +167,23 @@ self.report_error(error_callback, index=idx, message="Failed",
 
 Both are no-ops when the callback is `None`, so they are always safe to call.
 
-`run()` executes on a worker thread (`asyncio.to_thread`), so it may block; it must not
-assume an event loop.
+`run()` and `run_video()` may block; they must not assume an event loop. Where they run
+depends on the inference device:
+
+- **CUDA and the CPU:** on a worker thread (`asyncio.to_thread`).
+- **Apple Metal:** on the task runner's single GPU worker thread, the one thread allowed
+  to use Metal, because torch crashes when two threads use it at once
+  (`docs/apple-metal-thread-safety.md`). The call is queued at `URGENT` priority, so it
+  waits for the GPU task already running (a caption batch, say) and then runs, with no
+  timeout. The progress and error callbacks are called on that thread too. PixlStash
+  cannot tell whether a plugin uses the GPU, so this holds for every plugin: on Metal a
+  plain PIL filter waits behind GPU work as well. Do not start threads of your own that
+  use torch on Metal; do all device work inside `run()` / `run_video()`.
+  Keep no model on the plugin instance or in module globals: PixlStash reloads the
+  plugins, with fresh instances, whenever the plugin list is read and before each run,
+  and drops the old instances on a request thread, where a Metal model they held would
+  be freed off the worker. Load the model inside `run()` / `run_video()` and let it go
+  before returning.
 
 ## 5. Video
 

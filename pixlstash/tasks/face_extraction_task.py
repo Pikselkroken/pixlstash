@@ -31,7 +31,8 @@ from pixlstash.utils.insightface_model_utils import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
-from pixlstash.utils.vram_utils import empty_cuda_cache, is_vram_oom
+from pixlstash.utils.device_utils import empty_device_cache
+from pixlstash.utils.vram_utils import is_vram_oom
 
 # Suppress noisy FutureWarning from insightface's face_align.py about
 # SimilarityTransform.estimate being deprecated in scikit-image >= 0.26.
@@ -330,7 +331,9 @@ class FaceExtractionTask(BaseTask):
             cls._app_instances.clear()
 
         gc.collect()
-        empty_cuda_cache()
+        # CUDA only: InsightFace never runs on Metal, and this also runs on the
+        # planner thread, where a Metal flush would race the GPU worker.
+        empty_device_cache("cuda")
         cls._trim_process_memory()
 
     @staticmethod

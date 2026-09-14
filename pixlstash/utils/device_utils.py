@@ -2,6 +2,8 @@
 
 import os
 import sys
+import threading
+from typing import Optional
 
 from pixlstash.pixl_logging import get_logger
 
@@ -17,6 +19,11 @@ USE_GPU_ADVICE = "Set default_device=auto in server-config.json to use the GPU."
 
 #: transformers 5.x loads weights on a thread pool unless this is true.
 HF_ASYNC_LOAD_ENV = "HF_DEACTIVATE_ASYNC_LOAD"
+
+# The one thread allowed to use Apple Metal: the running task runner's GPU
+# worker. See register_metal_thread and ensure_metal_thread.
+_metal_thread_lock = threading.Lock()
+_metal_thread: Optional[threading.Thread] = None
 
 
 def detect_device() -> str:
@@ -144,6 +151,139 @@ def is_metal(device) -> bool:
         return False
     name = getattr(device, "type", None) or str(device)
     return name.split(":", 1)[0].lower() == "mps"
+
+
+def metal_present() -> bool:
+    """True when the torch already loaded reports Apple Metal available.
+
+    For deciding whether a warning about the Metal thread applies. torch is
+    read from :data:`sys.modules`, as in :func:`empty_device_cache`: without it
+    loaded, nothing has used Metal. A probe that raises is logged and counts as
+    no Metal.
+    """
+    torch = sys.modules.get("torch")
+    if torch is None:
+        return False
+    try:
+        return bool(torch.backends.mps.is_available())
+    except Exception as exc:
+        logger.warning(
+            "The Apple Metal (mps) availability probe raised (%s: %s).",
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
+def register_metal_thread(thread: threading.Thread) -> None:
+    """Record *thread* as the one thread allowed to use Apple Metal.
+
+    ``TaskRunner.start`` registers its GPU worker, whatever the device: the
+    registration only has an effect through :func:`ensure_metal_thread`, which
+    ignores every device but ``mps``. A process runs one started runner at a
+    time (a library switch stops the old vault before starting the new one,
+    and where Metal is present ``Vault.start`` first waits for a previous
+    worker that outlived its runner's stop), so a second registration replaces
+    the first.
+    Replacing a worker that is still alive logs a warning where Metal is
+    present (:func:`metal_present`); anywhere else the registration guards
+    nothing.
+
+    Args:
+        thread: The GPU worker thread.
+    """
+    global _metal_thread
+    with _metal_thread_lock:
+        previous = _metal_thread
+        _metal_thread = thread
+    if (
+        previous is not None
+        and previous is not thread
+        and previous.is_alive()
+        and metal_present()
+    ):
+        logger.warning(
+            "GPU worker %r replaces %r as the Apple Metal thread while the "
+            "previous one is still running; on Metal only one of them may use "
+            "the device.",
+            thread.name,
+            previous.name,
+        )
+
+
+def unregister_metal_thread(thread: threading.Thread) -> None:
+    """Forget *thread* as the Metal thread, if it is still the registered one.
+
+    A runner stopping after another has registered leaves that registration
+    alone.
+
+    Args:
+        thread: The GPU worker thread its runner registered.
+    """
+    global _metal_thread
+    with _metal_thread_lock:
+        if _metal_thread is thread:
+            _metal_thread = None
+
+
+def registered_metal_thread() -> Optional[threading.Thread]:
+    """The thread allowed to use Apple Metal, or ``None`` when none is registered.
+
+    A registered thread is normally alive. It can be dead when the GPU worker
+    was killed by an exception its runner did not catch: the registration then
+    stays until that runner stops or another starts, so Metal stays refused
+    (see :func:`ensure_metal_thread`).
+    """
+    with _metal_thread_lock:
+        return _metal_thread
+
+
+def ensure_metal_thread(device) -> None:
+    """Raise when this thread would use Apple Metal and is not the GPU worker.
+
+    torch's Metal backend crashes or hangs the process when two threads use it
+    at once (``docs/apple-metal-thread-safety.md``), so the task runner's GPU
+    worker is the only thread that may. Called at the entry points code outside
+    a task reaches - the SBERT and CLIP encoders, the built-in tagger's anomaly
+    localisation, the model unload - so a path that was never routed through
+    ``Vault.run_inference`` fails with a traceback naming the thread instead of
+    taking the process down.
+
+    Silent unless *device* is ``mps`` and a GPU worker is registered: CUDA and
+    the CPU have no such rule, and with no running task runner (the CLI tools,
+    tests without one) there is no worker for the call to race.
+
+    A registered worker that has died still refuses every other thread, with a
+    message saying so. Its runner has not stopped, and treating the dead worker
+    as "no runner" would let request threads use Metal together, and beside the
+    worker of any runner started later.
+
+    Args:
+        device: The device the caller is about to use.
+
+    Raises:
+        RuntimeError: *device* is Metal, a GPU worker is registered, and the
+            calling thread is not it.
+    """
+    if not is_metal(device):
+        return
+    worker = registered_metal_thread()
+    current = threading.current_thread()
+    if worker is None or current is worker:
+        return
+    if not worker.is_alive():
+        raise RuntimeError(
+            f"Apple Metal used from thread {current.name!r}, but the GPU worker "
+            f"{worker.name!r} registered for it is no longer running. Metal "
+            "stays refused until its task runner stops or a new one starts, "
+            "because torch crashes when two threads use it "
+            "(docs/apple-metal-thread-safety.md)."
+        )
+    raise RuntimeError(
+        f"Apple Metal used from thread {current.name!r}, but only the GPU worker "
+        f"{worker.name!r} may use it: torch crashes when two threads do. Route "
+        "the call through Vault.run_inference (docs/apple-metal-thread-safety.md)."
+    )
 
 
 def empty_device_cache(device=None) -> bool:

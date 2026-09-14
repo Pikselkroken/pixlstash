@@ -20,15 +20,18 @@ test is guaranteed to run after the ones it would be watching.
 """
 
 import numpy as np
+import contextlib
 import logging
 import os
 import json
 import random
 import shutil
+import sys
 import tempfile
 import threading
 import time
 import tomllib
+import types
 from types import SimpleNamespace
 import zipfile
 
@@ -68,11 +71,21 @@ from pixlstash.db_models import (
     Tag,
     TagPrediction,
 )
+import pixlstash.image_plugins.service as image_plugin_service
 import pixlstash.routes.pictures as pictures_routes
+from pixlstash.image_plugins.base import ImagePlugin
 from pixlstash.pixl_logging import get_logger
+from pixlstash.routes.pictures._anomaly import clear_anomaly_region_cache
+from pixlstash.task_runner import (
+    TaskCancelledError,
+    TaskRunner,
+    TaskRunnerNotRunningError,
+)
+from pixlstash.tasks.gpu_call_task import GpuCallTask
 from pixlstash.tasks.tag_task import TagTask
 from pixlstash.tasks.task_type import TaskType
 from pixlstash.server import Server
+from pixlstash.services import plugin_service
 from tests.utils import seed_likeness_stable, upload_pictures_and_wait, wait_for_faces
 
 logger = get_logger(__name__)
@@ -2343,6 +2356,16 @@ def test_text_search_encodes_the_query_off_the_db_writer_thread(
     assert searches[0]["clip_query_embedding"] is encodes[1][3]
 
 
+def _settle_the_gpu_worker(runner):
+    """Cancel the queued tasks and wait out the one the GPU worker is running.
+
+    Call with the work planner stopped, so nothing queues more. Afterwards a
+    routed call starts at once, and no GPU task rewrites a row a test seeds.
+    """
+    runner.cancel_pending_tasks()
+    runner.run_on_gpu_worker(lambda: None, timeout_s=120)
+
+
 def test_export_by_query_encodes_the_query_off_the_db_writer_thread(
     server, client, monkeypatch
 ):
@@ -2376,3 +2399,433 @@ def test_export_by_query_encodes_the_query_off_the_db_writer_thread(
     assert len(searches) == 1, searches
     assert searches[0]["query_embedding"] is encodes[0][3]
     assert searches[0].get("clip_query_embedding") is None
+
+
+class _MetalEngine:
+    """An engine on Apple Metal whose device work records the thread it ran on.
+
+    Carries the anomaly tagger's load and Grad-CAM pass, each appending
+    ``(name, thread)`` to :attr:`calls`.
+    """
+
+    device = "mps"
+
+    def __init__(
+        self,
+        tagger_loaded: bool = True,
+    ):
+        self.calls: list[tuple[str, threading.Thread]] = []
+        self._tagger_loaded = tagger_loaded
+        self.pixlstash_tagger_service = types.SimpleNamespace(
+            is_loaded=lambda: self._tagger_loaded,
+            version=lambda: 1,
+            resolve_label_index=lambda label: 0,
+            localize_anomaly=self._recorder(
+                "localize_anomaly", {"boxes": [], "diffuse": True, "heatmap": None}
+            ),
+        )
+
+    def ensure_pixlstash_tagger_ready(self) -> bool:
+        self.calls.append(("tagger_load", threading.current_thread()))
+        self._tagger_loaded = True
+        return True
+
+    def close(self) -> None:
+        """Nothing to release; present because vault shutdown calls it."""
+
+    def _recorder(self, name, result):
+        def record(*args, **kwargs):
+            self.calls.append((name, threading.current_thread()))
+            return result
+
+        return record
+
+
+@contextlib.contextmanager
+def _serving_on_metal(server, engine):
+    """Serve with *engine* as the vault's engine, the work planner stopped.
+
+    Stopped so no finder builds real work around the stand-in engine. The real
+    engine is put back before the planner starts again.
+    """
+    vault = server.vault
+    planner = vault._work_planner
+    planner.stop()
+    original = vault._engine
+    vault._engine = engine
+    try:
+        yield vault._task_runner._gpu_worker_thread
+    finally:
+        vault._engine = original
+        planner.start()
+
+
+def _fail_on_the_gpu_worker(server, monkeypatch, error):
+    """Make every routed call raise *error*; return the calls that reached it."""
+    attempts = []
+
+    def fail(fn, /, *args, **kwargs):
+        attempts.append(fn)
+        raise error
+
+    monkeypatch.setattr(server.vault._task_runner, "run_on_gpu_worker", fail)
+    return attempts
+
+
+def _time_out_on_the_gpu_worker(server, monkeypatch):
+    """Make every routed call raise ``TimeoutError``, as a busy worker would."""
+    return _fail_on_the_gpu_worker(
+        server, monkeypatch, TimeoutError("GpuCallTask did not complete within 60.0s")
+    )
+
+
+def test_the_anomaly_region_runs_the_tagger_on_the_gpu_worker(
+    server, client, monkeypatch
+):
+    """Both the on-demand tagger load and the Grad-CAM pass use the device."""
+    status = upload_pictures_and_wait(
+        client, [("file", ("anomaly.png", random_images[0], "image/png"))]
+    )
+    assert status["status"] == "completed", status
+    picture_id = status["results"][0]["picture_id"]
+    url = f"/pictures/{picture_id}/anomaly_region"
+    clear_anomaly_region_cache()
+    engine = _MetalEngine(tagger_loaded=False)
+
+    with _serving_on_metal(server, engine) as worker:
+        resp = client.get(url, params={"tag": "malformed hand"})
+        assert resp.status_code == 200, resp.text
+        assert [name for name, _ in engine.calls] == [
+            "tagger_load",
+            "localize_anomaly",
+        ]
+        for name, thread in engine.calls:
+            assert thread is worker, f"{name} ran on {thread.name}"
+
+        # A busy worker is a 503 whether or not the tagger has to load first.
+        attempts = _time_out_on_the_gpu_worker(server, monkeypatch)
+        for tagger_loaded in (False, True):
+            clear_anomaly_region_cache()
+            engine._tagger_loaded = tagger_loaded
+            attempts.clear()
+            busy = client.get(url, params={"tag": "malformed hand"})
+            assert attempts, "the request never reached the GPU worker"
+            assert busy.status_code == 503, (tagger_loaded, busy.text)
+            assert "GPU is busy" in busy.json()["detail"]
+    clear_anomaly_region_cache()
+
+
+def _request_anomaly_region(client, picture_id):
+    """Request the anomaly region of *picture_id*, past the route's cache."""
+    clear_anomaly_region_cache()
+    return client.get(
+        f"/pictures/{picture_id}/anomaly_region", params={"tag": "malformed hand"}
+    )
+
+
+def _upload_one_picture(client):
+    """Upload a picture and return its id."""
+    status = upload_pictures_and_wait(
+        client, [("file", ("anomaly.png", random_images[0], "image/png"))]
+    )
+    assert status["status"] == "completed", status
+    return status["results"][0]["picture_id"]
+
+
+def test_the_anomaly_region_is_503_when_there_is_no_gpu_worker_to_run_on(
+    server, client, monkeypatch
+):
+    """A stopping runner, or none at all, is a temporary refusal, not a 500."""
+    picture_id = _upload_one_picture(client)
+    errors = [
+        TaskCancelledError("Task GpuCallTask was cancelled before completion"),
+        TaskRunnerNotRunningError(
+            "TaskRunner vault-task-runner is stopped or was never started"
+        ),
+    ]
+
+    with _serving_on_metal(server, _MetalEngine(tagger_loaded=False)):
+        for error in errors:
+            attempts = _fail_on_the_gpu_worker(server, monkeypatch, error)
+            resp = _request_anomaly_region(client, picture_id)
+
+            assert attempts, "the anomaly region never reached the GPU worker"
+            assert resp.status_code == 503, (type(error).__name__, resp.text)
+            assert resp.json()["detail"] == (
+                "The GPU worker is not running; if this persists, restart PixlStash."
+            )
+    clear_anomaly_region_cache()
+
+
+def test_a_model_error_on_the_gpu_worker_is_not_reported_as_a_missing_worker(
+    server, client, monkeypatch
+):
+    """Only the runner's own errors are a 503 for want of a worker.
+
+    A ``RuntimeError`` the model raised keeps the route's existing answer.
+    """
+    picture_id = _upload_one_picture(client)
+    # A 500 is raised into the test by a client that re-raises server errors.
+    quiet_client = TestClient(server.api, raise_server_exceptions=False)
+    quiet_client.cookies = client.cookies
+    attempts = _fail_on_the_gpu_worker(
+        server, monkeypatch, RuntimeError("the model is not loaded")
+    )
+
+    with _serving_on_metal(server, _MetalEngine(tagger_loaded=False)):
+        resp = _request_anomaly_region(quiet_client, picture_id)
+
+    assert attempts, "the anomaly region never reached the GPU worker"
+    assert resp.status_code == 500, resp.text
+    assert "not running" not in resp.text
+    assert "Failed to localise anomaly region" in resp.json()["detail"]
+    clear_anomaly_region_cache()
+
+
+class _ExitingPlugin(ImagePlugin):
+    """An image plugin whose run ends with ``sys.exit(3)``, as argparse would."""
+
+    name = "exits"
+
+    def __init__(self):
+        self.threads: list[threading.Thread] = []
+
+    def parameter_schema(self):
+        return []
+
+    def run(
+        self,
+        images,
+        parameters=None,
+        progress_callback=None,
+        error_callback=None,
+        captions=None,
+    ):
+        self.threads.append(threading.current_thread())
+        sys.exit(3)
+
+
+def _serve_plugin(monkeypatch, plugin):
+    """Serve ``POST /pictures/plugins/{plugin.name}`` with *plugin*.
+
+    Its inputs are stand-in pictures, so no upload and no real engine is
+    needed; the run fails before any output would be imported.
+    """
+    manager = types.SimpleNamespace(
+        reload=lambda: None,
+        get_plugin=lambda name: plugin if name == plugin.name else None,
+    )
+    monkeypatch.setattr(plugin_service, "get_image_plugin_manager", lambda: manager)
+    monkeypatch.setattr(
+        image_plugin_service,
+        "_load_input_images",
+        lambda server, picture_ids: [
+            (
+                types.SimpleNamespace(id=picture_id, description=""),
+                Image.new("RGB", (8, 8)),
+                "PNG",
+                "input.png",
+            )
+            for picture_id in picture_ids
+        ],
+    )
+
+
+def test_a_plugin_run_is_503_when_there_is_no_gpu_worker_to_run_on(
+    server, client, monkeypatch
+):
+    """On Metal a plugin runs on the GPU worker; with none it is a temporary refusal.
+
+    A stopped runner, a dead worker, or a full restore cancelling the queued
+    run. The plugin's own error keeps its 500.
+    """
+    plugin = _ExitingPlugin()
+    _serve_plugin(monkeypatch, plugin)
+    url = f"/pictures/plugins/{plugin.name}"
+    errors = [
+        TaskCancelledError("Task GpuCallTask was cancelled before completion"),
+        TaskRunnerNotRunningError(
+            "TaskRunner vault-task-runner GPU worker is no longer running"
+        ),
+    ]
+
+    with _serving_on_metal(server, _MetalEngine()):
+        for error in errors:
+            attempts = _fail_on_the_gpu_worker(server, monkeypatch, error)
+            resp = client.post(url, json={"picture_ids": [1]})
+
+            assert attempts, "the plugin run never reached the GPU worker"
+            assert resp.status_code == 503, (type(error).__name__, resp.text)
+            assert resp.json()["detail"] == (
+                "The GPU worker is not running; if this persists, restart PixlStash."
+            )
+
+        # Positive control: an error from the plugin is still a failed plugin.
+        attempts = _fail_on_the_gpu_worker(
+            server, monkeypatch, RuntimeError("the upscaler weights are missing")
+        )
+        resp = client.post(url, json={"picture_ids": [1]})
+
+    assert attempts, "the plugin run never reached the GPU worker"
+    assert resp.status_code == 500, resp.text
+    assert "Plugin failed: the upscaler weights are missing" in resp.json()["detail"]
+    assert plugin.threads == []
+
+
+def test_a_plugin_that_exits_fails_its_run_and_the_gpu_worker_runs_on(
+    server, client, monkeypatch
+):
+    """A plugin's ``sys.exit()`` is a failed run, not the end of a thread.
+
+    Not of the GPU worker, which every plugin runs on on Metal, and not of the
+    server: asyncio lets ``SystemExit`` out of the event loop. The request is
+    made on a thread of its own because that is how the event loop's end shows
+    here: the client waits for ever on a loop that has stopped.
+    """
+    plugin = _ExitingPlugin()
+    _serve_plugin(monkeypatch, plugin)
+    runner = server.vault._task_runner
+    responses = []
+
+    with _serving_on_metal(server, _MetalEngine()) as worker:
+        requester = threading.Thread(
+            target=lambda: responses.append(
+                client.post(
+                    f"/pictures/plugins/{plugin.name}", json={"picture_ids": [1]}
+                )
+            ),
+            daemon=True,
+        )
+        requester.start()
+        requester.join(30)
+
+        assert responses, "the request never finished: its event loop stopped"
+        resp = responses[0]
+        assert plugin.threads == [worker], "the plugin did not run on the GPU worker"
+        assert resp.status_code == 500, resp.text
+        # Equal, not containing: a ``GpuCallTask`` that fails to keep the
+        # ``SystemExit`` for its waiter still names it, inside a runner error.
+        assert resp.json()["detail"] == "Plugin failed: SystemExit(3)"
+        assert worker.is_alive(), "the plugin's sys.exit() ended the GPU worker"
+        assert runner.run_on_gpu_worker(threading.current_thread, timeout_s=10) is (
+            worker
+        )
+    assert client.get("/protected").status_code == 200
+
+
+def test_the_anomaly_region_loads_and_localises_in_one_gpu_call(
+    server, client, monkeypatch
+):
+    """An idle unload queued on the worker cannot land between load and pass.
+
+    The load here queues exactly that unload, as ``_maybe_aggressive_unload``
+    does from a progress poll. Split over two routed calls, the unload runs
+    between them and the Grad-CAM pass finds no model.
+    """
+    picture_id = _upload_one_picture(client)
+    engine = _MetalEngine(tagger_loaded=False)
+    runner = server.vault._task_runner
+    routed = []
+    real_run_on_gpu_worker = runner.run_on_gpu_worker
+
+    def counting_run_on_gpu_worker(fn, /, *args, **kwargs):
+        routed.append(fn)
+        return real_run_on_gpu_worker(fn, *args, **kwargs)
+
+    def unload():
+        engine._tagger_loaded = False
+
+    def load_and_queue_an_idle_unload():
+        engine.calls.append(("tagger_load", threading.current_thread()))
+        engine._tagger_loaded = True
+        runner.submit(GpuCallTask(unload))
+        return True
+
+    def localize(pil_image, tag):
+        engine.calls.append(("localize_anomaly", threading.current_thread()))
+        if not engine._tagger_loaded:
+            raise RuntimeError("PixlStash tagger model is not loaded")
+        return {"boxes": [], "diffuse": True, "heatmap": None}
+
+    engine.ensure_pixlstash_tagger_ready = load_and_queue_an_idle_unload
+    engine.pixlstash_tagger_service.localize_anomaly = localize
+    monkeypatch.setattr(runner, "run_on_gpu_worker", counting_run_on_gpu_worker)
+
+    with _serving_on_metal(server, engine) as worker:
+        resp = _request_anomaly_region(client, picture_id)
+        # Lets the queued unload run before the real engine is put back.
+        real_run_on_gpu_worker(lambda: None, timeout_s=60)
+
+    assert resp.status_code == 200, resp.text
+    assert len(routed) == 1, routed
+    assert [name for name, _ in engine.calls] == ["tagger_load", "localize_anomaly"]
+    for name, thread in engine.calls:
+        assert thread is worker, f"{name} ran on {thread.name}"
+    assert engine._tagger_loaded is False, "the queued unload never ran"
+    clear_anomaly_region_cache()
+
+
+def test_an_anomaly_region_request_that_times_out_leaves_the_gpu_call_its_picture(
+    server, client, monkeypatch
+):
+    """The routed call owns the picture it localises, not the request waiting on it.
+
+    A call that has started on the GPU worker runs to the end after its caller
+    stops waiting (``run_on_gpu_worker``). Here the request times out while the
+    tagger's cold load is still under way; the Grad-CAM pass that follows must
+    still read its picture, which it cannot if the request opened the file and
+    closed it on its way out with the 503.
+    """
+    picture_id = _upload_one_picture(client)
+    engine = _MetalEngine(tagger_loaded=False)
+    runner = server.vault._task_runner
+    load_started = threading.Event()
+    release_load = threading.Event()
+    reads = []
+
+    def slow_load():
+        engine.calls.append(("tagger_load", threading.current_thread()))
+        load_started.set()
+        release_load.wait(60)
+        engine._tagger_loaded = True
+        return True
+
+    def localize(pil_image, tag):
+        engine.calls.append(("localize_anomaly", threading.current_thread()))
+        try:
+            pil_image.convert("RGB")
+        except Exception as exc:
+            reads.append(exc)
+        else:
+            reads.append("read")
+        return {"boxes": [], "diffuse": True, "heatmap": None}
+
+    engine.ensure_pixlstash_tagger_ready = slow_load
+    engine.pixlstash_tagger_service.localize_anomaly = localize
+
+    with _serving_on_metal(server, engine) as worker:
+        # So the call starts well inside its short timeout instead of being
+        # cancelled while it waits behind the upload's own work.
+        _settle_the_gpu_worker(runner)
+        try:
+            with monkeypatch.context() as patch:
+                patch.setattr(TaskRunner, "GPU_CALL_TIMEOUT_S", 1.0)
+                resp = _request_anomaly_region(client, picture_id)
+        finally:
+            release_load.set()
+            # Waits for the abandoned call, so it finishes on the stand-in engine.
+            runner.run_on_gpu_worker(lambda: None, timeout_s=60)
+
+    assert load_started.is_set(), (
+        "the call never started on the GPU worker, so nothing was in flight at "
+        "the timeout"
+    )
+    assert resp.status_code == 503, resp.text
+    assert "GPU is busy" in resp.json()["detail"]
+    assert reads == ["read"], (
+        f"the Grad-CAM pass could not read its picture after the timeout: {reads!r}"
+    )
+    assert [name for name, _ in engine.calls] == ["tagger_load", "localize_anomaly"]
+    for name, thread in engine.calls:
+        assert thread is worker, f"{name} ran on {thread.name}"
+    clear_anomaly_region_cache()

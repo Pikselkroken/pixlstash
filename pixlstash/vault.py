@@ -1,5 +1,6 @@
 import concurrent
 import ctypes
+import functools
 import platform
 
 import datetime
@@ -9,7 +10,7 @@ import threading
 import numpy as np
 
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from concurrent.futures import Future
 
 from sqlmodel import Session, select
@@ -40,8 +41,10 @@ from .tasks.image_embedding_task import ImageEmbeddingTask
 from .tasks.likeness_task import LikenessTask
 from .tasks.quality_task import QualityTask
 from .tasks.smart_score_task import SmartScoreTask
+from .utils.device_utils import is_metal, metal_present, registered_metal_thread
 from .utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from .tasks.base_task import TaskStatus
+from .tasks.gpu_call_task import GpuCallTask
 from .task_runner import TaskRunner
 from .work_planner import WorkPlanner
 from .tasks import TaskType
@@ -73,6 +76,18 @@ logger = get_logger(__name__)
 
 class Vault:
     AGGRESSIVE_UNLOAD_INTERVAL = 180
+
+    # How long ``start()`` waits, on Apple Metal, for a GPU worker an earlier
+    # task runner left running before refusing to start a second one.
+    PREVIOUS_METAL_WORKER_WAIT_S = 60.0
+
+    # Engines ``stop()`` did not close because a GPU worker was still using
+    # Apple Metal, as ``(engine, worker)``. Held here until a later ``start()``
+    # closes them on its own GPU worker once that worker has exited
+    # (``_queue_close_of_engines_left_loaded``): releasing their models on any
+    # other thread - even by dropping the last reference - is Metal work on a
+    # second thread.
+    _engines_left_loaded: list[tuple[InferenceEngine, threading.Thread]] = []
 
     def __enter__(self):
         # Allow use as a context manager for robust cleanup
@@ -417,14 +432,165 @@ class Vault:
         Must be called once after configuration is complete (e.g. from
         ``Server.lifespan``).  Idempotent: subsequent calls are no-ops.
         When ``disable_background_workers=True`` this method is a no-op.
+
+        Where Apple Metal is present, a GPU worker left running by an earlier
+        runner (its ``stop()`` join ran out) is waited for, up to
+        ``PREVIOUS_METAL_WORKER_WAIT_S``, before this vault starts its own
+        (:meth:`wait_for_previous_metal_worker`): two GPU workers would use
+        Metal at once, which crashes torch
+        (``docs/apple-metal-thread-safety.md``). Engines an earlier ``stop()``
+        left loaded for such a worker are closed on this vault's GPU worker
+        once theirs has exited.
+
+        A failure stops whatever had started, closes the vault (which closes
+        its database) and re-raises.
+
+        Raises:
+            RuntimeError: On Metal, the previous GPU worker was still running
+                after the wait; or whatever starting a worker raised.
         """
         if self._disable_background_workers or self._started:
             return
-        self._task_runner.start()
-        self._work_planner.start()
-        self._ref_folder_watcher.start()
-        self._start_existing_folder_watches()
+        # How to stop each part that has been started, in start order. The
+        # watcher is recorded only once started: stopping an observer that
+        # never started raises. The runner and the planner are safe to stop
+        # unstarted, so they are recorded first and a start that fails
+        # half-way is still stopped.
+        started: list[tuple[str, Callable[[], None]]] = []
+        try:
+            self.wait_for_previous_metal_worker()
+            started.append(("task runner", self._task_runner.stop))
+            self._task_runner.start()
+            self._queue_close_of_engines_left_loaded()
+            started.append(("work planner", self._work_planner.stop))
+            self._work_planner.start()
+            self._ref_folder_watcher.start()
+            started.append(("reference folder watcher", self._ref_folder_watcher.stop))
+            self._start_existing_folder_watches()
+        except Exception:
+            logger.exception(
+                "Vault for %s failed to start its background workers; stopping "
+                "what had started (%s) and closing the vault.",
+                self.image_root,
+                ", ".join(name for name, _stop in started) or "nothing",
+            )
+            for name, stop in reversed(started):
+                try:
+                    stop()
+                except Exception:
+                    logger.exception(
+                        "Could not stop the %s of the vault for %s after its "
+                        "failed start.",
+                        name,
+                        self.image_root,
+                    )
+            try:
+                self.close()
+            except Exception:
+                logger.exception(
+                    "Could not close the vault for %s after its failed start.",
+                    self.image_root,
+                )
+            raise
         self._started = True
+
+    def wait_for_previous_metal_worker(self) -> None:
+        """Wait for a GPU worker another runner left running on Apple Metal.
+
+        The worker is the registered Metal thread (``TaskRunner.stop`` keeps it
+        registered when its join runs out). It is usually finishing a batch or
+        a model load that ignored the cancel, so a bounded wait lets a library
+        switch go ahead, where refusing at once would fail the switch and its
+        recovery would hit the same worker.
+
+        Decided by Metal being present, not by this vault's engine: an engine
+        whose build failed, or one forced onto the CPU, can still be followed by
+        Metal work, and a library switch calls this before it builds the engine,
+        whose construction reads Metal's working set. Returns at once where
+        Metal is absent or no earlier worker is alive.
+
+        Raises:
+            RuntimeError: The worker was still running after
+                ``PREVIOUS_METAL_WORKER_WAIT_S`` seconds.
+        """
+        previous = registered_metal_thread()
+        if previous is None or not previous.is_alive() or not metal_present():
+            return
+        logger.warning(
+            "Vault for %s waits up to %.0fs for GPU worker %s, still running from "
+            "an earlier task runner, before starting its own on Apple Metal.",
+            self.image_root,
+            self.PREVIOUS_METAL_WORKER_WAIT_S,
+            previous.name,
+        )
+        previous.join(timeout=self.PREVIOUS_METAL_WORKER_WAIT_S)
+        if previous.is_alive():
+            raise RuntimeError(
+                f"GPU worker {previous.name!r} from an earlier task runner is "
+                f"still running after {self.PREVIOUS_METAL_WORKER_WAIT_S:.0f}s. "
+                "Starting a second one would use Apple Metal from two threads, "
+                "which crashes torch; restart PixlStash."
+            )
+        logger.info(
+            "GPU worker %s has exited; the vault for %s starts its own.",
+            previous.name,
+            self.image_root,
+        )
+
+    def _queue_close_of_engines_left_loaded(self) -> None:
+        """Queue the close of engines earlier stops left loaded, on this GPU worker.
+
+        ``stop()`` keeps an engine whose GPU worker was still running on Apple
+        Metal. Once that worker has exited, this runner's GPU worker is the one
+        thread on Metal, so the engine closes there, between tasks, as a
+        ``GpuCallTask``. An engine whose worker is still running stays for a
+        later start.
+
+        An entry leaves the list only when its close has run on the worker. A
+        close cancelled before it ran (a ``stop()`` drains the queue) leaves
+        the engine referenced here, rather than its last reference dropping on
+        the thread that drained the queue with its models still loaded.
+        Class-level models (InsightFace, the aesthetic scorer) are not
+        released: this vault uses the same instances.
+        """
+        for entry in list(Vault._engines_left_loaded):
+            engine, worker = entry
+            if worker.is_alive():
+                logger.info(
+                    "Vault for %s leaves an earlier engine loaded: its GPU worker "
+                    "%s is still running.",
+                    self.image_root,
+                    worker.name,
+                )
+                continue
+            self._task_runner.submit(
+                GpuCallTask(functools.partial(Vault._close_engine_left_loaded, entry))
+            )
+
+    @staticmethod
+    def _close_engine_left_loaded(
+        entry: tuple[InferenceEngine, threading.Thread],
+    ) -> None:
+        """Close an engine ``stop()`` left loaded, and stop holding it.
+
+        Runs on the GPU worker. Dropped from the list whether or not the close
+        succeeds: it ran on the right thread, and the engine's last reference
+        goes with this task, on the same worker.
+
+        Args:
+            entry: The ``(engine, worker)`` pair from ``_engines_left_loaded``.
+        """
+        engine, worker = entry
+        try:
+            logger.info(
+                "Closing an engine left loaded when GPU worker %s outlived its "
+                "runner's stop.",
+                worker.name,
+            )
+            engine.close()
+        finally:
+            if entry in Vault._engines_left_loaded:
+                Vault._engines_left_loaded.remove(entry)
 
     def _bind_engine_services(self) -> None:
         """Inject the engine's service instances into registry plugins.
@@ -735,18 +901,56 @@ class Vault:
                 self._work_planner.stop()
             if self._task_runner is not None:
                 self._task_runner.stop()
-        if not self._disable_background_workers:
-            FaceExtractionTask.release_detection_models()
-            ImageEmbeddingTask.release_models()
-        if self._engine:
-            self._engine.close()
-            del self._engine
-            self._engine = None
-        if self.db:
-            self.db.close()
-            del self.db
-            self.db = None
-        self._started = False
+        metal_worker = None
+        try:
+            metal_worker = self._running_metal_worker()
+            if metal_worker is not None:
+                logger.warning(
+                    "Vault for %s leaves its models loaded: GPU worker %s is "
+                    "still running on Apple Metal, and unloading them from "
+                    "this thread (%s) would crash torch. The next vault to "
+                    "start closes them on its own worker, once this one has "
+                    "exited.",
+                    self.image_root,
+                    metal_worker.name,
+                    threading.current_thread().name,
+                )
+                Vault._engines_left_loaded.append((self._engine, metal_worker))
+                self._engine = None
+            else:
+                if not self._disable_background_workers:
+                    FaceExtractionTask.release_detection_models()
+                    ImageEmbeddingTask.release_models()
+                if self._engine:
+                    self._engine.close()
+                    del self._engine
+                    self._engine = None
+        finally:
+            if self.db:
+                # No collection beside a worker still on Metal: it would free
+                # that worker's garbage on this thread.
+                self.db.close(collect_garbage=metal_worker is None)
+                del self.db
+                self.db = None
+            self._started = False
+
+    def _running_metal_worker(self) -> Optional[threading.Thread]:
+        """The GPU worker still using Apple Metal from another thread, if any.
+
+        ``None`` unless this vault's engine is on Metal and the registered Metal
+        thread is alive and is not the caller: a runner whose ``stop()`` join
+        ran out keeps its worker registered while it runs.
+        """
+        if not is_metal(getattr(self._engine, "device", None)):
+            return None
+        worker = registered_metal_thread()
+        if (
+            worker is None
+            or not worker.is_alive()
+            or worker is threading.current_thread()
+        ):
+            return None
+        return worker
 
     def set_daily_snapshots_enabled(self, enabled: bool) -> None:
         """Enable or disable automatic (GFS) snapshots at runtime.
@@ -1084,6 +1288,125 @@ class Vault:
             },
         )
         return len(reset_ids)
+
+    def run_inference(self, fn, /, *args, **kwargs):
+        """Call ``fn(*args, **kwargs)`` on the thread allowed to use the device.
+
+        On Apple Metal only the task runner's GPU worker may use the device:
+        torch crashes or hangs the process when two threads do
+        (``docs/apple-metal-thread-safety.md``). There the call runs on the
+        worker through ``TaskRunner.run_on_gpu_worker`` and this blocks until
+        it returns, so call it off the event loop. That holds for an engine on
+        Metal and, where Metal is present, for a vault with no engine yet (its
+        build failed): *fn* picks its own device then, and would pick Metal.
+        Everywhere else it runs inline on the calling thread: CUDA and the CPU
+        have no such rule, and a Vault with no task runner
+        (``disable_background_workers``) has no worker thread for the call to
+        race.
+
+        Code outside a task that runs a model on the engine's device goes
+        through here. ``ensure_metal_thread`` in the encoders is what catches a
+        path that does not.
+
+        Args:
+            fn: The callable to run.
+            *args: Positional arguments for *fn*.
+            **kwargs: Keyword arguments for *fn*.
+
+        Returns:
+            Whatever *fn* returned.
+
+        Raises:
+            TimeoutError: On Metal, the call did not finish within the runner's
+                default timeout, typically because a long GPU task holds the
+                worker.
+            TaskRunnerNotRunningError: On Metal, the task runner is stopped,
+                was never started, or its GPU worker has died.
+            TaskCancelledError: On Metal, the runner stopped while the call
+                was queued.
+            BaseException: Whatever *fn* raised. On Metal that includes
+                ``SystemExit`` and ``KeyboardInterrupt``, which the call task
+                keeps for the caller rather than letting them end the worker.
+        """
+        return self._run_on_device_thread(
+            fn, args, kwargs, timeout_s=TaskRunner.GPU_CALL_TIMEOUT_S
+        )
+
+    def run_long_inference(self, fn, /, *args, **kwargs):
+        """Like :meth:`run_inference`, but on Metal wait with no timeout.
+
+        For a run the user started and watches progress for, such as an image
+        plugin over a batch of pictures: it can take longer than the default
+        timeout, and giving up on it would leave it running on the worker with
+        nobody waiting for its result. The wait still ends if the GPU worker
+        dies or the runner stops while the call is queued.
+
+        A GPU out-of-memory error is not retried on Metal, where a routed call
+        otherwise would be (``GpuCallTask``): the retry calls *fn* again from
+        the start, so a run that reports progress and errors as it goes would
+        report them twice. Off Metal nothing retries it either.
+
+        On Metal the worker collects garbage once the run returns, so a model
+        the run left in a reference cycle is freed there rather than by a
+        collection on whichever thread runs next.
+
+        Raises:
+            TaskRunnerNotRunningError: On Metal, the task runner is stopped,
+                was never started, or its GPU worker died.
+            TaskCancelledError: On Metal, the runner stopped while the call
+                was queued.
+            BaseException: Whatever *fn* raised.
+        """
+        return self._run_on_device_thread(
+            fn,
+            args,
+            kwargs,
+            timeout_s=None,
+            retry_vram_oom=False,
+            collect_garbage_after=True,
+        )
+
+    def _run_on_device_thread(
+        self,
+        fn,
+        args: tuple,
+        kwargs: dict,
+        timeout_s: Optional[float],
+        retry_vram_oom: bool = True,
+        collect_garbage_after: bool = False,
+    ):
+        """Route ``fn(*args, **kwargs)`` as :meth:`run_inference` describes.
+
+        Args:
+            fn: The callable to run.
+            args: Positional arguments for *fn*.
+            kwargs: Keyword arguments for *fn*.
+            timeout_s: How long to wait on Metal, or ``None`` for no limit.
+            retry_vram_oom: Whether a GPU out-of-memory error on Metal calls
+                *fn* again.
+            collect_garbage_after: Whether the GPU worker collects garbage
+                after *fn* returns on Metal.
+
+        Returns:
+            Whatever *fn* returned.
+        """
+        runner = self._task_runner
+        engine = self._engine
+        on_metal = (
+            metal_present()
+            if engine is None
+            else is_metal(getattr(engine, "device", None))
+        )
+        if runner is None or not on_metal:
+            return fn(*args, **kwargs)
+        # Bound here so a keyword argument of *fn* can never be taken for one
+        # of run_on_gpu_worker's own.
+        return runner.run_on_gpu_worker(
+            functools.partial(fn, *args, **kwargs),
+            timeout_s=timeout_s,
+            retry_vram_oom=retry_vram_oom,
+            collect_garbage_after=collect_garbage_after,
+        )
 
     def generate_text_embedding(self, query: str) -> Optional[np.ndarray]:
         """
@@ -2093,36 +2416,54 @@ class Vault:
         if self._task_runner is not None and self._task_runner.has_active_gpu_tasks():
             return
 
-        logger.warning("All workers idle; aggressively unloading models.")
-        try:
-            self._engine.aggressive_unload()
-        except Exception as exc:
-            logger.warning("Aggressive unload failed for InferenceEngine: %s", exc)
-        # The engine unloads the services it owns by name; a tagger plugin's
-        # model is reachable only through the registry, and until this it was
-        # not reachable at all - a plugin captioner stayed resident for the
-        # life of the process and this setting could not free it (#967).
-        try:
-            unload_loaded_tagger_plugins()
-        except Exception as exc:
-            logger.warning("Aggressive unload failed for tagger plugins: %s", exc)
-        try:
-            FaceExtractionTask.release_detection_models()
-        except Exception as exc:
-            logger.warning(
-                "Aggressive unload failed for feature extraction models: %s", exc
-            )
-        try:
-            ImageEmbeddingTask.release_models()
-        except Exception as exc:
-            logger.warning(
-                "Aggressive unload failed for image embedding models: %s", exc
-            )
-        if platform.system().lower().startswith("linux"):
+        engine = self._engine
+
+        def unload() -> None:
+            logger.warning("All workers idle; aggressively unloading models.")
             try:
-                ctypes.CDLL("libc.so.6").malloc_trim(0)
+                engine.aggressive_unload()
             except Exception as exc:
-                logger.debug("malloc_trim call failed: %s", exc)
+                logger.warning("Aggressive unload failed for InferenceEngine: %s", exc)
+            # The engine unloads the services it owns by name; a tagger plugin's
+            # model is reachable only through the registry, and until this it
+            # was not reachable at all - a plugin captioner stayed resident for
+            # the life of the process and this setting could not free it (#967).
+            try:
+                unload_loaded_tagger_plugins()
+            except Exception as exc:
+                logger.warning("Aggressive unload failed for tagger plugins: %s", exc)
+            try:
+                FaceExtractionTask.release_detection_models()
+            except Exception as exc:
+                logger.warning(
+                    "Aggressive unload failed for feature extraction models: %s", exc
+                )
+            try:
+                ImageEmbeddingTask.release_models()
+            except Exception as exc:
+                logger.warning(
+                    "Aggressive unload failed for image embedding models: %s", exc
+                )
+            if platform.system().lower().startswith("linux"):
+                try:
+                    ctypes.CDLL("libc.so.6").malloc_trim(0)
+                except Exception as exc:
+                    logger.debug("malloc_trim call failed: %s", exc)
+
+        if self._task_runner is not None and is_metal(getattr(engine, "device", None)):
+            # The unload frees models and flushes the Metal cache, so on Metal
+            # it runs on the GPU worker, between tasks. Queued rather than
+            # awaited: this runs on the thread answering a progress poll.
+            try:
+                self._task_runner.submit(GpuCallTask(unload))
+            except RuntimeError as exc:
+                logger.warning(
+                    "Idle model unload not queued; the task runner is stopped: %s",
+                    exc,
+                )
+                return
+        else:
+            unload()
         self._last_aggressive_unload_at = now
 
     def import_default_data(self, add_tagger_test_images: bool = False):

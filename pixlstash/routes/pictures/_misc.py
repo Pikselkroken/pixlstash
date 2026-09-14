@@ -33,6 +33,7 @@ from pixlstash.scoring import (
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlstash.utils.serialization_utils import safe_model_dict
 from pixlstash.services import plugin_service
+from pixlstash.task_runner import TaskCancelledError, TaskRunnerNotRunningError
 from pixlstash.utils.service.picture_stats import (
     PictureStatsParams,
     get_cached_picture_stats,
@@ -218,6 +219,16 @@ def register_routes(router, server):
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
+        except (TaskCancelledError, TaskRunnerNotRunningError) as exc:
+            # On Apple Metal the plugin runs on the GPU worker, and there was
+            # none to run it on: the runner stopped, its worker died, or a full
+            # restore cancelled the queued run. Not the plugin's fault, so a 503
+            # like the anomaly region's. A dead worker does not come back, so
+            # the detail does not promise that a retry will work.
+            raise HTTPException(
+                status_code=503,
+                detail="The GPU worker is not running; if this persists, restart PixlStash.",
+            ) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=f"Plugin failed: {exc}")
 

@@ -21,6 +21,8 @@ from fastapi.testclient import TestClient
 
 import pixlstash.routes.pictures._anomaly as anomaly_module
 from pixlstash.server import Server
+from pixlstash.services import picture_service
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 from tests.utils import upload_pictures_and_wait
 
@@ -197,7 +199,13 @@ def test_anomaly_region_scope_both_directions():
 
 
 def test_anomaly_region_unknown_tag_is_422():
-    """An unknown anomaly tag yields 422 with a clear message (owner path)."""
+    """An unknown anomaly tag yields 422 with a clear message (owner path).
+
+    Also when the picture does not decode (a video still carrying anomaly
+    tags): the tag is checked before the file is opened, so an undecodable
+    picture cannot turn an unknown tag into a diffuse 200 and cache it. A
+    known tag on that picture is still the diffuse 200.
+    """
     temp_dir, server, client, picture_ids = _setup_server_with_pictures()
     try:
         r = client.get(
@@ -206,6 +214,41 @@ def test_anomaly_region_unknown_tag_is_422():
         )
         assert r.status_code == 422, r.text
         assert "Unknown anomaly tag" in r.json()["detail"]
+
+        undecodable = picture_ids[1]
+        file_path = ImageUtils.resolve_picture_path(
+            server.vault.image_root,
+            picture_service.fetch_picture_file_path(server.vault.db, undecodable),
+        )
+        with open(file_path, "wb") as fh:
+            fh.write(b"not an image at all")
+
+        r = client.get(
+            f"{API}/pictures/{undecodable}/anomaly_region",
+            params={"tag": "definitely not a label"},
+        )
+        assert r.status_code == 422, r.text
+        assert "Unknown anomaly tag" in r.json()["detail"]
+        assert not [
+            key for key in anomaly_module._anomaly_region_cache if key[0] == undecodable
+        ], "an unknown tag on an undecodable picture was cached"
+
+        # Positive control: a result for this picture is cached under its key.
+        r = client.get(
+            f"{API}/pictures/{undecodable}/anomaly_region",
+            params={"tag": "malformed hand"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json() == {
+            "picture_id": undecodable,
+            "tag": "malformed hand",
+            "boxes": [],
+            "diffuse": True,
+            "heatmap": None,
+        }
+        assert list(anomaly_module._anomaly_region_cache) == [
+            (undecodable, "malformed hand", 1)
+        ]
     finally:
         server.__exit__(None, None, None)
         temp_dir.cleanup()

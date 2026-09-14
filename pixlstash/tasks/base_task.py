@@ -72,6 +72,12 @@ class BaseTask(ABC):
     #: frees up shortly, so the same batch is worth retrying rather than losing.
     VRAM_OOM_ATTEMPTS = 3
 
+    #: Whether the runner flushes the device allocator cache and collects
+    #: garbage after this task runs on the GPU queue. A task that allocates
+    #: little and runs often (a ``GpuCallTask``) opts out: the flush costs a
+    #: ``gc.collect()`` per call and hands back buffers the next call reuses.
+    FLUSH_DEVICE_CACHE_AFTER_RUN = True
+
     def __init__(self, task_type: str, params: Optional[dict[str, Any]] = None):
         self.id = str(uuid.uuid4())
         self.type = task_type

@@ -24,7 +24,7 @@ from pixlstash.db_models.tag_prediction import (
     is_plugin_model_version,
     TagPrediction,
 )
-from pixlstash.utils.device_utils import USE_GPU_ADVICE
+from pixlstash.utils.device_utils import USE_GPU_ADVICE, is_metal
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.image_processing.face_utils import expand_bbox_to_square
@@ -177,6 +177,13 @@ class TagTask(BaseTask):
                 daemon=True,
             )
             self._preload_thread.start()
+
+        # On Apple Metal the model loads on the GPU worker when the task runs.
+        # A load on this thread uses the device while the worker may be running
+        # another model, which crashes torch (docs/apple-metal-thread-safety.md).
+        engine = getattr(self._tagging_workflow, "_engine", None)
+        if is_metal(getattr(engine, "device", None)):
+            return
 
         # Start model loading in a background thread and wait for it to finish
         # before returning.  submit() puts the task in the GPU queue only after

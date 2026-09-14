@@ -90,7 +90,14 @@ def _bring_up(vault, label: str) -> None:
     A failed engine build costs the AI workers, not the switch: the library is
     perfectly usable without them, and raising here would roll the user back to
     the library they just left.
+
+    Where Apple Metal is present, a GPU worker the previous library's runner
+    could not stop is waited for before the engine is built, not only before
+    the workers start: building the engine already reads Metal's working set.
+    A worker still running after the wait fails the switch, as ``start()``
+    would.
     """
+    vault.wait_for_previous_metal_worker()
     try:
         vault.ensure_ready()
     except Exception:

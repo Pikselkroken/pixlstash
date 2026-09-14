@@ -12,6 +12,7 @@ from pixlstash.event_types import EventType
 from pixlstash.image_plugins.registry import get_image_plugin_manager
 from pixlstash.image_plugins.service import apply_plugin_to_pictures
 from pixlstash.pixl_logging import get_logger
+from pixlstash.task_runner import TaskCancelledError, TaskRunnerNotRunningError
 
 if TYPE_CHECKING:
     from pixlstash.image_plugins.base import ImagePlugin
@@ -75,6 +76,10 @@ async def run_plugin_on_pictures(
 
     Raises:
         ValueError: If the plugin name is not found.
+        TaskRunnerNotRunningError: On Apple Metal, there is no GPU worker to
+            run the plugin on: the task runner is stopped or its worker died.
+        TaskCancelledError: On Apple Metal, the run was cancelled while it
+            waited for the GPU worker, e.g. by a full restore.
         RuntimeError: If plugin execution fails with an unexpected error,
             including a plugin raising ``SystemExit`` or ``KeyboardInterrupt``.
     """
@@ -140,6 +145,20 @@ async def run_plugin_on_pictures(
             stack=stack,
         )
     except ValueError as exc:
+        vault.notify(
+            EventType.PLUGIN_PROGRESS,
+            {
+                "run_id": plugin_run_id,
+                "plugin": name,
+                "status": "failed",
+                "message": str(exc),
+            },
+        )
+        raise
+    except (TaskRunnerNotRunningError, TaskCancelledError) as exc:
+        # Nothing was wrong with the plugin: there was no GPU worker to run it
+        # on. Raised as itself so the route can answer 503 rather than 500.
+        logger.warning("Plugin run for %r did not reach the GPU worker: %s", name, exc)
         vault.notify(
             EventType.PLUGIN_PROGRESS,
             {

@@ -231,6 +231,163 @@ ran at the same time on the same GPU.
   before Python sees anything, so no retry or CPU fallback reaches them. Keep
   the threads apart instead.
 
+## What PixlStash does
+
+Two layers, one for threads PixlStash does not own and one for every thread it
+does.
+
+- **transformers' loader threads.** `InferenceEngine.create` calls
+  `configure_metal_model_loading()` (`utils/device_utils.py`) before any
+  service exists. Whenever Metal is present it sets
+  `HF_DEACTIVATE_ASYNC_LOAD=1`, so transformers loads weights on the calling
+  thread instead of its four-thread pool. A value the owner already set is
+  kept. `pixlstash-cli plugins test --image` calls it too, before the plugin's
+  `setup()` and `init()`. Florence-2 loads straight onto Metal in fp16, the
+  dtype its checkpoint is stored in, so that load has nothing to cast.
+- **PixlStash's own threads.** The task runner's single GPU worker is the only
+  thread that uses Metal. Every GPU-queue task already runs there. Other work
+  that is not a task reaches the worker through
+  **`Vault.run_inference(fn, *args, **kwargs)`**:
+  - On Metal, the call runs on the GPU worker through
+    `TaskRunner.run_on_gpu_worker`, as an `URGENT` `GpuCallTask`, and the caller
+    waits for it. From the GPU worker itself it runs inline. A vault whose
+    engine build failed has no device to read, so where Metal is present its
+    calls go to the worker as well: an image plugin picks its own device, and
+    would pick Metal.
+  - On CUDA and the CPU it runs inline, unchanged. So does a Vault built with
+    `disable_background_workers`: it has no task runner, no worker thread to
+    race, and no engine unless a caller builds one.
+  - A runner that is stopped, was never started, or whose GPU worker has died
+    raises `TaskRunnerNotRunningError` (a `RuntimeError`). Nothing falls back
+    to running on the calling thread. A caller already waiting stops waiting,
+    within `TaskRunner.GPU_CALL_LIVENESS_POLL_S`, when the worker dies.
+  - Whatever the call raises reaches the caller unwrapped, `SystemExit` and
+    `KeyboardInterrupt` included, and the worker keeps running: a plugin's
+    `sys.exit()` would otherwise end the one thread GPU work runs on.
+  - `run_inference` waits `TaskRunner.GPU_CALL_TIMEOUT_S` (60 s).
+    **`Vault.run_long_inference`** routes the same way with no timeout, for a
+    run the user started and watches progress for. It does not retry a GPU
+    out-of-memory error (`retry_vram_oom=False`): the retry would run the call
+    again from the start and report its progress twice.
+  - The runner does not flush the device cache or run `gc.collect()` after a
+    call task (`GpuCallTask.FLUSH_DEVICE_CACHE_AFTER_RUN = False`), so a short
+    call does not throw away the buffers the next one reuses. After an
+    ordinary GPU task the runner collects garbage, then flushes: a tensor held
+    in a reference cycle is freed only by the collection.
+  - What a call leaves behind is still freed on the worker, before the caller
+    wakes: a call that raises clears the frames its error holds and collects
+    garbage, and `run_long_inference` collects after the run. Dropped on the
+    caller's thread, the error's frames or a model in a reference cycle would
+    free their Metal tensors there.
+
+What goes through it:
+
+| Path | Thread it starts on | On Metal |
+|---|---|---|
+| Anomaly region (`GET /pictures/{id}/anomaly_region`): on-demand tagger load and Grad-CAM pass | request thread | one `run_inference` call for both, so an idle unload queued on the worker cannot land between them |
+| Image plugin runs (`POST /pictures/plugins/{name}`): `ImagePlugin.run` and `run_video` | an `asyncio.to_thread` worker | `run_long_inference`. The plugin API does not say whether a plugin uses the GPU, so every plugin goes, a PIL filter included: on a Mac it waits behind the GPU task already running, and an anomaly region queued behind a long plugin run can get a 503. Progress and error callbacks run on the GPU worker and publish through `Vault.notify`, which any thread may call. A plugin that raises `SystemExit` or `KeyboardInterrupt` fails its run with a 500, on every platform: re-raised on the event loop, asyncio would stop the server |
+| Idle unload (`Vault._maybe_aggressive_unload`, from the worker-progress poll and the keep-models-in-memory setting) | request thread | queued as a `GpuCallTask` without waiting, so the poll returns at once; its busy checks are unchanged. Off Metal it runs on the poll thread, where an unload flushes Metal's cache only for a service on Metal, so a Mac forced onto the CPU flushes nothing there |
+| `TagTask` model preload at queue time | a `TagModelPreload` thread started by the planner's submit | skipped when the engine is on Metal; the worker loads the model when the task runs |
+| InsightFace release (`FaceExtractionTask.release_detection_models`), also run by the face finder's drain on the planner thread | planner thread | flushes the CUDA cache only. InsightFace runs on ONNX Runtime's CPU provider on a Mac, so a Metal flush freed nothing it held |
+
+The CPU-queue flush in `TaskRunner._run` (`elif vram_reserved_mb > 0`) cannot
+reach Metal. `_wait_for_vram_budget` reserves nothing for a task whose
+`estimated_vram_mb()` is 0, and every task that overrides it is a GPU-queue
+task.
+
+**A guard turns a missed path into an exception.** `TaskRunner.start()`
+registers its GPU worker as the Metal thread (`register_metal_thread`).
+`ensure_metal_thread(device)` raises `RuntimeError` naming the calling thread
+and pointing at `Vault.run_inference` when the device is `mps`, a worker is
+registered, and the caller is not it. It is silent on CUDA, the CPU, and with
+no running runner. A registered worker that has died (an exception the runner's
+loop does not catch, raised outside `BaseTask.run`, which records a task's
+`SystemExit` or `KeyboardInterrupt` as its failure) still refuses every other
+thread, with a message saying it is no longer running: its runner has not
+stopped, and letting request threads in would put them on Metal together. It is
+called at the entry points code outside a task reaches, not in inner loops:
+
+- `SBertService.encode`
+- `ClipService.encode_text`, `encode_image_batch`, `encode_image_crops`
+- `ModelLifecycleManager.aggressive_unload` and `safe_idle_unload`, before
+  anything is unloaded or flushed
+- `PixlStashTaggerService.localize_anomaly`
+
+**The registration outlives a worker that will not stop.** `stop()` clears it
+only once the worker has exited, and a worker leaving its loop clears it
+itself, so one still running a task after the runner's
+`STOP_JOIN_TIMEOUT_S` (60 s) join stays the Metal thread:
+
+- `Vault.stop()` does not unload or close models while such a worker runs on
+  Metal. It logs a warning naming the worker and keeps the engine referenced,
+  with the worker, in `Vault._engines_left_loaded`: dropping the last
+  reference frees its tensors on the stopping thread, which is Metal work on a
+  second thread too. The database still closes, without the `gc.collect()` its
+  close otherwise runs: that would free the worker's garbage, Metal tensors
+  included, on the stopping thread. The next `Vault.start()`
+  queues the close of each such engine whose worker has exited onto its own
+  GPU worker, and the entry is dropped once the close has run there; a close
+  cancelled before it ran leaves the engine held for a later start.
+- `Vault.start()` waits up to `PREVIOUS_METAL_WORKER_WAIT_S` (60 s) for that
+  worker to exit before starting its own, then refuses with `RuntimeError`
+  (`Vault.wait_for_previous_metal_worker`). It waits wherever Metal is present,
+  whatever its engine: an engine whose build failed can be built later, and a
+  plugin run before then picks Metal itself. A library switch waits before it
+  builds the new engine too, since building it reads Metal's working set. A
+  bounded wait rather than an immediate refusal: the worker is usually
+  finishing a batch or a load that ignored the cancel, and a refused library
+  switch would recover by starting the previous library's vault, into the same
+  worker.
+- A failed `Vault.start()` stops what it had started and closes the vault,
+  including its database, before re-raising.
+
+**A busy GPU or a missing worker is a 503, not a 500.** A routed call waits up
+to 60 s behind the task already on the worker. The anomaly region turns a
+`TimeoutError` into HTTP 503 saying the GPU is busy, and a `TaskCancelledError`
+or `TaskRunnerNotRunningError` into 503 saying the GPU worker is not running.
+`POST /pictures/plugins/{name}` answers the same 503 for those two. The
+not-running 503 asks for a restart if it persists rather than a retry: a dead
+worker does not come back. A `RuntimeError` from the model or the plugin
+itself keeps the route's own answer. Neither retries. How long a routed call
+waits is the rest of the task on the worker.
+
+Not covered:
+
+- WD14 runs on ONNX Runtime with CoreML, not torch's Metal backend. It runs
+  inside GPU tasks anyway.
+- A GPU worker that outlives its runner's stop leaves its models loaded until
+  a later vault starts after that worker has exited (above), or the process
+  exits.
+- The runner does not flush the device cache after an image plugin run, which
+  is a call task; the next ordinary GPU task's flush releases what it cached.
+- Python's automatic garbage collection can run on any thread. Ordinary GPU
+  tasks, failed calls and plugin runs collect on the worker as they finish,
+  and a failed call's frames are cleared there, so a free off the worker needs
+  garbage the worker made and has not collected yet: a short call that
+  succeeded, or a task still running. Measured without those collections, 19
+  of 19 failed calls freed their Metal tensors on request threads; none
+  crashed.
+
+### Measured with PixlStash's own services
+
+Without the routing above, several paths used Metal outside the GPU worker
+while that worker ran models and flushed the cache after every GPU task. They
+were reproduced with PixlStash's own SBERT (`all-MiniLM-L6-v2`), CLIP
+(`ViT-B-32`) and Florence-2 base services on two threads, not through the
+running server. Ten fresh processes per row:
+
+| Situation | torch 2.13.0 | torch 2.14.0 | Same work on one thread |
+|---|---|---|---|
+| First search while the worker runs CLIP's first pass (cold kernels) | 8 failed | 10 failed | 0 failed |
+| Warm search while the worker flushes the cache after each batch | 10 failed, then 9 on a repeat | 3 failed | 0 failed |
+| Warm search while the worker runs CLIP, no flush | 0 failed | – | – |
+| Two warm searches at once | 0 failed | – | – |
+| Warm search while the worker loads, captions with and unloads Florence-2 | 0 failed | – | – |
+
+The clean rows are clean in ten runs, not proven safe. The Florence-2 row
+flushed only three times per run, below the 32–93 flushes the flush row
+needed to fail, and it never tested a *first* search during a load.
+
 ## Upstream status (checked 2026-09-13)
 
 - [pytorch#167541](https://github.com/pytorch/pytorch/pull/167541) adds mutexes

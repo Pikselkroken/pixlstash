@@ -12,7 +12,7 @@ from typing import Optional
 
 import numpy as np
 
-from pixlstash.utils.device_utils import empty_device_cache
+from pixlstash.utils.device_utils import empty_device_cache, ensure_metal_thread
 from pixlstash.utils.vram_utils import is_device_error
 
 # ML imports (torch / open_clip, which itself pulls torch, torchvision and
@@ -147,11 +147,16 @@ class ClipService:
 
         Returns:
             Float32 numpy array of shape ``(N, D)`` or ``None`` on failure.
+
+        Raises:
+            RuntimeError: On Apple Metal, called from a thread other than the
+                task runner's GPU worker (``ensure_metal_thread``).
         """
         import torch
 
         if not images:
             return None
+        ensure_metal_thread(self._device)
         self.ensure_ready()
         try:
             if tensors is None or len(tensors) != len(images):
@@ -201,11 +206,18 @@ class ClipService:
 
         Returns:
             1-D numpy array or ``None`` on failure.
+
+        Raises:
+            RuntimeError: On Apple Metal, called from a thread other than the
+                task runner's GPU worker (``ensure_metal_thread``). Raised
+                before the ``try`` below, which would otherwise turn it into
+                ``None``.
         """
         import torch
 
         if not query:
             return None
+        ensure_metal_thread(self._device)
         self.ensure_ready()
         try:
             tokens = self._tokenizer([query]).to(self._device)
@@ -232,9 +244,14 @@ class ClipService:
         Returns:
             List of 1-D numpy arrays (or ``None`` for failed crops), same
             length as ``crops``.
+
+        Raises:
+            RuntimeError: On Apple Metal, called from a thread other than the
+                task runner's GPU worker (``ensure_metal_thread``).
         """
         import torch
 
+        ensure_metal_thread(self._device)
         self.ensure_ready()
         results: list[Optional[np.ndarray]] = []
         for i, crop in enumerate(crops):
