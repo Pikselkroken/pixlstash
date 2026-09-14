@@ -57,7 +57,7 @@ async function openEditor(character) {
       // reference grid would not be findable from here.
       stubs: {
         AppDialog: {
-          props: ["open", "title", "width"],
+          props: ["open", "title", "size"],
           template: "<div><slot /><slot name='footer' /></div>",
         },
       },

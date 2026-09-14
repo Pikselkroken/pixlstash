@@ -26,7 +26,7 @@ test('telemetry consent preview stays compact while choices are explored', async
 
   try {
     await page.goto('/')
-    const dialog = page.locator('.tc')
+    const dialog = page.locator('.app-dialog:has(.tc__options)')
     const preview = dialog.locator('.tp')
     const choices = dialog.locator('.tc__opt')
     await expect(dialog).toBeVisible()

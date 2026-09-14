@@ -44,7 +44,6 @@ onBeforeUnmount(unregisterConfirmHost);
   <AppDialog
     :open="Boolean(activeConfirm)"
     :title="activeConfirm?.options.title ?? ''"
-    :width="480"
     @close="settle(false)"
     @accept="settle(true)"
   >
@@ -88,7 +87,7 @@ onBeforeUnmount(unregisterConfirmHost);
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
-  margin: var(--space-4) 0 0;
+  margin: 0;
   padding: var(--space-3) var(--space-4);
   border: 1px solid rgb(var(--v-theme-warning));
   border-radius: var(--radius-md);
