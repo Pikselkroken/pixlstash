@@ -1418,7 +1418,7 @@
 }
 
 .sidebar-move-menu-group-header--current {
-  color: rgba(var(--v-theme-primary), 0.8);
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-move-menu-item {

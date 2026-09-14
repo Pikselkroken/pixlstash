@@ -49,8 +49,8 @@ to reverse.
 > `#c47a1e` under pure white; read `frontend/src/main.js` for the live values, not the
 > table. The focus and wash rows were superseded again on 2026-09-13 (ink focus ring,
 > ink hover wash; `visual-language.md` §11). `dark-surface-primary` and the two tally
-> spans are live as specified. The foreground sweep below is done too (#1300): eleven
-> small-text sites re-pointed at their surface's ink.
+> spans are live as specified. The foreground sweep below is done too (#1300): the
+> small-text sites were moved onto their surface's ink.
 
 | File | Change |
 |---|---|
@@ -79,18 +79,27 @@ have had when its accent was measured at 3.74:1.
 is 2.93 – 3.41:1 as a foreground on every light chrome surface, and `primary` /
 `secondary` / `tertiary` are 2.30 – 3.04:1 on every dark one, so any small text in one
 of the four fails in one theme or the other. The pass took every rule that sets one of
-the four as `color` together with a font size at `--text-sm` or below, eleven sites, and
-moved the words onto the ink of the surface they sit on: `.titlebar-update-link`
+the four as `color` on text at `--text-sm` (13px) or below, whether the size is declared
+in that rule or on the base class a modifier extends, and moved the words onto the ink
+of the surface they sit on: `.titlebar-update-link`
 (`on-background`), `.sidebar-update-available` (`sidebar-text`), `.editor-copy-status`,
 `.editor-sync-detected`, `.relocate-result`, `.account-success`, `.pp-more` (which now
 inherits its row's `on-surface`), `.pf-url-meta` (`on-surface` at
 `--opacity-text-secondary`), `.layout-tree__badge` (words to `on-surface`, the olive
 stays on its border), and `.rs-xp-points` / `.rs-xp-streak` (`on-dark-surface`; tertiary
-measures 2.79:1 on `dark-surface`). Two it found and left: `.star-number-label` sits
+measures 2.79:1 on `dark-surface`), `.rs-bin-new` / `.rs-pair-new` (`on-dark-surface`,
+the amber stays in the wash), `.kind-pill--DAILY` / `--MANUAL` / `--WEEKLY` (words to
+`on-surface`, the kind's hue moves into the wash through `--kind-hue`),
+`.layout-tree__delta--in` / `--out`, `.smart-score-status--success`, and
+`.sidebar-move-menu-group-header--current` (`sidebar-text`, set apart from its
+siblings by full opacity). A success message is therefore ink in every surface that had
+one in amber; the words say "saved", and status colour was never meant to be the only
+cue. Two sites were found and left: `.star-number-label` sits
 over a photo or the dark lightbox, not a canvas (amber 4.45 – 5.06:1 there), and
-`.titlebar-bc-crumb.is-link` inherits its size, so the size filter missed it; its olive
-is the only thing marking a crumb as clickable, which makes re-pointing it a UI/UX
-call rather than a mechanical one.
+`.titlebar-bc-crumb.is-link`, whose olive is the only thing marking a crumb as
+clickable. The two update links had the same property and were re-pointed anyway,
+leaning on their hover underline and the dismiss control beside them; if they read as
+lost in situ, the fix is an underline at rest, not the amber back.
 
 **Reversal cost.** Cheap and total: every row above is a one-line value swap with no
 structural dependency. The one irreversible-ish part is perceptual, not technical — the
@@ -118,8 +127,10 @@ under a white label.
 > reaches 4:1 on that fill, so closing it means lowering the active fill, a visual call.
 > `frontend/src/styles/on-fill-pairing.test.js` now fails the build on any rule that
 > pairs one of those four `on-*` colours with an `rgba(...)` or `color-mix(...)`
-> background. It reads a rule at a time, so an `on-*` in a child rule under a
-> see-through parent (the move-menu shape) is still a review catch.
+> background. It is deliberately that one shape: an `on-*` with no background in its
+> rule, an `on-*` made translucent itself, and an `on-*` in a child rule under a
+> see-through parent (the toggle, chart and move-menu shapes above) are all legal
+> somewhere in the tree, so they stay review catches rather than a noisy allowlist.
 
 The `on-<status>`-on-a-tint bug (`visual-language.md` §4) has three siblings outside the
 status family. All four are **pre-existing and independent of the action-fill change**;
@@ -149,7 +160,7 @@ fourth distinct occurrence of that bug in this codebase.
 > not foregrounds, which is correct). `SelectionBar`'s `6px` is **gone**: the bar was merged
 > into the grid action pill (`35c9f519`) and the old rule with it; the action-bar height
 > reconciliation it was waiting on is still the §8 decision. The z-index retrofit
-> **stays opportunistic by decision** (`visual-language.md` §14): 90 raw values remain,
+> **stays opportunistic by decision** (`visual-language.md` §14): 91 raw numeric values remain,
 > and moving them wholesale is exactly the unreviewable stacking change §14 rules out.
 
 - **~40 `error`-on-`dark-surface` declarations** in the review overlay measure 3.12:1 and
@@ -167,7 +178,7 @@ fourth distinct occurrence of that bug in this codebase.
   them here.
 ### 9.4 There are two focus languages, and the second one is not documented anywhere
 
-> **Status: done (`82a8f22c`, 2026-09-13), by a different route.** `--focus-ring` is
+> **Status: done (`82a8f22c`, 2026-08-06, and `3b8b1035`, 2026-09-13), by a different route.** `--focus-ring` is
 > gone rather than adopted. Focus is now one global ink outline (2px `--focus-stroke`
 > with a 2px gap) drawn from `style.css` and documented in `visual-language.md` §11.
 > The `focus` theme key is retired and nothing reads `rgb(var(--v-theme-focus))` any
