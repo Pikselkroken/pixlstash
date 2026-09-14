@@ -145,6 +145,11 @@ function onKeydown(event) {
   cursor: not-allowed;
 }
 
+/* One unavailable option fades on its own; a disabled group fades as a whole. */
+.seg:not(.seg--disabled) .seg__opt:disabled {
+  opacity: var(--opacity-disabled);
+}
+
 .seg__opt:not(:disabled):not(.seg__opt--on):hover {
   background: var(--hover-wash);
   color: rgb(var(--v-theme-on-surface));

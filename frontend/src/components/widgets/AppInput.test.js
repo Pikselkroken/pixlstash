@@ -13,8 +13,12 @@ import AppInput from "./AppInput.vue";
 describe("AppInput", () => {
   it("puts the label above the box, never inside it", () => {
     const w = mount(AppInput, { props: { label: "Folder path" } });
-    expect(w.find(".field-label").text()).toBe("Folder path");
-    expect(w.find(".app-input__wrap").text()).toBe("");
+    const label = w.find(".field-label");
+    expect(label.text()).toBe("Folder path");
+    expect(w.find(".app-input__wrap").find(".field-label").exists()).toBe(false);
+    expect(label.element.nextElementSibling).toBe(
+      w.find(".app-input__wrap").element,
+    );
   });
 
   it("takes the mono face only when asked", async () => {
@@ -43,6 +47,13 @@ describe("AppInput", () => {
     expect(input.attributes("aria-label")).toBe("Destination");
     await input.setValue("y");
     expect(w.emitted("update:modelValue")).toEqual([["y"]]);
+  });
+
+  it("keeps a min or max of 0", () => {
+    const w = mount(AppInput, { props: { type: "number", min: 0, max: 0 } });
+    expect(w.find("input").attributes("min")).toBe("0");
+    expect(w.find("input").attributes("max")).toBe("0");
+    expect(mount(AppInput).find("input").attributes("min")).toBeUndefined();
   });
 
   it("focuses itself on mount when autofocus is set", () => {

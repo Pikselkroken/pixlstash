@@ -53,7 +53,9 @@ const props = defineProps({
   ariaLabel: { type: String, default: "" },
 });
 
-const emit = defineEmits(["update:modelValue"]);
+// `pick` fires for a click (pointer, Enter or Space) and not for an arrow, so a
+// menu can close on a deliberate choice and stay open while arrows browse.
+const emit = defineEmits(["update:modelValue", "pick"]);
 
 const tabStop = computed(() => tabStopId(props.options, props.modelValue));
 
@@ -64,6 +66,7 @@ function iconName(icon) {
 function select(option) {
   if (props.disabled || option.disabled) return;
   if (option.id !== props.modelValue) emit("update:modelValue", option.id);
+  emit("pick", option.id);
 }
 
 function onKeydown(event) {

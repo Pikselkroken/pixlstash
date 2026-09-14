@@ -119,7 +119,8 @@
                 :columns="2"
                 :disabled="gbSearchActive"
                 aria-label="Sort order"
-                @update:model-value="gbHandleSortModelUpdate"
+                @update:model-value="gbHandleSortModelUpdate($event, false)"
+                @pick="gbCloseSortMenuOnPick"
               >
                 <template #meta="{ option }">
                   <span
@@ -886,11 +887,19 @@ function gbCommitSortSelection(sortValue) {
   gbSortModel.value = sortValue != null ? String(sortValue) : "";
 }
 
-function gbHandleSortModelUpdate(sortValue) {
+function gbHandleSortModelUpdate(sortValue, closeMenu = true) {
   if (searchStore.searchQuery && searchStore.searchQuery.trim()) return;
   gbPendingSortSelection.value = sortValue != null ? String(sortValue) : "";
   if (!gbSortRequiresParameter(gbPendingSortSelection.value)) {
     gbCommitSortSelection(gbPendingSortSelection.value);
+    if (closeMenu) gbSortMenuOpen.value = false;
+  }
+}
+
+// A click closes the menu; an arrow applies the sort and leaves it open, so the
+// list can be browsed from the keyboard.
+function gbCloseSortMenuOnPick(sortValue) {
+  if (!gbSortRequiresParameter(String(sortValue ?? ""))) {
     gbSortMenuOpen.value = false;
   }
 }

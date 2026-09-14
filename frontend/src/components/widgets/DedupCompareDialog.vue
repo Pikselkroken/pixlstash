@@ -2226,9 +2226,8 @@ function onZoomContextMenu() {
         <!-- Fit and 100% are SNAP STOPS on the wheel's continuum; the
              percentage readout is what makes "same magnification across the
              blink" verifiable by eye. -->
-        <!-- Arrow keys stop here: the radiogroup owns them while it has focus,
-             and the queue's document-level key model would otherwise flip the
-             picture on the same press. -->
+        <!-- mousedown.prevent: a click snaps the zoom without taking focus, so the
+             arrows go on flipping pictures. Tabbed to, the group owns them. -->
         <Segmented
           class="dc-zv-mode"
           :model-value="zoomSnap"
@@ -2238,7 +2237,7 @@ function onZoomContextMenu() {
           @update:model-value="
             (id) => snapZoomTo(id === 'fit' ? zoomFitScale : 1)
           "
-          @keydown.up.down.left.right.stop
+          @mousedown.prevent
         />
         <span v-if="zoomPercent !== null" class="dc-zv-pct">{{
           zoomPercent
@@ -2739,6 +2738,7 @@ function onZoomContextMenu() {
   --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
   --track-trough: rgba(var(--v-theme-scrim), 0.34);
   --track-ring: rgba(var(--v-theme-on-dark-surface), 0.4);
+  --focus-stroke: rgb(var(--v-theme-on-dark-surface));
 }
 
 /* The live magnification, in the photo-tool convention (100% = 1:1). Same

@@ -2,6 +2,7 @@
  * Roving focus for a `radiogroup` (Segmented, OptionRows). Left/Up step back,
  * Right/Down step forward, wrapping and skipping disabled options. The arrow
  * SELECTS as it moves, which is the radiogroup contract, and focus follows.
+ * A handled arrow does not propagate.
  *
  * @param {KeyboardEvent} event - keydown on the radiogroup element.
  * @param {Array<{id: *, disabled?: boolean}>} options
@@ -15,7 +16,10 @@ export function arrowStep(event, options, value) {
   if (!step) return undefined;
   const live = options.filter((o) => !o.disabled);
   if (!live.length) return undefined;
+  // The group owns the arrow while it has focus, so a grid's or a queue's
+  // window-level key model must not act on the same press.
   event.preventDefault();
+  event.stopPropagation();
   const at = live.findIndex((o) => o.id === value);
   const next =
     at < 0

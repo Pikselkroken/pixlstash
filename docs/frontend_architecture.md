@@ -2278,9 +2278,10 @@ split inset `0 var(--space-3) 0 var(--space-5)` — right pinned to the grid's s
 the app-wide tail is a fixed anchor, left at the shelf's own content gutter.
 `.shelf-title` sits at `--text-md` (the queue's `.qtitle`) rather than
 `--text-xl`, and `.shelf-sub` at the queue's `.qsub` alpha. The Shelf /
-Training runs switch is the design system's `Segmented` track (`.tbm-seg`,
-with `.shelf-viewseg` sizing it to 24px segments in a 30px track, #1270), and
-keeps `tablist` ARIA because it swaps panels rather than setting a value. `Toolbar.test.js` reads the CSS block of all three
+Training runs switch is a tab strip drawn in the popover's old track (`.tbm-seg`,
+with `.shelf-viewseg` sizing it to 24px segments in a 30px track, #1270), not
+the `Segmented` component: it keeps `tablist` ARIA because it swaps panels
+rather than setting a value, and tabs are their own job (buttons.md). `Toolbar.test.js` reads the CSS block of all three
 selectors and asserts the shared recipe, the equal right inset, exactly one
 `background` declaration painting `toolbar`, and the identity type matching the
 queue's; jsdom computes no layout, so the coupling is what is pinned. **Fine

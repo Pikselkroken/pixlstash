@@ -55,9 +55,9 @@
            on one segment against mdi line art on the other unbalances a control
            that has to read as symmetric.
 
-           Drawn as the design system's `Segmented` track (`.tbm-seg`), but
-           keeps `tablist`/`tab`: unlike every other track in the app this one
-           switches which panel is on screen rather than setting a value. -->
+           Drawn in the popover's old `.tbm-seg` track, not `Segmented`: it
+           keeps `tablist`/`tab` because it switches which panel is on screen
+           rather than setting a value, and tabs are their own job. -->
       <div
         class="tbm-seg shelf-viewswitch"
         role="tablist"

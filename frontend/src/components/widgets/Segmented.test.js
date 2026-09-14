@@ -56,21 +56,55 @@ describe.each([
     expect(w.emitted("update:modelValue")).toEqual([["c"]]);
   });
 
-  it("arrows select as they move, skip disabled options and wrap", async () => {
+  it("arrows step in their own direction, skip disabled options, wrap, and keep the press", async () => {
+    const options = [
+      { id: "a", label: "Alpha" },
+      { id: "b", label: "Beta", disabled: true },
+      { id: "c", label: "Gamma" },
+      { id: "d", label: "Delta" },
+    ];
+    const outer = vi.fn();
+    document.body.addEventListener("keydown", outer);
     const w = mount(Component, {
-      props: { options: OPTIONS, modelValue: "a" },
+      props: { options, modelValue: "a" },
       attachTo: document.body,
     });
+    const radios = w.findAll('[role="radio"]');
     await w.trigger("keydown", { key: "ArrowRight" });
-    expect(w.emitted("update:modelValue")[0]).toEqual(["c"]);
-    await w.setProps({ modelValue: "c" });
-    await w.trigger("keydown", { key: "ArrowDown" });
-    expect(w.emitted("update:modelValue")[1]).toEqual(["a"]);
+    expect(w.emitted("update:modelValue").at(-1)).toEqual(["c"]);
+    expect(document.activeElement).toBe(radios[2].element);
     await w.trigger("keydown", { key: "ArrowLeft" });
-    expect(w.emitted("update:modelValue")[2]).toEqual(["a"]);
+    expect(w.emitted("update:modelValue").at(-1)).toEqual(["d"]);
+    expect(document.activeElement).toBe(radios[3].element);
+    await w.setProps({ modelValue: "d" });
+    await w.trigger("keydown", { key: "ArrowDown" });
+    expect(w.emitted("update:modelValue").at(-1)).toEqual(["a"]);
+    await w.setProps({ modelValue: "c" });
+    await w.trigger("keydown", { key: "ArrowUp" });
+    expect(w.emitted("update:modelValue").at(-1)).toEqual(["a"]);
+    // A handled arrow never reaches a window-level key model.
+    expect(outer).not.toHaveBeenCalled();
     await w.trigger("keydown", { key: "Enter" });
-    expect(w.emitted("update:modelValue")).toHaveLength(3);
+    expect(w.emitted("update:modelValue")).toHaveLength(4);
+    expect(outer).toHaveBeenCalledTimes(1);
+    document.body.removeEventListener("keydown", outer);
     w.unmount();
+  });
+
+  it("starts from the ends when no value is selected yet", async () => {
+    const w = mount(Component, { props: { options: OPTIONS, modelValue: "zz" } });
+    await w.trigger("keydown", { key: "ArrowRight" });
+    await w.trigger("keydown", { key: "ArrowLeft" });
+    expect(w.emitted("update:modelValue")).toEqual([["a"], ["c"]]);
+  });
+
+  it("does nothing while the whole group is disabled", async () => {
+    const w = mount(Component, {
+      props: { options: OPTIONS, modelValue: "a", disabled: true },
+    });
+    await w.findAll('[role="radio"]')[2].trigger("click");
+    await w.trigger("keydown", { key: "ArrowRight" });
+    expect(w.emitted("update:modelValue")).toBeUndefined();
   });
 });
 
@@ -104,5 +138,20 @@ describe("OptionRows", () => {
     expect(rows[2].find(".optrow__check").exists()).toBe(true);
     expect(rows[0].find(".optrow__check").exists()).toBe(false);
     expect(w.findAll(".optrow__check")).toHaveLength(1);
+  });
+
+  it("picks on a click, even of the current value, and never on an arrow", async () => {
+    const w = mount(OptionRows, {
+      props: { options: OPTIONS, modelValue: "a" },
+      attachTo: document.body,
+    });
+    await w.trigger("keydown", { key: "ArrowRight" });
+    expect(w.emitted("update:modelValue")).toEqual([["c"]]);
+    expect(w.emitted("pick")).toBeUndefined();
+    const radios = w.findAll('[role="radio"]');
+    await radios[0].trigger("click");
+    await radios[2].trigger("click");
+    expect(w.emitted("pick")).toEqual([["a"], ["c"]]);
+    w.unmount();
   });
 });
