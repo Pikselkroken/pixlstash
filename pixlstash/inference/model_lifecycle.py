@@ -104,8 +104,10 @@ class ModelLifecycleManager:
         except Exception as exc:
             logger.warning("Exception during aggressive unload: %s", exc)
 
-        empty_cuda_cache()
+        # Collect first: a model in a reference cycle is freed only by gc, so
+        # a flush before that hands none of its memory back.
         gc.collect()
+        empty_cuda_cache()
         trim_process_memory()
 
     def safe_idle_unload(
@@ -146,6 +148,7 @@ class ModelLifecycleManager:
         except Exception as exc:
             logger.warning("Exception during safe idle unload: %s", exc)
 
-        empty_cuda_cache()
+        # Collect before flushing, as ``aggressive_unload`` does.
         gc.collect()
+        empty_cuda_cache()
         trim_process_memory()

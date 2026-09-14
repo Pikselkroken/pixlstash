@@ -4,12 +4,17 @@ Stand-ins replace torch's device probes and the models, so these run on any
 host. The tests that need a real Apple Metal GPU are marked and skip without one.
 """
 
+import contextlib
+import gc
 import logging
 import sys
 import types
+import weakref
 
 import pytest
 
+import pixlstash.inference.model_lifecycle as model_lifecycle_module
+from pixlstash.inference.model_lifecycle import ModelLifecycleManager
 from pixlstash.utils.device_utils import (
     detect_device,
     empty_device_cache,
@@ -273,3 +278,67 @@ def test_a_failing_flush_is_logged_at_warning(fake_torch, caplog, backend, label
     assert len(warnings_logged) == 1, caplog.text
     assert label in warnings_logged[0]
     assert "allocator is wedged" in warnings_logged[0]
+
+
+class _CyclicModel:
+    """A stand-in model in a reference cycle, as the loaded LLaVA model is."""
+
+    def __init__(self):
+        self.self_reference = self
+
+
+@contextlib.contextmanager
+def _only_explicit_collections():
+    """Turn automatic garbage collection off, so only an explicit one frees a cycle.
+
+    Proves it took effect first: a cycle dropped inside must still be alive.
+    """
+    collecting = gc.isenabled()
+    gc.disable()
+    try:
+        probe = _CyclicModel()
+        probe_ref = weakref.ref(probe)
+        del probe
+        assert probe_ref() is not None, (
+            "a dropped cycle was freed without a collection, so a test cannot tell "
+            "a flush before the collection from one after it"
+        )
+        yield
+    finally:
+        if collecting:
+            gc.enable()
+
+
+class _CyclicModelService:
+    """A service whose ``unload`` drops a model held in a reference cycle."""
+
+    def __init__(self):
+        self.model = _CyclicModel()
+
+    def unload(self):
+        self.model = None
+
+
+@pytest.mark.parametrize("unload", ["aggressive_unload", "safe_idle_unload"])
+def test_a_lifecycle_unload_collects_the_models_before_flushing(unload, monkeypatch):
+    """The engine's unloads flush after the collection that frees the models.
+
+    Same reason as JoyCaption's unload above: an unloaded model in a reference
+    cycle is freed only by ``gc.collect()``.
+    """
+    service = _CyclicModelService()
+    model_ref = weakref.ref(service.model)
+    alive_at_flush = []
+    monkeypatch.setattr(
+        model_lifecycle_module,
+        "empty_cuda_cache",
+        lambda: alive_at_flush.append(model_ref() is not None) or True,
+    )
+
+    with _only_explicit_collections():
+        getattr(ModelLifecycleManager(device="mps"), unload)(clip_service=service)
+
+    assert service.model is None
+    assert alive_at_flush == [False], (
+        f"{unload} flushed the device cache while the unloaded model was alive"
+    )
