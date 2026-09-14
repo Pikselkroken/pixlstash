@@ -29,13 +29,16 @@
             :class="{ active: tab === 'pictures' }"
             type="button"
             :disabled="!hasPictures"
-            :title="
-              hasPictures
-                ? undefined
-                : 'Nothing this workflow made is still in the library'
-            "
             @click="tab = 'pictures'"
           >
+            <Tooltip
+              :text="
+                hasPictures
+                  ? ''
+                  : 'Nothing this workflow made is still in the library'
+              "
+              activator="parent"
+            />
             <v-icon size="12">mdi-image-multiple-outline</v-icon>
             Pictures
           </button>
@@ -98,8 +101,9 @@
               v-for="model in models"
               :key="model.name"
               class="wfins-chip"
-              :title="model.name"
-              >{{ modelStem(model.name) }}</span
+              ><Tooltip :text="model.name" activator="parent" />{{
+                modelStem(model.name)
+              }}</span
             >
           </div>
           <!-- Empty is a state, and it says only what is true. A recipe whose
@@ -153,9 +157,14 @@
               :key="id"
               class="wfins-tile"
               type="button"
-              :title="`Open picture ${id}`"
+              :aria-label="`Open picture ${id}`"
               @click="openPicture(id)"
             >
+              <Tooltip
+                :text="`Open picture ${id}`"
+                activator="parent"
+                :describe="false"
+              />
               <img :src="thumbUrl(id)" alt="" loading="lazy" />
             </button>
           </div>
@@ -230,6 +239,7 @@ import {
   workflowDescriptor,
 } from "../../utils/workflowShelf";
 import AppButton from "../widgets/AppButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const store = useWorkflowShelfStore();
 const sidebarStore = useSidebarStore();
@@ -552,7 +562,7 @@ watch(
 .wfins-bar-track {
   position: relative;
   height: 18px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   background: rgba(var(--v-theme-on-surface), 0.07);
   overflow: hidden;
 }
@@ -560,7 +570,7 @@ watch(
 .wfins-bar-fill {
   position: absolute;
   inset: 0 auto 0 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   background: rgba(var(--v-theme-accent), 0.75);
 }
 

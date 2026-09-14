@@ -15,6 +15,7 @@ import { useBreadcrumb } from "../composables/useBreadcrumb";
 import { useVersionCheck } from "../composables/useVersionCheck";
 import WordmarkLogo from "./WordmarkLogo.vue";
 import AppBarButton from "./widgets/AppBarButton.vue";
+import Tooltip from "./widgets/Tooltip.vue";
 
 const props = defineProps({
   installType: { type: String, default: "pip" },
@@ -80,7 +81,7 @@ const close = () => desktop?.windowClose?.();
         v-if="activeLibraryName"
         icon="bookshelf"
         class="titlebar-library"
-        :title="`Open Libraries settings. Active library: ${activeLibraryName}`"
+        :tooltip="`Open Libraries settings. Active library: ${activeLibraryName}`"
         @click="emit('open-libraries')"
       >
         <span class="bar-btn-label">{{ activeLibraryName }}</span>
@@ -97,9 +98,9 @@ const close = () => desktop?.windowClose?.();
             v-if="crumb.to"
             type="button"
             class="titlebar-bc-crumb is-link"
-            :title="`Go to ${crumb.label}`"
             @click="navigateBreadcrumb(crumb)"
           >
+            <Tooltip :text="`Go to ${crumb.label}`" activator="parent" />
             {{ crumb.label }}
           </button>
           <span v-else class="titlebar-bc-crumb" :title="crumb.label">{{
@@ -116,8 +117,7 @@ const close = () => desktop?.windowClose?.();
         target="_blank"
         rel="noopener noreferrer"
         :class="securityUpdateClass"
-        :title="securityUpdateTitle"
-        >&#x2191; v{{ latestVersion
+        ><Tooltip :text="securityUpdateTitle || ''" activator="parent" />&#x2191; v{{ latestVersion
         }}{{ latestSecurityLevel ? " security" : " available"
         }}<span
           v-if="latestSecurityLevel"
@@ -130,7 +130,7 @@ const close = () => desktop?.windowClose?.();
       <AppBarButton
         icon="close"
         aria-label="Dismiss update alert"
-        :title="`Dismiss v${latestVersion} update alert`"
+        :tooltip="`Dismiss v${latestVersion} update alert`"
         @click.prevent="dismissUpdateAlert"
       />
     </div>

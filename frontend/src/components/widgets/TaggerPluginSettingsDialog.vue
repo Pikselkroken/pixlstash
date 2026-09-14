@@ -163,8 +163,7 @@ watch(
               size="sm"
               icon-only
               icon-left="delete"
-              :title="`Delete ${artifact.label || artifact.name}`"
-              :aria-label="`Delete ${artifact.label || artifact.name}`"
+              :tooltip="`Delete ${artifact.label || artifact.name}`"
               @click="
                 $emit('delete-artifact', {
                   plugin: plugin.name,

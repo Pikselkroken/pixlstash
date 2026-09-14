@@ -10,9 +10,10 @@
  * it affects every session - the copy says "PixlStash", not "you".
  */
 import { computed, ref, watch } from "vue";
-import { VIcon, VTooltip } from "vuetify/components";
+import { VIcon } from "vuetify/components";
 import AppSelect from "../widgets/AppSelect.vue";
 import AppButton from "../widgets/AppButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsInfoCard from "./SettingsInfoCard.vue";
 import RetentionReductionDialog from "../widgets/RetentionReductionDialog.vue";
@@ -239,7 +240,7 @@ function cancelReduction() {
           :disabled="busy"
           @update:model-value="onSelect"
         />
-        <v-tooltip location="bottom" max-width="320" open-on-focus>
+        <Tooltip location="bottom" :describe="false">
           <template #activator="{ props: tooltipProps }">
             <AppButton
               v-bind="tooltipProps"
@@ -252,7 +253,7 @@ function cancelReduction() {
           <ul class="sr-tip">
             <li v-for="point in tooltipPoints" :key="point">{{ point }}</li>
           </ul>
-        </v-tooltip>
+        </Tooltip>
       </div>
 
       <p v-if="stateLine" class="sr-state" role="status">

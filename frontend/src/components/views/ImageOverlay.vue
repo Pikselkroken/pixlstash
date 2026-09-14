@@ -17,8 +17,8 @@
           class="overlay-close"
           @click="emit('close')"
           aria-label="Close (ESC)"
-          title="Close (ESC)"
         >
+          <Tooltip text="Close (ESC)" activator="parent" :describe="false" />
           <v-icon size="18">mdi-close</v-icon>
           <span>Close</span>
         </button>
@@ -45,10 +45,11 @@
           </span>
         </div>
         <div class="overlay-top-actions">
-          <v-tooltip
+          <Tooltip
             v-if="image && isCurrentLocked"
             location="bottom"
             :text="currentLockReason"
+            :describe="false"
           >
             <template #activator="{ props: lockTipProps }">
               <div
@@ -62,7 +63,7 @@
                 <span class="overlay-lock-chip-text">Locked</span>
               </div>
             </template>
-          </v-tooltip>
+          </Tooltip>
           <v-menu
             v-if="!isReadOnly"
             v-model="pluginMenuOpen"
@@ -77,14 +78,14 @@
                 v-bind="props"
                 class="overlay-icon-btn overlay-comfy-activator"
                 type="button"
-                title="Filters"
                 aria-label="Filters"
                 :class="{
                   hidden: chromeHidden,
                   'overlay-icon-btn--active': pluginMenuOpen,
                 }"
               >
-                <v-icon size="20">mdi-tune-variant</v-icon>
+                <Tooltip text="Filters" activator="parent" :describe="false" />
+                <v-icon size="18">mdi-tune-variant</v-icon>
                 <span class="overlay-comfy-activator-label">Filters</span>
               </button>
             </template>
@@ -142,14 +143,18 @@
             <button
               class="overlay-icon-btn overlay-comfy-activator"
               type="button"
-              title="Edit with ComfyUI"
               aria-label="Edit with ComfyUI"
               :class="{
                 hidden: chromeHidden,
                 'overlay-icon-btn--active': comfyuiMenuOpen,
               }"
             >
-              <v-icon size="20">mdi-robot</v-icon>
+              <Tooltip
+                text="Edit with ComfyUI"
+                activator="parent"
+                :describe="false"
+              />
+              <v-icon size="18">mdi-robot</v-icon>
               <span class="overlay-comfy-activator-label">I2I</span>
             </button>
             <v-menu
@@ -247,32 +252,44 @@
               </div>
             </v-menu>
           </div>
-          <AddToEntityControl
+          <Tooltip
             v-if="image && !isReadOnly"
-            type="set"
-            ref="addToSetControlRef"
-            :key="addToSetControlKey"
-            :subject-ids="[image.id]"
-            :include-deleted-members="true"
-            :force-dark="true"
-            :disabled="!!stackGroupingLockReason"
-            :title="stackGroupingLockReason || undefined"
-            :locked-set-ids="lockedSetsStore.lockedSetIds"
-            :class="{ hidden: chromeHidden }"
-            @added="(payload) => emit('added-to-set', payload)"
-          />
-          <AddToEntityControl
+            :text="stackGroupingLockReason || ''"
+          >
+            <template #activator="{ props: setTipProps }">
+              <AddToEntityControl
+                v-bind="setTipProps"
+                type="set"
+                ref="addToSetControlRef"
+                :key="addToSetControlKey"
+                :subject-ids="[image.id]"
+                :include-deleted-members="true"
+                :force-dark="true"
+                :disabled="!!stackGroupingLockReason"
+                :locked-set-ids="lockedSetsStore.lockedSetIds"
+                :class="{ hidden: chromeHidden }"
+                @added="(payload) => emit('added-to-set', payload)"
+              />
+            </template>
+          </Tooltip>
+          <Tooltip
             v-if="image && !isReadOnly"
-            type="project"
-            :subject-ids="[image.id]"
-            :include-deleted-members="true"
-            :expand-stacks="false"
-            :force-dark="true"
-            :disabled="!!stackGroupingLockReason"
-            :title="stackGroupingLockReason || undefined"
-            :class="{ hidden: chromeHidden }"
-            @selected="(payload) => emit('set-project', payload)"
-          />
+            :text="stackGroupingLockReason || ''"
+          >
+            <template #activator="{ props: projectTipProps }">
+              <AddToEntityControl
+                v-bind="projectTipProps"
+                type="project"
+                :subject-ids="[image.id]"
+                :include-deleted-members="true"
+                :expand-stacks="false"
+                :force-dark="true"
+                :disabled="!!stackGroupingLockReason"
+                :class="{ hidden: chromeHidden }"
+                @selected="(payload) => emit('set-project', payload)"
+              />
+            </template>
+          </Tooltip>
           <StarRatingOverlay
             v-if="image && !isMobile"
             :class="{ hidden: chromeHidden }"
@@ -293,10 +310,10 @@
                 v-bind="menuProps"
                 class="overlay-icon-btn overlay-star-mobile-btn"
                 type="button"
-                title="Set rating (1–5)"
                 aria-label="Set rating"
                 :class="{ hidden: chromeHidden }"
               >
+                <Tooltip text="Set rating (1–5)" activator="parent" />
                 <v-icon size="18" color="rgba(var(--v-theme-accent))"
                   >mdi-star</v-icon
                 >
@@ -339,7 +356,6 @@
           <button
             class="overlay-icon-btn"
             type="button"
-            title="Toggle face bounding boxes"
             aria-label="Toggle face bounding boxes"
             @click.stop="toggleFaceBbox"
             :class="{
@@ -347,12 +363,16 @@
               'overlay-icon-btn--active': showFaceBbox,
             }"
           >
-            <v-icon size="20">mdi-face-recognition</v-icon>
+            <Tooltip
+              text="Toggle face bounding boxes"
+              activator="parent"
+              :describe="false"
+            />
+            <v-icon size="24">mdi-face-recognition</v-icon>
           </button>
           <button
             class="overlay-icon-btn"
             type="button"
-            title="Toggle object detection boxes"
             aria-label="Toggle object detection boxes"
             @click.stop="toggleDetections"
             :class="{
@@ -360,13 +380,17 @@
               'overlay-icon-btn--active': showDetections,
             }"
           >
-            <v-icon size="20">mdi-shape-outline</v-icon>
+            <Tooltip
+              text="Toggle object detection boxes"
+              activator="parent"
+              :describe="false"
+            />
+            <v-icon size="24">mdi-shape-outline</v-icon>
           </button>
           <button
             v-if="!isMobile && !isReadOnly"
             class="overlay-icon-btn"
             type="button"
-            title="Draw face bounding box"
             aria-label="Draw face bounding box"
             @click.stop="beginDrawMode('face')"
             :class="{
@@ -374,7 +398,12 @@
               'overlay-icon-btn--active': drawMode === 'face',
             }"
           >
-            <v-icon size="20">mdi-account-plus</v-icon>
+            <Tooltip
+              text="Draw face bounding box"
+              activator="parent"
+              :describe="false"
+            />
+            <v-icon size="24">mdi-account-plus</v-icon>
           </button>
 
           <!-- Rotate, in place and immediately: one click is one 90° step, no
@@ -389,48 +418,46 @@
                Filters > Rotate still makes a rotated copy, and a hidden control
                teaches nothing. -->
           <template v-if="image && !isReadOnly">
-            <v-tooltip
+            <Tooltip
               location="bottom"
               :text="rotateLeftTitle"
-              :disabled="!rotateDisabledReason"
+              :describe="false"
             >
               <template #activator="{ props: rotateLeftTipProps }">
                 <button
                   v-bind="rotateLeftTipProps"
                   class="overlay-icon-btn"
                   type="button"
-                  :title="rotateLeftTitle"
                   :aria-label="rotateLeftTitle"
                   aria-keyshortcuts="["
                   :disabled="!canRotateCurrent"
                   @click.stop="rotateCurrentImage(ROTATE_CCW)"
                   :class="{ hidden: chromeHidden }"
                 >
-                  <v-icon size="20">mdi-rotate-left</v-icon>
+                  <v-icon size="24">mdi-rotate-left</v-icon>
                 </button>
               </template>
-            </v-tooltip>
-            <v-tooltip
+            </Tooltip>
+            <Tooltip
               location="bottom"
               :text="rotateRightTitle"
-              :disabled="!rotateDisabledReason"
+              :describe="false"
             >
               <template #activator="{ props: rotateRightTipProps }">
                 <button
                   v-bind="rotateRightTipProps"
                   class="overlay-icon-btn"
                   type="button"
-                  :title="rotateRightTitle"
                   :aria-label="rotateRightTitle"
                   aria-keyshortcuts="]"
                   :disabled="!canRotateCurrent"
                   @click.stop="rotateCurrentImage(ROTATE_CW)"
                   :class="{ hidden: chromeHidden }"
                 >
-                  <v-icon size="20">mdi-rotate-right</v-icon>
+                  <v-icon size="24">mdi-rotate-right</v-icon>
                 </button>
               </template>
-            </v-tooltip>
+            </Tooltip>
           </template>
 
           <!-- The zoom readout lives ON the control (owner ruling): a live
@@ -441,20 +468,24 @@
           <button
             class="overlay-icon-btn zoom-btn"
             type="button"
-            :title="zoomButtonTitle"
             :aria-label="zoomButtonTitle"
             @click="toggleZoomSnap"
           >
+            <Tooltip :text="zoomButtonTitle" activator="parent" :describe="false" />
             <v-icon>mdi-magnify</v-icon>
             <span class="zoom-btn-label">{{ zoomButtonLabel }}</span>
           </button>
           <button
             class="overlay-icon-btn overlay-topbar-sidebar-toggle"
             type="button"
-            title="Toggle sidebar (S)"
             aria-label="Toggle sidebar (S)"
             @click="toggleSidebar"
           >
+            <Tooltip
+              text="Toggle sidebar (S)"
+              activator="parent"
+              :describe="false"
+            />
             <v-icon>{{
               sidebarOpen ? "mdi-arrow-collapse-right" : "mdi-arrow-expand-left"
             }}</v-icon>
@@ -658,8 +689,8 @@
             @click.stop="showPrevImage"
             @dblclick.stop
             aria-label="Previous (←)"
-            title="Previous (←)"
           >
+            <Tooltip text="Previous (←)" activator="parent" :describe="false" />
             <v-icon>mdi-chevron-left</v-icon>
           </button>
           <button
@@ -668,8 +699,8 @@
             @click.stop="showNextImage"
             @dblclick.stop
             aria-label="Next (→)"
-            title="Next (→)"
           >
+            <Tooltip text="Next (→)" activator="parent" :describe="false" />
             <v-icon>mdi-chevron-right</v-icon>
           </button>
 
@@ -905,6 +936,7 @@ import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
 import OverlaySaveAsDialog from "../widgets/OverlaySaveAsDialog.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import {
   applyStackBackgroundAlpha,
   faceBoxColor,

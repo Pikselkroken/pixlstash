@@ -34,8 +34,7 @@
               icon-only
               icon-left="folder-open-outline"
               class="editor-browse-btn"
-              title="Browse for folder"
-              aria-label="Browse for folder"
+              tooltip="Browse for folder"
               @click="browseOpen = true"
             />
           </div>
@@ -101,8 +100,7 @@
                 icon-only
                 icon-left="content-copy"
                 class="editor-copy-btn"
-                title="Copy mount line"
-                aria-label="Copy mount line"
+                tooltip="Copy mount line"
                 @click="
                   copyToClipboard(dockerMountSnippet, 'Mount line copied.')
                 "
@@ -122,8 +120,7 @@
                 icon-only
                 icon-left="content-copy"
                 class="editor-copy-btn"
-                title="Copy remove-container command"
-                aria-label="Copy remove-container command"
+                tooltip="Copy remove-container command"
                 @click="
                   copyToClipboard(
                     dockerRemoveContainerSnippet,
@@ -152,8 +149,7 @@
                 icon-only
                 icon-left="content-copy"
                 class="editor-copy-btn"
-                title="Copy full restart command"
-                aria-label="Copy full restart command"
+                tooltip="Copy full restart command"
                 @click="
                   copyToClipboard(
                     dockerRestartCommandSnippet,
@@ -184,8 +180,7 @@
               icon-only
               icon-left="folder-move-outline"
               class="editor-relocate-btn"
-              title="Relocate folder and move files"
-              aria-label="Relocate folder and move files"
+              tooltip="Relocate folder and move files"
               @click="
                 emit('relocate', activeFolder);
                 emit('close');
@@ -259,8 +254,7 @@
                 icon-only
                 icon-left="content-copy"
                 class="editor-copy-btn"
-                title="Copy remove-container command"
-                aria-label="Copy remove-container command"
+                tooltip="Copy remove-container command"
                 @click="
                   copyToClipboard(
                     dockerRemoveContainerSnippet,
@@ -291,8 +285,7 @@
                 icon-only
                 icon-left="content-copy"
                 class="editor-copy-btn"
-                title="Copy full restart command"
-                aria-label="Copy full restart command"
+                tooltip="Copy full restart command"
                 @click="
                   copyToClipboard(
                     dockerEditRestartCommandSnippet,
@@ -1091,7 +1084,7 @@ async function copyToClipboard(value, successMessage) {
   position: absolute;
   top: var(--space-4);
   right: var(--space-3);
-  z-index: 2;
+  z-index: var(--z-raised);
 }
 
 .editor-header {

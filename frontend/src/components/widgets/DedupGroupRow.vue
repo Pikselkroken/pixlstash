@@ -94,12 +94,16 @@
       <!-- A decided row states its verdict and offers the one way back.
            Clearing never touches pictures: a reopened "stacked" group stays
            stacked until unstacked from the Stacks view. -->
-      <span class="gverdict" :title="decidedTitle">
-        <v-icon size="16">{{
-          verdict === "stacked" ? "mdi-layers" : "mdi-call-split"
-        }}</v-icon>
-        {{ verdict === "stacked" ? "Stacked" : "Kept separate" }}
-      </span>
+      <Tooltip :text="decidedTitle">
+        <template #activator="{ props: tipProps }">
+          <span class="gverdict" v-bind="tipProps">
+            <v-icon size="16">{{
+              verdict === "stacked" ? "mdi-layers" : "mdi-call-split"
+            }}</v-icon>
+            {{ verdict === "stacked" ? "Stacked" : "Kept separate" }}
+          </span>
+        </template>
+      </Tooltip>
       <!-- When the decision was made, in the user's own date format. Older
            rows (or an older backend) serve no decided_at: no cell, no dash. -->
       <span v-if="decidedStamp" class="gdecided-at">{{ decidedStamp }}</span>
@@ -108,7 +112,7 @@
         icon-left="restore"
         data-testid="dedup-clear-decision"
         :disabled="busy || readOnly"
-        :title="
+        :tooltip="
           bulk
             ? `Clear the decision on every one of the ${selectionCount} selected groups: they return to the review queue. Stacked pictures stay stacked until you unstack them.`
             : 'Clear this decision: the group returns to the review queue. Stacked pictures stay stacked until you unstack them.'
@@ -136,7 +140,7 @@
         :tabindex="focused ? 0 : -1"
         :disabled="busy || readOnly || noLegalStack"
         aria-keyshortcuts="Enter S"
-        :title="
+        :tooltip="
           noLegalStack
             ? lockedStackReason
             : bulk
@@ -173,7 +177,7 @@
         :tabindex="focused ? 0 : -1"
         :disabled="busy || readOnly"
         aria-keyshortcuts="K"
-        :title="
+        :tooltip="
           bulk
             ? `Leave all ${selectionCount} selected groups as separate pictures. They stay in your library and stop being suggested.`
             : 'Leave these as separate pictures. They stay in your library and stop being suggested.'
@@ -240,7 +244,7 @@
           size="sm"
           icon-left="format-list-bulleted"
           :tabindex="focused ? 0 : -1"
-          title="Open this stack's row on the Mixed stacks page. Your place in the queue is kept."
+          tooltip="Open this stack's row on the Mixed stacks page. Your place in the queue is kept."
           @click.stop="emit('show-mixed', expandedUnit.stackId)"
           >Review this stack</AppButton
         >
@@ -348,6 +352,7 @@ import StarRatingOverlay from "./StarRatingOverlay.vue";
 import StackBadge from "./StackBadge.vue";
 import StackEdgeTicks from "./StackEdgeTicks.vue";
 import StackExpansionStrip from "./StackExpansionStrip.vue";
+import Tooltip from "./Tooltip.vue";
 import {
   DEFAULT_THUMBNAIL_SIZE_LEVEL,
   stripHeightForSizeLevel,
@@ -632,9 +637,7 @@ const tiles = computed(() =>
       // when its leader is one of the group's candidates: the alternative is
       // labelling the leader's picture with a matched member's number, which is
       // exactly the mismatch the deck exists to remove.
-      chip: smart
-        ? { icon: "mdi-brain", text: smart, title: `Smart score ${smart}` }
-        : null,
+      chip: smart ? { icon: "mdi-brain", text: smart } : null,
     };
   }),
 );

@@ -9,6 +9,11 @@ vi.mock("vuetify/components", () => ({
     emits: ["update:modelValue"],
     template: '<div v-if="modelValue"><slot /></div>',
   },
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup: (_p, { slots }) => () => slots.activator?.({ props: {} }),
+  },
 }));
 
 vi.mock("../../api/config", () => ({

@@ -30,6 +30,7 @@ vi.mock("../../utils/apiClient", async () => {
 vi.mock("vuetify/components", () => ({
   VIcon: { name: "v-icon", template: "<i><slot /></i>" },
   VProgressCircular: { name: "v-progress-circular", template: "<i></i>" },
+  VTooltip: { name: "v-tooltip", template: "<span></span>" },
 }));
 
 import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";

@@ -70,9 +70,22 @@ const VMenuStub = {
   },
 };
 
-const globalOpts = {
-  global: { stubs: { "v-icon": true, "v-menu": VMenuStub } },
+// Carries its text on the button it sits in: the real tip renders nothing until
+// it opens, and needs Vuetify besides.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text"],
+  template: '<span class="tip" :data-text="text" />',
 };
+
+const globalOpts = {
+  global: {
+    stubs: { "v-icon": true, "v-menu": VMenuStub, Tooltip: TooltipStub },
+  },
+};
+
+/** The tooltip a control carries. */
+const tip = (el) => el.find(".tip").attributes("data-text");
 
 function op(overrides = {}) {
   return {
@@ -143,10 +156,8 @@ describe("UndoControl - enablement", () => {
     // `aria-disabled`, never the native attribute: a `disabled` button is not
     // in the tab order and shows no tooltip, and the design requires both.
     expect(undo.attributes("disabled")).toBeUndefined();
-    expect(undo.attributes("title")).toContain("Nothing to undo");
-    expect(wrapper.find(".uc-btn--redo").attributes("title")).toContain(
-      "Nothing to redo",
-    );
+    expect(tip(undo)).toContain("Nothing to undo");
+    expect(tip(wrapper.find(".uc-btn--redo"))).toContain("Nothing to redo");
   });
 
   it("says when the undo target came from somewhere else", () => {
@@ -155,9 +166,7 @@ describe("UndoControl - enablement", () => {
     const wrapper = mount(UndoControl, globalOpts);
     // External operations update the stack silently, so the control has to say
     // so before it reverts something this user never did.
-    expect(wrapper.find(".uc-btn--undo").attributes("title")).toContain(
-      "Changed elsewhere:",
-    );
+    expect(tip(wrapper.find(".uc-btn--undo"))).toContain("Changed elsewhere:");
   });
 
   it("names the exact step and its shortcut once there is history", () => {
@@ -165,7 +174,7 @@ describe("UndoControl - enablement", () => {
     seed(store, [op()]);
     const wrapper = mount(UndoControl, globalOpts);
 
-    const title = wrapper.find(".uc-btn--undo").attributes("title");
+    const title = tip(wrapper.find(".uc-btn--undo"));
     expect(title).toContain("Added tag 'portrait' · 12");
     expect(title).toMatch(/Ctrl\+Z|⌘\+Z/);
     expect(wrapper.find(".uc-btn--undo").attributes("aria-disabled")).toBe(
@@ -218,12 +227,8 @@ describe("UndoControl - a read-only session", () => {
     const redo = wrapper.find(".uc-btn--redo");
     expect(undo.attributes("aria-disabled")).toBe("true");
     expect(redo.attributes("aria-disabled")).toBe("true");
-    expect(undo.attributes("title")).toBe(
-      "Undo is only available in your own library",
-    );
-    expect(redo.attributes("title")).toBe(
-      "Redo is only available in your own library",
-    );
+    expect(tip(undo)).toBe("Undo is only available in your own library");
+    expect(tip(redo)).toBe("Redo is only available in your own library");
     // Still tabbable and still tooltip-bearing, the same rule as "nothing to
     // undo": the tooltip is the only place the reason is stated.
     expect(undo.attributes("disabled")).toBeUndefined();

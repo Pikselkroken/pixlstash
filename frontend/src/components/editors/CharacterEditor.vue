@@ -80,13 +80,16 @@
                   }"
                   :aria-pressed="isThumbnail(pic)"
                   :aria-label="`Use reference image ${index + 1} as the thumbnail`"
-                  :title="
-                    isThumbnail(pic)
-                      ? 'This is the thumbnail - click to go back to the automatic choice'
-                      : 'Use this as the thumbnail'
-                  "
                   @click="toggleThumbnail(pic)"
                 >
+                  <Tooltip
+                    :text="
+                      isThumbnail(pic)
+                        ? 'This is the thumbnail - click to go back to the automatic choice'
+                        : 'Use this as the thumbnail'
+                    "
+                    activator="parent"
+                  />
                   <img
                     :src="
                       appendShareToken(
@@ -107,10 +110,14 @@
                 <button
                   type="button"
                   class="ref-picture-zoom"
-                  :title="`Preview reference image ${index + 1}`"
                   :aria-label="`Preview reference image ${index + 1}`"
                   @click="previewPic = pic"
                 >
+                  <Tooltip
+                    :text="`Preview reference image ${index + 1}`"
+                    activator="parent"
+                    :describe="false"
+                  />
                   <v-icon size="14">mdi-magnify</v-icon>
                 </button>
               </div>
@@ -211,6 +218,7 @@ import AppInput from "../widgets/AppInput.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import AdapterTray from "../widgets/AdapterTray.vue";
 import { errorDetail } from "../../utils/apiError";
 

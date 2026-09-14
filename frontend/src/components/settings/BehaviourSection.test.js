@@ -14,6 +14,9 @@ vi.mock("vuetify/components", () => ({
       '<div v-if="modelValue"><slot /></div>',
   },
   VIcon: { template: "<i><slot /></i>" },
+  VTooltip: {
+    template: '<slot name="activator" :props="{}" :is-active="false" />',
+  },
   VSlider: { template: "<input />" },
   VSpacer: { template: "<span />" },
   VSwitch: { template: "<input />" },

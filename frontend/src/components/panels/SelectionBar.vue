@@ -194,7 +194,7 @@
               icon="image-multiple-outline"
               chevron
               :disabled="selectedCount === 0 && selectedFaceCount === 0"
-              :title="triggerTitle"
+              :tooltip="triggerTitle"
               :aria-label="triggerTitle"
               aria-haspopup="menu"
               :aria-expanded="selectionMenuOpen ? 'true' : 'false'"
@@ -285,7 +285,7 @@
           shape="round"
           icon="tag-off-outline"
           :loading="clearingImpossible"
-          :title="`Strip the impossible tags from the ${selectedCount} selected picture(s)`"
+          :tooltip="`Strip the impossible tags from the ${selectedCount} selected picture(s)`"
           @click="$emit('clear-impossible-tags')"
         >
           <span class="clear-impossible-label">{{
@@ -296,8 +296,7 @@
           icon="selection-off"
           shape="round"
           :disabled="!hasSelection"
-          :title="clearTitle"
-          :aria-label="clearTitle"
+          :tooltip="clearTitle"
           :aria-keyshortcuts="ownsEscape ? 'Escape' : undefined"
           @click="$emit('clear-selection')"
         />
@@ -311,8 +310,7 @@
           icon="delete"
           danger
           :disabled="!hasSelection || isReadOnly"
-          :title="deleteTitle"
-          :aria-label="deleteTitle"
+          :tooltip="deleteTitle"
           @click="$emit('delete-selected')"
         />
     </div>
@@ -819,7 +817,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 }
 
 .plugin-menu-header {
-  font-size: 0.9rem;
+  font-size: var(--text-base);
   font-weight: 600;
   color: rgb(var(--v-theme-on-surface));
   padding: 10px 12px;
@@ -832,7 +830,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 
 .plugin-menu-label {
   display: block;
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   margin-bottom: 4px;
@@ -844,7 +842,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   align-items: center;
   gap: 8px;
   margin-top: 12px;
-  font-size: 0.85rem;
+  font-size: var(--text-base);
   cursor: pointer;
 }
 
@@ -861,7 +859,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 .plugin-run-select {
   height: var(--control-h-bar);
   width: 100%;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-primary), 0.4);
   background: rgba(var(--v-theme-background), 0.7);
   color: rgb(var(--v-theme-on-background));
@@ -870,7 +868,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 
 .plugin-menu-textarea {
   width: 100%;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-primary), 0.4);
   background: rgba(var(--v-theme-background), 0.7);
   color: rgb(var(--v-theme-on-background));
@@ -880,20 +878,20 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 }
 
 .plugin-menu-note {
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   opacity: 0.85;
 }
 
 .plugin-menu-error {
   margin-top: 8px;
   color: rgb(var(--v-theme-error));
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
 }
 
 .plugin-menu-success {
   margin-top: 8px;
   color: rgb(var(--v-theme-success));
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
 }
 
 .bar-btn-apply-label {

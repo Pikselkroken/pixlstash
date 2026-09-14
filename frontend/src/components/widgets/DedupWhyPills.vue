@@ -12,8 +12,8 @@
  *     for about two pills, so the warning half has to be the half that survives
  *     the `limit`.
  *   • Meaning never rides on colour alone (WCAG 1.4.1). The check and the cross
- *     glyphs carry the for/against split, and each pill states it in its `title`
- *     as well, so the distinction survives a monochrome or colour-blind read.
+ *     glyphs carry the for/against split, and each pill states it in its name
+ *     and tooltip as well, so the distinction survives a monochrome or colour-blind read.
  *
  * The label sits in `on-surface`, not in `primary` or `error`: an action-fill
  * token is never small body text on a canvas (visual-language.md §4). The status
@@ -22,6 +22,7 @@
 import { computed } from "vue";
 
 import { orderEvidence, evidenceLabel } from "../../utils/dedup";
+import Tooltip from "./Tooltip.vue";
 
 /** The pill's rendered text. The server calls the field `text`. */
 const labelOf = evidenceLabel;
@@ -98,9 +99,9 @@ const pills = computed(() => {
             ? 'why-pill--neg'
             : 'why-pill--pos'
       "
-      :title="titleOf(pill)"
       :aria-label="titleOf(pill)"
     >
+      <Tooltip :text="titleOf(pill)" activator="parent" :describe="false" />
       <v-icon class="why-pill__ico" size="12" aria-hidden="true">{{
         pill.against ? "mdi-close" : "mdi-check"
       }}</v-icon>

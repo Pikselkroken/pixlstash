@@ -9,11 +9,11 @@
       @dragleave="onDragLeave"
       @drop.prevent="onDrop"
     >
-      <v-icon size="14" class="pf-header-icon">mdi-paperclip</v-icon>
+      <v-icon size="16" class="pf-header-icon">mdi-paperclip</v-icon>
       <span class="pf-title">Project Files</span>
       <span v-if="files.length > 0" class="pf-count">{{ files.length }}</span>
       <span class="pf-spacer"></span>
-      <v-icon size="14" class="pf-chevron">
+      <v-icon size="16" class="pf-chevron">
         {{ expanded ? "mdi-chevron-down" : "mdi-chevron-right" }}
       </v-icon>
     </div>
@@ -60,14 +60,16 @@
           :key="file.id"
           class="pf-file-card"
           :class="{ 'pf-url-card': file.url }"
-          :title="file.url || file.original_filename"
+          :title="file.url ? undefined : file.original_filename"
           @click="openFile(file)"
         >
+          <Tooltip :text="file.url || ''" activator="parent" />
           <button
             class="pf-file-delete"
-            title="Remove"
+            aria-label="Remove"
             @click.stop="deleteFile(file)"
           >
+            <Tooltip text="Remove" activator="parent" :describe="false" />
             <v-icon size="13">mdi-close</v-icon>
           </button>
           <v-icon size="34" class="pf-file-icon">{{ fileIcon(file) }}</v-icon>
@@ -147,6 +149,7 @@ import {
 import { useSubmitGuard } from "../../composables/useSubmitGuard";
 import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
   projectId: { type: Number, required: true },
@@ -450,7 +453,7 @@ onMounted(() => {
 .pf-drop-overlay {
   position: absolute;
   inset: 0;
-  z-index: 10;
+  z-index: var(--z-raised);
   display: flex;
   flex-direction: column;
   align-items: center;

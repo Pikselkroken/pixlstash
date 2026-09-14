@@ -19,6 +19,7 @@ import { patchUserConfig } from "../../api/config";
 import TaggerPluginSettingsDialog from "./TaggerPluginSettingsDialog.vue";
 import { errorDetail } from "../../utils/apiError";
 import AppButton from "./AppButton.vue";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   /** Array of plugin objects from GET /taggers. */
@@ -159,11 +160,10 @@ function onParamsSaved({ name, params }) {
           </td>
 
           <td class="pt-col-name">
-            <v-tooltip
+            <Tooltip
               v-if="plugin.description"
               :text="plugin.description"
               location="top"
-              max-width="280"
             >
               <template #activator="{ props: tip }">
                 <span v-bind="tip" class="pt-plugin-name">
@@ -173,18 +173,24 @@ function onParamsSaved({ name, params }) {
                   >
                 </span>
               </template>
-            </v-tooltip>
+            </Tooltip>
             <span v-else class="pt-plugin-name">{{ plugin.display_name }}</span>
           </td>
 
           <td class="pt-col-loaded">
-            <v-icon
-              :color="plugin.is_loaded ? 'success' : 'default'"
-              size="16"
-              :title="plugin.is_loaded ? 'Loaded' : 'Not loaded'"
-            >
-              {{ plugin.is_loaded ? "mdi-check-circle" : "mdi-circle-outline" }}
-            </v-icon>
+            <Tooltip :text="plugin.is_loaded ? 'Loaded' : 'Not loaded'">
+              <template #activator="{ props: tip }">
+                <v-icon
+                  v-bind="tip"
+                  :color="plugin.is_loaded ? 'success' : 'default'"
+                  size="16"
+                >
+                  {{
+                    plugin.is_loaded ? "mdi-check-circle" : "mdi-circle-outline"
+                  }}
+                </v-icon>
+              </template>
+            </Tooltip>
           </td>
 
           <td class="pt-col-actions">
@@ -193,7 +199,7 @@ function onParamsSaved({ name, params }) {
               size="sm"
               icon-only
               icon-left="cog"
-              title="Plugin settings"
+              tooltip="Plugin settings"
               :aria-label="`${plugin.display_name} settings`"
               @click="openSettings(plugin)"
             />
@@ -237,7 +243,7 @@ function onParamsSaved({ name, params }) {
 .pt-table th {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--z-raised);
   text-align: left;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);

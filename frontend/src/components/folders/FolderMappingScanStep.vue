@@ -331,7 +331,7 @@ onUnmounted(() => {
 .scan-step__track {
   flex: 1;
   height: 6px;
-  border-radius: var(--radius-pill, 999px);
+  border-radius: var(--radius-pill);
   background: rgb(var(--v-theme-border));
   overflow: hidden;
 }

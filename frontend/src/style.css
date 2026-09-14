@@ -242,7 +242,7 @@ body {
 .is-desktop ::-webkit-scrollbar-thumb {
   background: rgba(var(--v-theme-on-surface), 0.18);
   border: 2px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background-clip: padding-box;
 }
 .is-desktop ::-webkit-scrollbar-thumb:hover {

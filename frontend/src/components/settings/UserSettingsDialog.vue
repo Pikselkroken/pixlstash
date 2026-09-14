@@ -188,7 +188,7 @@ watch(
         @click="settingsTab = item.id"
       >
         <span v-if="settingsTab === item.id" class="settings-nav-item__bar" />
-        <v-icon size="17" class="settings-nav-item__icon">
+        <v-icon size="16" class="settings-nav-item__icon">
           mdi-{{ item.icon }}
         </v-icon>
         {{ item.label }}

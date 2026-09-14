@@ -34,7 +34,23 @@ const VIcon = {
       h("i", { class: "v-icon" }, slots.default?.()),
 };
 
-const globalOpts = { stubs: { "v-icon": VIcon } };
+// The one tooltip surface, reduced to what a test can read: the tip's text as
+// `data-tip`, on the activator element or on a marker inside the parent. A
+// describing tip claims its activator's `aria-describedby`, as the real one does.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "shortcut", "location", "disabled", "describe", "activator"],
+  template: `<slot
+      v-if="$slots.activator"
+      name="activator"
+      :props="{
+        'data-tip': text || undefined,
+        'aria-describedby': describe === false ? undefined : 'tooltip-stub',
+      }"
+    /><span v-else-if="text" class="tip" :data-tip="text" />`,
+};
+
+const globalOpts = { stubs: { Tooltip: TooltipStub, "v-icon": VIcon } };
 
 function seedStore() {
   const store = useReviewSessionsStore();
@@ -77,10 +93,9 @@ describe("NewReviewDialog set-scope listbox", () => {
     expect(locked.exists()).toBe(true);
     expect(locked.text()).toContain("Frozen eval");
     expect(locked.attributes("aria-disabled")).toBe("true");
-    expect(locked.attributes("title")).toContain("is locked");
-    expect(locked.attributes("title")).toContain(
-      "Unlock it to review its tags",
-    );
+    const lockedTip = locked.find(".tip").attributes("data-tip");
+    expect(lockedTip).toContain("is locked");
+    expect(lockedTip).toContain("Unlock it to review its tags");
     // Lock glyph is present on the locked row only.
     expect(locked.find(".rs-listbox-lock").exists()).toBe(true);
     expect(w.findAll(".rs-listbox-lock")).toHaveLength(1);
@@ -184,10 +199,9 @@ describe("NewReviewDialog locked prefilled set scope", () => {
     expect(w.find(".rs-listbox-value").text()).toBe("Frozen eval");
     expect(trigger.classes()).toContain("rs-listbox-trigger--locked");
     expect(trigger.find(".rs-listbox-trigger-lock").exists()).toBe(true);
-    expect(trigger.attributes("title")).toContain("is locked");
-    expect(trigger.attributes("title")).toContain(
-      "Unlock it to review its tags",
-    );
+    const triggerTip = trigger.find(".tip").attributes("data-tip");
+    expect(triggerTip).toContain("is locked");
+    expect(triggerTip).toContain("Unlock it to review its tags");
   });
 
   it("blocks Scan & create while a locked set is the prefilled scope", () => {
@@ -202,7 +216,9 @@ describe("NewReviewDialog locked prefilled set scope", () => {
 
     const go = w.find(".rs-dialog-btn--go");
     expect(go.attributes("disabled")).toBeDefined();
-    expect(go.attributes("title")).toContain("Unlock it to review its tags");
+    expect(go.find(".tip").attributes("data-tip")).toContain(
+      "Unlock it to review its tags",
+    );
   });
 
   it("allows Scan & create for an unlocked prefilled scope", () => {
@@ -217,7 +233,7 @@ describe("NewReviewDialog locked prefilled set scope", () => {
 
     const go = w.find(".rs-dialog-btn--go");
     expect(go.attributes("disabled")).toBeUndefined();
-    expect(go.attributes("title")).toBeUndefined();
+    expect(go.find(".tip").exists()).toBe(false);
   });
 
   it("leaves the trigger unmarked for an unlocked prefilled set", () => {

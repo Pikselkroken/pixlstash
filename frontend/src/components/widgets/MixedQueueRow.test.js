@@ -12,11 +12,29 @@ import { mount } from "@vue/test-utils";
 
 import MixedQueueRow from "./MixedQueueRow.vue";
 
+// The one tooltip surface, reduced to what a test can read: the tip's text as
+// `data-tip`, on the activator element or on a marker inside the parent. A
+// describing tip claims its activator's `aria-describedby`, as the real one does.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "shortcut", "location", "disabled", "describe", "activator"],
+  template: `<slot
+      v-if="$slots.activator"
+      name="activator"
+      :props="{
+        'data-tip': text || undefined,
+        'aria-describedby': describe === false ? undefined : 'tooltip-stub',
+      }"
+    /><span v-else-if="text" class="tip" :data-tip="text" />`,
+};
+
 // The icon stub renders its slot, because the icon NAME is load-bearing here:
 // the primary's glyph has to change at the same instant its label does, and the
 // default auto-stub drops the slot that carries it.
 const globalOpts = {
-  global: { stubs: { "v-icon": { template: "<i><slot /></i>" } } },
+  global: {
+    stubs: { Tooltip: TooltipStub, "v-icon": { template: "<i><slot /></i>" } },
+  },
 };
 
 /** One `MixedStackModel` row, in the backend's shape. */

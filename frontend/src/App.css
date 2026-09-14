@@ -27,7 +27,7 @@ body {
   inset: 0;
   width: 100vw;
   height: 100vh;
-  z-index: 0;
+  z-index: var(--z-base);
   background: rgb(var(--v-theme-background));
   margin: 0;
   padding: 0;
@@ -397,7 +397,7 @@ button:focus:not(:focus-visible) {
   position: fixed;
   bottom: var(--space-3);
   right: var(--space-3);
-  z-index: 2000;
+  z-index: var(--z-overlay);
   width: 48px;
   height: 24px;
   border-radius: var(--radius-md);

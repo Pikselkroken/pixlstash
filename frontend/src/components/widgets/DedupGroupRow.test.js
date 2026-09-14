@@ -14,7 +14,25 @@ import DedupGroupRow from "./DedupGroupRow.vue";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { formatUserDate } from "../../utils/utils";
 
-const globalOpts = { global: { stubs: { "v-icon": true } } };
+// The one tooltip surface, reduced to what a test can read: the tip's text as
+// `data-tip`, on the activator element or on a marker inside the parent. A
+// describing tip claims its activator's `aria-describedby`, as the real one does.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "shortcut", "location", "disabled", "describe", "activator"],
+  template: `<slot
+      v-if="$slots.activator"
+      name="activator"
+      :props="{
+        'data-tip': text || undefined,
+        'aria-describedby': describe === false ? undefined : 'tooltip-stub',
+      }"
+    /><span v-else-if="text" class="tip" :data-tip="text" />`,
+};
+
+const globalOpts = {
+  global: { stubs: { Tooltip: TooltipStub, "v-icon": true } },
+};
 
 // The row reads the user's date format from the prefs store.
 beforeEach(() => {
@@ -123,10 +141,10 @@ describe("DedupGroupRow - what assistive tech is told", () => {
   // claim the keys work.
   it("names the keys in the tooltip only where they work", () => {
     expect(
-      mountRow({ focused: true }).find(".gthumb").attributes("title"),
+      mountRow({ focused: true }).find(".gthumb .tip").attributes("data-tip"),
     ).toContain("press 1");
     expect(
-      mountRow({ focused: false }).find(".gthumb").attributes("title"),
+      mountRow({ focused: false }).find(".gthumb .tip").attributes("data-tip"),
     ).not.toContain("press 1");
   });
 });
@@ -153,8 +171,8 @@ describe("DedupGroupRow - what the verdicts cost", () => {
   // before it is pressed rather than after.
   it("says that stacking deletes nothing and can be undone", () => {
     const title = mountRow()
-      .find('[data-testid="dedup-stack"]')
-      .attributes("title");
+      .find('[data-testid="dedup-stack"] .tip')
+      .attributes("data-tip");
     expect(title).toContain("stays on disk");
     expect(title).toContain("Ctrl+Z");
   });
@@ -163,8 +181,8 @@ describe("DedupGroupRow - what the verdicts cost", () => {
   // promise a "reopen" affordance that does not exist yet.
   it("says that keeping separate is remembered and loses nothing", () => {
     const title = mountRow()
-      .find('[data-testid="dedup-keep-separate"]')
-      .attributes("title");
+      .find('[data-testid="dedup-keep-separate"] .tip')
+      .attributes("data-tip");
     expect(title).toContain("stay in your library");
     expect(title).toContain("stop being suggested");
     expect(title).not.toContain("reopen");
@@ -213,7 +231,7 @@ describe("DedupGroupRow - the decided row's timestamp and alignment", () => {
     prefs.dateFormat = "eu";
     const title = mountRow({ verdict: "keep_separate", decidedAt: ISO })
       .find(".gverdict")
-      .attributes("title");
+      .attributes("data-tip");
     expect(title).toContain(formatUserDate(ISO, "eu"));
   });
 
@@ -221,7 +239,7 @@ describe("DedupGroupRow - the decided row's timestamp and alignment", () => {
   it("renders no timestamp cell when decided_at is absent", () => {
     const wrapper = mountRow({ verdict: "stacked" });
     expect(wrapper.find(".gdecided-at").exists()).toBe(false);
-    expect(wrapper.find(".gverdict").attributes("title")).toBe(
+    expect(wrapper.find(".gverdict").attributes("data-tip")).toBe(
       "This group was stacked.",
     );
   });
@@ -331,7 +349,8 @@ describe("DedupGroupRow - hover score overlays", () => {
 
     const chip = units[0].find(".gsmart");
     expect(chip.text()).toContain("3.72");
-    expect(chip.attributes("title")).toBe("Smart score 3.72");
+    // Pointer-inert, so a tip here could never open.
+    expect(chip.attributes("title")).toBeUndefined();
     expect(chip.attributes("aria-hidden")).toBe("true");
   });
 
@@ -631,7 +650,7 @@ describe("DedupGroupRow: the deck", () => {
     expect(wrapper.emitted("focus")).toHaveLength(2);
     expect(wrapper.emitted("set-cover")).toBeUndefined();
     expect(wrapper.emitted("toggle-excluded")).toBeUndefined();
-    expect(wrapper.find(".gthumb").attributes("title")).toContain(
+    expect(wrapper.find(".gthumb .tip").attributes("data-tip")).toContain(
       "compare this decided group",
     );
   });
@@ -912,9 +931,10 @@ describe("DedupGroupRow: the composition and the accessible names", () => {
       focused: true,
     });
     const tiles = wrapper.findAll(".gthumb");
-    expect(tiles[0].attributes("title")).toContain("this stack's cover");
-    expect(tiles[0].attributes("title")).toContain("leave this stack out");
-    expect(tiles[1].attributes("title")).toContain("leave this picture out");
+    const tipOf = (tile) => tile.find(".tip").attributes("data-tip");
+    expect(tipOf(tiles[0])).toContain("this stack's cover");
+    expect(tipOf(tiles[0])).toContain("leave this stack out");
+    expect(tipOf(tiles[1])).toContain("leave this picture out");
   });
 });
 
@@ -1065,13 +1085,13 @@ describe("DedupGroupRow: the expansion band", () => {
       focused: true,
     }).findComponent({ name: "StackBadge" });
     expect(closed.attributes("aria-expanded")).toBe("false");
-    expect(closed.attributes("title")).toBe(
+    expect(closed.attributes("aria-label")).toBe(
       "Show the 4 pictures in this stack, below the row, or press E",
     );
 
     const open = mountExpanded().findComponent({ name: "StackBadge" });
     expect(open.attributes("aria-expanded")).toBe("true");
-    expect(open.attributes("title")).toBe(
+    expect(open.attributes("aria-label")).toBe(
       "Hide the pictures in this stack, or press E",
     );
   });
@@ -1082,7 +1102,7 @@ describe("DedupGroupRow: the expansion band", () => {
       group: stackedGroup(),
       coverId: 501,
     }).findComponent({ name: "StackBadge" });
-    expect(badge.attributes("title")).toBe(
+    expect(badge.attributes("aria-label")).toBe(
       "Show the 4 pictures in this stack, below the row",
     );
   });

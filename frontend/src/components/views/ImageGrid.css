@@ -24,13 +24,13 @@
 .drag-overlay-message {
   padding: 6px 14px;
   background: rgba(var(--v-theme-shadow), 0.35);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 .thumbnail-badge {
   background: rgba(var(--v-theme-surface), 0.92);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.22);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: rgb(var(--v-theme-on-surface));
   box-shadow: 0 2px 6px rgba(var(--v-theme-shadow), 0.3);
   font-size: var(--badge-font-size, 0.8em);
@@ -228,7 +228,7 @@
   transform: translateX(-50%);
   background: rgba(var(--v-theme-surface), 0.82);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: rgb(var(--v-theme-on-surface));
   font-size: 0.72em;
   font-weight: 600;
@@ -254,7 +254,7 @@
   padding: 5px 12px;
   background: rgba(var(--v-theme-surface), 0.82);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: rgb(var(--v-theme-on-surface));
   font-size: 0.74em;
   font-weight: 600;
@@ -302,7 +302,7 @@
 .pending-imports-pill-anchor {
   position: sticky;
   top: 0;
-  z-index: 100;
+  z-index: var(--z-sticky);
   height: 0;
   overflow: visible;
   display: flex;
@@ -446,7 +446,7 @@
     border var(--dur-2) var(--ease-standard),
     z-index 0s;
   position: relative;
-  z-index: 0;
+  z-index: var(--z-base);
   border: 0 solid transparent;
 }
 
@@ -489,7 +489,7 @@
   top: 8px;
   bottom: 32px;
   width: 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--active-bar);
   box-shadow: var(--elevation-2);
   pointer-events: none;
@@ -615,7 +615,7 @@
    Face/detection overlays outside the crop are clipped at the cell edge here. */
 .thumbnail-container--cropped {
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: 1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3);
   transition: box-shadow 0.18s;
 }
@@ -632,7 +632,7 @@
   content: "";
   position: absolute;
   inset: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: inset 0 0 12px 4px var(--hover-wash);
   opacity: 0;
   transition: opacity 0.15s ease;
@@ -734,7 +734,7 @@
   object-fit: cover;
   object-position: top center;
   display: block;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   position: absolute;
   top: 0;
   left: 0;
@@ -839,7 +839,7 @@
   left: -9999px;
   top: -9999px;
   object-fit: cover;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 /* The lock badge joins these two so the three read as siblings in the top-left
@@ -999,7 +999,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 300;
+  z-index: var(--z-dropdown);
   display: flex;
   align-items: center;
   gap: 0;
@@ -1007,7 +1007,7 @@
   background: rgb(var(--v-theme-surface-variant));
   border-top: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   color: rgb(var(--v-theme-on-surface-variant));
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 .multi-select-toolbar__mode {
@@ -1017,7 +1017,7 @@
   border-right: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
-  font-size: 13px;
+  font-size: var(--text-sm);
   font-weight: 600;
   cursor: pointer;
   appearance: auto;
@@ -1028,7 +1028,7 @@
   padding: 0 12px;
   white-space: nowrap;
   color: rgb(var(--v-theme-on-surface-variant));
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 .multi-select-toolbar__spacer {
@@ -1038,14 +1038,14 @@
 .multi-select-toolbar__separator {
   padding: 0 2px;
   color: rgba(var(--v-theme-on-surface), 0.3);
-  font-size: 13px;
+  font-size: var(--text-sm);
   flex: 0 0 auto;
   user-select: none;
 }
 
 .multi-select-toolbar__base-label {
   padding: 0 6px 0 4px;
-  font-size: 12px;
+  font-size: var(--text-xs);
   font-weight: 600;
   color: rgb(var(--v-theme-on-surface-variant));
   white-space: nowrap;
@@ -1059,7 +1059,7 @@
   border-right: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   background: transparent;
   color: rgb(var(--v-theme-on-surface-variant));
-  font-size: 13px;
+  font-size: var(--text-sm);
   cursor: pointer;
   appearance: auto;
   flex: 0 0 auto;
@@ -1073,10 +1073,10 @@
 @media (max-width: 900px) {
   .multi-select-toolbar {
     height: 40px;
-    font-size: 12px;
+    font-size: var(--text-xs);
   }
   .multi-select-toolbar__mode {
-    font-size: 12px;
+    font-size: var(--text-xs);
   }
 }
 

@@ -84,9 +84,9 @@
           v-if="crumb.to"
           type="button"
           class="grid-breadcrumb-crumb is-link"
-          :title="`Go to ${crumb.label}`"
           @click="navigateBreadcrumb(crumb)"
         >
+          <Tooltip :text="`Go to ${crumb.label}`" activator="parent" />
           {{ crumb.label }}
         </button>
         <span v-else class="grid-breadcrumb-crumb" :title="crumb.label">{{
@@ -191,14 +191,14 @@
     <!-- ── Revoke picture shares confirm dialog ───────────────── -->
     <v-dialog v-model="revokeSharesDialogOpen" max-width="380">
       <v-card>
-        <v-card-title style="font-size: 1rem; padding: 16px 20px 8px">
+        <v-card-title style="font-size: var(--text-md); padding: 16px 20px 8px">
           <v-icon size="16" style="margin-right: 6px; opacity: 0.7"
             >mdi-link-variant-off</v-icon
           >
           Remove all shares
         </v-card-title>
         <v-card-text
-          style="padding: 0 20px 12px; font-size: 0.875rem; opacity: 0.85"
+          style="padding: 0 20px 12px; font-size: var(--text-base); opacity: 0.85"
         >
           This will revoke all active share links for this image. Anyone with an
           existing link will lose access immediately.
@@ -218,14 +218,14 @@
     <!-- ── Segment (object detection) dialog ─────────────────── -->
     <v-dialog v-model="segmentDialogOpen" max-width="420">
       <v-card>
-        <v-card-title style="font-size: 1rem; padding: 16px 20px 8px">
+        <v-card-title style="font-size: var(--text-md); padding: 16px 20px 8px">
           <v-icon size="16" style="margin-right: 6px; opacity: 0.7"
             >mdi-shape-outline</v-icon
           >
           Detect objects
         </v-card-title>
         <v-card-text style="padding: 0 20px 4px">
-          <div style="font-size: 0.875rem; opacity: 0.85; margin-bottom: 10px">
+          <div style="font-size: var(--text-base); opacity: 0.85; margin-bottom: 10px">
             Leave the label empty for dense object detection, or type a phrase
             to detect only that (e.g. "dog").
           </div>
@@ -362,7 +362,7 @@
       <AppBarButton
         class="multi-select-toolbar__clear"
         icon="selection-off"
-        title="Clear selection"
+        tooltip="Clear selection"
         @click="emit('clear-multi-selection')"
       >
         Deselect All
@@ -642,8 +642,8 @@
                 <div
                   v-if="gridStore.showProblemIcon && hasPenalisedTags(img)"
                   class="penalised-tag-indicator thumbnail-badge"
-                  :title="penalisedTagsTitle(img)"
                 >
+                  <Tooltip :text="penalisedTagsTitle(img)" activator="parent" />
                   <v-icon
                     :size="badgeIconSizes.penalised"
                     :color="
@@ -662,17 +662,23 @@
                   v-if="img.reference_folder_id"
                   type="button"
                   class="thumbnail-reference-badge thumbnail-badge"
-                  :title="img.file_path || 'Reference picture'"
                   :aria-label="`Open reference location for ${imageCardAriaLabel(img)}`"
                   @click.stop="openReferenceLocation(img.id)"
                 >
+                  <Tooltip
+                    :text="img.file_path || 'Reference picture'"
+                    activator="parent"
+                  />
                   <v-icon :size="badgeIconSizes.penalised">mdi-folder</v-icon>
                 </button>
                 <div
                   v-if="lockedSetsStore.isLocked(img.id)"
                   class="thumbnail-lock-badge thumbnail-badge"
-                  :title="lockedSetsStore.lockReason(img.id)"
                 >
+                  <Tooltip
+                    :text="lockedSetsStore.lockReason(img.id)"
+                    activator="parent"
+                  />
                   <v-icon :size="badgeIconSizes.penalised"
                     >mdi-lock-outline</v-icon
                   >
@@ -680,8 +686,8 @@
                 <div
                   v-if="!isReadOnly && sharedPictureIds.has(img.id)"
                   class="thumbnail-share-badge thumbnail-badge"
-                  title="Has active share link"
                 >
+                  <Tooltip text="Has active share link" activator="parent" />
                   <v-icon :size="badgeIconSizes.penalised"
                     >mdi-link-variant</v-icon
                   >
@@ -695,8 +701,11 @@
                 v-if="getScrapheapPurgeBadge(img)"
                 class="thumbnail-purge-badge"
                 :class="`thumbnail-purge-badge--${getScrapheapPurgeBadge(img).kind}`"
-                :title="getScrapheapPurgeBadge(img).title"
               >
+                <Tooltip
+                  :text="getScrapheapPurgeBadge(img).title"
+                  activator="parent"
+                />
                 <v-icon size="12" class="thumbnail-purge-badge__icon">{{
                   getScrapheapPurgeBadge(img).icon
                 }}</v-icon>
@@ -925,8 +934,10 @@
               <span
                 v-if="isExpandedStackCover(img)"
                 class="stack-cover-flag"
-                title="This picture is the stack's cover"
-                >Cover</span
+                ><Tooltip
+                  text="This picture is the stack's cover"
+                  activator="parent"
+                />Cover</span
               >
               <!-- Top-right badge column - the shared home for corner
                    indicators (stack count in the corner, hover-only stars
@@ -1224,6 +1235,7 @@ import GridActionPill from "../panels/GridActionPill.vue";
 import ActionReceipt from "../widgets/ActionReceipt.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
 import SearchResultBar from "../widgets/SearchResultBar.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";

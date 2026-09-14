@@ -154,7 +154,7 @@ defineExpose({ visible });
      pill's positioned ancestor. */
   width: max-content;
   transform: translateX(-50%);
-  z-index: 200;
+  z-index: var(--z-floating);
   display: flex;
   align-items: center;
   gap: var(--space-3);

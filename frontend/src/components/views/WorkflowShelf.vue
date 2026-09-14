@@ -348,11 +348,11 @@
                 >{{ modelSummary(row.assets) || "no model names" }}</span
               >
 
-              <span
-                role="gridcell"
-                class="wfshelf-col--date"
-                :title="dateTitle(row.last_used)"
-                >{{ dateCell(row.last_used) }}</span
+              <span role="gridcell" class="wfshelf-col--date"
+                ><Tooltip
+                  :text="dateTitle(row.last_used)"
+                  activator="parent"
+                />{{ dateCell(row.last_used) }}</span
               >
             </li>
 
@@ -393,7 +393,7 @@
                 @focus="rovingKey = variantKey(row, variant)"
               >
                 <span role="gridcell" class="wfshelf-row-ident">
-                  <v-icon size="14">mdi-subdirectory-arrow-right</v-icon>
+                  <v-icon size="16">mdi-subdirectory-arrow-right</v-icon>
                 </span>
                 <span role="gridcell" class="wfshelf-col--name">
                   <span class="wfshelf-row-name wfshelf-row-name--variant">{{
@@ -415,11 +415,11 @@
                   :class="{ 'wfshelf-quiet': !modelSummary(variant.assets) }"
                   >{{ modelSummary(variant.assets) || "no model names" }}</span
                 >
-                <span
-                  role="gridcell"
-                  class="wfshelf-col--date"
-                  :title="dateTitle(variant.last_used)"
-                  >{{ dateCell(variant.last_used) }}</span
+                <span role="gridcell" class="wfshelf-col--date"
+                  ><Tooltip
+                    :text="dateTitle(variant.last_used)"
+                    activator="parent"
+                  />{{ dateCell(variant.last_used) }}</span
                 >
               </li>
             </template>
@@ -448,7 +448,7 @@
           role="menuitem"
           @click="store.toggleOpen(menuRow.topology_hash)"
         >
-          <v-icon size="18">mdi-file-tree</v-icon>
+          <v-icon size="16">mdi-file-tree</v-icon>
           <span>{{
             store.isOpen(menuRow.topology_hash)
               ? "Close its variants"
@@ -460,10 +460,10 @@
           type="button"
           role="menuitem"
           :disabled="!canExport"
-          :title="exportTitle"
           @click="exportGraph()"
         >
-          <v-icon size="18">mdi-code-json</v-icon>
+          <Tooltip :text="exportTitle" activator="parent" />
+          <v-icon size="16">mdi-code-json</v-icon>
           <span>Export the graph…</span>
         </button>
         <button
@@ -472,7 +472,7 @@
           role="menuitem"
           @click="copyHash()"
         >
-          <v-icon size="18">mdi-identifier</v-icon>
+          <v-icon size="16">mdi-identifier</v-icon>
           <span>Copy its identity</span>
         </button>
       </div>
@@ -502,6 +502,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 
 import AppBarButton from "../widgets/AppBarButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import { getWorkflowGraph, listWorkflowVariants } from "../../api/workflows";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";

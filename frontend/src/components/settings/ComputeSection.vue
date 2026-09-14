@@ -9,10 +9,11 @@ import { login } from "../../utils/apiClient";
 import { getAuthState } from "../../api/users";
 import AppButton from "../widgets/AppButton.vue";
 import AppStepper from "../widgets/AppStepper.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsTwoCol from "./SettingsTwoCol.vue";
-import { VSwitch, VIcon, VTooltip, VProgressLinear } from "vuetify/components";
+import { VSwitch, VIcon, VProgressLinear } from "vuetify/components";
 import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
@@ -409,11 +410,11 @@ watch(
             :dim="!serverDraft.enabled"
           >
             <div class="server-port-control">
-              <v-tooltip
+              <Tooltip
                 v-if="portConflict"
                 :text="portWarning"
                 location="top"
-                max-width="280"
+                :describe="false"
               >
                 <template #activator="{ props: tooltipProps }">
                   <v-icon
@@ -426,7 +427,7 @@ watch(
                     >mdi-alert-circle</v-icon
                   >
                 </template>
-              </v-tooltip>
+              </Tooltip>
               <AppStepper
                 :model-value="String(serverDraft.port)"
                 :min="1024"

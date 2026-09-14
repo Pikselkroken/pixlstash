@@ -397,7 +397,7 @@ watch(dialogOpen, (isOpen) => {
   position: absolute;
   top: var(--space-6);
   right: var(--space-6);
-  z-index: 2;
+  z-index: var(--z-raised);
 }
 
 .google-photos-card {

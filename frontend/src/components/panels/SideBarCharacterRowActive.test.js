@@ -94,6 +94,18 @@ import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import SideBar from "./SideBar.vue";
 
+/**
+ * The element's own tooltip text: its direct `Tooltip` child, stubbed by the
+ * shallow mount. `undefined` when it has none or the text is empty, because an
+ * empty text is a disabled tip.
+ */
+function tipText(el) {
+  const tip = el
+    .findAll("tooltip-stub")
+    .find((t) => t.element.parentElement === el.element);
+  return tip?.attributes("text") || undefined;
+}
+
 const ADA = { id: 7, name: "Ada", image_count: 3, project_image_count: 3 };
 const GRACE = { id: 9, name: "Grace", image_count: 5, project_image_count: 5 };
 const CHARACTERS = [ADA, GRACE];
@@ -129,7 +141,7 @@ async function mountSidebar({ docked = false } = {}) {
 /**
  * Is the People-section row for `name` rendered with the active class?
  *
- * Located by the row's own `title`, which the template builds from the person's
+ * Located by the row's own tooltip, which the template builds from the person's
  * name, so the assertion is tied to the row a user would actually click rather
  * than to a DOM position. Returns `null` when no such row was rendered, which
  * would otherwise read as a passing "not active".
@@ -137,7 +149,7 @@ async function mountSidebar({ docked = false } = {}) {
 function characterRowIsActive(wrapper, name) {
   const row = wrapper
     .findAll(".sidebar-list-item")
-    .find((el) => String(el.attributes("title") ?? "").startsWith(`${name} (`));
+    .find((el) => String(tipText(el) ?? "").startsWith(`${name} (`));
   if (!row) return null;
   return row.classes().includes("active");
 }
@@ -145,7 +157,7 @@ function characterRowIsActive(wrapper, name) {
 function characterRow(wrapper, name) {
   return wrapper
     .findAll(".sidebar-list-item")
-    .find((el) => String(el.attributes("title") ?? "").startsWith(`${name} (`));
+    .find((el) => String(tipText(el) ?? "").startsWith(`${name} (`));
 }
 
 let consoleWarn;

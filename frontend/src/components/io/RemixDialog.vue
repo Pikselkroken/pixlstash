@@ -243,7 +243,7 @@
               :aria-checked="seedMode === option.id"
               @click="seedMode = option.id"
             >
-              <v-icon size="15">{{ option.icon }}</v-icon>
+              <v-icon size="16">{{ option.icon }}</v-icon>
               {{ option.label }}
             </button>
           </div>

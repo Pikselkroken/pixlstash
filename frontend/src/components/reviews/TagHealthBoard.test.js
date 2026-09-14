@@ -33,7 +33,23 @@ const VIcon = {
       h("i", { class: "v-icon" }, slots.default?.()),
 };
 
-const globalOpts = { stubs: { "v-icon": VIcon } };
+// The one tooltip surface, reduced to what a test can read: the tip's text as
+// `data-tip`, on the activator element or on a marker inside the parent. A
+// describing tip claims its activator's `aria-describedby`, as the real one does.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "shortcut", "location", "disabled", "describe", "activator"],
+  template: `<slot
+      v-if="$slots.activator"
+      name="activator"
+      :props="{
+        'data-tip': text || undefined,
+        'aria-describedby': describe === false ? undefined : 'tooltip-stub',
+      }"
+    /><span v-else-if="text" class="tip" :data-tip="text" />`,
+};
+
+const globalOpts = { stubs: { Tooltip: TooltipStub, "v-icon": VIcon } };
 
 function healthRow(overrides = {}) {
   return {
@@ -94,7 +110,7 @@ describe("TagHealthBoard: persistent rebuild control (Spec B)", () => {
     const wrapper = mount(TagHealthBoard, { global: globalOpts });
     const btn = wrapper.find(".rs-board-rebuild-persistent");
     expect(btn.classes()).toContain("rs-board-rebuild-persistent--stale");
-    expect(btn.attributes("title")).toMatch(/rebuild now/i);
+    expect(btn.find(".tip").attributes("data-tip")).toMatch(/rebuild now/i);
   });
 
   it("clicking calls store.rebuildHealth()", async () => {
@@ -116,7 +132,9 @@ describe("TagHealthBoard: Priority relabel (Spec C)", () => {
     const header = wrapper
       .findAll(".rs-board-hdr")
       .find((h) => h.text().includes("Priority"));
-    expect(header.attributes("title")).toMatch(/not a forecast/i);
+    expect(header.find(".tip").attributes("data-tip")).toMatch(
+      /not a forecast/i,
+    );
   });
 });
 
@@ -239,7 +257,7 @@ describe("TagHealthBoard: provably-empty Start review gate", () => {
     expect(btn.classes()).toContain("rs-board-btn--blocked");
 
     // The reason names the cause AND the remedy - not a bare "unavailable".
-    const title = w.find(".rs-board-action").attributes("title");
+    const title = w.find(".rs-board-action").attributes("data-tip");
     expect(title).toMatch(/nothing to compare/i);
     expect(title).toMatch(/confirm this tag on a few pictures/i);
     expect(title).not.toMatch(/unavailable/i);
@@ -272,7 +290,7 @@ describe("TagHealthBoard: provably-empty Start review gate", () => {
     const btn = startBtn(w);
     expect(btn.attributes("disabled")).toBeUndefined(); // … still enabled.
     expect(btn.classes()).not.toContain("rs-board-btn--blocked");
-    expect(w.find(".rs-board-action").attributes("title")).toBeUndefined();
+    expect(w.find(".rs-board-action").attributes("data-tip")).toBeUndefined();
 
     await btn.trigger("click");
     expect(w.emitted("start-review")[0]).toEqual(["shirt"]);
@@ -308,7 +326,7 @@ describe("TagHealthBoard: provably-empty Start review gate", () => {
     );
     expect(store.healthScoped).toBe(false);
     expect(startBtn(w).attributes("disabled")).toBeUndefined();
-    expect(w.find(".rs-board-action").attributes("title")).toBeUndefined();
+    expect(w.find(".rs-board-action").attributes("data-tip")).toBeUndefined();
   });
 
   it("re-evaluates when the scope changes", async () => {
@@ -339,7 +357,7 @@ describe("TagHealthBoard: provably-empty Start review gate", () => {
     const btn = w.find(".rs-board-btn--open");
     expect(btn.exists()).toBe(true);
     expect(btn.attributes("disabled")).toBeUndefined();
-    expect(w.find(".rs-board-action").attributes("title")).toBeUndefined();
+    expect(w.find(".rs-board-action").attributes("data-tip")).toBeUndefined();
   });
 
   it("does not fire on rows that predate the ground_truth field", () => {
@@ -388,7 +406,9 @@ describe("TagHealthBoard: zero-Priority tail disclosure", () => {
     expect(more.attributes("aria-controls")).toBe("rs-board-table");
     expect(w.find("#rs-board-table").exists()).toBe(true);
     // The rows are collapsed, not filtered - the control says so.
-    expect(more.attributes("title")).toMatch(/can still find work/i);
+    expect(more.find(".tip").attributes("data-tip")).toMatch(
+      /can still find work/i,
+    );
   });
 
   it("reveals the full row set when expanded, and collapses again", async () => {

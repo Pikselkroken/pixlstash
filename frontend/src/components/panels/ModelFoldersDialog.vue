@@ -103,9 +103,11 @@
             <span v-if="folder.present_bytes > 0">{{
               formatModelSize(folder.present_bytes)
             }}</span>
-            <span :title="folder.last_checked || ''">{{
-              scannedLabel(folder)
-            }}</span>
+            <span
+              ><Tooltip :text="folder.last_checked || ''" activator="parent" />{{
+                scannedLabel(folder)
+              }}</span
+            >
           </span>
 
           <!-- Visible, in the row, never a tooltip: it explains why this row
@@ -127,7 +129,7 @@
             variant="ghost"
             icon-left="refresh"
             :loading="isScanning(folder)"
-            :title="scanTitle(folder)"
+            :tooltip="scanTitle(folder)"
             :aria-label="`${scanVerb(folder)} ${folder.path}`"
             v-bind="blockedAttrs(remoteReason, REMOTE_NOTE_ID)"
             @click="onScan(folder)"
@@ -143,7 +145,7 @@
             icon-only
             variant="ghost"
             icon-left="folder-move-outline"
-            :title="`Move ${basename(folder.path)} to a different location. Every file in it is copied, verified and removed from here.`"
+            :tooltip="`Move ${basename(folder.path)} to a different location. Every file in it is copied, verified and removed from here.`"
             :aria-label="`Move ${folder.path} to a different location`"
             v-bind="blockedAttrs(relocateReason(folder), REMOTE_NOTE_ID)"
             @click="onRelocate(folder)"
@@ -154,7 +156,7 @@
             icon-only
             variant="ghost"
             icon-left="folder-off-outline"
-            :title="`Forget ${basename(folder.path)}. Nothing on disk is deleted.`"
+            :tooltip="`Forget ${basename(folder.path)}. Nothing on disk is deleted.`"
             :aria-label="`Forget ${folder.path}`"
             v-bind="blockedAttrs(forgetReason(folder), REMOTE_NOTE_ID)"
             @click="onForget(folder)"
@@ -212,6 +214,7 @@ import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import HelpTip from "../widgets/HelpTip.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import { MANAGED_KIND, SOURCE_KIND } from "../../api/modelFolders";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";

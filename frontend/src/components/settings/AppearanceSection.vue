@@ -7,6 +7,7 @@ import { useTasksStore } from "../../stores/useTasksStore";
 import { VSwitch } from "vuetify/components";
 import AppSelect from "../widgets/AppSelect.vue";
 import AppButton from "../widgets/AppButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsSliderRow from "./SettingsSliderRow.vue";
 
@@ -203,11 +204,11 @@ async function clearGuestSession() {
             :class="{ active: (props.thumbnailMode ?? 'square') === 'square' }"
             type="button"
             role="radio"
-            title="Uniform squares for a tidy grid"
             :aria-checked="(props.thumbnailMode ?? 'square') === 'square'"
             :tabindex="(props.thumbnailMode ?? 'square') === 'square' ? 0 : -1"
             @click="setThumbnailMode('square')"
           >
+            <Tooltip text="Uniform squares for a tidy grid" activator="parent" />
             <span class="tli tli--square" aria-hidden="true"
               ><i></i><i></i><i></i><i></i><i></i><i></i
             ></span>
@@ -221,13 +222,16 @@ async function clearGuestSession() {
             }"
             type="button"
             role="radio"
-            title="Each photo keeps its own shape, like Google Photos"
             :aria-checked="props.thumbnailMode === 'justified'"
             :aria-disabled="justifiedDisabled"
             :disabled="justifiedDisabled"
             :tabindex="props.thumbnailMode === 'justified' ? 0 : -1"
             @click="setThumbnailMode('justified')"
           >
+            <Tooltip
+              text="Each photo keeps its own shape, like Google Photos"
+              activator="parent"
+            />
             <span class="tli tli--just" aria-hidden="true"
               ><span class="tli-row"><i></i><i></i><i></i></span
               ><span class="tli-row"><i></i><i></i></span></span>

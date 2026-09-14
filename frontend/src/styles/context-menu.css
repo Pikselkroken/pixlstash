@@ -8,7 +8,7 @@
   gap: 8px;
   width: 100%;
   padding: 7px 14px;
-  font-size: 13px;
+  font-size: var(--text-sm);
   line-height: 1.4;
   color: rgb(var(--v-theme-on-surface));
   text-align: left;
@@ -43,7 +43,7 @@
 .ctx-shortcut {
   margin-left: auto;
   padding-left: 16px;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   opacity: var(--opacity-text-secondary);
 }
 
@@ -80,11 +80,11 @@
   top: 0;
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: var(--elevation-3);
   padding: 4px 0;
   min-width: 185px;
-  z-index: 2010;
+  z-index: var(--z-dropdown);
 }
 
 /* Flip submenus to open leftward when the parent menu is near the right edge */

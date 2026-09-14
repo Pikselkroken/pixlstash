@@ -60,6 +60,11 @@ vi.mock("../../utils/clipboard", () => ({ copyText: vi.fn() }));
 
 vi.mock("vuetify/components", () => ({
   VSwitch: { name: "v-switch", template: "<div><slot /></div>" },
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup: (_p, { slots }) => () => slots.activator?.({ props: {} }),
+  },
 }));
 
 import AccountSection from "./AccountSection.vue";

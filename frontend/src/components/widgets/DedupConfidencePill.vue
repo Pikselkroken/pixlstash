@@ -23,6 +23,7 @@
 import { computed } from "vue";
 
 import { confidenceLabel } from "../../utils/dedup";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   /** A queue group, carrying `kind` and `confidence`. */
@@ -49,17 +50,21 @@ const title = computed(() => {
 </script>
 
 <template>
-  <span
-    class="conf-pill"
-    :class="`conf-pill--${treatment}`"
-    :title="title"
-    :aria-label="title"
-  >
-    <v-icon class="conf-pill__ico" size="12" aria-hidden="true">{{
-      confidence.exact ? "mdi-equal" : measured ? "mdi-check" : "mdi-blur"
-    }}</v-icon>
-    <span class="conf-pill__label">{{ confidence.label }}</span>
-  </span>
+  <Tooltip :text="title" :describe="false">
+    <template #activator="{ props: tipProps }">
+      <span
+        class="conf-pill"
+        :class="`conf-pill--${treatment}`"
+        :aria-label="title"
+        v-bind="tipProps"
+      >
+        <v-icon class="conf-pill__ico" size="12" aria-hidden="true">{{
+          confidence.exact ? "mdi-equal" : measured ? "mdi-check" : "mdi-blur"
+        }}</v-icon>
+        <span class="conf-pill__label">{{ confidence.label }}</span>
+      </span>
+    </template>
+  </Tooltip>
 </template>
 
 <style scoped>

@@ -57,7 +57,7 @@
                 :aria-checked="tbComfyuiSeedMode === 'random'"
                 @click="tbComfyuiSeedMode = 'random'"
               >
-                <v-icon size="15">mdi-dice-multiple-outline</v-icon>
+                <v-icon size="16">mdi-dice-multiple-outline</v-icon>
                 Random
               </button>
               <button
@@ -68,7 +68,7 @@
                 :aria-checked="tbComfyuiSeedMode === 'fixed'"
                 @click="tbComfyuiSeedMode = 'fixed'"
               >
-                <v-icon size="15">mdi-lock-outline</v-icon>
+                <v-icon size="16">mdi-lock-outline</v-icon>
                 Fixed
               </button>
             </div>

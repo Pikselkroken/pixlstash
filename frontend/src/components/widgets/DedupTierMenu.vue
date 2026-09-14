@@ -22,9 +22,9 @@
       }"
       :disabled="tier.locked ? undefined : !isReachable(tier)"
       :aria-pressed="tier.locked ? undefined : tier.enabled"
-      :title="reasonFor(tier)"
       @click="tier.locked ? undefined : emit('toggle', tier.id, !tier.enabled)"
     >
+      <Tooltip :text="reasonFor(tier) || ''" activator="parent" />
       <span class="cbox" :class="{ 'cbox--on': tier.enabled }">
         <v-icon v-if="tier.enabled" size="14">mdi-check</v-icon>
       </span>
@@ -76,6 +76,7 @@
 import { computed } from "vue";
 
 import DedupThresholdControl from "./DedupThresholdControl.vue";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   /**

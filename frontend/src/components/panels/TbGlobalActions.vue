@@ -3,8 +3,7 @@
   <!-- ── Settings ──────────────────────────────────────────────────────── -->
   <AppBarButton
     icon="cog-outline"
-    title="Settings"
-    aria-label="Settings"
+    tooltip="Settings"
     @click="emit('open-settings')"
   />
   <!-- ── Stats toggle ──────────────────────────────────────────────────── -->
@@ -18,8 +17,7 @@
     :class="{ 'tb-stats-btn--busy': tasksStore.hasActiveTasks }"
     icon="chart-bar"
     :active="sidebarStore.statsOpen"
-    :title="statsTitle"
-    :aria-label="statsTitle"
+    :tooltip="statsTitle"
     @click="sidebarStore.toggleStats()"
   />
 </template>

@@ -44,6 +44,14 @@ vi.mock("vuetify/components", () => ({
     template:
       '<select :data-level="label" :disabled="disabled"><slot name="selection" :index="0" /></select>',
   },
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup:
+      (_p, { slots }) =>
+      () =>
+        slots.activator?.({ props: {} }),
+  },
 }));
 
 const getLayoutSettings = vi.fn();
@@ -417,9 +425,12 @@ describe("LibraryLayoutDialog", () => {
       "0 * var(--indent-step)",
     );
     // The full stored path is on the row whatever it managed to draw.
-    expect(rows[0].find(".layout-tree__name").attributes("title")).toBe(
-      "Harbour Nights/Nova/arm hair",
-    );
+    expect(
+      rows[0]
+        .find(".layout-tree__name")
+        .findComponent({ name: "Tooltip" })
+        .props("text"),
+    ).toBe("Harbour Nights/Nova/arm hair");
   });
 
   it("indents instead of repeating an ancestor that does have a row", async () => {

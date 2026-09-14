@@ -12,7 +12,7 @@
         :disabled="!store.activeCount"
         @click="store.resetFilters()"
       >
-        <v-icon size="15">mdi-close-circle-outline</v-icon>
+        <v-icon size="16">mdi-close-circle-outline</v-icon>
         Reset
       </button>
     </div>
@@ -87,10 +87,11 @@
            box matters more than the others: before these kinds existed the
            large encoders were counted as checkpoints, so `Checkpoints` was
            answering with a list mostly made of them. -->
-      <label
-        class="tbm-check"
-        title="VAEs and text encoders - the files a generation graph loads beside a checkpoint"
-      >
+      <label class="tbm-check">
+        <Tooltip
+          text="VAEs and text encoders - the files a generation graph loads beside a checkpoint"
+          activator="parent"
+        />
         <input
           type="checkbox"
           :checked="filters.support"
@@ -110,10 +111,11 @@
            its own word, and it is ON by default: the leftovers in PixlStash's
            own download folder land here, and off by default is how they stayed
            invisible (#927). -->
-      <label
-        class="tbm-check"
-        title="Files we could not identify as an adapter or a checkpoint"
-      >
+      <label class="tbm-check">
+        <Tooltip
+          text="Files we could not identify as an adapter or a checkpoint"
+          activator="parent"
+        />
         <input
           type="checkbox"
           :checked="filters.unclassified"
@@ -133,10 +135,11 @@
            are the answer to "where did my disk go", and off by default is
            exactly how they stayed invisible while the architecture note said
            they were on the shelf. -->
-      <label
-        class="tbm-check"
-        title="Models PixlStash and its tools downloaded: taggers, scorers, face packs and the HuggingFace cache"
-      >
+      <label class="tbm-check">
+        <Tooltip
+          text="Models PixlStash and its tools downloaded: taggers, scorers, face packs and the HuggingFace cache"
+          activator="parent"
+        />
         <input
           type="checkbox"
           :checked="filters.engines"
@@ -182,10 +185,11 @@
          there is nothing to ask the server for. -->
     <div class="tbm-section">
       <span class="tbm-label">Copies</span>
-      <label
-        class="tbm-check"
-        title="Files stored more than once - the same bytes, under one name or two"
-      >
+      <label class="tbm-check">
+        <Tooltip
+          text="Files stored more than once - the same bytes, under one name or two"
+          activator="parent"
+        />
         <input
           type="checkbox"
           :checked="filters.duplicatesOnly"
@@ -220,6 +224,7 @@
 
 <script setup>
 import { computed } from "vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import { BASE_MODEL_UNASSIGNED } from "../../api/modelShelf";
 import { adapterKindLabel, capabilityLabel } from "../../utils/modelShelf";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";

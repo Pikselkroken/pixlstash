@@ -564,7 +564,7 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
               size="sm"
               variant="ghost"
               icon-left="content-copy"
-              :title="`Copy ${item.syntax} command`"
+              :tooltip="`Copy ${item.syntax} command`"
               @click="copyCommand(item.command)"
             >
               {{ copiedCommand === item.command ? "Copied" : "Copy" }}

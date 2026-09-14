@@ -204,8 +204,8 @@ describe("ImageOverlay - the rotate buttons", () => {
     expect(left.attributes("disabled")).toBeDefined();
     // …and says why, pointing at the route that still works rather than
     // silently making a copy.
-    expect(left.attributes("title")).toContain("PNG and JPEG only");
-    expect(left.attributes("title")).toContain("Filters > Rotate");
+    expect(left.attributes("aria-label")).toContain("PNG and JPEG only");
+    expect(left.attributes("aria-label")).toContain("Filters > Rotate");
 
     await left.trigger("click");
     await flush();
@@ -221,7 +221,7 @@ describe("ImageOverlay - the rotate buttons", () => {
     });
     const left = rotateButtons(wrapper).byShortcut("[");
     expect(left.attributes("disabled")).toBeDefined();
-    expect(left.attributes("title")).toContain("Reference-folder");
+    expect(left.attributes("aria-label")).toContain("Reference-folder");
   });
 });
 

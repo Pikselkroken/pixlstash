@@ -233,8 +233,7 @@ defineExpose({
         class="uc-btn--undo"
         icon="undo-variant"
         :aria-disabled="!canUndo"
-        :title="undoTitle"
-        :aria-label="undoTitle"
+        :tooltip="undoTitle"
         :aria-keyshortcuts="undoKeyShortcut"
         @click="onUndo"
       />
@@ -242,8 +241,7 @@ defineExpose({
         class="uc-btn--redo"
         icon="redo-variant"
         :aria-disabled="!canRedo"
-        :title="redoTitle"
-        :aria-label="redoTitle"
+        :tooltip="redoTitle"
         :aria-keyshortcuts="redoKeyShortcut"
         @click="onRedo"
       />
@@ -261,8 +259,7 @@ defineExpose({
             v-bind="menuProps"
             class="uc-btn--chevron"
             chevron
-            title="History"
-            aria-label="History"
+            tooltip="History"
             :aria-expanded="menuOpen"
           />
         </template>
@@ -317,7 +314,7 @@ defineExpose({
               @click="onPick(row)"
               @keydown.enter.stop.prevent="onPick(row)"
             >
-              <v-icon size="18" class="uc-row-icon">{{
+              <v-icon size="16" class="uc-row-icon">{{
                 rowIcon(row.op)
               }}</v-icon>
               <span class="uc-row-label">{{ rowLabel(row.op) }}</span>

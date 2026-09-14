@@ -19,7 +19,7 @@
         variant="ghost"
         icon-left="refresh"
         :loading="loading"
-        title="Look for runs that have appeared since this list was read"
+        tooltip="Look for runs that have appeared since this list was read"
         aria-label="Reload the training runs"
         @click="reload"
       />
@@ -91,7 +91,7 @@
             loading="lazy"
           />
           <div v-else class="tr-card-preview tr-card-preview--none">
-            <v-icon size="20">mdi-image-off-outline</v-icon>
+            <v-icon size="18">mdi-image-off-outline</v-icon>
             <span>No previews</span>
           </div>
 
@@ -146,12 +146,12 @@
               type="button"
               aria-haspopup="menu"
               :aria-expanded="countMenuOpen"
-              :title="countTitle"
             >
+              <Tooltip :text="countTitle" activator="parent" />
               <AiToolkitIcon :size="16" />
               <span>{{ chosen.length.toLocaleString() }}</span>
               <span class="selbar-size">· {{ fileCountLabel }}</span>
-              <v-icon size="15" class="selbar-chevron">mdi-menu-down</v-icon>
+              <v-icon size="16" class="selbar-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
           <div class="shelf-menu" role="menu">
@@ -198,10 +198,13 @@
               type="button"
               aria-haspopup="menu"
               :aria-expanded="stepMenuOpen"
-              title="Choose which checkpoints of this run to take"
             >
+              <Tooltip
+                text="Choose which checkpoints of this run to take"
+                activator="parent"
+              />
               <span>{{ stepsLabel }}</span>
-              <v-icon size="15" class="selbar-chevron">mdi-menu-down</v-icon>
+              <v-icon size="16" class="selbar-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
           <div class="shelf-menu">
@@ -230,11 +233,14 @@
               type="button"
               aria-haspopup="menu"
               :aria-expanded="destMenuOpen"
-              title="Which folder the checkpoints are copied into"
             >
+              <Tooltip
+                text="Which folder the checkpoints are copied into"
+                activator="parent"
+              />
               <v-icon size="16">mdi-folder-outline</v-icon>
               <span>{{ destinationName }}</span>
-              <v-icon size="15" class="selbar-chevron">mdi-menu-down</v-icon>
+              <v-icon size="16" class="selbar-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
           <div class="shelf-menu" role="menu">
@@ -262,7 +268,7 @@
           size="sm"
           :loading="working"
           :disabled="!canSubmit"
-          :title="deletesSource ? deleteWarning : undefined"
+          :tooltip="deletesSource ? deleteWarning : ''"
           @click="submit"
         >
           {{ confirmLabel }}
@@ -271,7 +277,7 @@
         <AppBarButton
           shape="round"
           icon="close"
-          title="Clear the selection (Esc)"
+          tooltip="Clear the selection (Esc)"
           aria-label="Clear the selection"
           @click="clearSelection"
         />
@@ -324,6 +330,7 @@ import { VIcon, VMenu } from "vuetify/components";
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import { importRun, listRuns, runSampleUrl } from "../../api/modelImports";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";

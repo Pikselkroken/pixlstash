@@ -20,12 +20,12 @@ export class GridPage {
     this.thumbnails = page.locator('.thumbnail-card')
     this.thumbnailImages = page.locator('.thumbnail-img')
     // Toolbar buttons (titles are stable, verified in Toolbar.vue).
-    this.searchButton = page.locator('button[title="Search (F)"]').first()
+    this.searchButton = page.locator('button[aria-label="Search"]').first()
     // Sort is a split-button: .bar-split-menu opens the sort popover
     // (.gb-sort-panel); the in-popover ghost button flips the direction.
     this.sortMenuButton = page.locator('.bar-split-menu').first()
     this.sortDirectionButton = page.locator('.gb-sort-panel .tbm-ghost').first()
-    this.viewMenuButton = page.locator('button[title="View options"]').first()
+    this.viewMenuButton = page.locator('button[aria-label="View options"]').first()
     this.columnsSlider = page.locator('.gb-columns-slider')
     // Expand/Collapse-all live in the View popover as .tbm-action buttons.
     this.expandAllStacksButton = page

@@ -105,9 +105,13 @@
               role="option"
               :aria-selected="getAriaSelected(item)"
               :disabled="isItemDisabled(item)"
-              :title="isItemLocked(item) ? 'This set is locked' : undefined"
               @click.stop="toggleItem(item)"
             >
+              <Tooltip
+                v-if="isItemLocked(item)"
+                text="This set is locked"
+                activator="parent"
+              />
               <v-icon size="16" class="ate-item-check">
                 {{ getItemGlyph(item) }}
               </v-icon>
@@ -128,11 +132,11 @@
                   class="ate-item-lock"
                   >mdi-lock-outline</v-icon
                 >
-                <span
-                  v-else-if="isLastUsedItem(item)"
-                  class="ate-item-shortcut"
-                  title="Press A to add to this set"
-                  >A</span
+                <span v-else-if="isLastUsedItem(item)" class="ate-item-shortcut"
+                  ><Tooltip
+                    text="Press A to add to this set"
+                    activator="parent"
+                  />A</span
                 >
               </span>
             </button>
@@ -197,6 +201,7 @@ import {
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { errorDetail } from "../../utils/apiError";
 import { API_BASE_URL } from "../../utils/apiClient";
+import Tooltip from "./Tooltip.vue";
 const props = defineProps({
   // 'set' | 'project' | 'character' | 'face'.
   //

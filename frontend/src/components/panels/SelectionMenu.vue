@@ -14,39 +14,53 @@
     </div>
     <!-- ── Set / Character / Project ─────────────────────── -->
     <template v-if="!isScrapheapView">
-      <AddToEntityControl
+      <Tooltip
         v-if="entityLists.canSeeProjects"
-        ref="ateProjectRef"
-        type="project"
-        placement="right"
-        :subject-ids="selectedImageIds"
-        :disabled="selectedCount === 0 || !!groupingLockReason"
-        :title="groupingLockReason || undefined"
-        :readonly="isReadOnly"
-        @selected="$emit('set-project', $event)"
-      />
-      <AddToEntityControl
-        ref="ateCharacterRef"
-        type="character"
-        placement="right"
-        :subject-ids="selectedImageIds"
-        :disabled="selectedCount === 0 || !!groupingLockReason"
-        :title="groupingLockReason || undefined"
-        :readonly="isReadOnly"
-        @added="$emit('add-to-character', $event)"
-        @removed="$emit('remove-from-character', $event)"
-      />
-      <AddToEntityControl
-        ref="ateSetRef"
-        type="set"
-        placement="right"
-        :subject-ids="selectedImageIds"
-        :disabled="selectedCount === 0 || !!groupingLockReason"
-        :title="groupingLockReason || undefined"
-        :readonly="isReadOnly"
-        :locked-set-ids="lockedSetsStore.lockedSetIds"
-        @added="$emit('added-to-set', $event)"
-      />
+        :text="groupingLockReason || ''"
+      >
+        <template #activator="{ props: tipProps }">
+          <AddToEntityControl
+            v-bind="tipProps"
+            ref="ateProjectRef"
+            type="project"
+            placement="right"
+            :subject-ids="selectedImageIds"
+            :disabled="selectedCount === 0 || !!groupingLockReason"
+            :readonly="isReadOnly"
+            @selected="$emit('set-project', $event)"
+          />
+        </template>
+      </Tooltip>
+      <Tooltip :text="groupingLockReason || ''">
+        <template #activator="{ props: tipProps }">
+          <AddToEntityControl
+            v-bind="tipProps"
+            ref="ateCharacterRef"
+            type="character"
+            placement="right"
+            :subject-ids="selectedImageIds"
+            :disabled="selectedCount === 0 || !!groupingLockReason"
+            :readonly="isReadOnly"
+            @added="$emit('add-to-character', $event)"
+            @removed="$emit('remove-from-character', $event)"
+          />
+        </template>
+      </Tooltip>
+      <Tooltip :text="groupingLockReason || ''">
+        <template #activator="{ props: tipProps }">
+          <AddToEntityControl
+            v-bind="tipProps"
+            ref="ateSetRef"
+            type="set"
+            placement="right"
+            :subject-ids="selectedImageIds"
+            :disabled="selectedCount === 0 || !!groupingLockReason"
+            :readonly="isReadOnly"
+            :locked-set-ids="lockedSetsStore.lockedSetIds"
+            @added="$emit('added-to-set', $event)"
+          />
+        </template>
+      </Tooltip>
       <div class="ctx-sep" />
     </template>
 
@@ -56,52 +70,61 @@
         v-if="showRemoveStackButton"
         class="ctx-item"
         :disabled="isReadOnly"
-        title="Remove selected images from their stack"
         @click="
           $emit('remove-from-stack');
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
+        <Tooltip
+          text="Remove selected images from their stack"
+          activator="parent"
+        />
+        <v-icon class="ctx-icon" size="16">mdi-layers-off</v-icon>
         Unstack
       </button>
       <button
         v-else-if="selectedCount > 1"
         class="ctx-item"
         :disabled="isReadOnly"
-        title="Create a stack from the selected images"
         @click="
           $emit('create-stack');
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-layers</v-icon>
+        <Tooltip
+          text="Create a stack from the selected images"
+          activator="parent"
+        />
+        <v-icon class="ctx-icon" size="16">mdi-layers</v-icon>
         Stack
       </button>
       <button
         v-if="showUnstackMultipleButton"
         class="ctx-item"
         :disabled="isReadOnly"
-        title="Dissolve all selected stacks"
         @click="
           $emit('dissolve-stacks');
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
+        <Tooltip text="Dissolve all selected stacks" activator="parent" />
+        <v-icon class="ctx-icon" size="16">mdi-layers-off</v-icon>
         Unstack all
       </button>
       <button
         v-if="showGroupStackButton"
         class="ctx-item"
         :disabled="isReadOnly"
-        title="Create stacks from selected likeness groups"
         @click="
           $emit('create-stacks-from-groups');
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-layers-plus</v-icon>
+        <Tooltip
+          text="Create stacks from selected likeness groups"
+          activator="parent"
+        />
+        <v-icon class="ctx-icon" size="16">mdi-layers-plus</v-icon>
         Stack groups
       </button>
       <div v-if="showAnyStackAction" class="ctx-sep" />
@@ -112,13 +135,13 @@
       <button
         class="ctx-item"
         :disabled="selectedCount === 0 || isReadOnly"
-        title="Tag selected (T)"
         @click="
           $emit('open-tag-input');
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
+        <Tooltip text="Tag selected (T)" activator="parent" />
+        <v-icon class="ctx-icon" size="16">mdi-tag-plus</v-icon>
         Tag
       </button>
       <div
@@ -132,9 +155,9 @@
           class="ctx-item"
           :disabled="selectedCount === 0 || isReadOnly"
         >
-          <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
+          <v-icon class="ctx-icon" size="16">mdi-tag-outline</v-icon>
           Tag automatically
-          <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+          <v-icon class="ctx-arrow" size="16">mdi-chevron-right</v-icon>
         </button>
         <div v-if="autoTagSubmenuOpen" class="ctx-submenu">
           <button
@@ -147,7 +170,7 @@
               $emit('close');
             "
           >
-            <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
+            <v-icon class="ctx-icon" size="16">mdi-tag-outline</v-icon>
             {{ plugin.display_name || plugin.name }}
             <span v-if="plugin.default_enabled" class="ctx-default-pill"
               >default</span
@@ -166,9 +189,9 @@
           class="ctx-item"
           :disabled="selectedCount === 0 || isReadOnly"
         >
-          <v-icon class="ctx-icon" size="15">mdi-text-box-outline</v-icon>
+          <v-icon class="ctx-icon" size="16">mdi-text-box-outline</v-icon>
           Generate description
-          <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+          <v-icon class="ctx-arrow" size="16">mdi-chevron-right</v-icon>
         </button>
         <div v-if="descriptionSubmenuOpen" class="ctx-submenu">
           <button
@@ -181,7 +204,7 @@
               $emit('close');
             "
           >
-            <v-icon class="ctx-icon" size="15">mdi-text-box-outline</v-icon>
+            <v-icon class="ctx-icon" size="16">mdi-text-box-outline</v-icon>
             {{ plugin.display_name || plugin.name }}
             <span v-if="plugin.default_enabled" class="ctx-default-pill"
               >default</span
@@ -198,7 +221,7 @@
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-tune-variant</v-icon>
+        <v-icon class="ctx-icon" size="16">mdi-tune-variant</v-icon>
         Filters
       </button>
       <button
@@ -210,7 +233,7 @@
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-auto-fix</v-icon>
+        <v-icon class="ctx-icon" size="16">mdi-auto-fix</v-icon>
         Edit with ComfyUI
       </button>
       <div class="ctx-sep" />
@@ -228,9 +251,9 @@
           class="ctx-item"
           :disabled="selectedCount === 0 || isReadOnly"
         >
-          <v-icon class="ctx-icon" size="15">mdi-restore</v-icon>
+          <v-icon class="ctx-icon" size="16">mdi-restore</v-icon>
           Restore from snapshot
-          <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+          <v-icon class="ctx-arrow" size="16">mdi-chevron-right</v-icon>
         </button>
         <div v-if="restoreSubmenuOpen" class="ctx-submenu">
           <button
@@ -238,21 +261,24 @@
             :key="cp.id"
             class="ctx-item"
             :disabled="identicalSnapshotIds.has(cp.id)"
-            :title="
-              identicalSnapshotIds.has(cp.id)
-                ? 'Selection is identical to this snapshot'
-                : undefined
-            "
             @click="handleRestoreFromSnapshot(cp.id)"
           >
-            <v-icon class="ctx-icon" size="14">mdi-camera-outline</v-icon>
+            <Tooltip
+              :text="
+                identicalSnapshotIds.has(cp.id)
+                  ? 'Selection is identical to this snapshot'
+                  : ''
+              "
+              activator="parent"
+            />
+            <v-icon class="ctx-icon" size="16">mdi-camera-outline</v-icon>
             {{ cp.label || cp.kind }}
             <span class="ctx-default-pill">{{
               cp.created_at ? formatSnapshotDate(cp.created_at) : ""
             }}</span>
           </button>
           <button class="ctx-item" @click="handleRestoreMore">
-            <v-icon class="ctx-icon" size="14">mdi-dots-horizontal</v-icon>
+            <v-icon class="ctx-icon" size="16">mdi-dots-horizontal</v-icon>
             More…
           </button>
         </div>
@@ -264,13 +290,13 @@
       <button
         class="ctx-item"
         :disabled="selectedCount === 0"
-        title="Find visually similar images"
         @click="
           $emit('reverse-image-search');
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-image-search-outline</v-icon>
+        <Tooltip text="Find visually similar images" activator="parent" />
+        <v-icon class="ctx-icon" size="16">mdi-image-search-outline</v-icon>
         Reverse image search
       </button>
       <!-- ── Segment ───────────────────────────────────────
@@ -281,13 +307,16 @@
       <button
         class="ctx-item"
         :disabled="selectedCount === 0 || isReadOnly"
-        title="Detect objects and store bounding boxes"
         @click="
           $emit('segment');
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-shape-outline</v-icon>
+        <Tooltip
+          text="Detect objects and store bounding boxes"
+          activator="parent"
+        />
+        <v-icon class="ctx-icon" size="16">mdi-shape-outline</v-icon>
         Segment
       </button>
       <!-- ── Rotate in place ───────────────────────────────
@@ -301,25 +330,25 @@
       <button
         class="ctx-item"
         :disabled="selectedCount === 0 || isReadOnly || !!rotateBlockReason"
-        :title="rotateLeftTitle"
         @click="
           $emit('rotate-left');
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-rotate-left</v-icon>
+        <Tooltip :text="rotateLeftTitle" activator="parent" />
+        <v-icon class="ctx-icon" size="16">mdi-rotate-left</v-icon>
         {{ rotateLeftLabel }}
       </button>
       <button
         class="ctx-item"
         :disabled="selectedCount === 0 || isReadOnly || !!rotateBlockReason"
-        :title="rotateRightTitle"
         @click="
           $emit('rotate-right');
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-rotate-right</v-icon>
+        <Tooltip :text="rotateRightTitle" activator="parent" />
+        <v-icon class="ctx-icon" size="16">mdi-rotate-right</v-icon>
         {{ rotateRightLabel }}
       </button>
       <div class="ctx-sep" />
@@ -335,16 +364,19 @@
       v-if="showKeepCoverOnly"
       class="ctx-item ctx-item--danger"
       :disabled="isReadOnly || !!keepCoverOnlyLockReason"
-      :title="
-        keepCoverOnlyLockReason ||
-        'Keep each selected stack\'s cover and move its other pictures to the Scrapheap'
-      "
       @click="
         $emit('keep-cover-only');
         $emit('close');
       "
     >
-      <v-icon class="ctx-icon" size="15">{{ KEEP_COVER_ONLY_ICON }}</v-icon>
+      <Tooltip
+        :text="
+          keepCoverOnlyLockReason ||
+          'Keep each selected stack\'s cover and move its other pictures to the Scrapheap'
+        "
+        activator="parent"
+      />
+      <v-icon class="ctx-icon" size="16">{{ KEEP_COVER_ONLY_ICON }}</v-icon>
       {{ keepCoverOnlyLabel }}
     </button>
     <button
@@ -361,13 +393,13 @@
     <button
       class="ctx-item ctx-item--danger"
       :disabled="selectedCount === 0 || isReadOnly"
-      title="Delete selected items (DEL)"
       @click="
         $emit('delete-selected');
         $emit('close');
       "
     >
-      <v-icon class="ctx-icon" size="15">mdi-delete</v-icon>
+      <Tooltip text="Delete selected items (DEL)" activator="parent" />
+      <v-icon class="ctx-icon" size="16">mdi-delete</v-icon>
       {{ deleteButtonLabel }}
     </button>
   </div>
@@ -385,6 +417,7 @@ import {
 } from "../../utils/keepCoverOnly";
 import { ROTATE_CCW, ROTATE_CW, rotateMenuLabel } from "../../utils/rotate";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 

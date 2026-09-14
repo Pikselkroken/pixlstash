@@ -22,6 +22,7 @@ import { VMenu } from "vuetify/components";
 
 import { ALL_KINDS, JUST_A_FOLDER_KIND, kindByDigit, kindByValue, kindStyle } from "../../utils/folderMappingKinds";
 import AppButton from "../widgets/AppButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   result: { type: Object, required: true },
@@ -319,7 +320,7 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
         :class="{ 'map-tree__chip--folder': kind.value === JUST_A_FOLDER_KIND.value }"
         :style="kindStyle(kind.value)"
       >
-        <v-icon size="15">{{ kind.icon }}</v-icon>
+        <v-icon size="16">{{ kind.icon }}</v-icon>
         {{ kind.plural }}
         <span v-if="kind.value !== JUST_A_FOLDER_KIND.value && tally.get(kind.value)" class="map-tree__chip-count">
           {{ tally.get(kind.value) }}
@@ -369,11 +370,11 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
                 :style="bandKind(level) === 'mixed' ? mixedStyle(level) : kindStyle(bandKind(level))"
                 aria-haspopup="menu"
                 :aria-label="`${bandLabel(level)}, ${bandKind(level) === 'mixed' ? 'Mixed: ' + levelKinds(level).map((k) => k.label).join(', ') : kindByValue(bandKind(level))?.label ?? 'choose'}`"
-                :title="level.proposal?.evidence?.[0]?.text"
                 v-bind="menuProps"
                 @mouseenter="selectionCount(level) && (hoverLinked = true)"
                 @mouseleave="hoverLinked = false"
               >
+                <Tooltip :text="level.proposal?.evidence?.[0]?.text ?? ''" activator="parent" />
                 <v-icon v-if="bandKind(level) === 'mixed'" size="13">mdi-shuffle-variant</v-icon>
                 <v-icon v-else-if="bandKind(level)" size="13">{{ kindByValue(bandKind(level)).icon }}</v-icon>
                 <span class="map-tree__kdd-label">
@@ -395,7 +396,7 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
                   :style="kindStyle(kind.value)"
                   @click="applyToLevel(level, kind.value)"
                 >
-                  <v-icon size="14">{{ kind.icon }}</v-icon>
+                  <v-icon size="16">{{ kind.icon }}</v-icon>
                   {{ kind.label }}
                   <kbd class="map-tree__menu-digit">{{ kind.digit }}</kbd>
                 </button>
@@ -425,7 +426,7 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
             @keydown="onRowKeydown(level, folder, $event)"
             @focusin="focusedRowId.set(level.depth, folder.id)"
           >
-            <v-icon class="map-tree__lead" size="15">mdi-folder-outline</v-icon>
+            <v-icon class="map-tree__lead" size="16">mdi-folder-outline</v-icon>
             <span class="map-tree__name">{{ folder.name }}</span>
             <span class="map-tree__count">{{ folder.picture_count.toLocaleString() }}</span>
             <v-menu :close-on-content-click="true">
@@ -444,11 +445,11 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
                   aria-haspopup="menu"
                   :aria-label="`Kind, ${kindByValue(resolvedKind(folder))?.label ?? 'choose'}`"
                   :aria-description="isSelected(folder) ? `applies to the ${selectedIds.size} selected folders` : undefined"
-                  :title="folder.proposal?.evidence?.[0]?.text"
                   v-bind="menuProps"
                   @mouseenter="isSelected(folder) && (hoverLinked = true)"
                   @mouseleave="hoverLinked = false"
                 >
+                  <Tooltip :text="folder.proposal?.evidence?.[0]?.text ?? ''" activator="parent" />
                   <v-icon v-if="resolvedKind(folder)" size="13">{{ kindByValue(resolvedKind(folder)).icon }}</v-icon>
                   <span class="map-tree__kdd-label">{{ kindByValue(resolvedKind(folder))?.label ?? "choose…" }}</span>
                   <v-icon size="12">mdi-chevron-down</v-icon>
@@ -467,7 +468,7 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
                     :style="kindStyle(kind.value)"
                     @click="applyToRow(level, folder, kind.value)"
                   >
-                    <v-icon size="14">{{ kind.icon }}</v-icon>
+                    <v-icon size="16">{{ kind.icon }}</v-icon>
                     {{ kind.label }}
                     <kbd class="map-tree__menu-digit">{{ kind.digit }}</kbd>
                   </button>

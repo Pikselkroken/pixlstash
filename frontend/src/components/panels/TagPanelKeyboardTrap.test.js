@@ -37,7 +37,12 @@ vi.mock("../../api/users", () => ({ getPenalisedTags: vi.fn(async () => []) }));
 
 import TbTagPanel from "./TbTagPanel.vue";
 
-const STUBS = { "v-icon": true, "v-btn": true, "v-progress-circular": true };
+const STUBS = {
+  "v-icon": true,
+  "v-btn": true,
+  "v-progress-circular": true,
+  Tooltip: true,
+};
 
 beforeEach(() => {
   Object.values(tagsApi).forEach((mock) => mock.mockReset());

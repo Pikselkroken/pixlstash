@@ -39,11 +39,27 @@ const REQUIRED = {
   backendUrl: "http://x",
 };
 
+// The tooltip is stubbed to carry its text on the element it wraps or sits in:
+// the real one renders nothing until it opens, and needs Vuetify besides.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "activator"],
+  template:
+    '<span class="tip" :data-text="text"><slot name="activator" :props="{}" /></span>',
+};
+
+/** The tooltip text a control carries, whether the tip sits inside or around it. */
+function tip(wrapper) {
+  const inner = wrapper.find(".tip");
+  if (inner.exists()) return inner.attributes("data-text");
+  return wrapper.element.parentElement?.dataset.text;
+}
+
 // v-icon isn't registered in the test app; stub it so the menu mounts. The menu
 // teleports to <body>, so stub teleport to render its content inline where the
 // wrapper can query it.
 const globalStubs = {
-  global: { stubs: { "v-icon": true, teleport: true } },
+  global: { stubs: { "v-icon": true, Tooltip: TooltipStub, teleport: true } },
 };
 
 function itemLabels(wrapper) {
@@ -269,7 +285,7 @@ describe("overlay-mode context menu - action set", () => {
       .findAll("button.ctx-item")
       .find((button) => button.text().includes("Copy picture"));
     expect(copy.attributes("disabled")).toBeDefined();
-    expect(copy.attributes("title")).toBe(reason);
+    expect(tip(copy)).toBe(reason);
     const reasonId = copy.attributes("aria-describedby");
     expect(wrapper.find(`#${reasonId}`).text()).toBe(reason);
   });

@@ -12,9 +12,14 @@
       </div>
       <button
         class="comfyui-abort-btn"
-        title="Dismiss ComfyUI error"
+        aria-label="Dismiss ComfyUI error"
         @click.stop="dismissComfyuiProgress"
       >
+        <Tooltip
+          text="Dismiss ComfyUI error"
+          activator="parent"
+          :describe="false"
+        />
         ✕
       </button>
     </div>
@@ -56,6 +61,7 @@ import { formatComfyuiExecutionErrorMessage } from "../../utils/utils.js";
 import { useTasksStore } from "../../stores/useTasksStore";
 
 import { API_BASE_URL } from "../../utils/apiClient";
+import Tooltip from "../widgets/Tooltip.vue";
 const props = defineProps({
   backendUrl: { type: String, default: () => API_BASE_URL },
   wsPluginProgress: {

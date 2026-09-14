@@ -78,6 +78,7 @@ import AppButton from "./AppButton.vue";
 import DedupConfidencePill from "./DedupConfidencePill.vue";
 import DedupWhyPills from "./DedupWhyPills.vue";
 import StackExpansionStrip from "./StackExpansionStrip.vue";
+import Tooltip from "./Tooltip.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { listStackMembers, MAX_STACK_MEMBER_PAGE } from "../../api/dedup";
 import { API_BASE_URL } from "../../utils/apiClient";
@@ -864,7 +865,7 @@ function pickTitle(unit) {
       : "Click, or press X, to mark this picture as a stranger, so it comes out of the stack.";
   }
   return unit.kind === "deck"
-    ? "Make this stack the cover. Its leader, the picture shown here, leads the result."
+    ? "Make this stack the cover. Its leader, the picture shown here, leads the result. The numbers below are this picture's."
     : "Make this the cover";
 }
 
@@ -1752,9 +1753,9 @@ function onZoomContextMenu() {
           class="dc-pick"
           :aria-pressed="isMixed ? isMarkedUnit(unit) : isUnitCover(unit)"
           :aria-label="unitName(unit, index)"
-          :title="pickTitle(unit)"
           @click="onCardPick(unit)"
         >
+          <Tooltip :text="pickTitle(unit)" activator="parent" />
           <!-- Wheel over the picture starts the zoom on it: the mouse's
                equivalent of the corner button, without the pixel hunt. -->
           <span class="dc-thumb" @wheel="onThumbWheel(index, $event)">
@@ -1773,12 +1774,9 @@ function onZoomContextMenu() {
             </span>
             <!-- A deck is showing ONE picture and standing for several, so it
                  says which one this is: the numbers below are its, not the
-                 stack's. -->
-            <span
-              v-if="unit.kind === 'deck'"
-              class="dc-flag dc-flag--leader"
-              title="This stack's leader. The numbers below are this picture's, and a cover choice on this card resolves to it."
-            >
+                 stack's. The card's own tip says so; a second tip on the flag
+                 would open on top of it. -->
+            <span v-if="unit.kind === 'deck'" class="dc-flag dc-flag--leader">
               Leader
             </span>
             <span v-if="isUnitOut(unit)" class="dc-flag dc-flag--out">
@@ -1797,10 +1795,13 @@ function onZoomContextMenu() {
         <button
           type="button"
           class="dc-zoom"
-          title="Zoom - full-screen blink compare (Z)"
           :aria-label="`Zoom ${unitName(unit, index)}`"
           @click.stop="openZoom(unitZoomStart(index))"
         >
+          <Tooltip
+            text="Zoom - full-screen blink compare (Z)"
+            activator="parent"
+          />
           <v-icon size="16">mdi-magnify-plus-outline</v-icon>
         </button>
 
@@ -1829,12 +1830,16 @@ function onZoomContextMenu() {
                some cards only would leave the pictures out of register. -->
           <span v-if="isMixed" class="dc-cell">
             <span class="dc-label">Match</span>
-            <span
-              class="dc-val"
-              :class="{ 'dc-val--gap': isMarkedUnit(unit) }"
-              :title="matchTitle(unit)"
-              >{{ matchText(unit) }}</span
-            >
+            <Tooltip :text="matchTitle(unit)">
+              <template #activator="{ props: tipProps }">
+                <span
+                  class="dc-val"
+                  :class="{ 'dc-val--gap': isMarkedUnit(unit) }"
+                  v-bind="tipProps"
+                  >{{ matchText(unit) }}</span
+                >
+              </template>
+            </Tooltip>
           </span>
           <span class="dc-cell">
             <span class="dc-label">Resolution</span>
@@ -1873,13 +1878,16 @@ function onZoomContextMenu() {
                 type="button"
                 class="dc-expand"
                 :aria-expanded="isExpanded(unit)"
-                :title="
-                  isExpanded(unit)
-                    ? 'Hide the pictures in this stack'
-                    : 'Show the pictures in this stack, below the cards'
-                "
                 @click.stop="toggleExpansion(unit)"
               >
+                <Tooltip
+                  :text="
+                    isExpanded(unit)
+                      ? 'Hide the pictures in this stack'
+                      : 'Show the pictures in this stack, below the cards'
+                  "
+                  activator="parent"
+                />
                 <v-icon size="14">{{
                   isExpanded(unit) ? "mdi-chevron-down" : "mdi-chevron-right"
                 }}</v-icon>
@@ -1958,9 +1966,14 @@ function onZoomContextMenu() {
                 type="button"
                 class="dc-toggle"
                 :aria-pressed="!leavesStack(unit)"
-                :title="inStackToggleTitle(unit)"
+                :aria-label="inStackToggleTitle(unit)"
                 @click.stop="onInStackToggle(unit)"
               >
+                <Tooltip
+                  :text="inStackToggleTitle(unit)"
+                  activator="parent"
+                  :describe="false"
+                />
                 <v-icon size="14">{{
                   leavesStack(unit)
                     ? "mdi-checkbox-blank-outline"
@@ -1982,24 +1995,28 @@ function onZoomContextMenu() {
               class="dc-val dc-path"
               :title="candidatePath(face)"
             >
-              <v-icon
-                size="13"
-                class="dc-path-icon"
-                title="Reference folder, you manage these files yourself"
-                >mdi-folder-eye-outline</v-icon
-              >
+              <Tooltip text="Reference folder, you manage these files yourself">
+                <template #activator="{ props: tipProps }">
+                  <v-icon size="13" class="dc-path-icon" v-bind="tipProps"
+                    >mdi-folder-eye-outline</v-icon
+                  >
+                </template>
+              </Tooltip>
               {{ shortenPath(candidatePath(face)) }}
             </span>
-            <span
+            <Tooltip
               v-else
-              class="dc-val dc-path"
-              title="Stored in your PixlStash library, not in a reference folder"
+              text="Stored in your PixlStash library, not in a reference folder"
             >
-              <v-icon size="13" class="dc-path-icon"
-                >mdi-image-multiple-outline</v-icon
-              >
-              In your library
-            </span>
+              <template #activator="{ props: tipProps }">
+                <span class="dc-val dc-path" v-bind="tipProps">
+                  <v-icon size="13" class="dc-path-icon"
+                    >mdi-image-multiple-outline</v-icon
+                  >
+                  In your library
+                </span>
+              </template>
+            </Tooltip>
           </span>
         </span>
       </div>
@@ -2124,7 +2141,7 @@ function onZoomContextMenu() {
           icon-left="check"
           key-hint="k"
           :disabled="busy"
-          title="This stack is fine. It stops being listed until its pictures change."
+          tooltip="This stack is fine. It stops being listed until its pictures change."
           @click="emit('keep')"
         >
           Keep
@@ -2139,7 +2156,7 @@ function onZoomContextMenu() {
           :icon-left="primaryIcon"
           key-hint="enter"
           :disabled="busy"
-          :title="primaryTitle"
+          :tooltip="primaryTitle"
           @click="emit('resolve')"
         >
           {{ primaryLabel }}
@@ -2152,7 +2169,7 @@ function onZoomContextMenu() {
           icon-left="call-split"
           key-hint="k"
           :disabled="busy"
-          title="Leave these as separate pictures. They stay in your library and stop being suggested."
+          tooltip="Leave these as separate pictures. They stay in your library and stop being suggested."
           @click="emit('keep-separate')"
         >
           Keep separate
@@ -2163,7 +2180,7 @@ function onZoomContextMenu() {
           icon-left="layers-plus"
           key-hint="enter"
           :disabled="busy"
-          title="Group these behind one cover. Every file stays on disk, and Ctrl+Z reverses it."
+          tooltip="Group these behind one cover. Every file stays on disk, and Ctrl+Z reverses it."
           @click="emit('stack')"
         >
           {{ verdictLabel.full }}
@@ -2218,19 +2235,27 @@ function onZoomContextMenu() {
           <button
             type="button"
             :class="{ 'dc-zv-on': zoomAtFit }"
-            title="Snap to fit - every candidate in the same box, the blink registered"
             @click="snapZoomTo(zoomFitScale)"
           >
-            <v-icon size="15">mdi-fit-to-screen-outline</v-icon>
+            <Tooltip
+              text="Snap to fit - every candidate in the same box, the blink registered"
+              activator="parent"
+              attach=".dc-zv"
+            />
+            <v-icon size="16">mdi-fit-to-screen-outline</v-icon>
             Fit
           </button>
           <button
             type="button"
             :class="{ 'dc-zv-on': zoomAtActual }"
-            title="Snap to 1:1 - resolution differences show as size jumps (P)"
             @click="snapZoomTo(1)"
           >
-            <v-icon size="15">mdi-magnify-scan</v-icon>
+            <Tooltip
+              text="Snap to 1:1 - resolution differences show as size jumps (P)"
+              activator="parent"
+              attach=".dc-zv"
+            />
+            <v-icon size="16">mdi-magnify-scan</v-icon>
             Actual pixels
           </button>
           <span v-if="zoomPercent !== null" class="dc-zv-pct">{{
@@ -2240,9 +2265,17 @@ function onZoomContextMenu() {
         <button
           type="button"
           class="dc-zv-close"
-          title="Back to compare (Esc)"
+          aria-label="Back to compare"
+          aria-keyshortcuts="Escape"
           @click="closeZoom()"
         >
+          <Tooltip
+            text="Back to compare"
+            shortcut="Esc"
+            activator="parent"
+            attach=".dc-zv"
+            :describe="false"
+          />
           <v-icon size="18">mdi-close</v-icon>
         </button>
       </div>

@@ -15,7 +15,7 @@ import { useExportStore } from "../../stores/useExportStore";
 function mountPanel() {
   return mount(TbExportPanel, {
     attachTo: document.body,
-    global: { stubs: { "v-icon": true, "v-checkbox": true } },
+    global: { stubs: { "v-icon": true, "v-checkbox": true, Tooltip: true } },
   });
 }
 

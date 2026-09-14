@@ -7,20 +7,28 @@
     }"
   >
     <template v-if="numberMode">
-      <v-icon
-        :size="iconSize"
-        :color="
-          dScore > 0
-            ? 'rgba(var(--v-theme-accent))'
-            : 'rgba(var(--v-theme-on-background), 0.4)'
-        "
-        :title="
-          dScore > 0 ? `Rated ${dScore} - click to change` : 'Click to rate'
-        "
-        style="cursor: pointer; vertical-align: middle; display: flex"
-        @click.stop="cycleRating()"
-        >mdi-star</v-icon
+      <Tooltip
+        :text="dScore > 0 ? `Rated ${dScore} - click to change` : 'Click to rate'"
+        :describe="false"
       >
+        <template #activator="{ props: tipProps }">
+          <v-icon
+            v-bind="tipProps"
+            :size="iconSize"
+            :color="
+              dScore > 0
+                ? 'rgba(var(--v-theme-accent))'
+                : 'rgba(var(--v-theme-on-background), 0.4)'
+            "
+            :aria-label="
+              dScore > 0 ? `Rated ${dScore} - click to change` : 'Click to rate'
+            "
+            style="cursor: pointer; vertical-align: middle; display: flex"
+            @click.stop="cycleRating()"
+            >mdi-star</v-icon
+          >
+        </template>
+      </Tooltip>
       <span
         class="star-number-label"
         :style="{ opacity: dScore > 0 ? 1 : 0 }"
@@ -28,26 +36,35 @@
       >
     </template>
     <template v-else>
-      <v-icon
+      <Tooltip
         v-for="n in max"
         :key="n"
-        :size="iconSize"
-        :color="
-          n <= dScore
-            ? 'rgba(var(--v-theme-accent))'
-            : 'rgba(var(--v-theme-on-background), 0.6)'
-        "
-        :title="`Set rating ${n} (${n})`"
-        style="cursor: pointer"
-        @click.stop="handleClick(n)"
-        >mdi-star</v-icon
+        :text="`Set rating ${n} (${n})`"
+        :describe="false"
       >
+        <template #activator="{ props: tipProps }">
+          <v-icon
+            v-bind="tipProps"
+            :size="iconSize"
+            :color="
+              n <= dScore
+                ? 'rgba(var(--v-theme-accent))'
+                : 'rgba(var(--v-theme-on-background), 0.6)'
+            "
+            :aria-label="`Set rating ${n} (${n})`"
+            style="cursor: pointer"
+            @click.stop="handleClick(n)"
+            >mdi-star</v-icon
+          >
+        </template>
+      </Tooltip>
     </template>
   </div>
 </template>
 
 <script setup>
 import { computed } from "vue";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   score: { type: Number, default: 0 },

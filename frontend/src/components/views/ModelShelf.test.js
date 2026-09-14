@@ -171,10 +171,27 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { formatUserDate } from "../../utils/utils";
 
+// The tooltip is stubbed to carry its text on the element it wraps or sits in:
+// the real one renders nothing until it opens, and needs Vuetify besides.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "activator"],
+  template:
+    '<span class="tip" :data-text="text"><slot name="activator" :props="{}" /></span>',
+};
+
+/** The tooltip text a control carries, whether the tip sits inside or around it. */
+function tip(wrapper) {
+  const inner = wrapper.find(".tip");
+  if (inner.exists()) return inner.attributes("data-text");
+  return wrapper.element.parentElement?.dataset.text;
+}
+
 const globalOpts = {
   global: {
     stubs: {
       "v-icon": true,
+      Tooltip: TooltipStub,
       "v-menu": {
         template: "<div><slot name='activator' :props='{}' /><slot /></div>",
       },
@@ -688,7 +705,7 @@ describe("location state", () => {
         ],
       }),
     ]);
-    expect(wrapper.find(".shelf-row-file").attributes("title")).toBe(
+    expect(tip(wrapper.find(".shelf-row-file"))).toBe(
       "/home/me/models/a.st\n/media/me/spare/a.st",
     );
   });
@@ -709,7 +726,7 @@ describe("location state", () => {
     await wrapper.vm.$nextTick();
     const titles = wrapper
       .findAll(".shelf-row-file")
-      .map((el) => el.attributes("title"));
+      .map((el) => tip(el));
     expect(titles).toEqual([
       "/home/me/models/a.st",
       "/media/me/spare/a.st · not where it was",
@@ -733,15 +750,15 @@ describe("location state", () => {
     ]);
     await wrapper.find(".shelf-row").trigger("keydown", { key: "ArrowRight" });
     expect(
-      wrapper.find(".shelf-row--member .shelf-row-file").attributes("title"),
+      tip(wrapper.find(".shelf-row--member .shelf-row-file")),
     ).toBe("/media/me/spare/b.st");
   });
 
   it("offers no tooltip at all when every copy has been forgotten", async () => {
-    // An empty `title` is a tooltip that flashes and says nothing. The file
-    // line already carries the words for this state.
+    // An empty tip is one that flashes and says nothing; empty text is what
+    // disables the Tooltip. The file line already carries the words.
     const wrapper = await mountShelf([adapter({ locations: [] })]);
-    expect(wrapper.find(".shelf-row-file").attributes("title")).toBeUndefined();
+    expect(tip(wrapper.find(".shelf-row-file"))).toBe("");
   });
 });
 
@@ -1641,7 +1658,7 @@ describe("selecting rows", () => {
 
     await rowAt(wrapper, 0).trigger("click");
     await wrapper.vm.$nextTick();
-    expect(wrapper.find(".selbar-count").attributes("title")).toContain(
+    expect(tip(wrapper.find(".selbar-count"))).toContain(
       "1 model selected",
     );
   });
@@ -1777,9 +1794,9 @@ describe("drive bands", () => {
 
     const icons = wrapper.findAll(".shelf-band-icon");
     expect(icons[0].text()).toBe("mdi-nas");
-    expect(icons[0].attributes("title")).toBe("Network share");
+    expect(tip(icons[0])).toBe("Network share");
     expect(icons[1].text()).toBe("mdi-harddisk");
-    expect(icons[1].attributes("title")).toBeUndefined();
+    expect(tip(icons[1])).toBe("");
     expect(textOf(wrapper.findAll(".shelf-band")[1])).not.toContain("Unknown");
   });
 
@@ -2181,7 +2198,7 @@ describe("a folder header's context menu (#1270)", () => {
       textOf(el).includes("Move folder"),
     );
     expect(move.attributes("disabled")).toBeDefined();
-    expect(move.attributes("title")).toBe("A move is already running.");
+    expect(tip(move)).toBe("A move is already running.");
     // A never-scanned folder is offered a Scan, not a Rescan.
     expect(menuItems(wrapper).map(textOf)).toContain("Scan folder");
     wrapper.unmount();
@@ -2308,7 +2325,7 @@ describe("selection and drive bands together", () => {
 
     await rows[0].trigger("click");
     await wrapper.vm.$nextTick();
-    expect(wrapper.find(".selbar-count").attributes("title")).toContain(
+    expect(tip(wrapper.find(".selbar-count"))).toContain(
       "1 model selected",
     );
     // The band is a header, not a row: it must not have become selectable.
@@ -3145,7 +3162,7 @@ describe("the date column", () => {
     let wrapper = await mountShelf([adapter({ added_at: ADDED })]);
     let cell = wrapper.find(".shelf-col--date");
     expect(cell.text()).toBe("30/07/2026");
-    expect(cell.attributes("title")).toBe(
+    expect(tip(cell)).toBe(
       `Date added: ${formatUserDate(ADDED, "eu")}`,
     );
 
@@ -3267,7 +3284,7 @@ describe("the assignment ring (#892, redrawn for #904)", () => {
     // The greyscale test, as arithmetic: strip the hue and the ring still
     // carries a STYLE, and the mark still says who out loud. Both attachments
     // are named even though one ring is drawn - the mark has one edge.
-    expect(mark.attributes("title")).toBe("Ada (person), Beach (set)");
+    expect(tip(mark)).toBe("Ada (person), Beach (set)");
     expect(textOf(mark)).toContain("Ada (person), Beach (set)");
     expect(mark.classes()).toContain("mmark--ring");
     expect(
@@ -3314,7 +3331,7 @@ describe("the assignment ring (#892, redrawn for #904)", () => {
     // mark has one reads as a rendering fault rather than as "assigned to
     // nothing", and the word is what a reader hears.
     expect(mark.classes()).toContain("mmark--none");
-    expect(mark.attributes("title")).toBe("Unassigned");
+    expect(tip(mark)).toBe("Unassigned");
   });
 
   it("still rings an attachment whose entity the lists do not answer", async () => {
@@ -3325,7 +3342,7 @@ describe("the assignment ring (#892, redrawn for #904)", () => {
     ]);
     const mark = wrapper.find(".mmark");
     expect(mark.classes()).not.toContain("mmark--none");
-    expect(mark.attributes("title")).toBe("#42 (person)");
+    expect(tip(mark)).toBe("#42 (person)");
   });
 
   it("borrows the assigned face when the model has no picture of its own", async () => {
@@ -3785,14 +3802,14 @@ describe("the model-folders door", () => {
     await closeFoldersFrom(wrapper, folders);
     expect(document.activeElement).toBe(folders.element);
 
-    const add = wrapper.find(
-      '.shelf-toolbar button[title="Add models to the shelf"]',
-    );
+    const add = wrapper
+      .find('.shelf-toolbar .tip[data-text="Add models to the shelf"]')
+      .element.closest("button");
     const addItem = wrapper
       .findAll(".shelf-mi")
       .find((b) => b.text().includes("Add folder"));
     await closeFoldersFrom(wrapper, addItem);
-    expect(document.activeElement).toBe(add.element);
+    expect(document.activeElement).toBe(add);
 
     wrapper.unmount();
   });
@@ -4132,8 +4149,9 @@ describe("Add file", () => {
     await wrapper.vm.$nextTick();
 
     expect(document.activeElement).toBe(
-      wrapper.find('.shelf-toolbar button[title="Add models to the shelf"]')
-        .element,
+      wrapper
+        .find('.shelf-toolbar .tip[data-text="Add models to the shelf"]')
+        .element.closest("button"),
     );
     wrapper.unmount();
   });
@@ -4294,7 +4312,7 @@ describe("the app-wide toolbar tail", () => {
   it("asks App.vue for Settings and toggles the stats sidebar itself", async () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const sidebar = useSidebarStore();
-    const settings = wrapper.find(".shelf-toolbar button[title='Settings']");
+    const settings = wrapper.find(".shelf-toolbar button[aria-label='Settings']");
 
     await settings.trigger("click");
     expect(wrapper.emitted("open-settings")).toHaveLength(1);
@@ -4316,7 +4334,7 @@ describe("the app-wide toolbar tail", () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const cluster = wrapper.find(".shelf-bar-cluster").element;
     // TbGlobalActions is multi-root; its Settings button is a stable anchor.
-    const settings = wrapper.find("button[title='Settings']").element;
+    const settings = wrapper.find("button[aria-label='Settings']").element;
     const separator = wrapper.find(".shelf-bar-cluster .bar-separator").element;
     // The Show menu - the LAST of this view's own controls, and the one the
     // tail has to come after. (Every bar button is `--boxed` now, the tail's
@@ -4684,7 +4702,7 @@ describe("the two views of the shelf", () => {
       wrapper
         .findAll(".shelf-toolbar button")
         .map((b) =>
-          [b.attributes("aria-label"), b.attributes("title"), b.text()]
+          [b.attributes("aria-label"), tip(b), b.text()]
             .filter(Boolean)
             .join(" "),
         );
@@ -4706,7 +4724,7 @@ describe("the two views of the shelf", () => {
       wrapper
         .findAll(".shelf-toolbar button")
         .some((b) =>
-          [b.attributes("aria-label"), b.attributes("title"), b.text()]
+          [b.attributes("aria-label"), tip(b), b.text()]
             .filter(Boolean)
             .join(" ")
             .includes(needle),
@@ -4736,7 +4754,7 @@ describe("the two views of the shelf", () => {
     const folded = wrapper
       .findAll(".shelf-toolbar button")
       .filter((b) => b.classes().includes("shelf-fold-680"))
-      .map((b) => b.attributes("title"));
+      .map((b) => tip(b));
     expect(folded).toEqual([
       "Add models to the shelf",
       "Model folders - add, rescan, move or forget a folder",

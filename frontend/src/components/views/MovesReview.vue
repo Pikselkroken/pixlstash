@@ -74,9 +74,11 @@
                 loading="lazy"
                 @error="$event.target.style.visibility = 'hidden'"
               />
-              <span class="mv-path" :title="item.new_path">{{
-                shortFolder(item.new_path)
-              }}</span>
+              <span class="mv-path"
+                ><Tooltip :text="item.new_path" activator="parent" />{{
+                  shortFolder(item.new_path)
+                }}</span
+              >
               <span class="mv-change">
                 <template v-if="changeShape(item).swap">
                   <span class="mv-etag mv-etag--out">
@@ -148,9 +150,11 @@
                 @error="$event.target.style.visibility = 'hidden'"
               />
               <div class="mv-ambiguous-body">
-                <span class="mv-path" :title="item.new_path">{{
-                  shortFolder(item.new_path)
-                }}</span>
+                <span class="mv-path"
+                  ><Tooltip :text="item.new_path" activator="parent" />{{
+                    shortFolder(item.new_path)
+                  }}</span
+                >
                 <span class="mv-current">{{ currentSummary(item) }}</span>
               </div>
               <AppButton
@@ -193,8 +197,9 @@
               v-for="item in store.offLayout"
               :key="item.review_id"
               class="mv-chip"
-              :title="item.new_path"
-              >{{ shortFolder(item.new_path) }}</span
+              ><Tooltip :text="item.new_path" activator="parent" />{{
+                shortFolder(item.new_path)
+              }}</span
             >
           </div>
           <p class="mv-note">
@@ -226,6 +231,7 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
 import AppButton from "../widgets/AppButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { useMovesStore } from "../../stores/useMovesStore";
 import { errorDetail } from "../../utils/apiError";

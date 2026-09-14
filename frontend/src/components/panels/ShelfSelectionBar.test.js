@@ -31,11 +31,32 @@ const VMenuStub = {
     '<slot name="activator" :props="{}" /><slot /></div>',
 };
 
+// The tooltip is stubbed to carry its text on the element it wraps or sits in:
+// the real one renders nothing until it opens, and needs Vuetify besides.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "activator"],
+  template:
+    '<span class="tip" :data-text="text"><slot name="activator" :props="{}" /></span>',
+};
+
 const globalOpts = {
   global: {
-    stubs: { "v-icon": true, AddToEntityControl: true, "v-menu": VMenuStub },
+    stubs: {
+      "v-icon": true,
+      AddToEntityControl: true,
+      "v-menu": VMenuStub,
+      Tooltip: TooltipStub,
+    },
   },
 };
+
+/** The tooltip text a control carries, whether the tip sits inside or around it. */
+function tip(wrapper) {
+  const inner = wrapper.find(".tip");
+  if (inner.exists()) return inner.attributes("data-text");
+  return wrapper.element.parentElement?.dataset.text;
+}
 
 /** The Assign picker for one entity type, as the bar configured it. */
 function picker(wrapper, type) {
@@ -109,7 +130,7 @@ describe("the selection bar", () => {
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     const forget = verb(wrapper, "forget");
     expect(forget.attributes("disabled")).toBeDefined();
-    expect(forget.attributes("title")).toContain("files are gone");
+    expect(tip(forget)).toContain("files are gone");
   });
 
   it("refuses Forget on a drive it could not read", async () => {
@@ -133,14 +154,13 @@ describe("the selection bar", () => {
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     const forget = verb(wrapper, "forget");
     expect(forget.attributes("disabled")).toBeUndefined();
-    expect(forget.attributes("title")).toContain("the 1 whose files are gone");
+    expect(tip(forget)).toContain("the 1 whose files are gone");
   });
 
   it("names every icon verb, and does not lean on the tooltip to do it", async () => {
     // The pill's verbs are icons, so `aria-label` is the only thing naming
     // them - and it has to be the VERB, stable across selections, because the
-    // `title` beside it is the refusal and changes with what is selected.
-    // `title` is not a reliable accessible name and does not exist on touch.
+    // tooltip beside it is the refusal and changes with what is selected.
     selectRows([row(1, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     const verbs = wrapper.findAll("[data-verb]");
@@ -182,9 +202,7 @@ describe("the selection bar", () => {
     ]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     expect(picker(wrapper, "character").props("subjectIds")).toEqual([1]);
-    expect(picker(wrapper, "character").attributes("title")).toContain(
-      "the 1 of 3",
-    );
+    expect(tip(picker(wrapper, "character"))).toContain("the 1 of 3");
   });
 
   it("refuses Assign when nothing in the selection can take one", async () => {
@@ -274,7 +292,7 @@ describe("the selection bar", () => {
     // The pill shows the figures and the sentence is in the tooltip: it floats
     // over the list and every character of it costs a row underneath.
     expect(wrapper.find(".selbar-count").text()).toBe("2· 400.0 MB");
-    expect(wrapper.find(".selbar-count").attributes("title")).toBe(
+    expect(tip(wrapper.find(".selbar-count"))).toBe(
       "2 models selected · 400.0 MB",
     );
   });
@@ -285,9 +303,7 @@ describe("the selection bar", () => {
     selectRows([row(1, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     expect(wrapper.find(".selbar-count").text()).toBe("1");
-    expect(wrapper.find(".selbar-count").attributes("title")).toBe(
-      "1 model selected",
-    );
+    expect(tip(wrapper.find(".selbar-count"))).toBe("1 model selected");
   });
 
   it("offers Stack for two present adapters in one folder", async () => {
@@ -309,7 +325,7 @@ describe("the selection bar", () => {
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     const stack = verb(wrapper, "stack");
     expect(stack.attributes("disabled")).toBeDefined();
-    expect(stack.attributes("title")).toContain("one folder");
+    expect(tip(stack)).toContain("one folder");
   });
 
   it("names the missing file, not the folders, when a copy is not there", async () => {
@@ -320,8 +336,8 @@ describe("the selection bar", () => {
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     const stack = verb(wrapper, "stack");
     expect(stack.attributes("disabled")).toBeDefined();
-    expect(stack.attributes("title")).toContain("on this machine");
-    expect(stack.attributes("title")).not.toContain("folder");
+    expect(tip(stack)).toContain("on this machine");
+    expect(tip(stack)).not.toContain("folder");
   });
 
   it("refuses Stack on one model or a checkpoint", async () => {
@@ -335,9 +351,7 @@ describe("the selection bar", () => {
     ];
     store.toggleSelected(2);
     await wrapper.vm.$nextTick();
-    expect(verb(wrapper, "stack").attributes("title")).toContain(
-      "Only adapters",
-    );
+    expect(tip(verb(wrapper, "stack"))).toContain("Only adapters");
   });
 
   it("OFFERS Stack on a row that is already stacked, as a fuse", async () => {
@@ -350,16 +364,14 @@ describe("the selection bar", () => {
     await wrapper.vm.$nextTick();
 
     expect(verb(wrapper, "stack").attributes("disabled")).toBeUndefined();
-    expect(verb(wrapper, "stack").attributes("title")).toContain("Fuse");
+    expect(tip(verb(wrapper, "stack"))).toContain("Fuse");
   });
 
   it("refuses Ungroup unless everything selected is in a stack", async () => {
     const store = selectRows([row(1, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     expect(verb(wrapper, "unstack").attributes("disabled")).toBeDefined();
-    expect(verb(wrapper, "unstack").attributes("title")).toContain(
-      "not part of a stack",
-    );
+    expect(tip(verb(wrapper, "unstack"))).toContain("not part of a stack");
 
     store.rows = [row(3, "present", { stack_id: 7 })];
     store.clearSelection();
@@ -417,7 +429,7 @@ describe("the delete verb", () => {
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     const del = verb(wrapper, "delete");
     expect(del.attributes("disabled")).toBeDefined();
-    expect(del.attributes("title")).toContain("your own folders");
+    expect(tip(del)).toContain("your own folders");
   });
 
   it("refuses a copy on a drive it could not read", () => {
@@ -457,7 +469,7 @@ describe("the delete verb", () => {
     await wrapper.vm.$nextTick();
     const del = verb(wrapper, "delete");
     expect(del.attributes("aria-label")).toBe("Permanently delete");
-    expect(del.attributes("title")).toContain("no undo");
+    expect(tip(del)).toContain("no undo");
 
     window.dispatchEvent(new KeyboardEvent("keyup", { shiftKey: false }));
     await wrapper.vm.$nextTick();
@@ -537,7 +549,7 @@ describe("Open in file manager", () => {
       selectRows([row(1, state)]);
       const wrapper = mount(ShelfSelectionBar, globalOpts);
       expect(item(wrapper).attributes("disabled")).toBeDefined();
-      expect(item(wrapper).attributes("title")).toContain("no copy of this");
+      expect(tip(item(wrapper))).toContain("no copy of this");
     }
   });
 
@@ -596,7 +608,7 @@ describe("the two verbs that act inside a run", () => {
     expect(wrapper.vm.coverable).toBe(false);
     const entry = menuItem(wrapper, "Make this the cover");
     expect(entry.attributes("disabled")).toBeDefined();
-    expect(entry.attributes("title")).toContain("already stands for its run");
+    expect(tip(entry)).toContain("already stands for its run");
     // Still releasable: the cover is a file of the run like any other, and
     // taking it out promotes the one behind it.
     expect(wrapper.vm.releasable).toBe(true);
@@ -610,9 +622,7 @@ describe("the two verbs that act inside a run", () => {
     expect(wrapper.vm.selectedMembers).toHaveLength(0);
     expect(wrapper.vm.coverable).toBe(false);
     expect(wrapper.vm.releasable).toBe(false);
-    expect(
-      menuItem(wrapper, "Take out of this run").attributes("title"),
-    ).toContain("Ungroup");
+    expect(tip(menuItem(wrapper, "Take out of this run"))).toContain("Ungroup");
   });
 
   it("refuses a cover on two files at once: a run has one", () => {
@@ -639,9 +649,7 @@ describe("the two verbs that act inside a run", () => {
     selectInRun([2]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     expect(wrapper.vm.unstackable).toBe(false);
-    expect(verb(wrapper, "unstack").attributes("title")).toContain(
-      "select the run itself",
-    );
+    expect(tip(verb(wrapper, "unstack"))).toContain("select the run itself");
 
     // ...and the run itself still ungroups, which is the positive control.
     selectInRun([1, 2]);
@@ -654,9 +662,9 @@ describe("the two verbs that act inside a run", () => {
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     expect(wrapper.vm.coverable).toBe(false);
     expect(wrapper.vm.releasable).toBe(false);
-    expect(
-      menuItem(wrapper, "Take out of this run").attributes("title"),
-    ).toContain("not part of a run");
+    expect(tip(menuItem(wrapper, "Take out of this run"))).toContain(
+      "not part of a run",
+    );
   });
 
   it("emits rather than calling, like every other verb here", async () => {
