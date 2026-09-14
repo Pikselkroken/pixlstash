@@ -38,7 +38,7 @@ from pixlstash.utils.caption_file_utils import (
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
 from pixlstash.utils.library_roots import (
     holding_folder_overlap_lock,
-    refuse_folder_overlapping_a_library,
+    refuse_overlapping_folder,
 )
 from pixlstash.utils.library_layout import (
     DEFAULT_LAYOUT,
@@ -677,13 +677,12 @@ def create_router(server) -> APIRouter:
         # does this and its comment says this route did too; it did not.
         folder = os.path.realpath(folder)
         # `_validate_reference_folder_conflicts` covers `image_root` and the
-        # other reference-folder rows. Other registered libraries are refused
-        # here, in either direction; overlapping a watch folder is allowed
-        # (#1223).
+        # other reference-folder rows. Other registered libraries and the watch
+        # folders are refused here, in either direction (#1223).
         #
         # Before the DB task, not inside it: a read nested in `run_task` would
         # be a session inside a session.
-        refuse_folder_overlapping_a_library(folder, server, server.vault)
+        refuse_overlapping_folder(folder, server, server.vault)
 
         label = payload.label if payload.label is not None else os.path.basename(folder)
 
@@ -784,7 +783,17 @@ def create_router(server) -> APIRouter:
         # for the same reason it runs before the DB task rather than inside it.
         if "folder" in payload.model_fields_set and payload.folder is not None:
             candidate = os.path.realpath(os.path.normpath(payload.folder))
-            refuse_folder_overlapping_a_library(candidate, server, server.vault)
+            # This row is not a conflict with itself: a PATCH may repoint it, or
+            # carry the folder unchanged beside another field, and `update`
+            # below treats an unchanged path as a no-op. Read here rather than
+            # in `update`, since the check cannot run inside that session; a
+            # missing row is left to `update` to 404.
+            current = server.vault.db.run_immediate_read_task(
+                lambda session: getattr(
+                    session.get(ReferenceFolder, folder_id), "folder", None
+                )
+            )
+            refuse_overlapping_folder(candidate, server, server.vault, exclude=current)
 
         def update(session: Session):
             rf = session.get(ReferenceFolder, folder_id)
@@ -1057,11 +1066,13 @@ def create_router(server) -> APIRouter:
 
         # This route physically `shutil.move`s every file below `old_root`, so
         # a destination inside another registered library moves the pictures
-        # into a folder that library will index. `_validate_relocation_destination`
-        # above knows only `image_root` and the other reference-folder rows
-        # (#1206 item 1). Checked before the first move. A destination inside a
-        # watch folder is allowed, as for any reference folder (#1223).
-        refuse_folder_overlapping_a_library(new_root, server, server.vault)
+        # into a folder that library will index, and one inside a watch folder
+        # feeds them to the importer. `_validate_relocation_destination` above
+        # knows only `image_root` and the other reference-folder rows (#1206
+        # item 1). Checked before the first move. No `exclude`: that validator
+        # has already refused a destination equal to, inside or around
+        # `old_root`, so this row cannot be the root that matches (#1223).
+        refuse_overlapping_folder(new_root, server, server.vault)
 
         if not os.path.isdir(old_root):
             raise HTTPException(

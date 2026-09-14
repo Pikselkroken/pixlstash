@@ -159,22 +159,84 @@ def test_watch_and_reference_folders_refuse_overlapping_another_library(
     assert accepted.json()["folder"] == free
 
 
-def test_watch_and_reference_folders_may_overlap_each_other(client, workspace):
-    """Watch and reference folders may nest inside each other, either way
-    round (#1223): only a library's folder is out of bounds for them."""
-    reference = _mkdir(workspace, "reference-with-watch-inside")
-    assert _add_reference_folder(client, reference, "ref-outer").status_code == 200
-    watch_inside = _add_import_folder(
-        client, _mkdir(reference, "incoming"), "watch-inside-ref"
-    )
-    assert watch_inside.status_code == 200, watch_inside.text
+def test_watch_and_reference_folders_refuse_overlapping_each_other(
+    client, server, workspace
+):
+    """Two roots over one file is duplicate, destroy or no-op (#1223).
 
-    watched = _mkdir(workspace, "watch-with-reference-inside")
-    assert _add_import_folder(client, watched, "watch-outer").status_code == 200
-    reference_inside = _add_reference_folder(
-        client, _mkdir(watched, "pictures"), "ref-inside-watch"
+    The allowance shipped for one release and bought nothing. Whichever worker
+    reaches a shared file first decides: ``WatchFolderImportTask`` copies it
+    into ``image_root`` while ``ReferenceFolderScanTask`` indexes the original
+    in place under its own row (its ``existing_by_path`` is keyed on that
+    folder's own rows, so the second copy is not recognised), and a watch
+    folder carrying ``delete_after_import`` unlinks a file the owner asked to
+    have indexed where it lies. The third outcome is the scan winning and the
+    import skipping on hash, i.e. nothing.
+
+    Every direction, because a rule enforced one way round is the containment
+    bug #1223 item 1 was written about.
+    """
+    detail = "watch folders or reference folders"
+
+    # A reference folder first, then a watch folder inside it and around it.
+    parent = _mkdir(workspace, "parent-of-overlapped-reference")
+    reference = _mkdir(parent, "reference-with-watch-inside")
+    assert _add_reference_folder(client, reference, "ref-outer").status_code == 200
+    inside = _add_import_folder(
+        client,
+        _mkdir(reference, "incoming"),
+        "watch-inside-ref",
+        delete_after_import=True,
     )
-    assert reference_inside.status_code == 200, reference_inside.text
+    assert inside.status_code == 409, inside.text
+    assert detail in inside.json().get("detail", "")
+    around = _add_import_folder(client, parent, "watch-around-ref")
+    assert around.status_code == 409, around.text
+    assert detail in around.json().get("detail", "")
+
+    # A watch folder first, then a reference folder inside it and around it.
+    watch_parent = _mkdir(workspace, "parent-of-overlapped-watch")
+    watched = _mkdir(watch_parent, "watch-with-reference-inside")
+    assert _add_import_folder(client, watched, "watch-outer").status_code == 200
+    for folder in (_mkdir(watched, "pictures"), watch_parent):
+        refused = _add_reference_folder(client, folder, "ref-over-watch")
+        assert refused.status_code == 409, refused.text
+        assert detail in refused.json().get("detail", "")
+
+    # The two routes that repoint an existing row apply it too.
+    repointable = _mkdir(workspace, "repoint-toward-a-watch-folder")
+    added = _add_reference_folder(client, repointable, "repoint-toward-watch")
+    assert added.status_code == 200, added.text
+    repointed = client.patch(
+        f"/reference-folders/{added.json()['id']}",
+        json={"folder": _mkdir(watched, "repointed")},
+    )
+    assert repointed.status_code == 409, repointed.text
+    assert detail in repointed.json().get("detail", "")
+    relocated = client.post(
+        f"/reference-folders/{added.json()['id']}/relocate",
+        json={"destination_folder": os.path.join(watched, "relocated")},
+    )
+    assert relocated.status_code == 409, relocated.text
+    assert detail in relocated.json().get("detail", "")
+    assert not os.path.exists(os.path.join(watched, "relocated")), (
+        "nothing may be created on a refusal"
+    )
+
+    # And so does the folder-structure commit, which does not use the route.
+    with pytest.raises(svc.CommitError, match=detail):
+        svc.register_reference_folder(server, _mkdir(watched, "committed"))
+
+    # Positive controls, in this same environment: the row being repointed is
+    # not a conflict with itself, and folders in no other root are still free.
+    # Refusing everything would satisfy every assertion above.
+    elsewhere = _mkdir(workspace, "repointed-somewhere-free")
+    moved = client.patch(
+        f"/reference-folders/{added.json()['id']}", json={"folder": elsewhere}
+    )
+    assert moved.status_code == 200, moved.text
+    free_watch = _mkdir(workspace, "free-watch-beside-the-refusals")
+    assert _add_import_folder(client, free_watch, "free-beside").status_code == 200
 
 
 def test_relocating_a_reference_folder_into_another_library_is_refused(
@@ -336,13 +398,7 @@ def test_a_reference_commit_refuses_a_folder_overlapping_a_library(
     with pytest.raises(svc.CommitError, match="overlaps a library"):
         svc.register_reference_folder(server, parent)
 
-    # Positive controls: inside a watch folder is allowed, as is a free folder.
-    watched = _mkdir(workspace, "watched-for-commit")
-    assert _add_import_folder(client, watched, "watched-for-commit").status_code == 200
-    inside_watch = _mkdir(watched, "pictures")
-    assert svc.register_reference_folder(server, inside_watch).folder == (
-        os.path.realpath(inside_watch)
-    )
+    # Positive control: a folder in no other root is still registered.
     free = _mkdir(workspace, "free-commit-folder")
     assert svc.register_reference_folder(server, free).folder == os.path.realpath(free)
 

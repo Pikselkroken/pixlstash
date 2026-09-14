@@ -97,7 +97,7 @@ from pixlstash.utils.library_layout import Facet
 from pixlstash.utils.media_files import is_hidden_entry, is_supported_media_file
 from pixlstash.utils.library_roots import (
     holding_folder_overlap_lock,
-    refuse_folder_overlapping_a_library,
+    refuse_overlapping_folder,
 )
 from pixlstash.utils.path_utils import path_is_within
 from pixlstash.utils.reference_folder_validator import (
@@ -621,10 +621,13 @@ def register_reference_folder(
     if error:
         raise CommitError(error)
     # The rule the "add a reference folder" route also applies: no overlap with
-    # another registered library, which the conflict check below does not know
-    # about (#1223). Before the DB task, because it reads the registry.
+    # another registered library or a watch folder, neither of which the
+    # conflict check below knows about (#1223). Before the DB task, because it
+    # reads the registry. `exclude` is this path itself: registering is
+    # idempotent by path, so the row a resumed commit made last time is not a
+    # conflict with itself - whether it may be *reused* is decided below.
     try:
-        refuse_folder_overlapping_a_library(root_path, server, server.vault)
+        refuse_overlapping_folder(root_path, server, server.vault, exclude=root_path)
     except HTTPException as exc:
         raise CommitError(exc.detail) from exc
     image_root = os.path.normpath(getattr(server.vault, "image_root", "") or "")
