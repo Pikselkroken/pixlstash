@@ -28,7 +28,7 @@
       </p>
 
       <button class="rs-archived-back" type="button" @click="store.showBoard()">
-        <v-icon size="15">mdi-arrow-left</v-icon> Back to tag health
+        <v-icon size="16">mdi-arrow-left</v-icon> Back to tag health
       </button>
     </div>
   </div>
@@ -89,7 +89,7 @@ function formatWhen(iso) {
   color: rgb(var(--v-theme-dark-surface-success));
 }
 .rs-archived-title {
-  font-size: 16px;
+  font-size: var(--text-md);
   font-weight: var(--weight-bold);
 }
 .rs-archived-grid {

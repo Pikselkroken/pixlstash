@@ -25,6 +25,7 @@ import {
 } from "../../utils/fullRestoreTransition";
 import AppButton from "./AppButton.vue";
 import AppDialog from "./AppDialog.vue";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -309,22 +310,29 @@ const canRestore = computed(
           <span class="restore-picker-label">
             {{ cp.label || "—" }}
           </span>
-          <span
-            class="restore-picker-date"
-            :title="formatUserDate(cp.created_at, 'iso')"
-          >
+          <span class="restore-picker-date">
+            <Tooltip
+              :text="formatUserDate(cp.created_at, 'iso')"
+              activator="parent"
+            />
             {{ relativeDate(cp.created_at) }}
           </span>
-          <v-chip
+          <Tooltip
             v-if="!cp.is_compatible"
-            color="error"
-            size="x-small"
-            variant="tonal"
-            class="ml-2"
-            title="Schema version newer than live DB; restore not available."
+            text="Schema version newer than live DB; restore not available."
           >
-            incompatible
-          </v-chip>
+            <template #activator="{ props: tipProps }">
+              <v-chip
+                v-bind="tipProps"
+                color="error"
+                size="x-small"
+                variant="tonal"
+                class="ml-2"
+              >
+                incompatible
+              </v-chip>
+            </template>
+          </Tooltip>
         </div>
       </div>
     </template>
@@ -381,10 +389,11 @@ const canRestore = computed(
         <span class="restore-preview-cp-label">
           {{ preview.snapshot?.label || "—" }}
         </span>
-        <span
-          class="restore-preview-cp-date"
-          :title="formatUserDate(preview.snapshot?.created_at, 'iso')"
-        >
+        <span class="restore-preview-cp-date">
+          <Tooltip
+            :text="formatUserDate(preview.snapshot?.created_at, 'iso')"
+            activator="parent"
+          />
           {{ relativeDate(preview.snapshot?.created_at) }}
         </span>
       </div>

@@ -76,7 +76,7 @@ defineEmits([
   left: 0;
   top: var(--selbar-height, 48px);
   width: 100%;
-  z-index: 100;
+  z-index: var(--z-sticky);
   background: rgba(var(--v-theme-background), 0.95);
   padding: 0 var(--space-3) var(--space-2);
   margin: 0;

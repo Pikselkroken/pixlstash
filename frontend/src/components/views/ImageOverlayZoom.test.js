@@ -417,17 +417,17 @@ describe("ImageOverlay zoom - the continuous wheel", () => {
 });
 
 describe("ImageOverlay zoom - snap stops", () => {
-  it("Z toggles fit ↔ 100%, and the button title narrates both directions", async () => {
+  it("Z toggles fit ↔ 100%, and the button name narrates both directions", async () => {
     const wrapper = await openMeasured();
     const btn = wrapper.find(".zoom-btn");
-    expect(btn.attributes("title")).toBe(
+    expect(btn.attributes("aria-label")).toBe(
       "Zoom 50% (fit) - click for 100% (Z)",
     );
     press("z");
     await wrapper.vm.$nextTick();
     expect(zoomLabel(wrapper)).toBe("100%");
     expect(mediaTransform(wrapper).scale).toBeCloseTo(2, 5);
-    expect(btn.attributes("title")).toBe("Zoom 100% - click to fit (Z)");
+    expect(btn.attributes("aria-label")).toBe("Zoom 100% - click to fit (Z)");
     press("z");
     await wrapper.vm.$nextTick();
     expect(zoomLabel(wrapper)).toBe("50%");

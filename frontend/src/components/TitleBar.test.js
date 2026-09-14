@@ -37,6 +37,7 @@ describe("TitleBar active library", () => {
       global: {
         stubs: {
           VIcon: true,
+          VTooltip: true,
           WordmarkLogo: { template: "<span>PixlStash</span>" },
         },
       },
@@ -52,7 +53,7 @@ describe("TitleBar active library", () => {
     const { default: TitleBar } = await import("./TitleBar.vue");
     const wrapper = mount(TitleBar, {
       props: { activeLibraryName: "" },
-      global: { stubs: { VIcon: true, WordmarkLogo: true } },
+      global: { stubs: { VIcon: true, VTooltip: true, WordmarkLogo: true } },
     });
     expect(wrapper.find(".titlebar-library").exists()).toBe(false);
   });
@@ -68,7 +69,7 @@ describe("TitleBar active library", () => {
     const { default: BrowserTitleBar } = await import("./TitleBar.vue");
     const wrapper = mount(BrowserTitleBar, {
       props: { activeLibraryName: "Browser library" },
-      global: { stubs: { VIcon: true, WordmarkLogo: true } },
+      global: { stubs: { VIcon: true, VTooltip: true, WordmarkLogo: true } },
     });
 
     expect(wrapper.find(".titlebar").exists()).toBe(false);

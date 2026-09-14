@@ -15,7 +15,8 @@
       >{{ announcement }}</span
     >
 
-    <span class="search-result-status" :title="statusSentence">
+    <span class="search-result-status">
+      <Tooltip :text="statusSentence" activator="parent" />
       <v-progress-circular
         v-if="imagesLoading"
         indeterminate
@@ -75,7 +76,7 @@
               shape="round"
               icon="tune-variant"
               :aria-label="tuneAccessibleName"
-              :title="tuneAccessibleName"
+              :tooltip="tuneAccessibleName"
               :aria-disabled="imagesLoading ? 'true' : undefined"
               aria-haspopup="dialog"
             >
@@ -111,7 +112,7 @@
                   aria-label="Decrease match strength by 1 percent"
                   @click="stepThreshold(-0.01)"
                 >
-                  <v-icon size="18">mdi-minus</v-icon>
+                  <v-icon size="24">mdi-minus</v-icon>
                 </button>
                 <input
                   :id="strengthId"
@@ -131,7 +132,7 @@
                   aria-label="Increase match strength by 1 percent"
                   @click="stepThreshold(0.01)"
                 >
-                  <v-icon size="18">mdi-plus</v-icon>
+                  <v-icon size="24">mdi-plus</v-icon>
                 </button>
               </div>
               <p class="threshold-group-hint">
@@ -158,7 +159,7 @@
                   aria-label="Require one fewer reference face"
                   @click="stepMinRefs(-1)"
                 >
-                  <v-icon size="18">mdi-minus</v-icon>
+                  <v-icon size="24">mdi-minus</v-icon>
                 </button>
                 <input
                   :id="refsId"
@@ -178,7 +179,7 @@
                   aria-label="Require one more reference face"
                   @click="stepMinRefs(1)"
                 >
-                  <v-icon size="18">mdi-plus</v-icon>
+                  <v-icon size="24">mdi-plus</v-icon>
                 </button>
               </div>
               <p class="threshold-group-hint">
@@ -199,7 +200,7 @@
         v-if="showSearchAll"
         shape="round"
         icon="magnify-expand"
-        title="Search everything, not just this category"
+        tooltip="Search everything, not just this category"
         @click="$emit('search-all')"
       >
         <span class="search-all-label">Search everything</span>
@@ -220,7 +221,7 @@
         :disabled="assignCount === 0"
         :loading="assignBusy"
         :aria-label="assignAccessibleName"
-        :title="assignAccessibleName"
+        :tooltip="assignAccessibleName"
         @click="$emit('assign')"
       >
         <span class="assign-label"
@@ -234,7 +235,7 @@
         class="clear-search-btn"
         shape="round"
         icon="magnify-close"
-        :title="clearTitle"
+        :tooltip="clearTitle"
         :aria-keyshortcuts="ownsEscape ? 'Escape' : undefined"
         @click="$emit('clear')"
       >
@@ -252,6 +253,7 @@
 import { computed, onUnmounted, ref, useId, watch } from "vue";
 import AppBarButton from "./AppBarButton.vue";
 import AppButton from "./AppButton.vue";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   imagesLoading: { type: Boolean, default: false },

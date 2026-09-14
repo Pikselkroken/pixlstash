@@ -24,9 +24,9 @@
           type="button"
           :aria-pressed="tab.value === modelValue ? 'true' : 'false'"
           :disabled="tab.disabled"
-          :title="tab.title"
           @click="emit('update:modelValue', tab.value)"
         >
+          <Tooltip :text="tab.tooltip || ''" activator="parent" />
           <slot name="tab" :tab="tab">
             <v-icon v-if="tab.icon" size="12">{{ tab.icon }}</v-icon>
             {{ tab.label }}
@@ -42,13 +42,14 @@
 
 <script setup>
 import { VIcon } from "vuetify/components";
+import Tooltip from "./Tooltip.vue";
 
 defineProps({
   /** Open or collapsed to zero width. The pane keeps its place in the row. */
   open: { type: Boolean, default: true },
   /** The accessible name of the pane ("Stats", "Inspector"). */
   label: { type: String, required: true },
-  /** `[{ value, label, icon?, disabled?, title? }]`. */
+  /** `[{ value, label, icon?, disabled?, tooltip? }]`. */
   tabs: { type: Array, default: () => [] },
   /** The active tab's `value`. */
   modelValue: { type: String, default: "" },

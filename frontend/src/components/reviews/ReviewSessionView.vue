@@ -13,14 +13,17 @@
       <span class="rs-session-receipt">{{ receiptLine }}</span>
       <span class="rs-session-spacer"></span>
       <span v-if="session.stale" class="rs-session-stale">
-        <v-icon size="15">mdi-clock-alert-outline</v-icon>
+        <v-icon size="16">mdi-clock-alert-outline</v-icon>
         Vault changed since scan
         <button
           class="rs-session-refresh"
           type="button"
-          title="Append newly-found suspects - decided cards are never resurrected"
           @click="store.refreshSession(session.id)"
         >
+          <Tooltip
+            text="Append newly-found suspects - decided cards are never resurrected"
+            activator="parent"
+          />
           <v-icon size="14">mdi-refresh</v-icon> Refresh
         </button>
       </span>
@@ -35,14 +38,14 @@
       <!-- `progress.locked`: suspects frozen mid-session and held out of the
            queue. Surfaced so a review that visibly shrinks explains itself
            instead of silently dropping its count. -->
-      <span
-        v-if="lockedProgress"
-        class="rs-session-locked"
-        :title="lockedProgressNote(lockedProgress)"
-      >
-        <v-icon size="14">mdi-lock-outline</v-icon>
-        {{ lockedProgress }} frozen
-      </span>
+      <Tooltip v-if="lockedProgress" :text="lockedProgressNote(lockedProgress)">
+        <template #activator="{ props: tipProps }">
+          <span class="rs-session-locked" v-bind="tipProps">
+            <v-icon size="14">mdi-lock-outline</v-icon>
+            {{ lockedProgress }} frozen
+          </span>
+        </template>
+      </Tooltip>
       <span class="rs-session-tally">
         <span class="rs-tally-removed">✗ {{ tally.removed }}</span>
         <span class="rs-tally-added">+ {{ tally.added }}</span>
@@ -146,9 +149,12 @@
             v-if="reopenableSkips > 0"
             class="rs-state-btn rs-state-btn--accent"
             type="button"
-            title="Put the cards you skipped back in the queue"
             @click="store.reopenSkipped(session.id)"
           >
+            <Tooltip
+              text="Put the cards you skipped back in the queue"
+              activator="parent"
+            />
             <v-icon size="16">mdi-restart</v-icon> Reopen
             {{ reopenableSkips }} skipped
           </button>
@@ -194,17 +200,19 @@
           <button
             class="rs-confirm-btn rs-confirm-btn--apply"
             type="button"
-            title="Apply this decision despite the earlier call (Enter)."
             @click="confirmPending"
           >
+            <Tooltip
+              text="Apply this decision despite the earlier call (Enter)."
+              activator="parent"
+            />
             <kbd>↵</kbd> Apply
           </button>
-          <button
-            class="rs-confirm-btn"
-            type="button"
-            title="Leave the card unchanged (Esc)."
-            @click="cancelPending"
-          >
+          <button class="rs-confirm-btn" type="button" @click="cancelPending">
+            <Tooltip
+              text="Leave the card unchanged (Esc)."
+              activator="parent"
+            />
             <kbd>Esc</kbd> Cancel
           </button>
         </div>
@@ -258,6 +266,7 @@ import {
 import ReviewBinaryCard from "./ReviewBinaryCard.vue";
 import ReviewPairCard from "./ReviewPairCard.vue";
 import ReviewDecisionBar from "./ReviewDecisionBar.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import ReviewCelebration from "./ReviewCelebration.vue";
 
 const props = defineProps({
@@ -731,7 +740,7 @@ defineExpose({ handleKey });
   padding: 20px 24px 12px;
 }
 .rs-session-title {
-  font-size: 18px;
+  font-size: var(--text-lg);
   font-weight: var(--weight-bold);
 }
 .rs-session-receipt {
@@ -769,7 +778,7 @@ defineExpose({ handleKey });
   align-items: center;
   gap: 10px;
   padding: 5px 12px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: linear-gradient(
     90deg,
     color-mix(in srgb, rgb(var(--v-theme-accent)) 22%, rgb(var(--v-theme-dark-surface))),
@@ -1022,7 +1031,7 @@ defineExpose({ handleKey });
   font-family: var(--font-mono, monospace);
   font-size: 10px;
   padding: 0 4px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.3);
 }
 </style>

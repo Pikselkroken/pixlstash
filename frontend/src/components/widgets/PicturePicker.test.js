@@ -19,6 +19,11 @@ import { setActivePinia, createPinia } from "pinia";
 vi.mock("vuetify/components", () => ({
   VIcon: { name: "v-icon", template: "<i><slot /></i>" },
   VDialog: { name: "v-dialog", template: "<div><slot /></div>" },
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup: (_p, { slots }) => () => slots.activator?.({ props: {} }),
+  },
 }));
 
 const streamPictures = vi.fn();
@@ -342,7 +347,7 @@ describe("a picture whose file cannot be reached", () => {
 
     const cell = w.findAll(".pp-cell")[0];
     expect(cell.classes()).toContain("pp-cell--gone");
-    expect(cell.attributes("title")).toContain("not available");
+    expect(cell.findComponent({ name: "Tooltip" }).props("text")).toContain("not available");
     await cell.trigger("click");
     expect(w.findAll(".pp-cell--on")).toHaveLength(0);
   });

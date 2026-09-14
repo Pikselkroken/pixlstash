@@ -652,8 +652,22 @@ directly at their own tuned opacity; these tokens are for the corner-chip case.
 **One family: Material Design Icons** (`@mdi/font`, already installed). One family,
 one weight, one grid. Mixing icon sets is an instant tell of an unloved UI.
 
-- Default icon size tracks the adjacent text; align icon optical center to the text
-  baseline, gap `--space-2` between icon and label.
+- **Icons have no scale of their own** (buttons.md, "Icon sizes"). Three rules:
+  1. **A component owns its icon slot.** `AppButton` (18px, 16px at `sm`),
+     `AppBarButton` (24px icon-only, 18px beside a label) and a menu row (both glyph
+     slots, the leading icon and the submenu chevron, 16px = `--gutter-glyph`). A call
+     site never passes a size into one.
+  2. **A free-standing icon tracks its adjacent text** on the type ramp. The default
+     is **16px**.
+  3. **An icon-only control 32px (`--control-h-bar`) or taller takes a 24px glyph**:
+     MDI is drawn on a 24-unit grid, so 24 is the only size that renders as drawn.
+     Below 32px the control keeps its own smaller glyph. The discriminator is the
+     control's height, not the icon's. The one exception: the dialog close button
+     stays 20px beside its 18px title.
+
+  13px and under is an inline mark (a lock inside a label) and follows the text it
+  sits in; above 28px is display art and is exempt. Align the icon's optical centre
+  to the text baseline, gap `--space-2` between icon and label.
 - Icons inherit `currentColor`. Tint with a theme token, never a hex.
 - Brand/source marks (e.g. the Google Photos glyph on the import source) are *content*,
   not chrome icons — they live in their own context and are exempt from the
@@ -995,11 +1009,17 @@ later sibling of `.app-viewport` — moving it earlier silently hid every notice
 the chrome. Stacking now holds by value, proven by moving the host to first child and
 re-checking.
 
-**Migration is opportunistic, not a big-bang.** Touch a rule that carries a raw
-z-index, move that rule onto the ladder. A wholesale rewrite is not worth it: each
-move is pixel-visible on a different screen and has to be eyeballed there, and a
-mistake in stacking order is invisible until the exact combination of overlays that
-exposes it. From now on a raw z-index in new code is drift.
+**The ladder stops at `--z-drawer`** (buttons.md, "Off-token values"). Vuetify
+assigns each overlay its z-index at runtime, the top of its stack plus ten from a base
+of 2000, so a menu inside a dialog inside an overlay is wherever that stack has
+climbed to. A hand-written number above 1000 is betting against a number that moves.
+**If it must clear a modal, it must *be* an overlay** (teleported, ordered by the
+stack), not a positioned element with a bigger number. The rungs above `--z-drawer`
+stay only for the surfaces that remain in the document, and no fourth one is added.
+
+**There is no "just above my own layer".** A `1001` over `1000`, a `301` over `300`:
+two elements that need a plus-one belong in one stacking context, ordered by DOM
+order. A raw z-index is drift, and a raw value equal to a rung is a bug.
 
 ---
 

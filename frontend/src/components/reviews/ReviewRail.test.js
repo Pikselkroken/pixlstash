@@ -32,7 +32,23 @@ const VIcon = {
   setup: (_props, { slots }) => () => h("i", { class: "v-icon" }, slots.default?.()),
 };
 
-const globalOpts = { stubs: { "v-icon": VIcon } };
+// The one tooltip surface, reduced to what a test can read: the tip's text as
+// `data-tip`, on the activator element or on a marker inside the parent. A
+// describing tip claims its activator's `aria-describedby`, as the real one does.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "shortcut", "location", "disabled", "describe", "activator"],
+  template: `<slot
+      v-if="$slots.activator"
+      name="activator"
+      :props="{
+        'data-tip': text || undefined,
+        'aria-describedby': describe === false ? undefined : 'tooltip-stub',
+      }"
+    /><span v-else-if="text" class="tip" :data-tip="text" />`,
+};
+
+const globalOpts = { stubs: { Tooltip: TooltipStub, "v-icon": VIcon } };
 
 function archivedRow(id, tag) {
   return { id, tag, stats: { found: 4 }, created_at: "2026-07-01T00:00:00Z" };
@@ -122,7 +138,7 @@ describe("ReviewRail icon-only button labels", () => {
       "Delete the archived review for shirt",
     );
     // The mouse affordance stays.
-    expect(del.attributes("title")).toContain("shirt");
+    expect(del.find(".tip").attributes("data-tip")).toContain("shirt");
     w.unmount();
   });
 

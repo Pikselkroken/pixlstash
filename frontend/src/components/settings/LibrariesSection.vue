@@ -21,6 +21,7 @@
  * reload rather than a store refresh: picture ids do not mean the same thing in
  * another library, and every open view describes the old one.
  */
+import { withRef } from "../../utils/withRef.js";
 import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { VMenu, VProgressCircular } from "vuetify/components";
@@ -403,8 +404,9 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
             >
               <template #activator="{ props: menuProps }">
                 <button
-                  v-bind="menuProps"
-                  :ref="(el) => (moreButtons[library.uuid] = el)"
+                  v-bind="
+                    withRef(menuProps, (el) => (moreButtons[library.uuid] = el))
+                  "
                   type="button"
                   class="library-row__more"
                   :disabled="busyUuid === library.uuid"
@@ -567,7 +569,7 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
             size="sm"
             variant="ghost"
             icon-left="content-copy"
-            :title="`Copy ${item.syntax} command`"
+            :tooltip="`Copy ${item.syntax} command`"
             @click="copyCommand(item.command)"
           >
             {{ copiedCommand === item.command ? "Copied" : "Copy" }}

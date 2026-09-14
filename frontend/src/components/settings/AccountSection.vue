@@ -21,6 +21,7 @@ import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
 import AppSelect from "../widgets/AppSelect.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import SettingsSection from "./SettingsSection.vue";
 import { errorDetail } from "../../utils/apiError";
 
@@ -537,10 +538,15 @@ watch(
                   ? { backgroundImage: `url(${watermarkPreviewUrl})` }
                   : null
               "
-              title="Upload watermark"
+              aria-label="Upload watermark"
               :disabled="watermarkUploading"
               @click="watermarkInputRef?.click()"
             >
+              <Tooltip
+                text="Upload watermark"
+                activator="parent"
+                :describe="false"
+              />
               <template v-if="!watermarkPreviewUrl">
                 <v-icon size="26">mdi-image-plus-outline</v-icon>
                 <span class="wm-drop__hint">Click or drop an image</span>
@@ -550,10 +556,15 @@ watch(
               v-if="watermarkPreviewUrl"
               type="button"
               class="wm-drop__reset"
-              title="Reset to default watermark"
+              aria-label="Reset to default watermark"
               :disabled="watermarkUploading"
               @click="clearWatermark"
             >
+              <Tooltip
+                text="Reset to default watermark"
+                activator="parent"
+                :describe="false"
+              />
               <v-icon size="15">mdi-close</v-icon>
             </button>
             <input
@@ -669,7 +680,7 @@ watch(
                   size="sm"
                   icon-left="delete"
                   icon-only
-                  title="Revoke"
+                  tooltip="Revoke"
                   :disabled="tokensLoading"
                   @click="confirmDeleteToken(token)"
                 />
@@ -803,7 +814,7 @@ watch(
           size="sm"
           :icon-left="tokenCopied ? 'check' : 'content-copy'"
           icon-only
-          :title="tokenCopied ? 'Copied!' : 'Copy token'"
+          :tooltip="tokenCopied ? 'Copied!' : 'Copy token'"
           @click="copyToken"
         />
       </div>
@@ -821,7 +832,7 @@ watch(
             size="sm"
             :icon-left="shareLinkCopied ? 'check' : 'link'"
             icon-only
-            :title="shareLinkCopied ? 'Copied!' : 'Copy share link'"
+            :tooltip="shareLinkCopied ? 'Copied!' : 'Copy share link'"
             @click="copyShareLink"
           />
         </div>
@@ -1099,7 +1110,7 @@ watch(
   /* Stay visible while the list scrolls under it. */
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--z-raised);
 }
 
 .account-token-th-actions {

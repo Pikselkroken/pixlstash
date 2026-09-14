@@ -14,6 +14,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 
+vi.mock("vuetify/components", async (importOriginal) => ({
+  ...(await importOriginal()),
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup:
+      (_p, { slots }) =>
+      () =>
+        slots.activator?.({ props: {} }),
+  },
+}));
+
 const listAdapters = vi.fn();
 vi.mock("../../api/modelShelf", () => ({
   listAdapters: (...args) => listAdapters(...args),
@@ -504,11 +516,15 @@ describe("AdapterTray", () => {
       adapter({ id: 3, display_name: null, filename: "000002750.safetensors" }),
     ]);
     const cards = (await mountTray()).findAll(".adapter-card");
-    expect(cards[0].attributes("title")).toBe(
+    expect(cards[0].findComponent({ name: "Tooltip" }).props("text")).toBe(
       "Cyanwood Style - cw_v3.safetensors",
     );
-    expect(cards[1].attributes("title")).toBe("ivy - ivy.safetensors");
-    expect(cards[2].attributes("title")).toBe("000002750.safetensors");
+    expect(cards[1].findComponent({ name: "Tooltip" }).props("text")).toBe(
+      "ivy - ivy.safetensors",
+    );
+    expect(cards[2].findComponent({ name: "Tooltip" }).props("text")).toBe(
+      "000002750.safetensors",
+    );
   });
 
   it("asks for nothing at all if it is not told which kind of entity", async () => {

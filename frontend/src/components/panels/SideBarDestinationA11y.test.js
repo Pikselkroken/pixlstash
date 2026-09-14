@@ -100,6 +100,18 @@ import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import SideBar from "./SideBar.vue";
 
+/**
+ * The element's own tooltip text: its direct `Tooltip` child, stubbed by the
+ * shallow mount. `undefined` when it has none or the text is empty, because an
+ * empty text is a disabled tip.
+ */
+function tipText(el) {
+  const tip = el
+    .findAll("tooltip-stub")
+    .find((t) => t.element.parentElement === el.element);
+  return tip?.attributes("text") || undefined;
+}
+
 const ALL_ID = "ALL";
 const SCRAPHEAP_ID = "SCRAPHEAP";
 const DESTINATIONS = ["All Pictures", "Duplicates", "Scrapheap"];
@@ -138,11 +150,11 @@ function destination(wrapper, label) {
     );
 }
 
-/** The docked rail's destination, located by its title (the rail has no labels). */
+/** The docked rail's destination, located by its tooltip (the rail has no labels). */
 function dockedDestination(wrapper, label) {
   return wrapper
     .findAll(".sidebar-collapsed-item")
-    .find((el) => el.attributes("title") === label);
+    .find((el) => tipText(el) === label);
 }
 
 beforeEach(() => {
@@ -275,7 +287,7 @@ describe("what the conversion must not change", () => {
     const row = destination(wrapper, "Duplicates");
     expect(row.attributes("disabled")).toBeUndefined();
     expect(row.attributes("aria-disabled")).toBe("true");
-    expect(row.attributes("title")).toBeTruthy();
+    expect(tipText(row)).toBeTruthy();
 
     await row.trigger("click");
     expect(wrapper.emitted("select-duplicates")).toBeUndefined();

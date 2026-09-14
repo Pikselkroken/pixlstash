@@ -31,6 +31,22 @@ beforeEach(() => {
   isReadOnly.value = false;
 });
 
+// The tooltip is stubbed to carry its text on the element it wraps or sits in:
+// the real one renders nothing until it opens, and needs Vuetify besides.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "activator"],
+  template:
+    '<span class="tip" :data-text="text"><slot name="activator" :props="{}" /></span>',
+};
+
+/** The tooltip text a control carries, whether the tip sits inside or around it. */
+function tip(wrapper) {
+  const inner = wrapper.find(".tip");
+  if (inner.exists()) return inner.attributes("data-text");
+  return wrapper.element.parentElement?.dataset.text;
+}
+
 function mountMenu(props = {}) {
   return mount(ImageGridContextMenu, {
     props: {
@@ -43,6 +59,7 @@ function mountMenu(props = {}) {
     },
     global: {
       stubs: {
+        Tooltip: TooltipStub,
         // Renders its slot, so the glyph name survives into the markup. The
         // default `true` stub drops it, and the glyph is the only handle on
         // these items that survives a greyed state (where the label is replaced
@@ -112,8 +129,8 @@ describe("ImageGridContextMenu - rotate", () => {
     expect(right.attributes("disabled")).toBeDefined();
     // The tooltip carries the refusal rather than repeating the label, and
     // points at the route that still works.
-    expect(left.attributes("title")).toBe(ROTATE_FORMAT_REASON);
-    expect(left.attributes("title")).toContain("Filters > Rotate");
+    expect(tip(left)).toBe(ROTATE_FORMAT_REASON);
+    expect(tip(left)).toContain("Filters > Rotate");
   });
 
   it("is greyed in a read-only session, which cannot rotate at all", () => {

@@ -56,12 +56,10 @@
       <div class="inspector-section">
         <span class="section-label">Models</span>
         <div v-if="models.length" class="wfins-chips">
-          <span
-            v-for="model in models"
-            :key="model.name"
-            class="wfins-chip"
-            :title="model.name"
-            >{{ modelStem(model.name) }}</span
+          <span v-for="model in models" :key="model.name" class="wfins-chip"
+            ><Tooltip :text="model.name" activator="parent" />{{
+              modelStem(model.name)
+            }}</span
           >
         </div>
         <!-- Empty is a state, and it says only what is true. `forgotten_models`
@@ -114,9 +112,14 @@
             :key="id"
             class="wfins-tile"
             type="button"
-            :title="`Open picture ${id}`"
+            :aria-label="`Open picture ${id}`"
             @click="openPicture(id)"
           >
+            <Tooltip
+              :text="`Open picture ${id}`"
+              activator="parent"
+              :describe="false"
+            />
             <img :src="thumbUrl(id)" alt="" loading="lazy" />
           </button>
         </div>
@@ -191,6 +194,7 @@ import {
 } from "../../utils/workflowShelf";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const store = useWorkflowShelfStore();
 const sidebarStore = useSidebarStore();
@@ -229,8 +233,8 @@ const tabs = computed(() => [
     label: "Pictures",
     icon: "mdi-image-multiple-outline",
     disabled: !hasPictures.value,
-    title: hasPictures.value
-      ? undefined
+    tooltip: hasPictures.value
+      ? ""
       : "Nothing this workflow made is still in the library",
   },
 ]);
@@ -385,7 +389,7 @@ watch(
 .wfins-bar-track {
   position: relative;
   height: 18px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   background: rgba(var(--v-theme-on-surface), 0.07);
   overflow: hidden;
 }
@@ -393,7 +397,7 @@ watch(
 .wfins-bar-fill {
   position: absolute;
   inset: 0 auto 0 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   background: rgba(var(--v-theme-accent), 0.75);
 }
 

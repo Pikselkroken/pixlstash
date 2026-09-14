@@ -26,8 +26,7 @@
           <AppBarButton
             icon="close"
             :icon-size="20"
-            title="Close"
-            aria-label="Close"
+            tooltip="Close"
             @click="emit('close')"
           />
         </div>

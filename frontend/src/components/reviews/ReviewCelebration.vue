@@ -167,7 +167,7 @@ onUnmounted(() => {
   top: 14px;
   right: 20px;
   pointer-events: none;
-  z-index: 5;
+  z-index: var(--z-raised);
   color: rgb(var(--v-theme-dark-surface-success));
   animation: rs-glow 0.65s ease-out forwards;
 }
@@ -177,7 +177,7 @@ onUnmounted(() => {
   inset: 0;
   pointer-events: none;
   overflow: hidden;
-  z-index: 5;
+  z-index: var(--z-raised);
 }
 .rs-celebrate-origin {
   position: absolute;
@@ -216,7 +216,7 @@ onUnmounted(() => {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  z-index: 7;
+  z-index: var(--z-raised);
   overflow: hidden;
 }
 .rs-award-fly {
@@ -236,7 +236,7 @@ onUnmounted(() => {
   animation: rs-sticker-pop 0.45s cubic-bezier(0.2, 1.6, 0.4, 1) both;
 }
 .rs-award-text {
-  font-size: 14px;
+  font-size: var(--text-base);
   font-weight: 800;
   white-space: nowrap;
   color: rgb(var(--v-theme-on-dark-surface));

@@ -19,10 +19,15 @@
         :class="{ 'sxthumb--cover': isCover(member.id) }"
         :aria-pressed="isCover(member.id)"
         :disabled="readOnly"
-        :title="memberTitle(member.id)"
+        :aria-label="memberTitle(member.id)"
         data-testid="stack-member"
         @click.stop="onPick(member)"
       >
+        <Tooltip
+          :text="memberTitle(member.id)"
+          activator="parent"
+          :describe="false"
+        />
         <img
           class="sxt"
           :src="thumbUrl(member)"
@@ -89,6 +94,7 @@ import { computed } from "vue";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
 import AppBarButton from "./AppBarButton.vue";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   /** Members in the stack, including any not rendered in this strip. */

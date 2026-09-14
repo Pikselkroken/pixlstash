@@ -14,6 +14,14 @@ vi.mock("vuetify/components", () => ({
   VDialog: { name: "v-dialog", template: "<div><slot /></div>" },
   VIcon: { name: "v-icon", template: "<i><slot /></i>" },
   VProgressCircular: { name: "v-progress-circular", template: "<i />" },
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup:
+      (_p, { slots }) =>
+      () =>
+        slots.activator?.({ props: {} }),
+  },
 }));
 
 import FolderMappingWizard from "./FolderMappingWizard.vue";

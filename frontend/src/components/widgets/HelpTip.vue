@@ -6,7 +6,7 @@
        tab order, hit testing and the accessibility tree, so it needs no
        `tabindex`, no `aria-hidden` and no `pointer-events` rule
        (visual-language.md §5.1). -->
-  <v-tooltip :text="reason" location="top" max-width="280" interactive>
+  <Tooltip :text="reason" :describe="false">
     <template #activator="{ props: tipProps }">
       <AppButton
         v-bind="reason ? tipProps : {}"
@@ -18,24 +18,21 @@
         :aria-label="reason ? `${label}: ${reason}` : undefined"
       />
     </template>
-  </v-tooltip>
+  </Tooltip>
 </template>
 
 <script setup>
-import { VTooltip } from "vuetify/components";
 import AppButton from "./AppButton.vue";
+import Tooltip from "./Tooltip.vue";
 
 /**
  * The "why is this unavailable" mark that trails a group of blocked controls.
  *
  * A separate focusable `<button>` rather than a tooltip hung on the blocked
  * control: a natively `disabled` control fires no pointer events and holds no
- * focus, so a tooltip on it is unreachable by both routes. Vuetify's tooltip
- * opens on hover AND on focus and is `interactive` so the surface itself can be
- * hovered, which is the part of WCAG 1.4.13 the default `pointer-events: none`
- * fails. It is reused rather than hand-rolled: a second tooltip surface in one
- * app is drift, and its content teleports outside this component's root where a
- * scoped rule could not reach it anyway.
+ * focus, so a tooltip on it is unreachable by both routes. It is a preset of
+ * the one `Tooltip` surface, which opens on hover and on focus and can itself
+ * be hovered (WCAG 1.4.13).
  *
  * The reason is ALSO rendered as visible text on the surface and pointed at by
  * the blocked control's `aria-describedby`. This mark is the pointer-and-focus

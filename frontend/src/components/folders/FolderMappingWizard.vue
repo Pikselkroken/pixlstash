@@ -424,7 +424,7 @@ function onCommitted(result) {
   gap: var(--space-2);
   margin: 0;
   color: var(--text-secondary);
-  font-size: var(--font-size-sm);
+  font-size: var(--text-sm);
 }
 
 .mapping-wizard__error {

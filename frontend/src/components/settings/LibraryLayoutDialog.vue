@@ -42,6 +42,7 @@ import { VCheckbox, VIcon, VSelect } from "vuetify/components";
 import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
 import AppDialog from "../widgets/AppDialog.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { useOperationStore } from "../../stores/useOperationStore";
 import {
@@ -614,7 +615,7 @@ function netDelta(row) {
 
     <template v-else-if="loadError">
       <p class="layout-dlg__error">
-        <v-icon size="15">mdi-alert-outline</v-icon> {{ loadError }}
+        <v-icon size="16">mdi-alert-outline</v-icon> {{ loadError }}
       </p>
       <AppButton
         variant="secondary"
@@ -696,15 +697,21 @@ function netDelta(row) {
           hide-details
           :disabled="migrating"
         />
-        <AppInput
-          :model-value="unfiled"
-          mono
-          class="layout-unfiled__name"
-          aria-label="Folder for unassigned pictures"
-          title="Where a picture with no project, person, set or tag is written"
-          :disabled="migrating"
-          @update:model-value="setUnfiled"
-        />
+        <Tooltip
+          text="Where a picture with no project, person, set or tag is written"
+        >
+          <template #activator="{ props: tipProps }">
+            <AppInput
+              v-bind="tipProps"
+              :model-value="unfiled"
+              mono
+              class="layout-unfiled__name"
+              aria-label="Folder for unassigned pictures"
+              :disabled="migrating"
+              @update:model-value="setUnfiled"
+            />
+          </template>
+        </Tooltip>
       </div>
 
       <template v-if="isOn">
@@ -732,9 +739,9 @@ function netDelta(row) {
                 class="layout-tree__name"
                 role="cell"
                 :style="treeIndent(row.indent)"
-                :title="row.title"
               >
-                <v-icon size="14">mdi-folder-outline</v-icon>
+                <Tooltip :text="row.title" activator="parent" />
+                <v-icon size="16">mdi-folder-outline</v-icon>
                 <span class="layout-tree__path">
                   <span v-if="row.crumbs" class="layout-tree__crumbs"
                     >{{ row.crumbs }} /&nbsp;</span

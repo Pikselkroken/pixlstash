@@ -77,7 +77,7 @@
             'dq-fold-906': pageTogglesFold,
             'dq-bar-action--on': store.showingDecided,
           }"
-          :title="decidedToggleLabel"
+          :tooltip="decidedToggleLabel"
           :aria-label="decidedToggleLabel"
           :aria-pressed="store.showingDecided ? 'true' : 'false'"
           data-testid="decided-toggle"
@@ -104,7 +104,7 @@
             'dq-fold-906': pageTogglesFold,
             'dq-bar-action--on': store.showingMixed,
           }"
-          :title="mixedToggleTitle"
+          :tooltip="mixedToggleTitle"
           :aria-label="mixedToggleTitle"
           :aria-pressed="store.showingMixed ? 'true' : 'false'"
           data-testid="mixed-toggle"
@@ -147,7 +147,6 @@
               type="button"
               role="menuitem"
               class="ctx-item"
-              :title="decidedToggleLabel"
               :aria-label="decidedToggleLabel"
               data-testid="decided-row"
               @click="
@@ -155,6 +154,11 @@
                 close();
               "
             >
+              <Tooltip
+                :text="decidedToggleLabel"
+                activator="parent"
+                :describe="false"
+              />
               <v-icon class="ctx-icon">mdi-history</v-icon>
               <span class="ctx-label-text">{{ decidedToggleLabel }}</span>
             </button>
@@ -162,7 +166,6 @@
               type="button"
               role="menuitem"
               class="ctx-item"
-              :title="mixedToggleTitle"
               :aria-label="mixedToggleTitle"
               data-testid="mixed-row"
               @click="
@@ -170,6 +173,11 @@
                 close();
               "
             >
+              <Tooltip
+                :text="mixedToggleTitle"
+                activator="parent"
+                :describe="false"
+              />
               <v-icon class="ctx-icon">mdi-alert-outline</v-icon>
               <span class="ctx-label-text">{{ mixedToggleLabel }}</span>
               <span
@@ -206,7 +214,7 @@
             variant="outline"
             icon-left="filter-outline"
             class="dq-bar-action"
-            :title="tierLabel"
+            :tooltip="tierLabel"
             :aria-label="tierLabel"
             :aria-expanded="tierMenuOpen"
             aria-haspopup="true"
@@ -285,7 +293,7 @@
           variant="primary"
           icon-left="flash-outline"
           class="dq-bar-action"
-          :title="autoStackLabel"
+          :tooltip="autoStackLabel"
           :aria-label="autoStackLabel"
           data-testid="auto-stack-trigger"
           @click="openAutoStack"
@@ -406,9 +414,9 @@
             <button
               type="button"
               class="qselclear"
-              title="Clear the selection (Esc)"
               @click="clearMixedSelection()"
             >
+              <Tooltip text="Clear the selection (Esc)" activator="parent" />
               Clear
             </button>
           </span>
@@ -517,9 +525,9 @@
           <button
             type="button"
             class="qselclear"
-            title="Clear the selection (Esc)"
             @click="store.clearSelection()"
           >
+            <Tooltip text="Clear the selection (Esc)" activator="parent" />
             Clear
           </button>
         </span>
@@ -815,6 +823,7 @@ import DedupCompareDialog from "../widgets/DedupCompareDialog.vue";
 import DedupAutoStackDialog from "../widgets/DedupAutoStackDialog.vue";
 import ActionReceipt from "../widgets/ActionReceipt.vue";
 import AppButton from "../widgets/AppButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 /**
  * How many rows beyond the anchors stay mounted.

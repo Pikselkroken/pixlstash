@@ -27,10 +27,10 @@
         :tabindex="focused ? 0 : -1"
         :aria-pressed="tile.pressed"
         :aria-label="tile.ariaLabel"
-        :title="tile.title"
         @click.stop="emit('pick', tile, i)"
         @contextmenu.prevent.stop="emit('toggle', tile, i)"
       >
+        <Tooltip :text="tile.title || ''" activator="parent" />
         <!-- The IMG sizes its own box: the stored width/height are the raw file
              dimensions and ignore EXIF rotation, so a portrait phone shot
              reports landscape numbers. The browser decodes the rotated pixels,
@@ -86,7 +86,6 @@
           v-if="loadThumbnails && tile.chip"
           class="gsmart"
           aria-hidden="true"
-          :title="tile.chip.title"
         >
           <v-icon size="12">{{ tile.chip.icon }}</v-icon>
           {{ tile.chip.text }}
@@ -135,6 +134,8 @@
 
 import { computed, ref, useSlots, watch } from "vue";
 
+import Tooltip from "./Tooltip.vue";
+
 import {
   DEFAULT_THUMBNAIL_SIZE_LEVEL,
   stripHeightForSizeLevel,
@@ -174,8 +175,8 @@ const MAX_THUMB_RATIO = 2.4;
  * @property {string} [markIcon] - bottom-left glyph chip, the alternative
  *   tenant of the same corner.
  * @property {string} [centreIcon] - the centred tick over an excluded tile.
- * @property {{icon: string, text: string, title: string}} [chip] - the
- *   bottom-right hover chip.
+ * @property {{icon: string, text: string}} [chip] - the bottom-right hover
+ *   chip. Pointer-inert, so it carries no tip of its own.
  * @property {{width: number, height: number}} [box] - stored dimensions, for
  *   the placeholder's shape estimate only.
  */

@@ -7,8 +7,7 @@
           class="tb-mobile-nav"
           icon="menu"
           :aria-expanded="sidebarStore.sidebarVisible"
-          aria-label="Open library navigation"
-          title="Open library navigation"
+          tooltip="Open library navigation"
           @click="sidebarStore.revealSidebar()"
         />
         <div
@@ -32,8 +31,7 @@
               <AppBarButton
                 class="bar-split-toggle"
                 :icon="gbSortButtonIcon"
-                :title="gbDescendingModel ? 'Descending' : 'Ascending'"
-                :aria-label="gbDescendingModel ? 'Descending' : 'Ascending'"
+                :tooltip="gbDescendingModel ? 'Descending' : 'Ascending'"
                 :disabled="gbSortModel === LIKENESS_GROUPS_SORT_KEY_GB"
                 @click.stop="gbToggleSortDirection"
               />
@@ -43,7 +41,7 @@
                 prefix="Sort:"
                 :icon="gbSortTypeIcon"
                 chevron
-                :title="gbSortButtonLabel"
+                :tooltip="gbSortButtonLabel"
               >
                 <span class="bar-btn-sort-type">{{ gbSortTypeName }}</span>
                 <span
@@ -126,10 +124,14 @@
                   <span
                     v-if="option.id === STACK_UPDATED_AT_SORT_KEY"
                     class="gb-sort-filter-badge"
-                    title="Only available when viewing stacks"
                     aria-label="Only available when viewing stacks"
                     role="img"
                   >
+                    <Tooltip
+                      text="Only available when viewing stacks"
+                      activator="parent"
+                      :describe="false"
+                    />
                     <v-icon size="14">mdi-filter-outline</v-icon>
                   </span>
                 </template>
@@ -230,8 +232,7 @@
               "
               :active="filterStore.isActive && !gbFilterMenuOpen"
               :open="gbFilterMenuOpen"
-              title="Filters"
-              aria-label="Filters"
+              tooltip="Filters"
             />
           </template>
           <GbFilterPanel
@@ -256,8 +257,7 @@
               icon="view-grid"
               chevron
               :open="gbViewMenuOpen"
-              title="View options"
-              aria-label="View options"
+              tooltip="View options"
             />
           </template>
           <div class="tbm gb-view-panel">
@@ -366,7 +366,7 @@
               icon="magnify"
               :active="searchStore.isSearchActive && !gbSearchMenuOpen"
               :open="gbSearchMenuOpen"
-              title="Search (F)"
+              tooltip="Search (F)"
               aria-label="Search"
             />
           </template>
@@ -429,8 +429,7 @@
               class="tb-export-btn tb-fold-700"
               icon="tray-arrow-down"
               :open="exportStore.exportMenuOpen"
-              :title="exportActionLabel('Export current grid to zip')"
-              :aria-label="exportActionLabel('Export current grid to zip')"
+              :tooltip="exportActionLabel('Export current grid to zip')"
             />
           </template>
           <TbExportPanel
@@ -454,8 +453,7 @@
               class="tb-fold-700"
               icon="cloud-upload-outline"
               :open="tbImportMenuOpen"
-              title="Import photos"
-              aria-label="Import photos"
+              tooltip="Import photos"
             />
           </template>
           <TbImportPanel
@@ -488,7 +486,7 @@
               icon="image-plus-outline"
               :open="tbComfyuiMenuOpen"
               :disabled="isReadOnly"
-              title="Generate new image with ComfyUI from a text prompt"
+              tooltip="Generate new image with ComfyUI from a text prompt"
               aria-label="Generate new image with ComfyUI"
             />
           </template>
@@ -578,8 +576,7 @@
         <AppBarButton
           icon="tag-check-outline"
           :disabled="isReadOnly"
-          title="Review and fix tags"
-          aria-label="Review and fix tags"
+          tooltip="Review and fix tags"
           @click="reviewSessionsStore.overlayOpen = true"
         />
         <!-- ── Separator G-S4: view-local actions | app-wide chrome ─────
@@ -628,6 +625,7 @@ import TbOverflowMenu from "./TbOverflowMenu.vue";
 import UndoControl from "./UndoControl.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import OptionRows from "../widgets/OptionRows.vue";
 import { useOneTimeNotice } from "../../composables/useOneTimeNotice";
 const props = defineProps({
@@ -1098,7 +1096,7 @@ const gbCollapseAllStacksDisabled = computed(
   left: 0;
   top: 0;
   width: 100%;
-  z-index: 100;
+  z-index: var(--z-sticky);
   /* Paint from the `toolbar` token (not `background`) so the toolbar strip can be
      tuned independently of the grid canvas. Set `toolbar` == `background` in the
      theme to keep them identical. */

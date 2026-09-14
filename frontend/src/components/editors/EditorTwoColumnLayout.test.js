@@ -38,6 +38,11 @@ vi.mock("../../api/pictureSets", () => ({
 
 vi.mock("vuetify/components", () => ({
   VIcon: { name: "v-icon", template: "<i><slot /></i>" },
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup: (_p, { slots }) => () => slots.activator?.({ props: {} }),
+  },
 }));
 
 import { getReferencePictures } from "../../api/characters";
@@ -393,7 +398,9 @@ describe("PictureSetEditor layout", () => {
     // or the tooltip's hover target changes.
     const row = w.find(".appearance-row");
     expect(row.classes()).toContain("appearance-row--locked");
-    expect(row.attributes("title")).toContain("locked");
+    expect(row.findComponent({ name: "Tooltip" }).props("text")).toContain(
+      "locked",
+    );
     // The per-field disabled state is asserted live in PictureSetEditor.test.js
     // (against a stub that renders it as `data-disabled`, which is what makes
     // that assertion able to fail); it is not repeated here.

@@ -1,5 +1,6 @@
 <script setup>
 import { defineProps, defineEmits } from "vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   entry: { type: Object, required: true },
@@ -61,7 +62,6 @@ function childImageCount() {
           dropTargetKey === 'path-' + entry.path && dropRejected,
       }"
       :style="{ '--depth': depth }"
-      :title="`${entry.path} - drop dragged reference images here to move them`"
       @contextmenu.prevent="
         emit('context', {
           rfId,
@@ -81,6 +81,10 @@ function childImageCount() {
         })
       "
     >
+      <Tooltip
+        :text="`${entry.path} - drop dragged reference images here to move them`"
+        activator="parent"
+      />
       <v-icon
         size="12"
         class="sidebar-row-glyph sidebar-folder-chevron"
@@ -96,8 +100,8 @@ function childImageCount() {
       <span
         v-if="folderBrowseCache[entry.path]?.loading || childImageCount() > 0"
         class="sidebar-folder-count-badge"
-        title="Direct images in folder"
       >
+        <Tooltip text="Direct images in folder" activator="parent" />
         {{ folderBrowseCache[entry.path]?.loading ? "..." : childImageCount() }}
       </span>
     </div>

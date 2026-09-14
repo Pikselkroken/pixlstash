@@ -84,9 +84,9 @@
           v-if="crumb.to"
           type="button"
           class="grid-breadcrumb-crumb is-link"
-          :title="`Go to ${crumb.label}`"
           @click="navigateBreadcrumb(crumb)"
         >
+          <Tooltip :text="`Go to ${crumb.label}`" activator="parent" />
           {{ crumb.label }}
         </button>
         <span v-else class="grid-breadcrumb-crumb" :title="crumb.label">{{
@@ -344,7 +344,7 @@
       <AppBarButton
         class="multi-select-toolbar__clear"
         icon="selection-off"
-        title="Clear selection"
+        tooltip="Clear selection"
         @click="emit('clear-multi-selection')"
       >
         Deselect All
@@ -624,8 +624,8 @@
                 <div
                   v-if="gridStore.showProblemIcon && hasPenalisedTags(img)"
                   class="penalised-tag-indicator thumbnail-badge"
-                  :title="penalisedTagsTitle(img)"
                 >
+                  <Tooltip :text="penalisedTagsTitle(img)" activator="parent" />
                   <v-icon
                     :size="badgeIconSizes.penalised"
                     :color="
@@ -644,17 +644,23 @@
                   v-if="img.reference_folder_id"
                   type="button"
                   class="thumbnail-reference-badge thumbnail-badge"
-                  :title="img.file_path || 'Reference picture'"
                   :aria-label="`Open reference location for ${imageCardAriaLabel(img)}`"
                   @click.stop="openReferenceLocation(img.id)"
                 >
+                  <Tooltip
+                    :text="img.file_path || 'Reference picture'"
+                    activator="parent"
+                  />
                   <v-icon :size="badgeIconSizes.penalised">mdi-folder</v-icon>
                 </button>
                 <div
                   v-if="lockedSetsStore.isLocked(img.id)"
                   class="thumbnail-lock-badge thumbnail-badge"
-                  :title="lockedSetsStore.lockReason(img.id)"
                 >
+                  <Tooltip
+                    :text="lockedSetsStore.lockReason(img.id)"
+                    activator="parent"
+                  />
                   <v-icon :size="badgeIconSizes.penalised"
                     >mdi-lock-outline</v-icon
                   >
@@ -662,8 +668,8 @@
                 <div
                   v-if="!isReadOnly && sharedPictureIds.has(img.id)"
                   class="thumbnail-share-badge thumbnail-badge"
-                  title="Has active share link"
                 >
+                  <Tooltip text="Has active share link" activator="parent" />
                   <v-icon :size="badgeIconSizes.penalised"
                     >mdi-link-variant</v-icon
                   >
@@ -677,8 +683,11 @@
                 v-if="getScrapheapPurgeBadge(img)"
                 class="thumbnail-purge-badge"
                 :class="`thumbnail-purge-badge--${getScrapheapPurgeBadge(img).kind}`"
-                :title="getScrapheapPurgeBadge(img).title"
               >
+                <Tooltip
+                  :text="getScrapheapPurgeBadge(img).title"
+                  activator="parent"
+                />
                 <v-icon size="12" class="thumbnail-purge-badge__icon">{{
                   getScrapheapPurgeBadge(img).icon
                 }}</v-icon>
@@ -907,8 +916,10 @@
               <span
                 v-if="isExpandedStackCover(img)"
                 class="stack-cover-flag"
-                title="This picture is the stack's cover"
-                >Cover</span
+                ><Tooltip
+                  text="This picture is the stack's cover"
+                  activator="parent"
+                />Cover</span
               >
               <!-- Top-right badge column - the shared home for corner
                    indicators (stack count in the corner, hover-only stars
@@ -1206,6 +1217,7 @@ import GridActionPill from "../panels/GridActionPill.vue";
 import ActionReceipt from "../widgets/ActionReceipt.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
 import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
@@ -6947,6 +6959,20 @@ function handleImageCardFocus(image) {
 // ============================================================
 // THUMBNAIL BATCH FETCH
 // ============================================================
+// The card fields a thumbnail batch is the authority for; everything else on a
+// card belongs to whoever last wrote it.
+const THUMBNAIL_BATCH_FIELDS = [
+  "thumbnail",
+  "thumbnail_width",
+  "thumbnail_height",
+  "square_crop_x",
+  "square_crop_y",
+  "square_crop_side",
+  "faces",
+  "detections",
+  "penalised_tags",
+];
+
 async function fetchThumbnailsBatch(start, end, meta = {}) {
   if (start === undefined || start === null) {
     start = renderStart.value;
@@ -7156,7 +7182,18 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
         targetIndex = moved;
       }
       img.idx = targetIndex;
-      allGridImages.value[targetIndex] = img;
+      // Merge what the batch owns into the card as it is NOW, rather than put
+      // back the copy taken before the await: anything that changed while the
+      // request was out (a star click, a tag, a stack count) lives on the
+      // current card, and writing the stale copy over it reverted the rating
+      // just made with the backend already holding the new one.
+      const currentCard = allGridImages.value[targetIndex];
+      const merged = { ...currentCard, idx: targetIndex };
+      for (const field of THUMBNAIL_BATCH_FIELDS) merged[field] = img[field];
+      // A batch that carried no URL keeps what the card has now.
+      merged.thumbnail = img.thumbnail ?? currentCard?.thumbnail ?? null;
+      merged.score = currentCard?.score ?? 0;
+      allGridImages.value[targetIndex] = merged;
       if (img.thumbnail) {
         clearThumbnailRetry(img.id);
       } else {

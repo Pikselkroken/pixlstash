@@ -20,7 +20,7 @@ vi.mock("../../api/comfyui", () => ({
 function mountPanel() {
   return mount(GbFilterPanel, {
     props: { backendUrl: "", selectedCharacter: "ALL", allPicturesId: "ALL" },
-    global: { stubs: { "v-icon": true } },
+    global: { stubs: { "v-icon": true, Tooltip: true } },
   });
 }
 

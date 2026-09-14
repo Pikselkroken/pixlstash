@@ -68,6 +68,15 @@ beforeEach(() => {
   setActivePinia(createPinia());
 });
 
+// The tooltip is stubbed to carry its text on the element it wraps or sits in:
+// the real one renders nothing until it opens, and needs Vuetify besides.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "activator"],
+  template:
+    '<span class="tip" :data-text="text"><slot name="activator" :props="{}" /></span>',
+};
+
 async function mountMenu() {
   const wrapper = mount(ImageGridContextMenu, {
     props: {
@@ -79,7 +88,7 @@ async function mountMenu() {
     attachTo: document.body,
     // Teleport stays real so the menu lands in <body> like it does in the app;
     // the wrapper still queries it, and focus assertions need it in the document.
-    global: { stubs: { "v-icon": true } },
+    global: { stubs: { "v-icon": true, Tooltip: TooltipStub } },
   });
   await flushPromises();
   return wrapper;

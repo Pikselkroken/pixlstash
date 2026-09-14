@@ -77,6 +77,18 @@ import { isReadOnly, sessionContext } from "../../utils/apiClient";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import SideBar from "./SideBar.vue";
 
+/**
+ * The element's own tooltip text: its direct `Tooltip` child, stubbed by the
+ * shallow mount. `undefined` when it has none or the text is empty, because an
+ * empty text is a disabled tip.
+ */
+function tipText(el) {
+  const tip = el
+    .findAll("tooltip-stub")
+    .find((t) => t.element.parentElement === el.element);
+  return tip?.attributes("text") || undefined;
+}
+
 function respond(url) {
   const u = String(url ?? "");
   if (u.includes("/characters")) return { data: [] };
@@ -172,12 +184,12 @@ describe("the expanded rail's Models entry", () => {
       .find((el) => el.text().includes("Duplicates"));
     expect(duplicates).toBeTruthy();
     expect(duplicates.attributes("aria-disabled")).toBe("true");
-    expect(duplicates.attributes("title")).toBe(DEDUP_HINT);
+    expect(tipText(duplicates)).toBe(DEDUP_HINT);
 
     const models = expandedModels(wrapper);
     expect(models).toBeTruthy();
     expect(models.attributes("aria-disabled")).toBe("true");
-    expect(models.attributes("title")).toBe(SHELF_HINT);
+    expect(tipText(models)).toBe(SHELF_HINT);
     // `aria-disabled`, not the native attribute: the control stays tabbable so
     // a keyboard user reaches the explanation too.
     expect(models.attributes("disabled")).toBeUndefined();
@@ -195,7 +207,7 @@ describe("the expanded rail's Models entry", () => {
     const models = expandedModels(wrapper);
     expect(models).toBeTruthy();
     expect(models.attributes("aria-disabled")).toBeUndefined();
-    expect(models.attributes("title")).toBeUndefined();
+    expect(tipText(models)).toBeUndefined();
 
     await models.trigger("click");
     expect(wrapper.emitted("select-models")).toHaveLength(1);
@@ -211,13 +223,13 @@ describe("the collapsed dock's Models entry", () => {
 
     const duplicates = wrapper
       .findAll(".sidebar-collapsed-item")
-      .find((el) => String(el.attributes("title") ?? "") === DEDUP_HINT);
+      .find((el) => String(tipText(el) ?? "") === DEDUP_HINT);
     expect(duplicates).toBeTruthy();
 
     const models = dockedModels(wrapper);
     expect(models).toBeTruthy();
     expect(models.attributes("aria-disabled")).toBe("true");
-    expect(models.attributes("title")).toBe(SHELF_HINT);
+    expect(tipText(models)).toBe(SHELF_HINT);
 
     await models.trigger("click");
     expect(wrapper.emitted("select-models")).toBeUndefined();
@@ -230,7 +242,7 @@ describe("the collapsed dock's Models entry", () => {
 
     const models = dockedModels(wrapper);
     expect(models).toBeTruthy();
-    expect(models.attributes("title")).toBe("Models");
+    expect(tipText(models)).toBe("Models");
     expect(models.attributes("aria-disabled")).toBeUndefined();
 
     await models.trigger("click");
@@ -252,7 +264,7 @@ describe("the Workflows entry", () => {
     const workflows = expandedWorkflows(wrapper);
     expect(workflows).toBeTruthy();
     expect(workflows.attributes("aria-disabled")).toBe("true");
-    expect(workflows.attributes("title")).toBe(WORKFLOWS_HINT);
+    expect(tipText(workflows)).toBe(WORKFLOWS_HINT);
     // `aria-disabled`, not the native attribute: the control stays tabbable so
     // a keyboard user reaches the explanation too.
     expect(workflows.attributes("disabled")).toBeUndefined();
@@ -264,7 +276,7 @@ describe("the Workflows entry", () => {
     const dockedRow = dockedWorkflows(docked);
     expect(dockedRow).toBeTruthy();
     expect(dockedRow.attributes("aria-disabled")).toBe("true");
-    expect(dockedRow.attributes("title")).toBe(WORKFLOWS_HINT);
+    expect(tipText(dockedRow)).toBe(WORKFLOWS_HINT);
     await dockedRow.trigger("click");
     expect(docked.emitted("select-workflows")).toBeUndefined();
     docked.unmount();
@@ -284,7 +296,7 @@ describe("the Workflows entry", () => {
     const docked = await mountSidebar({ docked: true });
     const dockedRow = dockedWorkflows(docked);
     expect(dockedRow).toBeTruthy();
-    expect(dockedRow.attributes("title")).toBe("Workflows");
+    expect(tipText(dockedRow)).toBe("Workflows");
     expect(dockedRow.attributes("aria-disabled")).toBeUndefined();
     await dockedRow.trigger("click");
     expect(docked.emitted("select-workflows")).toHaveLength(1);

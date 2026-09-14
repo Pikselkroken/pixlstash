@@ -27,14 +27,14 @@
           type="button"
           aria-haspopup="menu"
           :aria-expanded="countMenuOpen"
-          :title="countTitle"
         >
-          <v-icon size="17">mdi-cube-outline</v-icon>
+          <Tooltip :text="countTitle" activator="parent" />
+          <v-icon size="16">mdi-cube-outline</v-icon>
           <span>{{ store.selectedRows.length.toLocaleString() }}</span>
           <span v-if="selectedSize" class="selbar-size"
             >· {{ selectedSize }}</span
           >
-          <v-icon size="15" class="selbar-chevron">mdi-menu-down</v-icon>
+          <v-icon size="16" class="selbar-chevron">mdi-menu-down</v-icon>
         </button>
       </template>
       <div class="ctx-menu shelf-menu" role="menu">
@@ -63,13 +63,12 @@
          inside it are the shared `AddToEntityControl` the grid uses, so the
          search, the tri-state and the keyboard model are learned once.
 
-         Every verb below carries BOTH `aria-label` and `title`, and they say
+         Every verb below carries BOTH `aria-label` and a tooltip, and they say
          different things on purpose. The label is the verb and never changes,
          so a screen reader hears a stable name and voice control has something
          to say; the tooltip is the REFUSAL - "Only files that are actually on
-         this machine can be moved" - and changes with the selection. `title`
-         alone is not an accessible name a reader can rely on, and it does not
-         exist at all on touch. -->
+         this machine can be moved" - and changes with the selection. A tooltip
+         alone is not an accessible name a reader can rely on. -->
     <v-menu
       v-model="assignMenuOpen"
       :close-on-content-click="false"
@@ -85,32 +84,40 @@
           data-verb="assign"
           aria-label="Assign to person or set"
           :disabled="!assignable.length"
-          :title="assignTitle || 'Assign to person or set'"
+          :tooltip="assignTitle || 'Assign to person or set'"
         />
       </template>
       <div class="ctx-menu shelf-menu shelf-menu--assign">
-        <AddToEntityControl
-          type="character"
-          label="Assign to person"
-          float-menu
-          :subject-ids="assignableIds"
-          :membership="membership.character"
-          :disabled="!assignable.length"
-          :title="assignTitle"
-          @attach="onAttach($event, true)"
-          @detach="onAttach($event, false)"
-        />
-        <AddToEntityControl
-          type="set"
-          label="Assign to set"
-          float-menu
-          :subject-ids="assignableIds"
-          :membership="membership.set"
-          :disabled="!assignable.length"
-          :title="assignTitle"
-          @attach="onAttach($event, true)"
-          @detach="onAttach($event, false)"
-        />
+        <Tooltip :text="assignTitle || ''">
+          <template #activator="{ props: tipProps }">
+            <AddToEntityControl
+              v-bind="tipProps"
+              type="character"
+              label="Assign to person"
+              float-menu
+              :subject-ids="assignableIds"
+              :membership="membership.character"
+              :disabled="!assignable.length"
+              @attach="onAttach($event, true)"
+              @detach="onAttach($event, false)"
+            />
+          </template>
+        </Tooltip>
+        <Tooltip :text="assignTitle || ''">
+          <template #activator="{ props: tipProps }">
+            <AddToEntityControl
+              v-bind="tipProps"
+              type="set"
+              label="Assign to set"
+              float-menu
+              :subject-ids="assignableIds"
+              :membership="membership.set"
+              :disabled="!assignable.length"
+              @attach="onAttach($event, true)"
+              @detach="onAttach($event, false)"
+            />
+          </template>
+        </Tooltip>
       </div>
     </v-menu>
 
@@ -122,7 +129,7 @@
         stackFuses ? 'Fuse these into one stack' : 'Stack these into one stack'
       "
       :disabled="!stackable"
-      :title="stackTitle"
+      :tooltip="stackTitle"
       @click="emit('stack')"
     />
 
@@ -132,7 +139,7 @@
       data-verb="unstack"
       aria-label="Break this stack up"
       :disabled="!unstackable"
-      :title="unstackTitle"
+      :tooltip="unstackTitle"
       @click="emit('unstack')"
     />
 
@@ -142,7 +149,7 @@
       data-verb="move"
       aria-label="Move to another folder"
       :disabled="!movable.length || moves.busy"
-      :title="moveTitle"
+      :tooltip="moveTitle"
       @click="emit('move')"
     />
 
@@ -156,7 +163,7 @@
       data-verb="rename"
       aria-label="Rename"
       :disabled="!single"
-      :title="renameTitle"
+      :tooltip="renameTitle"
       @click="emit('rename')"
     />
 
@@ -165,7 +172,7 @@
       icon="image-outline"
       data-verb="set-icon"
       aria-label="Set thumbnail"
-      :title="iconTitle"
+      :tooltip="iconTitle"
       @click="emit('set-icon')"
     />
 
@@ -177,7 +184,7 @@
       data-verb="forget"
       aria-label="Remove from shelf"
       :disabled="!forgettable.length"
-      :title="forgetTitle"
+      :tooltip="forgetTitle"
       @click="emit('forget')"
     />
 
@@ -193,7 +200,7 @@
       data-verb="delete"
       :aria-label="deleteLabel"
       :disabled="!deletable.length"
-      :title="deleteTitle"
+      :tooltip="deleteTitle"
       @click="emit('delete', $event.shiftKey)"
     />
 
@@ -213,7 +220,7 @@
           aria-label="More actions"
           aria-haspopup="menu"
           :aria-expanded="moreMenuOpen"
-          title="More…"
+          tooltip="More…"
         />
       </template>
       <VerbMenu :single="false" v-bind="verbHandlers" />
@@ -253,13 +260,14 @@
 // **Three surfaces, one set of gates.** The pill, its `⋯` menu and the row
 // context menu all offer the same verbs under the same refusals, so they are
 // one component rather than three that have to be kept in step. That is the
-// whole reason the context menu lives here and not in the view: every `title`
+// whole reason the context menu lives here and not in the view: every tooltip
 // below is a refusal sentence, and a second copy of them would drift.
 
 import { computed, h, onMounted, onUnmounted, ref } from "vue";
 
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
@@ -891,10 +899,10 @@ const VerbMenu = (props) => {
         type: "button",
         role: "menuitem",
         disabled,
-        title,
         onClick: on,
       },
       [
+        title ? h(Tooltip, { text: title, activator: "parent" }) : null,
         h("i", {
           class: `v-icon mdi ${icon} ctx-icon`,
           "aria-hidden": "true",
@@ -907,17 +915,24 @@ const VerbMenu = (props) => {
   // No `floatMenu`: it teleports the panel below the row, which a flyout cannot
   // use, and the picker now refuses the pair anyway.
   const assign = (type, label) =>
-    h(AddToEntityControl, {
-      type,
-      label,
-      placement: "right",
-      subjectIds: props.assignableIds,
-      membership: props.membership[type],
-      disabled: !props.assignable,
-      title: props.assignTitle,
-      onAttach: (entity) => props.onAttach(entity, true),
-      onDetach: (entity) => props.onAttach(entity, false),
-    });
+    h(
+      Tooltip,
+      { text: props.assignTitle || "" },
+      {
+        activator: ({ props: tipProps }) =>
+          h(AddToEntityControl, {
+            ...tipProps,
+            type,
+            label,
+            placement: "right",
+            subjectIds: props.assignableIds,
+            membership: props.membership[type],
+            disabled: !props.assignable,
+            onAttach: (entity) => props.onAttach(entity, true),
+            onDetach: (entity) => props.onAttach(entity, false),
+          }),
+      },
+    );
 
   return h("div", { class: "ctx-menu shelf-menu", role: "menu" }, [
     props.single

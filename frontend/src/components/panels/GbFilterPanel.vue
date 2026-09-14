@@ -12,7 +12,7 @@
         :disabled="!filterStore.isActive"
         @click="filterStore.resetFilters()"
       >
-        <v-icon size="15">mdi-close-circle-outline</v-icon>
+        <v-icon size="16">mdi-close-circle-outline</v-icon>
         Clear
       </button>
     </div>
@@ -134,9 +134,14 @@
                 :key="'min-' + n"
                 class="gb-score-star-btn"
                 type="button"
-                :title="`Set minimum score ${n}`"
+                :aria-label="`Set minimum score ${n}`"
                 @click="gbSetMinScore(n)"
               >
+                <Tooltip
+                  :text="`Set minimum score ${n}`"
+                  activator="parent"
+                  :describe="false"
+                />
                 <v-icon
                   size="16"
                   :color="
@@ -159,11 +164,15 @@
               <button
                 class="gb-score-star-btn"
                 type="button"
-                title="Only unscored pictures"
                 aria-label="Only unscored pictures"
                 :aria-pressed="gbUnscoredOnly"
                 @click="gbToggleUnscored"
               >
+                <Tooltip
+                  text="Only unscored pictures"
+                  activator="parent"
+                  :describe="false"
+                />
                 <v-icon
                   size="16"
                   :color="gbUnscoredOnly ? 'warning' : undefined"
@@ -180,9 +189,14 @@
                 :key="'max-' + n"
                 class="gb-score-star-btn"
                 type="button"
-                :title="`Set maximum score ${n}`"
+                :aria-label="`Set maximum score ${n}`"
                 @click="gbSetMaxScore(n)"
               >
+                <Tooltip
+                  :text="`Set maximum score ${n}`"
+                  activator="parent"
+                  :describe="false"
+                />
                 <v-icon
                   size="16"
                   :color="
@@ -228,8 +242,8 @@
             v-for="opt in gbImpossibleSourceOptions"
             :key="opt.value"
             class="tbm-check"
-            :title="opt.tip"
           >
+            <Tooltip :text="opt.tip" activator="parent" />
             <input
               type="checkbox"
               :checked="gbImpossibleSources.includes(opt.value)"
@@ -322,9 +336,12 @@
             :key="`confirmed-${tag}`"
             class="tag-chip tag-chip--filter"
             type="button"
-            :title="`'${tag}' – click to switch to rejected match`"
             @click.stop="gbToggleTagRejected(tag)"
           >
+            <Tooltip
+              :text="`'${tag}' – click to switch to rejected match`"
+              activator="parent"
+            />
             <span class="tag-chip-label">{{ tag }}</span>
             <v-icon
               size="11"
@@ -338,9 +355,12 @@
             :key="`rejected-${tag}`"
             class="tag-chip tag-chip--filter tag-chip--filter-rejected"
             type="button"
-            :title="`'${tag}' (rejected) – click to switch to confirmed match`"
             @click.stop="gbToggleTagRejected(tag)"
           >
+            <Tooltip
+              :text="`'${tag}' (rejected) – click to switch to confirmed match`"
+              activator="parent"
+            />
             <span class="tag-chip-label">{{ tag }}</span>
             <v-icon
               size="11"
@@ -448,7 +468,7 @@
               :disabled="!gbConfidenceTagInput.trim()"
               @click="gbAddConfidenceFilter()"
             >
-              <v-icon size="15">mdi-plus</v-icon>
+              <v-icon size="16">mdi-plus</v-icon>
               Add
             </button>
           </div>
@@ -464,8 +484,11 @@
               :key="`ca-${entry}`"
               class="tag-chip tag-chip--filter tag-chip--confidence-above"
               type="button"
-              :title="`Prediction ≥${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, not labelled`"
             >
+              <Tooltip
+                :text="`Prediction ≥${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, not labelled`"
+                activator="parent"
+              />
               <span class="tag-chip-label"
                 >≥{{ gbConfidenceEntryLabel(entry) }}</span
               >
@@ -481,8 +504,11 @@
               :key="`cb-${entry}`"
               class="tag-chip tag-chip--filter tag-chip--confidence-below"
               type="button"
-              :title="`Prediction <${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, labelled`"
             >
+              <Tooltip
+                :text="`Prediction <${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, labelled`"
+                activator="parent"
+              />
               <span class="tag-chip-label"
                 >&lt;{{ gbConfidenceEntryLabel(entry) }}</span
               >
@@ -580,6 +606,7 @@
 
 <script setup>
 import { ref, computed, watch } from "vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import { listTags } from "../../api/tags";
 import { listComfyuiModels, listComfyuiLoras } from "../../api/pictures";
@@ -1134,7 +1161,7 @@ watch(
   top: calc(100% + var(--space-1));
   left: 0;
   right: 0;
-  z-index: 200;
+  z-index: var(--z-floating);
   background: rgb(var(--v-theme-panel));
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
@@ -1275,13 +1302,6 @@ watch(
   justify-content: space-between;
   margin-bottom: var(--space-2);
 }
-/* Sub-labels under the ComfyUI section: a notch smaller (75%) than the section
-   labels so "Models"/"LoRAs" read as a level below "ComfyUI". Derived from the
-   ramp floor rather than a raw px so it still tracks the token. */
-.gb-comfy-list-head .tbm-label {
-  font-size: calc(var(--text-2xs) * 0.75);
-}
-
 .gb-comfy-list {
   width: 100%;
   max-height: 180px;

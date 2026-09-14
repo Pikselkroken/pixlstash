@@ -23,6 +23,11 @@ vi.mock("../../utils/apiClient", () => ({
 // can't load; replace it with a trivial stub.
 vi.mock("vuetify/components", () => ({
   VIcon: { name: "v-icon", template: "<i><slot /></i>" },
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup: (_p, { slots }) => () => slots.activator?.({ props: {} }),
+  },
 }));
 
 import { apiClient } from "../../utils/apiClient";

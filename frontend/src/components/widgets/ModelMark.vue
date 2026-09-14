@@ -8,7 +8,8 @@
        model this is - but NOT on the ring's label, which is the only thing on
        the row that says what the model is assigned to now that the column is
        gone (#904). -->
-  <span class="mmark" :class="ringClass" :title="ring?.label || undefined">
+  <span class="mmark" :class="ringClass">
+    <Tooltip :text="ring?.label || ''" activator="parent" :describe="false" />
     <span class="mmark-face" aria-hidden="true">
       <!-- KEYED on the URL, so each candidate in the fallback chain gets its
            own element. Reusing one element across two srcs is what makes an
@@ -74,6 +75,7 @@ import { characterThumbnailUrl } from "../../api/characters";
 import { modelIconUrl } from "../../api/modelIcons";
 import { pictureSetThumbnailUrl } from "../../api/pictureSets";
 import { generatedMark } from "../../utils/modelShelf";
+import Tooltip from "./Tooltip.vue";
 
 /** entity type → the resource module that addresses its thumbnail. */
 const ENTITY_THUMBNAIL = {

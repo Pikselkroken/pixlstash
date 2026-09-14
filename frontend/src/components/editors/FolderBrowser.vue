@@ -83,9 +83,12 @@
               'browse-entry--disabled': !!entryDisabledReason(entry.path),
               'browse-entry--picked': entry.path === pickedFile,
             }"
-            :title="entryDisabledReason(entry.path) || entry.path"
             @click="entryClick(entry)"
           >
+            <Tooltip
+              :text="entryDisabledReason(entry.path) || entry.path"
+              activator="parent"
+            />
             <v-icon size="16">{{
               entry.is_file ? "mdi-file-outline" : "mdi-folder"
             }}</v-icon>
@@ -119,6 +122,7 @@ import {
   browseFilesystem,
   createFilesystemFolder,
 } from "../../api/folders";
+import Tooltip from "../widgets/Tooltip.vue";
 import { useSubmitGuard } from "../../composables/useSubmitGuard";
 import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";

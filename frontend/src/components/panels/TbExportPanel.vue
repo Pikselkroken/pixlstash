@@ -138,9 +138,12 @@
       <button
         class="tbm-action tbm-action--outline tbm-action--lg tbm-action--full tb-export-folder-btn"
         type="button"
-        title="Write straight into a folder on this machine, then open it - no ZIP or download step"
         @click="folderBrowserOpen = true"
       >
+        <Tooltip
+          text="Write straight into a folder on this machine, then open it - no ZIP or download step"
+          activator="parent"
+        />
         <v-icon size="18">mdi-folder-download-outline</v-icon>
         Export to Folder…
       </button>
@@ -159,6 +162,7 @@
 import { computed, ref } from "vue";
 import { useExportStore } from "../../stores/useExportStore";
 import FolderBrowser from "../editors/FolderBrowser.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const emit = defineEmits(["confirm-export", "confirm-export-folder"]);
 

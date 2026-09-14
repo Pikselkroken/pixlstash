@@ -30,6 +30,7 @@ const globalOpts = {
   global: {
     stubs: {
       "v-icon": true,
+      Tooltip: true,
       // The shell teleports and is AppDialog's own contract; the footer slot
       // has to render or the submit button is unreachable here.
       AppDialog: {

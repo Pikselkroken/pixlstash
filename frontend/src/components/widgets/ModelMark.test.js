@@ -4,9 +4,21 @@
 // sample by construction, and 37% of real adapters carry no title, so the
 // generated mark is the common path rather than the fallback.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { defineComponent, ref } from "vue";
+
+vi.mock("vuetify/components", async (importOriginal) => ({
+  ...(await importOriginal()),
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup:
+      (_p, { slots }) =>
+      () =>
+        slots.activator?.({ props: {} }),
+  },
+}));
 
 // The api modules are deliberately NOT mocked. A mock would hardcode the
 // prefixed string, which is exactly the shape that let the shelf ship with

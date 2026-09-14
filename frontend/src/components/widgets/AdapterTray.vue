@@ -26,12 +26,8 @@
     >
       <!-- Keyed on the hub `model.id`: every row carries one, and it is what
            the shelf's other verbs address a row by. -->
-      <li
-        v-for="row in adapters"
-        :key="row.id"
-        class="adapter-card"
-        :title="cardTitle(row)"
-      >
+      <li v-for="row in adapters" :key="row.id" class="adapter-card">
+        <Tooltip :text="cardTitle(row)" activator="parent" />
         <ModelMark :row="row" />
         <span class="adapter-card__body">
           <span class="adapter-card__name">{{ nameOf(row) }}</span>
@@ -75,6 +71,7 @@ import { listAdapters } from "../../api/modelShelf";
 import { errorDetail } from "../../utils/apiError";
 import { modelName } from "../../utils/modelShelf";
 import ModelMark from "./ModelMark.vue";
+import Tooltip from "./Tooltip.vue";
 
 // Both kinds an attachment can be read back through. `unknown` is here because
 // the server lets an unclassified file be attached - of the file kinds, the
