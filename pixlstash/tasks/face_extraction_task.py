@@ -31,7 +31,11 @@ from pixlstash.utils.insightface_model_utils import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
-from pixlstash.utils.device_utils import empty_device_cache
+from pixlstash.utils.device_utils import (
+    ONNX_CUDA_ADVICE,
+    ONNX_RUN_FALLBACK_ADVICE,
+    empty_device_cache,
+)
 from pixlstash.utils.vram_utils import is_vram_oom
 
 # Suppress noisy FutureWarning from insightface's face_align.py about
@@ -69,6 +73,15 @@ class FaceExtractionTask(BaseTask):
     _global_insightface_app = None
     _global_cpu_insightface_app = None
     _cpu_insightface_lock = threading.Lock()
+    # Whether ``_global_insightface_app`` asked onnxruntime for CUDA and is meant
+    # to get it, and whether a session of it has since been reported on the CPU.
+    # onnxruntime can hand back a CPU session without raising, at load or during
+    # a run, and says so only on stdout, so
+    # ``_warn_if_insightface_is_on_the_cpu`` does it once. False on ROCm, where
+    # torch reports CUDA as available but the CPU onnxruntime ships beside it by
+    # design (``startup_checks``), so a CPU session is what was meant.
+    _global_insightface_cuda_expected: bool = False
+    _insightface_cpu_reported: bool = False
     # Live task instances that hold a reference to an InsightFace app. The app is
     # an onnxruntime session whose VRAM lives in ORT's own CUDA arena (torch's
     # empty_cache cannot free it) - the arena is only returned to the driver when
@@ -457,7 +470,54 @@ class FaceExtractionTask(BaseTask):
             det_size=(256, 256),
         )
         cls._global_insightface_app = app
+        # PyTorch's ROCm build drives AMD through the CUDA API, so use_cuda is
+        # true there while the onnxruntime we ship with it has no CUDA provider
+        # at all: its CPU sessions are the arrangement, not a fallback, and the
+        # advice the warning carries is for the CUDA build.
+        is_rocm = getattr(getattr(torch, "version", None), "hip", None) is not None
+        cls._global_insightface_cuda_expected = use_cuda and not is_rocm
+        cls._insightface_cpu_reported = False
+        if cls._global_insightface_cuda_expected:
+            cls._warn_if_insightface_is_on_the_cpu(app, during_a_run=False)
         return app
+
+    @classmethod
+    def _warn_if_insightface_is_on_the_cpu(cls, app, during_a_run: bool) -> None:
+        """Log, once per loaded app, a CUDA InsightFace session running on the CPU.
+
+        Args:
+            app: The ``FaceAnalysis`` loaded with the CUDA provider.
+            during_a_run: Whether a run has just finished, rather than a load.
+        """
+        if cls._insightface_cpu_reported:
+            return
+        on_cpu = [
+            name
+            for name, model in getattr(app, "models", {}).items()
+            if (getattr(model, "session", None) is not None)
+            and (model.session.get_providers() or ["CPUExecutionProvider"])[0]
+            == "CPUExecutionProvider"
+        ]
+        if not on_cpu:
+            return
+        cls._insightface_cpu_reported = True
+        if during_a_run:
+            logger.warning(
+                "InsightFace: onnxruntime moved the %s session(s) from "
+                "CUDAExecutionProvider to CPUExecutionProvider after the provider "
+                "failed during a run: face detection runs on the CPU at a "
+                "fraction of the speed until the face models next load. %s",
+                ", ".join(on_cpu),
+                ONNX_RUN_FALLBACK_ADVICE,
+            )
+        else:
+            logger.warning(
+                "InsightFace asked onnxruntime for CUDAExecutionProvider, but the "
+                "%s session(s) loaded with CPUExecutionProvider: face detection "
+                "runs on the CPU at a fraction of the speed. %s",
+                ", ".join(on_cpu),
+                ONNX_CUDA_ADVICE,
+            )
 
     def _init_insightface_app(self):
         if self._insightface_app is not None:
@@ -556,6 +616,13 @@ class FaceExtractionTask(BaseTask):
                     type(exc).__name__,
                     len(safe_images),
                     exc,
+                )
+            if (
+                insightface_app is FaceExtractionTask._global_insightface_app
+                and FaceExtractionTask._global_insightface_cuda_expected
+            ):
+                FaceExtractionTask._warn_if_insightface_is_on_the_cpu(
+                    insightface_app, during_a_run=True
                 )
         return results
 

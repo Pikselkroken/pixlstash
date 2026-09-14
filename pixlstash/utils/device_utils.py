@@ -17,6 +17,20 @@ ACCELERATORS = frozenset({"cuda", "mps"})
 #: ``cuda`` refuses to start on a Mac.
 USE_GPU_ADVICE = "Set default_device=auto in server-config.json to use the GPU."
 
+#: What to tell an owner whose onnxruntime CUDA session loaded on the CPU.
+ONNX_CUDA_ADVICE = (
+    "The usual cause is an execution provider this build advertises whose "
+    "libraries are not installed (the CUDA provider needs libcublasLt). Fix "
+    "with: pip uninstall -y onnxruntime && pip install onnxruntime-gpu"
+)
+
+#: What to tell an owner whose onnxruntime session moved to the CPU during a
+#: run: onnxruntime's own fallback reports the provider's error only on stdout.
+ONNX_RUN_FALLBACK_ADVICE = (
+    "onnxruntime printed the provider's error to standard output, not to this "
+    "log; look for 'EP Error' there."
+)
+
 #: transformers 5.x loads weights on a thread pool unless this is true.
 HF_ASYNC_LOAD_ENV = "HF_DEACTIVATE_ASYNC_LOAD"
 

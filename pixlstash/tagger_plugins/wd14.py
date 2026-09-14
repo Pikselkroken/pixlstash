@@ -19,6 +19,7 @@ from tqdm import tqdm
 from pixlstash.inference.vram_budget import ORT_ARENA_SHARE, VramBudget
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
+from pixlstash.utils.device_utils import ONNX_CUDA_ADVICE, ONNX_RUN_FALLBACK_ADVICE
 from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
 
 logger = get_logger(__name__)
@@ -116,6 +117,10 @@ class WD14Service:
         # service, at start or during a run. Every later session is a CPU one,
         # so a reload after the idle sweep does not go back to CoreML.
         self._coreml_failure: str | None = None
+        # The accelerator provider ``_ort_sess`` loaded with, while onnxruntime's
+        # own fallback could still move it to the CPU during a run and say so
+        # only on stdout; ``None`` once that is impossible or already logged.
+        self._run_fallback_provider: str | None = None
         self._input_name: str | None = None
         self._onnx_batch_capacity: int = 1
         self._rating_tags: list | None = None
@@ -187,6 +192,7 @@ class WD14Service:
                 self._ort_sess = None
                 logger.debug("WD14Service: ONNX session unloaded.")
             self._on_coreml = False
+            self._run_fallback_provider = None
             self._input_name = None
             self._onnx_batch_capacity = 1
             self._rating_tags = None
@@ -383,6 +389,14 @@ class WD14Service:
         # generic check would only guess at one.
         if self._coreml_failure is None:
             self._warn_if_the_session_fell_back_to_cpu()
+        # CoreML sessions run with enable_fallback=0 and _run_session handles
+        # their failures, so only the others are watched after a run.
+        active = self._ort_sess.get_providers() or ["CPUExecutionProvider"]
+        self._run_fallback_provider = (
+            None
+            if self._on_coreml or active[0] == "CPUExecutionProvider"
+            else active[0]
+        )
         self._input_name = self._ort_sess.get_inputs()[0].name
         self._onnx_batch_capacity = self._resolve_batch_capacity()
 
@@ -478,12 +492,7 @@ class WD14Service:
                 "macOS includes it. Fix with: pip uninstall -y onnxruntime && "
                 "pip install onnxruntime"
             )
-        return (
-            "The usual cause is an execution provider this build advertises "
-            "whose libraries are not installed (the CUDA provider needs "
-            "libcublasLt). Fix with: pip uninstall -y onnxruntime && "
-            "pip install onnxruntime-gpu"
-        )
+        return ONNX_CUDA_ADVICE
 
     def _resolve_batch_capacity(self) -> int:
         if self._ort_sess is None:
@@ -550,15 +559,32 @@ class WD14Service:
         a bug - propagates unchanged, and so does ``EPFail`` from a session
         that is not CoreML's. The failed batch is retried once, on the CPU; a
         failure there propagates too.
+
+        Any other accelerator session keeps onnxruntime's own fallback, which
+        moves the session to the CPU and reports it only with ``print()``, so
+        the first batch after that move logs it.
         """
         try:
-            return self._ort_sess.run(None, {self._input_name: imgs})[0]
+            output = self._ort_sess.run(None, {self._input_name: imgs})[0]
         except EPFail as exc:
             if not self._on_coreml:
                 raise
             onnx_path = os.path.join(self._model_location, "model.onnx")
             self._switch_to_cpu_after_coreml_failure(onnx_path, exc, "during a run")
             return self._ort_sess.run(None, {self._input_name: imgs})[0]
+        if self._run_fallback_provider is not None:
+            active = self._ort_sess.get_providers() or ["CPUExecutionProvider"]
+            if active[0] == "CPUExecutionProvider":
+                logger.warning(
+                    "WD14 tagger: onnxruntime moved the %s session to %s after "
+                    "the provider failed during a run: tagging runs on the CPU "
+                    "at a fraction of the speed until WD14 next loads. %s",
+                    self._run_fallback_provider,
+                    active[0],
+                    ONNX_RUN_FALLBACK_ADVICE,
+                )
+                self._run_fallback_provider = None
+        return output
 
     @staticmethod
     def _collate_fn_remove_corrupted(batch: list) -> list:

@@ -509,6 +509,7 @@ jobs:
           tests/test_impossible_clear_authz.py
           tests/test_index_install_type.py
           tests/test_inline_rotate.py
+          tests/test_insightface_cpu_fallback.py
           tests/test_insightface_relocation.py
           tests/test_install_type_buckets.py
           tests/test_invalid_image_endless_retry.py

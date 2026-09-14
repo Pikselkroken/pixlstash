@@ -382,7 +382,11 @@ def test_a_cuda_fallback_still_gets_the_onnxruntime_gpu_remediation(
         dropped={"CUDAExecutionProvider"},
     )
     with caplog.at_level(logging.WARNING, logger=wd14.logger.name):
-        _service("cuda", tmp_path)._init_onnx_session()
+        service = _service("cuda", tmp_path)
+        service._init_onnx_session()
+        # A session already reported as on the CPU is not reported again by
+        # the check that runs after every batch.
+        _tag_batch(service)
 
     warnings = _warnings(caplog)
     assert len(warnings) == 1, warnings
@@ -486,8 +490,12 @@ def test_a_non_provider_error_during_a_coreml_run_does_not_switch_to_the_cpu(
     assert _warnings(caplog) == []
 
 
-def test_a_cuda_epfail_during_a_run_is_left_to_onnxruntime(fake_ort, tmp_path):
-    """CUDA keeps onnxruntime's own run() retry, and WD14 adds nothing."""
+def test_a_cuda_epfail_during_a_run_is_left_to_onnxruntime(
+    fake_ort, tmp_path, caplog, capsys
+):
+    """CUDA keeps onnxruntime's own run() retry, and WD14 builds no session of
+    its own. onnxruntime reports the move to the CPU only with ``print()``, so
+    WD14 logs it, once, however many batches follow."""
     calls = fake_ort(
         ["CUDAExecutionProvider", "CPUExecutionProvider"],
         run_errors={"CUDAExecutionProvider": EPFail("CUDA failure 700")},
@@ -495,9 +503,39 @@ def test_a_cuda_epfail_during_a_run_is_left_to_onnxruntime(fake_ort, tmp_path):
     service = _service("cuda", tmp_path)
     service._init_onnx_session()
 
-    assert _tag_batch(service) == {"img0.png": ["cat"], "img1.png": ["cat"]}
+    with caplog.at_level(logging.WARNING, logger=wd14.logger.name):
+        assert _tag_batch(service) == {"img0.png": ["cat"], "img1.png": ["cat"]}
+        _tag_batch(service)
+
     assert len(calls) == 1
-    assert fake_ort.runs == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    assert fake_ort.runs == [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    # onnxruntime's own report reached stdout and nothing else.
+    assert "EP Error: CUDA failure 700" in capsys.readouterr().out
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1, warnings
+    assert "CUDAExecutionProvider" in warnings[0]
+    assert "CPUExecutionProvider" in warnings[0]
+    assert "during a run" in warnings[0]
+
+
+def test_a_cuda_session_that_keeps_its_provider_logs_nothing_after_a_run(
+    fake_ort, tmp_path, caplog
+):
+    # Control for the test above: the check after a run is silent while the
+    # session stays on its accelerator.
+    fake_ort(["CUDAExecutionProvider", "CPUExecutionProvider"])
+    service = _service("cuda", tmp_path)
+    service._init_onnx_session()
+
+    with caplog.at_level(logging.WARNING, logger=wd14.logger.name):
+        assert _tag_batch(service) == {"img0.png": ["cat"], "img1.png": ["cat"]}
+
+    assert fake_ort.runs == ["CUDAExecutionProvider"]
+    assert _warnings(caplog) == []
 
 
 def test_an_epfail_that_reaches_wd14_from_a_cuda_session_is_not_switched(
