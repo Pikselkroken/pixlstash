@@ -4891,7 +4891,7 @@ button.shelf-head-cell:hover {
 
 .shelf-group-btn--managed,
 .shelf-group-btn--builtin {
-  --shelf-rail: rgb(var(--v-theme-info));
+  --shelf-rail: rgb(var(--v-theme-surface-info));
 }
 
 /* An unplugged drive: muted ink and a muted rail, and deliberately NEVER the

@@ -1,35 +1,55 @@
 <!--
   AGENT-FACING DESIGN RECORD.
-  COLOR: the unified palette (Camp B — one brand palette shared by both themes,
-  warm-white labels). The port landed: frontend/src/main.js (pixlStashLight /
-  pixlStashDark) carries these exact values and is the runtime source. This file
-  is the agent-readable record of them; main.js wins if they ever disagree.
-  Non-color scales (spacing, radius, type, elevation, motion) live in one file
-  only — frontend/src/styles/design-tokens.css, which docs/design/design-tokens.css
-  symlinks to. Rationale in docs/design/visual-language.md.
+  SOURCE OF TRUTH: the Claude Design project "PixlStash Design System"
+  (https://claude.ai/design/p/ac544c9e-b278-4439-be75-e442fca29d41), read with
+  the DesignSync tool: tokens/colors.css, tokens/typography.css,
+  tokens/spacing.css, readme.md and ui_kits/app/unified-shell.html. This file
+  mirrors it for agents. When this file, frontend/src/main.js or
+  frontend/src/styles/design-tokens.css disagree with the design system, the
+  design system wins and the repo is drift: fix the repo, not the design.
+  The shipped app is still behind it in places; see "Where the app is behind".
 -->
 ---
 name: PixlStash
 description: A warm, quiet, dark-led library for reviewing AI-generated images at volume — the photos are the color, the chrome stays out of the way.
 colors:
   amber: "#c47a1e"
-  amber-glow: "#e08a2a"
+  amber-on: "#ffffff"
   olive: "#567309"
+  olive-lifted: "#8ea604"
   raspberry: "#bb3566"
   teal: "#46707a"
-  warm-near-black: "#23211d"
-  warm-near-white: "#faf9f7"
-  raised-white: "#ffffff"
-  warm-tinted-grey: "#f0ede9"
-  cancel-surface: "#e6e1d8"
-  warm-border: "#d8d3c8"
-  warm-divider: "#e8e4dc"
+  violet: "#7c55ae"
   on-fill: "#f7f1ea"
   error: "#b0392b"
   warning: "#e8912f"
   warning-on: "#1b1b1b"
   success: "#2a7d3e"
-  info: "#2f6690"
+  info: "#30558c"
+  dark-bg: "#1b1f24"
+  dark-surface: "#23282f"
+  dark-panel: "#313337"
+  dark-input: "#2b3138"
+  dark-border: "#363d45"
+  dark-divider: "#2c323a"
+  dark-text: "#f2e5da"
+  dark-cancel: "#3a4047"
+  light-bg: "#faf9f7"
+  light-surface: "#ffffff"
+  light-panel: "#efede9"
+  light-chrome: "#f0ede9"
+  light-border: "#d8d3c8"
+  light-divider: "#e8e4dc"
+  light-text: "#23211d"
+  light-cancel: "#e6e1d8"
+  surface-error-dark: "#eda79c"
+  surface-warning-dark: "#e2b05a"
+  surface-success-dark: "#7ec892"
+  surface-info-dark: "#9fbce8"
+  surface-error-light: "#9a3327"
+  surface-warning-light: "#755215"
+  surface-success-light: "#226534"
+  surface-info-light: "#30558c"
 typography:
   display:
     fontFamily: "system-ui, -apple-system, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif"
@@ -77,36 +97,51 @@ spacing:
   "8": "48px"
   "9": "64px"
 components:
-  button-primary:
+  button-key:
     backgroundColor: "{colors.amber}"
+    textColor: "{colors.amber-on}"
+    rounded: "{rounded.sm}"
+    height: "28px"
+    padding: "0 16px"
+  button-neutral:
+    backgroundColor: "{colors.dark-cancel}"
+    textColor: "{colors.dark-text}"
+    rounded: "{rounded.sm}"
+    height: "28px"
+    padding: "0 16px"
+  button-danger:
+    backgroundColor: "{colors.error}"
     textColor: "{colors.on-fill}"
     rounded: "{rounded.sm}"
-    padding: "8px 16px"
-  button-commit:
-    backgroundColor: "{colors.olive}"
-    textColor: "{colors.on-fill}"
+    height: "28px"
+    padding: "0 16px"
+  bar-button:
+    backgroundColor: "transparent"
+    textColor: "{colors.dark-text}"
     rounded: "{rounded.sm}"
-    padding: "8px 16px"
-  button-cancel:
-    backgroundColor: "{colors.cancel-surface}"
-    textColor: "{colors.warm-near-black}"
-    rounded: "{rounded.sm}"
-    padding: "8px 16px"
+    height: "32px"
+    padding: "0 8px"
   input:
-    backgroundColor: "{colors.raised-white}"
-    textColor: "{colors.warm-near-black}"
-    rounded: "{rounded.md}"
-    padding: "8px 12px"
-  chip:
-    backgroundColor: "{colors.warm-tinted-grey}"
-    textColor: "{colors.warm-near-black}"
+    backgroundColor: "{colors.dark-input}"
+    textColor: "{colors.dark-text}"
     rounded: "{rounded.sm}"
-    padding: "4px 8px"
+    height: "28px"
+    padding: "0 8px"
+  chip:
+    backgroundColor: "{colors.dark-surface}"
+    textColor: "{colors.dark-text}"
+    rounded: "{rounded.sm}"
+    padding: "2px 8px"
   card:
-    backgroundColor: "{colors.raised-white}"
-    textColor: "{colors.warm-near-black}"
+    backgroundColor: "{colors.dark-surface}"
+    textColor: "{colors.dark-text}"
     rounded: "{rounded.md}"
     padding: "16px"
+  dialog:
+    backgroundColor: "{colors.dark-surface}"
+    textColor: "{colors.dark-text}"
+    rounded: "{rounded.lg}"
+    padding: "24px"
 ---
 
 # Design System: PixlStash
@@ -115,172 +150,180 @@ components:
 
 **Creative North Star: "The Quiet Darkroom"**
 
-PixlStash is a self-hosted library where people who generate AI images at volume triage, score, and organize thousands of frames. The screen is mostly a dense grid of the user's own pictures, so the design works like a darkroom: the chrome dims to a warm safelight and the photos are the only thing that glows. Nothing in the interface competes with the work. The single amber accent is the safelight — used on the primary action and the key state, and almost nowhere else.
+PixlStash is a self-hosted library where people who generate AI images at volume triage, score, and organize thousands of frames. The screen is mostly a dense grid of the user's own pictures, so the design works like a darkroom: the chrome dims and the photos are the only thing that glows. Nothing in the interface competes with the work.
 
-The system is **warm, quiet, and pixel-honest**. Warm: the neutral ramp is a warm near-black on a warm near-white, never cold LCD grey and never pure `#000`/`#fff`; the one accent is amber. Quiet: chrome recedes, one accent spent sparingly, hierarchy carried by weight, color, and space before size. Pixel-honest: the brand is a pixel-art padlock and the Tiny5 pixel face, and that heritage appears **only** in brand moments (wordmark, logo, splash, empty-state headline) — never in working UI, which stays clean system-sans.
+The system is **warm, quiet, and pixel-honest**. Warm: the neutral ramp is a warm near-black on a warm near-white, never pure `#000`/`#fff` for text. Quiet: chrome recedes, one amber action per surface, hierarchy carried by weight, color and space before size. Pixel-honest: the brand is a pixel-art padlock and the Tiny5 pixel face, which sets the **wordmark only**; working UI, headlines and empty states stay system sans.
 
-Both a light and a dark theme are first-class and every decision must hold in both, but the **design is led from dark** — that is where volume review actually happens. Confirmed anti-references: no cold grey, no pure black or white, no second UI typeface (PressStart2P is retired; Tiny5 is brand-only), no per-tile bespoke framing, no icon set other than Material Design Icons in the chrome. The current honest weakness is drift, not taste: sizes, alignment, and colors have wandered off-token across components, and closing that gap is the active priority.
+Both themes ship and every decision must hold in both, but the app **defaults to dark and is designed dark-first**. `:root` in the design system's `tokens/colors.css` *is* the dark palette; light is `[data-theme="light"]`.
 
 **Key Characteristics:**
 - The photos are the color; the chrome is a warm, dim frame around them.
-- One amber accent, spent sparingly, on primary action and key state.
-- Warm neutrals only — near-black on near-white, never cold grey or pure black/white.
+- **Amber acts. Olive selects. Raspberry, teal and violet only identify.**
+- Hover is an ink wash and focus an ink ring; neither carries a hue.
 - Dense by design (14px base), but density is earned by the grid, not the controls.
-- Polish lives in designed focus / hover / selected / empty / loading states.
 - Every value comes from a token; a new value is a design decision, not an inline tweak.
 
 ## Colors
 
-The palette is **unified across both themes**: the four brand hues and the four status colors are a single hex value shared by dark and light, each deep enough to carry the warm near-white label (`on-fill` #f7f1ea) at ≥4.5:1. Only the **neutrals** switch per theme. Warm neutrals carry ~95% of every screen, the photos are the color, and the brand hues are spent sparingly on top. Consumed as tokens (`var(--accent)`, `rgb(var(--v-theme-*))`), **never a hex literal in a component.**
+The brand and status hues are **one value shared by both themes**; only the neutrals switch. Consumed as tokens (`var(--accent)`, `rgb(var(--v-theme-*))`), **never a hex literal in a component.**
+
+**Contrast floors: text 4:1, icons and marks 3:1** (owner decision, 2026-09-13). 4:1 is enough; do not add tokens or treatments only to lift text from 4 to 4.5:1.
 
 ### Brand
-- **Amber** (`accent` #c47a1e; glow #e08a2a): the one "safelight." The primary action, the selected/active state, focus ring, key emphasis. The accent was brightened from the old deep #9c6016 to this warmer, more-orange #c47a1e (2026-07-24) so it reads as amber, not brown; the brighter #e08a2a is used where amber is a *glow* not a fill (selection wash, focus ring, hover). Warm-white label contrast is ~3:1 — enough for the semibold button label (AA large), but drop to olive or dark text for small text on amber.
-- **Olive** (`primary` #567309): the "commit / go" action (Create, Apply, Save changes) and the good/high end of a scale (smart-score, tag coverage). Distinct from the default amber primary.
-- **Raspberry** (`secondary` #bb3566): category / identity (person accents, grouping chips). A label color, never an action.
-- **Teal** (`tertiary` #46707a): the quiet tertiary — a third category color, neutral-accent highlights, chart series.
+- **Amber** (`--accent` #c47a1e, label `--accent-on` **#ffffff**): **the action**. The key action fill (one per surface, including the verb that finishes something), links, the attention dot, and the "Stash" wordmark. Not selection, focus, hover, data or decoration. The pure-white label measures 3.41:1, an accepted exception; do not deepen the amber (it goes brown) or flip the label dark.
+- **Olive** (`--primary` #567309, lifted `#8ea604` in dark as `--selected-ink` / `--active-bar`): **selection**, for items and chosen values alike. A selected tile, row, tab or focused group (`--active-bar` ring + `--active-wash`), a selected segment, an option row's check, an active bar button's icon, and the good/high end of a scale. Olive marks, words stay `--text`. **Never a button fill.** Checkbox, switch and slider are deep olive with a white mark in both themes (accepted 2.32–2.72:1 against a dark ground).
+- **Raspberry** (`--secondary` #bb3566): category / identity (person accents, grouping chips). Never an action.
+- **Teal** (`--tertiary` #46707a): quiet category, the default chart hue. Never an action.
+- **Violet** (`--quaternary` #7c55ae): a fourth category and chart hue. Never an action or a selection. It stays apart from Info for colour-blind viewers because Info is darker; do not lighten Info toward it.
+- **Warm near-white** (`--ps-on-fill` #f7f1ea): the label on olive, raspberry, violet and the status fills (not amber, not warning).
 
-### Neutral (switches per theme — `light / dark`)
-- **Text** #23211d / #f2e5da and **canvas** #faf9f7 / #1b1f24 — warm, never `#000`/`#fff`.
-- **Raised surface** #ffffff / #23282f · **chrome** #f0ede9 / #23282f · **border** #d8d3c8 / #363d45 · **divider** #e8e4dc / #2c323a.
-- **Warm-white label** #f7f1ea: text/icon on any deep brand or status fill (except warning).
-- **Cancel** (neutral secondary): #e6e1d8 + warm-black (light) / #3a4047 + cream (dark).
+### Neutral (switches per theme: `dark / light`)
+- **Text** #f2e5da / #23211d; **muted** is that text at 55%.
+- **Canvas** (`--bg`) #1b1f24 / #faf9f7 · **surface** #23282f / #ffffff · **panel** #313337 / #efede9 · **chrome** #23282f / #f0ede9 · **input** #2b3138 / #ffffff.
+- **Border** #363d45 / #d8d3c8 · **divider** #2c323a / #e8e4dc.
+- **Cancel** (`--cancel-bg` / `--cancel-text`): #3a4047 + text / #e6e1d8 + text.
+- In light, the chrome is *darker* than the canvas; in dark it is lighter.
 
 ### Status (semantic only)
-- **Error** #b0392b (warm brick) · **Warning** #e8912f (bright orange, **dark text** #1b1b1b) · **Success** #2a7d3e (forest) · **Info** #2f6690 (muted slate-blue). One token each; they appear only on their own meaning.
+- **Error** #b0392b · **Warning** #e8912f (dark label #1b1b1b) · **Success** #2a7d3e · **Info** #30558c. They carry the warm near-white label on their fill (warning excepted) and appear only on their own meaning, always with an icon or text.
+- **On words, use the `--surface-*` family, never the fill.** A status fill fails the text floor as text: dark `--surface-error` #eda79c, `--surface-warning` #e2b05a, `--surface-success` #7ec892, `--surface-info` #9fbce8; light #9a3327, #755215, #226534, #30558c. Prefer the notice pattern where you can: the glyph and the rail carry the hue and the sentence stays `--text`.
 
 ### Color usage policy
-Neutrals carry ~95% of the screen; never more than ~2–3 of these colors visible at once on a working screen.
+Neutrals carry ~95% of the screen; never more than ~2–3 hues visible at once on a working screen.
 
 | Color | Role | Use for | Not for |
 |---|---|---|---|
-| **Amber** (accent) | The one safelight | Primary action; selected/active; focus; key emphasis (≤~10% of a screen) | Decoration; two amber actions competing |
-| **Olive** (primary) | Commit / go | Create / Apply / Save; the good-high end of a scale | A generic button color |
+| **Amber** (accent) | The action | The key action fill; links; attention dot (≤~10% of a screen) | Selection; focus; hover; data; two amber actions competing |
+| **Olive** (primary) | Selection | Selected tile, row, tab, segment, option; active bar button; good-high end of a scale | Any button fill |
 | **Raspberry** (secondary) | Category / identity | Person accents, grouping chips | Actions |
-| **Teal** (tertiary) | Quiet category | A third grouping color, neutral highlights, chart series | High emphasis |
+| **Teal** (tertiary) | Quiet category | A third grouping color, neutral highlights, default chart hue | High emphasis; actions |
+| **Violet** (quaternary) | Fourth category | A fourth grouping color, a fourth chart hue | Actions; selection; the only cue that separates it from Info |
 | **Error** | Destructive / error | Delete, error states, penalised tags | Decoration; color alone |
 | **Warning** | Caution | Stale / needs-review, non-blocking warnings | Blocking errors |
 | **Success** | Success / complete | Done confirmations, completed reviews | A general action button |
-| **Info** | Neutral information | Notices, links, tooltips | Emphasis or actions |
+| **Info** | Neutral information | Notices, tooltips | Emphasis or actions |
 | **Cancel gray** | Low-emphasis secondary | Cancel, dismiss, "not now" | Anything you want noticed |
-| **Wordmark amber** | Logo | The "Stash" wordmark (#c47a1e) | Anywhere in the working UI |
+
+### Data
+A chart picks **one** identity hue (teal by default, olive, raspberry or violet) and varies opacity for magnitude within it. Adjacent charts take different hues; hue never varies inside one chart. **Amber never appears in data.** What is yours or current is marked within the chart's own hue, at full strength with its label stated. Status hues appear only on facts.
 
 ### Named Rules
-**The One Safelight Rule.** Amber marks intent, not decoration. One amber action per view, ≤~10% of a screen. Its rarity is the point.
+**The One Action Rule.** Amber marks intent. One amber action per surface, small footprint. Its rarity is what makes it read as "the thing to do".
+
+**The Olive-Selects Rule.** Olive marks what is chosen, never a button. An olive button reads as a selected option.
 
 **The Unified-Palette Rule.** Brand and status colors are the same hex in both themes; only neutrals flip. A theme-specific brand color is drift.
 
-**The Warm-White-Label Rule.** Text on any deep brand/status fill is the warm-white `on-fill` (#f7f1ea), never pure `#fff`. The one exception is Warning, whose bright orange takes dark text (#1b1b1b) — the hazard convention.
+**The Status-Is-Not-Color-Alone Rule.** Error/warning/success/info always pair color with an icon or text, and never appear as decoration.
 
-**The Status-Is-Not-Color-Alone Rule.** Error/warning/success/info always pair color with an icon or text; color never carries meaning by itself, and status colors never appear as decoration.
+**The Categorizers-Label-Not-Act Rule.** Raspberry, teal and violet identify and group; they never sit on a button.
 
-**The Categorizers-Label-Not-Act Rule.** Raspberry and teal identify and group; they never sit on a button.
-
-**The No-Hex Rule.** A hex literal in a component is drift. Every color is a token; if the color you want isn't one, you want the nearest one.
-
-**The Warmth Rule.** Never cold grey, never pure `#000`/`#fff`; text, canvas, borders, and shadows all stay warm.
+**The No-Hex Rule.** A hex literal in a component is drift. If the color you want isn't a token, you want the nearest one.
 
 ## Typography
 
-**UI / body font:** platform system sans (`system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`) — no webfont load, instant render, native feel in a dense tool.
-**Brand font:** Tiny5 pixel face (`--font-pixel`) — wordmark, logo lockups, splash, empty-state headline **only**.
-**Mono font:** platform mono (`--font-mono`) — hashes, tokens, file paths, code.
-
-**Character:** one workhorse family carries the entire working UI; the pixel face is a brand accent, not a second UI typeface. Text should get out of the way of the images.
+**UI / body font:** platform system sans (`--font-ui`: `system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`). No webfont load, native feel in a dense tool.
+**Brand font:** Tiny5 pixel face (`--font-pixel`), **the wordmark only**. "Pixl" takes the text color, "Stash" takes `--wordmark-accent` amber.
+**Mono font:** platform mono (`--font-mono`): hashes, tokens, file paths, config values.
+**Website only:** Space Grotesk and IBM Plex Mono belong to pixlstash.dev. Never in the app.
 
 ### Hierarchy
-Base body is **14px** because the app is dense; 16px body would waste vertical space in the grid chrome. Size text **only** from the ramp and **only in rem** (off a 16px root, so user zoom scales it). Between the roles below sit intermediate steps used for secondary/dense text: `--text-xs` (12px) captions/metadata, `--text-sm` (13px) secondary body/toolbar labels, `--text-md` (16px) emphasised/dialog body.
+Base body is **14px**. Size text **only** from the ramp and **only in rem**: `--text-2xs` 11px (section labels, badge counts) · `--text-xs` 12px (captions, metadata) · `--text-sm` 13px (secondary body, toolbar labels) · `--text-base` 14px (default body and controls) · `--text-md` 16px (emphasised and dialog body) · `--text-lg` 18px (card titles, dialog headings) · `--text-xl` 22px (view titles) · `--text-2xl` 28px (login, startup, empty-state display).
 
-- **Display** (600, 1.75rem/28px, line-height 1.2): login, startup, empty-state headlines. The largest type in the product.
-- **Headline** (600, 1.375rem/22px, 1.2): view titles.
-- **Title** (600, 1.125rem/18px, 1.35): card titles, dialog headings.
-- **Body** (400, 0.875rem/14px, 1.5): default body and controls. Keep measure under ~75 characters for real paragraphs.
-- **Label** (600, 0.6875rem/11px, letter-spacing 0.06em, UPPERCASE): the recurring section label. Use the global `.section-label` class — do not re-roll it.
+- **Display** (600, 28px, 1.2), **Headline** (600, 22px, 1.2), **Title** (600, 18px, 1.35), **Body** (400, 14px, 1.5).
+- **Label** (600, 11px, `--tracking-label` 0.06em, UPPERCASE, `--text-muted`): the one way to name a group. Use the `SectionLabel` component.
 
 ### Named Rules
-**The rem-Only Rule.** Size type in rem, from the ramp. Never `em` (it compounds with its parent and is the main reason nested labels drift), never a raw px one-off. This is the single biggest typographic drift to hold the line on.
+**The rem-Only Rule.** Never `em` for text, never a raw px one-off.
 
-**The 600-Not-700 Rule.** Headings are weight 600. 700 reads heavy against the warm near-black and is reserved for rare true emphasis. Hierarchy comes from weight, color, and space at least as much as from size.
+**The 600-Not-700 Rule.** Headings are 600. 700 is reserved.
 
-**The Tiny5-Is-Brand-Only Rule.** The pixel face never sets a label, button, menu item, or any reading text — it is gorgeous as a mark and illegible as body. Brand moments only.
+**The Tiny5-Is-The-Wordmark Rule.** The pixel face never sets a label, button, headline or empty state.
 
 ## Layout
 
-Everything sits on a **4px grid**. Padding, margin, and gap come from the `--space-*` scale (2 / 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64px); `--space-1` (2px) is the only sub-4 step, for hairline insets and optical nudges only. Off-grid values (5, 7, 10, 11, 14, 18, 26, 30, 36px) are drift — snap to the nearest token.
+Everything sits on a **4px grid**: `--space-0`…`--space-9` = 0, 2, 4, 8, 12, 16, 24, 32, 48, 64px. `--space-1` (2px) is for hairline insets and optical nudges only. Most app spacing is `--space-2`–`--space-5`.
 
-The product is a desktop shell: a left sidebar (folders / navigation), a top toolbar, a central image grid, and a right stats/detail area, with full-screen overlays for the viewer and dialogs. The shell aligns the sidebar header, toolbar, and stats header to a shared **48px band** — respect that kind of intentional alignment everywhere: things in the same row share a baseline, columns of controls share a left edge. Alignment is most of what reads as polished.
+**The shell** is fixed and every screen lives inside it (a task screen is a screen, not an application mode):
+- **Title bar** `--titlebar-height` 34px: brand, breadcrumb, window controls.
+- **Toolbar** `--toolbar-height` **36px band** holding 32px bar buttons (`--control-h-bar`). Left changes the *view*; right is global to the app. Sidebar tabs and inspector tabs sit on the same band, so one bottom rule runs across the window.
+- **Sidebar** `--sidebar-width` 280px on `--chrome`.
+- **Inspector** `--stats-width` 288px on `--chrome`: one component for overlay metadata, grid statistics, model detail and the duplicates evidence pane.
+- **Content** on `--bg`, edge to edge.
 
-**Density is earned.** The image grid can be tight — it is the user's work. The controls *around* it stay calm and well-spaced; cramped chrome reads as cheap. Whitespace is structure: consistent spacing groups related controls and gives the eye somewhere to rest.
+**Control heights:** `--control-h` 28px (buttons, inputs, selects), `--control-h-sm` 24px (compact), `--control-h-bar` 32px (toolbar, selection pill, title bar, lightbox). **Dialog widths:** `--dialog-w-sm` 420 · `--dialog-w-md` 520 (default) · `--dialog-w-lg` 720 · `--dialog-w-xl` 840, and nothing else.
 
-**Responsive:** desktop-first and desktop-primary (Vuetify's breakpoint system underneath). Mobile web is a secondary target that should degrade acceptably, not a first-class layout yet — do not sacrifice desktop density to chase it.
+**Density is earned.** The grid can be tight; the controls around it stay calm.
 
 ## Elevation & Depth
 
-Depth is **warm and restrained**, built on four levels (`--elevation-1`…`--elevation-4`), all composed on the theme `--v-theme-shadow` token so shadows warm and cool with the theme — never a hardcoded `rgba(0,0,0,…)`, which reads cold and flat on the warm canvas. Elevation **inverts between themes**: in light, the content canvas is the brightest surface and a warm shadow does the lifting; in dark, elevation reads by *lightness* (raised surfaces get lighter) and shadows stay subtle.
+Four levels, built on the per-theme `--shadow-rgb`, never a hardcoded `rgba(0,0,0,…)`:
+- **`--elevation-1`**: hovered tiles.
+- **`--elevation-2`**: raised controls.
+- **`--elevation-3`**: menus, popovers, tooltips, floating panels.
+- **`--elevation-4`**: dialogs, lightbox chrome, the selection pill.
 
-### Shadow Vocabulary
-- **Level 1** (`--elevation-1`, `0 1px 2px rgba(var(--v-theme-shadow), .12)`): resting cards, hovered grid tiles.
-- **Level 2** (`--elevation-2`, `0 2px 6px …/.18`): menus, dropdowns, raised controls.
-- **Level 3** (`--elevation-3`, `0 4px 16px …/.22`): popovers, floating panels.
-- **Level 4** (`--elevation-4`, `0 8px 28px …/.30`): dialogs, lightbox chrome.
-
-### Named Rules
-**The Warm-Shadow Rule.** Every shadow is built on `--v-theme-shadow`. Never hardcode a shadow color; a cold shadow on a warm canvas is an instant tell.
-
-**The Dark-Leans-On-Lightness Rule.** In dark mode, convey elevation by making the surface lighter, not by stacking a heavier shadow (which just muddies).
+**Cards carry no resting shadow.** Elevation is for things that actually float. Overlays use `--scrim` (`rgba(0,0,0,.80)`), one value for dialogs and the lightbox. No backdrop blur.
 
 ## Shapes
 
-Four corner steps and a pill, from `--radius-*`: **sm 4px** (dense controls — chips, small buttons, tight inputs), **md 8px** (the default — cards, inputs, menus, image tiles), **lg 12px** (dialogs, panels, popovers), **pill 999px** (toggles, status pills, avatar rings). Borders are warm and low-contrast (`border` / `divider`). Corners are gently rounded, never sharp and never fully soft — the 8px default is the product's resting geometry.
+**Four radii and a pill, tiered by class of thing:** controls (buttons, inputs, selects, chips, kbd, checkbox, segments) `--radius-sm` 4px · surfaces (cards, menus, tiles, tooltips) `--radius-md` 8px · dialogs, panels and popovers `--radius-lg` 12px · toggles, badges, progress tracks and the selection pill `--radius-pill`. A button and the card it sits on never share a corner. Inner radii nest: outer radius minus inset. `--radius-xl` 22px is website-only.
 
-**The Consistent-Radius Rule.** Radii stay consistent *within* a component family. An 8px card with a 4px button inside it is correct; an 8px card beside a 6px sibling card is drift.
+## Interaction States
+
+- **Hover** is an ink wash, `--hover-wash` (the text color at 16%). Transparent controls take it as background and a muted label or icon goes to `--text`. A selected item layers it over `--active-wash`. Filled colored controls take `background-image: var(--hover-shade)` (20% darken); Cancel takes `--hover-neutral`. Never amber, never a brightness filter.
+- **Press:** `--hover-shade`.
+- **Selected:** `--active-wash` + olive `--active-bar` edge or ring; label, icon and count stay `--text`.
+- **Focus:** the ink ring on everything focusable, `outline: var(--focus-width) solid var(--focus-stroke)` (2px `--text`) with `outline-offset: var(--focus-offset)` (2px), from one global `:focus-visible` rule. Menu rows use the inset form, `box-shadow: inset 0 0 0 2px var(--focus-stroke)`. Never `outline: none` without that replacement.
+- **Disabled:** `--opacity-disabled` 0.38, prefer `aria-disabled`. **Pending is not disabled and never dims.**
+- **Motion:** `--dur-1` 150ms (hover, press), `--dur-2` 200ms (panels, default), `--dur-3` 250ms (overlays, dialogs), `--ease-standard` / `--ease-decelerate`. No bounces, no springs; reduced motion shows the end state, but spinners keep turning.
 
 ## Components
 
-The UI is built on **Vuetify** components themed by the palette above, plus scoped patterns. Lead with the token, not a bespoke value.
+Build on the design system's components and `ui_kits/app/unified.css`; **do not hand-roll a checkbox, switch, segmented control, button, tag, input or star rating.** If a control is missing, add it to the design system.
 
-### Buttons
-- **Shape:** gently rounded (`--radius-sm` 4px for dense controls).
-- **Primary:** Olive (`primary`) fill, white label, `--space-3`/`--space-5` padding. Olive (not amber) so a small label clears AA contrast.
-- **Cancel / secondary:** warm `cancel-button` surface (#e6e1d8 / #3a4047), warm-near-black label.
-- **Hover / focus:** hover lifts subtly with `--hover-wash` and `--dur-1` motion; focus always shows `--focus-ring` (3px accent-tinted). Never remove an outline without replacing it.
+### Buttons (two dialects)
+- **Raised `Button`**: dialogs, panels, forms, settings, popover footers. 28px (24px compact) at `--radius-sm`, weight 500. Roles: **key** (amber, white label, one per surface), **neutral** (`--cancel-bg`), **danger** (`--error`), **quiet** (transparent). No olive variant.
+- **Flat `BarButton`**: toolbar, selection pill, undo group, title bar, lightbox. 32px, transparent until hovered, icon-first, regular weight. Supports a count badge (neutral `--cancel-bg`), a dim `Sort:` prefix, and joined split pairs. Open state: `--hover-wash` with a `--border` edge. Active: the icon takes `--selected-ink`, the label stays `--text`.
+- **A keyboard hint rides inside the control it triggers** (`Kbd` chip in the button).
 
-### Chips
-- **Style:** warm-tinted-grey or surface background, warm-near-black text, `--radius-sm`, `--space-2` padding.
-- **Over imagery:** a chip sitting on a photo uses a scrim backing for legibility — `--scrim-surface` (light warm chip on the bright grid canvas, dark glyph) or `--scrim-photo` (dark chip directly over an arbitrary photo, light glyph). Match the sibling chips already on that surface. Never a raw `rgba(0,0,0,…)`.
+### Floating things
+A **menu** holds rows: `--surface`, 1px `--border`, `--elevation-3`, `--radius-md`, 32px rows. A **panel** holds controls (the filter popover): `--radius-lg`. A **tooltip** is `--surface`, `--text-sm`, 1px border, `--elevation-3`, `--radius-md`, at most `--tooltip-max-w` 280px, after `--tooltip-delay` 400ms. A menu that needs a control is a panel.
+
+### Selection pill
+Acting on a selection means the floating pill: bottom centre, `--radius-pill`, `--elevation-4`. Count first, then round 32px `BarButton` verbs; destructive last in `--surface-error`. Single-item verbs ride along disabled rather than disappearing. The grid, the models list and the dedup queue all use it.
 
 ### Cards / Containers
-- **Corner:** `--radius-md` (8px).
-- **Background:** Raised White (`surface`) above the canvas.
-- **Elevation:** `--elevation-1` at rest (see Elevation & Depth).
-- **Border:** warm `border`/`divider` when a line is needed.
-- **Padding:** `--space-5` (16px) internal.
+`--radius-md`, 1px `--border`, no resting shadow, no colored left-border accent, `--space-5` padding. Dialogs use the `Dialog` component: `--radius-lg`, `--elevation-4`, `--surface`, 1px `--border`, `--dialog-w-*` widths.
 
-### Inputs / Fields
-- **Style:** Raised White (`surface`) background, warm border, `--radius-md`.
-- **Focus:** `--focus-ring` (3px accent glow), not a bare browser outline.
-- **Disabled:** drop to ~38% opacity of the token — never swap to a different grey.
-
-### Navigation (sidebar)
-- **Style:** warm-tinted-grey chrome that recedes; system-sans labels; section headers in `.section-label`.
-- **Hover:** `--hover-wash`. **Selected:** `--active-wash` fill + `--active-bar` edge + `--active-text`, tuned per theme. **Focus:** `--focus-ring`.
+### Forms
+`Input` (label, hint, error), `Checkbox` (olive when checked), `Switch` (settings rows), `Segmented` (2–5 options; track `--track-trough` with inset `--track-ring`, selected segment olive), `OptionRows` (long single-select lists: olive check, no fill), `Slider` (olive).
 
 ### Image Grid Tile (signature)
-The defining component. Uniform tiles share `--radius-md` and a restrained warm border — no per-tile bespoke framing. Every tile designs three states beyond default: **hover** (`--elevation-1` lift), **selected** (`--active-wash` + `--active-bar` — this is how bulk work feels confident, so it must be unambiguous), and **focus** (`--focus-ring`). Loading is a skeleton at tile dimensions, not a spinner over a blank canvas. Empty states use the existing `Empty.png` / `EmptyTrash.png` art with a Tiny5 `--text-2xl` headline and a `--text-sm` line of guidance.
+Uniform tiles share `--radius-md`; no per-tile bespoke framing. Hover `--elevation-1`; selected `--active-wash` + `--active-bar` ring; focus the ink ring. Loading is a skeleton at tile dimensions.
+
+## Where the app is behind
+
+The shipped app has not caught up with this system everywhere. Treat each of these as drift to fix toward the design, never as the reference:
+- Controls are still 27/23px at 8px radius, not 28/24px at `--radius-sm`.
+- Olive is still used as a button fill in places, and the active bar label is the deep olive on dark chrome.
+- The amber button label is still the warm near-white, not pure white.
+- Hover (`--hover-wash`), focus (`--focus-ring`, `--focus-glow`) and, in dark, selection (`--active-bar`, `--active-wash`) are still amber in `style.css` and `styles/design-tokens.css`.
+- Light `error`, `warning` and `success` in `main.js`, and dark `error`, differ from the design system's unified status values.
 
 ## Do's and Don'ts
 
 ### Do:
-- **Do** reach for a token before typing a value — color as `rgb(var(--v-theme-*))`, everything else from `--space-*` / `--radius-*` / `--text-*` / `--elevation-*` / `--dur-*`. A genuinely new value is a design decision, raised with the lead designer, not an inline tweak.
-- **Do** size type from the ramp, in rem, at 14px base; headings at weight 600.
-- **Do** design focus, hover, selected, empty, and loading states for anything interactive — that is where polish lives.
-- **Do** validate both themes on every change, and **lead from dark** since that is where review happens; keep light fully first-class.
-- **Do** align to the grid and to the 48px shell band — same row shares a baseline, columns share a left edge.
-- **Do** use `--focus-ring` on every focusable element; keyboard flow is a product requirement here, not a nicety.
+- **Do** read the design system (`DesignSync`) before building or restyling a surface, and build app screens on `unified.css`.
+- **Do** reach for a token before typing a value.
+- **Do** design focus, hover, selected, empty, loading and pending states for anything interactive.
+- **Do** validate both themes and lead from dark.
+- **Do** name groups with the ALL-CAPS section label and nothing else.
 
 ### Don't:
-- **Don't** hardcode a hex color, a `rgba(0,0,0,…)` shadow/scrim, or an off-grid size/radius — those are exactly the size/alignment/color drift to eliminate.
-- **Don't** size text in `em`, or introduce a point size outside the ramp.
-- **Don't** set UI, labels, or body text in Tiny5 — brand moments only — and don't reintroduce PressStart2P.
-- **Don't** spend the amber accent broadly; one safelight, used sparingly.
-- **Don't** pull in a second icon set — Material Design Icons only in the chrome.
-- **Don't** let chrome compete with the photos; when in doubt, make the chrome quieter.
+- **Don't** fill a button with olive, or use amber for selection, hover, focus or data.
+- **Don't** hardcode a hex, a `rgba(0,0,0,…)` shadow or scrim, an off-grid size or an off-tier radius.
+- **Don't** size text in `em`, or outside the ramp.
+- **Don't** set anything but the wordmark in Tiny5.
+- **Don't** pull in a second icon set: Material Design Icons only.
+- **Don't** let chrome compete with the photos.

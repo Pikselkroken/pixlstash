@@ -238,7 +238,7 @@ const hostEl = ref(null);
    card in the light theme, so a coloured glyph would be a variant that silently
    fails on one theme. */
 .notice-card--info {
-  --notice-status: rgb(var(--v-theme-info));
+  --notice-status: rgb(var(--v-theme-surface-info));
   --notice-tint: rgba(var(--v-theme-info), 0.08);
   border-color: rgba(var(--v-theme-info), 0.5);
 }
