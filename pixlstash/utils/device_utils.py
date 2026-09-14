@@ -1,5 +1,6 @@
 """Inference device detection across CUDA, Apple Metal (MPS), and CPU."""
 
+import os
 import sys
 
 from pixlstash.pixl_logging import get_logger
@@ -13,6 +14,9 @@ ACCELERATORS = frozenset({"cuda", "mps"})
 #: value that reaches both CUDA and Metal: start-up rejects ``mps``, and
 #: ``cuda`` refuses to start on a Mac.
 USE_GPU_ADVICE = "Set default_device=auto in server-config.json to use the GPU."
+
+#: transformers 5.x loads weights on a thread pool unless this is true.
+HF_ASYNC_LOAD_ENV = "HF_DEACTIVATE_ASYNC_LOAD"
 
 
 def detect_device() -> str:
@@ -46,6 +50,77 @@ def detect_device() -> str:
         )
 
     return "cpu"
+
+
+def configure_metal_model_loading() -> bool:
+    """Make transformers load weights on one thread when Metal is present.
+
+    transformers 5.x copies and casts weights on a pool of worker threads unless
+    ``HF_DEACTIVATE_ASYNC_LOAD`` is true, and torch's Metal backend crashes or
+    hangs when those threads cast on it at once
+    (``docs/apple-metal-thread-safety.md``). The variable is set whenever Metal
+    exists, not only when it is the inference device, because accelerate's
+    ``device_map="auto"`` places weights on Metal whenever it is available.
+    transformers reads it on every load, so it only has to be set before the
+    first one. A value already in the environment is the owner's and is kept,
+    with a warning when transformers reads it as false.
+
+    torch is imported rather than read from :data:`sys.modules`, as in
+    :func:`detect_device`: this runs before any model has loaded, which is
+    exactly when torch may not have been imported yet.
+
+    Returns:
+        True when this call set the variable.
+    """
+    try:
+        import torch
+    except Exception as exc:
+        logger.debug(
+            "torch unavailable while configuring model loading (%s); leaving %s unset.",
+            exc,
+            HF_ASYNC_LOAD_ENV,
+        )
+        return False
+
+    try:
+        available = bool(torch.backends.mps.is_available())
+    except Exception as exc:
+        logger.debug(
+            "MPS availability probe failed (%s); leaving %s unset.",
+            exc,
+            HF_ASYNC_LOAD_ENV,
+        )
+        return False
+    if not available:
+        return False
+
+    if HF_ASYNC_LOAD_ENV in os.environ:
+        value = os.environ[HF_ASYNC_LOAD_ENV]
+        # transformers' own reading (utils.import_utils.is_env_variable_true):
+        # any other value, "0" and "" included, leaves its loader threaded.
+        if value.lower() in ("true", "1", "y", "yes", "on"):
+            logger.debug(
+                "Apple Metal present; keeping %s=%s from the environment.",
+                HF_ASYNC_LOAD_ENV,
+                value,
+            )
+        else:
+            logger.warning(
+                "Apple Metal present, but %s=%r from the environment leaves "
+                "transformers loading model weights on several threads, which "
+                "crashes or hangs on Metal (docs/apple-metal-thread-safety.md). "
+                "The value is kept; unset it or set it to 1.",
+                HF_ASYNC_LOAD_ENV,
+                value,
+            )
+        return False
+    os.environ[HF_ASYNC_LOAD_ENV] = "1"
+    logger.info(
+        "Apple Metal present: transformers will load model weights on one "
+        "thread (%s=1). See docs/apple-metal-thread-safety.md.",
+        HF_ASYNC_LOAD_ENV,
+    )
+    return True
 
 
 def is_accelerator(device) -> bool:

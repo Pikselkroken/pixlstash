@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+import types
 import zipfile
 from pathlib import Path
 
@@ -1186,6 +1187,44 @@ def test_image_runs_the_plugin_over_a_picture(tmp_path, capsys):
     # `or 128` fallback; init-called proves init() ran; the device proves
     # setup() was handed one the server can run on: cuda, mps or cpu, not "auto".
     assert re.search(r"\(64 tokens, (?:cuda|mps|cpu)(?::\d+)?, init-called\)", out), out
+
+
+def test_image_loads_weights_on_one_thread_where_metal_exists(
+    tmp_path, capsys, monkeypatch
+):
+    """The server sets HF_DEACTIVATE_ASYNC_LOAD before any model loads.
+
+    transformers otherwise loads weights on a thread pool, which crashes or
+    hangs torch on Apple Metal (docs/apple-metal-thread-safety.md), so a plugin
+    that loads a model in init() must see the variable here too. The template
+    reports what setup() saw, since that runs before init().
+    """
+    monkeypatch.setenv("HF_DEACTIVATE_ASYNC_LOAD", "placeholder")
+    # Set, then deleted: delenv on an absent variable records nothing, so the
+    # value the command sets would otherwise outlive the test.
+    monkeypatch.delenv("HF_DEACTIVATE_ASYNC_LOAD")
+    metal = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(is_available=lambda: False),
+        backends=types.SimpleNamespace(
+            mps=types.SimpleNamespace(is_available=lambda: True)
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", metal)
+    source = _write(
+        tmp_path / "mine.py",
+        _template(
+            (
+                "self._device = device",
+                'self._device = device + "/async-load=" + __import__("os").environ'
+                '.get("HF_DEACTIVATE_ASYNC_LOAD", "unset")',
+            ),
+        ),
+    )
+    image = _write(tmp_path / "sample.jpg", "not really a jpeg")
+
+    assert _check(source, "--image", str(image)) == cli.EXIT_OK
+
+    assert "tokens, cpu/async-load=1)" in capsys.readouterr().out
 
 
 def test_a_result_not_keyed_by_the_paths_it_was_given_is_caught(tmp_path, capsys):

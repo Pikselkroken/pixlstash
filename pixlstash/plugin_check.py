@@ -52,7 +52,7 @@ from pixlstash import plugin_install
 from pixlstash.plugin_install import PluginError
 from pixlstash.tagger_plugins.base import TaggerPlugin
 from pixlstash.tagger_plugins.registry import TaggerPluginManager
-from pixlstash.utils.device_utils import detect_device
+from pixlstash.utils.device_utils import configure_metal_model_loading, detect_device
 
 #: The parameter types ``TaggerParametersUI.vue`` has an explicit branch for,
 #: plus ``string``, which is that component's ``v-else``.  A ``type`` outside
@@ -392,6 +392,12 @@ def _run_over_image(plugin: TaggerPlugin, image: str) -> tuple[Any | None, list[
     except Exception as exc:
         return None, [f"needs_download() raised {type(exc).__name__}: {exc}"]
 
+    # As the server does before any model loads (``InferenceEngine.create``):
+    # where Metal exists, transformers must load weights on one thread, or a
+    # plugin loading a model in init() can crash or hang this command the way
+    # it would the server (docs/apple-metal-thread-safety.md). After the
+    # download check, so a plugin that stops there never imports torch.
+    configure_metal_model_loading()
     try:
         # Both workflows do this pair, in this order, before every batch.
         if hasattr(plugin, "setup"):

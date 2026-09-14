@@ -7,6 +7,7 @@ host. The tests that need a real Apple Metal GPU are marked and skip without one
 import contextlib
 import gc
 import logging
+import os
 import re
 import sys
 import threading
@@ -39,7 +40,9 @@ from pixlstash.tasks.base_task import (
 )
 from pixlstash.utils.device_utils import (
     ACCELERATORS,
+    HF_ASYNC_LOAD_ENV,
     USE_GPU_ADVICE,
+    configure_metal_model_loading,
     detect_device,
     empty_device_cache,
     is_accelerator,
@@ -2081,6 +2084,157 @@ def test_an_ordinary_florence_batch_failure_is_not_retried(monkeypatch, tmp_path
 
     assert reloaded == [], "a non-device failure must not reload anything"
     assert "cpu" not in seen, f"nothing may run on the CPU here, got {seen}"
+
+
+# --------------------------------------------------------------------------- #
+# transformers loads weights on one thread wherever Metal exists
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def async_load_env(monkeypatch):
+    """Start without HF_DEACTIVATE_ASYNC_LOAD; restore the real value after.
+
+    Set, then deleted: ``delenv`` on an absent variable records nothing, so a
+    value the code under test sets would otherwise outlive the test.
+    """
+    monkeypatch.setenv(HF_ASYNC_LOAD_ENV, "placeholder")
+    monkeypatch.delenv(HF_ASYNC_LOAD_ENV)
+
+
+def test_metal_turns_off_threaded_weight_loading_once(
+    fake_torch, async_load_env, caplog
+):
+    fake_torch(_fake_torch(mps=True))
+
+    with caplog.at_level("INFO"):
+        assert configure_metal_model_loading() is True
+        assert configure_metal_model_loading() is False
+
+    assert os.environ[HF_ASYNC_LOAD_ENV] == "1"
+    # A second engine (CPU spillover builds its own) must not say it again.
+    announced = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.INFO and HF_ASYNC_LOAD_ENV in r.getMessage()
+    ]
+    assert len(announced) == 1
+    assert "docs/apple-metal-thread-safety.md" in announced[0]
+
+
+def test_threaded_weight_loading_is_left_alone_without_metal(
+    fake_torch, async_load_env
+):
+    fake_torch(_fake_torch(cuda=True, mps=False))
+
+    assert configure_metal_model_loading() is False
+    assert HF_ASYNC_LOAD_ENV not in os.environ
+
+
+@pytest.mark.parametrize("value", ["0", "false", "", "no", "1", "TRUE", "yes", "on"])
+def test_an_owners_own_async_load_setting_is_kept_and_a_threaded_one_warned(
+    fake_torch, async_load_env, monkeypatch, caplog, value
+):
+    """The owner's value stands, and a warning says when it brings back the
+    threaded loader that crashes on Metal.
+
+    Whether it does is transformers' own reading of the variable, asked
+    directly, so the warning cannot drift from what transformers does.
+    """
+    # Local, as in the loader-pool test below: transformers imports torch,
+    # which fake_torch stands in for.
+    from transformers.utils.import_utils import is_env_variable_true
+
+    fake_torch(_fake_torch(mps=True))
+    monkeypatch.setenv(HF_ASYNC_LOAD_ENV, value)
+
+    with caplog.at_level(logging.WARNING, logger="pixlstash.utils.device_utils"):
+        assert configure_metal_model_loading() is False
+
+    assert os.environ[HF_ASYNC_LOAD_ENV] == value
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "pixlstash.utils.device_utils" and r.levelno == logging.WARNING
+    ]
+    if is_env_variable_true(HF_ASYNC_LOAD_ENV):
+        assert warnings == []
+    else:
+        assert len(warnings) == 1, warnings
+        assert f"{HF_ASYNC_LOAD_ENV}={value!r}" in warnings[0]
+        assert "docs/apple-metal-thread-safety.md" in warnings[0]
+
+
+def test_the_variable_stops_transformers_building_its_loader_pool(
+    monkeypatch, tmp_path, async_load_env
+):
+    """What transformers does with the variable, not that the variable is set.
+
+    The control loads the same checkpoint without it first and has to see the
+    pool built; otherwise the patched name is not the one transformers uses
+    and the second assertion would pass for nothing. Metal is faked on the
+    real torch only around the configure call, so both loads stay on the CPU
+    of a CI runner that has no Metal.
+    """
+    import torch
+    import transformers.core_model_loading as core_model_loading
+    from transformers import BertConfig, BertModel
+
+    config = BertConfig(
+        vocab_size=16,
+        hidden_size=8,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        intermediate_size=16,
+        max_position_embeddings=8,
+    )
+    BertModel(config).save_pretrained(tmp_path)
+
+    pools = []
+    real_pool = core_model_loading.ThreadPoolExecutor
+
+    class _RecordingPool(real_pool):
+        def __init__(self, *args, **kwargs):
+            pools.append(kwargs.get("max_workers"))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(core_model_loading, "ThreadPoolExecutor", _RecordingPool)
+
+    BertModel.from_pretrained(tmp_path, device_map="cpu")
+    assert len(pools) == 1, "the control load built no pool; wrong patch point"
+
+    pools.clear()
+    with monkeypatch.context() as metal:
+        metal.setattr(torch.backends.mps, "is_available", lambda: True)
+        assert configure_metal_model_loading() is True
+    BertModel.from_pretrained(tmp_path, device_map="cpu")
+    assert pools == []
+
+
+def test_the_engine_configures_weight_loading_before_any_service(monkeypatch):
+    """Forced onto the CPU too: device_map="auto" still finds Metal there."""
+    from pixlstash.inference import engine as engine_mod
+
+    order = []
+
+    def _first_service(**kwargs):
+        order.append("service")
+        raise _StopEarly()
+
+    monkeypatch.setattr(
+        engine_mod,
+        "configure_metal_model_loading",
+        lambda: order.append("configure"),
+    )
+    monkeypatch.setattr(engine_mod, "builtin_model_dir", lambda: "/nonexistent")
+    monkeypatch.setattr(
+        "pixlstash.tagger_plugins.clip_service.ClipService", _first_service
+    )
+
+    with pytest.raises(_StopEarly):
+        engine_mod.InferenceEngine.create(image_root="/nonexistent", force_cpu=True)
+
+    assert order == ["configure", "service"]
 
 
 @pytest.fixture

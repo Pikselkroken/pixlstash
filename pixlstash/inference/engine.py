@@ -10,6 +10,7 @@ from pixlstash.inference.model_lifecycle import ModelLifecycleManager
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_models import builtin_model_dir
 from pixlstash.utils.device_utils import (
+    configure_metal_model_loading,
     detect_device,
 )
 
@@ -528,6 +529,10 @@ class InferenceEngine:
         from pixlstash.tagger_plugins.pixlstash_tagger import PixlStashTaggerService
         from pixlstash.tagger_plugins.wd14 import WD14Service
         from pixlstash.tagger_plugins.florence2 import Florence2Service
+
+        # Before any service exists, so no model can load ahead of it.
+        # Not tied to the chosen device: a forced-CPU engine on a Mac still has Metal.
+        configure_metal_model_loading()
 
         model_dir = builtin_model_dir()
 
