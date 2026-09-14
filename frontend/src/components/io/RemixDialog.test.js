@@ -531,12 +531,11 @@ describe("RemixDialog prompt prefill", () => {
 
 describe("RemixDialog seeds", () => {
   function segButtons(w) {
-    return w.findAll(".remix-seg-btn");
+    return w.findAll('[role="radiogroup"][aria-label="Seed mode"] [role="radio"]');
   }
 
-  /** Button labels with the stubbed v-icon's "mdi-…" text stripped. */
   function segLabels(w) {
-    return segButtons(w).map((b) => b.text().replace(/mdi-\S+\s*/, ""));
+    return segButtons(w).map((b) => b.find(".seg__label").text());
   }
 
   function segButton(w, label) {

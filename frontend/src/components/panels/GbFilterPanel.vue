@@ -428,30 +428,12 @@
                 </button>
               </div>
             </div>
-            <div
-              class="tbm-seg"
-              role="group"
+            <Segmented
+              v-model="gbConfidenceMode"
+              :options="CONFIDENCE_MODE_OPTIONS"
+              variant="icon"
               aria-label="Confidence comparison"
-            >
-              <button
-                class="tbm-seg-btn"
-                :class="{ 'tbm-seg-btn--on': gbConfidenceMode === 'above' }"
-                type="button"
-                title="High confidence, not labelled"
-                @click="gbConfidenceMode = 'above'"
-              >
-                ≥
-              </button>
-              <button
-                class="tbm-seg-btn"
-                :class="{ 'tbm-seg-btn--on': gbConfidenceMode === 'below' }"
-                type="button"
-                title="Low confidence, labelled"
-                @click="gbConfidenceMode = 'below'"
-              >
-                &lt;
-              </button>
-            </div>
+            />
             <input
               v-model.number="gbConfidenceThreshold"
               type="number"
@@ -604,6 +586,7 @@ import { listComfyuiModels, listComfyuiLoras } from "../../api/pictures";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { markEnd, markStart } from "../../utils/perfMarks";
+import Segmented from "../widgets/Segmented.vue";
 
 const props = defineProps({
   backendUrl: { type: String, default: () => API_BASE_URL },
@@ -885,6 +868,20 @@ const gbConfidenceTagHoverEnabled = ref(false);
 const gbConfidenceTagIndex = ref(-1);
 const gbConfidenceThreshold = ref(0.7);
 const gbConfidenceMode = ref("above");
+const CONFIDENCE_MODE_OPTIONS = [
+  {
+    id: "above",
+    label: "≥",
+    icon: "greater-than-or-equal",
+    title: "High confidence, not labelled",
+  },
+  {
+    id: "below",
+    label: "<",
+    icon: "less-than",
+    title: "Low confidence, labelled",
+  },
+];
 let gbSuppressConfidenceSuggestionLoad = false;
 
 async function gbLoadConfidenceTagSuggestions(input) {

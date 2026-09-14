@@ -4,6 +4,7 @@ import { createToken } from '../../api/users'
 import { patchUserConfig } from '../../api/config'
 import { API_BASE_URL } from "../../utils/apiClient";
 import AppButton from "../widgets/AppButton.vue";
+import AppInput from "../widgets/AppInput.vue";
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
   resourceType: { type: String, default: '' },
@@ -167,16 +168,13 @@ async function copyUrl() {
 
           <template v-if="isGalleryMode()">
             <p class="share-dialog-hint">Optionally set an expiry date.</p>
-            <v-text-field
+            <AppInput
               v-model="expiresAt"
               label="Expires on (optional)"
               type="date"
               :min="expiryMin()"
               :max="expiryMax()"
-              density="compact"
-              variant="outlined"
-              hide-details="auto"
-              :error-messages="expiryError ? [expiryError] : []"
+              :error="expiryError"
               class="share-dialog-date"
             />
             <v-checkbox

@@ -28,7 +28,6 @@ const globalOpts = {
       "v-spacer": true,
       "v-icon": true,
       "v-checkbox": true,
-      "v-text-field": true,
       "v-progress-circular": true,
     },
   },

@@ -26,7 +26,6 @@ vi.mock("vuetify/components", () => ({
   VCardActions: { name: "v-card-actions", template: "<div><slot /></div>" },
   VBtn: { name: "v-btn", template: "<button><slot /></button>" },
   VSpacer: { name: "v-spacer", template: "<div />" },
-  VTextField: { name: "v-text-field", template: "<input />" },
   VCheckbox: { name: "v-checkbox", template: "<input type='checkbox' />" },
   VProgressCircular: { name: "v-progress-circular", template: "<i />" },
 }));

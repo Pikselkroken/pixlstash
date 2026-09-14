@@ -122,7 +122,7 @@ under a white label.
 > counts in `StatsHistogram` and `StatsSidebar` (`on-primary` at .85 on a 50 – 85%
 > fill, under 2:1 light at rest → `on-surface`), and `.tbm-toggle-end`, which set `on-primary`
 > with no fill at all and now inherits it from `.tbm-toggle--on`, the only state it
-> renders in. One residual: the **active** histogram bar (fill `.85` over the light
+> renders in (since removed with the sort dot it drew, when sort moved to `OptionRows`, #1296). One residual: the **active** histogram bar (fill `.85` over the light
 > sidebar) gives its count 3.87:1 in ink, against 3.14:1 before; neither ink nor white
 > reaches 4:1 on that fill, so closing it means lowering the active fill, a visual call.
 > `frontend/src/styles/on-fill-pairing.test.js` now fails the build on any rule that

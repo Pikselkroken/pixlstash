@@ -11,6 +11,7 @@
     </button>
     <input
       class="app-stepper__input"
+      :class="{ 'app-stepper__input--mono': mono }"
       type="text"
       inputmode="numeric"
       :value="modelValue"
@@ -40,6 +41,8 @@ const props = defineProps({
   step: { type: Number, default: 1 },
   disabled: { type: Boolean, default: false },
   width: { type: Number, default: 116 },
+  // A port or an id takes the mono face (docs/design/buttons.md, "Fields").
+  mono: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["update:modelValue"]);
@@ -73,10 +76,10 @@ function onBlur(e) {
 .app-stepper {
   display: inline-flex;
   align-items: center;
-  height: 26px;
+  height: var(--control-h);
   overflow: hidden;
   border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: rgb(var(--v-theme-input-background));
 }
 
@@ -94,7 +97,7 @@ function onBlur(e) {
 
 .app-stepper__btn {
   width: 30px;
-  height: 26px;
+  height: 100%;
   flex-shrink: 0;
   padding: 0;
   display: inline-flex;
@@ -127,6 +130,10 @@ function onBlur(e) {
   font-variant-numeric: tabular-nums;
   border-left: 1px solid rgb(var(--v-theme-border));
   border-right: 1px solid rgb(var(--v-theme-border));
+}
+
+.app-stepper__input--mono {
+  font-family: var(--font-mono);
 }
 
 .app-stepper__input:disabled {

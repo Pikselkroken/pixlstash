@@ -92,6 +92,11 @@ body {
   /* No olive text on olive: a selected item's label, icon and count take the
      surface's own ink (7.5 - 11.2:1 at rest, 5.05 - 8.3:1 hovered). */
   --active-text: rgb(var(--v-theme-on-surface));
+  /* SEGMENTED TRACK (buttons.md): a trough that darkens in both themes, and a
+     1px INSET ring that draws its edge, because the trough alone is 1.26:1 off
+     the panel. Inset so the track stays --control-h-bar; a border makes it 34. */
+  --track-trough: rgba(var(--v-theme-scrim), 0.34);
+  --track-ring: rgba(var(--v-theme-on-surface), 0.4);
 
   /* Drive-band capacity meter (#893). Three segments, so TWO adjacencies to
      keep readable: ours|other and other|free. `ours` is `primary` in both
@@ -138,6 +143,9 @@ body {
   --level-wash: 0.1;
   --active-bar: rgb(var(--v-theme-primary));
   --active-text: rgb(var(--v-theme-on-surface));
+  /* See the dark block. A light ground needs far less of the tint. */
+  --track-trough: rgba(var(--v-theme-scrim), 0.1);
+  --track-ring: rgba(var(--v-theme-scrim), 0.26);
 
   /* Drive-band capacity meter (#893) - see the dark block above for the rule.
      Here the canvas is near-white, so the neutral goes to the DARK extreme,

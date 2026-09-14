@@ -21,28 +21,21 @@
       </button>
     </div>
 
-    <!-- `role="group"` and `aria-pressed`, never `role="menu"`/`menuitemradio`:
-         this panel is a plain div holding other controls (the direction button
-         above), so a menu role here would promise a widget contract nothing
-         honours. Same shape as DedupTierMenu. -->
+    <!-- Pick-one, so `radiogroup`/`radio` with `aria-checked` (the approved
+         contract, docs/design/buttons.md "Pick one"), never `role="menu"`/
+         `menuitemradio`: this panel is a plain div holding other controls (the
+         direction button above), so a menu role would promise a widget
+         contract nothing honours. Sort by is OptionRows; the short axes below
+         are Segmented. -->
     <div v-if="showsSort" class="tbm-section">
       <span class="tbm-label">Sort by</span>
-      <div class="tbm-grid-2" role="group" aria-label="Sort by">
-        <button
-          v-for="key in SORT_KEYS"
-          :key="key"
-          class="tbm-toggle"
-          :class="{ 'tbm-toggle--on': view.sortKey === key }"
-          type="button"
-          :aria-pressed="view.sortKey === key"
-          @click="store.setView({ sortKey: key })"
-        >
-          <v-icon size="18" class="tbm-toggle-icon">{{
-            SORT_LABELS[key].icon
-          }}</v-icon>
-          <span class="tbm-toggle-label">{{ SORT_LABELS[key].label }}</span>
-        </button>
-      </div>
+      <OptionRows
+        :options="sortOptions"
+        :model-value="view.sortKey"
+        :columns="2"
+        aria-label="Sort by"
+        @update:model-value="(key) => store.setView({ sortKey: key })"
+      />
     </div>
 
     <!-- Three axes, not four: Type is already a Show checkbox and is already on
@@ -50,22 +43,13 @@
          the reader can see. -->
     <div v-if="showsGroup" class="tbm-section">
       <span class="tbm-label">Group by</span>
-      <div class="tbm-grid-3" role="group" aria-label="Group by">
-        <button
-          v-for="key in GROUP_BY_KEYS"
-          :key="key"
-          class="tbm-toggle"
-          :class="{ 'tbm-toggle--on': view.groupBy === key }"
-          type="button"
-          :aria-pressed="view.groupBy === key"
-          @click="store.setView({ groupBy: key })"
-        >
-          <v-icon size="18" class="tbm-toggle-icon">{{
-            GROUP_BY_LABELS[key].icon
-          }}</v-icon>
-          <span class="tbm-toggle-label">{{ GROUP_BY_LABELS[key].label }}</span>
-        </button>
-      </div>
+      <Segmented
+        :options="groupOptions"
+        :model-value="view.groupBy"
+        full
+        aria-label="Group by"
+        @update:model-value="(key) => store.setView({ groupBy: key })"
+      />
     </div>
 
     <!-- The folder layout is a SUB-CHOICE of Folder, not a fourth axis, so it
@@ -75,24 +59,13 @@
          real sorting went unnoticed. -->
     <div v-if="showsGroup && view.groupBy === 'folder'" class="tbm-section">
       <span class="tbm-label">Folders laid out</span>
-      <div class="tbm-grid-2" role="group" aria-label="Folders laid out">
-        <button
-          v-for="key in FOLDER_LAYOUTS"
-          :key="key"
-          class="tbm-toggle"
-          :class="{ 'tbm-toggle--on': view.folderLayout === key }"
-          type="button"
-          :aria-pressed="view.folderLayout === key"
-          @click="store.setView({ folderLayout: key })"
-        >
-          <v-icon size="18" class="tbm-toggle-icon">{{
-            FOLDER_LAYOUT_LABELS[key].icon
-          }}</v-icon>
-          <span class="tbm-toggle-label">{{
-            FOLDER_LAYOUT_LABELS[key].label
-          }}</span>
-        </button>
-      </div>
+      <Segmented
+        :options="layoutOptions"
+        :model-value="view.folderLayout"
+        full
+        aria-label="Folders laid out"
+        @update:model-value="(key) => store.setView({ folderLayout: key })"
+      />
     </div>
   </div>
 </template>
@@ -111,6 +84,8 @@ import {
   SORT_LABELS,
   sortDirectionLabel,
 } from "../../utils/modelShelf";
+import OptionRows from "../widgets/OptionRows.vue";
+import Segmented from "../widgets/Segmented.vue";
 
 // Two axes, two toolbar controls, one panel: the resolved design gives Sort and
 // Group a button each, labelled with the value each currently holds, so the two
@@ -124,6 +99,16 @@ const props = defineProps({
 
 const store = useModelShelfStore();
 const view = store.view;
+
+const asOptions = (keys, labels) =>
+  keys.map((key) => ({
+    id: key,
+    label: labels[key].label,
+    icon: labels[key].icon,
+  }));
+const sortOptions = asOptions(SORT_KEYS, SORT_LABELS);
+const groupOptions = asOptions(GROUP_BY_KEYS, GROUP_BY_LABELS);
+const layoutOptions = asOptions(FOLDER_LAYOUTS, FOLDER_LAYOUT_LABELS);
 
 const showsSort = computed(() => props.section !== "group");
 const showsGroup = computed(() => props.section !== "sort");
@@ -159,10 +144,8 @@ function toggleDirection() {
   max-width: 94vw;
 }
 
-/* Only the Group section needs the extra room: its three columns left ~51px of
-   label at 320px, so "Base model" - the middle one - ellipsized, and it wants
-   ~76px at --text-sm. 420px gives ~126px tracks, ~84px of label, clearing it
-   on a wide fallback font too. Sort stays 320px, matching the Show popover
+/* Only the Group section needs the extra room: its four segments share the
+   track, and "Base model" wants ~76px of label at --text-sm. Sort stays 320px, matching the Show popover
    beside it in the same bar. Below ~447px of viewport the 94vw cap wins and
    the label ellipsizes again, as everything in this bar already does. */
 .shelf-sort-panel--wide {

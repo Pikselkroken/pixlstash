@@ -75,6 +75,7 @@ import {
 } from "../../utils/zoomMath";
 import AppDialog from "./AppDialog.vue";
 import AppButton from "./AppButton.vue";
+import Segmented from "./Segmented.vue";
 import DedupConfidencePill from "./DedupConfidencePill.vue";
 import DedupWhyPills from "./DedupWhyPills.vue";
 import StackExpansionStrip from "./StackExpansionStrip.vue";
@@ -1317,6 +1318,17 @@ function nearScale(target) {
 const zoomAtFit = computed(() => nearScale(zoomFitScale.value));
 const zoomAtActual = computed(() => nearScale(1));
 
+const ZOOM_SNAP_OPTIONS = [
+  { id: "fit", label: "Fit", icon: "mdi-fit-to-screen-outline" },
+  { id: "actual", label: "Actual pixels", icon: "mdi-magnify-scan" },
+];
+
+/** The snap stop the zoom sits on, or null between stops. Fit wins where the
+ * two coincide (a picture no larger than the viewport). */
+const zoomSnap = computed(() =>
+  zoomAtFit.value ? "fit" : zoomAtActual.value ? "actual" : null,
+);
+
 /** The readout: percentage of ACTUAL pixels, the photo-tool convention.
  * Visibility of status - it is also what makes the blink guarantee (same
  * magnification across flips) verifiable by eye. */
@@ -2214,29 +2226,22 @@ function onZoomContextMenu() {
         <!-- Fit and 100% are SNAP STOPS on the wheel's continuum; the
              percentage readout is what makes "same magnification across the
              blink" verifiable by eye. -->
-        <div class="dc-zv-mode">
-          <button
-            type="button"
-            :class="{ 'dc-zv-on': zoomAtFit }"
-            title="Snap to fit - every candidate in the same box, the blink registered"
-            @click="snapZoomTo(zoomFitScale)"
-          >
-            <v-icon size="15">mdi-fit-to-screen-outline</v-icon>
-            Fit
-          </button>
-          <button
-            type="button"
-            :class="{ 'dc-zv-on': zoomAtActual }"
-            title="Snap to 1:1 - resolution differences show as size jumps (P)"
-            @click="snapZoomTo(1)"
-          >
-            <v-icon size="15">mdi-magnify-scan</v-icon>
-            Actual pixels
-          </button>
-          <span v-if="zoomPercent !== null" class="dc-zv-pct">{{
-            zoomPercent
-          }}</span>
-        </div>
+        <!-- mousedown.prevent: a click snaps the zoom without taking focus, so the
+             arrows go on flipping pictures. Tabbed to, the group owns them. -->
+        <Segmented
+          class="dc-zv-mode"
+          :model-value="zoomSnap"
+          :options="ZOOM_SNAP_OPTIONS"
+          variant="icon-label"
+          aria-label="Zoom"
+          @update:model-value="
+            (id) => snapZoomTo(id === 'fit' ? zoomFitScale : 1)
+          "
+          @mousedown.prevent
+        />
+        <span v-if="zoomPercent !== null" class="dc-zv-pct">{{
+          zoomPercent
+        }}</span>
         <button
           type="button"
           class="dc-zv-close"
@@ -2697,8 +2702,8 @@ function onZoomContextMenu() {
   background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 
-/* The picture on screen, and the snap stop the zoom sits at, are SELECTED, not
-   actions: the dark-surface olive edge and wash, words in the surface's ink. */
+/* The picture on screen is SELECTED, not an action: the dark-surface olive
+   edge and wash, words in the surface's ink. */
 .dc-zv .dc-zv-on {
   background: rgba(var(--v-theme-dark-surface-primary), 0.2);
   border-color: rgb(var(--v-theme-dark-surface-primary));
@@ -2725,36 +2730,21 @@ function onZoomContextMenu() {
   text-overflow: ellipsis;
 }
 
+/* Near-black in both themes, so Segmented's on-surface ink and track take the
+   dark-surface values (the dark theme's own) instead of the light theme's. */
 .dc-zv-mode {
-  display: flex;
-  gap: var(--space-1);
   flex-shrink: 0;
-}
-
-.dc-zv-mode button {
-  height: 30px;
-  padding: 0 var(--space-3);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  border: 1px solid rgba(255, 255, 255, 0.24);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: #fff;
-  font-family: var(--font-ui);
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-
-.dc-zv-mode button:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+  --v-theme-on-surface: var(--v-theme-on-dark-surface);
+  --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
+  --track-trough: rgba(var(--v-theme-scrim), 0.34);
+  --track-ring: rgba(var(--v-theme-on-dark-surface), 0.4);
+  --focus-stroke: rgb(var(--v-theme-on-dark-surface));
 }
 
 /* The live magnification, in the photo-tool convention (100% = 1:1). Same
    fixed chrome values as the meta line: this is the near-black judgement
    surface, deliberately un-themed. */
 .dc-zv-pct {
-  align-self: center;
   min-width: 5ch;
   text-align: right;
   font-size: var(--text-xs);

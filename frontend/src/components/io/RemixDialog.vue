@@ -232,21 +232,12 @@
       <div v-if="selectedMode" class="remix-field">
         <span class="remix-label">Seed</span>
         <div class="remix-seed-row">
-          <div class="remix-seg" role="radiogroup" aria-label="Seed mode">
-            <button
-              v-for="option in seedModes"
-              :key="option.id"
-              type="button"
-              class="remix-seg-btn"
-              :class="{ 'remix-seg-btn--on': seedMode === option.id }"
-              role="radio"
-              :aria-checked="seedMode === option.id"
-              @click="seedMode = option.id"
-            >
-              <v-icon size="15">{{ option.icon }}</v-icon>
-              {{ option.label }}
-            </button>
-          </div>
+          <Segmented
+            v-model="seedMode"
+            :options="seedModes"
+            variant="icon-label"
+            aria-label="Seed mode"
+          />
           <template v-if="seedMode === 'fixed'">
             <input
               v-model.number="seed"
@@ -339,6 +330,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
+import Segmented from "../widgets/Segmented.vue";
 import {
   getPictureRecipe,
   getPictureWorkflow,
@@ -1351,41 +1343,6 @@ async function submit() {
 /* The delta stays narrow so the resulting seed fits beside it. */
 .remix-num--delta {
   flex: 0 1 110px;
-}
-
-.remix-seg {
-  display: inline-flex;
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
-  overflow: hidden;
-}
-
-.remix-seg-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  font-size: var(--text-sm);
-  font-family: var(--font-ui);
-  color: rgba(var(--v-theme-on-surface), 0.7);
-  transition: background var(--dur-1) var(--ease-standard);
-}
-
-.remix-seg-btn:hover {
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-on-surface));
-}
-
-/* The track clips its overflow, so the ring goes inside the segment. */
-.remix-seg-btn:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring-inset);
-}
-
-.remix-seg-btn--on {
-  background: var(--active-wash);
-  color: var(--active-text);
-  font-weight: var(--weight-medium);
 }
 
 .remix-num {

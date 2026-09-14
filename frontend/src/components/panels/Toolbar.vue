@@ -113,41 +113,27 @@
             </div>
 
             <div class="tbm-section">
-              <div class="tbm-grid-2">
-                <button
-                  v-for="opt in filteredSortOptions"
-                  :key="opt.value"
-                  class="tbm-toggle"
-                  :class="{ 'tbm-toggle--on': gbSortMenuModel === opt.value }"
-                  type="button"
-                  :disabled="gbSearchActive"
-                  @click="gbHandleSortModelUpdate(opt.value)"
-                >
-                  <v-icon size="18" class="tbm-toggle-icon">{{
-                    gbGetSortIcon(opt.value)
-                  }}</v-icon>
-                  <span class="tbm-toggle-label">{{ opt.label }}</span>
+              <OptionRows
+                :options="sortRowOptions"
+                :model-value="gbSortMenuModel"
+                :columns="2"
+                :disabled="gbSearchActive"
+                aria-label="Sort order"
+                @update:model-value="gbHandleSortModelUpdate($event, false)"
+                @pick="gbCloseSortMenuOnPick"
+              >
+                <template #meta="{ option }">
                   <span
-                    v-if="opt.value === STACK_UPDATED_AT_SORT_KEY"
-                    class="tbm-toggle-filter-badge"
+                    v-if="option.id === STACK_UPDATED_AT_SORT_KEY"
+                    class="gb-sort-filter-badge"
                     title="Only available when viewing stacks"
                     aria-label="Only available when viewing stacks"
                     role="img"
                   >
                     <v-icon size="14">mdi-filter-outline</v-icon>
                   </span>
-                  <span
-                    v-if="
-                      gbSortMenuModel === opt.value &&
-                      (opt.value === SIMILARITY_SORT_KEY_GB ||
-                        opt.value === LIKENESS_GROUPS_SORT_KEY_GB)
-                    "
-                    class="tbm-toggle-end"
-                  >
-                    <v-icon size="16">mdi-circle-medium</v-icon>
-                  </span>
-                </button>
-              </div>
+                </template>
+              </OptionRows>
             </div>
 
             <div
@@ -638,6 +624,7 @@ import TbOverflowMenu from "./TbOverflowMenu.vue";
 import UndoControl from "./UndoControl.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
+import OptionRows from "../widgets/OptionRows.vue";
 import { useOneTimeNotice } from "../../composables/useOneTimeNotice";
 const props = defineProps({
   selectedCount: Number,
@@ -883,6 +870,14 @@ function gbGetSortIcon(value) {
   return GB_SORT_ICON_MAP[String(value).toUpperCase()] || "mdi-sort";
 }
 
+const sortRowOptions = computed(() =>
+  filteredSortOptions.value.map((opt) => ({
+    id: opt.value,
+    label: opt.label,
+    icon: gbGetSortIcon(opt.value),
+  })),
+);
+
 function gbSortRequiresParameter(sortValue) {
   const key = String(sortValue || "").toUpperCase();
   return key === SIMILARITY_SORT_KEY_GB || key === LIKENESS_GROUPS_SORT_KEY_GB;
@@ -892,11 +887,19 @@ function gbCommitSortSelection(sortValue) {
   gbSortModel.value = sortValue != null ? String(sortValue) : "";
 }
 
-function gbHandleSortModelUpdate(sortValue) {
+function gbHandleSortModelUpdate(sortValue, closeMenu = true) {
   if (searchStore.searchQuery && searchStore.searchQuery.trim()) return;
   gbPendingSortSelection.value = sortValue != null ? String(sortValue) : "";
   if (!gbSortRequiresParameter(gbPendingSortSelection.value)) {
     gbCommitSortSelection(gbPendingSortSelection.value);
+    if (closeMenu) gbSortMenuOpen.value = false;
+  }
+}
+
+// A click closes the menu; an arrow applies the sort and leaves it open, so the
+// list can be browsed from the keyboard.
+function gbCloseSortMenuOnPick(sortValue) {
+  if (!gbSortRequiresParameter(String(sortValue ?? ""))) {
     gbSortMenuOpen.value = false;
   }
 }
@@ -1375,7 +1378,7 @@ const gbCollapseAllStacksDisabled = computed(
    that narrower availability visible without turning the row into warning
    copy; the native title gives mouse users the precise rule, while aria-label
    gives the same explanation to assistive technology. */
-.tbm-toggle-filter-badge {
+.gb-sort-filter-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;

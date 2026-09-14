@@ -206,6 +206,7 @@ onMounted(() => {
         class="choose-step__field"
         label="Folder"
         placeholder="/home/me/Pictures"
+        mono
         icon="folder-outline"
         :disabled="scanning && !readFailed"
         @enter="inspect"

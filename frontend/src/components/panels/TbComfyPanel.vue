@@ -45,33 +45,14 @@
         <div class="tb-gen-seed">
           <span class="tbm-label">Seed</span>
           <div class="tb-gen-seed-row">
-            <!-- radiogroup/radio + aria-checked, not group + plain buttons:
-                 the selected mode was class-only, so a screen-reader user had
-                 no way to tell which one was active (WCAG 4.1.2). -->
-            <div class="tbm-seg" role="radiogroup" aria-label="Seed mode">
-              <button
-                class="tbm-seg-btn"
-                :class="{ 'tbm-seg-btn--on': tbComfyuiSeedMode === 'random' }"
-                type="button"
-                role="radio"
-                :aria-checked="tbComfyuiSeedMode === 'random'"
-                @click="tbComfyuiSeedMode = 'random'"
-              >
-                <v-icon size="15">mdi-dice-multiple-outline</v-icon>
-                Random
-              </button>
-              <button
-                class="tbm-seg-btn"
-                :class="{ 'tbm-seg-btn--on': tbComfyuiSeedMode === 'fixed' }"
-                type="button"
-                role="radio"
-                :aria-checked="tbComfyuiSeedMode === 'fixed'"
-                @click="tbComfyuiSeedMode = 'fixed'"
-              >
-                <v-icon size="15">mdi-lock-outline</v-icon>
-                Fixed
-              </button>
-            </div>
+            <Segmented
+              v-model="tbComfyuiSeedMode"
+              :options="SEED_MODE_OPTIONS"
+              variant="icon-label"
+              full
+              class="tb-gen-seed-mode"
+              aria-label="Seed mode"
+            />
             <input
               v-if="tbComfyuiSeedMode === 'fixed'"
               v-model.number="tbComfyuiSeed"
@@ -112,6 +93,7 @@ import { ref, computed, watch } from "vue";
 import { listWorkflows } from "../../api/comfyui";
 import { errorDetail } from "../../utils/apiError";
 import { API_BASE_URL } from "../../utils/apiClient";
+import Segmented from "../widgets/Segmented.vue";
 const props = defineProps({
   backendUrl: { type: String, default: () => API_BASE_URL },
   open: { type: Boolean, default: false },
@@ -130,6 +112,10 @@ const tbComfyuiSeedMode = ref(
     ? "fixed"
     : "random",
 );
+const SEED_MODE_OPTIONS = [
+  { id: "random", label: "Random", icon: "dice-multiple-outline" },
+  { id: "fixed", label: "Fixed", icon: "lock-outline" },
+];
 const _tbSavedSeed = Number(sessionStorage.getItem("comfyui_t2i_seed"));
 const tbComfyuiSeed = ref(
   Number.isFinite(_tbSavedSeed) && _tbSavedSeed >= 0 ? _tbSavedSeed : 0,
@@ -215,7 +201,7 @@ function tbRunComfyuiOnGrid() {
   align-items: center;
   gap: var(--space-2);
 }
-.tb-gen-seed-row .tbm-seg {
+.tb-gen-seed-mode {
   flex: 1;
 }
 .tb-gen-seed-input {
