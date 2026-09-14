@@ -66,7 +66,8 @@ watch(
 );
 
 async function save() {
-  if (!props.plugin) return;
+  // Enter reaches this through the dialog's accept, which :loading cannot block.
+  if (!props.plugin || saving.value) return;
   saving.value = true;
   saveError.value = "";
   try {

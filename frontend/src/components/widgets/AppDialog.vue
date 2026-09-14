@@ -144,8 +144,8 @@ function onKeydown(e) {
   justify-content: space-between;
   gap: var(--space-5);
   flex-shrink: 0;
-  /* 16px left onto the shared gutter; the right stays 12px so the 32px close
-     button's glyph lines up with the footer's right edge. */
+  /* 16px left onto the shared gutter; the right stays 12px, where the 32px
+     close button's own inset carries the edge (docs/design/buttons.md). */
   padding: var(--space-4) var(--space-4) var(--space-4) var(--space-5);
   border-bottom: 1px solid rgb(var(--v-theme-divider));
 }
@@ -204,7 +204,9 @@ function onKeydown(e) {
 
 /* The body scrolls, not its children: a child that scrolls itself would
    otherwise be squeezed by the column before the body ever overflows. */
-.app-dialog:not(.app-dialog--fullscreen) > .app-dialog__body > * {
+.app-dialog:not(.app-dialog--fullscreen)
+  > .app-dialog__body:not(.app-dialog__body--flush)
+  > * {
   flex-shrink: 0;
 }
 
