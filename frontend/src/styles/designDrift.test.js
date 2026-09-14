@@ -1,0 +1,89 @@
+/**
+ * Drift guard for the #1299 cleanup (docs/design/buttons.md, "Tooltips" and
+ * "Off-token values"). Each rule was a sweep across the whole app; this is
+ * what stops the count climbing back one call site at a time.
+ *
+ * Read as source text with comments stripped, so a token value named in a
+ * note is never counted as a use.
+ */
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+const SRC = dirname(dirname(fileURLToPath(import.meta.url)));
+
+function sources(dir = SRC) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return sources(path);
+    return /\.(vue|css)$/.test(entry.name) ? [path] : [];
+  });
+}
+
+const files = sources()
+  .filter((path) => !path.endsWith(join("styles", "design-tokens.css")))
+  .map((path) => ({
+    name: relative(SRC, path),
+    text: readFileSync(path, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/<!--[\s\S]*?-->/g, ""),
+  }));
+
+/** Every match of `re` across the sources, as `file: match`. */
+function hits(re, only = () => true) {
+  return files
+    .filter(only)
+    .flatMap(({ name, text }) =>
+      [...text.matchAll(re)].map((m) => `${name}: ${m[0].trim()}`),
+    );
+}
+
+/**
+ * Raw z-indexes above --z-drawer that are known and not yet fixed. Each one is
+ * a teleported or fixed element that has to clear a modal, which means it has
+ * to become an overlay rather than carry a bigger number; that is a
+ * restructuring per site, not a substitution. This list may only shrink.
+ */
+const Z_ABOVE_DRAWER_DEBT = [
+  "components/editors/CharacterEditor.vue: z-index: 9999",
+  "components/panels/SideBar.css: z-index: 1200",
+  "components/panels/TbTagPanel.vue: z-index: 9999",
+  "components/widgets/AddToEntityControl.vue: z-index: 2500",
+  "components/widgets/BaseModelInput.vue: z-index: 9999",
+];
+
+describe("design drift", () => {
+  it("has one tooltip surface", () => {
+    expect(
+      hits(/<v-tooltip\b/g, ({ name }) => !name.endsWith("Tooltip.vue")),
+    ).toEqual([]);
+  });
+
+  it("gives the two button dialects a tooltip, never a native title", () => {
+    expect(
+      hits(/<App(?:Bar)?Button\b(?:[^>"']|"[^"]*"|'[^']*')*?\s:?title=/g),
+    ).toEqual([]);
+  });
+
+  it("has no sub-pixel type", () => {
+    expect(
+      hits(/font-size:\s*(?:\d+\.\d+px|\d*\.\d+rem)/g).filter(
+        // Whole-pixel rem values are on the ramp's own terms.
+        (hit) => !/:\s*0\.(?:6875|75|8125|875)rem|1\.(?:125|375|75)rem/.test(hit),
+      ),
+    ).toEqual([]);
+  });
+
+  it("spells a font size or radius that is a token as the token", () => {
+    expect(hits(/font-size:\s*(?:11|12|13|14|16|18|22|28)px\b/g)).toEqual([]);
+    expect(hits(/border-radius:[^;}]*\b(?:4|8|12|999|9999)px\b/g)).toEqual([]);
+  });
+
+  it("writes no z-index above --z-drawer beyond the known debt", () => {
+    const found = hits(/z-index:\s*\d{4,}/g).filter(
+      (hit) => Number(hit.match(/\d+$/)[0]) > 1000,
+    );
+    expect(found.sort()).toEqual([...Z_ABOVE_DRAWER_DEBT].sort());
+  });
+});
