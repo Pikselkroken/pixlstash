@@ -129,6 +129,13 @@
   padding: var(--space-2) var(--space-4);
 }
 
+/* A menu that groups by project marks the one it was opened from, the same
+   olive its rows mark a current value with. Without it every heading reads
+   alike and the menu stops saying where you are. */
+.ctx-label--current {
+  color: var(--selected-ink);
+}
+
 /* ── Submenu (e.g. "Tag automatically" tagger picker) ──────────────── */
 .ctx-submenu-wrap {
   position: relative;
