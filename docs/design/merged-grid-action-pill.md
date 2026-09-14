@@ -59,12 +59,24 @@ var(--space-5)`, `left: 50%` + `translateX(-50%)`, `width: max-content`,
 `--radius-pill`, `rgba(var(--v-theme-surface), 0.86)`, `--elevation-3`, `1px
 solid rgba(var(--v-theme-on-surface), 0.14)`, `backdrop-filter: blur(12px)`.
 
-**Two annotated values are deliberately not touched.** The `6px` block padding is
-reserved for the UI/UX-gated 34/40/48/56px action-bar reconciliation
-(`visual-language.md` §5/§13) — merging two bars is not the occasion to open it.
-`bottom: var(--space-5)` is load-bearing for the notice arithmetic. So the pill
-stays **54px** tall (40px control band + 2×6px + 2×1px), and every measurement
-below assumes a 40px inner band.
+> **Superseded for the surface (issue #1301).** The pill now wears the shared
+> `.selbar` class, the one selection pill the model shelf and training runs
+> also use: solid `--panel`, a 1px `--border`, `--elevation-4`, and
+> `var(--space-2) var(--space-3)` padding, per the design system's shell
+> contract (rule 9). The blur, the translucency and the 6px block padding are
+> gone, so the pill is 4px shorter than the figures below (2px each side).
+> Its height is still measured, never assumed, so the notice arithmetic holds. Position, `nowrap`, the seam and the motion are unchanged. The seam
+> stays `border` rather than `divider`: the argument below about a photo
+> bleeding through no longer applies, but `border` is still the visible one of
+> the two.
+
+**Two annotated values were deliberately not touched at the merge.** The `6px`
+block padding was reserved for the UI/UX-gated 34/40/48/56px action-bar
+reconciliation (`visual-language.md` §5/§13); #1301 settled it on the design
+system's pill (see the note above). `bottom: var(--space-5)` is load-bearing for
+the notice arithmetic and is unchanged. At the merge the pill was **54px** tall
+(40px control band + 2×6px + 2×1px), and the measurements below assume a 40px
+inner band.
 
 ### State A — search only
 

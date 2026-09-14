@@ -466,7 +466,9 @@ def _register_first_library(
             # `unique_name=False`: the name is this function's own hardcoded
             # label, not something a person typed, and a hub already holding a
             # "Library 1" must not be a hub that cannot boot.
-            return registry.attach(image_root, "Library 1", unique_name=False)
+            return registry.attach(
+                image_root, "Library 1", unique_name=False, check_folder_overlap=False
+            )
         except NotAVaultError as exc:
             if _is_environmental_failure(exc):
                 # Locked, unreadable, full: the file may be perfectly good and

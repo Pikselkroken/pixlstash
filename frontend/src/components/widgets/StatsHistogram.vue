@@ -144,7 +144,7 @@ const barWidth = (item) =>
 .bar-count-inner {
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
-  fill: rgba(var(--v-theme-on-primary), 0.85);
+  fill: rgb(var(--v-theme-on-surface));
   dominant-baseline: central;
   pointer-events: none;
 }

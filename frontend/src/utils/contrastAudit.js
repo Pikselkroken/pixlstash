@@ -184,13 +184,15 @@ export function auditContrast(themes = readThemeColors()) {
     }
 
     // The notice rail: the hue against the card it tints. Mirrors
-    // NoticeHost.vue's `--notice-status` over `--notice-tint`.
+    // NoticeHost.vue's `--notice-status` over `--notice-tint`. A level with a
+    // `surface-<level>` foreground draws its rail with that; the tint stays
+    // the fill.
     for (const level of LEVELS) {
       const fill = need(level)
       add(
         `${theme} · notice rail`,
         `${level} rail`,
-        fill,
+        c[`surface-${level}`] ?? fill,
         composite(fill, surface, TINT_ON_THEME_SURFACE),
         FLOOR_RAIL,
       )

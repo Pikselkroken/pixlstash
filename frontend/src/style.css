@@ -195,6 +195,20 @@ body {
   --notice-safe-bottom: calc(var(--space-5) + var(--floating-bottom-h));
 }
 
+/* THE SELECTION MARK - one olive mark for anything selected (shell contract
+   rule 3): the --active-wash under it, plus ONE of these two shapes.
+     --selection-edge: a row, a list card, a grid tile's rail. The left edge.
+     --selection-ring: a cell or card that has no left edge to speak of.
+   Words stay --active-text; olive is the mark, never the label. Declared on
+   the theme classes because --active-bar is, and a custom property resolves
+   where it is declared. A drop target or a range preview borrows the same
+   vocabulary on purpose but is not a selection, and spells its own. */
+.v-theme--pixlStashDark,
+.v-theme--pixlStashLight {
+  --selection-edge: inset var(--rail-w) 0 0 var(--active-bar);
+  --selection-ring: inset 0 0 0 var(--space-1) var(--active-bar);
+}
+
 /* Reusable uppercase section label - matches font-size 11px, weight 600, spacing 0.06em
  *
  * Alpha 0.7 by lead-designer ruling, 2026-08: 11px semibold is SMALL text under
@@ -208,7 +222,13 @@ body {
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: var(--tracking-label);
-  color: rgba(var(--v-theme-on-surface), 0.7);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The lightbox's panels sit on the always-dark surface whichever theme is
+   active, so their labels take that surface's ink at the same alpha. */
+.section-label--on-dark {
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
 }
 
 /* Screen-reader-only text. NEVER use `display: none` / `visibility: hidden` for

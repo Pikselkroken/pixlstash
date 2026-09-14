@@ -153,7 +153,7 @@ shrinks as automated coverage grows.
 ## Statistics sidebar — `stats.spec.js`
 | Test | Covers | Status |
 |------|--------|--------|
-| toggles the stats sidebar open and closed | Toolbar chart-bar toggle shows/hides `.stats-sidebar-content` with its Tags/Pictures/Tasks tabs | ✅ |
+| toggles the stats sidebar open and closed | Toolbar chart-bar toggle shows/hides the stats inspector's content (`.stats-sidebar .inspector-content`) with its Tags/Pictures/Tasks tabs | ✅ |
 
 ## Boolean set operations — `set-operations.spec.js`
 | Test | Covers | Status |

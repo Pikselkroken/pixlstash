@@ -53,8 +53,8 @@ export class GridPage {
     // icon, which is stable across both states.
     this.statsToggle = page.locator('.bar-btn:has(.mdi-chart-bar)').first()
     this.statsSidebar = page.locator('.stats-sidebar')
-    this.statsContent = page.locator('.stats-sidebar-content')
-    this.statsTabs = page.locator('.stats-tab-btn')
+    this.statsContent = page.locator('.stats-sidebar .inspector-content')
+    this.statsTabs = page.locator('.stats-sidebar .inspector-tab')
     // Boolean set-operation toolbar (appears when >1 set/character selected).
     this.multiSelectToolbar = page.locator('.multi-select-toolbar')
     this.multiSelectMode = page.locator('.multi-select-toolbar__mode')

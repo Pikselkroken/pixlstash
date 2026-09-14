@@ -281,6 +281,12 @@
      fifth number. */
   --stats-panel-w: 288px;
 
+  /* The toolbar band. The inspector's tab band is pinned to it so one bottom
+     rule runs across the window; the toolbar and the sidebar tabs still spell
+     36px and move onto it when next touched. The bar buttons inside it are
+     --control-h-bar. */
+  --toolbar-height: 36px;
+
   /* Notice surface (see notice-surface.md §11). `--notice-max-w` matches the
      de-facto width already used by LockedDeleteNoticeDialog and
      .plugin-menu-panel, so the surface does not introduce a fifth floating-card

@@ -1221,7 +1221,7 @@ async function copyToClipboard(value, successMessage) {
 
 .editor-copy-status {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-surface));
   margin-top: var(--space-1);
 }
 
@@ -1332,7 +1332,7 @@ async function copyToClipboard(value, successMessage) {
 
 .editor-sync-detected {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .editor-error {

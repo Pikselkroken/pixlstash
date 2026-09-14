@@ -431,7 +431,7 @@ function zoomToRegion(box) {
   letter-spacing: 0.05em;
   padding: 3px 8px;
   border-radius: 999px;
-  color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-dark-surface));
   background: color-mix(in srgb, rgb(var(--v-theme-accent)) 18%, transparent);
 }
 

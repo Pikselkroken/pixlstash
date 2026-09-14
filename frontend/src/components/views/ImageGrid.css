@@ -508,7 +508,7 @@
   position: absolute;
   inset: 0;
   background: var(--active-wash);
-  box-shadow: inset var(--rail-w) 0 0 var(--active-bar);
+  box-shadow: var(--selection-edge);
   pointer-events: none;
   z-index: 25;
   border-radius: var(--radius-md);

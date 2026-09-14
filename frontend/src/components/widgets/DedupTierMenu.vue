@@ -2,7 +2,7 @@
   <div class="tiermenu" role="group" aria-label="Which duplicates to include">
     <div class="tm-head">
       <v-icon size="16">mdi-filter-outline</v-icon>
-      <span class="tm-title">Include</span>
+      <span class="section-label">Include</span>
       <span class="tm-sp"></span>
       <span class="tm-count">{{ groupCountLabel }}</span>
     </div>
@@ -168,14 +168,6 @@ function formatCount(value) {
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-}
-
-.tm-title {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
-  color: rgba(var(--v-theme-on-surface), 0.5);
 }
 
 .tm-sp {
