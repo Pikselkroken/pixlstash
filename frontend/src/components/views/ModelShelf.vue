@@ -4047,17 +4047,6 @@ watch(
 </script>
 
 <style scoped>
-/* The spinner keeps spinning under reduced motion, slower. The global reset in
-   design-tokens.css zeroes every element's animation, and @mdi/font puts this
-   one on ::before, where the reset lands - a frozen mdi-loading reads as a
-   rendering fault rather than as "working". Same fix as `LoginScreen`. */
-@media (prefers-reduced-motion: reduce) {
-  .bar-btn :deep(.mdi-spin::before) {
-    animation-duration: 2s !important;
-    animation-iteration-count: infinite !important;
-  }
-}
-
 .shelf {
   display: flex;
   flex-direction: column;
