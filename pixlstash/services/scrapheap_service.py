@@ -119,6 +119,7 @@ from pixlstash.services.workflow_ghost_service import (
     GhostPurgeContext,
     apply_purge_to_hub,
     collect_ghost_candidates_in_session,
+    enqueue_ghost_cascade_in_session,
     surviving_instance_hashes_in_session,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -1729,6 +1730,20 @@ def purge_scrapheap_pictures(
             priority=DBPriority.IMMEDIATE,
         ),
     )
+    if ghosts_kept:
+        # The DELETE above already queued these hashes, but a drain may have
+        # settled them before the ghosts were written, and another path may have
+        # removed their cover since the recheck. Queue them again so the cascade
+        # looks once more with the ghosts in place.
+        purged = set(purged_ids)
+        vault.db.run_task(
+            enqueue_ghost_cascade_in_session,
+            [
+                candidate.instance_hash
+                for candidate in ghost_context.candidates
+                if candidate.picture_id in purged
+            ],
+        )
     # Always the removal+reconcile pair, never the bare removal: the ledger rows
     # were committed above and assert file_removed=True, which stays a PREDICTION
     # until the files are actually gone. ``owned_path_shas`` scopes any later

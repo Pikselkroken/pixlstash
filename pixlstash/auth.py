@@ -134,8 +134,8 @@ READ_SAFE_POST_PATHS: frozenset[str] = frozenset(
 # ``tests/test_architecture_guardrails.py::
 # test_read_blocked_get_paths_name_declared_owner_class_gets``.
 #
-# Templated paths cannot be expressed in an exact-match frozenset and are a
-# recorded gap; see §16.3 in docs/backend_architecture.md.
+# Templated paths cannot be expressed in an exact-match frozenset; the prefixes
+# in ``READ_BLOCKED_GET_PREFIXES`` below hold them instead.
 READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
     {
         "/api/v1/users/me/config",
@@ -245,6 +245,29 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/users/me/token",
         "/api/v1/workflows",
     }
+)
+
+# The templated half of the same belt. A GET whose path starts with one of these
+# is refused to every scoped token, so a templated owner-class route such as
+# ``/workflows/{topology_hash}/variants`` survives the gate rollback too. A
+# prefix may only stand for routes that are ALL owner-class GETs:
+# ``tests/test_architecture_guardrails.py::
+# test_read_blocked_get_prefixes_cover_only_owner_class_gets`` fails the build
+# on a prefix that would also swallow a route a share token is meant to reach,
+# and ``tests/test_authz_host_capability_16_3.py::
+# test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt`` on a
+# templated owner-class GET that no prefix covers.
+READ_BLOCKED_GET_PREFIXES: tuple[str, ...] = (
+    "/api/v1/adapters/",
+    "/api/v1/dedup/",
+    "/api/v1/model-folders/",
+    "/api/v1/model-icons/",
+    "/api/v1/models/",
+    "/api/v1/operations/",
+    "/api/v1/pictures/import/",
+    "/api/v1/reviews/",
+    "/api/v1/snapshots/",
+    "/api/v1/workflows/",
 )
 
 
@@ -2687,9 +2710,9 @@ class AuthService:
                 # Filesystem and user-settings reads are barred to every scoped
                 # token, write-enabled or not: the restriction is about what a
                 # narrow credential may *see*, not about what it may change.
-                if (
-                    request.method == "GET"
-                    and request.url.path in READ_BLOCKED_GET_PATHS
+                if request.method == "GET" and (
+                    request.url.path in READ_BLOCKED_GET_PATHS
+                    or request.url.path.startswith(READ_BLOCKED_GET_PREFIXES)
                 ):
                     return JSONResponse(
                         status_code=403,

@@ -115,31 +115,26 @@ describe("PluginsTable None row", () => {
 });
 
 
-describe("PluginsTable re-activation is inert", () => {
+describe("PluginsTable re-selecting the active plugin", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("does nothing when the already-active plugin is clicked again", async () => {
+  // A real click on the already-checked radio emits no change event, so this
+  // fires the change a browser would not, to reach setActive for the active
+  // plugin. It must keep the selection rather than toggle it off; None is how
+  // a capability is turned off.
+  it("keeps it selected", async () => {
     const w = mountTable("wd14");
-    await pluginRadios(w)[0].trigger("click");
+    await pluginRadios(w)[0].trigger("change");
     await flushPromises();
-    expect(patchUserConfig).not.toHaveBeenCalled();
-  });
-
-  it("does not clear the selection on a double click", async () => {
-    const w = mountTable(null);
-    const radio = pluginRadios(w)[0];
-    await radio.trigger("click");
-    await radio.trigger("change");
-    await radio.trigger("click");
-    await flushPromises();
-
     expect(patchUserConfig).toHaveBeenCalledTimes(1);
     expect(patchUserConfig).toHaveBeenCalledWith({
       tagger_settings: { active_tag_plugin: "wd14" },
     });
+    expect(w.emitted("update:settings")).toEqual([
+      [{ active_tag_plugin: "wd14" }],
+    ]);
   });
 });
-
 
 describe("PluginsTable with no capable plugins", () => {
   it("shows the empty state rather than a lone None row", () => {

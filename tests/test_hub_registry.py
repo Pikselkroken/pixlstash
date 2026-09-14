@@ -479,6 +479,32 @@ class TestDetach:
         assert reattached.name == "second"
 
 
+class TestForget:
+    def test_forgetting_a_registration_erases_its_ghosts_and_no_others(
+        self, hub, registry, tmp_path
+    ):
+        """Nothing could cover a forgotten library's ghosts again, and nothing
+        could name it to erase them later. Another library's stay."""
+        registry.attach(make_vault_folder(tmp_path, "first"))
+        kept = registry.attach(make_vault_folder(tmp_path, "kept"))
+        gone = registry.attach(make_vault_folder(tmp_path, "gone"))
+        with hub.transaction() as conn:
+            for library in (kept, gone):
+                conn.execute(
+                    "INSERT INTO workflow_picture_ghost (library_uuid, pixel_sha, "
+                    "instance_hash, thumbnail, created_at) "
+                    "VALUES (?, 'sha', 'instance', x'00', '2026-09-13')",
+                    (library.uuid,),
+                )
+
+        registry.forget(gone.id)
+
+        rows = hub.connection.execute(
+            "SELECT library_uuid FROM workflow_picture_ghost"
+        ).fetchall()
+        assert [row[0] for row in rows] == [kept.uuid]
+
+
 class TestLibraryIdentity:
     """The uuid contract: stable, never reused, and never taken from a vault."""
 

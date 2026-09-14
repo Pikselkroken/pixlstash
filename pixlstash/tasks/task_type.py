@@ -36,6 +36,7 @@ class TaskType(str, Enum):
     CHECKPOINT_HASH = "CheckpointHashTask"
     MODEL_FOLDER_SCAN = "ModelFolderScanTask"
     LAYOUT_MOVE = "LayoutMoveTask"
+    GHOST_CASCADE = "GhostCascadeTask"
 
     @staticmethod
     def all():
