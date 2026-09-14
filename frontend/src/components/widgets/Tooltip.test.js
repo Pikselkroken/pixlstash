@@ -80,4 +80,50 @@ describe("Tooltip", () => {
     expect(document.body.textContent).toContain("Scan now");
     w.unmount();
   });
+
+  it("gives the control back its own describedby when the tip goes", async () => {
+    const w = mountHost(
+      `<button aria-describedby="reason">Delete<Tooltip v-if="tip" text="Deletes the source" activator="parent" /></button>`,
+      { tip: true },
+    );
+    await flushPromises();
+    const btn = w.find("button");
+    await btn.trigger("mouseenter");
+    await flushPromises();
+    w.vm.tip = false;
+    await flushPromises();
+    expect(btn.attributes("aria-describedby")).toBe("reason");
+    expect(btn.attributes("aria-description")).toBeUndefined();
+    w.unmount();
+  });
+
+  it("closes on Escape wherever focus is, and when its control is pressed", async () => {
+    const w = mountHost(
+      `<button>Scan<Tooltip text="Scan now" activator="parent" /></button>`,
+    );
+    await flushPromises();
+    const btn = w.find("button");
+    const tip = () => w.findComponent(components.VTooltip);
+    const opened = async () => {
+      await btn.trigger("mouseenter");
+      await new Promise((r) => setTimeout(r, 0));
+      await flushPromises();
+    };
+
+    await opened();
+    expect(tip().props("modelValue")).toBe(true);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    await flushPromises();
+    expect(tip().props("modelValue")).toBe(false);
+
+    await btn.trigger("mouseleave");
+    await opened();
+    expect(tip().props("modelValue")).toBe(true);
+    await btn.trigger("mousedown");
+    await flushPromises();
+    expect(tip().props("modelValue")).toBe(false);
+    w.unmount();
+  });
 });

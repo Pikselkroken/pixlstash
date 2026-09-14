@@ -49,9 +49,11 @@ import {
   getCurrentInstance,
   onBeforeUnmount,
   onMounted,
+  onUnmounted,
   ref,
   useAttrs,
   useSlots,
+  watch,
   watchEffect,
 } from "vue";
 import { VTooltip } from "vuetify/components";
@@ -151,10 +153,25 @@ onMounted(() => {
   parentEl.value?.addEventListener("mouseenter", arm);
   parentEl.value?.addEventListener("focus", arm);
 });
+// A tip can go while its control stays (`AppButton`'s `v-if="tooltip"`). On
+// teardown Vuetify removes every attribute it bound, the control's own
+// `aria-describedby` included, so the value the control holds now is put back
+// once Vuetify is done; and a description nobody shows must not be announced.
+let describedbyAtUnmount = null;
 onBeforeUnmount(() => {
   clearTimeout(pendingOpen);
-  parentEl.value?.removeEventListener("mouseenter", arm);
-  parentEl.value?.removeEventListener("focus", arm);
+  const el = parentEl.value;
+  if (!el) return;
+  el.removeEventListener("mouseenter", arm);
+  el.removeEventListener("focus", arm);
+  el.removeAttribute("aria-description");
+  describedbyAtUnmount = el.getAttribute("aria-describedby");
+});
+onUnmounted(() => {
+  if (describedbyAtUnmount != null) {
+    parentEl.value?.setAttribute("aria-describedby", describedbyAtUnmount);
+  }
+  document.removeEventListener("keydown", onDocumentKeydown);
 });
 watchEffect(() => {
   const el = parentEl.value;
@@ -169,8 +186,18 @@ watchEffect(() => {
 const activatorProps = computed(() => ({
   "aria-describedby": ownDescribedby.value,
   onFocus,
-  onKeydown,
+  // Pressing the control is using it: a tip left open over a menu the press
+  // just opened would sit in its first row, hoverable and in the way.
+  onMousedown: close,
 }));
+
+// Escape dismisses wherever focus is (WCAG 1.4.13). Vuetify's own Escape
+// handling never closes a tooltip, which it marks persistent, and a tip
+// opened by the pointer may not have focus anywhere near it.
+watch(open, (isOpen) => {
+  if (isOpen) document.addEventListener("keydown", onDocumentKeydown);
+  else document.removeEventListener("keydown", onDocumentKeydown);
+});
 
 function onFocus(e) {
   if (!props.disabled && e.target?.matches?.(":focus-visible")) {
@@ -178,8 +205,13 @@ function onFocus(e) {
   }
 }
 
-function onKeydown(e) {
-  if (e.key === "Escape" && open.value) open.value = false;
+function close() {
+  clearTimeout(pendingOpen);
+  open.value = false;
+}
+
+function onDocumentKeydown(e) {
+  if (e.key === "Escape") close();
 }
 </script>
 

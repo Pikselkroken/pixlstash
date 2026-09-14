@@ -3,7 +3,8 @@
  * "Off-token values"). Each rule was a sweep across the whole app; this is
  * what stops the count climbing back one call site at a time.
  *
- * Read as source text with comments stripped, so a token value named in a
+ * Reads the CSS and templates of `.vue` and `.css` files (not styles set from
+ * JS), as source text with comments stripped, so a token value named in a
  * note is never counted as a use.
  */
 import { readFileSync, readdirSync } from "node:fs";
