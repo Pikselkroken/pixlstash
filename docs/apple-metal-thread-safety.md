@@ -280,6 +280,9 @@ does.
     caller's thread, the error's frames or a model in a reference cycle would
     free their Metal tensors there.
 
+Search never needs the worker: it encodes its query on CPU copies of SBERT and
+CLIP (*Search encodes its query on the CPU*, below).
+
 What goes through it:
 
 | Path | Thread it starts on | On Metal |
@@ -372,6 +375,77 @@ Not covered:
   succeeded, or a task still running. Measured without those collections, 19
   of 19 failed calls freed their Metal tensors on request threads; none
   crashed.
+
+### Search encodes its query on the CPU
+
+Text search (`GET /pictures/search`), export by query and likeness search
+(`POST /pictures/likeness-search`) encode their query on the thread handling
+them; likeness search runs its encode in an executor, off the event loop. On
+Metal that encode uses CPU copies of SBERT and CLIP (`CpuQueryEncoders`,
+`inference/cpu_query_encoders.py`), which `InferenceEngine.create` builds beside
+the Metal services: the same classes, model names, weights, preprocessing and
+float32 dtype, on the `cpu` device, so a query vector matches the stored ones.
+The stored vectors are computed on Metal, by GPU tasks. On CUDA and the CPU,
+and in a Vault with no task runner (`disable_background_workers`), the engine's
+own services encode the query inline.
+
+- **Loading.** The copies load on the GPU worker, as an `URGENT` `GpuCallTask`
+  the Vault queues as soon as the engine exists
+  (`Vault._queue_cpu_query_encoder_load`). Every other model loads on that
+  worker, so the copies never load beside one. Loading them on a search thread
+  while the worker loaded models failed 3 runs in 10 with `ImportError: cannot
+  import name 'AcceleratorState' from partially initialized module
+  'accelerate.state'`: transformers and accelerate are not safe to import or
+  load from two threads at once. The load is queued before the engine becomes
+  `Vault._engine`, which the work finders read, so no caption or tagging batch
+  can be queued ahead of it. A library switch builds its engine before its
+  runner starts; the load runs as soon as the runner does.
+- **Waiting.** A search that arrives before the load has finished waits for it,
+  up to `Vault.CPU_QUERY_ENCODER_LOAD_WAIT_S` (60 s). It never loads the models
+  itself. A load that does not finish in time, fails, is cancelled (a full
+  restore cancels pending tasks), or cannot be queued because the runner is
+  stopped raises `CpuQueryEncodersNotReadyError`, and text search, likeness
+  search and the two export starts that take a query (`GET /pictures/export`,
+  `POST /pictures/export/folder`) answer 503 ("Search is still loading its
+  models"). An export started before the engine existed skips that check; its
+  task waits for the load when it encodes, and fails with a warning only if
+  that load fails or outlasts the wait. The next search queues a failed or
+  cancelled load again. With no running GPU worker (never started, stopped, or
+  dead) the search raises it at once instead of queueing a load nothing will
+  run, and a search already waiting stops within
+  `TaskRunner.GPU_CALL_LIVENESS_POLL_S` of the worker dying; either way the 503
+  says the GPU worker is not running and asks for a restart if it persists.
+  Code on the GPU worker itself that asks for the copies loads them inline.
+- **Resident.** Once loaded, the copies stay loaded as long as the engine: the
+  idle unload does not reach them, so a search never has to wait for a reload
+  on the worker.
+- **The guard.** `SBertService.encode` and the `ClipService` encoders call
+  `ensure_metal_thread`, which is silent for the `cpu` copies and refuses the
+  Metal ones off the worker.
+
+Measured on an M1 Pro with torch 2.13, all float32, through PixlStash's own
+services:
+
+| Measure | Result |
+|---|---|
+| Warm query encode on the CPU, p50 | SBERT ~7 ms, CLIP text ~27 ms, CLIP image ~37 ms |
+| Cold load of the SBERT and CLIP copies | 1.8–2.8 s |
+| Extra memory | 0.65 GB |
+| Top-10 results, CPU query vectors against a corpus embedded on Metal | identical in 120 of 120 queries |
+| CPU query loop on a search thread, beside Metal CLIP batches and cache flushes on the GPU worker | 20 of 20 runs clean; 0 of 7,447 operations on the CPU path touched `mps` |
+| The same loop with its SBERT on Metal and the guard removed | 3 of 3 runs hung or crashed |
+
+### Checked through the routing
+
+Real Metal, ten fresh processes per row unless stated, with the product's own
+engine construction, tasks and `Vault` methods (no server):
+
+| Situation | Result | What it shows |
+|---|---|---|
+| GPU worker runs CLIP batches with a gc and flush after each (~214 per run), a routed CLIP call, and a CPU search loop | 10 clean | Strong: the same setup with SBERT on Metal on a second thread aborted 3 of 3 (the `MPSGraph` weak-reference message) |
+| Search during Florence-2 captioning (fp16, direct load), CPU copies loaded on the GPU worker at start-up | 10 clean; search p50 35 ms, p95 52 ms; the first search waited 5–6 s for the copies | Weak: with only a few flushes per run, a Metal control did not crash either |
+| Florence-2 loading onto Metal while the search thread encodes on the CPU copies | 10 clean | Weak, for the same reason |
+| Searches routed through `run_on_gpu_worker` beside CLIP first passes and flushes (the design before CPU copies) | 20 clean | The unrouted control hung 3 of 3 |
 
 ### Measured with PixlStash's own services
 

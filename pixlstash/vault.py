@@ -34,7 +34,9 @@ from .db_models import (
 )
 from .pixl_logging import get_logger
 from pixlstash.startup_permissions import mkdir_private
+from pixlstash.inference.cpu_query_encoders import CpuQueryEncoders
 from pixlstash.inference.engine import InferenceEngine
+from pixlstash.inference.errors import CpuQueryEncodersNotReadyError
 from .utils.image_processing.image_utils import ImageUtils
 from .tasks.face_extraction_task import FaceExtractionTask
 from .tasks.image_embedding_task import ImageEmbeddingTask
@@ -45,7 +47,7 @@ from .utils.device_utils import is_metal, metal_present, registered_metal_thread
 from .utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from .tasks.base_task import TaskStatus
 from .tasks.gpu_call_task import GpuCallTask
-from .task_runner import TaskRunner
+from .task_runner import TaskRunner, TaskRunnerNotRunningError
 from .work_planner import WorkPlanner
 from .tasks import TaskType
 from .utils.reference_folder_watcher import ReferenceFolderWatcher
@@ -80,6 +82,12 @@ class Vault:
     # How long ``start()`` waits, on Apple Metal, for a GPU worker an earlier
     # task runner left running before refusing to start a second one.
     PREVIOUS_METAL_WORKER_WAIT_S = 60.0
+
+    # How long a search on Apple Metal waits for the engine's CPU query
+    # encoders to finish loading on the GPU worker. The load is queued when the
+    # engine is built and takes seconds, so only a search that arrives in
+    # those seconds waits at all.
+    CPU_QUERY_ENCODER_LOAD_WAIT_S = 60.0
 
     # Engines ``stop()`` did not close because a GPU worker was still using
     # Apple Metal, as ``(engine, worker)``. Held here until a later ``start()``
@@ -204,6 +212,10 @@ class Vault:
         self.auth_service = None
 
         self._engine: InferenceEngine | None = None
+        # The load of the engine's CPU query encoders queued on the GPU worker,
+        # as ``(encoders, task)``, shared by every search that waits for it.
+        self._cpu_query_encoder_load: tuple[CpuQueryEncoders, GpuCallTask] | None = None
+        self._cpu_query_encoder_load_lock = threading.Lock()
         self._force_cpu = force_cpu
         self._fast_captions = fast_captions
         self._insightface_model_pack = insightface_model_pack
@@ -410,21 +422,7 @@ class Vault:
         if self._disable_background_workers:
             return
         if not self._engine:
-            self._engine = InferenceEngine.create(
-                image_root=self.image_root,
-                force_cpu=self._force_cpu,
-                fast_captions=self._fast_captions,
-                max_vram_gb=self._max_vram_gb,
-                wd14_enabled=self._wd14_tagger_enabled,
-                pixlstash_tagger_enabled=self._pixlstash_tagger_enabled,
-                wd14_threshold=self._wd14_threshold,
-                pixlstash_tagger_threshold_offset=self._pixlstash_tagger_threshold_offset
-                or 0.0,
-                keep_models_in_memory=self._keep_models_in_memory,
-                insightface_model_pack=self._insightface_model_pack,
-                tagger_settings=self._tagger_settings,
-            )
-            self._bind_engine_services()
+            self._build_engine()
 
     def start(self) -> None:
         """Start background workers.
@@ -617,6 +615,58 @@ class Vault:
                 and hasattr(plugin, "bind_service")
             ):
                 plugin.bind_service(service)
+
+    def _build_engine(self) -> None:
+        """Build the inference engine and make it this vault's.
+
+        The engine's CPU query encoders are queued to load before the engine is
+        assigned to ``_engine``. The work finders read the engine through
+        ``_engine`` and the planner is already running at boot, so an engine
+        visible first could have a caption or tagging batch queued on the GPU
+        worker ahead of the load, and every search would wait behind that
+        batch. Queued first, the load is ahead of anything a finder submits.
+        """
+        engine = InferenceEngine.create(
+            image_root=self.image_root,
+            force_cpu=self._force_cpu,
+            fast_captions=self._fast_captions,
+            max_vram_gb=self._max_vram_gb,
+            wd14_enabled=self._wd14_tagger_enabled,
+            pixlstash_tagger_enabled=self._pixlstash_tagger_enabled,
+            wd14_threshold=self._wd14_threshold,
+            pixlstash_tagger_threshold_offset=self._pixlstash_tagger_threshold_offset
+            or 0.0,
+            keep_models_in_memory=self._keep_models_in_memory,
+            insightface_model_pack=self._insightface_model_pack,
+            tagger_settings=self._tagger_settings,
+        )
+        self._start_loading_cpu_query_encoders(engine)
+        self._engine = engine
+        self._bind_engine_services()
+
+    def _start_loading_cpu_query_encoders(self, engine: InferenceEngine) -> None:
+        """Queue *engine*'s CPU query encoders to load, if it has any.
+
+        Queued as soon as the engine exists, so on Metal the copies are loaded
+        seconds after start-up rather than when the first search asks. With no
+        task runner there is nothing to queue on, and :meth:`query_encoders`
+        uses the engine itself.
+
+        Args:
+            engine: The engine just built, not yet visible as ``_engine``.
+        """
+        encoders = engine.cpu_query_encoders
+        if encoders is None or self._task_runner is None:
+            return
+        try:
+            self._queue_cpu_query_encoder_load(encoders)
+        except TaskRunnerNotRunningError as exc:
+            logger.warning(
+                "CPU query encoders for %s were not queued to load, so search "
+                "cannot encode queries: %s",
+                self.image_root,
+                exc,
+            )
 
     def emit_event(self, event_type: EventType, data=None):
         """Emit an event to all registered listeners and wake the work planner.
@@ -926,6 +976,7 @@ class Vault:
                     del self._engine
                     self._engine = None
         finally:
+            self._cpu_query_encoder_load = None
             if self.db:
                 # No collection beside a worker still on Metal: it would free
                 # that worker's garbage on this thread.
@@ -1408,28 +1459,168 @@ class Vault:
             collect_garbage_after=collect_garbage_after,
         )
 
-    def generate_text_embedding(self, query: str) -> Optional[np.ndarray]:
-        """
-        Generate a text embedding using InferenceEngine.
+    def query_encoders(self):
+        """What encodes a search query on the calling thread.
 
-        Args:
-            text (str): Input text to generate embedding for.
+        On Apple Metal, the engine's CPU copies of SBERT and CLIP
+        (:class:`CpuQueryEncoders`): only the GPU worker may use Metal, and a
+        query encoded there would wait behind whatever GPU task is running.
+        They load on the GPU worker (:meth:`_queue_cpu_query_encoder_load`), so
+        a search that arrives before that load has finished waits for it, up
+        to ``CPU_QUERY_ENCODER_LOAD_WAIT_S``. On CUDA, the CPU, or a Vault with
+        no task runner, the engine itself.
+
+        The wait needs a running GPU worker. With none - the runner was never
+        started, stopped, or its worker died - the call refuses at once rather
+        than queueing a load nothing will run, and a wait already under way
+        ends within ``TaskRunner.GPU_CALL_LIVENESS_POLL_S`` of the worker
+        dying. Called on the GPU worker itself, the copies load inline: that
+        is the thread the load belongs on, and a queued load would wait for the
+        caller to finish.
 
         Returns:
-            Optional[np.ndarray]: Generated text embedding or None if failed.
+            An object with ``text_embedding_workflow`` and
+            ``clip_embedding_workflow``, or ``None`` when there is no engine.
+
+        Raises:
+            CpuQueryEncodersNotReadyError: On Metal, the CPU copies are not
+                loaded: their load did not finish in time, failed, was
+                cancelled, or could not be queued or run because the task
+                runner has no running GPU worker. The next call queues a
+                failed or cancelled load again.
         """
-        if self._engine is None:
+        engine = self._engine
+        if engine is None:
             return None
-        embedding = self._engine.text_embedding_workflow.encode_query(query)
+        encoders = engine.cpu_query_encoders
+        runner = self._task_runner
+        if encoders is None or runner is None:
+            return engine
+        if encoders.is_loaded():
+            return encoders
+        if runner.is_gpu_worker_thread():
+            try:
+                encoders.load()
+            except Exception as exc:
+                raise CpuQueryEncodersNotReadyError(
+                    f"The CPU query encoders did not load on the GPU worker: {exc}"
+                ) from exc
+            return encoders
+        if not runner.is_gpu_worker_alive():
+            raise CpuQueryEncodersNotReadyError(
+                "The CPU query encoders cannot be loaded: the task runner has no "
+                "running GPU worker to load them on.",
+                worker_running=False,
+            )
+        try:
+            load = self._queue_cpu_query_encoder_load(encoders)
+        except TaskRunnerNotRunningError as exc:
+            raise CpuQueryEncodersNotReadyError(
+                f"The CPU query encoders cannot be loaded: {exc}",
+                worker_running=False,
+            ) from exc
+        deadline = time.monotonic() + self.CPU_QUERY_ENCODER_LOAD_WAIT_S
+        while not load._done_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise CpuQueryEncodersNotReadyError(
+                    "The CPU query encoders did not finish loading on the GPU "
+                    f"worker within {self.CPU_QUERY_ENCODER_LOAD_WAIT_S:.0f}s."
+                )
+            if load._done_event.wait(
+                min(remaining, TaskRunner.GPU_CALL_LIVENESS_POLL_S)
+            ):
+                break
+            if not runner.is_gpu_worker_alive() and not load._done_event.is_set():
+                raise CpuQueryEncodersNotReadyError(
+                    "The CPU query encoders cannot be loaded: the GPU worker "
+                    f"stopped running before their load (task {load.id}) finished.",
+                    worker_running=False,
+                )
+        if not encoders.is_loaded():
+            raise CpuQueryEncodersNotReadyError(
+                f"The CPU query encoders did not load (task {load.id} "
+                f"{load.status.value}: {load.error})."
+            ) from load.exception
+        return encoders
+
+    def _queue_cpu_query_encoder_load(self, encoders: CpuQueryEncoders) -> GpuCallTask:
+        """Queue *encoders* to load on the GPU worker, or return the load queued.
+
+        On the GPU worker rather than on the thread asking, because the worker
+        is where every other model loads: transformers and accelerate fail
+        when two threads import or load models at once, so the copies load
+        between the worker's own tasks, never beside them. A ``GpuCallTask``
+        runs at ``URGENT`` priority, after the task already running. A load
+        queued before the runner starts (a library switch builds the engine
+        first) runs as soon as it does.
+
+        A load of *encoders* still queued or running, or one that succeeded,
+        is returned as it is. One that failed or was cancelled (a full restore
+        cancels pending tasks) is queued again.
+
+        Args:
+            encoders: The engine's CPU query encoders.
+
+        Returns:
+            The load task.
+
+        Raises:
+            TaskRunnerNotRunningError: The task runner is stopped.
+        """
+        with self._cpu_query_encoder_load_lock:
+            queued = self._cpu_query_encoder_load
+            if queued is not None and queued[0] is encoders:
+                load = queued[1]
+                if not load._done_event.is_set() or encoders.is_loaded():
+                    return load
+            load = GpuCallTask(encoders.load)
+            self._task_runner.submit(load)
+            self._cpu_query_encoder_load = (encoders, load)
+            return load
+
+    def generate_text_embedding(self, query: str) -> Optional[np.ndarray]:
+        """Encode *query* with SBERT, on the calling thread.
+
+        On Apple Metal the encode uses the CPU copy (:meth:`query_encoders`).
+
+        Args:
+            query: The text to encode.
+
+        Returns:
+            The embedding, or ``None`` when there is no engine or the query is
+            empty.
+
+        Raises:
+            CpuQueryEncodersNotReadyError: On Metal, the CPU copies are not
+                loaded (see :meth:`query_encoders`).
+        """
+        encoders = self.query_encoders()
+        if encoders is None:
+            return None
+        embedding = encoders.text_embedding_workflow.encode_query(query)
         return embedding[0] if embedding is not None and len(embedding) > 0 else None
 
     def generate_clip_text_embedding(self, query: str) -> Optional[np.ndarray]:
+        """Encode *query* with CLIP's text encoder, on the calling thread.
+
+        On Apple Metal the encode uses the CPU copy (:meth:`query_encoders`).
+
+        Args:
+            query: The text to encode.
+
+        Returns:
+            The normalised embedding, or ``None`` when there is no engine or
+            the encode failed.
+
+        Raises:
+            CpuQueryEncodersNotReadyError: On Metal, the CPU copies are not
+                loaded (see :meth:`query_encoders`).
         """
-        Generate a CLIP text embedding for the provided query text.
-        """
-        if self._engine is None:
+        encoders = self.query_encoders()
+        if encoders is None:
             return None
-        return self._engine.text_embedding_workflow.encode_clip_query(query)
+        return encoders.text_embedding_workflow.encode_clip_query(query)
 
     def set_description(self, description: str):
         def op(session: Session):
@@ -1790,21 +1981,7 @@ class Vault:
             concurrent.futures.Future: Future set to True when completed.
         """
         if not self._engine:
-            self._engine = InferenceEngine.create(
-                image_root=self.image_root,
-                force_cpu=self._force_cpu,
-                fast_captions=self._fast_captions,
-                max_vram_gb=self._max_vram_gb,
-                wd14_enabled=self._wd14_tagger_enabled,
-                pixlstash_tagger_enabled=self._pixlstash_tagger_enabled,
-                wd14_threshold=self._wd14_threshold,
-                pixlstash_tagger_threshold_offset=self._pixlstash_tagger_threshold_offset
-                or 0.0,
-                keep_models_in_memory=self._keep_models_in_memory,
-                insightface_model_pack=self._insightface_model_pack,
-                tagger_settings=self._tagger_settings,
-            )
-            self._bind_engine_services()
+            self._build_engine()
 
         # Register the watcher BEFORE checking the DB to avoid a TOCTOU race where
         # the task completes (and fires _notify_planner_ids_processed) in the gap

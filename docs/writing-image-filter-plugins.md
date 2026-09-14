@@ -184,6 +184,8 @@ depends on the inference device:
   and drops the old instances on a request thread, where a Metal model they held would
   be freed off the worker. Load the model inside `run()` / `run_video()` and let it go
   before returning.
+  Search encodes on CPU copies of its models, loaded on the GPU worker at start-up,
+  so once they have loaded a search does not wait behind a plugin run.
 
 ## 5. Video
 

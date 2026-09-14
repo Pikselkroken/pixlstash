@@ -29,13 +29,18 @@ import pixlstash.task_runner as task_runner_module
 from pixlstash.database import VaultDatabase
 from pixlstash.image_plugins.base import ImagePlugin
 from pixlstash.image_plugins.service import _run_plugin
+from pixlstash.inference.cpu_query_encoders import CpuQueryEncoders
 from pixlstash.inference.engine import InferenceEngine
+from pixlstash.inference.errors import CpuQueryEncodersNotReadyError
 from pixlstash.inference.model_lifecycle import ModelLifecycleManager
 from pixlstash.inference.vram_budget import MAX_CONCURRENT_GPU_IMAGES, VramBudget
+from pixlstash.inference.workflows.clip_embedding import ClipEmbeddingWorkflow
 from pixlstash.inference.workflows.tagging import (
     _MAX_CONCURRENT_CPU as TAGGING_MAX_CONCURRENT_CPU,
     TaggingWorkflow,
 )
+from pixlstash.inference.workflows.text_embedding import TextEmbeddingWorkflow
+from pixlstash.routes.pictures._likeness_search import _encode_query_image
 from pixlstash.services import library_switch_service
 from pixlstash.startup_checks import StartupCheckOutcome, StartupChecks
 from pixlstash.tagger_plugins.pixlstash_tagger import PixlStashTaggerService
@@ -3809,23 +3814,589 @@ def test_a_metal_entry_point_refuses_a_thread_that_is_not_the_gpu_worker(
     assert reached(), f"{entry_point} did not reach its model on the GPU worker"
 
 
+# --------------------------------------------------------------------------- #
+# Search encodes its query on CPU copies on Metal, never on the GPU worker
+# --------------------------------------------------------------------------- #
+
+
+class _RecordingQueryService:
+    """A stand-in SBERT or CLIP service recording each load and encode.
+
+    Every call appends ``(what, device, thread)`` to the shared *calls* list.
+    Like the real services, an encode loads the model first when it is not
+    loaded, so a load on the wrong thread is recorded too.
+
+    Attributes:
+        load_error: Raised by the next load, then cleared.
+    """
+
+    def __init__(self, device, calls, *, loaded=True):
+        self._device = device
+        self._calls = calls
+        self._loaded = loaded
+        self.load_error = None
+
+    @property
+    def device(self):
+        return self._device
+
+    def is_loaded(self):
+        return self._loaded
+
+    def ensure_ready(self):
+        if self._loaded:
+            return
+        self._record("load")
+        if self.load_error is not None:
+            error, self.load_error = self.load_error, None
+            raise error
+        self._loaded = True
+
+    def encode(self, texts):
+        self.ensure_ready()
+        self._record("sbert")
+        return [np.full(4, 0.5, np.float32) for _ in texts]
+
+    def encode_text(self, query):
+        self.ensure_ready()
+        self._record("clip_text")
+        return np.full(4, 0.25, np.float32)
+
+    def encode_image_batch(self, images, tensors=None):
+        self.ensure_ready()
+        self._record("clip_image")
+        return np.ones((len(images), 4), np.float32)
+
+    def _record(self, what):
+        self._calls.append((what, self._device, threading.current_thread()))
+
+
 class _RecordingEngine:
-    """An engine carrying only the device the routing reads."""
+    """An engine whose query services record what ran, where and on which thread.
 
-    def __init__(self, device):
+    On ``mps`` it carries CPU query encoders, as ``InferenceEngine.create``
+    builds them; the workflows are the real ones.
+    """
+
+    def __init__(self, device, *, copies_loaded=True):
         self.device = device
+        self.calls: list[tuple[str, str, threading.Thread]] = []
+        self.sbert_service = _RecordingQueryService(device, self.calls)
+        self.clip_service = _RecordingQueryService(device, self.calls)
+        self.cpu_query_encoders = (
+            CpuQueryEncoders(
+                clip_service=_RecordingQueryService(
+                    "cpu", self.calls, loaded=copies_loaded
+                ),
+                sbert_service=_RecordingQueryService(
+                    "cpu", self.calls, loaded=copies_loaded
+                ),
+            )
+            if device == "mps"
+            else None
+        )
+
+    @property
+    def text_embedding_workflow(self):
+        return TextEmbeddingWorkflow(engine=self)
+
+    @property
+    def clip_embedding_workflow(self):
+        return ClipEmbeddingWorkflow(engine=self)
 
 
-def _routing_vault(runner, device):
-    """A Vault carrying only what the routing reads: a runner and an engine.
+def _routing_vault(runner, device, **engine_kwargs):
+    """A Vault carrying only what the query encodes read: a runner and an engine.
 
     Built without ``__init__``, which opens a database and plans work; the
     methods under test are the real ones.
     """
     vault = Vault.__new__(Vault)
     vault._task_runner = runner
-    vault._engine = _RecordingEngine(device)
+    vault._engine = _RecordingEngine(device, **engine_kwargs)
+    vault._cpu_query_encoder_load = None
+    vault._cpu_query_encoder_load_lock = threading.Lock()
     return vault
+
+
+def _run_query_encodes(vault):
+    """Run every query encode the search routes use; return what they recorded."""
+    calls = vault._engine.calls
+    start = len(calls)
+    assert vault.generate_text_embedding("a red bicycle") is not None
+    assert vault.generate_clip_text_embedding("a red bicycle") is not None
+    embedding = _encode_query_image(
+        types.SimpleNamespace(vault=vault), Image.new("RGB", (4, 4))
+    )
+    assert embedding.shape == (4,)
+    return calls[start:]
+
+
+def _record_submissions(monkeypatch, runner):
+    """Record every task submitted to *runner*; the real ``submit`` still runs.
+
+    ``run_on_gpu_worker`` submits through the same attribute, so a routed call
+    is recorded too.
+    """
+    submitted = []
+    real_submit = runner.submit
+
+    def submit(task):
+        submitted.append(task)
+        return real_submit(task)
+
+    monkeypatch.setattr(runner, "submit", submit)
+    return submitted
+
+
+def test_query_encodes_use_the_cpu_copies_on_the_calling_thread_on_metal(
+    gpu_runner, monkeypatch
+):
+    """No query encode uses Metal or waits for the GPU worker."""
+    vault = _routing_vault(gpu_runner, "mps")
+    submitted = _record_submissions(monkeypatch, gpu_runner)
+
+    calls = _run_query_encodes(vault)
+
+    assert [(what, device) for what, device, _ in calls] == [
+        ("sbert", "cpu"),
+        ("clip_text", "cpu"),
+        ("clip_image", "cpu"),
+    ], "a query was encoded by something other than the loaded CPU copies"
+    for what, _, thread in calls:
+        assert thread is threading.current_thread(), (
+            f"the {what} encode left the calling thread for {thread.name}"
+        )
+    assert submitted == [], f"a query encode queued work on the runner: {submitted}"
+    assert gpu_runner._gpu_queue.qsize() == 0
+
+
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
+def test_query_encodes_use_the_engine_on_the_calling_thread_off_metal(
+    gpu_runner, device, monkeypatch
+):
+    vault = _routing_vault(gpu_runner, device)
+    submitted = _record_submissions(monkeypatch, gpu_runner)
+
+    calls = _run_query_encodes(vault)
+
+    assert [(what, used) for what, used, _ in calls] == [
+        ("sbert", device),
+        ("clip_text", device),
+        ("clip_image", device),
+    ]
+    for what, _, thread in calls:
+        assert thread is threading.current_thread(), (
+            f"the {what} encode on {device} left the calling thread for {thread.name}"
+        )
+    assert submitted == []
+
+
+def test_a_vault_with_no_task_runner_encodes_inline_on_metal():
+    """``disable_background_workers``: no runner to route to (and the server
+    builds no engine in that mode)."""
+    vault = _routing_vault(None, "mps", copies_loaded=False)
+
+    calls = _run_query_encodes(vault)
+
+    assert [(what, device) for what, device, _ in calls] == [
+        ("sbert", "mps"),
+        ("clip_text", "mps"),
+        ("clip_image", "mps"),
+    ]
+    assert {thread for _, _, thread in calls} == {threading.current_thread()}
+
+
+def _building_vault(runner, engine, monkeypatch):
+    """A Vault whose ``ensure_ready`` builds *engine*, through the real method."""
+    vault = _routing_vault(runner, "mps")
+    vault._engine = None
+    vault._disable_background_workers = False
+    vault.image_root = "/nonexistent"
+    vault._force_cpu = False
+    vault._fast_captions = False
+    vault._max_vram_gb = None
+    vault._wd14_tagger_enabled = False
+    vault._pixlstash_tagger_enabled = False
+    vault._wd14_threshold = None
+    vault._pixlstash_tagger_threshold_offset = None
+    vault._keep_models_in_memory = True
+    vault._insightface_model_pack = "buffalo_l"
+    vault._tagger_settings = None
+    vault._bind_engine_services = lambda: None
+    monkeypatch.setattr(InferenceEngine, "create", staticmethod(lambda **kw: engine))
+    return vault
+
+
+def test_the_cpu_copies_load_on_the_gpu_worker_once_the_engine_is_built(
+    gpu_runner, monkeypatch
+):
+    """Queued when the engine is built, and run between the worker's own tasks.
+
+    The worker is busy when the engine is built, so the load waits for it: it
+    never runs beside a model load on the worker.
+    """
+    worker = _gpu_worker_of(gpu_runner)
+    engine = _RecordingEngine("mps", copies_loaded=False)
+    vault = _building_vault(gpu_runner, engine, monkeypatch)
+
+    release, holder = _hold_the_gpu_worker(gpu_runner)
+    try:
+        vault.ensure_ready()
+        assert vault._engine is engine
+        queued = vault._cpu_query_encoder_load
+        assert queued is not None and queued[0] is engine.cpu_query_encoders, (
+            "building the engine queued no load of its CPU query encoders"
+        )
+        assert not queued[1]._done_event.wait(0.2), (
+            "the load finished while another task held the GPU worker"
+        )
+        assert engine.calls == []
+    finally:
+        release.set()
+        holder.join(10)
+
+    assert queued[1]._done_event.wait(10), "the queued load never ran"
+    assert engine.cpu_query_encoders.is_loaded()
+    assert engine.calls == [("load", "cpu", worker), ("load", "cpu", worker)]
+
+
+def test_the_cpu_copies_load_is_queued_before_the_engine_is_visible(
+    gpu_runner, monkeypatch
+):
+    """The work finders read the engine through ``_engine``, with the planner running.
+
+    Visible first, the engine could get a caption batch queued on an idle GPU
+    worker ahead of the load, and every search would wait behind the batch.
+    """
+    engine = _RecordingEngine("mps", copies_loaded=False)
+    vault = _building_vault(gpu_runner, engine, monkeypatch)
+    engine_when_submitted = []
+    real_submit = gpu_runner.submit
+
+    def submit(task):
+        engine_when_submitted.append((task, vault._engine))
+        return real_submit(task)
+
+    monkeypatch.setattr(gpu_runner, "submit", submit)
+
+    vault.ensure_ready()
+
+    assert vault._engine is engine
+    assert len(engine_when_submitted) == 1, engine_when_submitted
+    load, visible = engine_when_submitted[0]
+    assert load is vault._cpu_query_encoder_load[1]
+    assert visible is None, "the engine was visible before its load was queued"
+
+
+def test_a_search_waits_for_the_cpu_copies_to_load_rather_than_loading_them(
+    gpu_runner, monkeypatch
+):
+    worker = _gpu_worker_of(gpu_runner)
+    vault = _routing_vault(gpu_runner, "mps", copies_loaded=False)
+    engine = vault._engine
+    result = {}
+
+    def search():
+        result["embedding"] = vault.generate_text_embedding("a red bicycle")
+
+    release, holder = _hold_the_gpu_worker(gpu_runner)
+    submitted = _record_submissions(monkeypatch, gpu_runner)
+    try:
+        # The worker stays busy for longer than the wait: the search gives up
+        # and says so, having loaded nothing itself.
+        monkeypatch.setattr(Vault, "CPU_QUERY_ENCODER_LOAD_WAIT_S", 0.2)
+        with pytest.raises(
+            CpuQueryEncodersNotReadyError, match="did not finish loading"
+        ) as raised:
+            search()
+        assert raised.value.worker_running is True, "a busy worker is still running"
+        assert engine.calls == []
+
+        monkeypatch.setattr(Vault, "CPU_QUERY_ENCODER_LOAD_WAIT_S", 10.0)
+        searcher = threading.Thread(target=search)
+        searcher.start()
+        searcher.join(0.2)
+        assert searcher.is_alive(), "the search did not wait for the load"
+    finally:
+        release.set()
+        holder.join(10)
+    searcher.join(10)
+
+    assert result["embedding"] is not None
+    assert engine.calls == [
+        ("load", "cpu", worker),
+        ("load", "cpu", worker),
+        ("sbert", "cpu", searcher),
+    ]
+    loads = [task for task in submitted if isinstance(task, GpuCallTask)]
+    assert len(loads) == 1, f"both searches should share one queued load: {loads}"
+
+
+def test_a_failed_load_is_not_ready_and_the_next_search_loads_again(gpu_runner):
+    worker = _gpu_worker_of(gpu_runner)
+    vault = _routing_vault(gpu_runner, "mps", copies_loaded=False)
+    engine = vault._engine
+    engine.cpu_query_encoders.sbert_service.load_error = OSError("no model files")
+
+    with pytest.raises(CpuQueryEncodersNotReadyError, match="did not load") as raised:
+        vault.generate_text_embedding("a red bicycle")
+    assert isinstance(raised.value.__cause__, OSError)
+    assert raised.value.worker_running is True
+
+    assert vault.generate_text_embedding("a red bicycle") is not None
+    assert engine.calls == [
+        ("load", "cpu", worker),
+        ("load", "cpu", worker),
+        ("load", "cpu", worker),
+        ("sbert", "cpu", threading.current_thread()),
+    ]
+
+
+# The worker thread dying of the SystemExit is the situation under test.
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_a_search_is_not_ready_at_once_when_the_gpu_worker_is_dead(
+    gpu_runner, monkeypatch
+):
+    """Nothing will run the load, so the search neither queues it nor waits for it."""
+    _end_the_gpu_worker(gpu_runner)
+    vault = _routing_vault(gpu_runner, "mps", copies_loaded=False)
+    submitted = _record_submissions(monkeypatch, gpu_runner)
+
+    started = time.monotonic()
+    with pytest.raises(
+        CpuQueryEncodersNotReadyError, match="no running GPU worker"
+    ) as raised:
+        vault.generate_text_embedding("a red bicycle")
+
+    assert raised.value.worker_running is False
+    assert time.monotonic() - started < 1.0
+    assert submitted == [], f"a load was queued for a dead GPU worker: {submitted}"
+    assert vault._engine.calls == []
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_a_search_waiting_for_the_load_stops_when_the_gpu_worker_dies(
+    gpu_runner, monkeypatch
+):
+    """The load queued behind the task that ends the worker will never run."""
+    monkeypatch.setattr(Vault, "CPU_QUERY_ENCODER_LOAD_WAIT_S", 10.0)
+    release = threading.Event()
+    ending = _WorkerEndingTask(release)
+    gpu_runner.submit(ending)
+    assert ending.reached.wait(10), "the ending task never reached the GPU worker"
+    vault = _routing_vault(gpu_runner, "mps", copies_loaded=False)
+    outcome = []
+
+    def search():
+        try:
+            outcome.append(vault.generate_text_embedding("a red bicycle"))
+        except Exception as exc:
+            outcome.append(exc)
+
+    searcher = threading.Thread(target=search, daemon=True)
+    searcher.start()
+    deadline = time.monotonic() + 10
+    while vault._cpu_query_encoder_load is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert vault._cpu_query_encoder_load is not None, "the search queued no load"
+    searcher.join(0.3)
+    assert searcher.is_alive(), "the search did not wait for the load"
+
+    release.set()
+    ended = time.monotonic()
+    searcher.join(10)
+
+    assert not searcher.is_alive()
+    assert time.monotonic() - ended < 2.0, "the search waited out its whole wait"
+    assert len(outcome) == 1
+    assert isinstance(outcome[0], CpuQueryEncodersNotReadyError), outcome
+    assert "stopped running" in str(outcome[0])
+    assert outcome[0].worker_running is False
+    assert vault._engine.calls == []
+
+
+def test_query_encoders_on_the_gpu_worker_load_the_cpu_copies_inline(
+    gpu_runner, monkeypatch
+):
+    """Queued, the load would wait for the very call that is waiting for it."""
+    monkeypatch.setattr(Vault, "CPU_QUERY_ENCODER_LOAD_WAIT_S", 2.0)
+    worker = _gpu_worker_of(gpu_runner)
+    vault = _routing_vault(gpu_runner, "mps", copies_loaded=False)
+    engine = vault._engine
+    submitted = _record_submissions(monkeypatch, gpu_runner)
+
+    started = time.monotonic()
+    encoders = gpu_runner.run_on_gpu_worker(
+        lambda: vault.query_encoders(), timeout_s=10
+    )
+
+    assert time.monotonic() - started < 1.0
+    assert encoders is engine.cpu_query_encoders
+    assert encoders.is_loaded()
+    assert engine.calls == [("load", "cpu", worker), ("load", "cpu", worker)]
+    assert len(submitted) == 1, f"a load was queued from the GPU worker: {submitted}"
+
+
+def test_a_load_cancelled_before_it_ran_is_queued_again():
+    """A full restore cancels pending tasks, a queued load among them."""
+    # Not started yet, as a switched-to library's runner is when its engine is
+    # built.
+    runner = TaskRunner(name="cpu-query-load-cancelled")
+    vault = _routing_vault(runner, "mps", copies_loaded=False)
+    engine = vault._engine
+    vault._start_loading_cpu_query_encoders(engine)
+    _, first_load = vault._cpu_query_encoder_load
+    assert runner.cancel_pending_tasks() == 1
+    assert first_load.status == TaskStatus.CANCELLED
+
+    runner.start()
+    try:
+        worker = _gpu_worker_of(runner)
+        assert vault.generate_text_embedding("a red bicycle") is not None
+    finally:
+        runner.stop()
+    assert engine.calls == [
+        ("load", "cpu", worker),
+        ("load", "cpu", worker),
+        ("sbert", "cpu", threading.current_thread()),
+    ]
+
+
+@pytest.mark.parametrize("stopped_before", ["liveness check", "submit"])
+def test_a_search_is_not_ready_when_the_task_runner_is_stopped(
+    monkeypatch, stopped_before
+):
+    """Either way no GPU worker will load the copies, and the error says so.
+
+    The runner can stop between the liveness check and the submit, so the
+    submit's refusal is its own case.
+    """
+    runner = TaskRunner(name="cpu-query-load-stopped")
+    runner.start()
+    runner.stop()
+    if stopped_before == "submit":
+        monkeypatch.setattr(runner, "is_gpu_worker_alive", lambda: True)
+    vault = _routing_vault(runner, "mps", copies_loaded=False)
+
+    with pytest.raises(
+        CpuQueryEncodersNotReadyError, match="cannot be loaded"
+    ) as raised:
+        vault.generate_text_embedding("a red bicycle")
+    assert raised.value.worker_running is False
+    assert vault._engine.calls == []
+
+
+class _StubTaggerService:
+    """The PixlStash tagger service, without its download."""
+
+    _model_path = "/nonexistent/model.safetensors"
+    _meta_path = "/nonexistent/meta.json"
+
+    def __init__(self, **kwargs):
+        pass
+
+    def needs_download(self):
+        return False
+
+
+class _StubWd14Service:
+    """The WD14 service, without onnxruntime or a download."""
+
+    def __init__(self, **kwargs):
+        pass
+
+    def needs_download(self):
+        return False
+
+
+@pytest.fixture
+def engine_without_taggers(monkeypatch):
+    """``InferenceEngine.create`` with the tagger services stubbed out.
+
+    SBERT and CLIP are the real services; nothing loads until asked.
+    """
+    from pixlstash.inference import engine as engine_mod
+    from pixlstash.tagger_plugins import pixlstash_tagger as tagger_mod
+
+    wd14_module = types.ModuleType("pixlstash.tagger_plugins.wd14")
+    wd14_module.WD14Service = _StubWd14Service
+    monkeypatch.setitem(sys.modules, "pixlstash.tagger_plugins.wd14", wd14_module)
+    monkeypatch.setattr(tagger_mod, "PixlStashTaggerService", _StubTaggerService)
+    monkeypatch.setattr(engine_mod, "configure_metal_model_loading", lambda: False)
+    monkeypatch.setattr(engine_mod, "builtin_model_dir", lambda: "/nonexistent")
+    return engine_mod.InferenceEngine.create
+
+
+class _FakeOpenClipModel:
+    def __init__(self):
+        self.calls = []
+
+    def to(self, device):
+        self.calls.append(("to", str(device)))
+        return self
+
+    def half(self):
+        self.calls.append(("half",))
+        return self
+
+
+def test_the_cpu_copies_load_the_models_the_metal_services_load(
+    engine_without_taggers, monkeypatch
+):
+    """Same classes, model names, weights, preprocessing and dtype, so the
+    query vectors are comparable with the ones stored from Metal."""
+    from pixlstash.tagger_plugins import sbert as sbert_module
+
+    clip_loads = []
+    sbert_loads = []
+    open_clip = types.ModuleType("open_clip")
+
+    def create_model_and_transforms(name, pretrained=None):
+        model = _FakeOpenClipModel()
+        clip_loads.append(((name, pretrained), model))
+        return model, None, ("preprocess", name, pretrained)
+
+    open_clip.create_model_and_transforms = create_model_and_transforms
+    open_clip.get_tokenizer = lambda name: ("tokenizer", name)
+    monkeypatch.setitem(sys.modules, "open_clip", open_clip)
+    monkeypatch.setattr(
+        sbert_module,
+        "load_sentence_transformer",
+        lambda *args, **kwargs: sbert_loads.append((args, kwargs)) or object(),
+    )
+
+    engine = engine_without_taggers(device="mps", image_root="/nonexistent")
+    copies = engine.cpu_query_encoders
+    assert copies is not None, "a Metal engine has no CPU query encoders"
+    engine.clip_service.ensure_ready()
+    copies.clip_service.ensure_ready()
+    engine.sbert_service.ensure_ready()
+    copies.sbert_service.ensure_ready()
+
+    assert type(copies.clip_service) is type(engine.clip_service)
+    assert type(copies.sbert_service) is type(engine.sbert_service)
+    (metal_clip, metal_model), (cpu_clip, cpu_model) = clip_loads
+    assert cpu_clip == metal_clip
+    assert copies.clip_service._preprocess == engine.clip_service._preprocess
+    assert copies.clip_service.tokenizer == engine.clip_service.tokenizer
+    # Float32 on both: neither model is halved.
+    assert metal_model.calls == [("to", "mps")]
+    assert cpu_model.calls == [("to", "cpu")]
+    (metal_args, metal_kwargs), (cpu_args, cpu_kwargs) = sbert_loads
+    assert metal_kwargs.pop("device") == "mps"
+    assert cpu_kwargs.pop("device") == "cpu"
+    assert (cpu_args, cpu_kwargs) == (metal_args, metal_kwargs)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"device": "cuda"}, {"device": "cpu"}, {"device": "mps", "force_cpu": True}],
+)
+def test_only_an_engine_on_metal_has_cpu_query_encoders(engine_without_taggers, kwargs):
+    engine = engine_without_taggers(image_root="/nonexistent", **kwargs)
+
+    assert engine.cpu_query_encoders is None
 
 
 def test_run_inference_keeps_keyword_arguments_for_the_call(gpu_runner):

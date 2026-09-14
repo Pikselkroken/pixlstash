@@ -12,6 +12,8 @@ import json
 import os
 import re
 import shlex
+import subprocess
+import sys
 import tempfile
 import warnings
 from pathlib import Path
@@ -2307,6 +2309,73 @@ def test_ml_import_probe_has_teeth():
         "the ML-import probe failed to notice a module that definitely imports "
         f"torch and onnxruntime; it reported {loaded}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: a module imports as the first import of a process
+# ---------------------------------------------------------------------------
+#
+# tests/conftest.py imports the server before any test runs, so every module on
+# its path is already initialised, in the server's order, when a test imports
+# one. An import cycle that breaks only when one of those modules comes first,
+# as it does for a script importing `pixlstash.vault`, passes every in-process
+# test. The CPU query encoders once closed one: `export_utils` imported their
+# error class, and the `pixlstash.utils.service` package imports `export_utils`
+# on the way to `caption_utils`, which the encoders' workflows import.
+
+#: The modules that cycle broke when imported first.
+_FIRST_IMPORT_MODULES = (
+    "pixlstash.inference.cpu_query_encoders",
+    "pixlstash.inference.engine",
+    "pixlstash.inference.workflows.text_embedding",
+    "pixlstash.utils.service.export_utils",
+    "pixlstash.vault",
+)
+
+_PIXLSTASH_MODULES_PROBE = (
+    "import sys, json\n"
+    "__import__({target!r})\n"
+    "print(json.dumps(sorted(m for m in sys.modules "
+    "if m == 'pixlstash' or m.startswith('pixlstash.'))))\n"
+)
+
+
+def _pixlstash_modules_loaded_by(target: str) -> list[str]:
+    """Import *target* first in a fresh interpreter; return the pixlstash modules loaded.
+
+    A subprocess for the same reason as ``_ml_modules_loaded_by``: in this
+    process the server has already imported *target*.
+    """
+    proc = subprocess.run(
+        [sys.executable, "-c", _PIXLSTASH_MODULES_PROBE.format(target=target)],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        timeout=300,
+    )
+    assert proc.returncode == 0, (
+        f"importing {target!r} first in a process failed:\n{proc.stderr}"
+    )
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.parametrize("module", _FIRST_IMPORT_MODULES)
+def test_a_module_imports_as_the_first_import_of_a_process(module):
+    assert module in _pixlstash_modules_loaded_by(module)
+
+
+def test_the_query_encoder_error_imports_nothing_from_pixlstash():
+    """Search, likeness search, export and the vault all import the error.
+
+    Its module importing anything from pixlstash would let any of them close a
+    cycle again.
+    """
+    loaded = _pixlstash_modules_loaded_by("pixlstash.inference.errors")
+    assert loaded == [
+        "pixlstash",
+        "pixlstash.inference",
+        "pixlstash.inference.errors",
+    ]
 
 
 # ---------------------------------------------------------------------------

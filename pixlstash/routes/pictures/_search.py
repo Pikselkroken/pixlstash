@@ -16,6 +16,10 @@ from pixlstash.db_models import (
     Picture,
     SortMechanism,
 )
+from pixlstash.inference.errors import (
+    NO_GPU_WORKER_DETAIL,
+    CpuQueryEncodersNotReadyError,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.filter_helpers import (
     collect_set_filter_ids,
@@ -344,9 +348,23 @@ def register_routes(router, server):
             return []
 
         # Encoded on the request thread, not inside the database task, so the
-        # model calls never hold the DB writer thread.
-        query_embedding = server.vault.generate_text_embedding(query)
-        clip_query_embedding = server.vault.generate_clip_text_embedding(query)
+        # model calls never hold the DB writer thread. On Apple Metal they use
+        # CPU copies of the models and never touch Metal (Vault.query_encoders).
+        try:
+            query_embedding = server.vault.generate_text_embedding(query)
+            clip_query_embedding = server.vault.generate_clip_text_embedding(query)
+        except CpuQueryEncodersNotReadyError as exc:
+            logger.warning(
+                "Text search cannot encode its query yet (query=%r): %s", query, exc
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Search is still loading its models; try the search again shortly."
+                    if exc.worker_running
+                    else NO_GPU_WORKER_DETAIL
+                ),
+            ) from exc
 
         def find_by_text(session, query, offset, limit):
             words = re.findall(r"\b\w+\b", query.lower())

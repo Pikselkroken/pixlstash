@@ -10,6 +10,7 @@ according to the ``combine`` parameter before ranking.
 
 from __future__ import annotations
 
+import asyncio
 import random as _random
 from io import BytesIO
 from typing import List
@@ -19,6 +20,10 @@ from fastapi import File, HTTPException, Query, Request, UploadFile
 from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
+from pixlstash.inference.errors import (
+    NO_GPU_WORKER_DETAIL,
+    CpuQueryEncodersNotReadyError,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.likeness.likeness_utils import LikenessUtils
 from pixlstash.services import search_query_service
@@ -47,17 +52,32 @@ class ImageLikenessMatchResponse(BaseModel):
 def _encode_query_image(server, pil_image: Image.Image) -> np.ndarray:
     """Encode *pil_image* into a normalised CLIP embedding.
 
-    Raises :class:`~fastapi.HTTPException` 503 when CLIP is unavailable or
-    503 when encoding fails.
+    Runs on the calling thread, on Apple Metal with the CPU copy of CLIP
+    (``Vault.query_encoders``). Blocks for the length of the encode, and on
+    Metal until that copy has loaded, so call it off the event loop.
+
+    Raises :class:`~fastapi.HTTPException` 503 when CLIP is unavailable, when
+    its CPU copy is not loaded yet, or when encoding fails.
     """
-    engine = getattr(server.vault, "_engine", None)
-    if engine is None:
+    try:
+        encoders = server.vault.query_encoders()
+    except CpuQueryEncodersNotReadyError as exc:
+        logger.warning("likeness-search: cannot encode the query image yet: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Search is still loading its models; try the search again shortly."
+                if exc.worker_running
+                else NO_GPU_WORKER_DETAIL
+            ),
+        ) from exc
+    if encoders is None:
         raise HTTPException(
             status_code=503,
             detail="Inference engine not available; CLIP model not loaded.",
         )
 
-    workflow = engine.clip_embedding_workflow
+    workflow = encoders.clip_embedding_workflow
     try:
         embeddings = workflow.encode_images([pil_image])
     except Exception as exc:
@@ -309,7 +329,13 @@ def register_routes(router, server):
                         detail=f"File {idx + 1}: could not decode uploaded image.",
                     ) from exc
 
-                query_embeddings.append(_encode_query_image(server, pil_image))
+                # In an executor: the encode blocks, and on Metal a search that
+                # arrives before the CPU copy of CLIP has loaded waits for it.
+                query_embeddings.append(
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, _encode_query_image, server, pil_image
+                    )
+                )
         else:
             raise HTTPException(
                 status_code=400,

@@ -20,6 +20,7 @@ test is guaranteed to run after the ones it would be watching.
 """
 
 import numpy as np
+import asyncio
 import contextlib
 import logging
 import os
@@ -74,6 +75,11 @@ from pixlstash.db_models import (
 import pixlstash.image_plugins.service as image_plugin_service
 import pixlstash.routes.pictures as pictures_routes
 from pixlstash.image_plugins.base import ImagePlugin
+from pixlstash.inference.cpu_query_encoders import CpuQueryEncoders
+from pixlstash.inference.errors import (
+    NO_GPU_WORKER_DETAIL,
+    CpuQueryEncodersNotReadyError,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.routes.pictures._anomaly import clear_anomaly_region_cache
 from pixlstash.task_runner import (
@@ -86,6 +92,8 @@ from pixlstash.tasks.tag_task import TagTask
 from pixlstash.tasks.task_type import TaskType
 from pixlstash.server import Server
 from pixlstash.services import plugin_service
+from pixlstash.utils.service.export_utils import ExportUtils
+from starlette.datastructures import QueryParams
 from tests.utils import seed_likeness_stable, upload_pictures_and_wait, wait_for_faces
 
 logger = get_logger(__name__)
@@ -2356,6 +2364,27 @@ def test_text_search_encodes_the_query_off_the_db_writer_thread(
     assert searches[0]["clip_query_embedding"] is encodes[1][3]
 
 
+def _export_by_query(server, client, query):
+    """Export by *query* and wait for the export to finish."""
+    resp = client.get("/pictures/export", params={"query": query})
+    assert resp.status_code == 200, resp.text
+    task_id = resp.json()["task_id"]
+    try:
+        deadline = time.monotonic() + 30
+        while True:
+            status = client.get("/pictures/export/status", params={"task_id": task_id})
+            assert status.status_code == 200, status.text
+            if status.json()["status"] != "in_progress":
+                return status.json()
+            assert time.monotonic() < deadline, "export did not finish within 30 s"
+            time.sleep(0.1)
+    finally:
+        task = server.export_tasks.pop(task_id, None)
+        private_dir = (task or {}).get("private_dir")
+        if private_dir:
+            shutil.rmtree(private_dir, ignore_errors=True)
+
+
 def _settle_the_gpu_worker(runner):
     """Cancel the queued tasks and wait out the one the GPU worker is running.
 
@@ -2366,6 +2395,29 @@ def _settle_the_gpu_worker(runner):
     runner.run_on_gpu_worker(lambda: None, timeout_s=120)
 
 
+def _make_every_query_find(server, picture_id):
+    """Point *picture_id*'s text embedding along the stand-in SBERT query vectors.
+
+    Those are all ``np.full(384, 0.5)``, so a text search then scores the
+    picture above 0. ``Picture.semantic_search`` drops a picture that scores 0,
+    as a fresh upload with no tags and no text embedding does. Call with the
+    work planner stopped: the GPU worker is settled first, so no embedding task
+    overwrites the vector before the export reads it.
+    """
+    assert not server.vault._work_planner.is_running(), "stop the work planner first"
+    _settle_the_gpu_worker(server.vault._task_runner)
+
+    def set_embedding(session):
+        session.exec(
+            update(Picture)
+            .where(Picture.id == picture_id)
+            .values(text_embedding=np.ones(384, dtype=np.float32).tobytes())
+        )
+        session.commit()
+
+    server.vault.db.run_task(set_embedding)
+
+
 def test_export_by_query_encodes_the_query_off_the_db_writer_thread(
     server, client, monkeypatch
 ):
@@ -2373,23 +2425,18 @@ def test_export_by_query_encodes_the_query_off_the_db_writer_thread(
 
     Export by query uses only the SBERT encoder, on ``"A photo of " + query``.
     """
+    picture_id = _upload_one_picture(client)
     encodes, searches, writer = _record_query_encoding(server, monkeypatch)
-
-    resp = client.get("/pictures/export", params={"query": "a red bicycle"})
-    assert resp.status_code == 200, resp.text
-    task_id = resp.json()["task_id"]
+    planner = server.vault._work_planner
+    planner.stop()
     try:
-        deadline = time.monotonic() + 30
-        while True:
-            status = client.get("/pictures/export/status", params={"task_id": task_id})
-            assert status.status_code == 200, status.text
-            if status.json()["status"] != "in_progress":
-                break
-            assert time.monotonic() < deadline, "export did not finish within 30 s"
-            time.sleep(0.1)
+        _make_every_query_find(server, picture_id)
+        status = _export_by_query(server, client, "a red bicycle")
     finally:
-        server.export_tasks.pop(task_id, None)
+        planner.start()
 
+    # clean_library empties the library before each test: the one upload is all.
+    assert (status["status"], status["processed"]) == ("completed", 1), status
     assert [(name, text) for name, text, _, _ in encodes] == [
         ("sbert", "A photo of a red bicycle"),
     ], "export must encode 'A photo of <query>' once, with SBERT only"
@@ -2401,11 +2448,54 @@ def test_export_by_query_encodes_the_query_off_the_db_writer_thread(
     assert searches[0].get("clip_query_embedding") is None
 
 
+class _CpuQueryService:
+    """A CPU copy of SBERT or CLIP that records each encode in *calls*.
+
+    Records ``(name, thread)``, and in :attr:`on_loop` whether an event loop
+    was running on that thread. Loaded unless *load_error* is given, which its
+    load raises.
+    """
+
+    def __init__(self, calls, load_error: Exception | None = None):
+        self._calls = calls
+        self._load_error = load_error
+        self.on_loop: list[bool] = []
+
+    def is_loaded(self) -> bool:
+        return self._load_error is None
+
+    def ensure_ready(self) -> None:
+        if self._load_error is not None:
+            raise self._load_error
+
+    def encode(self, texts):
+        self._record("cpu_sbert")
+        return [np.full(384, 0.5, np.float32) for _ in texts]
+
+    def encode_text(self, query):
+        self._record("cpu_clip_text")
+        return np.full(512, 0.25, np.float32)
+
+    def encode_image_batch(self, images, tensors=None):
+        self._record("cpu_clip_image")
+        return np.ones((len(images), 512), dtype=np.float32)
+
+    def _record(self, name):
+        self.ensure_ready()
+        try:
+            asyncio.get_running_loop()
+            self.on_loop.append(True)
+        except RuntimeError:
+            self.on_loop.append(False)
+        self._calls.append((name, threading.current_thread()))
+
+
 class _MetalEngine:
     """An engine on Apple Metal whose device work records the thread it ran on.
 
-    Carries the anomaly tagger's load and Grad-CAM pass, each appending
-    ``(name, thread)`` to :attr:`calls`.
+    Carries the three Metal query encoders, their CPU copies, and the anomaly
+    tagger's load and Grad-CAM pass, each appending ``(name, thread)`` to
+    :attr:`calls`. The CPU copies' names start with ``cpu_``.
     """
 
     device = "mps"
@@ -2413,8 +2503,24 @@ class _MetalEngine:
     def __init__(
         self,
         tagger_loaded: bool = True,
+        cpu_load_error: Exception | None = None,
     ):
         self.calls: list[tuple[str, threading.Thread]] = []
+        self.cpu_query_encoders = CpuQueryEncoders(
+            clip_service=_CpuQueryService(self.calls, cpu_load_error),
+            sbert_service=_CpuQueryService(self.calls, cpu_load_error),
+        )
+        self.text_embedding_workflow = types.SimpleNamespace(
+            encode_query=self._recorder("sbert", [np.full(384, 0.5, np.float32)]),
+            encode_clip_query=self._recorder(
+                "clip_text", np.full(512, 0.25, np.float32)
+            ),
+        )
+        self.clip_embedding_workflow = types.SimpleNamespace(
+            encode_images=self._recorder(
+                "clip_image", np.ones((1, 512), dtype=np.float32)
+            )
+        )
         self._tagger_loaded = tagger_loaded
         self.pixlstash_tagger_service = types.SimpleNamespace(
             is_loaded=lambda: self._tagger_loaded,
@@ -2458,6 +2564,261 @@ def _serving_on_metal(server, engine):
     finally:
         vault._engine = original
         planner.start()
+
+
+def _small_png() -> bytes:
+    buf = BytesIO()
+    Image.new("RGB", (8, 8), (200, 30, 30)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _record_gpu_calls(server, monkeypatch):
+    """Record every ``GpuCallTask`` submitted to the vault's task runner.
+
+    The real ``submit`` still runs; ``run_on_gpu_worker`` submits through it.
+    """
+    runner = server.vault._task_runner
+    calls = []
+    real_submit = runner.submit
+
+    def submit(task):
+        if isinstance(task, GpuCallTask):
+            calls.append(task)
+        return real_submit(task)
+
+    monkeypatch.setattr(runner, "submit", submit)
+    return calls
+
+
+def test_likeness_search_encodes_on_the_cpu_copy_off_the_event_loop(
+    server, client, monkeypatch
+):
+    """On Metal the upload is encoded by the CPU copy of CLIP, in the executor.
+
+    Never on the GPU worker, and never on the event loop: the encode blocks.
+    """
+    engine = _MetalEngine()
+    gpu_calls = _record_gpu_calls(server, monkeypatch)
+
+    with _serving_on_metal(server, engine) as worker:
+        resp = client.post(
+            "/pictures/likeness-search",
+            files=[("files", ("query.png", _small_png(), "image/png"))],
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert [name for name, _ in engine.calls] == ["cpu_clip_image"]
+    assert engine.calls[0][1] is not worker
+    assert engine.cpu_query_encoders.clip_service.on_loop == [False], (
+        "the query image was encoded on the event loop"
+    )
+    assert gpu_calls == [], (
+        f"likeness search queued work on the GPU worker: {gpu_calls}"
+    )
+
+
+def test_text_search_encodes_on_the_cpu_copies_on_metal(server, client, monkeypatch):
+    engine = _MetalEngine()
+    gpu_calls = _record_gpu_calls(server, monkeypatch)
+
+    with _serving_on_metal(server, engine) as worker:
+        resp = client.get(
+            "/pictures/search", params={"query": "a red bicycle", "threshold": 0.0}
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert [name for name, _ in engine.calls] == ["cpu_sbert", "cpu_clip_text"]
+    for name, thread in engine.calls:
+        assert thread is not worker, f"the {name} encode ran on the GPU worker"
+    assert gpu_calls == [], f"text search queued work on the GPU worker: {gpu_calls}"
+
+
+def test_export_by_query_encodes_on_the_cpu_copy_on_metal(server, client, monkeypatch):
+    picture_id = _upload_one_picture(client)
+    engine = _MetalEngine()
+
+    with _serving_on_metal(server, engine) as worker:
+        _make_every_query_find(server, picture_id)
+        gpu_calls = _record_gpu_calls(server, monkeypatch)
+        status = _export_by_query(server, client, "a red bicycle")
+
+    # clean_library empties the library before each test: the one upload is all.
+    assert (status["status"], status["processed"]) == ("completed", 1), status
+    assert [name for name, _ in engine.calls] == ["cpu_sbert"]
+    assert engine.calls[0][1] is not worker
+    assert gpu_calls == [], f"export queued work on the GPU worker: {gpu_calls}"
+
+
+@pytest.mark.parametrize("route", ["search", "likeness-search"])
+def test_a_search_is_503_while_the_cpu_copies_are_not_loaded(
+    route, server, client, monkeypatch
+):
+    """A search that cannot encode its query yet is refused, not failed with a 500.
+
+    The CPU copies' load, queued on the GPU worker, fails here.
+    """
+    engine = _MetalEngine(cpu_load_error=OSError("no model files"))
+    gpu_calls = _record_gpu_calls(server, monkeypatch)
+
+    with _serving_on_metal(server, engine):
+        if route == "search":
+            resp = client.get(
+                "/pictures/search", params={"query": "a red bicycle", "threshold": 0.0}
+            )
+        else:
+            resp = client.post(
+                "/pictures/likeness-search",
+                files=[("files", ("query.png", _small_png(), "image/png"))],
+            )
+
+    assert len(gpu_calls) == 1, "the search did not queue the load it needed"
+    assert resp.status_code == 503, resp.text
+    assert "still loading its models" in resp.json()["detail"]
+    assert engine.calls == []
+
+
+@pytest.mark.parametrize("route", ["zip", "folder"])
+def test_an_export_by_query_is_503_while_the_cpu_copies_are_not_loaded(
+    route, server, client
+):
+    """Starting an export by query is refused, as a search is, until it can encode.
+
+    The export encodes its query in its background task, after the start
+    request has answered, where a failure reaches the owner as a bare
+    ``failed``. The CPU copies' load, queued on the GPU worker, fails here. The
+    export of a set does not encode its query, so it still starts. The folder
+    route needs a loopback owner, which the in-process client counts as.
+    """
+    engine = _MetalEngine(cpu_load_error=OSError("no model files"))
+
+    with (
+        _serving_on_metal(server, engine),
+        tempfile.TemporaryDirectory() as destination,
+    ):
+
+        def start(**params):
+            if route == "zip":
+                return client.get("/pictures/export", params=params)
+            return client.post(
+                "/pictures/export/folder",
+                params={"destination": destination, **params},
+            )
+
+        before = set(server.export_tasks)
+        refused = start(query="a red bicycle")
+        after_refused = set(server.export_tasks)
+        # Positive control: an export that starts is seen registering its task.
+        started = start(query="a red bicycle", set_id=987654)
+        started_ids = set(server.export_tasks) - after_refused
+        for task_id in started_ids:
+            server.export_tasks.pop(task_id, None)
+
+    assert refused.status_code == 503, refused.text
+    assert refused.json()["detail"] == (
+        "Search is still loading its models; try the export again shortly."
+    )
+    assert after_refused - before == set(), "the refused export registered a task"
+    assert started.status_code == 200, started.text
+    assert started_ids == {started.json()["task_id"]}
+    assert engine.calls == []
+
+
+@pytest.mark.parametrize("route", ["search", "likeness", "zip", "folder"])
+def test_a_search_with_no_gpu_worker_to_load_its_models_does_not_promise_a_retry(
+    route, server, client, monkeypatch
+):
+    """A dead GPU worker does not come back, so "try again shortly" would mislead.
+
+    Positive control: the same refusal with a worker running still asks for a
+    retry.
+    """
+    details = {}
+
+    with (
+        _serving_on_metal(server, _MetalEngine()),
+        tempfile.TemporaryDirectory() as destination,
+    ):
+        for worker_running in (False, True):
+
+            def refuse(worker_running=worker_running):
+                raise CpuQueryEncodersNotReadyError(
+                    "not loaded", worker_running=worker_running
+                )
+
+            monkeypatch.setattr(server.vault, "query_encoders", refuse)
+            if route == "search":
+                resp = client.get(
+                    "/pictures/search",
+                    params={"query": "a red bicycle", "threshold": 0.0},
+                )
+            elif route == "likeness":
+                resp = client.post(
+                    "/pictures/likeness-search",
+                    files=[("files", ("query.png", _small_png(), "image/png"))],
+                )
+            elif route == "zip":
+                resp = client.get("/pictures/export", params={"query": "a red bicycle"})
+            else:
+                resp = client.post(
+                    "/pictures/export/folder",
+                    params={"destination": destination, "query": "a red bicycle"},
+                )
+            assert resp.status_code == 503, resp.text
+            details[worker_running] = resp.json()["detail"]
+
+    assert details[False] == NO_GPU_WORKER_DETAIL
+    assert "again shortly" in details[True]
+
+
+def test_an_export_that_cannot_encode_its_query_when_it_runs_fails_with_a_warning(
+    server, caplog
+):
+    """The background fallback, for a query encoder load that fails.
+
+    The start route cannot check the encoders before the engine exists. By the
+    time the export task runs, its encode waits for their load and fails only
+    if that load fails or outlasts the wait. Both generators share the encode,
+    so both are run directly, with the CPU copies' load failing on the GPU
+    worker.
+    """
+    engine = _MetalEngine(cpu_load_error=OSError("no model files"))
+    request = types.SimpleNamespace(
+        query_params=QueryParams(), state=types.SimpleNamespace()
+    )
+    tasks = {
+        "zip-task": {"status": "in_progress"},
+        "folder-task": {"status": "in_progress"},
+    }
+    caplog.set_level(logging.WARNING, logger=ExportUtils.__module__)
+
+    with (
+        _serving_on_metal(server, engine),
+        tempfile.TemporaryDirectory() as destination,
+    ):
+        ExportUtils.generate_zip(
+            server, request, "zip-task", tasks, {"query": "a red bicycle"}
+        )
+        ExportUtils.generate_folder_export(
+            server,
+            request,
+            "folder-task",
+            tasks,
+            {"destination": destination, "query": "a red bicycle"},
+        )
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == ExportUtils.__module__ and record.levelno == logging.WARNING
+    ]
+    for task_id, task in tasks.items():
+        assert task["status"] == "failed", (task_id, task)
+        prefix = (
+            f"Export task {task_id} cannot encode its search query yet "
+            "(query='a red bicycle'): "
+        )
+        assert [m for m in warnings if m.startswith(prefix)], (task_id, warnings)
+    assert engine.calls == []
 
 
 def _fail_on_the_gpu_worker(server, monkeypatch, error):

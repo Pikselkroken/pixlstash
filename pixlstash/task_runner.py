@@ -739,6 +739,17 @@ class TaskRunner:
         worker = self._gpu_worker_thread
         return worker is not None and threading.current_thread() is worker
 
+    def is_gpu_worker_alive(self) -> bool:
+        """True while this runner has a GPU worker thread and it is running.
+
+        ``False`` before ``start()``, after a ``stop()`` whose worker exited,
+        and once the worker has died. A worker still running a task after its
+        runner's ``stop()`` is alive, although nothing new will reach it:
+        ``submit`` refuses a stopped runner.
+        """
+        worker = self._gpu_worker_thread
+        return worker is not None and worker.is_alive()
+
     def run_on_gpu_worker(
         self,
         fn: Callable[..., Any],

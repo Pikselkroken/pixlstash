@@ -13,6 +13,10 @@ from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict
 from typing import Optional
 
+from pixlstash.inference.errors import (
+    NO_GPU_WORKER_DETAIL,
+    CpuQueryEncodersNotReadyError,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.library_roots import refuse_path_inside_a_library
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
@@ -54,6 +58,46 @@ class ExportStatusResponse(BaseModel):
     opened: Optional[bool] = None
 
 
+def _refuse_while_the_query_cannot_be_encoded(vault, request, query, set_id) -> None:
+    """Answer 503 while an export by *query* could not encode its query.
+
+    The export encodes the query in its background task, after the start
+    request has answered, where a failure reaches the owner only as a bare
+    ``failed`` status. So it is checked here first, as a search does: on Apple
+    Metal ``Vault.query_encoders`` waits for the CPU copies of the search
+    models to load and raises when they do not; elsewhere it returns at once.
+    An export of selected ids or of a set does not encode its query
+    (``ExportUtils._gather_export_pictures`` takes those first), so it is not
+    refused.
+
+    Args:
+        vault: The vault the export runs against.
+        request: The start request, whose ``id`` parameters select pictures.
+        query: The export's search query, if any.
+        set_id: The picture set to export, if any.
+
+    Raises:
+        HTTPException: 503 when the export would encode *query* and the query
+            encoders are not ready.
+    """
+    if not query or set_id is not None or request.query_params.getlist("id"):
+        return
+    try:
+        vault.query_encoders()
+    except CpuQueryEncodersNotReadyError as exc:
+        logger.warning(
+            "Export by query cannot encode its query yet (query=%r): %s", query, exc
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Search is still loading its models; try the export again shortly."
+                if exc.worker_running
+                else NO_GPU_WORKER_DETAIL
+            ),
+        ) from exc
+
+
 def register_routes(router, server):
     def discard_export(task_id: str, task: dict) -> None:
         current = server.export_tasks.get(task_id)
@@ -93,8 +137,9 @@ def register_routes(router, server):
         tag_format: str = Query("spaces"),
         bbox_mode: str = Query("none"),
     ):
-        task_id = str(uuid.uuid4())
         lease = request.state.library_lease
+        _refuse_while_the_query_cannot_be_encoded(lease.vault, request, query, set_id)
+        task_id = str(uuid.uuid4())
         server.export_tasks[task_id] = {
             "status": "in_progress",
             "file_path": None,
@@ -222,6 +267,7 @@ def register_routes(router, server):
                 status_code=409,
                 detail="Destination folder is not empty. Choose or create an empty folder.",
             )
+        _refuse_while_the_query_cannot_be_encoded(vault, request, query, set_id)
 
         task_id = str(uuid.uuid4())
         lease = request.state.library_lease

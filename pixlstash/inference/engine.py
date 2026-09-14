@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from pixlstash.inference.cpu_query_encoders import CpuQueryEncoders
 from pixlstash.inference.vram_budget import VramBudget
 from pixlstash.inference.model_lifecycle import ModelLifecycleManager
 from pixlstash.pixl_logging import get_logger
@@ -12,6 +13,7 @@ from pixlstash.services.builtin_models import builtin_model_dir
 from pixlstash.utils.device_utils import (
     configure_metal_model_loading,
     detect_device,
+    is_metal,
 )
 
 if TYPE_CHECKING:
@@ -69,6 +71,9 @@ class InferenceEngine:
             PixlStash tagger.
         tagger_settings: Full plugin settings dict (takes precedence over the
             per-tagger flags when provided).
+        cpu_query_encoders: CPU copies of the SBERT and CLIP services that
+            encode search queries when *device* is Apple Metal, or ``None``
+            (see :class:`CpuQueryEncoders`).
     """
 
     def __init__(
@@ -89,6 +94,7 @@ class InferenceEngine:
         pixlstash_tagger_enabled: bool = True,
         pixlstash_tagger_threshold_offset: float = 0.0,
         tagger_settings: dict | None = None,
+        cpu_query_encoders: CpuQueryEncoders | None = None,
     ) -> None:
         self.device = device
         self.clip_service = clip_service
@@ -100,6 +106,7 @@ class InferenceEngine:
         self.lifecycle = lifecycle
         self.force_cpu = force_cpu
         self.image_root = image_root
+        self.cpu_query_encoders = cpu_query_encoders
         self._keep_models_in_memory = keep_models_in_memory
         self.insightface_model_pack = insightface_model_pack
         # tagger_settings is the authoritative config; the per-tagger flags are
@@ -351,7 +358,12 @@ class InferenceEngine:
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        """Unload all models and release GPU/CPU memory."""
+        """Unload the engine's models and release GPU/CPU memory.
+
+        :attr:`cpu_query_encoders` are left loaded and freed with the engine: a
+        search may still hold them, and its encode would load an unloaded model
+        again on its own thread.
+        """
         self.lifecycle.aggressive_unload(
             clip_service=self.clip_service,
             wd14_service=self.wd14_service,
@@ -566,6 +578,20 @@ class InferenceEngine:
 
         clip_service = ClipService(device=device)
         sbert_service = SBertService(device=device)
+        # On Metal a search encodes its query with CPU copies of these two, on
+        # its own thread, so it never uses Metal beside the GPU worker. Same
+        # classes on the CPU device: the vectors agree with the Metal ones to
+        # about 1e-06 and the top ten results matched in every query measured.
+        # The copies are loaded on the GPU worker, queued as the vault builds
+        # this engine (Vault._queue_cpu_query_encoder_load).
+        cpu_query_encoders = (
+            CpuQueryEncoders(
+                clip_service=ClipService(device="cpu"),
+                sbert_service=SBertService(device="cpu"),
+            )
+            if is_metal(device)
+            else None
+        )
 
         # Mutable cell so batch_size_fn closures can reference the engine
         # before it is constructed.
@@ -646,6 +672,7 @@ class InferenceEngine:
             pixlstash_tagger_enabled=pixlstash_tagger_enabled,
             pixlstash_tagger_threshold_offset=pixlstash_tagger_threshold_offset,
             tagger_settings=tagger_settings,
+            cpu_query_encoders=cpu_query_encoders,
         )
         _engine_cell[0] = engine
 
