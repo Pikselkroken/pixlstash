@@ -24,35 +24,48 @@
          icon columns. It spans instead. -->
     <div class="editor-body">
       <div class="editor-col">
-        <AppInput
-          ref="nameInputRef"
-          v-model="localSet.name"
-          label="Name *"
-          placeholder="Picture set name"
-          icon="layers-triple-outline"
-          :disabled="isLockedSet"
-          :title="isLockedSet ? LOCK_REASON : undefined"
-          @enter="save"
-        />
-        <AppTextarea
-          v-model="localSet.description"
-          label="Description"
-          placeholder="Optional description…"
-          :rows="2"
-          :disabled="isLockedSet"
-          :title="isLockedSet ? LOCK_REASON : undefined"
-        />
+        <Tooltip :text="isLockedSet ? LOCK_REASON : ''">
+          <template #activator="{ props: tipProps }">
+            <AppInput
+              v-bind="
+                withRef(tipProps, (el) => (nameInputRef = el))
+              "
+              v-model="localSet.name"
+              label="Name *"
+              placeholder="Picture set name"
+              icon="layers-triple-outline"
+              :disabled="isLockedSet"
+              @enter="save"
+            />
+          </template>
+        </Tooltip>
+        <Tooltip :text="isLockedSet ? LOCK_REASON : ''">
+          <template #activator="{ props: tipProps }">
+            <AppTextarea
+              v-bind="tipProps"
+              v-model="localSet.description"
+              label="Description"
+              placeholder="Optional description…"
+              :rows="2"
+              :disabled="isLockedSet"
+            />
+          </template>
+        </Tooltip>
       </div>
 
       <div class="editor-col">
-        <AppSelect
-          v-model="projectSelection"
-          label="Projects"
-          :options="projectOptions"
-          :multiple="true"
-          :disabled="isLockedSet"
-          :title="isLockedSet ? LOCK_REASON : undefined"
-        />
+        <Tooltip :text="isLockedSet ? LOCK_REASON : ''">
+          <template #activator="{ props: tipProps }">
+            <AppSelect
+              v-bind="tipProps"
+              v-model="projectSelection"
+              label="Projects"
+              :options="projectOptions"
+              :multiple="true"
+              :disabled="isLockedSet"
+            />
+          </template>
+        </Tooltip>
 
         <!-- Locked toggle: the only control that stays active while the set is
              locked, so unticking + Save is the unlock path. -->
@@ -77,8 +90,8 @@
       <div
         class="appearance-row editor-span"
         :class="{ 'appearance-row--locked': isLockedSet }"
-        :title="isLockedSet ? LOCK_REASON : undefined"
       >
+        <Tooltip :text="isLockedSet ? LOCK_REASON : ''" activator="parent" />
         <FieldLabel>Choose icon or thumbnail &amp; color</FieldLabel>
         <div class="appearance-sections">
           <div class="icon-thumb-box">
@@ -94,12 +107,17 @@
                     type="button"
                     class="icon-btn"
                     :class="{ selected: localSet.set_icon === ic.value }"
-                    :title="ic.label"
+                    :aria-label="ic.label"
                     :disabled="isLockedSet"
                     @click="localSet.set_icon = ic.value"
                   >
+                    <Tooltip
+                      :text="ic.label"
+                      activator="parent"
+                      :describe="false"
+                    />
                     <v-icon
-                      size="20"
+                      size="24"
                       :color="localSet.set_color || undefined"
                       >{{ ic.value }}</v-icon
                     >
@@ -120,10 +138,11 @@
                 type="button"
                 class="icon-btn--cards-large"
                 :class="{ selected: localSet.set_icon === ICON_CARDS }"
-                title="Thumbnail"
+                aria-label="Thumbnail"
                 :disabled="isLockedSet"
                 @click="localSet.set_icon = ICON_CARDS"
               >
+                <Tooltip text="Thumbnail" activator="parent" :describe="false" />
                 <img
                   v-if="props.thumbnailUrl && !thumbnailBroken"
                   :src="props.thumbnailUrl"
@@ -151,10 +170,16 @@
                 class="color-swatch"
                 :class="{ selected: localSet.set_color === col.value }"
                 :style="{ background: col.value }"
-                :title="col.label"
+                :aria-label="col.label"
                 :disabled="isLockedSet"
                 @click="localSet.set_color = col.value"
-              />
+              >
+                <Tooltip
+                  :text="col.label"
+                  activator="parent"
+                  :describe="false"
+                />
+              </button>
             </div>
           </div>
         </div>
@@ -191,6 +216,7 @@
 </template>
 
 <script setup>
+import { withRef } from "../../utils/withRef.js";
 import { computed, ref, watch, nextTick, onUnmounted } from "vue";
 import { VIcon } from "vuetify/components";
 import {
@@ -210,6 +236,7 @@ import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import AppSelect from "../widgets/AppSelect.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
 import AdapterTray from "../widgets/AdapterTray.vue";
 import { errorDetail } from "../../utils/apiError";
@@ -507,7 +534,7 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
    already carry their own :disabled state (per the visual-language disabled
    rule), so this is a lighter wash on top of that - enough to read as inactive
    without dropping the block below legibility. Pointer events stay on the
-   container so its lock-reason title still shows on hover. */
+   container so its lock-reason tooltip still shows on hover. */
 .appearance-row--locked {
   opacity: 0.55;
 }
@@ -691,12 +718,12 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 
 .color-swatch:hover {
   transform: scale(1.1);
-  z-index: 1;
+  z-index: var(--z-raised);
 }
 
 .color-swatch.selected {
   border-color: rgb(var(--v-theme-on-surface));
   transform: scale(1.1);
-  z-index: 1;
+  z-index: var(--z-raised);
 }
 </style>

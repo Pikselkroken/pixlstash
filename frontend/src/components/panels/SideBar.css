@@ -464,12 +464,12 @@
 .sidebar-collapsed-project-menu,
 .sidebar-collapsed-project-submenu {
   position: fixed;
-  z-index: 300;
+  z-index: var(--z-dropdown);
   min-width: 180px;
 }
 
 .sidebar-collapsed-project-submenu {
-  z-index: 301;
+  z-index: var(--z-dropdown);
   max-height: 60vh;
   overflow-y: auto;
 }
@@ -497,7 +497,7 @@
 
 .sidebar-collapsed-flyout-menu {
   position: fixed;
-  z-index: 300;
+  z-index: var(--z-dropdown);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1230,7 +1230,7 @@
 
 .sidebar-move-menu {
   position: fixed;
-  z-index: 9999;
+  z-index: var(--z-overlay);
   min-width: 180px;
   max-width: 300px;
   max-height: 420px; /* keep in sync with MOVE_MENU_MAX_H in the script */
@@ -1631,7 +1631,7 @@
   font-size: var(--text-base);
   white-space: nowrap;
   pointer-events: none;
-  z-index: 1000 !important;
+  z-index: var(--z-drawer) !important;
 }
 
 @media (hover: none) and (pointer: coarse) {
@@ -1848,7 +1848,7 @@
 /* ── Sidebar context menu ────────────────────────────── */
 .sidebar-ctx-menu {
   position: fixed;
-  z-index: 2000;
+  z-index: var(--z-overlay);
   min-width: 140px;
   max-width: 260px;
   user-select: none;
@@ -1866,7 +1866,7 @@
 /* Appearance panel (icon / color picker) that floats next to the context menu */
 .sidebar-ctx-appearance-panel {
   position: fixed;
-  z-index: 2100;
+  z-index: var(--z-overlay);
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
   border-radius: var(--radius-md);
@@ -2014,13 +2014,13 @@
 
 .sidebar-ctx-color-swatch:hover {
   transform: scale(1.12);
-  z-index: 1;
+  z-index: var(--z-raised);
 }
 
 .sidebar-ctx-color-swatch.selected {
   border-color: #fff;
   transform: scale(1.12);
-  z-index: 1;
+  z-index: var(--z-raised);
 }
 
 .folder-type-subtitle {

@@ -8,7 +8,7 @@ import { expect } from '@playwright/test'
  * its own beyond readiness waits.
  *
  * The overlay opens from a Pinia store flag (reviewSessionsStore.overlayOpen),
- * toggled by the toolbar button title="Review and fix tags". There are no
+ * toggled by the toolbar button named "Review and fix tags". There are no
  * data-testid attributes in the feature; selectors are class/title/kbd based.
  *
  * The new-review dialog's tag chips are the health-board rows, so the health
@@ -20,7 +20,7 @@ export class ReviewSessions {
   constructor(page) {
     this.page = page
     // Launch + shell
-    this.launchButton = page.locator('button[title="Review and fix tags"]').first()
+    this.launchButton = page.locator('button[aria-label="Review and fix tags"]').first()
     this.overlay = page.locator('.rs-overlay')
     this.shell = page.locator('.rs-shell')
 

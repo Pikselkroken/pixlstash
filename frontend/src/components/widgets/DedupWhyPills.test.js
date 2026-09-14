@@ -10,7 +10,25 @@ import { mount } from "@vue/test-utils";
 
 import DedupWhyPills from "./DedupWhyPills.vue";
 
-const globalOpts = { global: { stubs: { "v-icon": true } } };
+// The one tooltip surface, reduced to what a test can read: the tip's text as
+// `data-tip`, on the activator element or on a marker inside the parent. A
+// describing tip claims its activator's `aria-describedby`, as the real one does.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "shortcut", "location", "disabled", "describe", "activator"],
+  template: `<slot
+      v-if="$slots.activator"
+      name="activator"
+      :props="{
+        'data-tip': text || undefined,
+        'aria-describedby': describe === false ? undefined : 'tooltip-stub',
+      }"
+    /><span v-else-if="text" class="tip" :data-tip="text" />`,
+};
+
+const globalOpts = {
+  global: { stubs: { Tooltip: TooltipStub, "v-icon": true } },
+};
 
 /** Two supporting reasons with the warning last, as the server may send it. */
 const MIXED = [
@@ -66,10 +84,10 @@ describe("DedupWhyPills", () => {
   it("states the for/against split in words as well as colour", () => {
     // WCAG 1.4.1: colour alone must not carry the meaning.
     const pills = mountPills().findAll(".why-pill");
-    expect(pills[0].attributes("title")).toBe(
+    expect(pills[0].find(".tip").attributes("data-tip")).toBe(
       "Different capture time. Argues against stacking.",
     );
-    expect(pills[1].attributes("title")).toBe(
+    expect(pills[1].find(".tip").attributes("data-tip")).toBe(
       "Same size. Supports stacking.",
     );
     expect(pills[0].attributes("aria-label")).toBe(

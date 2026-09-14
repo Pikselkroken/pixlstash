@@ -1,6 +1,6 @@
 <template>
   <div class="info-card">
-    <v-icon size="15" class="info-card__icon">mdi-information-outline</v-icon>
+    <v-icon size="16" class="info-card__icon">mdi-information-outline</v-icon>
     <span class="info-card__text"><slot /></span>
   </div>
 </template>

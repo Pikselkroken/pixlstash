@@ -73,7 +73,7 @@ function filesChosen(event) {
              whole release rests on. -->
         <li class="library-empty__option">
           <span class="library-empty__mark" aria-hidden="true">
-            <v-icon size="19">mdi-folder-outline</v-icon>
+            <v-icon size="18">mdi-folder-outline</v-icon>
           </span>
           <span v-if="rootMayHoldPictures" class="library-empty__text">
             <span class="library-empty__heading"
@@ -106,7 +106,7 @@ function filesChosen(event) {
 
         <li class="library-empty__option">
           <span class="library-empty__mark" aria-hidden="true">
-            <v-icon size="19">mdi-tray-arrow-up</v-icon>
+            <v-icon size="18">mdi-tray-arrow-up</v-icon>
           </span>
           <span class="library-empty__text">
             <span class="library-empty__heading">Drop pictures in</span>
@@ -121,7 +121,7 @@ function filesChosen(event) {
 
         <li class="library-empty__option">
           <span class="library-empty__mark" aria-hidden="true">
-            <v-icon size="19">mdi-graph-outline</v-icon>
+            <v-icon size="18">mdi-graph-outline</v-icon>
           </span>
           <span class="library-empty__text">
             <span class="library-empty__heading">Connect ComfyUI</span>

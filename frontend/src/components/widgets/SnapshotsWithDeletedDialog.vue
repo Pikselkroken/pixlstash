@@ -2,6 +2,7 @@
 import { kindChipColor, relativeDate } from "../../utils/snapshots";
 import { formatUserDate } from "../../utils/utils";
 import AppButton from "./AppButton.vue";
+import Tooltip from "./Tooltip.vue";
 import AppDialog from "./AppDialog.vue";
 
 defineProps({
@@ -47,10 +48,11 @@ const emit = defineEmits(["update:modelValue", "update:dontShowAgain"]);
           <div class="snap-del-item-title">
             {{ snap.label || `${snap.kind} snapshot` }}
           </div>
-          <div
-            class="snap-del-item-subtitle"
-            :title="formatUserDate(snap.created_at, 'iso')"
-          >
+          <div class="snap-del-item-subtitle">
+            <Tooltip
+              :text="formatUserDate(snap.created_at, 'iso')"
+              activator="parent"
+            />
             {{ relativeDate(snap.created_at) }} ·
             {{ snap.matched_count }}
             {{ snap.matched_count === 1 ? "picture" : "pictures" }}

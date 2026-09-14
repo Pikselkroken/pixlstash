@@ -14,6 +14,18 @@ import { readFileSync } from "node:fs";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { mount } from "@vue/test-utils";
 
+vi.mock("vuetify/components", async (importOriginal) => ({
+  ...(await importOriginal()),
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup:
+      (_p, { slots }) =>
+      () =>
+        slots.activator?.({ props: {} }),
+  },
+}));
+
 import SearchResultBar from "./SearchResultBar.vue";
 
 const globalOpts = {
@@ -97,9 +109,12 @@ describe("SearchResultBar - plain search", () => {
       statusCount: 42,
       statusLabel: 'matches for "sunset" in Landscapes',
     });
-    expect(wrapper.find(".search-result-status").attributes("title")).toBe(
-      '42 matches for "sunset" in Landscapes',
-    );
+    expect(
+      wrapper
+        .find(".search-result-status")
+        .findComponent({ name: "Tooltip" })
+        .props("text"),
+    ).toBe('42 matches for "sunset" in Landscapes');
   });
 });
 
@@ -386,8 +401,11 @@ describe("SearchResultBar - the Esc keycap", () => {
     expect(
       wrapper.find(".clear-search-btn").attributes("aria-keyshortcuts"),
     ).toBeUndefined();
-    expect(wrapper.find(".clear-search-btn").attributes("title")).toBe(
-      "Clear search - press Esc twice, or click",
-    );
+    expect(
+      wrapper
+        .find(".clear-search-btn")
+        .findComponent({ name: "Tooltip" })
+        .props("text"),
+    ).toBe("Clear search - press Esc twice, or click");
   });
 });

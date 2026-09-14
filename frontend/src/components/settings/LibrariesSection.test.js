@@ -26,6 +26,11 @@ vi.mock("vuetify/components", () => ({
     name: "v-menu",
     template: "<div><slot name=\"activator\" :props=\"{}\" /><slot /></div>",
   },
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup: (_p, { slots }) => () => slots.activator?.({ props: {} }),
+  },
 }));
 
 import LibrariesSection from "./LibrariesSection.vue";

@@ -2,7 +2,7 @@
   position: fixed;
   inset: 0;
   background: rgba(var(--v-theme-scrim), 0.92);
-  z-index: 1000;
+  z-index: var(--z-drawer);
 }
 
 /* The lightbox is dark in both themes, so the global focus outline takes the
@@ -239,7 +239,7 @@
   min-width: 420px;
   background: rgba(var(--v-theme-dark-surface), 0.96);
   color: rgb(var(--v-theme-on-dark-surface));
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--elevation-3);
   display: flex;
   flex-direction: column;
@@ -509,7 +509,7 @@
   align-items: center;
   gap: 6px;
   padding: var(--space-3) 20px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
   text-decoration: none;
@@ -658,7 +658,7 @@
 
 .rejected-threshold-label {
   margin-left: 6px;
-  font-size: 0.64rem;
+  font-size: var(--text-2xs);
   opacity: 0.5;
   font-weight: 400;
   letter-spacing: 0.01em;
@@ -687,7 +687,7 @@
 .face-assign-card {
   background: rgba(var(--v-theme-on-dark-surface), 0.06);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 3px;
 }
 
@@ -780,7 +780,7 @@
   top: 8px;
   color: rgb(var(--v-theme-dark-surface-error));
   background: rgba(var(--v-theme-on-dark-surface), 0.12);
-  z-index: 1001;
+  z-index: var(--z-raised);
   font-size: var(--text-sm);
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-sm);
@@ -801,14 +801,14 @@
   box-sizing: border-box;
   position: absolute;
   pointer-events: none;
-  z-index: 1000 !important;
+  z-index: var(--z-raised) !important;
 }
 
 .overlay-draw-layer {
   position: absolute;
   inset: 0;
   pointer-events: auto;
-  z-index: 5000;
+  z-index: var(--z-raised);
   cursor: crosshair;
 }
 
@@ -817,7 +817,7 @@
   border: 2px dashed rgba(var(--v-theme-on-dark-surface), 0.8);
   background: rgba(var(--v-theme-on-dark-surface), 0.12);
   box-sizing: border-box;
-  z-index: 2001;
+  z-index: var(--z-raised);
 }
 
 .overlay-draw-hint {
@@ -833,7 +833,7 @@
   font-weight: var(--weight-semibold);
   box-shadow: var(--elevation-3);
   pointer-events: none;
-  z-index: 2002;
+  z-index: var(--z-raised);
   display: inline-flex;
   align-items: center;
   gap: 10px;

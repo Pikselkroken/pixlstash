@@ -70,11 +70,14 @@
               type="button"
               draggable="true"
               :disabled="tagActionLoading.includes(t.name)"
-              :title="`On all ${totalWithTagData} selected - click to remove, drag to rejected to remove`"
               @dragstart="onCurrentTagDragStart($event, t)"
               @dragend="onDragEnd"
               @click="removeTagFromAll(t)"
             >
+              <Tooltip
+                :text="`On all ${totalWithTagData} selected - click to remove, drag to rejected to remove`"
+                activator="parent"
+              />
               <span class="tag-chip-label">{{
                 formatSentinelTag(t.name)
               }}</span>
@@ -92,11 +95,14 @@
               type="button"
               draggable="true"
               :disabled="tagActionLoading.includes(t.name)"
-              :title="`On ${t.count} of ${totalWithTagData} - click to add to all, drag to rejected to remove`"
               @dragstart="onCurrentTagDragStart($event, t)"
               @dragend="onDragEnd"
               @click="addTagToRemaining(t)"
             >
+              <Tooltip
+                :text="`On ${t.count} of ${totalWithTagData} - click to add to all, drag to rejected to remove`"
+                activator="parent"
+              />
               <span class="tag-chip-label">{{
                 formatSentinelTag(t.name)
               }}</span>
@@ -174,11 +180,14 @@
               draggable="true"
               :disabled="predActionLoading.includes(p.tag)"
               :style="{ '--pred-confidence': p.avgConf }"
-              :title="`Rejected on ${p.count} image${p.count !== 1 ? 's' : ''}, avg ${(p.avgConf * 100).toFixed(0)}%, needs +${(p.avgNeeded * 100).toFixed(0)}% to auto-accept - click to confirm all, drag to current to confirm`"
               @dragstart="onRejectedTagDragStart($event, p)"
               @dragend="onDragEnd"
               @click="confirmPredictionOnAll(p)"
             >
+              <Tooltip
+                :text="`Rejected on ${p.count} image${p.count !== 1 ? 's' : ''}, avg ${(p.avgConf * 100).toFixed(0)}%, needs +${(p.avgNeeded * 100).toFixed(0)}% to auto-accept - click to confirm all, drag to current to confirm`"
+                activator="parent"
+              />
               <span class="tag-chip-label">{{ p.tag }}</span>
               <span class="tag-chip-count"
                 >{{ p.count }}/{{ fetchedPredictionData.length }}</span
@@ -226,7 +235,7 @@
           <div class="plugin-menu-actions tag-autogen-row">
             <AppButton
               :loading="generateTagsLoading"
-              :title="`Reset and regenerate tags for all ${selectedCount} selected image${selectedCount !== 1 ? 's' : ''}`"
+              :tooltip="`Reset and regenerate tags for all ${selectedCount} selected image${selectedCount !== 1 ? 's' : ''}`"
               @click="generateTagsForAll()"
             >
               Generate tags with default tagger
@@ -240,7 +249,7 @@
                 <AppButton
                   icon-left="chevron-down"
                   icon-only
-                  title="Generate tags with a specific tagger..."
+                  tooltip="Generate tags with a specific tagger..."
                   aria-label="Generate tags with a specific tagger"
                   :disabled="generateTagsLoading"
                   v-bind="menuProps"
@@ -347,6 +356,7 @@ import { getUserConfig } from "../../api/config";
 import { isSentinelTag, formatSentinelTag } from "../../utils/tags.js";
 import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const MAX_TAG_FETCH = 100;
 const MAX_PREVIEW_IMAGES = 16;

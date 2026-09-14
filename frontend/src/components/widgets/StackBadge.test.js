@@ -4,8 +4,20 @@
 // never renders as an existing stack, and that a click reaches the parent so it
 // can expand the stack or jump to the group in the queue.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+
+vi.mock("vuetify/components", async (importOriginal) => ({
+  ...(await importOriginal()),
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup:
+      (_p, { slots }) =>
+      () =>
+        slots.activator?.({ props: {} }),
+  },
+}));
 
 import StackBadge from "./StackBadge.vue";
 
@@ -45,9 +57,9 @@ describe("StackBadge - stacked vs unresolved", () => {
     const wrapper = mountBadge({ count: 4 });
     expect(wrapper.find(".sbcount").text()).toBe("4");
     expect(wrapper.find(".sbcount").text()).not.toContain("?");
-    expect(wrapper.get('[data-testid="stack-badge"]').attributes("title")).toBe(
-      "Stack of 4 pictures",
-    );
+    expect(
+      wrapper.get('[data-testid="stack-badge"]').attributes("aria-label"),
+    ).toBe("Stack of 4 pictures");
   });
 
   it("marks an unresolved group with a question mark", () => {
@@ -61,10 +73,12 @@ describe("StackBadge - stacked vs unresolved", () => {
   });
 
   it("tells an unresolved group where the decision is made", () => {
-    // The title is the only place the badge can say that nothing is stacked yet
+    // The name is the only place the badge can say that nothing is stacked yet
     // and point at the queue.
     const wrapper = mountBadge({ count: 3, unresolved: true });
-    expect(wrapper.get('[data-testid="stack-badge"]').attributes("title")).toBe(
+    expect(
+      wrapper.get('[data-testid="stack-badge"]').attributes("aria-label"),
+    ).toBe(
       "3 possible duplicates, not stacked yet. Open Duplicates to decide.",
     );
   });
@@ -154,7 +168,7 @@ describe("StackBadge: as a disclosure trigger", () => {
     expect(
       mountBadge({ count: 4, actionTitle: "Show the 4 pictures in this stack" })
         .get('[data-testid="stack-badge"]')
-        .attributes("title"),
+        .attributes("aria-label"),
     ).toBe("Show the 4 pictures in this stack");
   });
 });

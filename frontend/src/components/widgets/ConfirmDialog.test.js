@@ -5,6 +5,9 @@ import { nextTick } from "vue";
 vi.mock("vuetify/components", () => ({
   VIcon: { name: "v-icon", template: "<i><slot /></i>" },
   VDialog: { name: "v-dialog", template: "<div><slot /></div>" },
+  VTooltip: {
+    template: '<slot name="activator" :props="{}" :is-active="false" />',
+  },
 }));
 
 import ConfirmDialog from "./ConfirmDialog.vue";

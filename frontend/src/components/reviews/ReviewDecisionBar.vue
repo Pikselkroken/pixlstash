@@ -10,101 +10,127 @@
          `disabled` button leaves the tab order, so a keyboard user could never
          reach the control to discover why it does nothing. Skip stays fully
          live - it is the way past a locked card. -->
-    <span
-      v-if="lockNote"
-      :id="chipId"
-      class="rs-decide-lock"
-      :class="{ 'rs-decide-lock--flash': flashing }"
-      :title="lockDetail || lockNote"
-    >
-      <v-icon size="15">mdi-lock-outline</v-icon>
-      <span>{{ lockNote }}</span>
-    </span>
+    <Tooltip v-if="lockNote" :text="lockDetail || lockNote">
+      <template #activator="{ props: tipProps }">
+        <span
+          :id="chipId"
+          class="rs-decide-lock"
+          :class="{ 'rs-decide-lock--flash': flashing }"
+          v-bind="tipProps"
+        >
+          <v-icon size="16">mdi-lock-outline</v-icon>
+          <span>{{ lockNote }}</span>
+        </span>
+      </template>
+    </Tooltip>
 
     <template v-if="kind === 'binary'">
-      <button
-        class="rs-decide-btn rs-decide-btn--yes"
-        type="button"
-        :disabled="hold"
-        v-bind="lockAttrs('yes')"
-        @click="emit('answer', 'yes')"
-      >
-        <kbd>Y</kbd>
-        <span class="rs-decide-verb">Yes</span>
-        <span class="rs-decide-sub">{{
-          direction === "remove" ? "keep the tag" : "add the tag"
-        }}</span>
-      </button>
-      <button
-        class="rs-decide-btn rs-decide-btn--no"
-        type="button"
-        :disabled="hold"
-        v-bind="lockAttrs('no')"
-        @click="emit('answer', 'no')"
-      >
-        <kbd>N</kbd>
-        <span class="rs-decide-verb">No</span>
-        <span class="rs-decide-sub">{{
-          direction === "remove" ? "remove the tag" : "leave untagged"
-        }}</span>
-      </button>
+      <Tooltip :text="blocked.yes || ''" :describe="false">
+        <template #activator="{ props: tipProps }">
+          <button
+            class="rs-decide-btn rs-decide-btn--yes"
+            type="button"
+            :disabled="hold"
+            v-bind="lockAttrs('yes', tipProps)"
+            @click="emit('answer', 'yes')"
+          >
+            <kbd>Y</kbd>
+            <span class="rs-decide-verb">Yes</span>
+            <span class="rs-decide-sub">{{
+              direction === "remove" ? "keep the tag" : "add the tag"
+            }}</span>
+          </button>
+        </template>
+      </Tooltip>
+      <Tooltip :text="blocked.no || ''" :describe="false">
+        <template #activator="{ props: tipProps }">
+          <button
+            class="rs-decide-btn rs-decide-btn--no"
+            type="button"
+            :disabled="hold"
+            v-bind="lockAttrs('no', tipProps)"
+            @click="emit('answer', 'no')"
+          >
+            <kbd>N</kbd>
+            <span class="rs-decide-verb">No</span>
+            <span class="rs-decide-sub">{{
+              direction === "remove" ? "remove the tag" : "leave untagged"
+            }}</span>
+          </button>
+        </template>
+      </Tooltip>
     </template>
 
     <template v-else>
-      <button
-        class="rs-decide-btn rs-decide-btn--yes"
-        type="button"
-        :disabled="hold"
-        v-bind="lockAttrs('both')"
-        @click="emit('corner', 'both')"
-      >
-        <kbd>B</kbd>
-        <span class="rs-decide-verb">Both</span>
-        <span class="rs-decide-sub">tag both versions</span>
-      </button>
-      <button
-        class="rs-decide-btn rs-decide-btn--no"
-        type="button"
-        :disabled="hold"
-        v-bind="lockAttrs('neither')"
-        @click="emit('corner', 'neither')"
-      >
-        <kbd>N</kbd>
-        <span class="rs-decide-verb">Neither</span>
-        <span class="rs-decide-sub">clear the tag</span>
-      </button>
-      <button
-        class="rs-decide-btn"
-        type="button"
-        :disabled="hold"
-        v-bind="lockAttrs('left')"
-        @click="emit('corner', 'left')"
-      >
-        <kbd>L</kbd>
-        <span class="rs-decide-verb">Left only</span>
-        <span class="rs-decide-sub">keep as is</span>
-      </button>
-      <button
-        class="rs-decide-btn"
-        type="button"
-        :disabled="hold"
-        v-bind="lockAttrs('right')"
-        @click="emit('corner', 'right')"
-      >
-        <kbd>R</kbd>
-        <span class="rs-decide-verb">Right only</span>
-        <span class="rs-decide-sub">move the tag</span>
-      </button>
+      <Tooltip :text="blocked.both || ''" :describe="false">
+        <template #activator="{ props: tipProps }">
+          <button
+            class="rs-decide-btn rs-decide-btn--yes"
+            type="button"
+            :disabled="hold"
+            v-bind="lockAttrs('both', tipProps)"
+            @click="emit('corner', 'both')"
+          >
+            <kbd>B</kbd>
+            <span class="rs-decide-verb">Both</span>
+            <span class="rs-decide-sub">tag both versions</span>
+          </button>
+        </template>
+      </Tooltip>
+      <Tooltip :text="blocked.neither || ''" :describe="false">
+        <template #activator="{ props: tipProps }">
+          <button
+            class="rs-decide-btn rs-decide-btn--no"
+            type="button"
+            :disabled="hold"
+            v-bind="lockAttrs('neither', tipProps)"
+            @click="emit('corner', 'neither')"
+          >
+            <kbd>N</kbd>
+            <span class="rs-decide-verb">Neither</span>
+            <span class="rs-decide-sub">clear the tag</span>
+          </button>
+        </template>
+      </Tooltip>
+      <Tooltip :text="blocked.left || ''" :describe="false">
+        <template #activator="{ props: tipProps }">
+          <button
+            class="rs-decide-btn"
+            type="button"
+            :disabled="hold"
+            v-bind="lockAttrs('left', tipProps)"
+            @click="emit('corner', 'left')"
+          >
+            <kbd>L</kbd>
+            <span class="rs-decide-verb">Left only</span>
+            <span class="rs-decide-sub">keep as is</span>
+          </button>
+        </template>
+      </Tooltip>
+      <Tooltip :text="blocked.right || ''" :describe="false">
+        <template #activator="{ props: tipProps }">
+          <button
+            class="rs-decide-btn"
+            type="button"
+            :disabled="hold"
+            v-bind="lockAttrs('right', tipProps)"
+            @click="emit('corner', 'right')"
+          >
+            <kbd>R</kbd>
+            <span class="rs-decide-verb">Right only</span>
+            <span class="rs-decide-sub">move the tag</span>
+          </button>
+        </template>
+      </Tooltip>
     </template>
 
     <span class="rs-decide-sep" aria-hidden="true"></span>
 
-    <button
-      class="rs-decide-btn"
-      type="button"
-      title="Can't decide - the card leaves the queue with no change made. Undo brings it back."
-      @click="emit('skip')"
-    >
+    <button class="rs-decide-btn" type="button" @click="emit('skip')">
+      <Tooltip
+        text="Can't decide - the card leaves the queue with no change made. Undo brings it back."
+        activator="parent"
+      />
       <kbd>S</kbd>
       <span class="rs-decide-verb">Skip</span>
     </button>
@@ -112,39 +138,49 @@
          explain), but `aria-disabled` + the lock reason when a decision EXISTS
          and cannot be reopened - reopen guards both sides of the card, so a
          decision on a locked-twin card is final until the set is unlocked. -->
-    <button
-      class="rs-decide-btn"
-      type="button"
-      :disabled="!canUndo"
-      :title="undoBlocked ? undefined : undoTitle"
-      :aria-keyshortcuts="undoKeyShortcuts"
-      v-bind="lockAttrs('undo')"
-      @click="emit('undo')"
-    >
-      <kbd>U</kbd>
-      <span class="rs-decide-verb">Undo</span>
-    </button>
+    <Tooltip :text="undoBlocked || undoTitle">
+      <template #activator="{ props: tipProps }">
+        <button
+          class="rs-decide-btn"
+          type="button"
+          :disabled="!canUndo"
+          :aria-keyshortcuts="undoKeyShortcuts"
+          v-bind="lockAttrs('undo', tipProps)"
+          @click="emit('undo')"
+        >
+          <kbd>U</kbd>
+          <span class="rs-decide-verb">Undo</span>
+        </button>
+      </template>
+    </Tooltip>
 
     <span class="rs-decide-gap" aria-hidden="true"></span>
 
-    <label
-      class="rs-gamify"
-      :class="{ 'rs-gamify--on': gamify }"
-      title="Fireworks, stars, XP, sticker rewards, and relentless praise for doing data cleanup"
+    <Tooltip
+      text="Fireworks, stars, XP, sticker rewards, and relentless praise for doing data cleanup"
     >
-      <input
-        type="checkbox"
-        :checked="gamify"
-        @change="emit('gamify-toggle', $event.target.checked)"
-      />
-      <span class="rs-gamify-label">Pretend this is fun</span>
-      <span class="rs-gamify-emoji">{{ gamify ? "🎉" : "" }}</span>
-    </label>
+      <template #activator="{ props: tipProps }">
+        <label
+          class="rs-gamify"
+          :class="{ 'rs-gamify--on': gamify }"
+          v-bind="tipProps"
+        >
+          <input
+            type="checkbox"
+            :checked="gamify"
+            @change="emit('gamify-toggle', $event.target.checked)"
+          />
+          <span class="rs-gamify-label">Pretend this is fun</span>
+          <span class="rs-gamify-emoji">{{ gamify ? "🎉" : "" }}</span>
+        </label>
+      </template>
+    </Tooltip>
   </div>
 </template>
 
 <script setup>
-import { computed, onUnmounted, ref, useId, watch } from "vue";
+import { computed, mergeProps, onUnmounted, ref, useId, watch } from "vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 import {
   formatKeyHint,
@@ -200,14 +236,16 @@ const undoKeyShortcuts = computed(() =>
 
 // aria-disabled (NOT disabled) + the reason, co-located via aria-describedby so
 // it is heard on focus rather than only on a hover the keyboard never performs.
-function lockAttrs(key) {
-  const reason = key === "undo" ? undoBlocked.value : props.blocked?.[key] || "";
-  if (!reason) return {};
-  return {
+// Merged over the tooltip's activator props so the chip, not the tip, stays the
+// description of a blocked control.
+function lockAttrs(key, tipProps = {}) {
+  const reason =
+    key === "undo" ? undoBlocked.value : props.blocked?.[key] || "";
+  if (!reason) return tipProps;
+  return mergeProps(tipProps, {
     "aria-disabled": "true",
     "aria-describedby": chipId,
-    title: reason,
-  };
+  });
 }
 
 const flashing = ref(false);
@@ -315,9 +353,9 @@ onUnmounted(() => {
 }
 .rs-decide-btn kbd {
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--text-2xs);
   padding: 1px 5px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.3);
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
 }

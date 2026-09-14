@@ -3,6 +3,7 @@ import { ref, watch, computed, nextTick, onMounted, onUnmounted } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
 import AppInspector from "../widgets/AppInspector.vue";
 import StatsHistogram from "../widgets/StatsHistogram.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import { getPictureStats } from "../../api/pictures";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useFilterStore } from "../../stores/useFilterStore";
@@ -1170,8 +1171,10 @@ defineExpose({ focusTasksTab });
       <span
         v-if="tab.value === 'tasks' && tasksStore.hasActiveTasks"
         class="tm-tab-pulse"
-        :title="`${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? '' : 's'}`"
-      ></span>
+        ><Tooltip
+          :text="`${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? '' : 's'}`"
+          activator="parent"
+      /></span>
     </template>
 
     <div v-if="loading && !stats" class="stats-loading">
@@ -1293,9 +1296,9 @@ defineExpose({ focusTasksTab });
             class="penalised-toggle"
             :class="{ active: penalisedOnlyTags }"
             type="button"
-            title="Show penalised tags only"
             @click="penalisedOnlyTags = !penalisedOnlyTags"
           >
+            <Tooltip text="Show penalised tags only" activator="parent" />
             <v-icon size="11">mdi-alert-circle-outline</v-icon>
             penalised
           </button>
@@ -1303,9 +1306,14 @@ defineExpose({ focusTasksTab });
             v-if="topTagsOpen && activeTagsInTopTags().length > 0"
             class="stats-clear-btn"
             type="button"
-            title="Clear top-tag filters"
+            aria-label="Clear top-tag filters"
             @click="clearTagFilters(activeTagsInTopTags())"
           >
+            <Tooltip
+              text="Clear top-tag filters"
+              activator="parent"
+              :describe="false"
+            />
             <v-icon size="11">mdi-close</v-icon>
           </button>
         </div>
@@ -1385,9 +1393,12 @@ defineExpose({ focusTasksTab });
             class="penalised-toggle"
             :class="{ active: penalisedOnlyCooc > 0 }"
             type="button"
-            :title="COOC_FILTER_TITLES[penalisedOnlyCooc]"
             @click="penalisedOnlyCooc = (penalisedOnlyCooc + 1) % 3"
           >
+            <Tooltip
+              :text="COOC_FILTER_TITLES[penalisedOnlyCooc]"
+              activator="parent"
+            />
             <v-icon size="11">mdi-alert-circle-outline</v-icon>
             {{
               penalisedOnlyCooc === 0
@@ -1401,9 +1412,14 @@ defineExpose({ focusTasksTab });
             v-if="coocOpen && activeTagsInCooc().length > 0"
             class="stats-clear-btn"
             type="button"
-            title="Clear co-occurrence filters"
+            aria-label="Clear co-occurrence filters"
             @click="clearTagFilters(activeTagsInCooc())"
           >
+            <Tooltip
+              text="Clear co-occurrence filters"
+              activator="parent"
+              :describe="false"
+            />
             <v-icon size="11">mdi-close</v-icon>
           </button>
         </div>
@@ -1463,38 +1479,51 @@ defineExpose({ focusTasksTab });
               color="primary"
               class="conf-tag-spinner"
             />
-            <select
-              v-model="selectedConfTag"
-              class="conf-tag-select"
-              title="Filter by tag"
-            >
-              <option :value="null">All tags</option>
-              <optgroup v-if="anomalyTagOptions.length" label="Anomaly tags">
-                <option
-                  v-for="tag in anomalyTagOptions"
-                  :key="'a:' + tag"
-                  :value="tag"
+            <Tooltip text="Filter by tag" :describe="false">
+              <template #activator="{ props: tipProps }">
+                <select
+                  v-model="selectedConfTag"
+                  class="conf-tag-select"
+                  v-bind="tipProps"
+                  aria-label="Filter by tag"
                 >
-                  {{ tag }}
-                </option>
-              </optgroup>
-              <optgroup v-if="regularTags.length" label="Regular tags">
-                <option
-                  v-for="tag in regularTags"
-                  :key="'r:' + tag"
-                  :value="tag"
-                >
-                  {{ tag }}
-                </option>
-              </optgroup>
-            </select>
+                  <option :value="null">All tags</option>
+                  <optgroup
+                    v-if="anomalyTagOptions.length"
+                    label="Anomaly tags"
+                  >
+                    <option
+                      v-for="tag in anomalyTagOptions"
+                      :key="'a:' + tag"
+                      :value="tag"
+                    >
+                      {{ tag }}
+                    </option>
+                  </optgroup>
+                  <optgroup v-if="regularTags.length" label="Regular tags">
+                    <option
+                      v-for="tag in regularTags"
+                      :key="'r:' + tag"
+                      :value="tag"
+                    >
+                      {{ tag }}
+                    </option>
+                  </optgroup>
+                </select>
+              </template>
+            </Tooltip>
             <button
               v-if="confHistOpen && activeConfEntries().length > 0"
               class="stats-clear-btn"
               type="button"
-              title="Clear confidence filters"
+              aria-label="Clear confidence filters"
               @click="clearConfidenceFilters(activeConfEntries())"
             >
+              <Tooltip
+                text="Clear confidence filters"
+                activator="parent"
+                :describe="false"
+              />
               <v-icon size="11">mdi-close</v-icon>
             </button>
           </div>
@@ -1550,13 +1579,18 @@ defineExpose({ focusTasksTab });
               "
               class="stats-clear-btn"
               type="button"
-              title="Clear score filter"
+              aria-label="Clear score filter"
               @click="
                 filterStore.minScoreFilter = null;
                 filterStore.maxScoreFilter = null;
                 filterStore.unscoredOnlyFilter = false;
               "
             >
+              <Tooltip
+                text="Clear score filter"
+                activator="parent"
+                :describe="false"
+              />
               <v-icon size="11">mdi-close</v-icon>
             </button>
           </div>
@@ -1579,9 +1613,14 @@ defineExpose({ focusTasksTab });
               v-if="filterStore.smartScoreBucketFilter != null"
               class="stats-clear-btn"
               type="button"
-              title="Clear smart score filter"
+              aria-label="Clear smart score filter"
               @click="filterStore.smartScoreBucketFilter = null"
             >
+              <Tooltip
+                text="Clear smart score filter"
+                activator="parent"
+                :describe="false"
+              />
               <v-icon size="11">mdi-close</v-icon>
             </button>
           </div>
@@ -1602,20 +1641,29 @@ defineExpose({ focusTasksTab });
             <span class="section-label">Agreement</span>
             <span
               class="stats-info-dot"
-              :title="AGREEMENT_CAVEAT"
               tabindex="0"
               role="note"
               :aria-label="AGREEMENT_CAVEAT"
             >
+              <Tooltip
+                :text="AGREEMENT_CAVEAT"
+                activator="parent"
+                :describe="false"
+              />
               <v-icon size="11">mdi-information-outline</v-icon>
             </span>
             <button
               v-if="agreementCellSelected"
               class="stats-clear-btn"
               type="button"
-              title="Clear agreement filter"
+              aria-label="Clear agreement filter"
               @click="clearAgreementFilter"
             >
+              <Tooltip
+                text="Clear agreement filter"
+                activator="parent"
+                :describe="false"
+              />
               <v-icon size="11">mdi-close</v-icon>
             </button>
           </div>
@@ -1735,7 +1783,8 @@ defineExpose({ focusTasksTab });
           <div class="agreement-summary">
             <dl v-if="agreementCoefficients.length" class="agreement-stats">
               <template v-for="stat in agreementCoefficients" :key="stat.key">
-                <dt class="agreement-stat-name" :title="stat.title">
+                <dt class="agreement-stat-name">
+                  <Tooltip :text="stat.title" activator="parent" />
                   {{ stat.name }}
                 </dt>
                 <dd class="agreement-stat-value">{{ stat.value }}</dd>
@@ -1756,9 +1805,14 @@ defineExpose({ focusTasksTab });
               v-if="filterStore.resolutionBucketFilter != null"
               class="stats-clear-btn"
               type="button"
-              title="Clear resolution filter"
+              aria-label="Clear resolution filter"
               @click="filterStore.resolutionBucketFilter = null"
             >
+              <Tooltip
+                text="Clear resolution filter"
+                activator="parent"
+                :describe="false"
+              />
               <v-icon size="11">mdi-close</v-icon>
             </button>
           </div>
@@ -1791,9 +1845,14 @@ defineExpose({ focusTasksTab });
                 v-if="entry.run.status !== 'completed'"
                 class="tm-comfy-abort"
                 type="button"
-                title="Abort ComfyUI run"
+                aria-label="Abort ComfyUI run"
                 @click="tasksStore.abortComfyuiRun(entry.key)"
               >
+                <Tooltip
+                  text="Abort ComfyUI run"
+                  activator="parent"
+                  :describe="false"
+                />
                 ✕
               </button>
             </div>
@@ -1835,9 +1894,14 @@ defineExpose({ focusTasksTab });
                 v-if="entry.run.abortable && !isReadOnly"
                 class="tm-comfy-abort"
                 type="button"
-                title="Cancel import"
+                aria-label="Cancel import"
                 @click="tasksStore.abortImportRun(entry.key)"
               >
+                <Tooltip
+                  text="Cancel import"
+                  activator="parent"
+                  :describe="false"
+                />
                 ✕
               </button>
             </div>
@@ -2406,14 +2470,14 @@ defineExpose({ focusTasksTab });
 /* ── ComfyUI run rows ──────────────────────────────────────────────────────── */
 .tm-comfy-bar {
   height: 6px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   background: rgba(var(--v-theme-on-surface), 0.12);
   overflow: hidden;
 }
 
 .tm-comfy-fill {
   height: 100%;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   background: rgb(var(--v-theme-primary));
   transition: width 0.25s ease;
 }

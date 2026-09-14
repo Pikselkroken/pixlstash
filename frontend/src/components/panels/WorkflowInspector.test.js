@@ -35,7 +35,7 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 const HASH = "a".repeat(64);
 
 const globalOpts = {
-  global: { stubs: { "v-icon": true } },
+  global: { stubs: { "v-icon": true, Tooltip: true } },
 };
 
 function workflow(overrides = {}) {

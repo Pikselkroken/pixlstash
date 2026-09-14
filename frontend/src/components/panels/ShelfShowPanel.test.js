@@ -19,7 +19,7 @@ vi.mock("../../api/modelShelf", () => ({
 import ShelfShowPanel from "./ShelfShowPanel.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 
-const globalOpts = { global: { stubs: { "v-icon": true } } };
+const globalOpts = { global: { stubs: { "v-icon": true, Tooltip: true } } };
 
 function adapter(overrides = {}) {
   return {

@@ -201,7 +201,7 @@ async function copyUrl() {
           variant="ghost"
           icon-only
           :icon-left="copied ? 'check' : 'content-copy'"
-          :title="copied ? 'Copied!' : 'Copy link'"
+          :tooltip="copied ? 'Copied!' : 'Copy link'"
           aria-label="Copy link"
           @click="copyUrl"
         />

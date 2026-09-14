@@ -13,6 +13,18 @@ import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
+vi.mock("vuetify/components", async (importOriginal) => ({
+  ...(await importOriginal()),
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup:
+      (_p, { slots }) =>
+      () =>
+        slots.activator?.({ props: {} }),
+  },
+}));
+
 const listRuns = vi.fn();
 const importRun = vi.fn();
 vi.mock("../../api/modelImports", () => ({

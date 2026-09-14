@@ -16,10 +16,15 @@
           v-if="props.image && !readOnly"
           class="section-meta-btn"
           type="button"
-          title="Regenerate description - deletes the current description and requeues it for captioning"
+          aria-label="Regenerate description - deletes the current description and requeues it for captioning"
           :disabled="isDescriptionRefreshing"
           @click.stop="refreshDescription()"
         >
+          <Tooltip
+            text="Regenerate description - deletes the current description and requeues it for captioning"
+            activator="parent"
+            :describe="false"
+          />
           <v-icon size="16" :class="{ 'mdi-spin': isDescriptionRefreshing }">
             {{ isDescriptionRefreshing ? "mdi-loading" : "mdi-refresh" }}
           </v-icon>
@@ -34,11 +39,16 @@
             <button
               class="section-meta-btn section-meta-btn--with-chevron"
               type="button"
-              title="Regenerate description with a specific model..."
+              aria-label="Regenerate description with a specific model..."
               :disabled="isDescriptionRefreshing"
               v-bind="menuProps"
               @click.stop="fetchDescPlugins"
             >
+              <Tooltip
+                text="Regenerate description with a specific model..."
+                activator="parent"
+                :describe="false"
+              />
               <v-icon size="14">mdi-refresh</v-icon>
               <v-icon size="10">mdi-chevron-down</v-icon>
             </button>
@@ -83,10 +93,11 @@
         <button
           class="section-meta-btn"
           type="button"
-          title="Copy description"
+          aria-label="Copy description"
           :disabled="!canCopyDescription"
           @click.stop="copyDescription"
         >
+          <Tooltip text="Copy description" activator="parent" :describe="false" />
           <v-icon size="16">
             {{
               descriptionCopyState === "copied"
@@ -104,7 +115,8 @@
       </span>
     </div>
     <template v-if="!descriptionCollapsed">
-      <div v-if="locked && lockNote" class="overlay-lock-note" :title="lockNote">
+      <div v-if="locked && lockNote" class="overlay-lock-note">
+        <Tooltip :text="lockNote" activator="parent" />
         <v-icon size="12">mdi-lock-outline</v-icon>
         <span>Locked - read-only. Unlock the set to edit.</span>
       </div>
@@ -129,22 +141,32 @@
             <button
               class="overlay-icon-btn"
               type="button"
-              title="Save description"
+              aria-label="Save description"
               :disabled="isSavingDescription"
               @click.stop="saveDescription"
             >
-              <v-icon size="18" :class="{ 'mdi-spin': isSavingDescription }">
+              <Tooltip
+                text="Save description"
+                activator="parent"
+                :describe="false"
+              />
+              <v-icon size="24" :class="{ 'mdi-spin': isSavingDescription }">
                 {{ isSavingDescription ? "mdi-loading" : "mdi-content-save" }}
               </v-icon>
             </button>
             <button
               class="overlay-icon-btn"
               type="button"
-              title="Cancel editing"
+              aria-label="Cancel editing"
               :disabled="isSavingDescription"
               @click.stop="cancelEditDescription"
             >
-              <v-icon size="18">mdi-close</v-icon>
+              <Tooltip
+                text="Cancel editing"
+                activator="parent"
+                :describe="false"
+              />
+              <v-icon size="24">mdi-close</v-icon>
             </button>
           </template>
         </div>
@@ -164,6 +186,7 @@ import { listTaggers } from "../../api/taggers";
 import { copyText } from "../../utils/clipboard";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorDetail } from "../../utils/apiError";
+import Tooltip from "../widgets/Tooltip.vue";
 import {
   isDescriptionSentinel,
   formatDescriptionSentinel,

@@ -3,10 +3,11 @@
     <button
       type="button"
       class="app-stepper__btn"
-      title="Decrease"
+      aria-label="Decrease"
       :disabled="disabled"
       @click="bump(-step)"
     >
+      <Tooltip text="Decrease" activator="parent" :describe="false" />
       <v-icon size="17">mdi-minus</v-icon>
     </button>
     <input
@@ -22,10 +23,11 @@
     <button
       type="button"
       class="app-stepper__btn"
-      title="Increase"
+      aria-label="Increase"
       :disabled="disabled"
       @click="bump(step)"
     >
+      <Tooltip text="Increase" activator="parent" :describe="false" />
       <v-icon size="17">mdi-plus</v-icon>
     </button>
   </div>
@@ -33,6 +35,7 @@
 
 <script setup>
 import { VIcon } from "vuetify/components";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   modelValue: { type: [String, Number], default: "" },

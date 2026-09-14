@@ -73,6 +73,7 @@ const globalOpts = {
       "v-menu": VMenuStub,
       "v-slider": true,
       "v-switch": true,
+      VTooltip: true,
       GbFilterPanel: true,
       TbComfyPanel: true,
       TbExportPanel: true,
@@ -109,7 +110,7 @@ describe("Toolbar - icon menu attachment", () => {
       { TbExportPanel: false, TbImportPanel: false },
     );
     const iconMenus = [
-      ["Search (F)", ".gb-search-panel"],
+      ["Search", ".gb-search-panel"],
       ["Export current grid to zip", ".tb-export-panel"],
       ["Import photos", ".tb-import-panel"],
     ];
@@ -118,13 +119,13 @@ describe("Toolbar - icon menu attachment", () => {
       const menu = wrapper
         .findAll(".v-menu-stub")
         .find((candidate) =>
-          candidate.find(`button[title="${title}"]`).exists(),
+          candidate.find(`button[aria-label="${title}"]`).exists(),
         );
       expect(menu, `${title} menu`).toBeTruthy();
       expect(menu.attributes("data-location")).toBe("bottom end");
       expect(menu.attributes("data-origin")).toBe("top end");
 
-      await menu.find(`button[title="${title}"]`).trigger("click");
+      await menu.find(`button[aria-label="${title}"]`).trigger("click");
       expect(wrapper.find(`${panelSelector} .tbm-caret`).classes()).toContain(
         "tbm-caret--icon-center-end",
       );
@@ -332,7 +333,7 @@ describe("Toolbar - Recently changed stacks", () => {
     expect(stacked.text()).toContain("Recently changed stacks");
     const badge = stacked.find(".gb-sort-filter-badge");
     expect(badge.exists()).toBe(true);
-    expect(badge.attributes("title")).toBe(
+    expect(badge.findComponent({ name: "Tooltip" }).props("text")).toBe(
       "Only available when viewing stacks",
     );
     expect(badge.attributes("aria-label")).toBe(
@@ -436,7 +437,7 @@ describe("Toolbar - the export control names what it will export", () => {
   const exportTitle = (wrapper) =>
     wrapper
       .findAll("button.tb-export-btn")
-      .map((b) => b.attributes("title"))
+      .map((b) => b.attributes("aria-label"))
       .at(0);
 
   it("offers the whole grid while nothing is selected", () => {
@@ -530,11 +531,11 @@ describe("Toolbar - the ⋯ overflow mirrors its controls", () => {
   // The controls the amendment pinned OUT of the burger stay first-class.
   it("keeps Review and the global pair as visible controls", () => {
     const wrapper = mountToolbar();
-    expect(wrapper.find('button[title="Review and fix tags"]').exists()).toBe(
+    expect(wrapper.find('button[aria-label="Review and fix tags"]').exists()).toBe(
       true,
     );
     expect(
-      wrapper.find('button[title="Review and fix tags"]').classes(),
+      wrapper.find('button[aria-label="Review and fix tags"]').classes(),
     ).not.toContain("tb-fold-700");
     expect(wrapper.findComponent({ name: "TbGlobalActions" }).exists()).toBe(
       true,

@@ -35,9 +35,25 @@ import { isReadOnly } from "../../utils/apiClient";
 import ImageGridContextMenu from "./ImageGridContextMenu.vue";
 import SelectionMenu from "../panels/SelectionMenu.vue";
 
+// The tooltip is stubbed to carry its text on the element it wraps or sits in:
+// the real one renders nothing until it opens, and needs Vuetify besides.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "activator"],
+  template:
+    '<span class="tip" :data-text="text"><slot name="activator" :props="{}" /></span>',
+};
+
+/** The tooltip text a control carries, whether the tip sits inside or around it. */
+function tip(wrapper) {
+  const inner = wrapper.find(".tip");
+  if (inner.exists()) return inner.attributes("data-text");
+  return wrapper.element.parentElement?.dataset.text;
+}
+
 const globalStubs = {
   global: {
-    stubs: { "v-icon": true, teleport: true, AddToEntityControl: true },
+    stubs: { "v-icon": true, Tooltip: TooltipStub, teleport: true, AddToEntityControl: true },
   },
 };
 
@@ -149,7 +165,7 @@ describe.each(MENUS)("%s: the Keep cover only item", (_name, mountMenu, event) =
     const reason = "Locked: every selected stack is held by the locked set 'X'.";
     const item = keepCoverItem(mountMenu({ keepCoverOnlyLockReason: reason }));
     expect(item.attributes("disabled")).toBeDefined();
-    expect(item.attributes("title")).toBe(reason);
+    expect(tip(item)).toBe(reason);
   });
 
   // A mixed selection stays live and the dialog reports the skips, which is the

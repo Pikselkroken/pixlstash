@@ -6,7 +6,7 @@
       class="rs-bin-banner"
       :class="isRemove ? 'rs-bin-banner--remove' : 'rs-bin-banner--add'"
     >
-      <v-icon size="19" class="rs-bin-banner-icon">{{
+      <v-icon size="18" class="rs-bin-banner-icon">{{
         isRemove ? "mdi-tag-remove-outline" : "mdi-tag-plus-outline"
       }}</v-icon>
       <span class="rs-bin-banner-text">
@@ -38,14 +38,17 @@
         class="rs-region-toggle"
         :class="{ 'rs-region-toggle--on': store.heatmapEnabled }"
         :aria-pressed="store.heatmapEnabled"
-        :title="
-          store.heatmapEnabled
-            ? `Hide the “${item.tag}” evidence region (H)`
-            : `Show where “${item.tag}” is (H)`
-        "
         @click.stop="store.setHeatmapEnabled(!store.heatmapEnabled)"
       >
-        <v-icon size="15">mdi-image-filter-center-focus</v-icon>
+        <Tooltip
+          :text="
+            store.heatmapEnabled
+              ? `Hide the “${item.tag}” evidence region (H)`
+              : `Show where “${item.tag}” is (H)`
+          "
+          activator="parent"
+        />
+        <v-icon size="16">mdi-image-filter-center-focus</v-icon>
         Tag location
       </button>
       <span v-if="item._isNew" class="rs-bin-new">NEW - from refresh</span>
@@ -54,24 +57,36 @@
     <!-- Picture + collapsible similar column -->
     <div class="rs-bin-body">
       <figure class="rs-bin-figure">
-        <img
-          ref="imgRef"
-          class="rs-bin-img"
-          :src="imgSrc(item.picture_id, item.picture_ext)"
-          :alt="`picture ${item.picture_id}`"
-          title="Click to zoom"
-          @click="openZoom(item.picture_id, item.picture_ext)"
-          @load="onImgLoad"
-          @error="onImgError($event, item.picture_id)"
-        />
+        <Tooltip text="Click to zoom">
+          <template #activator="{ props: tipProps }">
+            <img
+              class="rs-bin-img"
+              :src="imgSrc(item.picture_id, item.picture_ext)"
+              :alt="`picture ${item.picture_id}`"
+              v-bind="
+                withRef(tipProps, (el) => (imgRef = el))
+              "
+              @click="openZoom(item.picture_id, item.picture_ext)"
+              @load="onImgLoad"
+              @error="onImgError($event, item.picture_id)"
+            />
+          </template>
+        </Tooltip>
         <span class="rs-img-chip rs-img-chip--id">#{{ item.picture_id }}</span>
         <span class="rs-img-chip rs-img-chip--zoom">click to zoom</span>
         <button
           class="rs-manual-tag"
           type="button"
-          title="Tag manually (T)"
+          aria-label="Tag manually"
+          aria-keyshortcuts="T"
           @click.stop="openTagApply()"
         >
+          <Tooltip
+            text="Tag manually"
+            shortcut="T"
+            activator="parent"
+            :describe="false"
+          />
           <v-icon size="16">mdi-tag-plus-outline</v-icon>
         </button>
 
@@ -91,9 +106,14 @@
             type="button"
             class="rs-region-box"
             :style="boxStyle(b)"
-            :title="`Zoom into this “${item.tag}” region`"
+            :aria-label="`Zoom into this “${item.tag}” region`"
             @click.stop="zoomToRegion(b)"
           >
+            <Tooltip
+              :text="`Zoom into this “${item.tag}” region`"
+              activator="parent"
+              :describe="false"
+            />
             <v-icon size="14">mdi-magnify-plus-outline</v-icon>
           </button>
         </div>
@@ -105,9 +125,9 @@
         v-if="hasNeighbors && !similarOpen"
         class="rs-similar-closed"
         type="button"
-        title="Show similar images"
         @click="setSimilarOpen(true)"
       >
+        <Tooltip text="Show similar images" activator="parent" />
         <v-icon size="18">mdi-chevron-left</v-icon>
         <span class="rs-similar-closed-label"
           >Similar · {{ nHas }}/{{ nTot }}</span
@@ -120,9 +140,10 @@
           <button
             class="rs-similar-hide"
             type="button"
-            title="Hide"
+            aria-label="Hide"
             @click="setSimilarOpen(false)"
           >
+            <Tooltip text="Hide" activator="parent" :describe="false" />
             <v-icon size="18">mdi-chevron-right</v-icon>
           </button>
         </div>
@@ -136,13 +157,9 @@
             class="rs-thumb"
             :class="{ 'rs-thumb--has': n.has }"
             type="button"
-            :title="
-              n.has
-                ? `#${n.picture_id} - has “${item.tag}”`
-                : `#${n.picture_id} - no “${item.tag}”`
-            "
             @click="openZoom(n.picture_id)"
           >
+            <Tooltip :text="thumbTip(n)" activator="parent" />
             <img
               class="rs-thumb-img"
               :src="thumbSrc(n.picture_id)"
@@ -152,7 +169,6 @@
             <span
               v-if="lockedSetsStore.isLocked(n.picture_id)"
               class="rs-thumb-lock"
-              :title="referenceTitle(n.picture_id)"
             >
               <v-icon size="11">mdi-lock-outline</v-icon>
             </span>
@@ -173,12 +189,14 @@
 // evidence (which of the k nearest neighbours carry the tag); the evidence-
 // region overlay shows where the model saw the tag (Grad-CAM), toggled with H
 // and persisted (same preference key as the old overlay).
+import { withRef } from "../../utils/withRef.js";
 import { computed, inject, onUnmounted, ref, watch } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import {
   useLockedSetsStore,
   buildReferenceReason,
 } from "../../stores/useLockedSetsStore";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   item: { type: Object, required: true },
@@ -192,6 +210,16 @@ const openTagApply = inject("rs-open-tag-apply", () => {});
 
 function referenceTitle(id) {
   return buildReferenceReason(lockedSetsStore.lockedSetNames(id));
+}
+
+// One tip per thumb: a nested tip on the lock chip would open alongside it.
+function thumbTip(n) {
+  const vote = n.has
+    ? `#${n.picture_id} - has “${props.item.tag}”`
+    : `#${n.picture_id} - no “${props.item.tag}”`;
+  return lockedSetsStore.isLocked(n.picture_id)
+    ? `${vote}. ${referenceTitle(n.picture_id)}`
+    : vote;
 }
 
 const SIMILAR_PREF_KEY = "pixlstash:reviewSimilarOpen";
@@ -426,11 +454,11 @@ function zoomToRegion(box) {
 }
 .rs-bin-new {
   flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: var(--text-2xs);
   font-weight: var(--weight-bold);
   letter-spacing: 0.05em;
   padding: 3px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: rgb(var(--v-theme-on-dark-surface));
   background: color-mix(in srgb, rgb(var(--v-theme-accent)) 18%, transparent);
 }
@@ -492,11 +520,11 @@ function zoomToRegion(box) {
 .rs-img-chip--id {
   left: 8px;
   font-family: var(--font-mono, monospace);
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 .rs-img-chip--zoom {
   right: 8px;
-  font-size: 11.5px;
+  font-size: var(--text-xs);
   color: rgba(255, 255, 255, 0.9);
 }
 
@@ -542,7 +570,7 @@ function zoomToRegion(box) {
   padding: 2px;
   border: 2px dashed
     color-mix(in srgb, rgb(var(--v-theme-accent)) 80%, white);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: #fff;
   cursor: zoom-in;
   pointer-events: auto;
@@ -563,7 +591,7 @@ function zoomToRegion(box) {
 }
 .rs-similar-closed-label {
   writing-mode: vertical-rl;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   font-weight: var(--weight-bold);
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -589,7 +617,7 @@ function zoomToRegion(box) {
 }
 .rs-similar-title {
   flex: 1;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -603,7 +631,7 @@ function zoomToRegion(box) {
 .rs-similar-why {
   flex-shrink: 0;
   padding: 7px 10px;
-  font-size: 11.5px;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.65);
   border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.1);
   line-height: 1.4;
@@ -663,7 +691,7 @@ function zoomToRegion(box) {
   right: 3px;
   width: 17px;
   height: 17px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;

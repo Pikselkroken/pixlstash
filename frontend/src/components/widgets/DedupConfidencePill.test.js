@@ -10,9 +10,25 @@ import { mount } from "@vue/test-utils";
 
 import DedupConfidencePill from "./DedupConfidencePill.vue";
 
+// The one tooltip surface, reduced to what a test can read: the tip's text as
+// `data-tip`, on the activator element or on a marker inside the parent. A
+// describing tip claims its activator's `aria-describedby`, as the real one does.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "shortcut", "location", "disabled", "describe", "activator"],
+  template: `<slot
+      v-if="$slots.activator"
+      name="activator"
+      :props="{
+        'data-tip': text || undefined,
+        'aria-describedby': describe === false ? undefined : 'tooltip-stub',
+      }"
+    /><span v-else-if="text" class="tip" :data-tip="text" />`,
+};
+
 const globalOpts = {
   global: {
-    stubs: { "v-icon": { template: "<i><slot /></i>" } },
+    stubs: { Tooltip: TooltipStub, "v-icon": { template: "<i><slot /></i>" } },
   },
 };
 
@@ -48,7 +64,7 @@ describe("DedupConfidencePill", () => {
     );
     expect(pill.classes()).toContain("conf-pill--near");
     expect(pill.html()).toContain("mdi-check");
-    expect(pill.attributes("title")).toBe(
+    expect(pill.attributes("data-tip")).toBe(
       "98% similar. Supports stacking.",
     );
     expect(pill.attributes("aria-label")).toBe(

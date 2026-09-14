@@ -13,6 +13,14 @@ import { h } from "vue";
 vi.mock("vuetify/components", () => ({
   VIcon: { name: "v-icon", template: "<i><slot /></i>" },
   VDialog: { name: "v-dialog", template: "<div><slot /></div>" },
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup:
+      (_p, { slots }) =>
+      () =>
+        slots.activator?.({ props: {} }),
+  },
 }));
 
 import AppDialog from "./AppDialog.vue";

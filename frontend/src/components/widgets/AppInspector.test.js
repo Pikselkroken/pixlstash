@@ -2,13 +2,14 @@
 // in place, and a collapsed pane keeps its box but renders nothing inside it.
 
 import { describe, it, expect } from "vitest";
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 
 import AppInspector from "./AppInspector.vue";
+import { describedAs } from "../../testing/describedAs.js";
 
 const TABS = [
   { value: "a", label: "Alpha" },
-  { value: "b", label: "Beta", disabled: true, title: "Nothing here" },
+  { value: "b", label: "Beta", disabled: true, tooltip: "Nothing here" },
 ];
 
 function mountInspector(props = {}) {
@@ -36,9 +37,12 @@ describe("AppInspector", () => {
 
   it("keeps a disabled tab in the band with its reason, and inert", async () => {
     const wrapper = mountInspector();
+    await flushPromises();
     const beta = wrapper.findAll("button.inspector-tab")[1];
     expect(beta.attributes("disabled")).toBeDefined();
-    expect(beta.attributes("title")).toBe("Nothing here");
+    // The reason is the tab's tooltip, which a labelled tab exposes as its
+    // description (buttons.md, "Tooltips").
+    expect(describedAs(beta)).toBe("Nothing here");
     await beta.trigger("click");
     expect(wrapper.emitted("update:modelValue")).toBeUndefined();
   });

@@ -20,7 +20,17 @@
     ]"
     :disabled="disabled || loading"
     :aria-busy="loading ? 'true' : undefined"
+    :aria-label="iconOnly && tooltip ? tooltip : undefined"
   >
+    <!-- Same contract as AppButton: an icon-only bar button's tooltip is also
+         its name; an explicit `aria-label` still wins. -->
+    <Tooltip
+      v-if="tooltip"
+      :text="tooltip"
+      activator="parent"
+      :location="tooltipLocation"
+      :describe="!iconOnly"
+    />
     <span v-if="loading || icon" class="bar-icon-badge-wrap">
       <!-- 24px when the glyph is the whole control, 18px beside a label: MDI
            is drawn on a 24-unit grid, and a labelled glyph tracks its text. -->
@@ -46,6 +56,7 @@
 <script setup>
 import { computed, nextTick, ref, useSlots, watch } from "vue";
 import { VIcon } from "vuetify/components";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   // An mdi glyph, with or without the `mdi-` prefix.
@@ -65,6 +76,9 @@ const props = defineProps({
   // Same pending contract as AppButton: disabled against a second press, the
   // glyph becomes the spinner, and focus comes back when it settles.
   loading: { type: Boolean, default: false },
+  // The tip, and an icon-only button's accessible name (buttons.md, "Tooltips").
+  tooltip: { type: String, default: "" },
+  tooltipLocation: { type: String, default: "bottom" },
 });
 
 const slots = useSlots();

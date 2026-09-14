@@ -11,7 +11,25 @@ import { mount } from "@vue/test-utils";
 
 import DedupPictureStrip from "./DedupPictureStrip.vue";
 
-const globalOpts = { global: { stubs: { "v-icon": true } } };
+// The one tooltip surface, reduced to what a test can read: the tip's text as
+// `data-tip`, on the activator element or on a marker inside the parent. A
+// describing tip claims its activator's `aria-describedby`, as the real one does.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "shortcut", "location", "disabled", "describe", "activator"],
+  template: `<slot
+      v-if="$slots.activator"
+      name="activator"
+      :props="{
+        'data-tip': text || undefined,
+        'aria-describedby': describe === false ? undefined : 'tooltip-stub',
+      }"
+    /><span v-else-if="text" class="tip" :data-tip="text" />`,
+};
+
+const globalOpts = {
+  global: { stubs: { Tooltip: TooltipStub, "v-icon": true } },
+};
 
 /** One tile, in the shape a row hands over. */
 function tile(over = {}) {
@@ -228,6 +246,6 @@ describe("DedupPictureStrip: what it reports", () => {
     });
     const button = wrapper.find(".gthumb");
     expect(button.attributes("aria-label")).toBe("Picture 1 of 1");
-    expect(button.attributes("title")).toBe("Do it");
+    expect(button.find(".tip").attributes("data-tip")).toBe("Do it");
   });
 });

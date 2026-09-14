@@ -7,6 +7,18 @@
 import { describe, it, expect, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 
+vi.mock("vuetify/components", async (importOriginal) => ({
+  ...(await importOriginal()),
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup:
+      (_p, { slots }) =>
+      () =>
+        slots.activator?.({ props: {} }),
+  },
+}));
+
 // The thumbnail URL builder pulls in the Axios client; the strip only needs a
 // string for `<img src>`.
 // Mirrors the real builder, which now spells the API base itself rather than

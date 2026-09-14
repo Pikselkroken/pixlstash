@@ -13,9 +13,9 @@
           }"
           type="button"
           :disabled="store.healthBuilding"
-          :title="rebuildTitle"
           @click="store.rebuildHealth()"
         >
+          <Tooltip :text="rebuildTitle" activator="parent" />
           <v-icon size="14" :class="{ 'mdi-spin': store.healthBuilding }">{{
             store.healthStale && !store.healthBuilding
               ? "mdi-clock-alert-outline"
@@ -30,49 +30,61 @@
       </div>
 
       <div class="rs-board-controls">
-        <select
-          class="rs-board-scope"
-          :class="{ 'rs-board-scope--set': scope.projectId != null }"
-          :value="scope.projectId ?? ''"
-          title="Only count pictures in this project"
-          @change="pickScope('projectId', $event)"
-        >
-          <option value="">Project: Any</option>
-          <option v-for="p in store.projects" :key="p.id" :value="p.id">
-            {{ p.name || `Project ${p.id}` }}
-          </option>
-        </select>
-        <select
-          class="rs-board-scope"
-          :class="{ 'rs-board-scope--set': scope.setId != null }"
-          :value="scope.setId ?? ''"
-          title="Only count pictures in this set"
-          @change="pickScope('setId', $event)"
-        >
-          <option value="">Set: Any</option>
-          <!-- A native <option> can carry neither an icon nor a title, so the
-               lock state rides in the label text. Locked sets keep their natural
-               order - burying them makes them harder to find exactly when the
-               user is asking why one is unavailable. -->
-          <option v-for="s in store.sets" :key="s.id" :value="s.id">
-            {{ `${s.name || `Set ${s.id}`}${s.locked ? " (locked)" : ""}` }}
-          </option>
-        </select>
-        <select
-          class="rs-board-scope"
-          :class="{ 'rs-board-scope--set': scope.characterId != null }"
-          :value="scope.characterId ?? ''"
-          title="Only count pictures of this character"
-          @change="pickScope('characterId', $event)"
-        >
-          <option value="">Character: Any</option>
-          <option value="UNASSIGNED">Unassigned</option>
-          <option v-for="c in store.characters" :key="c.id" :value="c.id">
-            {{ c.name || `Character ${c.id}` }}
-          </option>
-        </select>
+        <Tooltip text="Only count pictures in this project">
+          <template #activator="{ props: tipProps }">
+            <select
+              class="rs-board-scope"
+              :class="{ 'rs-board-scope--set': scope.projectId != null }"
+              :value="scope.projectId ?? ''"
+              v-bind="tipProps"
+              @change="pickScope('projectId', $event)"
+            >
+              <option value="">Project: Any</option>
+              <option v-for="p in store.projects" :key="p.id" :value="p.id">
+                {{ p.name || `Project ${p.id}` }}
+              </option>
+            </select>
+          </template>
+        </Tooltip>
+        <Tooltip text="Only count pictures in this set">
+          <template #activator="{ props: tipProps }">
+            <select
+              class="rs-board-scope"
+              :class="{ 'rs-board-scope--set': scope.setId != null }"
+              :value="scope.setId ?? ''"
+              v-bind="tipProps"
+              @change="pickScope('setId', $event)"
+            >
+              <option value="">Set: Any</option>
+              <!-- A native <option> can carry neither an icon nor a title, so the
+                   lock state rides in the label text. Locked sets keep their natural
+                   order - burying them makes them harder to find exactly when the
+                   user is asking why one is unavailable. -->
+              <option v-for="s in store.sets" :key="s.id" :value="s.id">
+                {{ `${s.name || `Set ${s.id}`}${s.locked ? " (locked)" : ""}` }}
+              </option>
+            </select>
+          </template>
+        </Tooltip>
+        <Tooltip text="Only count pictures of this character">
+          <template #activator="{ props: tipProps }">
+            <select
+              class="rs-board-scope"
+              :class="{ 'rs-board-scope--set': scope.characterId != null }"
+              :value="scope.characterId ?? ''"
+              v-bind="tipProps"
+              @change="pickScope('characterId', $event)"
+            >
+              <option value="">Character: Any</option>
+              <option value="UNASSIGNED">Unassigned</option>
+              <option v-for="c in store.characters" :key="c.id" :value="c.id">
+                {{ c.name || `Character ${c.id}` }}
+              </option>
+            </select>
+          </template>
+        </Tooltip>
         <div class="rs-board-filter">
-          <v-icon size="15" class="rs-board-filter-icon">mdi-magnify</v-icon>
+          <v-icon size="16" class="rs-board-filter-icon">mdi-magnify</v-icon>
           <input
             ref="filterRef"
             v-model="filter"
@@ -87,22 +99,29 @@
           :class="{ 'rs-board-anomaly-toggle--on': anomalyOnly }"
           type="button"
           :aria-pressed="anomalyOnly"
-          title="Only show smart-score penalised tags"
           @click="anomalyOnly = !anomalyOnly"
         >
-          <v-icon size="15">mdi-alert-octagon-outline</v-icon>
+          <Tooltip
+            text="Only show smart-score penalised tags"
+            activator="parent"
+          />
+          <v-icon size="16">mdi-alert-octagon-outline</v-icon>
           Anomalies only
         </button>
-        <select
-          class="rs-board-sort"
-          :value="sort.key"
-          title="Sort the board"
-          @change="pickSort($event.target.value, $event)"
-        >
-          <option v-for="o in SORT_OPTS" :key="o.key" :value="o.key">
-            Sort: {{ o.label }}
-          </option>
-        </select>
+        <Tooltip text="Sort the board">
+          <template #activator="{ props: tipProps }">
+            <select
+              class="rs-board-sort"
+              :value="sort.key"
+              v-bind="tipProps"
+              @change="pickSort($event.target.value, $event)"
+            >
+              <option v-for="o in SORT_OPTS" :key="o.key" :value="o.key">
+                Sort: {{ o.label }}
+              </option>
+            </select>
+          </template>
+        </Tooltip>
       </div>
 
       <!-- Terminal state: the board is scoped to a LOCKED set. A locked set's
@@ -138,7 +157,7 @@
           class="rs-board-building"
         >
           <span class="rs-board-building-label">
-            <v-icon size="15" class="mdi-spin">mdi-loading</v-icon>
+            <v-icon size="16" class="mdi-spin">mdi-loading</v-icon>
             {{
               store.healthBuilding
                 ? "Building tag health signals…"
@@ -194,9 +213,14 @@
                 'rs-board-hdr--active': h.key && sort.key === h.key,
               }"
               :type="h.key ? 'button' : undefined"
-              :title="h.tip || undefined"
+              :aria-label="h.icon ? h.tip : undefined"
               @click="h.key && toggleSort(h.key)"
             >
+              <Tooltip
+                :text="h.tip || ''"
+                activator="parent"
+                :describe="!h.icon"
+              />
               <v-icon v-if="h.icon" size="16">{{ h.icon }}</v-icon>
               <template v-else>{{ h.label }}</template>
               <v-icon v-if="h.key" size="13" class="rs-board-hdr-arrow">
@@ -222,19 +246,23 @@
               :class="{ 'rs-board-tag--anomaly': isAnomaly(r) }"
             >
               <span class="rs-board-tag-name" :title="r.tag">{{ r.tag }}</span>
-              <v-icon
-                v-if="isAnomaly(r)"
-                size="14"
-                class="rs-board-tag-flag"
-                title="smart-score penalised"
-                >mdi-alert-octagon-outline</v-icon
-              >
-              <span
+              <Tooltip v-if="isAnomaly(r)" text="smart-score penalised">
+                <template #activator="{ props: tipProps }">
+                  <v-icon size="14" class="rs-board-tag-flag" v-bind="tipProps"
+                    >mdi-alert-octagon-outline</v-icon
+                  >
+                </template>
+              </Tooltip>
+              <Tooltip
                 v-if="r.has_model === false"
-                class="rs-board-nomodel-chip"
-                title="This tag is not in the tagger's vocabulary; the board only sees neighbour-scan signals"
-                >no model signal</span
+                text="This tag is not in the tagger's vocabulary; the board only sees neighbour-scan signals"
               >
+                <template #activator="{ props: tipProps }">
+                  <span class="rs-board-nomodel-chip" v-bind="tipProps"
+                    >no model signal</span
+                  >
+                </template>
+              </Tooltip>
             </span>
             <span class="rs-board-health">
               <span class="rs-board-health-track">
@@ -245,25 +273,33 @@
               </span>
               <span class="rs-board-health-num">{{ corrections(r) }}</span>
             </span>
-            <span
-              class="rs-board-num"
-              :class="
-                numClass(estDisplay(r.est_wrong, r.est_wrong_adj), 'error')
-              "
-              :title="estRawTitle(r.est_wrong, r.est_wrong_adj)"
-              >{{ estDisplay(r.est_wrong, r.est_wrong_adj) }}</span
-            >
-            <span
-              class="rs-board-num"
-              :class="
-                numClass(
-                  estDisplay(r.est_missing, r.est_missing_adj),
-                  'primary',
-                )
-              "
-              :title="estRawTitle(r.est_missing, r.est_missing_adj)"
-              >{{ estDisplay(r.est_missing, r.est_missing_adj) }}</span
-            >
+            <Tooltip :text="estRawTitle(r.est_wrong, r.est_wrong_adj)">
+              <template #activator="{ props: tipProps }">
+                <span
+                  class="rs-board-num"
+                  :class="
+                    numClass(estDisplay(r.est_wrong, r.est_wrong_adj), 'error')
+                  "
+                  v-bind="tipProps"
+                  >{{ estDisplay(r.est_wrong, r.est_wrong_adj) }}</span
+                >
+              </template>
+            </Tooltip>
+            <Tooltip :text="estRawTitle(r.est_missing, r.est_missing_adj)">
+              <template #activator="{ props: tipProps }">
+                <span
+                  class="rs-board-num"
+                  :class="
+                    numClass(
+                      estDisplay(r.est_missing, r.est_missing_adj),
+                      'primary',
+                    )
+                  "
+                  v-bind="tipProps"
+                  >{{ estDisplay(r.est_missing, r.est_missing_adj) }}</span
+                >
+              </template>
+            </Tooltip>
             <span
               class="rs-board-num"
               :class="numClass(r.mismatch, 'tertiary')"
@@ -277,36 +313,36 @@
             }}</span>
             <!-- The blocked reason rides on this WRAPPER, not on the button:
                  a `disabled` button dispatches no pointer events in Chromium,
-                 so a `title` on it would never surface a tooltip. The wrapper
-                 is not disabled, so hovering the control still explains it. -->
-            <span
-              class="rs-board-action"
-              :title="startBlockedReason(r) || undefined"
-            >
-              <button
-                v-if="openSessionFor(r.tag)"
-                class="rs-board-btn rs-board-btn--open"
-                type="button"
-                @click="store.openSession(openSessionFor(r.tag).id)"
-              >
-                Open <v-icon size="14">mdi-arrow-right</v-icon>
-              </button>
-              <!-- Disabled ONLY when this row's review is provably empty AND
+                 so a tip on it would never open. The wrapper is not disabled,
+                 so hovering the control still explains it. -->
+            <Tooltip :text="startBlockedReason(r) || ''">
+              <template #activator="{ props: tipProps }">
+                <span class="rs-board-action" v-bind="tipProps">
+                  <button
+                    v-if="openSessionFor(r.tag)"
+                    class="rs-board-btn rs-board-btn--open"
+                    type="button"
+                    @click="store.openSession(openSessionFor(r.tag).id)"
+                  >
+                    Open <v-icon size="14">mdi-arrow-right</v-icon>
+                  </button>
+                  <!-- Disabled ONLY when this row's review is provably empty AND
                    the board scope is the review's scope - see
                    startBlockedReason(). The reason names the cause and the
                    remedy, so the tooltip is the whole explanation. -->
-              <button
-                v-else
-                class="rs-board-btn"
-                :class="{ 'rs-board-btn--blocked': startBlockedReason(r) }"
-                type="button"
-                :disabled="!!startBlockedReason(r)"
-                :title="startBlockedReason(r) || undefined"
-                @click="emit('start-review', r.tag)"
-              >
-                Start review
-              </button>
-            </span>
+                  <button
+                    v-else
+                    class="rs-board-btn"
+                    :class="{ 'rs-board-btn--blocked': startBlockedReason(r) }"
+                    type="button"
+                    :disabled="!!startBlockedReason(r)"
+                    @click="emit('start-review', r.tag)"
+                  >
+                    Start review
+                  </button>
+                </span>
+              </template>
+            </Tooltip>
           </div>
         </div>
 
@@ -318,9 +354,9 @@
           type="button"
           :aria-expanded="tailExpanded"
           :aria-controls="TAIL_ID"
-          :title="TAIL_TOGGLE_TITLE"
           @click="tailExpanded = !tailExpanded"
         >
+          <Tooltip :text="TAIL_TOGGLE_TITLE" activator="parent" />
           <v-icon size="14">{{
             tailExpanded ? "mdi-chevron-up" : "mdi-chevron-down"
           }}</v-icon>
@@ -358,6 +394,7 @@ import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 // Same words as NewReviewDialog's locked set option/trigger tooltip - one
 // source so the two surfaces can't drift apart.
 import { LOCKED_SET_HEADLINE, lockedSetTitle } from "./lockedSetCopy";
+import Tooltip from "../widgets/Tooltip.vue";
 // relativeDate already solves the "naive ISO string = UTC" quirk backend
 // timestamps carry (computed_at is the same shape as the snapshot timestamps
 // this helper was written for) - reuse it rather than re-deriving the same
@@ -735,7 +772,7 @@ const TAIL_TOGGLE_TITLE =
   margin-bottom: 4px;
 }
 .rs-board-title {
-  font-size: 18px;
+  font-size: var(--text-lg);
   font-weight: var(--weight-bold);
 }
 .rs-board-subtitle {
@@ -880,7 +917,7 @@ const TAIL_TOGGLE_TITLE =
 .rs-board-building-bar {
   flex: 1;
   height: 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-pill);
   background: rgba(var(--v-theme-on-dark-surface), 0.18);
   overflow: hidden;
 }
@@ -1004,7 +1041,7 @@ const TAIL_TOGGLE_TITLE =
   padding: 0;
   border: none;
   background: none;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -1034,7 +1071,7 @@ button.rs-board-hdr {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   min-width: 0;
 }
@@ -1057,7 +1094,7 @@ button.rs-board-hdr {
 .rs-board-nomodel-chip {
   flex-shrink: 0;
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 10px;
   line-height: 1.4;
   white-space: nowrap;
@@ -1076,7 +1113,7 @@ button.rs-board-hdr {
   display: inline-block;
   width: 56px;
   height: 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-pill);
   background: rgba(var(--v-theme-on-dark-surface), 0.18);
   overflow: hidden;
 }
@@ -1085,13 +1122,13 @@ button.rs-board-hdr {
   height: 100%;
 }
 .rs-board-health-num {
-  font-size: 12px;
+  font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   color: rgba(var(--v-theme-on-dark-surface), 0.75);
 }
 
 .rs-board-num {
-  font-size: 13px;
+  font-size: var(--text-sm);
   text-align: center;
   font-variant-numeric: tabular-nums;
   font-weight: var(--weight-semibold);

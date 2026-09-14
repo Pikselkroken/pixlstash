@@ -315,11 +315,11 @@
                 >{{ modelSummary(row.assets) || "no model names" }}</span
               >
 
-              <span
-                role="gridcell"
-                class="wfshelf-col--date"
-                :title="dateTitle(row.last_used)"
-                >{{ dateCell(row.last_used) }}</span
+              <span role="gridcell" class="wfshelf-col--date"
+                ><Tooltip
+                  :text="dateTitle(row.last_used)"
+                  activator="parent"
+                />{{ dateCell(row.last_used) }}</span
               >
             </li>
 
@@ -360,7 +360,7 @@
                 @focus="rovingKey = variantKey(row, variant)"
               >
                 <span role="gridcell" class="wfshelf-row-ident">
-                  <v-icon size="14">mdi-subdirectory-arrow-right</v-icon>
+                  <v-icon size="16">mdi-subdirectory-arrow-right</v-icon>
                 </span>
                 <span role="gridcell" class="wfshelf-col--name">
                   <span class="wfshelf-row-name wfshelf-row-name--variant">{{
@@ -382,11 +382,11 @@
                   :class="{ 'wfshelf-quiet': !modelSummary(variant.assets) }"
                   >{{ modelSummary(variant.assets) || "no model names" }}</span
                 >
-                <span
-                  role="gridcell"
-                  class="wfshelf-col--date"
-                  :title="dateTitle(variant.last_used)"
-                  >{{ dateCell(variant.last_used) }}</span
+                <span role="gridcell" class="wfshelf-col--date"
+                  ><Tooltip
+                    :text="dateTitle(variant.last_used)"
+                    activator="parent"
+                  />{{ dateCell(variant.last_used) }}</span
                 >
               </li>
             </template>
@@ -427,9 +427,9 @@
           type="button"
           role="menuitem"
           :disabled="!canExport"
-          :title="exportTitle"
           @click="exportGraph()"
         >
+          <Tooltip :text="exportTitle" activator="parent" />
           <v-icon class="ctx-icon">mdi-code-json</v-icon>
           <span class="ctx-label-text">Export the graph…</span>
         </button>
@@ -469,6 +469,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 
 import AppBarButton from "../widgets/AppBarButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import OptionRows from "../widgets/OptionRows.vue";
 import Segmented from "../widgets/Segmented.vue";
 import { getWorkflowGraph, listWorkflowVariants } from "../../api/workflows";

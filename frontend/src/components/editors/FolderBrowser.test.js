@@ -29,6 +29,7 @@ const globalOpts = {
       "v-icon": true,
       "v-checkbox": true,
       "v-progress-circular": true,
+      Tooltip: true,
     },
   },
 };
