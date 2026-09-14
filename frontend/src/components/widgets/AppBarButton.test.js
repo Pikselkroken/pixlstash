@@ -1,7 +1,7 @@
 // AppBarButton - the flat bar dialect (docs/design/buttons.md).
 
 import { describe, it, expect, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 
 vi.mock("vuetify/components", () => ({
   VIcon: {
@@ -11,9 +11,8 @@ vi.mock("vuetify/components", () => ({
   },
   VTooltip: {
     name: "v-tooltip",
-    props: ["activator", "activatorProps"],
-    template:
-      '<span class="tip" :data-activator="activator" :data-describes="String(!activatorProps || !(\'aria-describedby\' in activatorProps))"><slot /></span>',
+    props: ["activator"],
+    template: '<span class="tip" :data-activator="activator"><slot /></span>',
   },
 }));
 
@@ -87,18 +86,20 @@ describe("AppBarButton", () => {
 
   // One string, both jobs (buttons.md, "Tooltips"): the tip of an icon-only
   // control is its accessible name too, so the two cannot drift.
-  it("names an icon-only button from its tooltip and renders the tip", () => {
+  it("names an icon-only button from its tooltip and renders the tip", async () => {
     const w = mount(AppBarButton, {
       props: { icon: "close", tooltip: "Close" },
     });
+    await flushPromises();
     const btn = w.find("button");
     expect(btn.attributes("aria-label")).toBe("Close");
+    await btn.trigger("mouseenter");
     expect(btn.attributes("title")).toBeUndefined();
     const tip = w.find(".tip");
     expect(tip.text()).toBe("Close");
     expect(tip.attributes("data-activator")).toBe("parent");
     // The tip is the name, so it must not also describe: said twice otherwise.
-    expect(tip.attributes("data-describes")).toBe("false");
+    expect(btn.attributes("aria-description")).toBeUndefined();
   });
 
   it("lets an explicit aria-label win over the tooltip", () => {
@@ -111,13 +112,16 @@ describe("AppBarButton", () => {
     );
   });
 
-  it("describes rather than renames a labelled button", () => {
+  it("describes rather than renames a labelled button", async () => {
     const w = mount(AppBarButton, {
       props: { icon: "sort", tooltip: "Sort order (S)" },
       slots: { default: "Date added" },
     });
+    await flushPromises();
     expect(w.find("button").attributes("aria-label")).toBeUndefined();
-    expect(w.find(".tip").attributes("data-describes")).toBe("true");
+    expect(w.find("button").attributes("aria-description")).toBe(
+      "Sort order (S)",
+    );
   });
 
   it("renders no tip without a tooltip", () => {

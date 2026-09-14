@@ -121,20 +121,22 @@ describe("AppButton focus continuity", () => {
 });
 
 describe("AppButton tooltip", () => {
-  it("names an icon-only button from its tooltip", () => {
+  it("names an icon-only button from its tooltip", async () => {
     const w = mount(AppButton, {
       props: { iconOnly: true, iconLeft: "close", tooltip: "Remove" },
     });
     expect(w.find("button").attributes("aria-label")).toBe("Remove");
+    await w.find("button").trigger("mouseenter");
     expect(w.find(".tip").text()).toBe("Remove");
   });
 
-  it("keeps a labelled button's visible name", () => {
+  it("keeps a labelled button's visible name", async () => {
     const w = mount(AppButton, {
       props: { tooltip: "Writes to disk" },
       slots: { default: "Save" },
     });
     expect(w.find("button").attributes("aria-label")).toBeUndefined();
+    await w.find("button").trigger("focus");
     expect(w.find(".tip").text()).toBe("Writes to disk");
   });
 });
