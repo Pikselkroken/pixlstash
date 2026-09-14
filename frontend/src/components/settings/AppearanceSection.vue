@@ -349,6 +349,18 @@ async function clearGuestSession() {
 .pair-seg {
   max-width: 320px;
 }
+/* Half a phone-width pane is narrower than two stacked segments; stack the
+   pair instead (same breakpoint as the dialog's own narrow layout). */
+@media (max-width: 480px) {
+  .pair-set {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    grid-auto-flow: row;
+  }
+  .pair-body + .pair-title {
+    margin-top: var(--space-5);
+  }
+}
 /* Mini layout illustration: an even grid (square) vs uneven justified rows.
    currentColor, so it follows the option's ink (mirrors the Sidebar Width .swi). */
 .tli {
