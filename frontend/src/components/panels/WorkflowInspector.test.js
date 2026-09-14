@@ -61,7 +61,7 @@ async function mountOnPictures(row = workflow()) {
   const wrapper = mount(WorkflowInspector, globalOpts);
   await flush(wrapper);
   const pictures = wrapper
-    .findAll("button.wfins-tab-btn")
+    .findAll("button.inspector-tab")
     .find((b) => b.text().includes("Pictures"));
   if (!pictures.attributes("disabled")) {
     await pictures.trigger("click");
@@ -155,7 +155,7 @@ describe("the tab strip", () => {
   it("names the subject, never the view", async () => {
     listWorkflowPictures.mockResolvedValue([]);
     const { wrapper } = await mountOnPictures();
-    const tabs = wrapper.findAll("button.wfins-tab-btn").map((b) => b.text());
+    const tabs = wrapper.findAll("button.inspector-tab").map((b) => b.text());
     expect(tabs[0]).toContain("Workflow");
     expect(tabs[1]).toContain("Pictures");
   });

@@ -398,7 +398,7 @@ const { pending: createFolderLoading, run: createFolder } =
    marks a selected row with, so selection reads the same way in both places. */
 .browse-entry--picked {
   background: var(--active-wash);
-  box-shadow: inset 3px 0 0 var(--active-bar);
+  box-shadow: var(--selection-edge);
 }
 
 .browse-entry-name {

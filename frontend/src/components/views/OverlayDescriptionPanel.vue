@@ -4,7 +4,7 @@
     :class="{ 'sidebar-section--collapsed': descriptionCollapsed }"
   >
     <div
-      class="section-header section-header--collapsible"
+      class="section-header section-header--collapsible section-label section-label--on-dark"
       @click="
         descriptionCollapsed = !descriptionCollapsed;
         descriptionCollapsed && cancelEditDescription();
@@ -375,17 +375,13 @@ defineExpose({
   color: rgb(var(--v-theme-on-dark-surface));
 }
 
+/* Type and ink come from the shared `.section-label`; this is layout only. */
 .section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   margin-bottom: var(--space-2);
   padding: var(--space-1) 0;
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
 .section-meta-group {

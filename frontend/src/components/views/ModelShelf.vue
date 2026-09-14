@@ -4990,7 +4990,7 @@ button.shelf-head-cell:hover {
    the list scrolls. The bar is the greyscale half - the wash alone is a hue. */
 .shelf-row--selected {
   background: var(--active-wash);
-  box-shadow: inset 3px 0 0 var(--active-bar);
+  box-shadow: var(--selection-edge);
 }
 
 /* ── The three kinds of absence ────────────────────────────────────────────

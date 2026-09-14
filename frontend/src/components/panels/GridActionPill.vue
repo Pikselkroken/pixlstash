@@ -1,6 +1,6 @@
 <template>
   <transition name="selbar-pop">
-    <div v-if="visible" ref="barEl" class="grid-action-pill">
+    <div v-if="visible" ref="barEl" class="grid-action-pill selbar">
       <!-- Two real groups, not styled runs. A screen reader navigates the GROUP
            boundary; the seam is decoration and is hidden from it. Each group's
            first child carries its own count, so entering either one announces
@@ -154,9 +154,10 @@ defineExpose({ visible });
      pill's positioned ancestor. */
   width: max-content;
   transform: translateX(-50%);
-  z-index: 200;
+  z-index: var(--z-floating);
+  /* The surface is the shared `.selbar` (App.css). The run's gap stays at
+     --space-3 here because the seam's air is counted against it below. */
   display: flex;
-  align-items: center;
   gap: var(--space-3);
   /* LOAD-BEARING, not a style preference. The merged content is roughly double
      what the selection pill alone held. If this ever wraps, the pill's height
@@ -166,18 +167,6 @@ defineExpose({ visible });
      floor (merged-grid-action-pill.md §5). Asserted by GridActionPill.test.js. */
   flex-wrap: nowrap;
   max-width: calc(100% - var(--space-6));
-  /* Block padding deliberately left at 6px: it sets the pill's occupied height,
-     and that dimension belongs to the UI/UX-gated action-bar reconciliation
-     (visual-language.md §5/§13, the 34/40/48/56px drift), not to a token swap. */
-  padding: 6px var(--space-4);
-  border-radius: var(--radius-pill);
-  background: rgba(var(--v-theme-surface), 0.86);
-  /* --elevation-3, not -4: -4 is reserved for dialogs and lightbox chrome. The
-     pill is persistent floating chrome, and it sits --space-3 from the notice
-     cards, which are also -3. Peers on the bottom edge read as one layer. */
-  box-shadow: var(--elevation-3);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  backdrop-filter: blur(12px);
 }
 
 .pill-segment {
@@ -188,9 +177,8 @@ defineExpose({ visible });
 }
 
 /* The seam between the two contexts. `border`, not `divider`: §4 splits those
-   into "visible" and "subtle", and under backdrop-filter: blur(12px) the subtle
-   one is a whisper (~1.15:1 on light `surface`) that does not survive a bright
-   photo bleeding through the 14% of transparency.
+   into "visible" and "subtle", and a seam that has to part two contexts at a
+   glance wants the visible one.
 
    16px of air each side - 8px here plus the pill's own 8px gap - so the gutter
    is 32px across against an 8px internal rhythm. THAT 4x step is what tells the

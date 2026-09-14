@@ -691,7 +691,7 @@ watch(
   inset: 0;
   border-radius: inherit;
   background: var(--active-wash);
-  box-shadow: inset 0 0 0 var(--space-1) var(--active-bar);
+  box-shadow: var(--selection-ring);
   pointer-events: none;
 }
 /* The tick. `z-index` to clear the wash, which is an ::after and therefore

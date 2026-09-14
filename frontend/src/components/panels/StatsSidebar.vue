@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch, computed, nextTick, onMounted, onUnmounted } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
+import AppInspector from "../widgets/AppInspector.vue";
 import StatsHistogram from "../widgets/StatsHistogram.vue";
 import { getPictureStats } from "../../api/pictures";
 import { useTasksStore } from "../../stores/useTasksStore";
@@ -54,6 +55,12 @@ const confHistOpen = ref(false);
 
 // Tab state
 const activeTab = ref("tags");
+
+const tabs = [
+  { value: "tags", label: "Tags", icon: "mdi-tag-multiple-outline" },
+  { value: "pictures", label: "Pictures", icon: "mdi-image-multiple-outline" },
+  { value: "tasks", label: "Tasks", icon: "mdi-timeline-clock-outline" },
+];
 
 // Picture stats
 const picStats = ref(null);
@@ -1143,58 +1150,374 @@ defineExpose({ focusTasksTab });
 </script>
 
 <template>
-  <div class="stats-sidebar" :class="{ collapsed: !sidebarStore.statsOpen }">
-    <div v-if="sidebarStore.statsOpen" class="stats-sidebar-content">
-      <div class="stats-sidebar-header">
-        <div class="stats-sidebar-title-row">
-          <span class="stats-sidebar-title-text">
-            <v-icon size="13" class="stats-sidebar-title-icon"
-              >mdi-chart-bar</v-icon
-            >
-            Stats
-          </span>
+  <AppInspector
+    v-model="activeTab"
+    class="stats-sidebar"
+    label="Stats"
+    :open="sidebarStore.statsOpen"
+    :tabs="tabs"
+  >
+    <template #tab="{ tab }">
+      <v-icon
+        size="12"
+        :class="{
+          'tm-tab-icon--busy':
+            tab.value === 'tasks' && tasksStore.hasActiveTasks,
+        }"
+        >{{ tab.icon }}</v-icon
+      >
+      {{ tab.label }}
+      <span
+        v-if="tab.value === 'tasks' && tasksStore.hasActiveTasks"
+        class="tm-tab-pulse"
+        :title="`${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? '' : 's'}`"
+      ></span>
+    </template>
+
+    <div v-if="loading && !stats" class="stats-loading">
+      <v-progress-circular indeterminate size="24" width="2" color="primary" />
+    </div>
+
+    <div v-else-if="error" class="stats-error">{{ error }}</div>
+
+    <template v-else-if="stats && activeTab === 'tags'">
+      <!-- Overview section -->
+      <div class="inspector-section">
+        <!-- Stat tiles -->
+        <div class="stats-tiles">
+          <div class="stats-tile">
+            <span class="stats-tile-value">{{
+              stats.total_tags != null
+                ? stats.total_tags.toLocaleString()
+                : stats.total.toLocaleString()
+            }}</span>
+            <span class="stats-tile-label">Total tags</span>
+          </div>
+          <div class="stats-tile">
+            <span class="stats-tile-value">{{
+              stats.avg_tags_per_image.toFixed(1)
+            }}</span>
+            <span class="stats-tile-label">Avg tags / pic</span>
+          </div>
         </div>
-        <div class="stats-sidebar-tabs">
-          <button
-            class="stats-tab-btn"
-            :class="{ active: activeTab === 'tags' }"
-            type="button"
-            @click="activeTab = 'tags'"
+
+        <!-- Donut chart -->
+        <div class="stats-section-header">
+          <span class="section-label">Tagged pictures</span>
+        </div>
+        <div class="stats-donut-wrap">
+          <svg
+            :width="DONUT_CX * 2"
+            :height="DONUT_CY * 2"
+            class="stats-donut"
+            aria-label="Tagged vs untagged"
           >
-            <v-icon size="12">mdi-tag-multiple-outline</v-icon>
-            Tags
-          </button>
-          <button
-            class="stats-tab-btn"
-            :class="{ active: activeTab === 'pictures' }"
-            type="button"
-            @click="activeTab = 'pictures'"
-          >
-            <v-icon size="12">mdi-image-multiple-outline</v-icon>
-            Pictures
-          </button>
-          <button
-            class="stats-tab-btn"
-            :class="{ active: activeTab === 'tasks' }"
-            type="button"
-            @click="activeTab = 'tasks'"
-          >
-            <v-icon
-              size="12"
-              :class="{ 'tm-tab-icon--busy': tasksStore.hasActiveTasks }"
-              >mdi-timeline-clock-outline</v-icon
+            <!-- background track -->
+            <circle
+              :cx="DONUT_CX"
+              :cy="DONUT_CY"
+              :r="DONUT_R"
+              fill="none"
+              :stroke-width="DONUT_STROKE"
+              class="donut-track"
+            />
+            <!-- untagged segment -->
+            <circle
+              v-if="stats.total > 0"
+              :cx="DONUT_CX"
+              :cy="DONUT_CY"
+              :r="DONUT_R"
+              fill="none"
+              :stroke-width="DONUT_STROKE"
+              :stroke-dasharray="donutUntaggedDash"
+              :stroke-dashoffset="donutUntaggedOffset"
+              class="donut-untagged"
+              transform="rotate(-90, 56, 56)"
+            />
+            <!-- tagged segment -->
+            <circle
+              v-if="stats.tagged > 0"
+              :cx="DONUT_CX"
+              :cy="DONUT_CY"
+              :r="DONUT_R"
+              fill="none"
+              :stroke-width="DONUT_STROKE"
+              :stroke-dasharray="donutTaggedDash"
+              class="donut-tagged"
+              transform="rotate(-90, 56, 56)"
+            />
+            <text
+              :x="DONUT_CX"
+              :y="DONUT_CY + 5"
+              text-anchor="middle"
+              class="donut-label"
             >
-            Tasks
-            <span
-              v-if="tasksStore.hasActiveTasks"
-              class="tm-tab-pulse"
-              :title="`${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? '' : 's'}`"
-            ></span>
-          </button>
+              {{
+                stats.total > 0
+                  ? Math.round((stats.tagged / stats.total) * 100) + "%"
+                  : "—"
+              }}
+            </text>
+          </svg>
+          <div class="donut-legend">
+            <span class="legend-dot tagged-dot" />
+            <span class="legend-text"
+              >Tagged {{ stats.tagged.toLocaleString() }}</span
+            >
+            <span class="legend-dot untagged-dot" />
+            <span class="legend-text"
+              >Untagged {{ stats.untagged.toLocaleString() }}</span
+            >
+          </div>
         </div>
       </div>
 
-      <div v-if="loading && !stats" class="stats-loading">
+      <!-- Top tags section -->
+      <div
+        v-if="stats.top_tags.length || penalisedOnlyTags"
+        class="inspector-section"
+      >
+        <div class="stats-section-header">
+          <button
+            class="stats-section-toggle"
+            type="button"
+            @click="topTagsOpen = !topTagsOpen"
+          >
+            <v-icon size="13">{{
+              topTagsOpen ? "mdi-chevron-down" : "mdi-chevron-right"
+            }}</v-icon>
+            <span class="section-label" style="margin-left: 2px">Top Tags</span>
+          </button>
+          <button
+            v-if="hasPenalisedTags && topTagsOpen"
+            class="penalised-toggle"
+            :class="{ active: penalisedOnlyTags }"
+            type="button"
+            title="Show penalised tags only"
+            @click="penalisedOnlyTags = !penalisedOnlyTags"
+          >
+            <v-icon size="11">mdi-alert-circle-outline</v-icon>
+            penalised
+          </button>
+          <button
+            v-if="topTagsOpen && activeTagsInTopTags().length > 0"
+            class="stats-clear-btn"
+            type="button"
+            title="Clear top-tag filters"
+            @click="clearTagFilters(activeTagsInTopTags())"
+          >
+            <v-icon size="11">mdi-close</v-icon>
+          </button>
+        </div>
+        <div v-if="topTagsOpen" class="stats-bars">
+          <svg
+            :width="260"
+            :height="displayedTags.length * 18 + 4"
+            class="stats-bar-chart"
+            aria-label="Top tags bar chart"
+          >
+            <g
+              v-for="(item, i) in displayedTags"
+              :key="item.tag"
+              class="bar-row"
+              :class="{
+                'bar-penalised': isPenalised(item.tag),
+                'bar-row--active': isTagActive(item.tag),
+              }"
+              :transform="`translate(0, ${i * 18})`"
+              role="button"
+              tabindex="0"
+              @click="toggleTagFilter(item.tag)"
+              @keydown.enter="toggleTagFilter(item.tag)"
+            >
+              <title>{{ item.tag }}</title>
+              <rect
+                x="0"
+                y="2"
+                :width="(barWidth(item.count) / 100) * 140"
+                height="13"
+                rx="2"
+                class="bar-rect"
+              />
+              <text
+                v-if="(barWidth(item.count) / 100) * 140 >= 40"
+                :x="(barWidth(item.count) / 100) * 140 - 3"
+                y="9"
+                text-anchor="end"
+                class="bar-count-inner"
+              >
+                {{ item.count }}
+              </text>
+              <text
+                v-else-if="item.count > 0"
+                :x="(barWidth(item.count) / 100) * 140 + 3"
+                y="9"
+                text-anchor="start"
+                class="bar-count-outer"
+              >
+                {{ item.count }}
+              </text>
+              <foreignObject x="148" y="1" width="110" height="16">
+                <div class="bar-label-fo">{{ item.tag }}</div>
+              </foreignObject>
+            </g>
+          </svg>
+        </div>
+      </div>
+
+      <!-- Co-occurrence section -->
+      <div v-if="stats.total > 0" class="inspector-section">
+        <div class="stats-section-header">
+          <button
+            class="stats-section-toggle"
+            type="button"
+            @click="coocOpen = !coocOpen"
+          >
+            <v-icon size="13">{{
+              coocOpen ? "mdi-chevron-down" : "mdi-chevron-right"
+            }}</v-icon>
+            <span class="section-label" style="margin-left: 2px"
+              >Co-occurrences</span
+            >
+          </button>
+          <button
+            v-if="hasPenalisedTags && coocOpen"
+            class="penalised-toggle"
+            :class="{ active: penalisedOnlyCooc > 0 }"
+            type="button"
+            :title="COOC_FILTER_TITLES[penalisedOnlyCooc]"
+            @click="penalisedOnlyCooc = (penalisedOnlyCooc + 1) % 3"
+          >
+            <v-icon size="11">mdi-alert-circle-outline</v-icon>
+            {{
+              penalisedOnlyCooc === 0
+                ? "penalised"
+                : penalisedOnlyCooc === 1
+                  ? "one penalised"
+                  : "both penalised"
+            }}
+          </button>
+          <button
+            v-if="coocOpen && activeTagsInCooc().length > 0"
+            class="stats-clear-btn"
+            type="button"
+            title="Clear co-occurrence filters"
+            @click="clearTagFilters(activeTagsInCooc())"
+          >
+            <v-icon size="11">mdi-close</v-icon>
+          </button>
+        </div>
+        <div v-if="coocOpen" class="stats-cooc-list">
+          <div
+            v-for="(item, i) in displayedCooc"
+            :key="i"
+            class="cooc-item"
+            :class="{
+              'cooc-penalised':
+                isPenalised(item.tags[0]) || isPenalised(item.tags[1]),
+              'cooc-item--active': isCoocActive(item.tags),
+            }"
+            role="button"
+            tabindex="0"
+            @click="toggleTagsFilter(item.tags)"
+            @keydown.enter="toggleTagsFilter(item.tags)"
+          >
+            <span class="cooc-tags">
+              <span :class="{ 'tag-penalised': isPenalised(item.tags[0]) }">{{
+                item.tags[0]
+              }}</span>
+              <span class="cooc-sep"> + </span>
+              <span :class="{ 'tag-penalised': isPenalised(item.tags[1]) }">{{
+                item.tags[1]
+              }}</span>
+            </span>
+            <span class="cooc-count">{{ item.count }}</span>
+          </div>
+          <div v-if="displayedCooc.length === 0" class="cooc-empty">
+            No penalised pairs
+          </div>
+        </div>
+      </div>
+
+      <!-- Confidence distribution section -->
+      <div v-if="stats.total > 0" class="inspector-section">
+        <div class="stats-section-header">
+          <button
+            class="stats-section-toggle"
+            type="button"
+            @click="confHistOpen = !confHistOpen"
+          >
+            <v-icon size="13">{{
+              confHistOpen ? "mdi-chevron-down" : "mdi-chevron-right"
+            }}</v-icon>
+            <span class="section-label" style="margin-left: 2px"
+              >Tag Confidence</span
+            >
+          </button>
+          <div class="conf-tag-selector">
+            <v-progress-circular
+              v-if="confTagLoading"
+              indeterminate
+              size="10"
+              width="1"
+              color="primary"
+              class="conf-tag-spinner"
+            />
+            <select
+              v-model="selectedConfTag"
+              class="conf-tag-select"
+              title="Filter by tag"
+            >
+              <option :value="null">All tags</option>
+              <optgroup v-if="anomalyTagOptions.length" label="Anomaly tags">
+                <option
+                  v-for="tag in anomalyTagOptions"
+                  :key="'a:' + tag"
+                  :value="tag"
+                >
+                  {{ tag }}
+                </option>
+              </optgroup>
+              <optgroup v-if="regularTags.length" label="Regular tags">
+                <option
+                  v-for="tag in regularTags"
+                  :key="'r:' + tag"
+                  :value="tag"
+                >
+                  {{ tag }}
+                </option>
+              </optgroup>
+            </select>
+            <button
+              v-if="confHistOpen && activeConfEntries().length > 0"
+              class="stats-clear-btn"
+              type="button"
+              title="Clear confidence filters"
+              @click="clearConfidenceFilters(activeConfEntries())"
+            >
+              <v-icon size="11">mdi-close</v-icon>
+            </button>
+          </div>
+        </div>
+        <div v-if="confHistOpen" class="stats-hist">
+          <StatsHistogram
+            :buckets="confHistBuckets"
+            aria-label="Tag confidence distribution"
+            fill="tertiary"
+            :interactive="() => !!selectedConfTag"
+            :active="(item, i) => isConfEntryActive(i)"
+            :row-title="
+              (item, i) => `Filter: ${selectedConfTag} \u2265 ${i * 20}%`
+            "
+            @select="onConfBucketSelect"
+          />
+        </div>
+      </div>
+    </template>
+
+    <!-- ── Pictures tab ──────────────────────────────────────────────── -->
+    <template v-if="activeTab === 'pictures'">
+      <div v-if="picStatsLoading && !picStats" class="stats-loading">
         <v-progress-circular
           indeterminate
           size="24"
@@ -1202,835 +1525,376 @@ defineExpose({ focusTasksTab });
           color="primary"
         />
       </div>
-
-      <div v-else-if="error" class="stats-error">{{ error }}</div>
-
-      <template v-else-if="stats && activeTab === 'tags'">
-        <!-- Overview section -->
-        <div class="stats-section">
-          <!-- Stat tiles -->
+      <template v-else-if="picStats">
+        <!-- Total tile -->
+        <div class="inspector-section">
           <div class="stats-tiles">
             <div class="stats-tile">
               <span class="stats-tile-value">{{
-                stats.total_tags != null
-                  ? stats.total_tags.toLocaleString()
-                  : stats.total.toLocaleString()
+                picStats.total.toLocaleString()
               }}</span>
-              <span class="stats-tile-label">Total tags</span>
-            </div>
-            <div class="stats-tile">
-              <span class="stats-tile-value">{{
-                stats.avg_tags_per_image.toFixed(1)
-              }}</span>
-              <span class="stats-tile-label">Avg tags / pic</span>
-            </div>
-          </div>
-
-          <!-- Donut chart -->
-          <div class="stats-section-header">
-            <span class="stats-section-title">Tagged pictures</span>
-          </div>
-          <div class="stats-donut-wrap">
-            <svg
-              :width="DONUT_CX * 2"
-              :height="DONUT_CY * 2"
-              class="stats-donut"
-              aria-label="Tagged vs untagged"
-            >
-              <!-- background track -->
-              <circle
-                :cx="DONUT_CX"
-                :cy="DONUT_CY"
-                :r="DONUT_R"
-                fill="none"
-                :stroke-width="DONUT_STROKE"
-                class="donut-track"
-              />
-              <!-- untagged segment -->
-              <circle
-                v-if="stats.total > 0"
-                :cx="DONUT_CX"
-                :cy="DONUT_CY"
-                :r="DONUT_R"
-                fill="none"
-                :stroke-width="DONUT_STROKE"
-                :stroke-dasharray="donutUntaggedDash"
-                :stroke-dashoffset="donutUntaggedOffset"
-                class="donut-untagged"
-                transform="rotate(-90, 56, 56)"
-              />
-              <!-- tagged segment -->
-              <circle
-                v-if="stats.tagged > 0"
-                :cx="DONUT_CX"
-                :cy="DONUT_CY"
-                :r="DONUT_R"
-                fill="none"
-                :stroke-width="DONUT_STROKE"
-                :stroke-dasharray="donutTaggedDash"
-                class="donut-tagged"
-                transform="rotate(-90, 56, 56)"
-              />
-              <text
-                :x="DONUT_CX"
-                :y="DONUT_CY + 5"
-                text-anchor="middle"
-                class="donut-label"
-              >
-                {{
-                  stats.total > 0
-                    ? Math.round((stats.tagged / stats.total) * 100) + "%"
-                    : "—"
-                }}
-              </text>
-            </svg>
-            <div class="donut-legend">
-              <span class="legend-dot tagged-dot" />
-              <span class="legend-text"
-                >Tagged {{ stats.tagged.toLocaleString() }}</span
-              >
-              <span class="legend-dot untagged-dot" />
-              <span class="legend-text"
-                >Untagged {{ stats.untagged.toLocaleString() }}</span
-              >
+              <span class="stats-tile-label">Total</span>
             </div>
           </div>
         </div>
 
-        <!-- Top tags section -->
-        <div
-          v-if="stats.top_tags.length || penalisedOnlyTags"
-          class="stats-section"
-        >
+        <!-- Manual score distribution -->
+        <div class="inspector-section">
           <div class="stats-section-header">
+            <span class="section-label">Score</span>
             <button
-              class="stats-section-toggle"
-              type="button"
-              @click="topTagsOpen = !topTagsOpen"
-            >
-              <v-icon size="13">{{
-                topTagsOpen ? "mdi-chevron-down" : "mdi-chevron-right"
-              }}</v-icon>
-              <span class="stats-section-title" style="margin-left: 2px"
-                >Top Tags</span
-              >
-            </button>
-            <button
-              v-if="hasPenalisedTags && topTagsOpen"
-              class="penalised-toggle"
-              :class="{ active: penalisedOnlyTags }"
-              type="button"
-              title="Show penalised tags only"
-              @click="penalisedOnlyTags = !penalisedOnlyTags"
-            >
-              <v-icon size="11">mdi-alert-circle-outline</v-icon>
-              penalised
-            </button>
-            <button
-              v-if="topTagsOpen && activeTagsInTopTags().length > 0"
-              class="stats-clear-btn"
-              type="button"
-              title="Clear top-tag filters"
-              @click="clearTagFilters(activeTagsInTopTags())"
-            >
-              <v-icon size="11">mdi-close</v-icon>
-            </button>
-          </div>
-          <div v-if="topTagsOpen" class="stats-bars">
-            <svg
-              :width="260"
-              :height="displayedTags.length * 18 + 4"
-              class="stats-bar-chart"
-              aria-label="Top tags bar chart"
-            >
-              <g
-                v-for="(item, i) in displayedTags"
-                :key="item.tag"
-                class="bar-row"
-                :class="{
-                  'bar-penalised': isPenalised(item.tag),
-                  'bar-row--active': isTagActive(item.tag),
-                }"
-                :transform="`translate(0, ${i * 18})`"
-                role="button"
-                tabindex="0"
-                @click="toggleTagFilter(item.tag)"
-                @keydown.enter="toggleTagFilter(item.tag)"
-              >
-                <title>{{ item.tag }}</title>
-                <rect
-                  x="0"
-                  y="2"
-                  :width="(barWidth(item.count) / 100) * 140"
-                  height="13"
-                  rx="2"
-                  class="bar-rect"
-                />
-                <text
-                  v-if="(barWidth(item.count) / 100) * 140 >= 40"
-                  :x="(barWidth(item.count) / 100) * 140 - 3"
-                  y="9"
-                  text-anchor="end"
-                  class="bar-count-inner"
-                >
-                  {{ item.count }}
-                </text>
-                <text
-                  v-else-if="item.count > 0"
-                  :x="(barWidth(item.count) / 100) * 140 + 3"
-                  y="9"
-                  text-anchor="start"
-                  class="bar-count-outer"
-                >
-                  {{ item.count }}
-                </text>
-                <foreignObject x="148" y="1" width="110" height="16">
-                  <div class="bar-label-fo">{{ item.tag }}</div>
-                </foreignObject>
-              </g>
-            </svg>
-          </div>
-        </div>
-
-        <!-- Co-occurrence section -->
-        <div v-if="stats.total > 0" class="stats-section">
-          <div class="stats-section-header">
-            <button
-              class="stats-section-toggle"
-              type="button"
-              @click="coocOpen = !coocOpen"
-            >
-              <v-icon size="13">{{
-                coocOpen ? "mdi-chevron-down" : "mdi-chevron-right"
-              }}</v-icon>
-              <span class="stats-section-title" style="margin-left: 2px"
-                >Co-occurrences</span
-              >
-            </button>
-            <button
-              v-if="hasPenalisedTags && coocOpen"
-              class="penalised-toggle"
-              :class="{ active: penalisedOnlyCooc > 0 }"
-              type="button"
-              :title="COOC_FILTER_TITLES[penalisedOnlyCooc]"
-              @click="penalisedOnlyCooc = (penalisedOnlyCooc + 1) % 3"
-            >
-              <v-icon size="11">mdi-alert-circle-outline</v-icon>
-              {{
-                penalisedOnlyCooc === 0
-                  ? "penalised"
-                  : penalisedOnlyCooc === 1
-                    ? "one penalised"
-                    : "both penalised"
-              }}
-            </button>
-            <button
-              v-if="coocOpen && activeTagsInCooc().length > 0"
-              class="stats-clear-btn"
-              type="button"
-              title="Clear co-occurrence filters"
-              @click="clearTagFilters(activeTagsInCooc())"
-            >
-              <v-icon size="11">mdi-close</v-icon>
-            </button>
-          </div>
-          <div v-if="coocOpen" class="stats-cooc-list">
-            <div
-              v-for="(item, i) in displayedCooc"
-              :key="i"
-              class="cooc-item"
-              :class="{
-                'cooc-penalised':
-                  isPenalised(item.tags[0]) || isPenalised(item.tags[1]),
-                'cooc-item--active': isCoocActive(item.tags),
-              }"
-              role="button"
-              tabindex="0"
-              @click="toggleTagsFilter(item.tags)"
-              @keydown.enter="toggleTagsFilter(item.tags)"
-            >
-              <span class="cooc-tags">
-                <span :class="{ 'tag-penalised': isPenalised(item.tags[0]) }">{{
-                  item.tags[0]
-                }}</span>
-                <span class="cooc-sep"> + </span>
-                <span :class="{ 'tag-penalised': isPenalised(item.tags[1]) }">{{
-                  item.tags[1]
-                }}</span>
-              </span>
-              <span class="cooc-count">{{ item.count }}</span>
-            </div>
-            <div v-if="displayedCooc.length === 0" class="cooc-empty">
-              No penalised pairs
-            </div>
-          </div>
-        </div>
-
-        <!-- Confidence distribution section -->
-        <div v-if="stats.total > 0" class="stats-section">
-          <div class="stats-section-header">
-            <button
-              class="stats-section-toggle"
-              type="button"
-              @click="confHistOpen = !confHistOpen"
-            >
-              <v-icon size="13">{{
-                confHistOpen ? "mdi-chevron-down" : "mdi-chevron-right"
-              }}</v-icon>
-              <span class="stats-section-title" style="margin-left: 2px"
-                >Tag Confidence</span
-              >
-            </button>
-            <div class="conf-tag-selector">
-              <v-progress-circular
-                v-if="confTagLoading"
-                indeterminate
-                size="10"
-                width="1"
-                color="primary"
-                class="conf-tag-spinner"
-              />
-              <select
-                v-model="selectedConfTag"
-                class="conf-tag-select"
-                title="Filter by tag"
-              >
-                <option :value="null">All tags</option>
-                <optgroup v-if="anomalyTagOptions.length" label="Anomaly tags">
-                  <option
-                    v-for="tag in anomalyTagOptions"
-                    :key="'a:' + tag"
-                    :value="tag"
-                  >
-                    {{ tag }}
-                  </option>
-                </optgroup>
-                <optgroup v-if="regularTags.length" label="Regular tags">
-                  <option
-                    v-for="tag in regularTags"
-                    :key="'r:' + tag"
-                    :value="tag"
-                  >
-                    {{ tag }}
-                  </option>
-                </optgroup>
-              </select>
-              <button
-                v-if="confHistOpen && activeConfEntries().length > 0"
-                class="stats-clear-btn"
-                type="button"
-                title="Clear confidence filters"
-                @click="clearConfidenceFilters(activeConfEntries())"
-              >
-                <v-icon size="11">mdi-close</v-icon>
-              </button>
-            </div>
-          </div>
-          <div v-if="confHistOpen" class="stats-hist">
-            <StatsHistogram
-              :buckets="confHistBuckets"
-              aria-label="Tag confidence distribution"
-              fill="tertiary"
-              :interactive="() => !!selectedConfTag"
-              :active="(item, i) => isConfEntryActive(i)"
-              :row-title="
-                (item, i) => `Filter: ${selectedConfTag} \u2265 ${i * 20}%`
+              v-if="
+                filterStore.minScoreFilter != null ||
+                filterStore.maxScoreFilter != null ||
+                filterStore.unscoredOnlyFilter
               "
-              @select="onConfBucketSelect"
+              class="stats-clear-btn"
+              type="button"
+              title="Clear score filter"
+              @click="
+                filterStore.minScoreFilter = null;
+                filterStore.maxScoreFilter = null;
+                filterStore.unscoredOnlyFilter = false;
+              "
+            >
+              <v-icon size="11">mdi-close</v-icon>
+            </button>
+          </div>
+          <div class="stats-hist">
+            <StatsHistogram
+              :buckets="picStats.score_distribution"
+              aria-label="Manual score distribution"
+              fill="secondary"
+              :active="(item) => isScoreBarActive(item.label)"
+              @select="(item) => handleScoreBarClick(item.label)"
             />
           </div>
         </div>
-      </template>
 
-      <!-- ── Pictures tab ──────────────────────────────────────────────── -->
-      <template v-if="activeTab === 'pictures'">
-        <div v-if="picStatsLoading && !picStats" class="stats-loading">
-          <v-progress-circular
-            indeterminate
-            size="24"
-            width="2"
-            color="primary"
-          />
+        <!-- Smart score distribution -->
+        <div class="inspector-section">
+          <div class="stats-section-header">
+            <span class="section-label">Smart Score</span>
+            <button
+              v-if="filterStore.smartScoreBucketFilter != null"
+              class="stats-clear-btn"
+              type="button"
+              title="Clear smart score filter"
+              @click="filterStore.smartScoreBucketFilter = null"
+            >
+              <v-icon size="11">mdi-close</v-icon>
+            </button>
+          </div>
+          <div class="stats-hist">
+            <StatsHistogram
+              :buckets="picStats.smart_score_distribution"
+              aria-label="Smart score distribution"
+              fill="primary"
+              :active="(item) => isSmartScoreBarActive(item.label)"
+              @select="(item) => handleSmartScoreBarClick(item.label)"
+            />
+          </div>
         </div>
-        <template v-else-if="picStats">
-          <!-- Total tile -->
-          <div class="stats-section">
-            <div class="stats-tiles">
-              <div class="stats-tile">
-                <span class="stats-tile-value">{{
-                  picStats.total.toLocaleString()
-                }}</span>
-                <span class="stats-tile-label">Total</span>
-              </div>
-            </div>
-          </div>
 
-          <!-- Manual score distribution -->
-          <div class="stats-section">
-            <div class="stats-section-header">
-              <span class="stats-section-title">Score</span>
-              <button
-                v-if="
-                  filterStore.minScoreFilter != null ||
-                  filterStore.maxScoreFilter != null ||
-                  filterStore.unscoredOnlyFilter
-                "
-                class="stats-clear-btn"
-                type="button"
-                title="Clear score filter"
-                @click="
-                  filterStore.minScoreFilter = null;
-                  filterStore.maxScoreFilter = null;
-                  filterStore.unscoredOnlyFilter = false;
-                "
-              >
-                <v-icon size="11">mdi-close</v-icon>
-              </button>
-            </div>
-            <div class="stats-hist">
-              <StatsHistogram
-                :buckets="picStats.score_distribution"
-                aria-label="Manual score distribution"
-                fill="secondary"
-                :active="(item) => isScoreBarActive(item.label)"
-                @select="(item) => handleScoreBarClick(item.label)"
-              />
-            </div>
+        <!-- Smart score vs your rating (agreement matrix) -->
+        <div v-if="agreement" class="inspector-section">
+          <div class="stats-section-header">
+            <span class="section-label">Agreement</span>
+            <span
+              class="stats-info-dot"
+              :title="AGREEMENT_CAVEAT"
+              tabindex="0"
+              role="note"
+              :aria-label="AGREEMENT_CAVEAT"
+            >
+              <v-icon size="11">mdi-information-outline</v-icon>
+            </span>
+            <button
+              v-if="agreementCellSelected"
+              class="stats-clear-btn"
+              type="button"
+              title="Clear agreement filter"
+              @click="clearAgreementFilter"
+            >
+              <v-icon size="11">mdi-close</v-icon>
+            </button>
           </div>
-
-          <!-- Smart score distribution -->
-          <div class="stats-section">
-            <div class="stats-section-header">
-              <span class="stats-section-title">Smart Score</span>
-              <button
-                v-if="filterStore.smartScoreBucketFilter != null"
-                class="stats-clear-btn"
-                type="button"
-                title="Clear smart score filter"
-                @click="filterStore.smartScoreBucketFilter = null"
-              >
-                <v-icon size="11">mdi-close</v-icon>
-              </button>
-            </div>
-            <div class="stats-hist">
-              <StatsHistogram
-                :buckets="picStats.smart_score_distribution"
-                aria-label="Smart score distribution"
-                fill="primary"
-                :active="(item) => isSmartScoreBarActive(item.label)"
-                @select="(item) => handleSmartScoreBarClick(item.label)"
-              />
-            </div>
-          </div>
-
-          <!-- Smart score vs your rating (agreement matrix) -->
-          <div v-if="agreement" class="stats-section">
-            <div class="stats-section-header">
-              <span class="stats-section-title">Agreement</span>
-              <span
-                class="stats-info-dot"
-                :title="AGREEMENT_CAVEAT"
-                tabindex="0"
-                role="note"
-                :aria-label="AGREEMENT_CAVEAT"
-              >
-                <v-icon size="11">mdi-information-outline</v-icon>
-              </span>
-              <button
-                v-if="agreementCellSelected"
-                class="stats-clear-btn"
-                type="button"
-                title="Clear agreement filter"
-                @click="clearAgreementFilter"
-              >
-                <v-icon size="11">mdi-close</v-icon>
-              </button>
-            </div>
-            <div v-if="agreement.pairs > 0" class="stats-hist">
-              <svg
-                :width="260"
-                :height="
-                  AGREEMENT_ROW_H * 5 +
-                  AGREEMENT_HEADER_H +
-                  AGREEMENT_AXIS_H +
-                  2
-                "
-                class="stats-bar-chart agreement-grid"
-                role="grid"
-                aria-label="Your rating against smart score"
-                @keydown="onAgreementKeydown"
-              >
-                <!-- Axis titles. The y title is rotated up the left edge; the x
+          <div v-if="agreement.pairs > 0" class="stats-hist">
+            <svg
+              :width="260"
+              :height="
+                AGREEMENT_ROW_H * 5 + AGREEMENT_HEADER_H + AGREEMENT_AXIS_H + 2
+              "
+              class="stats-bar-chart agreement-grid"
+              role="grid"
+              aria-label="Your rating against smart score"
+              @keydown="onAgreementKeydown"
+            >
+              <!-- Axis titles. The y title is rotated up the left edge; the x
                      title sits under the grid, both in the recessive label ink. -->
-                <text
-                  :x="-(AGREEMENT_HEADER_H + (AGREEMENT_ROW_H * 5) / 2)"
-                  y="9"
-                  transform="rotate(-90)"
-                  text-anchor="middle"
-                  class="hist-axis-title"
-                >
-                  Your rating
-                </text>
-                <text
-                  :x="AGREEMENT_X0 + (AGREEMENT_COL_W * 4) / 2"
-                  :y="AGREEMENT_HEADER_H + AGREEMENT_ROW_H * 5 + 11"
-                  text-anchor="middle"
-                  class="hist-axis-title"
-                >
-                  Smart score
-                </text>
-                <text
-                  v-for="(bucket, col) in AGREEMENT_BUCKETS"
-                  :key="`col-${bucket}`"
-                  :x="
-                    AGREEMENT_X0 + col * AGREEMENT_COL_W + AGREEMENT_CELL_W / 2
-                  "
-                  y="9"
-                  text-anchor="middle"
-                  class="hist-label"
-                >
-                  {{ bucket }}
+              <text
+                :x="-(AGREEMENT_HEADER_H + (AGREEMENT_ROW_H * 5) / 2)"
+                y="9"
+                transform="rotate(-90)"
+                text-anchor="middle"
+                class="hist-axis-title"
+              >
+                Your rating
+              </text>
+              <text
+                :x="AGREEMENT_X0 + (AGREEMENT_COL_W * 4) / 2"
+                :y="AGREEMENT_HEADER_H + AGREEMENT_ROW_H * 5 + 11"
+                text-anchor="middle"
+                class="hist-axis-title"
+              >
+                Smart score
+              </text>
+              <text
+                v-for="(bucket, col) in AGREEMENT_BUCKETS"
+                :key="`col-${bucket}`"
+                :x="AGREEMENT_X0 + col * AGREEMENT_COL_W + AGREEMENT_CELL_W / 2"
+                y="9"
+                text-anchor="middle"
+                class="hist-label"
+              >
+                {{ bucket }}
+              </text>
+              <g
+                v-for="(star, row) in AGREEMENT_STARS"
+                :key="`row-${star}`"
+                role="row"
+                :transform="`translate(0, ${AGREEMENT_HEADER_H + row * AGREEMENT_ROW_H})`"
+              >
+                <text x="46" y="14" text-anchor="end" class="hist-label">
+                  {{ star }}
                 </text>
                 <g
-                  v-for="(star, row) in AGREEMENT_STARS"
-                  :key="`row-${star}`"
-                  role="row"
-                  :transform="`translate(0, ${AGREEMENT_HEADER_H + row * AGREEMENT_ROW_H})`"
+                  v-for="(bucket, col) in AGREEMENT_BUCKETS"
+                  :key="`cell-${star}-${bucket}`"
+                  role="gridcell"
+                  :class="[
+                    'agreement-cell',
+                    `agreement-cell--${agreementTone(star, bucket)}`,
+                    {
+                      'agreement-cell--interactive':
+                        agreementCount(star, bucket) > 0,
+                      'agreement-cell--selected': isAgreementCellActive(
+                        star,
+                        bucket,
+                      ),
+                    },
+                  ]"
+                  :tabindex="agreementTabIndex(row, col)"
+                  :aria-selected="isAgreementCellActive(star, bucket)"
+                  :aria-label="agreementCellLabel(star, bucket)"
+                  @click="onAgreementCellClick(star, bucket, row, col)"
+                  @focus="agreementFocus = { row, col }"
                 >
-                  <text x="46" y="14" text-anchor="end" class="hist-label">
-                    {{ star }}
-                  </text>
-                  <g
-                    v-for="(bucket, col) in AGREEMENT_BUCKETS"
-                    :key="`cell-${star}-${bucket}`"
-                    role="gridcell"
+                  <rect
+                    :x="AGREEMENT_X0 + col * AGREEMENT_COL_W"
+                    y="2"
+                    :width="AGREEMENT_CELL_W"
+                    :height="AGREEMENT_CELL_H"
+                    rx="2"
+                    class="agreement-cell-rect"
+                    :style="{ opacity: agreementShade(star, bucket) }"
+                  />
+                  <rect
+                    :x="AGREEMENT_X0 + col * AGREEMENT_COL_W"
+                    y="2"
+                    :width="AGREEMENT_CELL_W"
+                    :height="AGREEMENT_CELL_H"
+                    rx="2"
+                    class="agreement-cell-outline"
+                  />
+                  <text
+                    v-if="agreementCount(star, bucket) > 0"
+                    :x="
+                      AGREEMENT_X0 +
+                      col * AGREEMENT_COL_W +
+                      AGREEMENT_CELL_W / 2
+                    "
+                    :y="2 + AGREEMENT_CELL_H / 2 + 4"
+                    text-anchor="middle"
                     :class="[
-                      'agreement-cell',
-                      `agreement-cell--${agreementTone(star, bucket)}`,
+                      'agreement-count',
                       {
-                        'agreement-cell--interactive':
-                          agreementCount(star, bucket) > 0,
-                        'agreement-cell--selected': isAgreementCellActive(
+                        'agreement-count--on-fill': agreementCountOnFill(
                           star,
                           bucket,
                         ),
                       },
                     ]"
-                    :tabindex="agreementTabIndex(row, col)"
-                    :aria-selected="isAgreementCellActive(star, bucket)"
-                    :aria-label="agreementCellLabel(star, bucket)"
-                    @click="onAgreementCellClick(star, bucket, row, col)"
-                    @focus="agreementFocus = { row, col }"
                   >
-                    <rect
-                      :x="AGREEMENT_X0 + col * AGREEMENT_COL_W"
-                      y="2"
-                      :width="AGREEMENT_CELL_W"
-                      :height="AGREEMENT_CELL_H"
-                      rx="2"
-                      class="agreement-cell-rect"
-                      :style="{ opacity: agreementShade(star, bucket) }"
-                    />
-                    <rect
-                      :x="AGREEMENT_X0 + col * AGREEMENT_COL_W"
-                      y="2"
-                      :width="AGREEMENT_CELL_W"
-                      :height="AGREEMENT_CELL_H"
-                      rx="2"
-                      class="agreement-cell-outline"
-                    />
-                    <text
-                      v-if="agreementCount(star, bucket) > 0"
-                      :x="
-                        AGREEMENT_X0 +
-                        col * AGREEMENT_COL_W +
-                        AGREEMENT_CELL_W / 2
-                      "
-                      :y="2 + AGREEMENT_CELL_H / 2 + 4"
-                      text-anchor="middle"
-                      :class="[
-                        'agreement-count',
-                        {
-                          'agreement-count--on-fill': agreementCountOnFill(
-                            star,
-                            bucket,
-                          ),
-                        },
-                      ]"
-                    >
-                      {{ agreementCount(star, bucket) }}
-                    </text>
-                  </g>
+                    {{ agreementCount(star, bucket) }}
+                  </text>
                 </g>
-              </svg>
-            </div>
-            <div class="agreement-summary">
-              <dl v-if="agreementCoefficients.length" class="agreement-stats">
-                <template v-for="stat in agreementCoefficients" :key="stat.key">
-                  <dt class="agreement-stat-name" :title="stat.title">
-                    {{ stat.name }}
-                  </dt>
-                  <dd class="agreement-stat-value">{{ stat.value }}</dd>
-                </template>
-              </dl>
-              <span v-else class="agreement-stat-empty">
-                {{ agreementNoCoefficientLabel }}
-              </span>
-              <span class="agreement-coverage">{{ agreementCoverage }}</span>
-            </div>
+              </g>
+            </svg>
           </div>
+          <div class="agreement-summary">
+            <dl v-if="agreementCoefficients.length" class="agreement-stats">
+              <template v-for="stat in agreementCoefficients" :key="stat.key">
+                <dt class="agreement-stat-name" :title="stat.title">
+                  {{ stat.name }}
+                </dt>
+                <dd class="agreement-stat-value">{{ stat.value }}</dd>
+              </template>
+            </dl>
+            <span v-else class="agreement-stat-empty">
+              {{ agreementNoCoefficientLabel }}
+            </span>
+            <span class="agreement-coverage">{{ agreementCoverage }}</span>
+          </div>
+        </div>
 
-          <!-- Resolution distribution -->
-          <div class="stats-section">
-            <div class="stats-section-header">
-              <span class="stats-section-title">Resolution</span>
+        <!-- Resolution distribution -->
+        <div class="inspector-section">
+          <div class="stats-section-header">
+            <span class="section-label">Resolution</span>
+            <button
+              v-if="filterStore.resolutionBucketFilter != null"
+              class="stats-clear-btn"
+              type="button"
+              title="Clear resolution filter"
+              @click="filterStore.resolutionBucketFilter = null"
+            >
+              <v-icon size="11">mdi-close</v-icon>
+            </button>
+          </div>
+          <div class="stats-hist">
+            <StatsHistogram
+              :buckets="picStats.resolution_distribution"
+              aria-label="Resolution distribution"
+              fill="tertiary"
+              :active="(item) => isResolutionBarActive(item.label)"
+              @select="(item) => handleResolutionBarClick(item.label)"
+            />
+          </div>
+        </div>
+      </template>
+    </template>
+
+    <!-- ── Tasks tab ─────────────────────────────────────────────────── -->
+    <template v-if="activeTab === 'tasks'">
+      <div v-if="tasksStore.activeEntries.length === 0" class="tm-idle-msg">
+        No active tasks
+      </div>
+      <div v-else class="tm-worker-list">
+        <template v-for="entry in tasksStore.activeEntries" :key="entry.key">
+          <!-- ComfyUI run: frontend-driven, shows a progress bar + abort -->
+          <div v-if="entry.kind === 'comfyui'" class="tm-worker-row">
+            <div class="tm-worker-row-top">
+              <span class="tm-status-dot tm-status-dot--running"></span>
+              <span class="tm-worker-label">{{ entry.run.label }}</span>
               <button
-                v-if="filterStore.resolutionBucketFilter != null"
-                class="stats-clear-btn"
+                v-if="entry.run.status !== 'completed'"
+                class="tm-comfy-abort"
                 type="button"
-                title="Clear resolution filter"
-                @click="filterStore.resolutionBucketFilter = null"
+                title="Abort ComfyUI run"
+                @click="tasksStore.abortComfyuiRun(entry.key)"
               >
-                <v-icon size="11">mdi-close</v-icon>
+                ✕
               </button>
             </div>
-            <div class="stats-hist">
-              <StatsHistogram
-                :buckets="picStats.resolution_distribution"
-                aria-label="Resolution distribution"
-                fill="tertiary"
-                :active="(item) => isResolutionBarActive(item.label)"
-                @select="(item) => handleResolutionBarClick(item.label)"
-              />
+            <div class="tm-comfy-bar">
+              <div
+                class="tm-comfy-fill"
+                :style="{
+                  width: `${Math.min(100, Math.max(0, Math.round(entry.run.percent)))}%`,
+                }"
+              ></div>
             </div>
+            <div class="tm-comfy-message">{{ entry.run.message }}</div>
           </div>
-        </template>
-      </template>
-
-      <!-- ── Tasks tab ─────────────────────────────────────────────────── -->
-      <template v-if="activeTab === 'tasks'">
-        <div v-if="tasksStore.activeEntries.length === 0" class="tm-idle-msg">
-          No active tasks
-        </div>
-        <div v-else class="tm-worker-list">
-          <template v-for="entry in tasksStore.activeEntries" :key="entry.key">
-            <!-- ComfyUI run: frontend-driven, shows a progress bar + abort -->
-            <div v-if="entry.kind === 'comfyui'" class="tm-worker-row">
-              <div class="tm-worker-row-top">
-                <span class="tm-status-dot tm-status-dot--running"></span>
-                <span class="tm-worker-label">{{ entry.run.label }}</span>
-                <button
-                  v-if="entry.run.status !== 'completed'"
-                  class="tm-comfy-abort"
-                  type="button"
-                  title="Abort ComfyUI run"
-                  @click="tasksStore.abortComfyuiRun(entry.key)"
-                >
-                  ✕
-                </button>
-              </div>
-              <div class="tm-comfy-bar">
-                <div
-                  class="tm-comfy-fill"
-                  :style="{
-                    width: `${Math.min(100, Math.max(0, Math.round(entry.run.percent)))}%`,
-                  }"
-                ></div>
-              </div>
-              <div class="tm-comfy-message">{{ entry.run.message }}</div>
-            </div>
-            <!-- Async import (#459): the two-phase dialog auto-hides at the safe
+          <!-- Async import (#459): the two-phase dialog auto-hides at the safe
                  transition and the import lands here as a determinate task row.
                  data-import-task-row is the FLIP flight target the import dialog
                  flies its count chip into. -->
-            <div
-              v-else-if="entry.kind === 'import'"
-              class="tm-worker-row tm-import-row"
-              :data-import-task-row="entry.key"
-            >
-              <div class="tm-worker-row-top">
-                <span
-                  class="tm-status-dot"
-                  :class="{
-                    'tm-status-dot--running': entry.run.status === 'running',
-                  }"
-                ></span>
-                <span class="tm-worker-label">{{ entry.run.label }}</span>
-                <span v-if="entry.run.total > 0" class="tm-worker-progress">
-                  {{ entry.run.current }} / {{ entry.run.total }}
-                </span>
-                <!-- Cancel is offered only while the import is genuinely
+          <div
+            v-else-if="entry.kind === 'import'"
+            class="tm-worker-row tm-import-row"
+            :data-import-task-row="entry.key"
+          >
+            <div class="tm-worker-row-top">
+              <span
+                class="tm-status-dot"
+                :class="{
+                  'tm-status-dot--running': entry.run.status === 'running',
+                }"
+              ></span>
+              <span class="tm-worker-label">{{ entry.run.label }}</span>
+              <span v-if="entry.run.total > 0" class="tm-worker-progress">
+                {{ entry.run.current }} / {{ entry.run.total }}
+              </span>
+              <!-- Cancel is offered only while the import is genuinely
                      client-abortable (the pre-commit upload window, run.abortable).
                      A committed server-side import cannot be stopped from the
                      client, so no cancel control is shown for it. -->
-                <button
-                  v-if="entry.run.abortable && !isReadOnly"
-                  class="tm-comfy-abort"
-                  type="button"
-                  title="Cancel import"
-                  @click="tasksStore.abortImportRun(entry.key)"
-                >
-                  ✕
-                </button>
-              </div>
-              <div class="tm-comfy-bar">
-                <div
-                  class="tm-comfy-fill"
-                  :style="{
-                    width: `${Math.min(100, Math.max(0, Math.round(entry.run.percent)))}%`,
-                  }"
-                ></div>
-              </div>
-              <div class="tm-comfy-message">{{ entry.run.message }}</div>
+              <button
+                v-if="entry.run.abortable && !isReadOnly"
+                class="tm-comfy-abort"
+                type="button"
+                title="Cancel import"
+                @click="tasksStore.abortImportRun(entry.key)"
+              >
+                ✕
+              </button>
             </div>
-            <!-- Backend worker: throughput sparkline + rate -->
-            <div v-else class="tm-worker-row">
-              <div class="tm-worker-row-top">
-                <span
-                  class="tm-status-dot"
-                  :class="{
-                    'tm-status-dot--running':
-                      entry.snapshot.running || tmGetLatestRate(entry.key) > 0,
-                  }"
-                ></span>
-                <span class="tm-worker-label">{{
-                  tmFormatLabel(entry.key, entry.snapshot.label)
-                }}</span>
-                <span class="tm-worker-progress">{{
-                  tmFormatProgress(entry.snapshot)
-                }}</span>
-              </div>
-              <div class="tm-worker-row-bottom">
-                <canvas
-                  :ref="(el) => tmRegisterCanvas(entry.key, el)"
-                  class="tm-sparkline"
-                ></canvas>
-                <span class="tm-worker-rate">
-                  {{ tmFormatRate(tmGetLatestRate(entry.key)) }}/s
-                </span>
-              </div>
+            <div class="tm-comfy-bar">
+              <div
+                class="tm-comfy-fill"
+                :style="{
+                  width: `${Math.min(100, Math.max(0, Math.round(entry.run.percent)))}%`,
+                }"
+              ></div>
             </div>
-          </template>
-        </div>
-        <div v-if="tmSystemItems.length" class="tm-system-bar">
-          <div
-            v-for="item in tmSystemItems"
-            :key="item.label"
-            class="tm-system-item"
-          >
-            <span class="tm-system-label">{{ item.label }}</span>
-            <span class="tm-system-value">{{ item.value }}</span>
+            <div class="tm-comfy-message">{{ entry.run.message }}</div>
           </div>
+          <!-- Backend worker: throughput sparkline + rate -->
+          <div v-else class="tm-worker-row">
+            <div class="tm-worker-row-top">
+              <span
+                class="tm-status-dot"
+                :class="{
+                  'tm-status-dot--running':
+                    entry.snapshot.running || tmGetLatestRate(entry.key) > 0,
+                }"
+              ></span>
+              <span class="tm-worker-label">{{
+                tmFormatLabel(entry.key, entry.snapshot.label)
+              }}</span>
+              <span class="tm-worker-progress">{{
+                tmFormatProgress(entry.snapshot)
+              }}</span>
+            </div>
+            <div class="tm-worker-row-bottom">
+              <canvas
+                :ref="(el) => tmRegisterCanvas(entry.key, el)"
+                class="tm-sparkline"
+              ></canvas>
+              <span class="tm-worker-rate">
+                {{ tmFormatRate(tmGetLatestRate(entry.key)) }}/s
+              </span>
+            </div>
+          </div>
+        </template>
+      </div>
+      <div v-if="tmSystemItems.length" class="tm-system-bar">
+        <div
+          v-for="item in tmSystemItems"
+          :key="item.label"
+          class="tm-system-item"
+        >
+          <span class="tm-system-label">{{ item.label }}</span>
+          <span class="tm-system-value">{{ item.value }}</span>
         </div>
-      </template>
-    </div>
-  </div>
+      </div>
+    </template>
+  </AppInspector>
 </template>
 
 <style scoped>
-.stats-sidebar {
-  position: relative;
-  width: var(--stats-panel-w);
-  min-width: var(--stats-panel-w);
-  max-width: var(--stats-panel-w);
-  height: 100%;
-  display: flex;
-  flex-direction: row;
-  flex-shrink: 0;
-  /* Mirrors `.sidebar`'s border-right exactly, so the two rails present the
-     same edge onto the grid canvas. Was `transparent`, which reserved the pixel
-     but painted nothing while the left rail carried a visible hairline. */
-  border-left: 1px solid rgb(var(--v-theme-border));
-  background: rgb(var(--v-theme-sidebar));
-  transition:
-    width 0.15s,
-    min-width 0.15s,
-    border-color 0.15s;
-  overflow: hidden;
-}
-
-/* The panel is DOCKED at every width and is never taken out of flow. A
-   `max-width: 1339px` block used to turn it into a fixed overlay drawer
-   (z-index 150, anchored below the 36px header band). That drawer opened
-   directly on top of the toolbar's own stats toggle - the only control that
-   closes it - because the toggle sits in the band *below* that anchor. It also
-   hid the title row, and its close button was never wired up, so on any
-   viewport at or under 1339px an opened panel could not be dismissed at all.
-   Docking removes the collision by construction: the toolbar ends where the
-   panel begins. If a floating stats panel is ever wanted it should be a user
-   preference like the left sidebar's (`.sidebar-overlay` in App.css), not a
-   width breakpoint. */
-.stats-sidebar.collapsed {
-  width: 0;
-  min-width: 0;
-  max-width: 0;
-  border-left-color: transparent;
-  /* Was `visible` so the edge-toggle button could hang outside the collapsed
-     panel; that button no longer exists, and a zero-width panel must not let
-     its content bleed over the grid. */
-  overflow: hidden;
-  background: transparent;
-}
-
-.stats-sidebar-content {
-  flex: 1;
-  min-width: 0;
-  padding: 0 var(--space-3) var(--space-4) var(--space-3);
-  overflow-y: auto;
-  overflow-x: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.stats-sidebar-header {
-  display: flex;
-  flex-direction: column;
-  margin-bottom: var(--space-2);
-  /* Match the toolbar height so the three column header bands (left tabs,
-     toolbar, stats) line up. The "Stats" title row is flex:1 and absorbs the
-     change; the tabs row keeps its natural height. */
-  height: 36px;
-  flex-shrink: 0;
-}
-
-.stats-sidebar-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex: 1;
-  padding: 0 var(--space-2) 0 var(--space-3);
-}
-
-.stats-sidebar-title,
-.stats-sidebar-title-text {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: rgba(var(--v-theme-on-surface), 0.5);
-}
-
-.stats-sidebar-title-text {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.stats-sidebar-title-icon {
-  color: rgba(var(--v-theme-on-surface), 0.4);
-}
-
-.stats-sidebar-tabs {
-  display: flex;
-  align-items: stretch;
-  flex-shrink: 0;
-}
-
-.stats-header-icon {
-  color: rgba(var(--v-theme-on-surface), 0.4);
-}
-
 .stats-loading {
   display: flex;
   align-items: center;
@@ -2042,26 +1906,6 @@ defineExpose({ focusTasksTab });
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-error), 1);
   padding: var(--space-3) 0;
-}
-
-.stats-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding-bottom: var(--space-3);
-  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.07);
-}
-
-.stats-section:last-child {
-  border-bottom: none;
-}
-
-.stats-section-title {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: rgba(var(--v-theme-on-surface), 0.45);
 }
 
 .stats-section-toggle {
@@ -2096,9 +1940,9 @@ defineExpose({ focusTasksTab });
 
 .stats-tile-label {
   font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), 0.45);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--tracking-label);
   margin-top: var(--space-1);
 }
 
@@ -2219,7 +2063,7 @@ defineExpose({ focusTasksTab });
 }
 
 .bar-row--active .bar-rect {
-  stroke: rgba(var(--v-theme-primary), 1);
+  stroke: var(--active-bar);
   stroke-width: 1.5;
   opacity: 1;
 }
@@ -2369,34 +2213,6 @@ defineExpose({ focusTasksTab });
 }
 .conf-tag-select:hover {
   border-color: rgba(var(--v-theme-on-surface), 0.3);
-}
-
-.stats-tab-btn {
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  font-size: var(--text-2xs);
-  font-weight: 500;
-  padding: 0 var(--space-3);
-  border-bottom: 2px solid transparent;
-  color: rgba(var(--v-theme-on-surface), 0.45);
-  transition:
-    color 0.12s,
-    border-color 0.12s;
-  border-radius: 0;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.stats-tab-btn:hover {
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-on-surface));
-}
-/* Olive marks, words stay ink: the underline carries the selection. */
-.stats-tab-btn.active {
-  color: var(--active-text);
-  border-bottom-color: var(--selected-ink);
 }
 
 /* ── Agreement matrix ──────────────────────────────────────────────────────
@@ -2735,8 +2551,8 @@ defineExpose({ focusTasksTab });
 
 .tm-system-label {
   font-weight: var(--weight-semibold);
-  letter-spacing: 0.04em;
-  color: rgba(var(--v-theme-on-surface), 0.5);
+  letter-spacing: var(--tracking-label);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   text-transform: uppercase;
   font-size: var(--text-2xs);
   flex-shrink: 0;

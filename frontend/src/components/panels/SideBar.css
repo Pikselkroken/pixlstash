@@ -768,7 +768,7 @@
   scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
   box-sizing: border-box;
   /* One rule for "chrome rail meets the grid canvas", shared with
-     `.stats-sidebar`'s border-left so both rails present the same edge. */
+     the inspector's (`AppInspector`) border-left so both rails present the same edge. */
   border-right: 1px solid rgb(var(--v-theme-border));
 }
 
