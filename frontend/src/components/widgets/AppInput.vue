@@ -59,7 +59,10 @@ const props = defineProps({
   // mono face. The height never changes with the kind of value.
   mono: { type: Boolean, default: false },
   // true marks the field; a string also renders as the message below it.
-  error: { type: [Boolean, String], default: false },
+  // String FIRST: Vue casts `""` to `true` for a Boolean-first type list, so
+  // `:error="someRef"` starting (and clearing) at "" would mark the field for
+  // good. Order is the fix; the types are the same two.
+  error: { type: [String, Boolean], default: false },
   // The accessible name for a field with no visible label.
   ariaLabel: { type: String, default: "" },
   min: { type: [String, Number], default: "" },

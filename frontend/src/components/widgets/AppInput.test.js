@@ -34,6 +34,12 @@ describe("AppInput", () => {
     expect(w.find(".app-input__error").exists()).toBe(false);
     await w.setProps({ error: "Pick a date in the future" });
     expect(w.find(".app-input__error").text()).toBe("Pick a date in the future");
+    // A CLEARED message is not an error: a caller holding the message in one
+    // ref passes "" for the valid state, and Vue casts that to true whenever
+    // Boolean comes first in the prop's type list.
+    await w.setProps({ error: "" });
+    expect(w.find(".app-input__wrap--error").exists()).toBe(false);
+    expect(w.find("input").attributes("aria-invalid")).toBeUndefined();
     await w.setProps({ error: false });
     expect(w.find("input").attributes("aria-invalid")).toBeUndefined();
   });
