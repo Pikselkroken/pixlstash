@@ -247,7 +247,13 @@
                   @click="fetchTaggerPlugins"
                 />
               </template>
-              <div class="ctx-menu" role="menu" style="min-width: 180px">
+              <div
+                class="ctx-menu"
+                role="menu"
+                tabindex="-1"
+                style="min-width: 180px"
+                @keydown="onMenuKeydown"
+              >
                 <button
                   v-if="taggerPluginsLoading"
                   type="button"
@@ -346,6 +352,7 @@ import { listTaggers } from "../../api/taggers";
 import { getUserConfig } from "../../api/config";
 import { isSentinelTag, formatSentinelTag } from "../../utils/tags.js";
 import { errorDetail } from "../../utils/apiError";
+import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import AppButton from "../widgets/AppButton.vue";
 
 const MAX_TAG_FETCH = 100;

@@ -45,6 +45,7 @@ import AppInput from "../widgets/AppInput.vue";
 import LibraryCaptionsDialog from "./LibraryCaptionsDialog.vue";
 import LibraryLayoutDialog from "./LibraryLayoutDialog.vue";
 import SettingsSection from "./SettingsSection.vue";
+import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 
 const props = defineProps({
   // The dialog re-fetches whenever it opens, so a library attached from the
@@ -415,7 +416,10 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
                   ⋯
                 </button>
               </template>
-              <div class="ctx-menu" role="menu" style="min-width: 200px">
+              <div class="ctx-menu" role="menu" style="min-width: 200px"
+                tabindex="-1"
+                @keydown="onMenuKeydown"
+              >
                 <button
                   v-if="!library.is_active"
                   type="button"
