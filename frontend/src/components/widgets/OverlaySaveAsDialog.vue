@@ -3,7 +3,7 @@
     :open="open"
     title="Save as"
     :subtitle="mediaNoun"
-    :width="440"
+    size="sm"
     @close="emit('close')"
     @accept="confirm"
   >

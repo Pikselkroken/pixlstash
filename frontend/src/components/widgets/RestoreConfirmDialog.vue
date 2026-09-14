@@ -24,7 +24,7 @@ import {
   reloadAfterFullRestore,
 } from "../../utils/fullRestoreTransition";
 import AppButton from "./AppButton.vue";
-import AppBarButton from "./AppBarButton.vue";
+import AppDialog from "./AppDialog.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -271,222 +271,221 @@ const canRestore = computed(
 </script>
 
 <template>
-  <v-dialog
-    v-model="dialogOpen"
-    max-width="680"
-    @click:outside="dialogOpen = false"
+  <!-- Destructive: no @accept, Enter never restores. -->
+  <AppDialog
+    :open="dialogOpen"
+    title="Restore from snapshot"
+    size="lg"
+    @close="dialogOpen = false"
   >
-    <v-card class="restore-dialog-card">
-      <!-- ── Header ─────────────────────────────────────────────────────── -->
-      <v-card-title class="restore-dialog-title">
-        <v-icon size="20" class="mr-2">mdi-restore</v-icon>
-        Restore from snapshot
-        <AppBarButton
-          icon="close"
-          :icon-size="20"
-          class="ml-auto"
-          aria-label="Close"
-          @click="dialogOpen = false"
-        />
-      </v-card-title>
-
-      <v-card-text class="restore-dialog-body">
-        <!-- ── Step 1: Snapshot picker ──────────────────────────────── -->
-        <template v-if="isPickerStep">
-          <p class="restore-picker-hint">Select a snapshot to restore from:</p>
-          <div
-            v-if="store.loading && !snapshots.length"
-            class="restore-loading"
+    <!-- ── Step 1: Snapshot picker ──────────────────────────────── -->
+    <template v-if="isPickerStep">
+      <p class="restore-picker-hint">Select a snapshot to restore from:</p>
+      <div v-if="store.loading && !snapshots.length" class="restore-loading">
+        <v-progress-circular indeterminate size="20" class="mr-2" />
+        Loading snapshots…
+      </div>
+      <div v-else-if="!snapshots.length" class="restore-empty">
+        No snapshots found.
+      </div>
+      <div v-else class="restore-picker-list">
+        <div
+          v-for="cp in snapshots"
+          :key="cp.id"
+          class="restore-picker-row"
+          :class="{
+            'restore-picker-row--disabled': !cp.is_compatible,
+          }"
+          @click="selectSnapshot(cp)"
+        >
+          <v-chip
+            :color="kindChipColor(cp.kind)"
+            size="x-small"
+            variant="tonal"
+            class="mr-2"
           >
-            <v-progress-circular indeterminate size="20" class="mr-2" />
-            Loading snapshots…
-          </div>
-          <div v-else-if="!snapshots.length" class="restore-empty">
-            No snapshots found.
-          </div>
-          <div
-            v-for="cp in snapshots"
-            :key="cp.id"
-            class="restore-picker-row"
-            :class="{
-              'restore-picker-row--disabled': !cp.is_compatible,
-            }"
-            @click="selectSnapshot(cp)"
+            {{ cp.kind }}
+          </v-chip>
+          <span class="restore-picker-label">
+            {{ cp.label || "—" }}
+          </span>
+          <span
+            class="restore-picker-date"
+            :title="formatUserDate(cp.created_at, 'iso')"
           >
-            <v-chip
-              :color="kindChipColor(cp.kind)"
-              size="x-small"
-              variant="tonal"
-              class="mr-2"
-            >
-              {{ cp.kind }}
-            </v-chip>
-            <span class="restore-picker-label">
-              {{ cp.label || "—" }}
-            </span>
-            <span
-              class="restore-picker-date"
-              :title="formatUserDate(cp.created_at, 'iso')"
-            >
-              {{ relativeDate(cp.created_at) }}
-            </span>
-            <v-chip
-              v-if="!cp.is_compatible"
-              color="error"
-              size="x-small"
-              variant="tonal"
-              class="ml-2"
-              title="Schema version newer than live DB; restore not available."
-            >
-              incompatible
-            </v-chip>
-          </div>
-        </template>
-
-        <!-- ── Step 2: Preview ────────────────────────────────────────── -->
-        <template v-else>
-          <!-- Back button (only when we came through the picker) -->
-          <AppButton
-            v-if="!props.snapshotId"
-            variant="ghost"
-            size="sm"
-            icon-left="arrow-left"
-            class="mb-3"
-            @click="backToPicker"
+            {{ relativeDate(cp.created_at) }}
+          </span>
+          <v-chip
+            v-if="!cp.is_compatible"
+            color="error"
+            size="x-small"
+            variant="tonal"
+            class="ml-2"
+            title="Schema version newer than live DB; restore not available."
           >
-            Back
-          </AppButton>
+            incompatible
+          </v-chip>
+        </div>
+      </div>
+    </template>
 
-          <!-- Snapshot header -->
-          <div v-if="preview" class="restore-preview-header">
-            <v-chip
-              :color="kindChipColor(preview.snapshot?.kind)"
-              size="small"
-              variant="tonal"
-              class="mr-2"
+    <!-- ── Step 2: Preview ────────────────────────────────────────── -->
+    <template v-else>
+      <!-- ── Missing-dependencies prompt ──────────────────────────────────
+           Server returned 409 missing_dependencies - ask the user whether
+           to also restore the listed parents from the snapshot. First in the
+           body, so the question is in view beside the YES / NO footer. -->
+      <div v-if="missingDependencies" class="missing-deps-prompt">
+        <div class="missing-deps-title">
+          <v-icon size="18" color="warning" class="mr-1"
+            >mdi-alert-circle-outline</v-icon
+          >
+          This restore needs to bring back some missing parents
+        </div>
+        <div class="missing-deps-body">
+          The snapshot references resources that have been deleted from your
+          vault since it was taken:
+          <ul class="missing-deps-list">
+            <li v-for="(ids, kind) in missingDependencies" :key="kind">
+              <strong>{{ ids.length }}</strong>
+              {{ humanKind(kind, ids.length) }}
+              (id{{ ids.length > 1 ? "s" : "" }}: {{ ids.join(", ") }})
+            </li>
+          </ul>
+          Restore them too, or cancel and pick a different snapshot?
+        </div>
+      </div>
+
+      <!-- Back button (only when we came through the picker) -->
+      <AppButton
+        v-if="!props.snapshotId"
+        variant="ghost"
+        size="sm"
+        icon-left="arrow-left"
+        class="restore-back"
+        @click="backToPicker"
+      >
+        Back
+      </AppButton>
+
+      <!-- Snapshot header -->
+      <div v-if="preview" class="restore-preview-header">
+        <v-chip
+          :color="kindChipColor(preview.snapshot?.kind)"
+          size="small"
+          variant="tonal"
+          class="mr-2"
+        >
+          {{ preview.snapshot?.kind }}
+        </v-chip>
+        <span class="restore-preview-cp-label">
+          {{ preview.snapshot?.label || "—" }}
+        </span>
+        <span
+          class="restore-preview-cp-date"
+          :title="formatUserDate(preview.snapshot?.created_at, 'iso')"
+        >
+          {{ relativeDate(preview.snapshot?.created_at) }}
+        </span>
+      </div>
+
+      <!-- Loading skeleton -->
+      <div v-if="previewLoading" class="restore-loading">
+        <v-progress-circular indeterminate size="20" class="mr-2" />
+        Loading preview…
+      </div>
+
+      <div v-else-if="previewError" class="restore-inline-error">
+        {{ previewError }}
+      </div>
+
+      <template v-else-if="preview">
+        <!-- Warnings -->
+        <div v-if="preview.warnings?.length" class="restore-warnings">
+          <v-alert
+            v-for="(warn, i) in preview.warnings"
+            :key="i"
+            type="warning"
+            density="compact"
+            variant="tonal"
+          >
+            {{ warn }}
+          </v-alert>
+        </div>
+
+        <!-- Summary blocks -->
+        <div class="restore-summary-grid">
+          <template v-for="(val, key) in preview.summary" :key="key">
+            <div
+              v-if="val > 0"
+              class="restore-summary-card"
+              :class="{
+                'restore-summary-card--danger':
+                  key === 'pictures_to_delete' || key === 'missing_files',
+              }"
             >
-              {{ preview.snapshot?.kind }}
-            </v-chip>
-            <span class="restore-preview-cp-label">
-              {{ preview.snapshot?.label || "—" }}
-            </span>
-            <span
-              class="restore-preview-cp-date"
-              :title="formatUserDate(preview.snapshot?.created_at, 'iso')"
-            >
-              {{ relativeDate(preview.snapshot?.created_at) }}
-            </span>
-          </div>
-
-          <!-- Loading skeleton -->
-          <div v-if="previewLoading" class="restore-loading">
-            <v-progress-circular indeterminate size="20" class="mr-2" />
-            Loading preview…
-          </div>
-
-          <div v-else-if="previewError" class="restore-inline-error">
-            {{ previewError }}
-          </div>
-
-          <template v-else-if="preview">
-            <!-- Warnings -->
-            <v-alert
-              v-for="(warn, i) in preview.warnings"
-              :key="i"
-              type="warning"
-              density="compact"
-              variant="tonal"
-              class="mb-2"
-              style="font-size: 0.78rem"
-            >
-              {{ warn }}
-            </v-alert>
-
-            <!-- Summary blocks -->
-            <div class="restore-summary-grid">
-              <template v-for="(val, key) in preview.summary" :key="key">
-                <div
-                  v-if="val > 0"
-                  class="restore-summary-card"
-                  :class="{
-                    'restore-summary-card--danger':
-                      key === 'pictures_to_delete' || key === 'missing_files',
-                  }"
-                >
-                  <span class="restore-summary-value">{{ val }}</span>
-                  <span class="restore-summary-label">{{
-                    summaryLabel(key)
-                  }}</span>
-                </div>
-              </template>
-            </div>
-
-            <!-- Per-resource diff table -->
-            <div v-if="preview.resources?.length" class="restore-diff-section">
-              <button
-                class="restore-diff-toggle"
-                @click="showDiffTable = !showDiffTable"
-              >
-                <v-icon size="14" class="mr-1">
-                  {{ showDiffTable ? "mdi-chevron-up" : "mdi-chevron-down" }}
-                </v-icon>
-                {{ showDiffTable ? "Hide" : "Show" }} details ({{
-                  preview.resources.length
-                }}
-                resources)
-              </button>
-              <div v-if="showDiffTable" class="restore-diff-table">
-                <div
-                  v-for="r in preview.resources"
-                  :key="`${r.type}-${r.id}`"
-                  class="restore-diff-row"
-                  :class="{
-                    'restore-diff-row--missing': !r.file_on_disk,
-                    'restore-diff-row--delete': !r.exists_in_snapshot,
-                  }"
-                >
-                  <span class="diff-type">{{ r.type }}</span>
-                  <span class="diff-id">#{{ r.id }}</span>
-                  <span class="diff-fields">
-                    <template v-if="!r.file_on_disk">
-                      <em>file missing</em>
-                    </template>
-                    <template v-else-if="!r.exists_in_snapshot">
-                      <em>will be deleted</em>
-                    </template>
-                    <template v-else-if="r.changed_fields?.length">
-                      {{ r.changed_fields.join(", ") }}
-                    </template>
-                    <template v-else>no changes</template>
-                  </span>
-                  <span
-                    v-if="
-                      r.dependent_counts &&
-                      Object.keys(r.dependent_counts).length
-                    "
-                    class="diff-deps"
-                  >
-                    <span
-                      v-for="(cnt, depKey) in r.dependent_counts"
-                      :key="depKey"
-                      >{{ depKey }}: {{ cnt }}</span
-                    >
-                  </span>
-                </div>
-              </div>
+              <span class="restore-summary-value">{{ val }}</span>
+              <span class="restore-summary-label">{{ summaryLabel(key) }}</span>
             </div>
           </template>
-        </template>
-      </v-card-text>
+        </div>
+
+        <!-- Per-resource diff table -->
+        <div v-if="preview.resources?.length" class="restore-diff-section">
+          <button
+            class="restore-diff-toggle"
+            @click="showDiffTable = !showDiffTable"
+          >
+            <v-icon size="14" class="mr-1">
+              {{ showDiffTable ? "mdi-chevron-up" : "mdi-chevron-down" }}
+            </v-icon>
+            {{ showDiffTable ? "Hide" : "Show" }} details ({{
+              preview.resources.length
+            }}
+            resources)
+          </button>
+          <div v-if="showDiffTable" class="restore-diff-table">
+            <div
+              v-for="r in preview.resources"
+              :key="`${r.type}-${r.id}`"
+              class="restore-diff-row"
+              :class="{
+                'restore-diff-row--missing': !r.file_on_disk,
+                'restore-diff-row--delete': !r.exists_in_snapshot,
+              }"
+            >
+              <span class="diff-type">{{ r.type }}</span>
+              <span class="diff-id">#{{ r.id }}</span>
+              <span class="diff-fields">
+                <template v-if="!r.file_on_disk">
+                  <em>file missing</em>
+                </template>
+                <template v-else-if="!r.exists_in_snapshot">
+                  <em>will be deleted</em>
+                </template>
+                <template v-else-if="r.changed_fields?.length">
+                  {{ r.changed_fields.join(", ") }}
+                </template>
+                <template v-else>no changes</template>
+              </span>
+              <span
+                v-if="
+                  r.dependent_counts && Object.keys(r.dependent_counts).length
+                "
+                class="diff-deps"
+              >
+                <span v-for="(cnt, depKey) in r.dependent_counts" :key="depKey"
+                  >{{ depKey }}: {{ cnt }}</span
+                >
+              </span>
+            </div>
+          </div>
+        </div>
+      </template>
 
       <!-- Full-vault acknowledgement (irreversible destructive action) -->
       <div
-        v-if="
-          !isPickerStep &&
-          isFullVaultRestore &&
-          preview != null &&
-          !missingDependencies
-        "
+        v-if="isFullVaultRestore && preview != null && !missingDependencies"
         class="full-vault-ack"
       >
         <v-checkbox
@@ -505,64 +504,35 @@ const canRestore = computed(
           </template>
         </v-checkbox>
       </div>
+    </template>
 
-      <!-- ── Missing-dependencies prompt ──────────────────────────────────
-           Server returned 409 missing_dependencies - ask the user whether
-           to also restore the listed parents from the snapshot. Replaces
-           the normal action footer until the user picks YES or NO. -->
-      <template v-if="!isPickerStep && missingDependencies">
-        <div class="missing-deps-prompt">
-          <div class="missing-deps-title">
-            <v-icon size="18" color="warning" class="mr-1"
-              >mdi-alert-circle-outline</v-icon
-            >
-            This restore needs to bring back some missing parents
-          </div>
-          <div class="missing-deps-body">
-            The snapshot references resources that have been deleted from
-            your vault since it was taken:
-            <ul class="missing-deps-list">
-              <li
-                v-for="(ids, kind) in missingDependencies"
-                :key="kind"
-              >
-                <strong>{{ ids.length }}</strong>
-                {{ humanKind(kind, ids.length) }}
-                (id{{ ids.length > 1 ? "s" : "" }}: {{ ids.join(", ") }})
-              </li>
-            </ul>
-            Restore them too, or cancel and pick a different snapshot?
-          </div>
-        </div>
-        <v-card-actions class="restore-dialog-actions">
-          <v-spacer />
-          <AppButton
-            variant="secondary"
-            :disabled="restoring"
-            @click="declineRestoreDependencies"
-          >
-            No, cancel
-          </AppButton>
-          <AppButton
-            variant="danger"
-            icon-left="restore"
-            :loading="restoring"
-            @click="confirmRestoreDependencies"
-          >
-            Yes, restore everything
-          </AppButton>
-        </v-card-actions>
+    <!-- ── Footer: none on the picker step ─────────────────────────────── -->
+    <template v-if="!isPickerStep" #footer>
+      <!-- Replaces the normal actions until the user picks YES or NO. -->
+      <template v-if="missingDependencies">
+        <AppButton
+          variant="secondary"
+          :disabled="restoring"
+          @click="declineRestoreDependencies"
+        >
+          No, cancel
+        </AppButton>
+        <AppButton
+          variant="danger"
+          icon-left="restore"
+          :loading="restoring"
+          @click="confirmRestoreDependencies"
+        >
+          Yes, restore everything
+        </AppButton>
       </template>
-
-      <!-- ── Footer ─────────────────────────────────────────────────────── -->
-      <v-card-actions
-        v-if="!isPickerStep && !missingDependencies"
-        class="restore-dialog-actions"
-      >
-        <div v-if="restoreError" class="restore-inline-error mr-auto">
+      <template v-else>
+        <div
+          v-if="restoreError"
+          class="restore-inline-error restore-footer-error"
+        >
           {{ restoreError }}
         </div>
-        <v-spacer v-else />
         <AppButton variant="secondary" @click="dialogOpen = false">
           Cancel
         </AppButton>
@@ -575,48 +545,23 @@ const canRestore = computed(
         >
           Restore
         </AppButton>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+      </template>
+    </template>
+  </AppDialog>
 </template>
 
 <style scoped>
-.restore-dialog-card {
-  background: rgb(var(--v-theme-surface));
-  color: rgb(var(--v-theme-on-surface));
-  border-radius: var(--radius-lg);
-  color-scheme: dark;
-  max-height: 80dvh;
-  display: flex;
-  flex-direction: column;
-}
-
-.restore-dialog-title {
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-  display: flex;
-  align-items: center;
-  padding: var(--space-5) var(--space-5) var(--space-3);
-  flex-shrink: 0;
-}
-
-.restore-dialog-body {
-  overflow-y: auto;
-  flex: 1;
-  padding: var(--space-3) var(--space-5) var(--space-4);
-}
-
-.restore-dialog-actions {
-  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.1);
-  padding: var(--space-3) var(--space-5);
-  flex-shrink: 0;
-}
-
 /* Picker step */
 .restore-picker-hint {
   font-size: var(--text-sm);
-  margin-bottom: var(--space-3);
+  margin: 0;
   opacity: 0.75;
+}
+
+.restore-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 .restore-picker-row {
@@ -626,7 +571,6 @@ const canRestore = computed(
   border-radius: var(--radius-sm);
   cursor: pointer;
   border: 1px solid rgba(var(--v-theme-on-surface), 0.08);
-  margin-bottom: var(--space-2);
   transition: background 0.1s;
 }
 
@@ -654,10 +598,24 @@ const canRestore = computed(
 }
 
 /* Preview step */
+/* A column-flex body stretches its children; the back button keeps its width. */
+.restore-back {
+  align-self: flex-start;
+}
+
+.restore-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.restore-warnings :deep(.v-alert) {
+  font-size: var(--text-xs);
+}
+
 .restore-preview-header {
   display: flex;
   align-items: center;
-  margin-bottom: var(--space-4);
 }
 
 .restore-preview-cp-label {
@@ -677,7 +635,6 @@ const canRestore = computed(
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
-  margin: var(--space-3) 0 var(--space-5);
 }
 
 .restore-summary-card {
@@ -709,10 +666,6 @@ const canRestore = computed(
 }
 
 /* Diff table */
-.restore-diff-section {
-  margin-top: var(--space-3);
-}
-
 .restore-diff-toggle {
   font-size: var(--text-xs);
   display: flex;
@@ -800,8 +753,12 @@ const canRestore = computed(
   color: rgb(var(--v-theme-error));
 }
 
+.restore-footer-error {
+  margin-right: auto;
+}
+
 .full-vault-ack {
-  padding: var(--space-3) var(--space-5) 0;
+  padding-top: var(--space-3);
   border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08);
 }
 
@@ -812,8 +769,8 @@ const canRestore = computed(
 }
 
 .missing-deps-prompt {
-  padding: var(--space-4) var(--space-5) var(--space-2);
-  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.08);
 }
 
 .missing-deps-title {

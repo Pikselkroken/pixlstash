@@ -32,7 +32,7 @@ import PictureSetEditor from "./PictureSetEditor.vue";
 // and drive the Save button without pulling in the whole design-system tree.
 const AppDialog = {
   name: "AppDialog",
-  props: ["open", "title", "width"],
+  props: ["open", "title", "size"],
   template: `<div><slot /><slot name="footer" /></div>`,
 };
 const fieldStub = (name) => ({

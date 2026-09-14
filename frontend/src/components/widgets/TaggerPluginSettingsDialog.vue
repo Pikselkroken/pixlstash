@@ -16,6 +16,7 @@ import { patchUserConfig } from "../../api/config";
 import TaggerParametersUI from "./TaggerParametersUI.vue";
 import { errorDetail } from "../../utils/apiError";
 import AppButton from "./AppButton.vue";
+import AppDialog from "./AppDialog.vue";
 
 const props = defineProps({
   /** Plugin object from GET /taggers (includes parameter_schema, etc.) */
@@ -113,167 +114,132 @@ watch(
 </script>
 
 <template>
-  <v-dialog v-model="open" max-width="460" @click:outside="open = false">
-    <v-card v-if="plugin" class="tagger-settings-dialog">
-      <v-card-title class="tagger-settings-title">
-        {{ plugin.display_name }} - Settings
-      </v-card-title>
+  <AppDialog
+    :open="open && !!plugin"
+    :title="plugin ? `${plugin.display_name} - Settings` : ''"
+    @close="open = false"
+    @accept="save"
+  >
+    <template v-if="plugin">
+      <p v-if="plugin.description" class="tagger-settings-desc">
+        {{ plugin.description }}
+      </p>
 
-      <v-card-text class="tagger-settings-body">
-        <p v-if="plugin.description" class="tagger-settings-desc">
-          {{ plugin.description }}
-        </p>
+      <TaggerParametersUI
+        v-model="formParams"
+        :schema="plugin.parameter_schema"
+      />
 
-        <TaggerParametersUI
-          v-model="formParams"
-          :schema="plugin.parameter_schema"
-        />
-
-        <!-- Label-thresholds preview for pixlstash_tagger -->
-        <div
-          v-if="plugin.name === 'pixlstash_tagger'"
-          class="tagger-settings-threshold-row"
+      <!-- Label-thresholds preview for pixlstash_tagger -->
+      <div v-if="plugin.name === 'pixlstash_tagger'">
+        <AppButton
+          variant="ghost"
+          size="sm"
+          icon-left="table-eye"
+          @click="openLabelThresholds"
         >
+          Preview label thresholds
+        </AppButton>
+      </div>
+
+      <!-- Downloaded artifacts panel (dormant in 1.3a) -->
+      <div
+        v-if="plugin.downloaded_artifacts && plugin.downloaded_artifacts.length"
+        class="tagger-settings-artifacts"
+      >
+        <div class="tagger-settings-artifacts-title">Downloaded models</div>
+        <div
+          v-for="artifact in plugin.downloaded_artifacts"
+          :key="artifact.name"
+          class="tagger-settings-artifact-row"
+        >
+          <span>{{ artifact.label || artifact.name }}</span>
           <AppButton
             variant="ghost"
             size="sm"
-            icon-left="table-eye"
-            @click="openLabelThresholds"
-          >
-            Preview label thresholds
-          </AppButton>
+            icon-only
+            icon-left="delete"
+            :title="`Delete ${artifact.label || artifact.name}`"
+            :aria-label="`Delete ${artifact.label || artifact.name}`"
+            @click="
+              $emit('delete-artifact', {
+                plugin: plugin.name,
+                artifact: artifact.name,
+              })
+            "
+          />
         </div>
+      </div>
 
-        <!-- Downloaded artifacts panel (dormant in 1.3a) -->
-        <div
-          v-if="
-            plugin.downloaded_artifacts && plugin.downloaded_artifacts.length
-          "
-          class="tagger-settings-artifacts"
-        >
-          <div class="tagger-settings-artifacts-title">Downloaded models</div>
-          <div
-            v-for="artifact in plugin.downloaded_artifacts"
-            :key="artifact.name"
-            class="tagger-settings-artifact-row"
-          >
-            <span>{{ artifact.label || artifact.name }}</span>
-            <AppButton
-              variant="ghost"
-              size="sm"
-              icon-only
-              icon-left="delete"
-              :title="`Delete ${artifact.label || artifact.name}`"
-              :aria-label="`Delete ${artifact.label || artifact.name}`"
-              @click="
-                $emit('delete-artifact', {
-                  plugin: plugin.name,
-                  artifact: artifact.name,
-                })
-              "
-            />
-          </div>
-        </div>
+      <div v-if="saveError" class="tagger-settings-error">
+        {{ saveError }}
+      </div>
+    </template>
 
-        <div v-if="saveError" class="tagger-settings-error">
-          {{ saveError }}
-        </div>
-      </v-card-text>
-
-      <v-card-actions class="tagger-settings-actions">
-        <AppButton variant="ghost" @click="resetToDefaults">
-          Reset to defaults
-        </AppButton>
-        <v-spacer />
-        <AppButton variant="secondary" @click="open = false">Cancel</AppButton>
-        <AppButton variant="primary" :loading="saving" @click="save">
-          Save
-        </AppButton>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+    <template #footer>
+      <AppButton
+        variant="ghost"
+        class="tagger-settings-reset"
+        @click="resetToDefaults"
+      >
+        Reset to defaults
+      </AppButton>
+      <AppButton variant="secondary" @click="open = false">Cancel</AppButton>
+      <AppButton variant="primary" :loading="saving" @click="save">
+        Save
+      </AppButton>
+    </template>
+  </AppDialog>
 
   <!-- Label thresholds sub-dialog -->
-  <v-dialog
-    v-model="labelThresholdsOpen"
-    max-width="520"
-    @click:outside="labelThresholdsOpen = false"
+  <AppDialog
+    :open="labelThresholdsOpen"
+    title="PixlStash Tagger - Label Thresholds"
+    @close="labelThresholdsOpen = false"
   >
-    <v-card class="label-thresholds-dialog">
-      <v-card-title class="label-thresholds-dialog-title">
-        PixlStash Tagger - Label Thresholds
-      </v-card-title>
-      <v-card-text class="label-thresholds-dialog-body">
-        <div v-if="labelThresholdsLoading" class="label-thresholds-loading">
-          Loading…
-        </div>
-        <div
-          v-else-if="!labelThresholdsData.length"
-          class="label-thresholds-empty"
-        >
-          No label thresholds found. Ensure the PixlStash tagger model is
-          installed.
-        </div>
-        <table v-else class="label-thresholds-table">
-          <thead>
-            <tr>
-              <th class="lth-col-name">Tag</th>
-              <th class="lth-col-base">Base threshold</th>
-              <th class="lth-col-eff">After offset</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in labelThresholdsData" :key="row.label">
-              <td class="lth-col-name">{{ row.label }}</td>
-              <td class="lth-col-base">
-                {{ (row.base_threshold * 100).toFixed(1) }}%
-              </td>
-              <td
-                class="lth-col-eff"
-                :class="
-                  row.effective_threshold > row.base_threshold
-                    ? 'lth-penalised'
-                    : row.effective_threshold < row.base_threshold
-                      ? 'lth-boosted'
-                      : ''
-                "
-              >
-                {{ (row.effective_threshold * 100).toFixed(1) }}%
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </v-card-text>
-    </v-card>
-  </v-dialog>
+    <div v-if="labelThresholdsLoading" class="label-thresholds-loading">
+      Loading…
+    </div>
+    <div v-else-if="!labelThresholdsData.length" class="label-thresholds-empty">
+      No label thresholds found. Ensure the PixlStash tagger model is installed.
+    </div>
+    <table v-else class="label-thresholds-table">
+      <thead>
+        <tr>
+          <th class="lth-col-name">Tag</th>
+          <th class="lth-col-base">Base threshold</th>
+          <th class="lth-col-eff">After offset</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="row in labelThresholdsData" :key="row.label">
+          <td class="lth-col-name">{{ row.label }}</td>
+          <td class="lth-col-base">
+            {{ (row.base_threshold * 100).toFixed(1) }}%
+          </td>
+          <td
+            class="lth-col-eff"
+            :class="
+              row.effective_threshold > row.base_threshold
+                ? 'lth-penalised'
+                : row.effective_threshold < row.base_threshold
+                  ? 'lth-boosted'
+                  : ''
+            "
+          >
+            {{ (row.effective_threshold * 100).toFixed(1) }}%
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </AppDialog>
 </template>
 
 <style scoped>
-.tagger-settings-dialog {
-  background: rgb(var(--v-theme-surface));
-}
-
-.tagger-settings-title {
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-  padding: var(--space-5) var(--space-5) var(--space-3);
-}
-
-.tagger-settings-body {
-  padding: var(--space-3) var(--space-5) var(--space-2);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-}
-
 .tagger-settings-desc {
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.7);
   margin: 0;
-}
-
-.tagger-settings-threshold-row {
-  margin-top: var(--space-2);
 }
 
 .tagger-settings-artifacts {
@@ -302,28 +268,11 @@ watch(
 .tagger-settings-error {
   color: rgb(var(--v-theme-error));
   font-size: var(--text-xs);
-  margin-top: var(--space-2);
 }
 
-.tagger-settings-actions {
-  padding: var(--space-3) var(--space-5) var(--space-4);
-}
-
-/* Label thresholds sub-dialog (shared styles copied from BehaviourSection) */
-.label-thresholds-dialog {
-  background: rgb(var(--v-theme-surface));
-}
-
-.label-thresholds-dialog-title {
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
-  padding: var(--space-5) var(--space-5) var(--space-3);
-}
-
-.label-thresholds-dialog-body {
-  padding: var(--space-2) var(--space-5) var(--space-5);
-  max-height: 400px;
-  overflow-y: auto;
+/* Reset sits on the footer's left edge, apart from Cancel / Save. */
+.tagger-settings-reset {
+  margin-right: auto;
 }
 
 .label-thresholds-loading,

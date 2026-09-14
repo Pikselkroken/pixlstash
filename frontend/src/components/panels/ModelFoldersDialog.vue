@@ -2,7 +2,7 @@
   <AppDialog
     :open="open"
     title="Model folders"
-    :width="720"
+    size="lg"
     @close="emit('close')"
   >
     <template #header-right>
@@ -480,7 +480,6 @@ watch(
 .mf-intro {
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.7);
-  margin-bottom: var(--space-5);
   max-width: 60ch;
 }
 
@@ -613,7 +612,6 @@ watch(
   font-size: var(--text-xs);
   line-height: var(--leading-body);
   color: rgba(var(--v-theme-on-surface), 0.7);
-  margin-top: var(--space-5);
   max-width: 70ch;
 }
 
@@ -622,9 +620,9 @@ watch(
 }
 
 /* Measured, not guessed. At a 320px viewport Vuetify gives the dialog
-   `calc(100% - 48px)` = 272px, minus the 1px borders and two `--space-6` of
-   body padding = 222px of content. The fixed part (24px glyph + two 8px column
-   gaps + a 124px action group) is 164px, leaving the path 58px, about five
+   `calc(100% - 48px)` = 272px, minus the 1px borders and two `--space-5` of
+   body padding = 238px of content. The fixed part (24px glyph + two 8px column
+   gaps + a 124px action group) is 164px, leaving the path 74px, about six
    characters of mono. So the actions restack below 480px, where the path gets
    190px instead. The buttons never shrink: 23px is the wrong direction for a
    touch target, and the group was never what did not fit. */

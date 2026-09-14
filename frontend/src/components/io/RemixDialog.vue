@@ -3,7 +3,6 @@
     :open="open"
     title="Generate variants"
     :subtitle="sourceLabel"
-    :width="560"
     :persistent="submitting"
     @close="onRequestClose"
     @accept="submit"
@@ -1293,7 +1292,7 @@ async function submit() {
 }
 
 /* Node class names are identifiers, so they take the mono face. Plain text
-   rather than chips: twenty chips in a 560px dialog is noise, and it would
+   rather than chips: twenty chips in a 520px dialog is noise, and it would
    imply an interactivity that is not there. */
 .remix-recipe-nodes {
   font-family: var(--font-mono);

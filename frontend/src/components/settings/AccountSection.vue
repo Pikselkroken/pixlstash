@@ -688,7 +688,6 @@ watch(
   <AppDialog
     :open="createTokenDialogOpen"
     title="New API token"
-    :width="460"
     @close="createTokenDialogOpen = false"
   >
     <div class="account-token-form">
@@ -791,7 +790,6 @@ watch(
   <AppDialog
     :open="tokenDialogOpen"
     title="New API token"
-    :width="520"
     @close="tokenDialogOpen = false"
   >
     <div class="account-token-reveal">
@@ -840,7 +838,7 @@ watch(
   <AppDialog
     :open="tokenDeleteDialogOpen"
     title="Delete token?"
-    :width="420"
+    size="sm"
     @close="tokenDeleteDialogOpen = false"
   >
     <div class="account-token-confirm">

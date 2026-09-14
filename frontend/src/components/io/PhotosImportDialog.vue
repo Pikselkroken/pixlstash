@@ -9,7 +9,7 @@ import { listProjects } from "../../api/projects.js";
 import { listImportFolders } from "../../api/folders.js";
 import ProjectEditor from "../editors/ProjectEditor.vue";
 import AppButton from "../widgets/AppButton.vue";
-import AppBarButton from "../widgets/AppBarButton.vue";
+import AppDialog from "../widgets/AppDialog.vue";
 
 import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
@@ -202,217 +202,188 @@ watch(dialogOpen, (isOpen) => {
 </script>
 
 <template>
-  <v-dialog v-model="dialogOpen" width="980">
-    <div class="google-photos-shell">
-      <AppBarButton
-        icon="close"
-        :icon-size="20"
-        class="google-photos-close"
-        aria-label="Close"
-        @click="dialogOpen = false"
+  <AppDialog
+    :open="dialogOpen"
+    title="Import photos"
+    fullscreen
+    @close="dialogOpen = false"
+  >
+    <div class="import-project-row">
+      <span class="import-title-text">Import to</span>
+      <v-select
+        :model-value="selectedProjectId"
+        :items="projectSelectItems"
+        item-title="title"
+        item-value="value"
+        variant="outlined"
+        density="compact"
+        hide-details
+        single-line
+        class="import-project-select"
+        color="primary"
+        @update:model-value="handleProjectChange"
       />
-      <v-card class="google-photos-card">
-        <v-card-title class="google-photos-title">
-          <span class="import-title-text">Import photos to</span>
-          <v-select
-            :model-value="selectedProjectId"
-            :items="projectSelectItems"
-            item-title="title"
-            item-value="value"
-            variant="outlined"
-            density="compact"
-            hide-details
-            single-line
-            class="import-project-select"
-            color="primary"
-            @update:model-value="handleProjectChange"
-          />
-        </v-card-title>
-        <v-card-text class="google-photos-body">
-          <ProjectEditor
-            :open="projectEditorOpen"
-            :project="null"
-            @close="projectEditorOpen = false"
-            @saved="onProjectSaved"
-          />
-          <v-tabs v-model="activeTab" class="photo-import-tabs">
-            <v-tab value="local">Local import</v-tab>
-            <v-tab value="monitoring">Automatic Folder Monitoring</v-tab>
-            <v-tab value="google">Google Photos</v-tab>
-            <v-tab value="icloud">iCloud Photos</v-tab>
-            <v-tab value="flickr">Flickr</v-tab>
-          </v-tabs>
-          <v-window v-model="activeTab" class="photo-import-window">
-            <v-window-item value="local">
-              <div class="google-photos-instructions">
-                <div class="google-photos-section-title">Local files</div>
-                <p class="google-photos-note">
-                  Select images, videos, or ZIP archives to import.
-                </p>
-                <div
-                  class="local-import-dropzone"
-                  :class="{ 'is-dragging': dragActive }"
-                  @dragenter.stop.prevent="handleLocalDragEnter"
-                  @dragover.stop.prevent="handleLocalDragOver"
-                  @dragleave.stop.prevent="handleLocalDragLeave"
-                  @drop.stop.prevent="handleLocalDrop"
-                >
-                  <div class="local-import-dropzone-text">
-                    {{ dropMessage }}
-                  </div>
-                </div>
-                <div class="local-import-controls">
-                  <input
-                    ref="localInputRef"
-                    class="local-import-input"
-                    type="file"
-                    multiple
-                    :accept="IMPORT_FILE_ACCEPT"
-                    @change="handleLocalChange"
-                  />
-                  <AppButton variant="outline" @click="openLocalPicker">
-                    Choose files
-                  </AppButton>
-                </div>
-              </div>
-            </v-window-item>
-            <v-window-item value="monitoring">
-              <div class="google-photos-instructions">
-                <div class="google-photos-section-title">
-                  Automatic Folder Monitoring
-                </div>
-                <p class="google-photos-note">
-                  Import folders are managed directly in PixlStash.
-                </p>
-                <ol>
-                  <li>Open the sidebar <strong>Folders</strong> tab.</li>
-                  <li>
-                    Click <strong>Add folder</strong> and choose
-                    <strong>Import folder</strong>.
-                  </li>
-                  <li>
-                    Set <strong>Delete source files after import</strong> if you
-                    want one-way ingest behavior.
-                  </li>
-                </ol>
-              </div>
-            </v-window-item>
-            <v-window-item value="google">
-              <div class="google-photos-instructions">
-                <div class="google-photos-section-title">
-                  Google Takeout export
-                </div>
-                <ol>
-                  <li>
-                    Go to
-                    <a
-                      href="https://takeout.google.com/"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      Google Takeout
-                    </a>
-                    and select Google Photos.
-                  </li>
-                  <li>Download the zip archive.</li>
-                  <li>Drag the zip file into PixlStash to import.</li>
-                </ol>
-                <div class="google-photos-note">
-                  Importable right now: Takeout zip files or extracted folders.
-                </div>
-              </div>
-            </v-window-item>
-            <v-window-item value="icloud">
-              <div class="google-photos-instructions">
-                <div class="google-photos-section-title">
-                  iCloud Photos export
-                </div>
-                <ol>
-                  <li>
-                    Web: open
-                    <a
-                      href="https://www.icloud.com/photos/"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      iCloud Photos
-                    </a>
-                    , select your library, and download.
-                  </li>
-                  <li>
-                    Mac: Photos → Settings → iCloud → enable "Download
-                    Originals" and export unmodified originals.
-                  </li>
-                  <li>
-                    Windows: install iCloud for Windows, enable Photos, and use
-                    the synced download folder.
-                  </li>
-                  <li>Download the zip files from iCloud.</li>
-                  <li>Drag the zip file into PixlStash to import.</li>
-                </ol>
-                <div class="google-photos-note">
-                  Importable right now: iCloud zip files or extracted folders.
-                </div>
-              </div>
-            </v-window-item>
-            <v-window-item value="flickr">
-              <div class="google-photos-instructions">
-                <div class="google-photos-section-title">Flickr export</div>
-                <ol>
-                  <li>
-                    Open
-                    <a
-                      href="https://www.flickr.com/account/data"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      Flickr Data Download
-                    </a>
-                    and request your archive.
-                  </li>
-                  <li>When it arrives, download the zip archive.</li>
-                  <li>Drag the zip file into PixlStash to import.</li>
-                </ol>
-                <div class="google-photos-note">
-                  Importable right now: Flickr zip files or extracted folders.
-                </div>
-              </div>
-            </v-window-item>
-          </v-window>
-        </v-card-text>
-      </v-card>
     </div>
-  </v-dialog>
+    <ProjectEditor
+      :open="projectEditorOpen"
+      :project="null"
+      @close="projectEditorOpen = false"
+      @saved="onProjectSaved"
+    />
+    <v-tabs v-model="activeTab" class="photo-import-tabs">
+      <v-tab value="local">Local import</v-tab>
+      <v-tab value="monitoring">Automatic Folder Monitoring</v-tab>
+      <v-tab value="google">Google Photos</v-tab>
+      <v-tab value="icloud">iCloud Photos</v-tab>
+      <v-tab value="flickr">Flickr</v-tab>
+    </v-tabs>
+    <v-window v-model="activeTab" class="photo-import-window">
+      <v-window-item value="local">
+        <div class="google-photos-instructions">
+          <div class="google-photos-section-title">Local files</div>
+          <p class="google-photos-note">
+            Select images, videos, or ZIP archives to import.
+          </p>
+          <div
+            class="local-import-dropzone"
+            :class="{ 'is-dragging': dragActive }"
+            @dragenter.stop.prevent="handleLocalDragEnter"
+            @dragover.stop.prevent="handleLocalDragOver"
+            @dragleave.stop.prevent="handleLocalDragLeave"
+            @drop.stop.prevent="handleLocalDrop"
+          >
+            <div class="local-import-dropzone-text">
+              {{ dropMessage }}
+            </div>
+          </div>
+          <div class="local-import-controls">
+            <input
+              ref="localInputRef"
+              class="local-import-input"
+              type="file"
+              multiple
+              :accept="IMPORT_FILE_ACCEPT"
+              @change="handleLocalChange"
+            />
+            <AppButton variant="outline" @click="openLocalPicker">
+              Choose files
+            </AppButton>
+          </div>
+        </div>
+      </v-window-item>
+      <v-window-item value="monitoring">
+        <div class="google-photos-instructions">
+          <div class="google-photos-section-title">
+            Automatic Folder Monitoring
+          </div>
+          <p class="google-photos-note">
+            Import folders are managed directly in PixlStash.
+          </p>
+          <ol>
+            <li>Open the sidebar <strong>Folders</strong> tab.</li>
+            <li>
+              Click <strong>Add folder</strong> and choose
+              <strong>Import folder</strong>.
+            </li>
+            <li>
+              Set <strong>Delete source files after import</strong> if you
+              want one-way ingest behavior.
+            </li>
+          </ol>
+        </div>
+      </v-window-item>
+      <v-window-item value="google">
+        <div class="google-photos-instructions">
+          <div class="google-photos-section-title">
+            Google Takeout export
+          </div>
+          <ol>
+            <li>
+              Go to
+              <a
+                href="https://takeout.google.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Google Takeout
+              </a>
+              and select Google Photos.
+            </li>
+            <li>Download the zip archive.</li>
+            <li>Drag the zip file into PixlStash to import.</li>
+          </ol>
+          <div class="google-photos-note">
+            Importable right now: Takeout zip files or extracted folders.
+          </div>
+        </div>
+      </v-window-item>
+      <v-window-item value="icloud">
+        <div class="google-photos-instructions">
+          <div class="google-photos-section-title">
+            iCloud Photos export
+          </div>
+          <ol>
+            <li>
+              Web: open
+              <a
+                href="https://www.icloud.com/photos/"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                iCloud Photos
+              </a>
+              , select your library, and download.
+            </li>
+            <li>
+              Mac: Photos → Settings → iCloud → enable "Download
+              Originals" and export unmodified originals.
+            </li>
+            <li>
+              Windows: install iCloud for Windows, enable Photos, and use
+              the synced download folder.
+            </li>
+            <li>Download the zip files from iCloud.</li>
+            <li>Drag the zip file into PixlStash to import.</li>
+          </ol>
+          <div class="google-photos-note">
+            Importable right now: iCloud zip files or extracted folders.
+          </div>
+        </div>
+      </v-window-item>
+      <v-window-item value="flickr">
+        <div class="google-photos-instructions">
+          <div class="google-photos-section-title">Flickr export</div>
+          <ol>
+            <li>
+              Open
+              <a
+                href="https://www.flickr.com/account/data"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Flickr Data Download
+              </a>
+              and request your archive.
+            </li>
+            <li>When it arrives, download the zip archive.</li>
+            <li>Drag the zip file into PixlStash to import.</li>
+          </ol>
+          <div class="google-photos-note">
+            Importable right now: Flickr zip files or extracted folders.
+          </div>
+        </div>
+      </v-window-item>
+    </v-window>
+  </AppDialog>
 </template>
 
 <style scoped>
-.google-photos-shell {
-  position: relative;
-  padding: var(--space-5);
-}
-
-/* Inside the card's corner, not straddling it: the flat close has no fill of
-   its own to sit on the backdrop with. */
-.google-photos-close {
-  position: absolute;
-  top: var(--space-6);
-  right: var(--space-6);
-  z-index: 2;
-}
-
-.google-photos-card {
-  background: rgb(var(--v-theme-surface));
-  color: rgb(var(--v-theme-on-surface));
-  border-radius: var(--radius-lg);
-  min-height: 560px;
-}
-
-.google-photos-title {
-  font-weight: var(--weight-semibold);
+.import-project-row {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   flex-wrap: wrap;
+  font-weight: var(--weight-semibold);
 }
 
 .import-title-text {
@@ -463,18 +434,9 @@ watch(dialogOpen, (isOpen) => {
   opacity: 0.8;
 }
 
-.google-photos-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-}
-
 .photo-import-tabs {
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.5);
-}
-
-.photo-import-window {
-  margin-top: var(--space-3);
+  flex-shrink: 0;
 }
 
 .google-photos-section-title {
@@ -499,6 +461,7 @@ watch(dialogOpen, (isOpen) => {
 }
 
 .google-photos-note {
+  margin: 0;
   font-size: var(--text-base);
   color: rgba(var(--v-theme-on-surface), 0.7);
 }
