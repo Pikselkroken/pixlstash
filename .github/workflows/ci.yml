@@ -68,7 +68,7 @@ jobs:
     name: checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-backend
 
       - name: Verify wheel includes Alembic assets
@@ -177,7 +177,7 @@ jobs:
     env:
       HF_TOKEN: ${{ github.event_name == 'push' && secrets.HF_TOKEN || '' }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - id: models
         uses: ./.github/actions/model-cache
@@ -369,7 +369,7 @@ jobs:
     env:
       HF_TOKEN: ${{ github.event_name == 'push' && secrets.HF_TOKEN || '' }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - id: models
         uses: ./.github/actions/model-cache
@@ -438,7 +438,7 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-backend
 
       - name: Backend tests (shard ${{ matrix.shard }} of 8)
@@ -696,7 +696,7 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-backend
 
       - name: Full suite in collection order (block ${{ matrix.shard }} of 6)
@@ -738,7 +738,7 @@ jobs:
       # still arrives labelled dev rather than a real install. See #1213.
       PIXLSTASH_TELEMETRY_DEV: '1'
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Require committed e2e fixture
         id: fixture
@@ -931,7 +931,7 @@ jobs:
       # the process actually dies on a fatal signal.
       PYTHONFAULTHANDLER: 1
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The wheel build (pip install . below) runs `npm ci` via setup.py. Set up
       # Node with an npm cache so that step pulls tarballs from the warm cache
