@@ -5,7 +5,6 @@ from sqlmodel import Session, select
 from pixlstash.db_models import Picture
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
-from pixlstash.services.workflow_ghost_service import DEFAULT_GHOST_RETENTION
 from pixlstash.tasks.missing_file_purge_task import MissingFilePurgeTask
 
 logger = get_logger(__name__)
@@ -22,14 +21,7 @@ class MissingFilePurgeFinder(BaseTaskFinder):
 
     SCAN_COOLDOWN_S: float = 3600.0  # one full pass at most once per hour
 
-    def __init__(
-        self,
-        database,
-        is_ready=None,
-        hub=None,
-        library_uuid=None,
-        ghost_retention_source=None,
-    ):
+    def __init__(self, database, is_ready=None):
         """Initialise the finder.
 
         Args:
@@ -48,22 +40,10 @@ class MissingFilePurgeFinder(BaseTaskFinder):
                 deletes the row with ``file_removed=True`` - which
                 ``full_restore`` reads as *never resurrect*. There is no
                 ordering that makes both safe, so only one of them may delete.
-            hub: The hub database, or ``None`` when the vault was opened without
-                one. Handed to the task so it can run the covered-ghost cascade
-                over the instance hashes it destroys (§B4).
-            library_uuid: Which library's ghosts the cascade may reach.
-            ghost_retention_source: Zero-argument callable returning the
-                CURRENT ghost-retention position. A callable rather than a value
-                because the setting is saved at runtime and this finder outlives
-                the save; capturing the value at construction would leave the
-                sweep acting on whatever position was in force at start-up.
         """
         super().__init__()
         self._db = database
         self._is_ready = is_ready
-        self._hub = hub
-        self._library_uuid = library_uuid
-        self._ghost_retention_source = ghost_retention_source
         self._cursor_id: int = 0
         self._cooldown_start: float = 0.0
 
@@ -98,17 +78,7 @@ class MissingFilePurgeFinder(BaseTaskFinder):
             return None
 
         self._cursor_id = max(p.id for p in pictures)
-        return MissingFilePurgeTask(
-            database=self._db,
-            pictures=pictures,
-            hub=self._hub,
-            library_uuid=self._library_uuid,
-            ghost_retention=(
-                self._ghost_retention_source()
-                if self._ghost_retention_source is not None
-                else DEFAULT_GHOST_RETENTION
-            ),
-        )
+        return MissingFilePurgeTask(database=self._db, pictures=pictures)
 
     @staticmethod
     def _fetch_batch(
