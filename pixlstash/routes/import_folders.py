@@ -15,7 +15,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
 from pixlstash.utils.library_roots import (
     holding_folder_overlap_lock,
-    refuse_folder_overlapping_a_library,
+    refuse_overlapping_folder,
 )
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 
@@ -164,13 +164,14 @@ def create_router(server) -> APIRouter:
                 detail="Host path is required in Docker mode.",
             )
 
-        # A watch folder may overlap a reference folder or another watch folder,
-        # but not a library's folder, in either direction: it would import, and
-        # with `delete_after_import` unlink, pictures a library owns (#1223).
+        # A watch folder may not overlap a library's folder, a reference
+        # folder or another watch folder, in either direction: it would import,
+        # and with `delete_after_import` unlink, pictures another root owns
+        # (#1223).
         #
         # Outside the DB task on purpose: this reads the registry and a read
         # nested inside `run_task` would be a session inside a session.
-        refuse_folder_overlapping_a_library(folder, server, server.vault)
+        refuse_overlapping_folder(folder, server, server.vault)
 
         label = payload.label if payload.label is not None else os.path.basename(folder)
 
