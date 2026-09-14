@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -46,6 +47,10 @@ logger = get_logger(__name__)
 # retained thumbnail at once. Membership tests use ``sql_chunking.chunked``'s
 # own default, which is sized against SQLite's bound-parameter cap.
 _GHOST_WRITE_CHUNK = 100
+
+# What a loader's ``*_sha256`` value must look like to name a model at all.
+# ``structural_widget_value`` lowercases it, so lowercase hex is the whole form.
+_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -220,6 +225,14 @@ def _model_ghost_names(fetchall: Callable[[str], list]) -> set[str]:
     removing a folder keeps the ``model`` row so re-adding the folder re-links
     it, and the shelf still lists it. Both the recorded filename and every
     copy's basename count, because a copy renamed on disk is the same model.
+
+    **Digests are judged only when every shelf model has one.** A checkpoint
+    waits for ``MissingCheckpointHashFinder`` with ``sha256`` NULL, and until it
+    is read its loader digest matches nothing, so judging then would forget the
+    digest of a model still on disk. ``engine`` rows never carry a digest and
+    are left out of that wait. A value that is not a 64-hex digest (an unset
+    loader, a download node's ``expected_sha256`` left blank) names no model
+    and is never a ghost.
     """
     shelf_names = {
         normalized_filename(row[0])
@@ -233,12 +246,15 @@ def _model_ghost_names(fetchall: Callable[[str], list]) -> set[str]:
         row[0].lower()
         for row in fetchall("SELECT sha256 FROM model WHERE sha256 IS NOT NULL")
     }
+    judge_digests = not fetchall(
+        "SELECT 1 FROM model WHERE sha256 IS NULL AND file_kind <> 'engine' LIMIT 1"
+    )
     ghosts = set()
     for widget, value in fetchall(
         "SELECT DISTINCT widget_name, normalized_filename FROM workflow_recipe_asset"
     ):
         if SHA256_FIELD_RE.search(widget):
-            if value not in shelf_digests:
+            if judge_digests and _DIGEST_RE.match(value) and value not in shelf_digests:
                 ghosts.add(value)
         elif value.endswith(SHELF_MODEL_SUFFIX) and value not in shelf_names:
             ghosts.add(value)

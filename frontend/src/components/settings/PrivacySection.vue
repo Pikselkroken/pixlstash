@@ -89,14 +89,14 @@
     </AppDialog>
   </SettingsSection>
 
-  <!-- What a permanent delete leaves behind (#1309). A ghost is the thumbnail
-       and prompt of a destroyed picture, or the filename of a model no longer
-       on the shelf. Rendered only once the server has answered; a hubless
-       server answers with null counts, so it gets the setting and no purges. -->
+  <!-- What is kept of things that are gone (#1309). A ghost is the thumbnail
+       and prompt of a destroyed picture, or the name of a model not on the
+       shelf. Rendered only once the server has answered; a hubless server
+       answers with null counts, so it gets the setting and no purges. -->
   <SettingsSection
     v-if="ghosts"
-    title="Deleted pictures"
-    desc="When a picture is permanently deleted, PixlStash can keep its thumbnail and prompt with the workflow that made it, so it can be made again."
+    title="Ghosts"
+    desc="A ghost is what PixlStash keeps of something that is gone: the thumbnail and prompt of a permanently deleted picture, kept with the workflow that made it so it can be made again, or the name of a model that is not on your shelf. Workflows › Ghosts lists the workflows that hold them."
   >
     <SettingsRow
       label="Keep picture ghosts"
@@ -105,7 +105,6 @@
       <Segmented
         :options="retentionOptions"
         :model-value="ghosts.workflow_ghost_retention"
-        :disabled="ghostBusy"
         aria-label="Keep picture ghosts"
         @update:model-value="saveRetention"
       />
@@ -120,20 +119,20 @@
         variant="secondary"
         :disabled="!ghosts.picture_ghosts || ghostBusy"
         @click="askPurge('picture')"
-        >{{ purgeLabel(ghosts.picture_ghosts) }}</AppButton
+        >{{ PURGES.picture.rowLabel(ghosts.picture_ghosts) }}</AppButton
       >
     </SettingsRow>
 
     <SettingsRow
       v-if="ghosts.model_ghosts != null"
       label="Model ghosts"
-      sub="Model filenames and digests workflows remember for models that are not on your shelf, including ones you never added. The workflows stay grouped; their models read as names forgotten."
+      sub="Names and digests of models that are not on your shelf, as workflows remember them, including models from imported pictures you never added. Forgotten, the workflows still group and read as names forgotten."
     >
       <AppButton
         variant="secondary"
         :disabled="!ghosts.model_ghosts || ghostBusy"
         @click="askPurge('model')"
-        >{{ purgeLabel(ghosts.model_ghosts) }}</AppButton
+        >{{ PURGES.model.rowLabel(ghosts.model_ghosts) }}</AppButton
       >
     </SettingsRow>
     <p v-if="ghostError" class="pv__error" role="alert">{{ ghostError }}</p>
@@ -153,8 +152,12 @@
         <AppButton variant="secondary" @click="purgeKind = null"
           >Cancel</AppButton
         >
-        <AppButton variant="danger" :loading="ghostBusy" @click="doPurge"
-          >Purge</AppButton
+        <AppButton
+          v-if="purgeKind"
+          variant="danger"
+          :loading="ghostBusy"
+          @click="doPurge"
+          >{{ PURGES[purgeKind].confirm(purgeCount) }}</AppButton
         >
       </template>
     </AppDialog>
@@ -165,6 +168,7 @@
 import { onMounted, computed, ref, watch } from "vue";
 import { VSwitch } from "vuetify/components";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { useWorkflowShelfStore } from "../../stores/useWorkflowShelfStore";
 import { patchUserConfig } from "../../api/config";
 import { getInstallId, recreateInstallId } from "../../api/telemetry";
 import {
@@ -263,6 +267,7 @@ async function doRecreate() {
 }
 
 // ── Ghosts ──────────────────────────────────────────────────────────────────
+const workflowShelf = useWorkflowShelfStore();
 const ghosts = ref(null);
 const ghostBusy = ref(false);
 const ghostError = ref("");
@@ -275,23 +280,35 @@ const retentionOptions = [
   { id: "on", label: "On" },
 ];
 
+// Saving a position destroys nothing already kept (the server says so too), so
+// Off must not read as a purge: somebody choosing it for privacy would believe
+// the ghosts were gone.
 const RETENTION_SUBS = {
-  off: "None. A permanently deleted picture cannot be made again.",
+  off: "From now on, none: a permanently deleted picture cannot be made again. Ghosts already kept stay until you purge them below.",
   covered:
     "Only while a picture you kept has the same workflow and prompt. Deleting the last one removes the ghosts it covered.",
   on: "Every permanently deleted picture, until you purge them below.",
 };
 
+const plural = (n, one, many) =>
+  `${n.toLocaleString()} ${n === 1 ? one : many}`;
+
+// One verb per purge, the same on the row, the title and the confirm button:
+// a picture ghost is purged, a model name is forgotten.
 const PURGES = {
   picture: {
-    title: (n) => `Purge ${n} picture ${n === 1 ? "ghost" : "ghosts"}?`,
-    body: "Their thumbnails and prompts are destroyed, and the pictures they came from can no longer be made again. The workflows stay.",
+    rowLabel: (n) => (n ? `Purge ${n.toLocaleString()}` : "None kept"),
+    title: (n) => `Purge ${plural(n, "picture ghost", "picture ghosts")}?`,
+    confirm: (n) => `Purge ${plural(n, "ghost", "ghosts")}`,
+    body: "Their thumbnails and prompts are destroyed, and the pictures they came from can no longer be made again. The workflows stay. This cannot be undone.",
     run: async () => {
       await purgePictureGhosts();
     },
   },
   model: {
-    title: (n) => `Forget ${n} model ${n === 1 ? "name" : "names"}?`,
+    rowLabel: (n) => (n ? `Forget ${n.toLocaleString()}` : "None kept"),
+    title: (n) => `Forget ${plural(n, "model name", "model names")}?`,
+    confirm: (n) => `Forget ${plural(n, "name", "names")}`,
     body: "Workflows stop saying which models they used, for every model that is not on your shelf, including models you never added. They still group, and read as names forgotten. This cannot be undone.",
     run: async (count) => {
       await purgeModelGhosts(count);
@@ -305,10 +322,6 @@ const purgeCount = computed(() =>
     : ghosts.value?.picture_ghosts || 0,
 );
 
-function purgeLabel(n) {
-  return n ? `Purge ${n.toLocaleString()}` : "None kept";
-}
-
 async function loadGhosts() {
   try {
     ghosts.value = await getGhostRetention();
@@ -320,20 +333,45 @@ async function loadGhosts() {
   }
 }
 
+// The last position the server confirmed, and the latest one asked for while a
+// save was in flight. The control is never disabled for a save: a natively
+// disabled radio drops keyboard focus on the first arrow press. So a pick made
+// mid-save is queued, and only the newest queued pick is sent next.
+let confirmedRetention = null;
+let pendingRetention = null;
+let savingRetention = false;
+
 async function saveRetention(position) {
-  const previous = ghosts.value;
   ghostError.value = "";
-  ghostBusy.value = true;
-  ghosts.value = { ...previous, workflow_ghost_retention: position };
+  if (!savingRetention) {
+    confirmedRetention = ghosts.value.workflow_ghost_retention;
+  }
+  ghosts.value = { ...ghosts.value, workflow_ghost_retention: position };
+  pendingRetention = position;
+  if (savingRetention) return;
+  savingRetention = true;
   try {
-    ghosts.value = await setGhostRetention(position);
-  } catch (e) {
-    console.error("Failed to save workflow_ghost_retention:", e);
-    ghosts.value = previous;
-    ghostError.value =
-      "Could not save which ghosts to keep. Your previous choice was kept.";
+    while (pendingRetention !== null) {
+      const next = pendingRetention;
+      pendingRetention = null;
+      try {
+        const body = await setGhostRetention(next);
+        confirmedRetention = body.workflow_ghost_retention;
+        // A newer pick is already on screen; the next pass saves it.
+        if (pendingRetention === null) ghosts.value = body;
+      } catch (e) {
+        console.error("Failed to save workflow_ghost_retention:", e);
+        pendingRetention = null;
+        ghosts.value = {
+          ...ghosts.value,
+          workflow_ghost_retention: confirmedRetention,
+        };
+        ghostError.value =
+          "Could not save which ghosts to keep. Your previous choice was kept.";
+      }
+    }
   } finally {
-    ghostBusy.value = false;
+    savingRetention = false;
   }
 }
 
@@ -348,6 +386,9 @@ async function doPurge() {
   ghostBusy.value = true;
   try {
     await PURGES[kind].run(purgeCount.value);
+    // The Workflows view holds the names and ghost counts this just changed,
+    // and keeps a row's variants for the whole session.
+    workflowShelf.invalidate();
   } catch (e) {
     console.error(`Failed to purge ${kind} ghosts:`, e);
     ghostError.value =

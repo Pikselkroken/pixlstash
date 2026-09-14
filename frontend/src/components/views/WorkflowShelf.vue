@@ -198,6 +198,12 @@
         }}</v-icon>
         <p class="wfshelf-empty-title">{{ emptyState.title }}</p>
         <p class="wfshelf-empty-body">{{ emptyState.body }}</p>
+        <AppButton
+          v-if="emptyState.clearFilters"
+          variant="secondary"
+          @click="store.setView({ show: 'all', ghosts: false })"
+          >Show every workflow</AppButton
+        >
       </div>
 
       <div v-for="group in store.groups" :key="group.key ?? '__flat__'">
@@ -501,6 +507,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 
 import AppBarButton from "../widgets/AppBarButton.vue";
+import AppButton from "../widgets/AppButton.vue";
 import OptionRows from "../widgets/OptionRows.vue";
 import Segmented from "../widgets/Segmented.vue";
 import { getWorkflowGraph, listWorkflowVariants } from "../../api/workflows";
@@ -593,9 +600,26 @@ const EMPTY_STATES = {
   },
 };
 
-const emptyState = computed(() =>
-  store.state === "listed" ? null : EMPTY_STATES[store.state],
-);
+// The fourth kind of empty: the library has workflows and the filters leave
+// none. The Ghosts toggle is remembered and a purge is meant to empty it, so
+// this is the ordinary sight after a purge, and it must not read as a library
+// with no workflows.
+const FILTERED_EMPTY = {
+  icon: "mdi-filter-off-outline",
+  title: "No workflows match",
+  clearFilters: true,
+};
+
+const emptyState = computed(() => {
+  if (store.state !== "listed") return EMPTY_STATES[store.state];
+  if (store.visibleRows.length) return null;
+  return {
+    ...FILTERED_EMPTY,
+    body: store.view.ghosts
+      ? "None of the workflows shown holds a ghost. Turn off Ghosts to see the rest."
+      : "None of the workflows in this library fits what Show asks for.",
+  };
+});
 
 const subtitle = computed(() => {
   const families = store.visibleRows.length;

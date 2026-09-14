@@ -60,6 +60,14 @@ _WORKFLOW_ROUTES = (
     ("GET", "/api/v1/workflows/{topology_hash}/variants"),
     ("GET", "/api/v1/workflows/{topology_hash}/pictures"),
     ("GET", "/api/v1/workflows/recipes/{structural_hash}/graph"),
+    # The ghost routes. Pinned here as well as refused in the authz test below:
+    # every token that test can mint is READ, which the middleware refuses on a
+    # DELETE before the gate reads the declaration, so a loosened entry would
+    # leave that test green.
+    ("GET", "/api/v1/server-config/ghost-retention"),
+    ("PATCH", "/api/v1/server-config/ghost-retention"),
+    ("DELETE", "/api/v1/server-config/ghost-retention/ghosts"),
+    ("DELETE", "/api/v1/server-config/ghost-retention/model-ghosts"),
 )
 
 
@@ -186,10 +194,12 @@ def _seed_hub(server) -> None:
             "DELETE FROM model WHERE filename IN (?, ?)",
             (_SHELF_FILENAME, "add_detail.safetensors"),
         )
+        # Hashed, like a checkpoint the finder has already read: an unhashed
+        # one holds back every digest judgement (see the digest tests below).
         conn.execute(
-            "INSERT INTO model (file_kind, filename, provenance) "
-            "VALUES ('checkpoint', ?, 'scanned')",
-            (_SHELF_FILENAME,),
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('checkpoint', ?, ?, 'scanned')",
+            (_SHELF_FILENAME, _h("realvisxl-digest")),
         )
         for topology, node_count, first_seen in (
             (BUSY_TOPOLOGY, 47, "2026-08-01T00:00:00Z"),
@@ -373,7 +383,7 @@ def _bearer(server, token: str) -> TestClient:
 
 
 def test_every_workflow_route_is_declared_owner_only():
-    """§16.1: the declaration IS the enforcement, so pin all four cells.
+    """§16.1: the declaration IS the enforcement, so pin every cell.
 
     OWNER_ONLY is a decision here rather than a default: the counts are read
     across every non-deleted picture in the vault, so a scoped token holding
@@ -534,6 +544,9 @@ def test_model_ghosts_judge_only_what_the_shelf_can_hold(workflow_env):
                 (BUSY_RECIPE_A, "model_name", "4x_ultrasharp.pth"),
                 (BUSY_RECIPE_A, "lora_sha256", unknown),
                 (BUSY_RECIPE_B, "lora_sha256", on_shelf),
+                # An unset loader and a blank download digest name no model.
+                (BUSY_RECIPE_B, "checkpoint_sha256", ""),
+                (BUSY_RECIPE_B, "expected_sha256", "not-a-digest"),
             ],
         )
         conn.execute("DELETE FROM model WHERE sha256 = ?", (on_shelf,))
@@ -560,11 +573,44 @@ def test_model_ghosts_judge_only_what_the_shelf_can_hold(workflow_env):
                 "SELECT normalized_filename FROM workflow_recipe_asset"
             )
         }
-        assert {"4x_ultrasharp.pth", on_shelf, _SHELF_FILENAME} <= left
+        assert {
+            "4x_ultrasharp.pth",
+            on_shelf,
+            _SHELF_FILENAME,
+            "",
+            "not-a-digest",
+        } <= left
         assert not {"add_detail.safetensors", unknown} & left
     finally:
         with server.hub.transaction() as conn:
             conn.execute("DELETE FROM model WHERE sha256 = ?", (on_shelf,))
+
+
+def test_digests_wait_while_a_shelf_checkpoint_is_unhashed(workflow_env):
+    """Until the hash finder reads it, a checkpoint's loader digest matches
+    nothing on the shelf, so judging it then would forget a model on disk."""
+    server = workflow_env.server
+    digest = _h("digest-of-unhashed-checkpoint")
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_recipe_asset "
+            "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
+            (BUSY_RECIPE_B, "checkpoint_sha256", digest),
+        )
+        conn.execute("DELETE FROM model WHERE filename = 'unhashed.safetensors'")
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('checkpoint', 'unhashed.safetensors', 'scanned')"
+        )
+    base = f"{API}/server-config/ghost-retention"
+    try:
+        # Only the seeded LoRA name; the digest is not judged yet.
+        assert workflow_env.owner.get(base).json()["model_ghosts"] == 1
+    finally:
+        with server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE filename = 'unhashed.safetensors'")
+    # Positive control: with nothing waiting, the same digest is a ghost.
+    assert workflow_env.owner.get(base).json()["model_ghosts"] == 2
 
 
 def test_a_model_back_on_the_shelf_is_not_a_ghost(workflow_env):

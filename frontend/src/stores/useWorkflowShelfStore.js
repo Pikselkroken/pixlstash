@@ -141,9 +141,10 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
     groupWorkflows(visibleRows.value, view.groupBy),
   );
 
-  const state = computed(() =>
-    libraryState(scan.value, visibleRows.value.length),
-  );
+  // The whole list, not what the filters leave: a filter that matches nothing
+  // is not a library with no workflows, and saying so would be the wrong
+  // sentence for exactly the list the Ghosts toggle is meant to empty.
+  const state = computed(() => libraryState(scan.value, rows.value.length));
 
   const selectedRow = computed(
     () =>
@@ -327,6 +328,20 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
     return samplesFailed.value.has(topologyHash);
   }
 
+  /**
+   * Forget what was read and read the list again, after something outside this
+   * view changed what the rows say (a ghost purge in Settings › Privacy).
+   *
+   * The variants go too, and the open rows with them: a variant fetched before
+   * a model-name purge still carries the names, and it is otherwise kept for
+   * the whole session. Tile ids are picture ids, which a purge does not touch.
+   */
+  function invalidate() {
+    openHashes.value = new Set();
+    for (const key of Object.keys(variants)) delete variants[key];
+    if (loaded.value) fetchRows();
+  }
+
   function resetForSession() {
     epoch += 1;
     rows.value = [];
@@ -374,6 +389,7 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
     isSamplesLoading,
     samplesDidFail,
     loadSamples,
+    invalidate,
     resetForSession,
   };
 });

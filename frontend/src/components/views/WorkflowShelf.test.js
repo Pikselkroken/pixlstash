@@ -302,6 +302,63 @@ describe("the ghosts filter", () => {
   });
 });
 
+describe("after a purge", () => {
+  it("says the filters match nothing, not that the library has no workflows", async () => {
+    listWorkflows.mockResolvedValue({
+      scan: { pictures: 28172, scanned: 28172 },
+      workflows: [topology()],
+    });
+    const wrapper = await mountShelf();
+    wrapper.vm.store.setView({ ghosts: true });
+    await wrapper.vm.$nextTick();
+    expect(textOf(wrapper)).toContain("No workflows match");
+    expect(textOf(wrapper)).not.toContain("No workflows in this library");
+
+    const clear = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Show every workflow"));
+    await clear.trigger("click");
+    expect(wrapper.findAll(".wfshelf-row")).toHaveLength(1);
+  });
+
+  it("drops the variants it holds and reads the list again when invalidated", async () => {
+    const hash = "a".repeat(64);
+    listWorkflowVariants.mockResolvedValue([
+      {
+        structural_hash: "c".repeat(64),
+        node_count: 47,
+        first_seen_at: "2026-08-01T00:00:00Z",
+        pictures: 5,
+        assets: [{ widget: "lora_name", name: "secret_name.safetensors" }],
+      },
+    ]);
+    const wrapper = await mountShelf();
+    await wrapper.vm.store.toggleOpen(hash);
+    await wrapper.vm.$nextTick();
+    expect(textOf(wrapper)).toContain("secret_name");
+
+    listWorkflowVariants.mockResolvedValue([
+      {
+        structural_hash: "c".repeat(64),
+        node_count: 47,
+        first_seen_at: "2026-08-01T00:00:00Z",
+        pictures: 5,
+        assets: [],
+        forgotten_models: 1,
+      },
+    ]);
+    wrapper.vm.store.invalidate();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+    expect(textOf(wrapper)).not.toContain("secret_name");
+    expect(listWorkflows).toHaveBeenCalledTimes(2);
+
+    await wrapper.vm.store.toggleOpen(hash);
+    await wrapper.vm.$nextTick();
+    expect(listWorkflowVariants).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("the keyboard", () => {
   it("walks THROUGH an open workflow, not over it", async () => {
     // A variant is a child row of the workflow above it, which is the whole of

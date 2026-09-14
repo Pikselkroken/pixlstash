@@ -3103,7 +3103,12 @@ is a row delete with no stored graph rewritten. `hub/workflows.model_ghost_names
 is the set: every `.safetensors` name recipes keep that matches neither a
 `model.filename` nor a `model_file` basename, and every loader `*_sha256` value
 matching no `model.sha256` (a digest identifies a model on a public registry as
-well as its name does). Only what the shelf can hold is judged: the scanner
+well as its name does). A digest is judged only when it is 64 hex characters and
+no non-`engine` shelf model is still waiting for its hash: an unhashed
+checkpoint's loader digest matches nothing until `MissingCheckpointHashFinder`
+reads it, and forgetting it then would forget a model on disk. Re-filing a
+recipe (a new import naming the same model) writes its names back; only a
+picture that still names the model can do that. Only what the shelf can hold is judged: the scanner
 lists `.safetensors` alone, so a `.ckpt` or `.gguf` would always read as a ghost
 and its purge would forget the name of a model still on disk. A tombstoned model
 still counts as on the shelf, since the shelf still lists it; a model never
