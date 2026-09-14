@@ -5,7 +5,7 @@ import subprocess
 import sys
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.device_utils import is_accelerator
+from pixlstash.utils.device_utils import empty_device_cache, is_accelerator
 
 logger = get_logger(__name__)
 
@@ -250,24 +250,16 @@ def is_device_error(error: BaseException, device) -> bool:
 
 
 def empty_cuda_cache() -> bool:
-    """Flush PyTorch's CUDA allocator cache back to the driver.
+    """Flush the torch allocator cache back to the driver, on any backend.
 
-    ``torch`` is looked up in :data:`sys.modules` rather than imported. If torch
-    was never imported, this process cannot have allocated any CUDA memory, so
-    there is nothing to flush - and importing it here purely to discover that
-    would cost seconds. That matters because this module sits on the API
-    server's import path and on every best-effort teardown path in the test
-    suite, where the caller usually never touched a model at all.
+    Covers Metal as well as CUDA.
+
+    See :func:`pixlstash.utils.device_utils.empty_device_cache` for why torch is
+    read from :data:`sys.modules` rather than imported.
 
     Returns:
-        ``True`` if the cache was flushed, ``False`` when torch is not loaded or
-        no CUDA device is available (callers use this to skip their own cache
+        ``True`` if a cache was flushed, ``False`` when torch is not loaded or
+        no accelerator is available (callers use this to skip their own cache
         bookkeeping).
     """
-    torch = sys.modules.get("torch")
-    if torch is None:
-        return False
-    if not torch.cuda.is_available():
-        return False
-    torch.cuda.empty_cache()
-    return True
+    return empty_device_cache()

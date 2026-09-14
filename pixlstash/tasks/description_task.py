@@ -83,6 +83,7 @@ class DescriptionTask(BaseTask):
                 cls._cpu_spillover_engine = InferenceEngine.create(
                     device="cpu",
                     image_root=image_root,
+                    cpu_spillover=True,
                 )
             cls._cpu_spillover_last_used_at = time.perf_counter()
             return cls._cpu_spillover_engine

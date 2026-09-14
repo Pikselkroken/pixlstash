@@ -13,6 +13,9 @@ from PIL import Image
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
+from pixlstash.utils.device_utils import (
+    USE_GPU_ADVICE,
+)
 from pixlstash.utils.model_utils import from_pretrained_local_first
 from pixlstash.utils.service.caption_utils import sanitise_tag
 
@@ -451,8 +454,8 @@ class JoyCaptionService:
             )
             if str(self._model_device) == "cpu":
                 logger.warning(
-                    "[JoyCaption] Running on CPU - inference will be very slow (~100s/image). "
-                    "Set default_device=cuda in server-config.json to use the GPU."
+                    "[JoyCaption] Running on CPU - inference will be very slow (~100s/image). %s",
+                    USE_GPU_ADVICE,
                 )
 
         except Exception as exc:

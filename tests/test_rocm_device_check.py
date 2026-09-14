@@ -20,7 +20,12 @@ from pixlstash.startup_checks import StartupCheckOutcome, StartupChecks
 
 
 def _make_torch(*, hip, available, mem=(8_000 * 1024**2, 16_000 * 1024**2)):
-    """Build a fake torch module. hip=None => CUDA build; a string => ROCm build."""
+    """Build a fake torch module. hip=None => CUDA build; a string => ROCm build.
+
+    It answers the Metal probe with False, as torch does on Linux: auto mode asks
+    it whenever CUDA is unavailable, and a stand-in without it would read as a
+    broken torch there.
+    """
     version = types.SimpleNamespace(hip=hip, cuda=None if hip else "12.8")
 
     def is_available():
@@ -34,7 +39,10 @@ def _make_torch(*, hip, available, mem=(8_000 * 1024**2, 16_000 * 1024**2)):
         get_device_capability=lambda i=0: (9, 0),
         get_device_name=lambda i=0: "Fake GPU",
     )
-    return types.SimpleNamespace(version=version, cuda=cuda)
+    backends = types.SimpleNamespace(
+        mps=types.SimpleNamespace(is_available=lambda: False)
+    )
+    return types.SimpleNamespace(version=version, cuda=cuda, backends=backends)
 
 
 def _make_ort(providers):

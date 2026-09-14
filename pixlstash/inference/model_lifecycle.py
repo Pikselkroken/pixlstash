@@ -6,8 +6,8 @@ import gc
 import threading
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.device_utils import empty_device_cache, is_metal
 from pixlstash.utils.model_utils import trim_process_memory
-from pixlstash.utils.vram_utils import empty_cuda_cache
 
 logger = get_logger(__name__)
 
@@ -107,7 +107,7 @@ class ModelLifecycleManager:
         # Collect first: a model in a reference cycle is freed only by gc, so
         # a flush before that hands none of its memory back.
         gc.collect()
-        empty_cuda_cache()
+        self._flush_device_cache()
         trim_process_memory()
 
     def safe_idle_unload(
@@ -150,5 +150,15 @@ class ModelLifecycleManager:
 
         # Collect before flushing, as ``aggressive_unload`` does.
         gc.collect()
-        empty_cuda_cache()
+        self._flush_device_cache()
         trim_process_memory()
+
+    def _flush_device_cache(self) -> None:
+        """Hand the cache the unload freed back to the driver.
+
+        Metal's cache only for an engine on Metal, whose unloads run on the GPU
+        worker. Any other engine unloads on the thread that asked, which on a
+        Mac forced onto the CPU is the progress poll, so it flushes CUDA's
+        cache, as it always has, and leaves Metal alone.
+        """
+        empty_device_cache("mps" if is_metal(self._device) else "cuda")

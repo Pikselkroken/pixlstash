@@ -22,6 +22,10 @@ if TYPE_CHECKING:  # annotations only - see the function-local import note below
     from torchvision import transforms
 
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
+from pixlstash.utils.device_utils import (
+    empty_device_cache,
+    is_accelerator,
+)
 from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
 from pixlstash.utils.vram_utils import is_device_error
 
@@ -113,7 +117,7 @@ class PixlStashTaggerService:
     inference for tag-only, joint tag+score, and score-only passes.
 
     Args:
-        device: Initial inference device ("cuda" or "cpu").
+        device: Initial inference device ("cuda", "mps", or "cpu").
         model_dir: Directory where model files are stored. Paths to the
             checkpoint, meta.json, and revision sidecar are constructed
             internally from ``model_dir`` and this class's filename constants.
@@ -301,11 +305,11 @@ class PixlStashTaggerService:
         # Normalise dtype first: safetensors weights may be FP16 while the
         # freshly-built classifier head is FP32.  Cast everything to FP32,
         # load the state dict (now a consistent dtype), then promote to FP16
-        # on CUDA for faster inference.  CPU always stays FP32.
+        # on any GPU for faster inference.  CPU always stays FP32.
         self._model.float()
         self._model.load_state_dict(state_dict)
         self._model.to(self._device)
-        if str(self._device) == "cuda":
+        if is_accelerator(self._device):
             self._model.half()
             self._dtype = torch.float16
         else:
@@ -378,8 +382,7 @@ class PixlStashTaggerService:
                 self._model.float()
             self._device = "cpu"
             self._dtype = torch.float32
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            empty_device_cache()
             logger.debug("PixlStash tagger reloaded on CPU")
             return True
         except Exception as cpu_error:
@@ -809,7 +812,7 @@ class PixlStashTaggerService:
         defect), the result is flagged diffuse with no box or heatmap.
 
         Grad-CAM needs gradients, so this runs OUTSIDE ``torch.inference_mode``
-        and forces fp32: the CUDA model is kept in fp16 for the hot tagging
+        and forces fp32: the GPU model is kept in fp16 for the hot tagging
         path, which yields NaN gradients. To stay correct without permanently
         mutating the shared model, the model is temporarily upcast to fp32 for
         the CAM and its original dtype is restored in a ``finally`` block. A

@@ -9,6 +9,9 @@ from pixlstash.inference.vram_budget import VramBudget
 from pixlstash.inference.model_lifecycle import ModelLifecycleManager
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_models import builtin_model_dir
+from pixlstash.utils.device_utils import (
+    detect_device,
+)
 
 if TYPE_CHECKING:
     from pixlstash.tagger_plugins.clip_service import ClipService
@@ -24,6 +27,12 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+_DEVICE_LABELS = {
+    "cuda": "CUDA",
+    "mps": "Apple Metal (mps)",
+    "cpu": "CPU",
+}
+
 _MAX_CONCURRENT_GPU = 64
 _MAX_CONCURRENT_CPU = 8
 
@@ -38,7 +47,7 @@ class InferenceEngine:
     Use :meth:`create` to construct a fully-wired engine in one call.
 
     Args:
-        device: Inference device string (``"cuda"`` or ``"cpu"``).
+        device: Inference device string (``"cuda"``, ``"mps"`` or ``"cpu"``).
         clip_service: :class:`ClipService` instance (lazy-loaded on first use).
         sbert_service: :class:`SBertService` instance.
         wd14_service: :class:`WD14Service` instance.
@@ -487,15 +496,16 @@ class InferenceEngine:
         keep_models_in_memory: bool = True,
         insightface_model_pack: str = "buffalo_l",
         tagger_settings: dict | None = None,
+        cpu_spillover: bool = False,
     ) -> "InferenceEngine":
         """Construct a fully-wired :class:`InferenceEngine`.
 
         Args:
-            device: Inference device (``"cuda"`` or ``"cpu"``).  Auto-detected
+            device: Inference device (``"cuda"``, ``"mps"`` or ``"cpu"``).  Auto-detected
                 when ``None``.
             image_root: Filesystem root for picture storage.
-            force_cpu: When ``True`` forces CPU inference regardless of CUDA
-                availability.
+            force_cpu: When ``True`` forces CPU inference regardless of
+                accelerator availability.
             fast_captions: When ``True`` enables fast (lower-quality) caption
                 mode in Florence-2.
             max_vram_gb: Optional VRAM budget cap in gigabytes.
@@ -507,11 +517,12 @@ class InferenceEngine:
             keep_models_in_memory: Whether to keep models loaded between runs.
             insightface_model_pack: Name of the InsightFace model pack used by
                 the face pipeline (e.g. ``"buffalo_l"`` or ``"auraface"``).
+            cpu_spillover: Whether this engine runs work beside a GPU engine
+                that keeps the GPU. Only the device announcement reads it.
 
         Returns:
             A fully constructed :class:`InferenceEngine` ready for use.
         """
-        import torch
         from pixlstash.tagger_plugins.clip_service import ClipService
         from pixlstash.tagger_plugins.sbert import SBertService
         from pixlstash.tagger_plugins.pixlstash_tagger import PixlStashTaggerService
@@ -522,8 +533,31 @@ class InferenceEngine:
 
         if force_cpu:
             device = "cpu"
+            # force_cpu is one bool for several causes: default_device cpu, the
+            # --force-cpu test flag, and the start-up checks' fallback in auto
+            # mode (no GPU, no torch, too little free VRAM). Which GPU the
+            # machine has is what separates the one worth investigating - a GPU
+            # present and unused - from a machine that has none.
+            available = detect_device()
+            if available == "cpu":
+                reason = "no supported GPU detected"
+            else:
+                reason = (
+                    f"forced; {_DEVICE_LABELS.get(available, available)} is "
+                    "present but not used"
+                )
         elif device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            device = detect_device()
+            reason = "no supported GPU detected" if device == "cpu" else "detected"
+        else:
+            reason = "configured"
+
+        logger.info(
+            "Inference device: %s (%s)%s",
+            _DEVICE_LABELS.get(device, device),
+            "CPU spillover, beside the GPU engine" if cpu_spillover else reason,
+            "" if device != "cpu" or cpu_spillover else " - inference will be slow",
+        )
 
         clip_service = ClipService(device=device)
         sbert_service = SBertService(device=device)

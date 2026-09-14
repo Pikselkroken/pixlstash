@@ -24,6 +24,7 @@ from pixlstash.db_models.tag_prediction import (
     is_plugin_model_version,
     TagPrediction,
 )
+from pixlstash.utils.device_utils import USE_GPU_ADVICE
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.image_processing.face_utils import expand_bbox_to_square
@@ -534,6 +535,7 @@ class TagTask(BaseTask):
                 cls._cpu_spillover_engine = InferenceEngine.create(
                     device="cpu",
                     image_root=image_root,
+                    cpu_spillover=True,
                 )
             cls._cpu_spillover_last_used_at = time.perf_counter()
             return cls._cpu_spillover_engine
@@ -1184,10 +1186,10 @@ class TagTask(BaseTask):
                     )
                     if device == "cpu" and inference_s > 10:
                         logger.warning(
-                            "[TAG_TIMING] Inference ran on CPU and took %.1fs for %d image(s). "
-                            "Set default_device=cuda in server-config.json to use the GPU.",
+                            "[TAG_TIMING] Inference ran on CPU and took %.1fs for %d image(s). %s",
                             inference_s,
                             n,
+                            USE_GPU_ADVICE,
                         )
         finally:
             if cpu_spillover_engine is not None:

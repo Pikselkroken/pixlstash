@@ -11,6 +11,7 @@ import re
 import sys
 import threading
 import types
+import warnings
 import weakref
 
 import numpy as np
@@ -18,7 +19,15 @@ import pytest
 from PIL import Image
 
 import pixlstash.inference.model_lifecycle as model_lifecycle_module
+import pixlstash.startup_checks as sc
+from pixlstash.inference.engine import InferenceEngine
 from pixlstash.inference.model_lifecycle import ModelLifecycleManager
+from pixlstash.inference.vram_budget import MAX_CONCURRENT_GPU_IMAGES, VramBudget
+from pixlstash.inference.workflows.tagging import (
+    _MAX_CONCURRENT_CPU as TAGGING_MAX_CONCURRENT_CPU,
+    TaggingWorkflow,
+)
+from pixlstash.startup_checks import StartupCheckOutcome, StartupChecks
 from pixlstash.task_runner import (
     TaskRunner,
 )
@@ -30,6 +39,7 @@ from pixlstash.tasks.base_task import (
 )
 from pixlstash.utils.device_utils import (
     ACCELERATORS,
+    USE_GPU_ADVICE,
     detect_device,
     empty_device_cache,
     is_accelerator,
@@ -315,6 +325,22 @@ def test_empty_device_cache_flushes_only_the_named_backend(
     assert flushed == expected
 
 
+def test_empty_cuda_cache_flushes_metal_despite_its_name(fake_torch):
+    """The alias the teardown paths call flushes Metal too.
+
+    task_runner and model_lifecycle call this name, not empty_device_cache.
+    """
+    from pixlstash.utils.vram_utils import empty_cuda_cache
+
+    flushed = []
+    torch = _fake_torch(cuda=False, mps=True)
+    torch.mps.empty_cache = lambda: flushed.append("mps")
+    fake_torch(torch)
+
+    assert empty_cuda_cache() is True
+    assert flushed == ["mps"]
+
+
 @pytest.mark.parametrize(
     "cuda,mps,expected",
     [(True, False, ["cuda"]), (False, False, [])],
@@ -370,6 +396,435 @@ def test_a_failing_flush_is_logged_at_warning(fake_torch, caplog, backend, label
     assert len(warnings_logged) == 1, caplog.text
     assert label in warnings_logged[0]
     assert "allocator is wedged" in warnings_logged[0]
+
+
+# --------------------------------------------------------------------------- #
+# The device is announced once, where it is actually resolved
+# --------------------------------------------------------------------------- #
+
+
+def _engine_device_log(
+    monkeypatch, caplog, *, detected, force_cpu=False, device=None, cpu_spillover=False
+):
+    """Capture what InferenceEngine.create says about the device it chose."""
+    from pixlstash.inference import engine as engine_mod
+
+    monkeypatch.setattr(engine_mod, "builtin_model_dir", lambda: "/nonexistent")
+    monkeypatch.setattr(engine_mod, "detect_device", lambda: detected)
+    # Stop at the first service construction: the device is already resolved
+    # and logged by then, and building the rest would load models.
+    monkeypatch.setattr(
+        "pixlstash.tagger_plugins.clip_service.ClipService",
+        lambda **kw: (_ for _ in ()).throw(_StopEarly()),
+    )
+    with caplog.at_level("INFO"):
+        try:
+            engine_mod.InferenceEngine.create(
+                image_root="/nonexistent",
+                force_cpu=force_cpu,
+                device=device,
+                cpu_spillover=cpu_spillover,
+            )
+        except _StopEarly:
+            pass
+    return caplog.text
+
+
+class _StopEarly(Exception):
+    """Marker: the device has been resolved, no need to build the engine."""
+
+
+def test_metal_is_announced_at_info(monkeypatch, caplog):
+    """A Mac owner has to be able to tell the GPU is in use.
+
+    The other device telemetry at the default log level reads nvidia-smi, so
+    this line is what tells a working Metal install from a CPU one. The
+    start-up check's note is logged at DEBUG.
+    """
+    text = _engine_device_log(monkeypatch, caplog, detected="mps")
+    assert "Inference device: Apple Metal (mps) (detected)" in text
+    assert "inference will be slow" not in text
+
+
+def test_cpu_says_why_it_is_on_the_cpu(monkeypatch, caplog):
+    # "CPU with a GPU sitting unused" and "CPU because there is no GPU" are
+    # different problems, and only one of them is worth investigating.
+    forced = _engine_device_log(monkeypatch, caplog, detected="mps", force_cpu=True)
+    assert "forced; apple metal (mps) is present but not used" in forced.lower()
+
+    caplog.clear()
+    absent = _engine_device_log(monkeypatch, caplog, detected="cpu")
+    assert "no supported gpu" in absent.lower()
+    assert "inference will be slow" in absent
+
+
+def test_a_forced_cpu_without_a_gpu_is_not_called_forced(monkeypatch, caplog):
+    """The server always arrives with force_cpu, including on a CPU-only host.
+
+    The start-up checks set forced_cpu when auto mode finds no GPU, and the
+    vault hands that on as force_cpu=True, so a plain CPU machine reaches the
+    forced branch. There, "forced" would send the owner looking for a setting
+    they never made.
+    """
+    text = _engine_device_log(monkeypatch, caplog, detected="cpu", force_cpu=True)
+
+    assert "no supported gpu" in text.lower()
+    assert "forced" not in text.lower()
+
+
+def test_a_cpu_spillover_engine_is_not_read_as_a_machine_on_the_CPU(
+    monkeypatch, caplog
+):
+    """A GPU host builds these beside its GPU engine, which keeps the GPU.
+
+    The line every owner greps for is this one, so a spillover engine
+    announcing "CPU (configured) - inference will be slow" on a CUDA machine
+    reads as the GPU having been lost.
+    """
+    text = _engine_device_log(
+        monkeypatch, caplog, detected="cuda", device="cpu", cpu_spillover=True
+    )
+
+    assert "CPU spillover" in text
+    assert "inference will be slow" not in text
+    assert "(configured)" not in text
+
+
+def test_both_spillover_factories_say_what_they_are_building(monkeypatch, caplog):
+    """The announcement above is only right if the call sites pass the flag."""
+    from pixlstash.inference import engine as engine_mod
+    from pixlstash.tasks.description_task import DescriptionTask
+    from pixlstash.tasks.tag_task import TagTask
+
+    monkeypatch.setattr(engine_mod, "builtin_model_dir", lambda: "/nonexistent")
+    monkeypatch.setattr(engine_mod, "detect_device", lambda: "cuda")
+    monkeypatch.setattr(
+        "pixlstash.tagger_plugins.clip_service.ClipService",
+        lambda **kw: (_ for _ in ()).throw(_StopEarly()),
+    )
+
+    for owner in (TagTask, DescriptionTask):
+        monkeypatch.setattr(owner, "_cpu_spillover_engine", None)
+        caplog.clear()
+        with caplog.at_level("INFO"), pytest.raises(_StopEarly):
+            owner._acquire_cpu_spillover_engine("/nonexistent")
+
+        assert "CPU spillover" in caplog.text, owner.__name__
+        assert "inference will be slow" not in caplog.text, owner.__name__
+
+
+def test_cuda_is_announced_too(monkeypatch, caplog):
+    # Positive control: this is not a Metal-only courtesy.
+    text = _engine_device_log(monkeypatch, caplog, detected="cuda")
+    assert "Inference device: CUDA (detected)" in text
+    assert "no supported GPU" not in text
+    assert "inference will be slow" not in text
+
+
+def test_a_device_passed_in_is_announced_as_configured(monkeypatch, caplog):
+    # Named by the caller rather than detected, so the log must not claim it
+    # was found on the machine.
+    text = _engine_device_log(monkeypatch, caplog, detected="cpu", device="mps")
+    assert "Inference device: Apple Metal (mps) (configured)" in text
+
+
+# --------------------------------------------------------------------------- #
+# Start-up device check
+# --------------------------------------------------------------------------- #
+
+
+def _checks(device):
+    return StartupChecks(
+        {"default_device": device}, "/tmp/server_config.json", logging.getLogger("test")
+    )
+
+
+@pytest.fixture
+def patch_runtime(monkeypatch):
+    """Seed ``startup_checks``' cached torch/ort accessors with stand-ins."""
+
+    def apply(torch_mod, ort_mod=None):
+        monkeypatch.setattr(sc, "_torch_mod", torch_mod)
+        monkeypatch.setattr(
+            sc,
+            "_ort_mod",
+            ort_mod
+            or types.SimpleNamespace(
+                get_available_providers=lambda: ["CPUExecutionProvider"]
+            ),
+        )
+
+    return apply
+
+
+def test_explicit_cuda_without_torch_still_names_cuda(patch_runtime):
+    # An unimportable torch is a reason to refuse a named device, not to
+    # rewrite the config to cpu behind the owner's back.
+    patch_runtime(None)
+    outcome = StartupCheckOutcome()
+    _checks("cuda")._check_device_and_vram(outcome)
+
+    assert any("default_device is set to cuda" in f for f in outcome.hard_failures)
+
+
+@pytest.mark.parametrize("configured", ["cuda", "gpu"])
+def test_an_explicit_cuda_on_a_mac_with_metal_still_refuses(patch_runtime, configured):
+    """Metal is accepted in auto mode only.
+
+    The owner named CUDA, which a Mac does not have. Starting on Metal instead
+    would be the same silent swap as starting on the CPU.
+    """
+    patch_runtime(_fake_torch(cuda=False, mps=True))
+    outcome = StartupCheckOutcome()
+    _checks(configured)._check_device_and_vram(outcome)
+
+    assert any("default_device is set to cuda" in f for f in outcome.hard_failures), (
+        outcome.hard_failures
+    )
+    assert not outcome.forced_cpu
+    assert "Metal" not in " ".join(outcome.notes)
+
+
+def test_auto_without_torch_still_forces_cpu_without_refusing(patch_runtime):
+    # The other positive control: auto mode named no device, so it must keep
+    # falling back quietly rather than refusing to boot.
+    patch_runtime(None)
+    outcome = StartupCheckOutcome()
+    _checks("auto")._check_device_and_vram(outcome)
+
+    assert outcome.forced_cpu
+    assert not outcome.hard_failures
+
+
+def test_auto_without_any_gpu_still_forces_cpu(patch_runtime):
+    # A host with neither CUDA nor Metal is still reported as forced-CPU.
+    patch_runtime(_fake_torch(cuda=False, mps=False))
+    outcome = StartupCheckOutcome()
+    _checks("auto")._check_device_and_vram(outcome)
+
+    assert outcome.forced_cpu
+
+
+@pytest.mark.parametrize("configured", ["auto", "cpu"])
+def test_metal_does_not_warn_about_a_missing_nvidia_smi(
+    patch_runtime, monkeypatch, configured
+):
+    """nvidia-smi will never exist on a Mac, so warning about it is noise.
+
+    The warning guards VRAM telemetry, which is read exclusively through
+    nvidia-smi and so is CUDA-only. On Metal it names a tool the owner cannot
+    install, for a feature that was never going to run - directly above the
+    line saying the GPU is in use.
+    """
+    patch_runtime(_fake_torch(cuda=False, mps=True))
+    monkeypatch.setattr(sc.shutil, "which", lambda _name: None)
+    outcome = StartupCheckOutcome()
+    _checks(configured)._check_device_and_vram(outcome)
+    _checks(configured)._check_optional_dependencies(outcome)
+
+    assert not any("nvidia-smi" in w for w in outcome.warnings), outcome.warnings
+
+
+@pytest.mark.parametrize(
+    "torch_mod,configured",
+    [
+        (_fake_torch(cuda=True), "cuda"),
+        (_fake_torch(cuda=True), "cpu"),
+        (_fake_torch(cuda=False, mps=False), "auto"),
+        (_fake_torch(cuda=False, mps=False), "cpu"),
+        (None, "auto"),
+    ],
+    ids=[
+        "cuda-host",
+        "cuda-host-set-to-cpu",
+        "cpu-only-host",
+        "cpu-only-host-set-to-cpu",
+        "no-torch",
+    ],
+)
+def test_every_host_but_metal_warns_about_a_missing_nvidia_smi(
+    patch_runtime, monkeypatch, torch_mod, configured
+):
+    # Positive control for the test above: skipping the warning is for Metal
+    # alone, whatever default_device says and whether or not a card is found.
+    patch_runtime(torch_mod)
+    monkeypatch.setattr(sc.shutil, "which", lambda _name: None)
+    outcome = StartupCheckOutcome()
+    _checks(configured)._check_optional_dependencies(outcome)
+
+    assert any("nvidia-smi" in w for w in outcome.warnings), outcome.warnings
+
+
+def test_mps_is_not_a_configurable_device():
+    """`auto` is the only way to ask for Metal, deliberately.
+
+    An explicit `mps` was identical to `auto` on a Mac, meaningless on CUDA,
+    and unreachable from the desktop app, which maps its Metal choice to
+    `auto`. Its one distinct behaviour was refusing to boot when Metal was
+    missing - a new way to fail, for a signal the start-up device log already
+    gives. Rejecting it here is what keeps it from drifting back in.
+    """
+    config = {"default_device": "mps"}
+    checks = StartupChecks(config, "/tmp/server_config.json", logging.getLogger("test"))
+    outcome = StartupCheckOutcome()
+    checks._check_config_sanity(outcome)
+
+    assert any("default_device must be one of" in f for f in outcome.hard_failures)
+    assert not any("mps" in f for f in outcome.hard_failures), (
+        "the message lists the devices that work, so it must not offer mps"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Real hardware
+# --------------------------------------------------------------------------- #
+
+
+def _mps_present() -> bool:
+    try:
+        import torch
+
+        return bool(torch.backends.mps.is_available())
+    except Exception as exc:  # pragma: no cover - depends on the host
+        warnings.warn(f"MPS availability probe failed, skipping: {exc}")
+        return False
+
+
+@pytest.mark.skipif(not _mps_present(), reason="requires an Apple Metal GPU")
+def test_tagger_promotes_to_fp16_on_real_metal(tmp_path):
+    """The tagger loads onto Metal in fp16, the same as it does on CUDA."""
+    import json
+
+    import torch
+    from safetensors.torch import save_file
+    from torchvision.models import convnext_tiny
+
+    from pixlstash.tagger_plugins.pixlstash_tagger import (
+        PIXLSTASH_TAGGER_FILENAME,
+        PIXLSTASH_TAGGER_META_FILENAME,
+        PixlStashTaggerService,
+    )
+
+    labels = ["blocky", "noisy"]
+    model = convnext_tiny(weights=None)
+    model.classifier[2] = torch.nn.Linear(model.classifier[2].in_features, len(labels))
+    save_file(model.state_dict(), str(tmp_path / PIXLSTASH_TAGGER_FILENAME))
+    (tmp_path / PIXLSTASH_TAGGER_META_FILENAME).write_text(
+        json.dumps({"labels": labels, "arch": "convnext_tiny", "version": 1})
+    )
+
+    service = PixlStashTaggerService(
+        device="mps", model_dir=str(tmp_path), batch_size_fn=lambda: 2
+    )
+    service.init()
+    try:
+        param = next(service._model.parameters())
+        assert param.device.type == "mps"
+        assert param.dtype is torch.float16
+        assert service._dtype is torch.float16
+    finally:
+        service.unload()
+
+
+@pytest.mark.parametrize(
+    "device, fp16", [("mps", True), ("cuda", True), ("cpu", False)]
+)
+def test_the_tagger_loads_in_fp16_on_every_accelerator(
+    tmp_path, monkeypatch, device, fp16
+):
+    """Metal gets the fp16 promotion CUDA gets; the CPU stays in fp32.
+
+    ``test_tagger_promotes_to_fp16_on_real_metal`` is the only other guard, and
+    it skips on CI. The checkpoint and the network are stand-ins that record
+    what the load does.
+    """
+    import json
+
+    import safetensors.torch
+    import torch
+
+    from pixlstash.tagger_plugins import pixlstash_tagger as pt
+
+    (tmp_path / pt.PIXLSTASH_TAGGER_FILENAME).write_bytes(b"")
+    (tmp_path / pt.PIXLSTASH_TAGGER_META_FILENAME).write_text(
+        json.dumps({"labels": ["blocky", "noisy"], "arch": "convnext_tiny"})
+    )
+    monkeypatch.setattr(safetensors.torch, "load_file", lambda path, device=None: {})
+    calls = []
+
+    class _Network:
+        def float(self):
+            calls.append("float")
+            return self
+
+        def load_state_dict(self, state_dict):
+            calls.append("load")
+
+        def to(self, target):
+            calls.append(f"to {target}")
+            return self
+
+        def half(self):
+            calls.append("half")
+            return self
+
+        def eval(self):
+            return self
+
+    service = pt.PixlStashTaggerService(
+        device=device, model_dir=str(tmp_path), batch_size_fn=lambda: 1
+    )
+    monkeypatch.setattr(service, "_build_model", lambda arch, count: _Network())
+    monkeypatch.setattr(service, "_build_transform", lambda size: None)
+
+    service.init()
+
+    expected = ["float", "load", f"to {device}"] + (["half"] if fp16 else [])
+    assert calls == expected
+    assert service._dtype is (torch.float16 if fp16 else torch.float32)
+
+
+@pytest.mark.parametrize("onnx_capacity", [1024, 1])
+@pytest.mark.parametrize(
+    "device,limit",
+    [
+        ("mps", 8),
+        ("cuda", MAX_CONCURRENT_GPU_IMAGES),
+        ("cpu", TAGGING_MAX_CONCURRENT_CPU),
+    ],
+)
+def test_tag_tasks_and_tagger_batches_hold_at_most_eight_on_metal(
+    device, limit, onnx_capacity
+):
+    """Metal caps a tag task, and the taggers' batches, at eight images.
+
+    No VRAM budget bounds a Metal batch (``VramBudget`` is CUDA-only), and every
+    image in it comes out of the machine's one pool of memory, so Metal gets
+    its own small limit. CUDA keeps the GPU size and the CPU its own. The
+    taggers' batch is also bounded by WD14's ONNX capacity: far above every
+    limit once a session has loaded, and 1 until one has, which is where the
+    built-in tagger's batch stays when WD14 never loads. The task size does not
+    read the capacity.
+    """
+    engine = types.SimpleNamespace(
+        device=device,
+        vram_budget=VramBudget(device),
+        wd14_service=types.SimpleNamespace(batch_capacity=lambda: onnx_capacity),
+    )
+    workflow = TaggingWorkflow(engine=engine, use_wd14=True, use_pixlstash_tagger=True)
+
+    assert workflow.effective_wd14_batch_size() == min(limit, onnx_capacity)
+    assert workflow.effective_pixlstash_tagger_batch_size() == min(limit, onnx_capacity)
+    assert workflow.suggested_task_size() == limit
+
+
+def test_the_metal_tagging_limit_leaves_the_engines_concurrency_alone():
+    # Florence-2 sizes its Metal batch from the engine's concurrency and its own
+    # memory cap; the taggers' Metal limit must not reach it.
+    engine = InferenceEngine.__new__(InferenceEngine)
+    engine.device = "mps"
+
+    assert engine.max_concurrent_images() == MAX_CONCURRENT_GPU_IMAGES
 
 
 # --------------------------------------------------------------------------- #
@@ -1043,8 +1498,8 @@ def test_a_lifecycle_unload_collects_the_models_before_flushing(unload, monkeypa
     alive_at_flush = []
     monkeypatch.setattr(
         model_lifecycle_module,
-        "empty_cuda_cache",
-        lambda: alive_at_flush.append(model_ref() is not None) or True,
+        "empty_device_cache",
+        lambda device=None: alive_at_flush.append(model_ref() is not None) or True,
     )
 
     with _only_explicit_collections():
@@ -1054,6 +1509,51 @@ def test_a_lifecycle_unload_collects_the_models_before_flushing(unload, monkeypa
     assert alive_at_flush == [False], (
         f"{unload} flushed the device cache while the unloaded model was alive"
     )
+
+
+@pytest.mark.parametrize("unload", ["aggressive_unload", "safe_idle_unload"])
+@pytest.mark.parametrize(
+    "device, flushed", [("mps", ["mps"]), ("cuda", ["cuda"]), ("cpu", ["cuda"])]
+)
+def test_a_lifecycle_unload_flushes_metal_only_for_an_engine_on_metal(
+    fake_torch, unload, device, flushed
+):
+    """A Mac forced onto the CPU unloads on the progress poll, off the GPU worker.
+
+    Flushing Metal there would be Metal work on a second thread. Every engine
+    off Metal still flushes CUDA's cache, as before Metal support.
+    """
+    calls = []
+    torch = _fake_torch(cuda=True, mps=True)
+    torch.cuda.empty_cache = lambda: calls.append("cuda")
+    torch.mps.empty_cache = lambda: calls.append("mps")
+    fake_torch(torch)
+
+    getattr(ModelLifecycleManager(device=device), unload)()
+
+    assert calls == flushed
+
+
+def test_joycaption_on_the_cpu_gives_the_use_gpu_advice(monkeypatch, caplog):
+    # The advice itself is checked against start-up above; this pins that the
+    # warning carries it rather than a device list of its own.
+    from pixlstash.tagger_plugins import joycaption as jc
+
+    monkeypatch.setattr(
+        jc,
+        "from_pretrained_local_first",
+        lambda cls, name, **kw: types.SimpleNamespace(
+            eval=lambda: None,
+            image_processor=None,
+            tokenizer=None,
+        ),
+    )
+
+    service = jc.JoyCaptionService(device="cpu", precision="fp16")
+    with caplog.at_level("WARNING"):
+        service._init()
+
+    assert USE_GPU_ADVICE in caplog.text
 
 
 # --------------------------------------------------------------------------- #
@@ -1374,6 +1874,52 @@ def test_an_ordinary_failure_is_not_retried_on_the_cpu(monkeypatch, call):
     assert reloaded == [], "a non-device failure must not reload anything"
     assert seen == ["mps"], "the batch must not be retried"
     assert not results
+
+
+def test_the_tagger_names_the_device_it_leaves_for_the_cpu(monkeypatch, caplog):
+    # reload_on_cpu is not handed the exception - its callers log that just
+    # before - so what it owes the log is the device it is leaving. It also
+    # flushes the allocator cache once the model is off that device.
+    from pixlstash.tagger_plugins import pixlstash_tagger as pt
+
+    class _Model:
+        location = "mps"
+
+        def to(self, target):
+            self.location = str(target)
+            return self
+
+        def float(self):
+            return self
+
+    model = _Model()
+    service = pt.PixlStashTaggerService.__new__(pt.PixlStashTaggerService)
+    service._device = "mps"
+    service._model = model
+    service._load_lock = threading.RLock()
+    # Not the real flush: it would call into Metal on a Mac.
+    flushes = []
+    monkeypatch.setattr(
+        pt,
+        "empty_device_cache",
+        lambda device=None: flushes.append((model.location, device)) or False,
+    )
+
+    with caplog.at_level(logging.WARNING, logger=pt.logger.name):
+        assert service.reload_on_cpu() is True
+
+    assert service._device == "cpu"
+    assert len(flushes) == 1, f"the reload must flush once, not {flushes}"
+    location, flushed = flushes[0]
+    assert location == "cpu", "the flush must come after the model left Metal"
+    assert flushed in (None, "mps"), f"the flush must cover Metal, not {flushed!r}"
+    messages = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == pt.logger.name and r.levelno == logging.WARNING
+    ]
+    assert any("mps" in m for m in messages), messages
+    assert not any("OOM" in m for m in messages), messages
 
 
 # --------------------------------------------------------------------------- #

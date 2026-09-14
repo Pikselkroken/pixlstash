@@ -1184,10 +1184,8 @@ def test_image_runs_the_plugin_over_a_picture(tmp_path, capsys):
     assert str(image) in out
     # 64 proves the schema's default was merged rather than the plugin's own
     # `or 128` fallback; init-called proves init() ran; the device proves
-    # setup() was handed one.
-    assert "(64 tokens, cuda, init-called)" in out or (
-        "(64 tokens, cpu, init-called)" in out
-    )
+    # setup() was handed one the server can run on: cuda, mps or cpu, not "auto".
+    assert re.search(r"\(64 tokens, (?:cuda|mps|cpu)(?::\d+)?, init-called\)", out), out
 
 
 def test_a_result_not_keyed_by_the_paths_it_was_given_is_caught(tmp_path, capsys):
@@ -1228,24 +1226,69 @@ def test_image_loads_no_model_for_a_plugin_nothing_will_ever_call(tmp_path, caps
     assert "neither supports_tags nor supports_descriptions" in err
 
 
-def test_a_torch_that_will_not_answer_does_not_take_the_command_down(monkeypatch):
+@pytest.mark.parametrize("where", ["import", "probe"])
+def test_a_torch_that_will_not_answer_does_not_take_the_command_down(
+    monkeypatch, where
+):
     """The plugin's own init() gives a better error than a traceback from here.
 
     An installed-but-unloadable torch raises `OSError` rather than
     `ImportError` - a missing CUDA shared library is the usual way - so the
     narrower catch let it escape and end the command before the plugin could
-    report its own missing dependency.
+    report its own missing dependency. The import and the availability probe
+    are caught separately, so each gets its own row.
     """
+    import builtins
+
     from pixlstash import plugin_check
 
-    class Unloadable:
-        @property
-        def cuda(self):
-            raise OSError("libcuda.so.1: cannot open shared object file")
+    unloadable = OSError("libcuda.so.1: cannot open shared object file")
+    if where == "import":
+        real_import = builtins.__import__
 
-    monkeypatch.setitem(sys.modules, "torch", Unloadable())
+        def refuse_torch(name, *args, **kwargs):
+            if name == "torch":
+                raise unloadable
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.delitem(sys.modules, "torch", raising=False)
+        monkeypatch.setattr(builtins, "__import__", refuse_torch)
+    else:
+
+        class Unloadable:
+            @property
+            def cuda(self):
+                raise unloadable
+
+        monkeypatch.setitem(sys.modules, "torch", Unloadable())
 
     assert plugin_check._device() == "cpu"
+
+
+def test_image_says_why_the_plugin_got_no_gpu_when_torch_will_not_import(
+    tmp_path, capsys, caplog, monkeypatch
+):
+    """A plugin handed "cpu" because torch is broken has to be told so.
+
+    ``None`` in ``sys.modules`` makes ``import torch`` raise, as a broken
+    install does. The command still runs the plugin on the CPU; the WARNING is
+    the only place the owner learns the GPU was never on offer.
+    """
+    monkeypatch.setitem(sys.modules, "torch", None)
+    source = _write(tmp_path / "mine.py", _template())
+    image = _write(tmp_path / "sample.jpg", "not really a jpeg")
+
+    with caplog.at_level("WARNING"):
+        assert _check(source, "--image", str(image)) == cli.EXIT_OK
+
+    assert "tokens, cpu)" in capsys.readouterr().out
+    torch_warnings = [
+        record
+        for record in caplog.records
+        if record.levelname == "WARNING"
+        and "torch could not be imported" in record.getMessage()
+    ]
+    assert len(torch_warnings) == 1, caplog.text
 
 
 def test_image_stops_when_the_plugin_says_its_model_is_missing(tmp_path, capsys):

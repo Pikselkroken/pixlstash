@@ -11,6 +11,7 @@ from pixlstash.inference.vram_budget import (
     WD14_PER_ITEM_MB,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.device_utils import is_accelerator, is_metal
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.service.caption_utils import merge_video_frame_tags
 
@@ -21,6 +22,11 @@ logger = get_logger(__name__)
 
 _VIDEO_EXTS = frozenset({".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"})
 _MAX_CONCURRENT_CPU = 8
+#: The taggers' Metal limit. We don't have a VRAM budget on Metal batches right
+#: now, and the whole batch comes out of the machine's one pool of memory, so the
+#: GPU size (64) can outgrow a small Mac; a batch also holds the one GPU worker
+#: until it returns. Florence-2 is sized separately (``InferenceEngine``).
+_MAX_CONCURRENT_METAL = 8
 
 
 class TaggingWorkflow:
@@ -588,8 +594,16 @@ class TaggingWorkflow:
     # ──── VRAM / batch-sizing ────────────────────────────────────────────────
 
     def _max_concurrent_images(self) -> int:
-        """Maximum image concurrency determined by device type."""
-        if self._engine.device == "cuda":
+        """Maximum image concurrency: Metal's own limit, the GPU one on CUDA, else the CPU one.
+
+        The VRAM-budget caps applied on top of it stay CUDA-only:
+        :class:`~pixlstash.inference.vram_budget.VramBudget` sets no budget on
+        any other device, which is why Metal has a limit of its own
+        (:data:`_MAX_CONCURRENT_METAL`).
+        """
+        if is_metal(self._engine.device):
+            return _MAX_CONCURRENT_METAL
+        if is_accelerator(self._engine.device):
             return MAX_CONCURRENT_GPU_IMAGES
         return _MAX_CONCURRENT_CPU
 

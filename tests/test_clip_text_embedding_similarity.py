@@ -13,6 +13,7 @@ from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.tag import Tag
 from pixlstash.inference.engine import InferenceEngine
 from pixlstash.server import Server
+from pixlstash.utils.device_utils import empty_device_cache
 
 
 def cosine_similarity(a, b):
@@ -68,19 +69,17 @@ descriptions = [
 @pytest.fixture(scope="module")
 def shared_tagger():
     import gc
-    import torch
 
-    tagger = InferenceEngine.create(
-        device="cpu" if Server.DEFAULT_FORCE_CPU else "cuda"
-    )
+    # ``None`` asks the engine to detect, rather than naming cuda: this really
+    # loads CLIP onto the device it is given, so hardcoding cuda made the
+    # fixture error out on any machine whose GPU is not NVIDIA.
+    tagger = InferenceEngine.create(device="cpu" if Server.DEFAULT_FORCE_CPU else None)
     tagger.ensure_clip_ready()
     yield tagger
     tagger.close()
     del tagger
     gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
+    empty_device_cache()
 
 
 @pytest.mark.parametrize("query", ["Clementine holding a black assault rifle"])

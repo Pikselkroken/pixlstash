@@ -49,12 +49,10 @@ from pathlib import Path
 from typing import Any
 
 from pixlstash import plugin_install
-from pixlstash.pixl_logging import get_logger
 from pixlstash.plugin_install import PluginError
 from pixlstash.tagger_plugins.base import TaggerPlugin
 from pixlstash.tagger_plugins.registry import TaggerPluginManager
-
-logger = get_logger(__name__)
+from pixlstash.utils.device_utils import detect_device
 
 #: The parameter types ``TaggerParametersUI.vue`` has an explicit branch for,
 #: plus ``string``, which is that component's ``v-else``.  A ``type`` outside
@@ -424,29 +422,13 @@ def _run_over_image(plugin: TaggerPlugin, image: str) -> tuple[Any | None, list[
 def _device() -> str:
     """Return the device the server would hand a plugin's ``setup()``.
 
-    Falls back to ``"cpu"`` if torch cannot be reached at all, which is not a
-    guess about the machine so much as a way of getting out of torch's way: a
-    plugin that needs a device needs torch too, and its own ``init()`` is
-    moments away and will say so in terms of its own dependency. Failing here
-    instead would replace that message with a traceback out of the checker,
-    about a library the plugin author may not even import directly.
+    ``"cpu"`` when torch cannot be imported or probed, because
+    :func:`detect_device` never raises. That is not a guess about the machine
+    so much as a way of getting out of torch's way: a plugin that needs a
+    device needs torch too, and its own ``init()`` is moments away and will say
+    so in terms of its own dependency, where a traceback out of the checker
+    would be about a library the plugin author may not even import directly.
+    Why the plugin got no GPU is the WARNING :func:`detect_device` logs, which
+    reaches this command's stderr.
     """
-    # Local import: torch is seconds of start-up, and every other verb in this
-    # CLI - including `plugins test` without --image - runs without it.
-    try:
-        import torch
-
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    except Exception as exc:
-        # Deliberately not just ImportError. A torch that is installed but
-        # cannot load its shared libraries raises OSError here, and a partial
-        # install can raise almost anything; all of them mean the same thing to
-        # this function. Logged with the exception rather than swallowed, so
-        # the cause survives for whoever reads the log.
-        logger.warning(
-            "Could not ask torch which device to use (%s: %s); telling the "
-            "plugin 'cpu'. If it needs a GPU, this is why it did not get one.",
-            type(exc).__name__,
-            exc,
-        )
-        return "cpu"
+    return detect_device()

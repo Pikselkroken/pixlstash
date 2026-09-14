@@ -62,6 +62,33 @@ class TestDefaultDeviceOverride:
 
         assert cfg["default_device"] == "auto"
 
+    def test_mps_override_is_rejected_like_any_unknown_device(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """`mps` is a runtime device, not a configurable one.
+
+        Asking for Metal is what `auto` is for: it is identical to `auto` on a
+        Mac, meaningless on CUDA, and the desktop app maps its own Metal choice
+        to `auto` rather than writing this. The override validates against its
+        own set, separate from the one ``StartupChecks._check_config_sanity``
+        uses, so this is the second of the two places that has to agree - and
+        the one a sweep of the first would miss.
+        """
+        path = tmp_path / "server-config.json"
+        _write_config(path, default_device="auto")
+        monkeypatch.setenv(DEVICE_ENV, "mps")
+
+        with caplog.at_level("WARNING"):
+            cfg = Server.init_server_config(str(path))
+
+        assert cfg["default_device"] == "auto", (
+            "an unsupported override must leave the configured device alone"
+        )
+        assert any(
+            "mps" in r.message and "PIXLSTASH_DEFAULT_DEVICE" in r.message
+            for r in caplog.records
+        ), "the rejection has to say which value was ignored"
+
     def test_invalid_override_is_rejected_and_config_kept(
         self, tmp_path, monkeypatch, caplog
     ):

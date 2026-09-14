@@ -9,6 +9,11 @@ logger = get_logger(__name__)
 #: Devices that are a GPU of some kind, i.e. everything except plain CPU.
 ACCELERATORS = frozenset({"cuda", "mps"})
 
+#: What to tell an owner whose inference ran on the CPU. ``auto`` is the one
+#: value that reaches both CUDA and Metal: start-up rejects ``mps``, and
+#: ``cuda`` refuses to start on a Mac.
+USE_GPU_ADVICE = "Set default_device=auto in server-config.json to use the GPU."
+
 
 def detect_device() -> str:
     """Return the best inference device available: cuda or cpu.

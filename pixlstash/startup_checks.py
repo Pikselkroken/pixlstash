@@ -9,7 +9,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from pixlstash.pixl_logging import get_logger
 from pixlstash.startup_permissions import mkdir_private
+
+# For the module-level probes below; StartupChecks methods log through the
+# logger they are constructed with.
+logger = get_logger(__name__)
 
 _UNSET: Any = object()
 _torch_mod: Any = _UNSET
@@ -51,6 +56,24 @@ def _ort():
         else:
             _ort_mod = ort
     return _ort_mod
+
+
+def _mps_available(torch) -> bool:
+    """True when *torch* can reach Apple's Metal (MPS) backend."""
+    try:
+        return bool(torch.backends.mps.is_available())
+    except Exception as exc:
+        # A working torch answers False without raising on a machine with no
+        # Metal, so a raise means a broken install. The callers report it only
+        # as "no Metal" (auto mode then forces CPU inference), so this line is
+        # what tells the two apart.
+        logger.warning(
+            "[startup-check] Apple Metal (MPS) availability probe failed "
+            "(%s: %s); reporting no Metal.",
+            type(exc).__name__,
+            exc,
+        )
+        return False
 
 
 class StartupCheckError(Exception):
@@ -313,10 +336,42 @@ class StartupChecks:
                     "PixlStash will generate a self-signed certificate automatically."
                 )
 
-        if not shutil.which("nvidia-smi"):
+        if not shutil.which("nvidia-smi") and not self._is_apple_metal_host():
             outcome.warnings.append(
                 "Optional GPU utility missing: nvidia-smi (GPU telemetry may be reduced)."
             )
+
+    def _is_apple_metal_host(self) -> bool:
+        """True when torch can reach Apple Metal, where nvidia-smi cannot exist.
+
+        The missing-nvidia-smi warning is skipped only on such a host, whatever
+        ``default_device`` says. Every other host keeps it: a CPU-only one, a
+        CUDA one configured to ``cpu``, and one whose torch cannot be imported.
+        """
+        torch = _torch()
+        return torch is not None and _mps_available(torch)
+
+    def _onnx_providers(self, ort) -> list[str]:
+        """Return the execution providers *ort* offers, or ``[]`` if it cannot say.
+
+        A raising ``get_available_providers()`` means a broken ONNX Runtime
+        install. It is logged rather than swallowed: without the log it reads
+        as "no CUDA provider" or "no CoreML provider", and the ONNX models run
+        on the CPU with no clue why.
+
+        Args:
+            ort: The imported ``onnxruntime`` module.
+        """
+        try:
+            return list(ort.get_available_providers())
+        except Exception as exc:
+            self._logger.warning(
+                "[startup-check] ort.get_available_providers() failed (%s); "
+                "treating ONNX Runtime as having no available providers. ONNX "
+                "models will run on CPU.",
+                exc,
+            )
+            return []
 
     def _has_onnxruntime_conflict(self) -> bool:
         """Return True if both onnxruntime and onnxruntime-gpu are installed.
@@ -406,20 +461,7 @@ class StartupChecks:
             )
             return
 
-        providers = []
-        try:
-            providers = ort.get_available_providers() if ort is not None else []
-        except Exception as exc:
-            # A failure here means a broken ONNX Runtime install. Do not swallow
-            # it silently: without this log a broken ORT masquerades as "no CUDA
-            # provider" on a CUDA box, sending inference to CPU with no clue why.
-            providers = []
-            self._logger.warning(
-                "[startup-check] ort.get_available_providers() failed (%s); "
-                "treating ONNX Runtime as having no available providers. ONNX "
-                "models will run on CPU.",
-                exc,
-            )
+        providers = self._onnx_providers(ort) if ort is not None else []
         if is_rocm:
             # The ROCm/MIGraphX ONNX Runtime build isn't on PyPI, so we bundle the
             # CPU ORT on ROCm; the InsightFace face-extraction and optional WD14
