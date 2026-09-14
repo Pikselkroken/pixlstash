@@ -9,6 +9,7 @@ from pixlstash.inference.vram_budget import VramBudget
 from pixlstash.inference.model_lifecycle import ModelLifecycleManager
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_models import builtin_model_dir
+from pixlstash.utils.accelerator import CUDA, MPS, normalise_device, resolve_device
 
 if TYPE_CHECKING:
     from pixlstash.tagger_plugins.clip_service import ClipService
@@ -26,6 +27,25 @@ logger = get_logger(__name__)
 
 _MAX_CONCURRENT_GPU = 64
 _MAX_CONCURRENT_CPU = 8
+
+#: Images at once on Apple Silicon. Deliberately the CPU figure rather than the
+#: CUDA one, and it costs nothing: MPS throughput on the default tagger is
+#: **flat** across batch 1-16 (226 +/- 2 ms/image at fp16), so a larger batch
+#: buys no speed and only spends memory. It spends a lot of it - the measured
+#: model is 443 MB + 162 MB per 576 px image - and the memory is system RAM
+#: shared with everything else running. 64 was reproduced as a real OOM at 32:
+#: "MPS backend out of memory ... max allowed: 9.07 GiB" on a machine with 8 GiB
+#: installed, because torch's default MPS high watermark is 1.7x the
+#: recommended working set and therefore above physical RAM.
+_MAX_CONCURRENT_MPS = 8
+
+#: Image concurrency per device. A table rather than an if-ladder so a fourth
+#: device is one entry, and so this cannot drift from the sibling decision in
+#: ``inference/workflows/tagging.py`` the way the two ladders did.
+_MAX_CONCURRENT_BY_DEVICE = {
+    CUDA: _MAX_CONCURRENT_GPU,
+    MPS: _MAX_CONCURRENT_MPS,
+}
 
 
 class InferenceEngine:
@@ -368,10 +388,19 @@ class InferenceEngine:
     # ------------------------------------------------------------------
 
     def max_concurrent_images(self) -> int:
-        """Return the maximum number of images to process concurrently."""
-        if self.device == "cpu":
-            return _MAX_CONCURRENT_CPU
-        return _MAX_CONCURRENT_GPU
+        """Return the maximum number of images to process concurrently.
+
+        Named per device rather than "cpu or else", which is how it was written
+        and which is a live hazard the moment a third device exists: ``"mps"``
+        is not ``"cpu"``, so it inherited the 64-image CUDA branch - a batch the
+        memory model puts at roughly 10.8 GB. The sibling decision in
+        ``inference/workflows/tagging.py`` was written with the opposite
+        polarity ("cuda or else"), so the two disagreed about every device
+        neither of them named.
+        """
+        return _MAX_CONCURRENT_BY_DEVICE.get(
+            normalise_device(self.device), _MAX_CONCURRENT_CPU
+        )
 
     def description_batch_size(self) -> int:
         """Return the current Florence-2 description batch size."""
@@ -496,7 +525,6 @@ class InferenceEngine:
         Returns:
             A fully constructed :class:`InferenceEngine` ready for use.
         """
-        import torch
         from pixlstash.tagger_plugins.clip_service import ClipService
         from pixlstash.tagger_plugins.sbert import SBertService
         from pixlstash.tagger_plugins.pixlstash_tagger import PixlStashTaggerService
@@ -505,10 +533,10 @@ class InferenceEngine:
 
         model_dir = builtin_model_dir()
 
-        if force_cpu:
-            device = "cpu"
-        elif device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+        # One resolution, accelerator-blind. ``force_cpu`` wins over everything
+        # here as it does everywhere else, which is what keeps CI's --force-cpu
+        # honest on a developer machine that has Metal.
+        device = resolve_device(device, force_cpu=force_cpu)
 
         clip_service = ClipService(device=device)
         sbert_service = SBertService(device=device)

@@ -15,7 +15,7 @@ from datetime import datetime, UTC
 from .event_types import EventType
 from .pixl_logging import get_logger
 from .tasks.base_task import BaseTask, QueueType, TaskPriority, TaskStatus
-from .utils.vram_utils import empty_cuda_cache
+from .utils.vram_utils import empty_device_cache
 
 
 logger = get_logger(__name__)
@@ -195,7 +195,7 @@ class TaskRunner:
             error: The out-of-memory error, for the log line.
         """
         try:
-            if empty_cuda_cache():
+            if empty_device_cache():
                 with TaskRunner._vram_cache_lock:
                     TaskRunner._vram_cache_ts = 0.0
         except Exception:
@@ -773,7 +773,7 @@ class TaskRunner:
                 # reservation.
                 if task.queue_type == QueueType.GPU:
                     try:
-                        if empty_cuda_cache():
+                        if empty_device_cache():
                             with TaskRunner._vram_cache_lock:
                                 TaskRunner._vram_cache_ts = 0.0
                     except Exception:
@@ -807,7 +807,7 @@ class TaskRunner:
                             0, self._vram_reserved_mb - vram_reserved_mb
                         )
                     try:
-                        if empty_cuda_cache():
+                        if empty_device_cache():
                             with TaskRunner._vram_cache_lock:
                                 TaskRunner._vram_cache_ts = 0.0
                     except Exception:

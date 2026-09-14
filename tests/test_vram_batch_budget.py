@@ -7,8 +7,13 @@ from pixlstash.inference.vram_budget import (
     WD14_BASE_MB,
     WD14_PER_ITEM_MB,
 )
+from pixlstash.inference.engine import (
+    _MAX_CONCURRENT_BY_DEVICE,
+    _MAX_CONCURRENT_CPU,
+)
 from pixlstash.inference.workflows.tagging import TaggingWorkflow
 from pixlstash.tasks.missing_tag_finder import MissingTagFinder
+from pixlstash.utils.accelerator import normalise_device
 
 
 class _FakeWD14Service:
@@ -24,6 +29,17 @@ class _FakeEngine:
         self.vram_budget = vram_budget
         self.wd14_service = wd14_service
         self.device = device
+
+    def max_concurrent_images(self):
+        """Mirror ``InferenceEngine.max_concurrent_images``.
+
+        Reuses the production table rather than restating a number, so the fake
+        cannot drift from the engine it stands in for - which is the whole point
+        of the concurrency cap moving onto the engine in the first place.
+        """
+        return _MAX_CONCURRENT_BY_DEVICE.get(
+            normalise_device(self.device), _MAX_CONCURRENT_CPU
+        )
 
 
 def _build_workflow_for_budget_tests(

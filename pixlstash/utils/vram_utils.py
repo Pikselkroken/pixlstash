@@ -1,19 +1,52 @@
-"""VRAM budget utilities for GPU memory-aware batch sizing."""
+"""VRAM budget utilities for GPU memory-aware batch sizing.
+
+"VRAM" is a discrete card's word. On Apple Silicon there is no card and no
+separate pool: the GPU reads the same RAM the OS and every other application
+is using. So on that hardware every figure here means **how much of the single
+shared pool PixlStash may claim**, not how much of a dedicated device it owns,
+and the numbers are deliberately conservative for that reason - overshooting on
+a discrete card wastes the card, overshooting on unified memory swaps the whole
+machine.
+"""
 
 import subprocess
 import sys
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.accelerator import (
+    MPS,
+    ALL_DEVICE_ERROR_WORDS,
+    accelerator_total_memory_mb,
+    empty_accelerator_cache,
+    is_accelerated,
+    is_apple_silicon,
+)
 
 logger = get_logger(__name__)
 
 
 def query_total_vram_mb() -> int:
-    """Return the total installed VRAM across all NVIDIA GPUs in MiB.
+    """Return the GPU memory this host can offer, in MiB.
 
-    Uses ``nvidia-smi`` to query installed VRAM.  Returns 0 if the query
-    fails (e.g. on CPU-only machines or when nvidia-smi is not installed).
+    Two very different machines answer this:
+
+    * **NVIDIA**: the sum of installed VRAM across all cards, from
+      ``nvidia-smi``. Memory the GPU owns outright.
+    * **Apple Silicon**: Metal's recommended working set, which is a *share of
+      system RAM* (see
+      :func:`~pixlstash.utils.accelerator.accelerator_total_memory_mb`).
+      Nothing owns it; the OS, the browser and PixlStash all spend one pool.
+
+    Returning 0 on a Mac - which is what the nvidia-smi-only version did - is
+    not harmless. It sends ``system_utils.default_max_vram_gb`` to its 6 GB
+    fallback and ``max_vram_budget_gb`` to 12 GB, figures that were invisible
+    only while no Apple GPU was ever selected.
+
+    Returns:
+        Total GPU-usable memory in MiB, or 0 when there is no GPU to ask.
     """
+    if is_apple_silicon():
+        return accelerator_total_memory_mb(MPS)
     try:
         output = subprocess.check_output(
             [
@@ -47,14 +80,15 @@ def vram_limited_batch_cap(
 
     Args:
         budget_mb: Configured VRAM budget in MiB, or ``None`` for unlimited.
-        device: Inference device string (``"cuda"`` enables the cap).
+        device: Inference device string. Any accelerator (``"cuda"``, ``"mps"``)
+            enables the cap; the CPU has no device memory to run out of.
         base_mb: Fixed model footprint in MiB (loaded once).
         per_item_mb: Incremental VRAM per image/item in MiB.
 
     Returns:
         Maximum item count that fits, or ``10_000`` when the cap is inactive.
     """
-    if device != "cuda" or not budget_mb:
+    if not is_accelerated(device) or not budget_mb:
         return 10_000
     reserve_mb = max(256, int(budget_mb * 0.20))
     task_budget_mb = max(1, budget_mb - reserve_mb)
@@ -67,7 +101,17 @@ def vram_limited_batch_cap(
 #: these the phrase is ambiguous: ``sqlite3.OperationalError: out of memory``
 #: (SQLITE_NOMEM) says it too, and treating that as transient GPU pressure
 #: would retry a task that has nothing to do with the GPU.
-_DEVICE_WORDS = ("cuda", "gpu", "hip", "vram")
+#:
+#: ``mps`` and ``metal`` are here because Apple's two OOM messages carry neither
+#: "cuda" nor "gpu", so every MPS OOM was being classified as a permanent
+#: failure: torch says ``MPS backend out of memory (MPS allocated: …)`` and the
+#: driver says ``kIOGPUCommandBufferCallbackErrorOutOfMemory``.
+_DEVICE_WORDS = ALL_DEVICE_ERROR_WORDS
+
+#: Metal's command-buffer failure, which is the *driver* running out rather
+#: than torch's allocator. It says "OutOfMemory" as one word and never says
+#: "out of memory", so the phrase check below cannot see it.
+_METAL_COMMAND_BUFFER_OOM = "kiogpucommandbuffercallbackerroroutofmemory"
 
 #: How far up the ``__cause__``/``__context__`` chain to look. A plugin that
 #: wraps the driver's error in its own class is the common case; a chain deeper
@@ -83,7 +127,7 @@ def is_vram_oom(error: BaseException) -> bool:
     type for the same condition, so the message is checked as well - and the
     wrapped-cause chain with it, because ``raise RuntimeError(...) from oom``
     is exactly how a plugin reports one. ``torch`` is read from
-    :data:`sys.modules` for the same reason as in :func:`empty_cuda_cache`: a
+    :data:`sys.modules` for the same reason as in :func:`empty_device_cache`: a
     process that never imported it cannot have raised its OOM.
 
     Args:
@@ -105,6 +149,8 @@ def is_vram_oom(error: BaseException) -> bool:
         message = str(current).lower()
         if "cuda_error_out_of_memory" in message:
             return True
+        if _METAL_COMMAND_BUFFER_OOM in message:
+            return True
         # ONNX Runtime's BFC arena says neither "out of memory" nor a device
         # word when the card is full: "Failed to allocate memory for requested
         # buffer of size N" from bfc_arena.cc. Another process holding the
@@ -118,25 +164,18 @@ def is_vram_oom(error: BaseException) -> bool:
     return False
 
 
-def empty_cuda_cache() -> bool:
-    """Flush PyTorch's CUDA allocator cache back to the driver.
+def empty_device_cache() -> bool:
+    """Flush the accelerator allocator's cache back to the driver.
 
-    ``torch`` is looked up in :data:`sys.modules` rather than imported. If torch
-    was never imported, this process cannot have allocated any CUDA memory, so
-    there is nothing to flush - and importing it here purely to discover that
-    would cost seconds. That matters because this module sits on the API
-    server's import path and on every best-effort teardown path in the test
-    suite, where the caller usually never touched a model at all.
+    Kept as the name every recovery and teardown path in the codebase already
+    imports; the accelerator-specific work is
+    :func:`~pixlstash.utils.accelerator.empty_accelerator_cache`. It was called
+    ``empty_cuda_cache`` and released CUDA's cache only, so on any other
+    accelerator every caller's "free memory and retry" did nothing at all.
 
     Returns:
-        ``True`` if the cache was flushed, ``False`` when torch is not loaded or
-        no CUDA device is available (callers use this to skip their own cache
+        ``True`` if a cache was flushed, ``False`` when torch is not loaded or
+        the host has no accelerator (callers use this to skip their own cache
         bookkeeping).
     """
-    torch = sys.modules.get("torch")
-    if torch is None:
-        return False
-    if not torch.cuda.is_available():
-        return False
-    torch.cuda.empty_cache()
-    return True
+    return empty_accelerator_cache()

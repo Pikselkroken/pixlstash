@@ -2,7 +2,25 @@ import subprocess
 
 import pytest
 
-from pixlstash.utils import system_utils
+from pixlstash.utils import system_utils, vram_utils
+
+
+@pytest.fixture(autouse=True)
+def a_card_host(monkeypatch):
+    """Simulate a non-Apple host for every test in this module.
+
+    These tests describe the **card** path, and they say so by patching
+    ``nvidia-smi``. That was enough while "has a GPU" meant "has CUDA"; it is
+    not enough now that ``query_total_vram_mb`` and ``default_max_vram_gb``
+    both branch on the memory model first, because on an Apple machine they
+    answer from Metal and never reach the mocked ``nvidia-smi`` at all. The
+    tests then passed on CI's Linux runners and failed on a developer's Mac -
+    a test whose result depends on the machine running it, which is the thing
+    the simulated-host discipline in ``test_mps_memory_and_providers.py``
+    exists to avoid. The unified-memory answers are asserted there.
+    """
+    monkeypatch.setattr(vram_utils, "is_apple_silicon", lambda: False)
+    monkeypatch.setattr(system_utils, "is_apple_silicon", lambda: False)
 
 
 @pytest.mark.parametrize(

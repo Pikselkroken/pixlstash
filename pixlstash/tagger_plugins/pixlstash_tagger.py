@@ -22,7 +22,9 @@ if TYPE_CHECKING:  # annotations only - see the function-local import note below
     from torchvision import transforms
 
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
+from pixlstash.utils.accelerator import is_accelerated, supports_fp16
 from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
+from pixlstash.utils.vram_utils import empty_device_cache, is_vram_oom
 
 # ML imports (torch / torchvision) are deliberately FUNCTION-LOCAL throughout
 # this module. They cost seconds to import, and this module sits on the API
@@ -300,11 +302,16 @@ class PixlStashTaggerService:
         # Normalise dtype first: safetensors weights may be FP16 while the
         # freshly-built classifier head is FP32.  Cast everything to FP32,
         # load the state dict (now a consistent dtype), then promote to FP16
-        # on CUDA for faster inference.  CPU always stays FP32.
+        # on an accelerator.  CPU always stays FP32.
+        #
+        # On CUDA fp16 buys speed. On MPS it buys *headroom* - measured
+        # tag-identical to fp32 and to the CPU, no measurable speed change, and
+        # ~45 % less device memory at the same batch - which on unified memory
+        # is the thing that keeps a batch from taking the machine with it.
         self._model.float()
         self._model.load_state_dict(state_dict)
         self._model.to(self._device)
-        if str(self._device) == "cuda":
+        if supports_fp16(self._device):
             self._model.half()
             self._dtype = torch.float16
         else:
@@ -320,18 +327,13 @@ class PixlStashTaggerService:
             True if the model is successfully loaded, False if loading
             failed on both GPU and CPU.
         """
-        import torch
-
         if self.is_loaded():
             return True
         try:
             self.init()
             return True
         except Exception as exc:
-            is_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
-                "out of memory" in str(exc).lower()
-            )
-            if is_oom and self._device != "cpu":
+            if is_vram_oom(exc) and is_accelerated(self._device):
                 logger.warning(
                     "PixlStash tagger GPU load failed (OOM); retrying on CPU: %s", exc
                 )
@@ -377,11 +379,14 @@ class PixlStashTaggerService:
                 # state on GPU, causing every subsequent inference to fail).
                 self._model.to("cpu")
                 self._model.float()
+            previous_device = self._device
             self._device = "cpu"
             self._dtype = torch.float32
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            logger.debug("PixlStash tagger reloaded on CPU")
+            # Release the accelerator's cache, not CUDA's specifically: this is
+            # the recovery path, and on MPS the old code freed nothing at all,
+            # so the retry met the same full device it had just failed on.
+            empty_device_cache()
+            logger.debug("PixlStash tagger reloaded on CPU from %s", previous_device)
             return True
         except Exception as cpu_error:
             # If the move to CPU itself failed, unload the model entirely so it
@@ -482,10 +487,7 @@ class PixlStashTaggerService:
                     logits = self._model(inputs)
                     probs = torch.sigmoid(logits).cpu().numpy()
             except Exception as exc:
-                is_cuda_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
-                    "CUDA out of memory" in str(exc)
-                )
-                if is_cuda_oom and device == "cuda":
+                if is_vram_oom(exc) and is_accelerated(device):
                     logger.warning(
                         "PixlStash tagger CUDA OOM; falling back to CPU for this run."
                     )
@@ -596,10 +598,7 @@ class PixlStashTaggerService:
                     logits = self._model(inputs)
                     probs = torch.sigmoid(logits).float().cpu().numpy()
             except Exception as exc:
-                is_cuda_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
-                    "CUDA out of memory" in str(exc)
-                )
-                if is_cuda_oom and device == "cuda":
+                if is_vram_oom(exc) and is_accelerated(device):
                     logger.warning(
                         "PixlStash tagger CUDA OOM; falling back to CPU for this run."
                     )
@@ -744,10 +743,7 @@ class PixlStashTaggerService:
                     logits = self._model(inputs)
                     probs = torch.sigmoid(logits).cpu().numpy()
             except Exception as exc:
-                is_cuda_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
-                    "CUDA out of memory" in str(exc)
-                )
-                if is_cuda_oom and device == "cuda":
+                if is_vram_oom(exc) and is_accelerated(device):
                     logger.warning(
                         "Custom scorer CUDA OOM; falling back to CPU for this batch."
                     )

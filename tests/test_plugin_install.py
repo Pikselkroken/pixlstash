@@ -25,6 +25,7 @@ import pytest
 
 from pixlstash import cli, plugin_install, tagger_plugins
 from pixlstash.plugin_install import CAPTIONING, IMAGE, PluginError
+from pixlstash.utils.accelerator import VALID_DEVICE_SETTINGS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1185,9 +1186,15 @@ def test_image_runs_the_plugin_over_a_picture(tmp_path, capsys):
     # 64 proves the schema's default was merged rather than the plugin's own
     # `or 128` fallback; init-called proves init() ran; the device proves
     # setup() was handed one.
-    assert "(64 tokens, cuda, init-called)" in out or (
-        "(64 tokens, cpu, init-called)" in out
-    )
+    #
+    # Any real device, not a hardcoded two. This named cuda and cpu, which is
+    # the "has a GPU means has CUDA" spelling that made Apple Silicon invisible
+    # everywhere else in the codebase - and it fails on a Mac, where the answer
+    # is `mps`. CI's runners are CPU-only, so the narrow version passed there
+    # and was wrong only on the machines it was describing.
+    assert any(
+        f"(64 tokens, {device}, init-called)" in out for device in VALID_DEVICE_SETTINGS
+    ), out
 
 
 def test_a_result_not_keyed_by_the_paths_it_was_given_is_caught(tmp_path, capsys):

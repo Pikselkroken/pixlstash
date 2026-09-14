@@ -3,6 +3,14 @@
 from __future__ import annotations
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.accelerator import (
+    CUDA,
+    MPS,
+    accelerator_total_memory_mb,
+    clamp_accelerator_memory,
+    is_accelerated,
+    normalise_device,
+)
 from pixlstash.utils.vram_utils import query_total_vram_mb, vram_limited_batch_cap
 
 logger = get_logger(__name__)
@@ -36,6 +44,31 @@ ORT_ARENA_SHARE = {
 #: measured after load (~904 MiB against 377 MiB of weights on disk).
 WD14_BASE_MB = 900
 WD14_PER_ITEM_MB = 220
+
+#: WD14's figures above are **CUDA** measurements and are reused unchanged on
+#: the CoreML path, where they are **unverified**. ORT's arena accounting on
+#: CoreML is not comparable to a CUDA context plus torch allocations, so these
+#: are a placeholder there rather than a model. They are left in place because
+#: the concurrency cap binds first on Apple Silicon anyway, but a batch sized
+#: from them on CoreML is not sized from evidence. Measure before relying on it.
+
+#: The PixlStash tagger (convnext_base @ 576 px) on **Apple Silicon**, in MiB.
+#: Measured as fresh-process peak ``torch.mps.driver_allocated_memory()`` at
+#: batch 8: 2347 MiB in fp32 and 1319 MiB in fp16. The linear model below
+#: reproduces both slightly conservatively (450 + 8x240 = 2370; 450 + 8x120 =
+#: 1410), which is the direction a memory gate should err in.
+#:
+#: Kept separate from the CUDA figures rather than replacing them: the CUDA
+#: path's 700 + 90n is a different card, a different allocator and a different
+#: dtype policy, and nothing here was measured against it.
+PIXLSTASH_TAGGER_MPS_BASE_MB = 450
+PIXLSTASH_TAGGER_MPS_PER_ITEM_MB = 240
+PIXLSTASH_TAGGER_MPS_PER_ITEM_FP16_MB = 120
+
+#: The CUDA figures the tagger has always used, named rather than inline so the
+#: two memory models sit side by side and neither can be changed by accident.
+PIXLSTASH_TAGGER_CUDA_BASE_MB = 700
+PIXLSTASH_TAGGER_CUDA_PER_ITEM_MB = 90
 
 #: The same session's **ORT arena** in MiB, which is a different quantity: ORT's
 #: ``gpu_mem_limit`` governs only the CUDA EP's own allocator, not the context
@@ -85,23 +118,37 @@ class VramBudget:
         return self._max_vram_usage_mb
 
     def set_budget_gb(self, max_vram_gb: float | None) -> None:
-        """Set the VRAM budget in gigabytes.
+        """Set the device-memory budget in gigabytes.
 
-        No-ops (sets unlimited) when the device is not CUDA.
+        No-ops (sets unlimited) on the CPU, which has no device memory to run
+        out of. Every accelerator gets a budget - this used to read
+        ``!= "cuda"``, so on Apple Silicon the budget was discarded, every
+        ``limited_batch_cap`` answered 10,000, and batch sizing fell back to a
+        hardcoded constant on the one memory model where a constant is least
+        defensible.
+
+        On unified memory an *unconfigured* budget is not the same as no
+        budget. Left alone, torch's MPS allocator will hand out up to 1.7x
+        Metal's recommended working set, which on an 8 GB machine is more
+        memory than the machine physically has. So MPS defaults its budget to
+        the recommended working set - a figure read from the driver, never
+        assumed - and clamps the allocator to match, which is what turns an
+        over-large batch into a catchable error instead of a driver failure.
 
         Args:
-            max_vram_gb: Budget in GiB, or ``None`` for unlimited.
+            max_vram_gb: Budget in GiB, or ``None`` for the device default.
         """
-        if self._device != "cuda":
+        if not is_accelerated(self._device):
             self._max_vram_usage_mb = None
             logger.debug(
-                "Ignoring VRAM budget because inference device is %s.",
+                "Ignoring device-memory budget because inference device is %s.",
                 self._device,
             )
             return
 
         if max_vram_gb is None:
-            self._max_vram_usage_mb = None
+            self._max_vram_usage_mb = self._default_budget_mb()
+            clamp_accelerator_memory(self._device, self._max_vram_usage_mb)
             return
         try:
             requested_mb = int(float(max_vram_gb) * 1024)
@@ -121,6 +168,15 @@ class VramBudget:
             )
             requested_mb = total_mb
         self._max_vram_usage_mb = requested_mb
+        clamp_accelerator_memory(self._device, requested_mb)
+        if normalise_device(self._device) != CUDA:
+            logger.info(
+                "%s inference: budget %.2f GB of a %d MB working set",
+                self._device,
+                self._max_vram_usage_mb / 1024.0,
+                accelerator_total_memory_mb(self._device),
+            )
+            return
         # Local import: torch costs seconds to import and is only needed once a
         # budget is actually being set on a CUDA device. Importing it at module
         # scope would make the API server and every test pay for it at startup.
@@ -234,3 +290,17 @@ class VramBudget:
             base_mb,
             per_item_mb,
         )
+
+    def _default_budget_mb(self) -> int | None:
+        """Budget to use when the owner configured none.
+
+        Returns:
+            MiB for an accelerator whose "unlimited" default is unsafe (MPS,
+            where it exceeds physical RAM), otherwise ``None`` - CUDA's
+            allocator raises a catchable OOM at the card's real limit, so
+            unlimited genuinely means unlimited there.
+        """
+        if normalise_device(self._device) != MPS:
+            return None
+        recommended_mb = accelerator_total_memory_mb(MPS)
+        return recommended_mb if recommended_mb > 0 else None

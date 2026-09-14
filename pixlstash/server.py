@@ -141,6 +141,7 @@ from pixlstash.routes.telemetry import create_router as create_telemetry_router
 from pixlstash.routes.test_hooks import create_router as create_test_hooks_router
 from pixlstash.routes.workflows import create_router as create_workflows_router
 from pixlstash.server_config_io import DEVICE_ON_DISK_KEY, persist_server_config
+from pixlstash.utils.accelerator import VALID_DEVICE_SETTINGS
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
@@ -1308,7 +1309,10 @@ class Server(
             # warning and ignored, leaving the config's own default_device in
             # place, rather than being written straight through and silently
             # falling back to CPU with no explanation.
-            _valid_devices = {"cpu", "cuda", "gpu", "auto"}
+            # One frozenset, shared with the config validator in
+            # startup_checks. These were two hand-maintained copies of the same
+            # list and had already drifted once.
+            _valid_devices = VALID_DEVICE_SETTINGS
             if _device_override in _valid_devices:
                 # Remember what the owner configured: persist_server_config
                 # writes that back, never the runtime's answer.
