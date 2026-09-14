@@ -245,6 +245,20 @@ inside the overlay directory), then launch:
 | Full quit from the tray/menu **actually stops the backend** — no orphaned server process afterwards | | | |
 | Windows: clean uninstall removes the app; the library folder and vault are left intact | | n/a | n/a |
 
+### 3.7 Apple Silicon: Metal and CoreML (macOS)
+
+The backend gate has no macOS runner (`install-smoke.yml` and `electron.yml`
+have one, and neither runs the suite), so nothing else checks that a Mac really
+runs its models on the GPU. Run on the desktop app and on a from-source install (§1.4),
+with `"log_level": "debug"` in `server-config.json`: the start-up check's notes
+are logged at DEBUG.
+
+| Check | Desktop app | From source |
+|-------|-------------|-------------|
+| The server log shows `Inference device: Apple Metal (mps) (detected)` at start-up, not `CPU` | | |
+| The `[startup-check]` note says `The WD14 tagger runs on CoreML`, not that ONNX models run on CPU | | |
+| Import 50+ pictures; while descriptions are being generated, run a text search: results come back within a few seconds, not once the captioning finishes, and the server does not crash | | |
+
 ---
 
 ## 4. Grid & browsing — manual remainder

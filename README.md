@@ -14,7 +14,7 @@ It provides:
 - Object segmentation, and reverse likeness search on CLIP embeddings
 - A tag review queue and a per-tag health board, so auto-tags become tags you can trust
 - Smart score sorting, character-likeness scoring, and calibrated anomaly detection for malformed anatomy
-- Every model runs on your own hardware (CPU, NVIDIA CUDA, or experimental AMD ROCm). No cloud API
+- Every model runs on your own hardware (CPU, NVIDIA CUDA, Apple Metal, or experimental AMD ROCm). No cloud API
 - Re-tag or regenerate descriptions for any selection directly from the context menu
 - Instant grid loading — thumbnails appear immediately, metadata fills in asynchronously
 - Fast metadata and tag filtering
@@ -76,10 +76,11 @@ Full breakdown, including a capability-by-capability comparison table:
 PixlStash is available as a **native desktop app for Windows, macOS (Apple
 Silicon), and Linux** (no Python or browser tab required), as a Docker image, or
 as a pip package that runs anywhere Python does (including Intel Macs). The
-desktop app ships a ready-to-run CPU runtime,
-so it works offline out of the box, and auto-detects your hardware to offer
-optional GPU acceleration (NVIDIA CUDA, or experimental AMD ROCm), which it
-installs on demand straight from PyPI / PyTorch.
+desktop app ships a ready-to-run runtime — CPU on Windows and Linux, Apple
+Metal on Apple Silicon — so it works offline out of the box, and on Windows and
+Linux auto-detects your hardware to offer optional GPU acceleration (NVIDIA
+CUDA, or experimental AMD ROCm), which it installs on demand straight from
+PyPI / PyTorch.
 
 Detailed installation instructions on <a href="http://pixlstash.dev/install.html">pixlstash.dev</a>.
 
@@ -461,7 +462,7 @@ Import Folders UI/API, not in `server-config.json`.
 
 | Key                              | Default        | Description                                                                                                  |
 | -------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------- |
-| `default_device`                 | `"cpu"`        | Device used for AI processing (`"cpu"` or `"cuda"`).                                                        |
+| `default_device`                 | `"auto"`       | Device used for AI processing: `"auto"` (pick the best available, including Apple Metal), `"cpu"`, or `"cuda"` (NVIDIA, and AMD via ROCm; `"gpu"` is an alias). |
 | `insightface_model_pack`         | `"buffalo_l"`  | InsightFace model pack used by the face detection / recognition pipeline. One of `"buffalo_l"` or `"auraface"`. |
 | `generate_thumbnails_on_startup` | `true`         | Generate missing thumbnails when the server starts.                                                         |
 
@@ -512,7 +513,7 @@ python -m pixlstash.app --cleanup-missing-pictures
   "log_level": "info",
   "require_ssl": false,
   "image_root": "/home/user/.config/pixlstash/images",
-  "default_device": "cpu",
+  "default_device": "auto",
   "insightface_model_pack": "buffalo_l",
   "generate_thumbnails_on_startup": true
 }

@@ -55,8 +55,9 @@ browser can't credibly claim the AI organization.
   library.
 - First run downloads AI model weights (tagging, captioning, scoring) into the
   platform user-data directory; needs a network connection once, then works
-  offline. Desktop app ships a CPU runtime and can add GPU acceleration (NVIDIA
-  CUDA, experimental AMD ROCm) on demand.
+  offline. Desktop app ships a CPU runtime on Windows and Linux and
+  Apple Metal on Apple Silicon; Windows and Linux can add GPU acceleration
+  (NVIDIA CUDA, experimental AMD ROCm) on demand.
 - Core loop: import (incl. watched import/reference folders) → automatic
   processing (tags, descriptions, scores, faces) → review/filter/sort/score →
   organize into characters, sets, projects → act (retag/regenerate via context
