@@ -63,8 +63,10 @@ test.describe('read-only session: owner-only features stay visible', () => {
       const undo = page.locator('.uc-btn--undo')
       await expect(undo).toBeVisible({ timeout: 15_000 })
       await expect(undo).toHaveAttribute('aria-disabled', 'true')
+      // Icon-only, so the reason is the control's name: one string for the
+      // tooltip and the accessible name (buttons.md, "Tooltips").
       await expect(undo).toHaveAttribute(
-        'title',
+        'aria-label',
         'Undo is only available in your own library',
       )
       // `aria-disabled`, not the native attribute: the control stays tabbable
@@ -77,8 +79,10 @@ test.describe('read-only session: owner-only features stay visible', () => {
         .first()
       await expect(duplicates).toBeVisible()
       await expect(duplicates).toHaveAttribute('aria-disabled', 'true')
+      // A labelled row keeps its name; the reason is its tooltip, exposed to
+      // assistive tech as the row's description.
       await expect(duplicates).toHaveAttribute(
-        'title',
+        'aria-description',
         'Duplicate review is only available in your own library',
       )
       // No badge: the dot reports a fact about the library that this session
@@ -102,7 +106,7 @@ test.describe('read-only session: owner-only features stay visible', () => {
       await expect(models).toBeVisible()
       await expect(models).toHaveAttribute('aria-disabled', 'true')
       await expect(models).toHaveAttribute(
-        'title',
+        'aria-description',
         'The model shelf is only available in your own library',
       )
       // Unlike the Duplicates row above, this one is a <button>, so
