@@ -351,6 +351,11 @@ worker does not come back. A `RuntimeError` from the model or the plugin
 itself keeps the route's own answer. Neither retries. How long a routed call
 waits is the rest of the task on the worker.
 
+JoyCaption, which captions one image at a time at 20 s or more each on Metal,
+carries one image per description task there
+(`TaggerPlugin.description_task_size`). Its tag tasks still carry its tag
+batch, 4 images by default.
+
 Not covered:
 
 - WD14 runs on ONNX Runtime with CoreML, not torch's Metal backend. It runs

@@ -178,15 +178,16 @@ truth between calls — the settings table polls it.
 
 | Method | Required | Called by PixlStash today |
 |--------|----------|---------------------------|
-| `setup(device)` | optional | **Yes** — via `hasattr`, just before `init()`. The only way to learn the device (`"cuda"`, `"cpu"`, …), so implement it if you use a GPU. |
+| `setup(device)` | optional | **Yes** — via `hasattr`, just before `init()`. The only way to learn the device (`"cuda"`, `"mps"`, `"cpu"`), so implement it if you use a GPU. |
 | `init(parameters)` | yes | **Yes**, before every batch. Return early when already loaded. |
 | `is_loaded()` | yes | **Yes** — the settings table, and `plugin_schema()`. |
 | `unload()` | yes (abstract) | **Yes** — when the workers go idle with "Keep models in memory" off. See below. |
 | `estimated_vram_mb(image_count, parameters)` | no | **Yes** for a description plugin, before its batch is scheduled. Not yet for a tag plugin. See below. |
 | `effective_batch_size(parameters)` | no | **Yes** — it caps the `image_count` your VRAM estimate is asked about, and sizes a tag batch. |
+| `description_task_size(device)` | no | **Yes** for a description plugin, each time the host builds a description task for it. See below. |
 
-**Two of these arrive from outside your batch**, so they are worth reading before you
-implement them (issue #967 wired both; older guides say they are never called):
+**Three of these arrive from outside your batch**, so they are worth reading before you
+implement them (issue #967 wired the first two; older guides say they are never called):
 
 - **`unload()` is called when the user turns "Keep models in memory" off and every worker
   has gone idle.** The host unloads its own services first and then walks the plugin
@@ -217,6 +218,31 @@ implement them (issue #967 wired both; older guides say they are never called):
   So charge for the **cold start** as well as the warm one — `JoyCaptionPlugin` bills its
   full 8 GB footprint until its weights are actually sitting on the CPU — and keep 0 for
   a model that genuinely holds nothing on the card.
+- **`description_task_size(device)` is asked on the work planner's thread** each time
+  the host builds a description task, not on the thread that captions. Keep it to
+  arithmetic on `device`, with no model or device call; see below.
+
+**`description_task_size(device)` lets a slow captioner ask for smaller tasks.** The host
+groups pictures that need a description into tasks, and each task is one call to your
+`generate_descriptions`. By default a task carries the host's own description batch size,
+which is sized for Florence-2: up to 32 images on a GPU. A task holds the single GPU worker
+until it returns, so everything else that needs the GPU, including a re-description the
+user just asked for, waits behind the whole task. Return a positive image count to make
+tasks smaller, or `None` (the default) to keep the host's size.
+
+- `device` is the engine's device string, `"cuda"`, `"mps"` or `"cpu"`, the same one
+  `setup(device)` receives.
+- You are asked for the backlog when you are the active description plugin, and for a
+  re-description request that names you, whichever plugin is active.
+- The answer can only shrink a task: the host takes the smaller of it and its own size.
+- A raise, or an answer `int()` cannot read, is logged as a warning and the task keeps
+  the host's size.
+- Florence-2, and a plugin the host replaces with Florence-2 because it is missing or
+  does not support descriptions, is never asked.
+
+`JoyCaptionPlugin` returns `1` on Apple Metal, where one caption takes 20 s or more, and
+`None` elsewhere. It decides how long one task holds the GPU worker, not how much memory
+it uses: that is still `estimated_vram_mb`.
 
 ## 5. Inference
 

@@ -1896,11 +1896,90 @@ def test_sbert_reraises_an_ordinary_failure(monkeypatch):
         service.encode(["a caption"])
 
 
+@pytest.mark.parametrize(
+    "device, flushed", [("mps", ["mps"]), ("cuda", ["cuda"]), ("cpu", ["cuda"])]
+)
+def test_joycaption_unload_flushes_metal_only_on_metal(fake_torch, device, flushed):
+    """Metal's cache is flushed only for a service on Metal.
+
+    Off Metal the idle unload runs on the progress poll, so a Mac forced onto
+    the CPU would flush Metal off the GPU worker. The CUDA flush stays for
+    everything else.
+    """
+    # Imported before the stand-in is installed: joycaption binds torch at
+    # module scope, so importing it under the fake would leave every later
+    # test in the session holding a SimpleNamespace instead of torch.
+    from pixlstash.tagger_plugins import joycaption as jc
+
+    calls = []
+    torch = _fake_torch(cuda=True, mps=True)
+    torch.mps.empty_cache = lambda: calls.append("mps")
+    torch.cuda.empty_cache = lambda: calls.append("cuda")
+    fake_torch(torch)
+
+    service = jc.JoyCaptionService.__new__(jc.JoyCaptionService)
+    service._load_lock = threading.RLock()
+    service._device = device
+    service._model = object()
+    service._processor = object()
+
+    service.unload()
+
+    assert calls == flushed
+    assert service._model is None
+
+
 class _CyclicModel:
     """A stand-in model in a reference cycle, as the loaded LLaVA model is."""
 
     def __init__(self):
         self.self_reference = self
+
+
+def test_joycaption_unload_collects_the_model_before_flushing(fake_torch):
+    """The flush runs after the collection that frees the model.
+
+    A model in a reference cycle is not freed when ``unload`` clears the
+    attribute, only when ``gc.collect()`` runs, so a flush ahead of the
+    collection hands nothing back to the driver. Automatic collection is off
+    for the call, so the only collection that can free the stand-in is
+    ``unload``'s own.
+    """
+    from pixlstash.tagger_plugins import joycaption as jc
+
+    model = _CyclicModel()
+    model_ref = weakref.ref(model)
+    alive_at_flush = []
+    torch = _fake_torch(cuda=False, mps=True)
+    torch.mps.empty_cache = lambda: alive_at_flush.append(model_ref() is not None)
+    fake_torch(torch)
+
+    service = jc.JoyCaptionService.__new__(jc.JoyCaptionService)
+    service._load_lock = threading.RLock()
+    service._device = "mps"
+    service._model = model
+    service._processor = object()
+    del model
+
+    collecting = gc.isenabled()
+    gc.disable()
+    try:
+        probe = _CyclicModel()
+        probe_ref = weakref.ref(probe)
+        del probe
+        assert probe_ref() is not None, (
+            "the stand-in must need a collection to be freed, or this test "
+            "cannot tell a flush before the collection from one after it"
+        )
+        service.unload()
+    finally:
+        if collecting:
+            gc.enable()
+
+    assert alive_at_flush == [False], (
+        "the Metal cache was flushed while the unloaded model was still alive; "
+        "the tensors it held were not yet free to hand back"
+    )
 
 
 @contextlib.contextmanager
@@ -1983,6 +2062,61 @@ def test_a_lifecycle_unload_flushes_metal_only_for_an_engine_on_metal(
     assert calls == flushed
 
 
+def test_joycaption_records_metal_as_the_model_device(monkeypatch):
+    """The recorded device is the one the service was built for.
+
+    ``generate_caption`` moves every input to ``_model_device``, so on Metal it
+    must be ``mps``. Nothing is loaded here: the load is stubbed, and the
+    device probe raises to show the recorded device is not asked of it again.
+    """
+    import torch
+
+    from pixlstash.tagger_plugins import joycaption as jc
+
+    def _probe():
+        raise AssertionError("the load re-derived the device instead of using its own")
+
+    monkeypatch.setattr(jc, "detect_device", _probe)
+    monkeypatch.setattr(
+        jc,
+        "from_pretrained_local_first",
+        lambda cls, name, **kw: types.SimpleNamespace(
+            eval=lambda: None,
+            image_processor=None,
+            tokenizer=None,
+        ),
+    )
+
+    _stub_metal_budget(monkeypatch, jc)
+    service = jc.JoyCaptionService(device="mps", precision="fp16")
+    service._init()
+
+    assert service._model_device == torch.device("mps")
+
+
+def test_joycaption_still_records_cpu_when_the_cpu_was_asked_for(monkeypatch):
+    # Positive control: an explicit cpu request is honoured, not overridden.
+    import torch
+
+    from pixlstash.tagger_plugins import joycaption as jc
+
+    monkeypatch.setattr(jc, "detect_device", lambda: "mps")
+    monkeypatch.setattr(
+        jc,
+        "from_pretrained_local_first",
+        lambda cls, name, **kw: types.SimpleNamespace(
+            eval=lambda: None,
+            image_processor=None,
+            tokenizer=None,
+        ),
+    )
+
+    service = jc.JoyCaptionService(device="cpu", precision="fp16")
+    service._init()
+
+    assert service._model_device == torch.device("cpu")
+
+
 def test_joycaption_on_the_cpu_gives_the_use_gpu_advice(monkeypatch, caplog):
     # The advice itself is checked against start-up above; this pins that the
     # warning carries it rather than a device list of its own.
@@ -2003,6 +2137,200 @@ def test_joycaption_on_the_cpu_gives_the_use_gpu_advice(monkeypatch, caplog):
         service._init()
 
     assert USE_GPU_ADVICE in caplog.text
+
+
+# --------------------------------------------------------------------------- #
+# JoyCaption on Metal: memory budget and device-appropriate guidance
+# --------------------------------------------------------------------------- #
+
+
+#: Stands in for torch.mps.recommended_max_memory(), which calls
+#: torch._C._mps_recommendedMaxMemory() - compiled in only with USE_MPS, so
+#: calling it on the Linux and Windows gate runners raises. The value is
+#: arbitrary; what these tests assert is that it is the number actually used.
+FAKE_METAL_BUDGET = 26_000_000_000
+
+
+def _stub_metal_budget(monkeypatch, jc):
+    """Give every Metal JoyCaption test a budget the gate runners can answer.
+
+    ``torch.mps.recommended_max_memory`` is compiled in only with USE_MPS, so
+    on the Linux and Windows runners the real call raises AttributeError and
+    _init reports a failed load instead of the device under test. Any test that
+    drives JoyCaption with device "mps" needs this, not only the ones reading
+    load kwargs back.
+    """
+    monkeypatch.setattr(
+        jc.torch.mps, "recommended_max_memory", lambda: FAKE_METAL_BUDGET, raising=False
+    )
+
+
+def _joycaption_load_kwargs(monkeypatch, device, precision):
+    """Run _init far enough to capture what it passes to from_pretrained."""
+    from pixlstash.tagger_plugins import joycaption as jc
+
+    captured = {}
+
+    def _fake_from_pretrained(cls, name, **kwargs):
+        captured.update(kwargs)
+        return types.SimpleNamespace(
+            eval=lambda: None, image_processor=None, tokenizer=None
+        )
+
+    monkeypatch.setattr(jc, "from_pretrained_local_first", _fake_from_pretrained)
+    monkeypatch.setattr(jc, "detect_device", lambda: device)
+    _stub_metal_budget(monkeypatch, jc)
+    jc.JoyCaptionService(device=device, precision=precision)._init()
+    return captured
+
+
+def test_metal_gets_an_explicit_memory_budget(monkeypatch):
+    """Accelerate sizes the Metal budget from free RAM, not from capacity.
+
+    ``device_map="auto"`` asks Accelerate to plan the layout, and on MPS its
+    budget is ``psutil.virtual_memory().available`` - whatever happens to be
+    free this second. On a busy machine that makes it plan a CPU/disk split,
+    which bitsandbytes then refuses outright, so a 5 GB model fails to load on
+    a 32 GB machine depending on what else is open. Measured: refused at
+    9.4 GB free, loaded at 12.5 GB.
+    """
+    kwargs = _joycaption_load_kwargs(monkeypatch, "mps", "nf4")
+
+    assert "max_memory" in kwargs, "Metal must not be left to Accelerate's guess"
+    assert kwargs["max_memory"]["mps"] == FAKE_METAL_BUDGET
+
+
+def test_cuda_is_left_to_accelerate(monkeypatch):
+    # Positive control: the guess is correct on CUDA, where the budget comes
+    # from the card rather than from free system RAM.
+    kwargs = _joycaption_load_kwargs(monkeypatch, "cuda", "nf4")
+    assert "max_memory" not in kwargs
+
+
+@pytest.mark.parametrize("precision", ["nf4", "int8", "bf16", "fp16"])
+def test_every_auto_mapped_precision_gets_the_budget_on_metal(monkeypatch, precision):
+    """The budget follows device_map="auto", not quantisation.
+
+    An unquantised load needs it as much as a bitsandbytes one: on a Mac
+    Accelerate's ``get_max_memory`` fills in ``mps`` *or* ``cpu``, never both,
+    so an unquantised overflow is planned onto ``disk`` and the load dies with
+    "We need an `offload_dir`". All four precisions set device_map="auto"
+    whenever the device is not cpu, so all four must get the budget.
+    """
+    kwargs = _joycaption_load_kwargs(monkeypatch, "mps", precision)
+    assert kwargs["max_memory"] == {"mps": FAKE_METAL_BUDGET}
+
+
+def test_an_explicit_cpu_device_gets_no_budget(monkeypatch):
+    # device_map is "cpu" there, not "auto", so there is nothing to plan.
+    kwargs = _joycaption_load_kwargs(monkeypatch, "cpu", "bf16")
+    assert "max_memory" not in kwargs
+
+
+def _precision_field(monkeypatch, device):
+    from pixlstash.tagger_plugins import joycaption as jc
+
+    monkeypatch.setattr(jc, "detect_device", lambda: device)
+    schema = jc.JoyCaptionPlugin().parameter_schema()
+    return next(f for f in schema if f["name"] == "precision")
+
+
+def test_precision_guidance_follows_the_device(monkeypatch):
+    """The stock text is true on CUDA and wrong on Metal."""
+    metal = _precision_field(monkeypatch, "mps")
+    cuda = _precision_field(monkeypatch, "cuda")
+
+    assert metal["description"] != cuda["description"]
+    assert "faster" in cuda["description"], "CUDA keeps the original guidance"
+    assert "Apple" in metal["description"] or "Metal" in metal["description"]
+
+
+def test_the_saved_precision_values_never_vary_by_device(monkeypatch):
+    """Labels and help may vary; values may not.
+
+    A stored ``tagger_settings`` holds the value, so a machine-dependent one
+    would stop resolving the moment the config moved between machines - or the
+    moment the same machine reported a different device.
+    """
+    metal = _precision_field(monkeypatch, "mps")
+    cuda = _precision_field(monkeypatch, "cuda")
+
+    assert [o["value"] for o in metal["options"]] == [
+        o["value"] for o in cuda["options"]
+    ]
+    assert metal["default"] == cuda["default"] == "nf4"
+
+
+def test_metal_precision_help_gives_memory_as_the_reason(monkeypatch):
+    """BF16/FP16 run natively on Metal; what rules them out is their size."""
+    metal = _precision_field(monkeypatch, "mps")
+    help_text = metal["description"]
+
+    assert "no accelerated Metal support" not in help_text
+    assert "run natively on Metal" in help_text, "BF16/FP16 are native Metal ops"
+    for figure in ("16 GB", "6.4 GB", "8.7 GB"):
+        assert figure in help_text, f"the Metal help must state {figure}"
+    assert "INT8 has no optimised Metal kernel in bitsandbytes" in help_text
+    assert [o["label"] for o in metal["options"]] == [
+        "NF4 (~6.4 GB, recommended)",
+        "INT8 (~8 GB, unoptimised on Metal)",
+        "BF16 (~16 GB, needs a large Mac)",
+        "FP16 (~16 GB, needs a large Mac)",
+    ]
+
+
+@pytest.mark.parametrize(
+    "service_device,host_device",
+    [("cpu", "mps"), ("mps", "cuda")],
+    ids=["cpu-plugin-on-a-mac", "metal-plugin-probe-says-cuda"],
+)
+def test_precision_field_follows_the_device_the_plugin_was_set_up_for(
+    monkeypatch, service_device, host_device
+):
+    """Once set up, the field describes the plugin's device, not a fresh probe.
+
+    A forced-CPU engine on a Mac sets JoyCaption up for the CPU while
+    ``detect_device()`` still answers ``mps``.
+    """
+    from pixlstash.tagger_plugins import joycaption as jc
+
+    monkeypatch.setattr(jc, "detect_device", lambda: host_device)
+    plugin = jc.JoyCaptionPlugin()
+    plugin.setup(service_device)
+    field = next(f for f in plugin.parameter_schema() if f["name"] == "precision")
+
+    assert field == _precision_field(monkeypatch, service_device)
+    assert field != _precision_field(monkeypatch, host_device)
+
+
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
+def test_precision_field_off_metal_is_the_stock_one(monkeypatch, device):
+    """Off Metal the field reads exactly as the CUDA guidance always has."""
+    assert _precision_field(monkeypatch, device) == {
+        "name": "precision",
+        "label": "Precision",
+        "type": "select",
+        "default": "nf4",
+        "description": (
+            "Quantisation precision. NF4/INT8 use bitsandbytes and "
+            "require less VRAM; BF16/FP16 require more but are faster."
+        ),
+        "options": [
+            {"value": "nf4", "label": "NF4 (~5 GB VRAM)"},
+            {"value": "int8", "label": "INT8 (~8 GB VRAM)"},
+            {"value": "bf16", "label": "BF16 (~16 GB VRAM)"},
+            {"value": "fp16", "label": "FP16 (~16 GB VRAM)"},
+        ],
+    }
+
+
+@pytest.mark.parametrize("device,expected", [("mps", 1), ("cuda", None), ("cpu", None)])
+def test_joycaption_asks_for_one_image_per_description_task_on_metal(device, expected):
+    """One caption takes 20 s or more on Metal, and a description task holds
+    the single GPU worker until it returns; elsewhere the host's size stands."""
+    from pixlstash.tagger_plugins.joycaption import JoyCaptionPlugin
+
+    assert JoyCaptionPlugin().description_task_size(device) == expected
 
 
 # --------------------------------------------------------------------------- #

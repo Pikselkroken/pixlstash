@@ -298,6 +298,39 @@ class TaggerPlugin(ABC):
         return 1
 
     # ------------------------------------------------------------------
+    # Scheduling hints
+    # ------------------------------------------------------------------
+
+    def description_task_size(self, device: str) -> int | None:
+        """Return how many images one description task should carry on *device*.
+
+        The host groups pictures that need a description into tasks and runs
+        each task as one call to :meth:`generate_descriptions`. By default a
+        task carries the host's own description batch size, which is sized for
+        Florence-2 (up to 32 images on a GPU). A task holds the GPU worker
+        until it returns, so a plugin that is slow per image can ask for
+        smaller tasks and let other GPU work, and the user's own requests, run
+        between them.
+
+        The host asks when it builds each task, for the plugin that will
+        caption it: the active description plugin for the backlog, or the
+        plugin a re-description request names. It is never asked when that is
+        Florence-2, or a plugin the host would replace with Florence-2 because
+        it is missing or cannot caption. The answer can only shrink a task:
+        the host uses the smaller of it and its own size.
+
+        Args:
+            device: The engine's inference device (``"cuda"``, ``"mps"`` or
+                ``"cpu"``), the same string an optional ``setup(device)``
+                receives.
+
+        Returns:
+            A positive image count, or ``None`` (the default) to use the
+            host's size.
+        """
+        return None
+
+    # ------------------------------------------------------------------
     # Inference
     # ------------------------------------------------------------------
 

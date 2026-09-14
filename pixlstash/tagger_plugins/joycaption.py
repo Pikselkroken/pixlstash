@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import os
 import threading
 import time
@@ -15,6 +16,9 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
 from pixlstash.utils.device_utils import (
     USE_GPU_ADVICE,
+    detect_device,
+    empty_device_cache,
+    is_metal,
 )
 from pixlstash.utils.model_utils import from_pretrained_local_first
 from pixlstash.utils.service.caption_utils import sanitise_tag
@@ -92,15 +96,24 @@ class JoyCaptionService:
         """Release model and processor from memory.
 
         Blocks while a load is in flight rather than freeing underneath it.
-        Waiting costs a few seconds on shutdown; the alternative is
-        ``torch.cuda.empty_cache()`` releasing memory that ``from_pretrained``
-        is still writing into, which takes the whole process down.
+        Waiting costs a few seconds on shutdown; the alternative is the cache
+        flush releasing memory that ``from_pretrained`` is still writing into,
+        which takes the whole process down.
+
+        The order is load-bearing: drop the references, collect, then flush.
+        The loaded model sits in reference cycles, so dropping the two
+        attributes frees none of its tensors until ``gc.collect()`` runs, and a
+        flush before the collection has nothing to hand back.
+
+        Metal's cache is flushed only for a service on Metal: off Metal the
+        idle unload calls this on the progress poll, not the GPU worker, and a
+        Mac forced onto the CPU would flush Metal there.
         """
         with self._load_lock:
             self._model = None
             self._processor = None
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            gc.collect()
+            empty_device_cache("mps" if is_metal(self._device) else "cuda")
 
     def generate_caption(
         self,
@@ -409,6 +422,10 @@ class JoyCaptionService:
                 "device_map": device_map,
                 "revision": _MODEL_REVISION,
             }
+            if self._device == "mps":
+                # Accelerate budgets MPS at psutil's *available* RAM rather
+                # than the machine's capacity.
+                load_kwargs["max_memory"] = {"mps": torch.mps.recommended_max_memory()}
             if quantization_config is not None:
                 load_kwargs["quantization_config"] = quantization_config
             if torch_dtype is not None:
@@ -441,11 +458,11 @@ class JoyCaptionService:
                     _proj.to(dtype=_vision_dtype)
 
             self._model = model
-            self._model_device = (
-                torch.device("cpu")
-                if use_cpu
-                else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            )
+            # The device this service was built for. "cpu" loaded with
+            # device_map="cpu"; any other value came from detect_device()
+            # (InferenceEngine.create, plugin_check), the accelerator that
+            # device_map="auto" loaded onto.
+            self._model_device = torch.device(self._device)
             logger.info(
                 "[JoyCaption] Model loaded successfully on %s (precision=%s) - total load time %.1fs",
                 self._model_device,
@@ -546,7 +563,7 @@ class JoyCaptionPlugin(TaggerPlugin):
         which case the old model is unloaded automatically via garbage collection).
 
         Args:
-            device: Inference device string (``"cuda"`` or ``"cpu"``).
+            device: Inference device string (``"cuda"``, ``"mps"`` or ``"cpu"``).
         """
         if self._service is not None and self._service._device == device:
             return
@@ -566,22 +583,7 @@ class JoyCaptionPlugin(TaggerPlugin):
     def parameter_schema(self) -> list[dict[str, Any]]:
         """Return parameter definitions for JoyCaption."""
         return [
-            {
-                "name": "precision",
-                "label": "Precision",
-                "type": "select",
-                "default": "nf4",
-                "description": (
-                    "Quantisation precision. NF4/INT8 use bitsandbytes and "
-                    "require less VRAM; BF16/FP16 require more but are faster."
-                ),
-                "options": [
-                    {"value": "nf4", "label": "NF4 (~5 GB VRAM)"},
-                    {"value": "int8", "label": "INT8 (~8 GB VRAM)"},
-                    {"value": "bf16", "label": "BF16 (~16 GB VRAM)"},
-                    {"value": "fp16", "label": "FP16 (~16 GB VRAM)"},
-                ],
-            },
+            self._precision_field(),
             {
                 "name": "temperature",
                 "label": "Temperature",
@@ -811,6 +813,26 @@ class JoyCaptionPlugin(TaggerPlugin):
             return max(1, int(parameters.get("tag_batch_size", 4)))
         return 4
 
+    def description_task_size(self, device: str) -> int | None:
+        """Carry one image per description task on Apple Metal.
+
+        ``generate_descriptions`` captions one image at a time, at 20 s or more
+        each on Metal, and the task carrying them runs on the single GPU worker.
+        Everything else that needs Metal queues behind the running task: a
+        routed call (``Vault.run_inference``, 60 s timeout by default), an
+        urgent re-description a user asked for, the next task of any kind. A
+        task sized for Florence-2 (up to 32 images on Metal) keeps them waiting
+        for many minutes; one image per task bounds the wait at one caption.
+        Other devices keep the host's size.
+
+        Args:
+            device: The engine's inference device.
+
+        Returns:
+            ``1`` on Metal, otherwise ``None``.
+        """
+        return 1 if is_metal(device) else None
+
     def tag_images(
         self,
         image_paths: list,
@@ -951,6 +973,63 @@ class JoyCaptionPlugin(TaggerPlugin):
             "[JoyCaption] generate_descriptions() complete - %d results", len(results)
         )
         return results
+
+    def _precision_field(self) -> dict[str, Any]:
+        """Precision options, described for the hardware they will run on.
+
+        On CUDA the stock advice holds: NF4 and INT8 run on bitsandbytes'
+        kernels and need less VRAM, BF16 and FP16 need more and run faster. On
+        Apple Silicon memory decides. BF16 and FP16 are native Metal operations
+        (an FP16 decode step on an 8B-sized layer measured 3.1 ms against NF4's
+        5.0 ms), but their weights alone need roughly 16 GB. NF4 measured about
+        6.4 GB resident after loading and about 8.7 GB after one caption on the
+        test Mac. INT8 has no optimised Metal kernel in bitsandbytes.
+
+        The *values* are deliberately identical on every device. A stored
+        ``tagger_settings`` holds one, so a machine-dependent value would stop
+        resolving the moment the config moved between machines. Only the
+        labels and the description change, and both devices build their
+        options from the one value tuple below.
+        """
+        device = self._service._device if self._service is not None else detect_device()
+
+        if is_metal(device):
+            description = (
+                "Quantisation precision. On Apple Silicon the choice is about "
+                "memory: BF16 and FP16 run natively on Metal, but their weights "
+                "alone need roughly 16 GB. NF4 is the smallest, about 6.4 GB "
+                "once loaded and about 8.7 GB after its first caption. INT8 has "
+                "no optimised Metal kernel in bitsandbytes."
+            )
+            labels = {
+                "nf4": "NF4 (~6.4 GB, recommended)",
+                "int8": "INT8 (~8 GB, unoptimised on Metal)",
+                "bf16": "BF16 (~16 GB, needs a large Mac)",
+                "fp16": "FP16 (~16 GB, needs a large Mac)",
+            }
+        else:
+            description = (
+                "Quantisation precision. NF4/INT8 use bitsandbytes and "
+                "require less VRAM; BF16/FP16 require more but are faster."
+            )
+            labels = {
+                "nf4": "NF4 (~5 GB VRAM)",
+                "int8": "INT8 (~8 GB VRAM)",
+                "bf16": "BF16 (~16 GB VRAM)",
+                "fp16": "FP16 (~16 GB VRAM)",
+            }
+
+        return {
+            "name": "precision",
+            "label": "Precision",
+            "type": "select",
+            "default": "nf4",
+            "description": description,
+            "options": [
+                {"value": value, "label": labels[value]}
+                for value in ("nf4", "int8", "bf16", "fp16")
+            ],
+        }
 
 
 def _parse_tags(raw: str) -> list[TagResult]:

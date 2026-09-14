@@ -14,20 +14,32 @@ was constructed with), it is checked per picture in the Florence video loop, and
 ``BaseTask.run`` refuses a task cancelled before it started while still reporting
 COMPLETED for one that returned normally.
 
-Deliberately Server-free. An in-memory SQLite engine and a two-method stub are
-everything ``DescriptionTask`` and the finder's query touch, so this file builds
-no environment (CLAUDE.md, "Tests: reuse the environment, don't rebuild it") and
+The last section covers how many pictures the finder puts in one task. A task
+holds the GPU worker until it returns, so a captioner that is slow per image
+(JoyCaption on Apple Metal) asks for smaller tasks through
+``TaggerPlugin.description_task_size``, and the plugin that will caption the task
+is the one asked, on the backlog and on a re-description request alike.
+
+Deliberately Server-free. An in-memory SQLite engine, a two-method database stub,
+a stub engine and a registry holding only the plugins a test names are
+everything ``DescriptionTask`` and the finder touch, so this file builds no
+environment (CLAUDE.md, "Tests: reuse the environment, don't rebuild it") and
 costs milliseconds rather than the ~1.35 s a ``Server`` does.
 """
 
+import logging
 import threading
 import types
 
+import pytest
 from sqlmodel import Session, SQLModel, create_engine
 
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Picture, make_description_sentinel
 from pixlstash.inference.workflows.description import DescriptionWorkflow
-from pixlstash.tasks.base_task import BaseTask, TaskStatus
+from pixlstash.tagger_plugins import registry
+from pixlstash.tagger_plugins.base import TaggerPlugin
+from pixlstash.tasks.base_task import BaseTask, TaskPriority, TaskStatus
+from pixlstash.tasks import missing_description_finder
 from pixlstash.tasks.description_task import DescriptionTask
 from pixlstash.tasks.missing_description_finder import MissingDescriptionFinder
 
@@ -265,3 +277,284 @@ def test_a_cancel_landing_after_the_work_still_reports_completed():
 
     assert task.run() == "committed before the cancel"
     assert task.status == TaskStatus.COMPLETED
+
+
+# ----------------------------------------------------------------------
+# Task size: the captioning plugin can ask for smaller tasks
+# ----------------------------------------------------------------------
+
+#: The stub engine's description batch size, what Florence-2 would get.
+_ENGINE_BATCH_SIZE = 4
+
+
+class _Captioner(TaggerPlugin):
+    """A description plugin that does not override ``description_task_size``."""
+
+    supports_descriptions = True
+
+    def __init__(self, name):
+        self.name = name
+
+    def parameter_schema(self):
+        return []
+
+    def needs_download(self, parameters=None):
+        return False
+
+    def init(self, parameters):
+        return None
+
+    def unload(self):
+        return None
+
+    def is_loaded(self):
+        return False
+
+
+class _SizedCaptioner(_Captioner):
+    """A description plugin that asks for *size* images per task."""
+
+    def __init__(self, name, size, supports_descriptions=True):
+        super().__init__(name)
+        self.size = size
+        self.supports_descriptions = supports_descriptions
+
+    def description_task_size(self, device):
+        return self.size
+
+
+@pytest.fixture
+def install_plugins(monkeypatch):
+    """Install *plugins* as the process-wide registry for one test."""
+
+    def _install(*plugins):
+        manager = registry.TaggerPluginManager(user_dir=None, first_party=[])
+        manager.reload()
+        manager._plugins = {plugin.name: plugin for plugin in plugins}
+        monkeypatch.setattr(registry, "_manager", manager)
+        return manager
+
+    return _install
+
+
+def _joycaption():
+    # Imported here rather than at the top: the module imports torch, which the
+    # rest of this file never needs.
+    from pixlstash.tagger_plugins.joycaption import JoyCaptionPlugin
+
+    return JoyCaptionPlugin()
+
+
+def _find_task(db, device, active_plugin):
+    engine = types.SimpleNamespace(
+        device=device,
+        tagger_settings={"active_description_plugin": active_plugin, "plugins": {}},
+        description_batch_size=lambda: _ENGINE_BATCH_SIZE,
+        description_workflow=None,
+    )
+    return MissingDescriptionFinder(db, engine_getter=lambda: engine).find_task()
+
+
+def _finder_warnings(caplog):
+    """What the finder logged at WARNING or above."""
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == missing_description_finder.logger.name
+        and r.levelno >= logging.WARNING
+    ]
+
+
+def _request_redescription(db, picture_ids, engine_name):
+    def set_sentinel(session):
+        for picture_id in picture_ids:
+            pic = session.get(Picture, picture_id)
+            pic.description = make_description_sentinel(engine_name)
+            session.add(pic)
+        session.commit()
+
+    db.run_task(set_sentinel)
+
+
+def test_joycaption_on_metal_captions_the_backlog_one_picture_per_task(
+    install_plugins,
+):
+    """The blocker: a Florence-sized task of 20 s captions holds the GPU
+    worker for minutes, and every other Metal call waits behind it."""
+    install_plugins(_joycaption())
+    db = _StubDB()
+    _seed(db, _ENGINE_BATCH_SIZE + 2)
+
+    task = _find_task(db, "mps", "joycaption")
+
+    assert len(task.params["picture_ids"]) == 1, (
+        "the finder ignored JoyCaption's description_task_size on Metal"
+    )
+    assert task._engine_override is None
+    assert task.priority == TaskPriority.LOW
+
+
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
+def test_joycaption_off_metal_keeps_the_engine_size(install_plugins, caplog, device):
+    """JoyCaption answers ``None`` off Metal, which is nothing to warn about."""
+    install_plugins(_joycaption())
+    db = _StubDB()
+    _seed(db, _ENGINE_BATCH_SIZE + 2)
+
+    with caplog.at_level(
+        logging.WARNING, logger=missing_description_finder.logger.name
+    ):
+        task = _find_task(db, device, "joycaption")
+
+    assert len(task.params["picture_ids"]) == _ENGINE_BATCH_SIZE
+    assert _finder_warnings(caplog) == []
+
+
+def test_florence_on_metal_keeps_the_engine_size_and_is_never_asked(
+    install_plugins,
+):
+    """Florence-2 is dispatched natively, so the finder does not consult the
+    registry for it; a registry entry under its name that asks for 1 is not
+    what sizes its tasks."""
+    install_plugins(_joycaption(), _SizedCaptioner("florence2", size=1))
+    db = _StubDB()
+    _seed(db, _ENGINE_BATCH_SIZE + 2)
+
+    task = _find_task(db, "mps", "florence2")
+
+    assert len(task.params["picture_ids"]) == _ENGINE_BATCH_SIZE
+
+
+def test_a_plugin_without_the_hook_keeps_the_engine_size(install_plugins, caplog):
+    """The default hook answers ``None``, which is not a failure to size a task.
+
+    Read as one, it would log a warning on every sweep.
+    """
+    install_plugins(_Captioner("example_captioner"))
+    db = _StubDB()
+    _seed(db, _ENGINE_BATCH_SIZE + 2)
+
+    with caplog.at_level(
+        logging.WARNING, logger=missing_description_finder.logger.name
+    ):
+        task = _find_task(db, "mps", "example_captioner")
+
+    assert len(task.params["picture_ids"]) == _ENGINE_BATCH_SIZE
+    assert _finder_warnings(caplog) == []
+
+
+@pytest.mark.parametrize(
+    "plugins",
+    [
+        pytest.param([], id="missing"),
+        pytest.param(
+            [_SizedCaptioner("example_captioner", 1, supports_descriptions=False)],
+            id="cannot-caption",
+        ),
+    ],
+)
+def test_a_plugin_that_falls_back_to_florence_keeps_the_engine_size(
+    install_plugins, plugins
+):
+    """``DescriptionWorkflow`` captions with Florence-2 in both cases, so the
+    task is sized for Florence-2 whatever the plugin would have asked."""
+    install_plugins(*plugins)
+    db = _StubDB()
+    _seed(db, _ENGINE_BATCH_SIZE + 2)
+
+    task = _find_task(db, "mps", "example_captioner")
+
+    assert len(task.params["picture_ids"]) == _ENGINE_BATCH_SIZE
+
+
+def test_a_plugin_cannot_make_a_task_larger_than_the_engine_size(install_plugins):
+    install_plugins(_SizedCaptioner("example_captioner", 100))
+    db = _StubDB()
+    _seed(db, _ENGINE_BATCH_SIZE + 2)
+
+    task = _find_task(db, "cuda", "example_captioner")
+
+    assert len(task.params["picture_ids"]) == _ENGINE_BATCH_SIZE
+
+
+class _FailingSizedCaptioner(_Captioner):
+    """A description plugin whose ``description_task_size`` raises."""
+
+    def description_task_size(self, device):
+        raise RuntimeError("the plugin's own bug")
+
+
+@pytest.mark.parametrize(
+    "plugin",
+    [
+        pytest.param(_FailingSizedCaptioner("example_captioner"), id="raises"),
+        pytest.param(_SizedCaptioner("example_captioner", float("nan")), id="nan"),
+        pytest.param(_SizedCaptioner("example_captioner", "four"), id="not-a-number"),
+    ],
+)
+def test_a_plugin_whose_task_size_fails_keeps_the_engine_size_and_says_so(
+    install_plugins, caplog, plugin
+):
+    """A third-party hook that raises or answers nonsense must not stop the
+    finder: raised in ``find_task``, it would fail every sweep and the backlog
+    would never get a task."""
+    install_plugins(plugin)
+    db = _StubDB()
+    _seed(db, _ENGINE_BATCH_SIZE + 2)
+
+    with caplog.at_level(
+        logging.WARNING, logger=missing_description_finder.logger.name
+    ):
+        task = _find_task(db, "mps", "example_captioner")
+
+    assert len(task.params["picture_ids"]) == _ENGINE_BATCH_SIZE
+    warnings = _finder_warnings(caplog)
+    assert len(warnings) == 1, warnings
+    assert "example_captioner" in warnings[0]
+
+
+def test_a_request_is_sized_by_the_engine_it_names_not_the_active_one(
+    install_plugins,
+):
+    """A user asked for JoyCaption on a library whose active captioner is
+    Florence-2: the request runs on JoyCaption, so JoyCaption sizes it."""
+    install_plugins(_joycaption())
+    db = _StubDB()
+    ids = _seed(db, _ENGINE_BATCH_SIZE + 2)
+    _request_redescription(db, ids[:3], "joycaption")
+
+    task = _find_task(db, "mps", "florence2")
+
+    assert task._engine_override == "joycaption"
+    assert task.priority == TaskPriority.URGENT
+    assert len(task.params["picture_ids"]) == 1, (
+        "the re-description request was sized for the active plugin, not for "
+        "the plugin it names"
+    )
+
+
+def test_a_request_for_florence_keeps_the_engine_size_under_active_joycaption(
+    install_plugins,
+):
+    install_plugins(_joycaption())
+    db = _StubDB()
+    ids = _seed(db, _ENGINE_BATCH_SIZE + 2)
+    _request_redescription(db, ids, "florence2")
+
+    task = _find_task(db, "mps", "joycaption")
+
+    assert task._engine_override == "florence2"
+    assert len(task.params["picture_ids"]) == _ENGINE_BATCH_SIZE
+
+
+def test_a_request_naming_no_engine_is_sized_by_the_active_plugin(install_plugins):
+    install_plugins(_joycaption())
+    db = _StubDB()
+    ids = _seed(db, _ENGINE_BATCH_SIZE + 2)
+    _request_redescription(db, ids, None)
+
+    task = _find_task(db, "mps", "joycaption")
+
+    assert task._engine_override is None
+    assert task.priority == TaskPriority.URGENT
+    assert len(task.params["picture_ids"]) == 1

@@ -159,7 +159,7 @@ class MyCaptioner(TaggerPlugin):
     # ------------------------------------------------------------------
 
     def setup(self, device: str) -> None:
-        """Optional hook - receives the inference device ("cuda", "cpu", …).
+        """Optional hook - receives the inference device ("cuda", "mps", "cpu").
 
         The workflow calls this via ``hasattr`` before ``init()``, so it is
         the only way to learn which device to load onto.  Omit the method
@@ -219,6 +219,25 @@ class MyCaptioner(TaggerPlugin):
         hold nothing on the card.
         """
         return 0
+
+    # ------------------------------------------------------------------
+    # Scheduling hints
+    # ------------------------------------------------------------------
+
+    def description_task_size(self, device: str) -> int | None:
+        """Optional hook - how many images one description task carries.
+
+        The host groups the pictures that need a description into tasks, each
+        one call to ``generate_descriptions``, sized by default for Florence-2
+        (up to 32 images on a GPU).  A task holds the single GPU worker until
+        it returns, so a captioner that takes seconds per image can return a
+        smaller count and let other GPU work, and the user's own requests, run
+        between its tasks.  The answer can only shrink a task.  *device* is the
+        string ``setup()`` receives; ``JoyCaptionPlugin`` returns 1 on Apple
+        Metal (``"mps"``).  Return ``None`` to keep the host's size, or omit the
+        method entirely.
+        """
+        return None
 
     # ------------------------------------------------------------------
     # Inference
