@@ -223,10 +223,18 @@ def _fill_run_inputs(workflow: dict, image: str | None, caption: str) -> dict:
     targets = workflow_bindings.run_targets(workflow)
     try:
         if image is not None:
-            workflow_bindings.fill(instance, targets[workflow_bindings.IMAGE], image)
+            workflow_bindings.fill(
+                instance,
+                targets[workflow_bindings.IMAGE],
+                workflow_bindings.IMAGE,
+                image,
+            )
         if caption:
             workflow_bindings.fill(
-                instance, targets[workflow_bindings.CAPTION], caption
+                instance,
+                targets[workflow_bindings.CAPTION],
+                workflow_bindings.CAPTION,
+                caption,
             )
     except workflow_bindings.BindingError as exc:
         logger.warning("Workflow binding does not resolve: %s", exc)
@@ -1089,13 +1097,16 @@ def create_router(server) -> APIRouter:
         summary="Import ComfyUI workflow",
         description=(
             "Stores a workflow JSON, UI or API format, unchanged in the user "
-            "workflow directory. A copy of a workflow already stored is matched "
+            "workflow directory (a file still carrying placeholder tokens is "
+            "stored with them migrated to bindings). A copy of a workflow already stored is matched "
             "to it rather than stored twice. A name taken by a different "
             "workflow is refused unless overwrite or keep_both is set."
         ),
         response_model=ComfyUIWorkflowImportResponse,
     )
-    async def import_comfyui_workflow(payload: dict = Body(...)):
+    def import_comfyui_workflow(payload: dict = Body(...)):
+        # Sync on purpose: finding a stored copy reads every workflow file, so
+        # FastAPI runs this on its thread pool rather than the event loop.
         name = _normalize_workflow_name(payload.get("name"))
         if not name:
             raise HTTPException(status_code=400, detail="name is required")

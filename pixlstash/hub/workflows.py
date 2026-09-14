@@ -247,8 +247,9 @@ def topology_index(hub: HubDatabase) -> list[sqlite3.Row]:
 
     The Workflows view's whole list in one query. A LEFT JOIN rather than a
     subquery per row: 192 topologies over 617 recipes is small, and a topology
-    with no recipe is impossible today but reads as zero rather than vanishing
-    if one ever appears.
+    with no recipe - a UI-format workflow filed by import, which has no recipe
+    until ``object_info`` names its widgets - reads as zero rather than
+    vanishing.
     """
     return hub.fetchall(
         "SELECT t.topology_hash, t.hash_version, t.node_count, t.first_seen_at, "

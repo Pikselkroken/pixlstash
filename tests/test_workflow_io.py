@@ -318,13 +318,16 @@ def test_migration_binds_tokens_and_restores_neutral_values():
     graph["2"]["inputs"]["text"] = "{{caption}}"
     graph["3"]["inputs"]["text"] = "photo of {{caption}}, sharp"
     graph["7"] = _node("LoadImage", image="{{image_path}}")
+    # A title is not an input, whatever it says.
+    graph["7"]["_meta"] = {"title": "{{image_path}} loader"}
     original = json.dumps(graph, sort_keys=True)
 
     migrated, changed = workflow_bindings.migrate_placeholders(graph)
 
     assert changed
     assert json.dumps(graph, sort_keys=True) == original
-    assert "{{" not in json.dumps(migrated)
+    body = {k: v for k, v in migrated.items() if k != workflow_bindings.BINDINGS_KEY}
+    assert "{{" not in json.dumps(body).replace("{{image_path}} loader", "")
     assert migrated["2"]["inputs"]["text"] == ""
     assert migrated["7"]["inputs"]["image"] == "example.png"
     assert migrated["3"]["inputs"]["text"] == "photo of , sharp"
@@ -337,7 +340,17 @@ def test_migration_binds_tokens_and_restores_neutral_values():
         ("caption", "3", ("3", "inputs", "text"), False),
         ("image", "7", ("7", "inputs", "image"), True),
     }
-    # The embedded token cannot be put back, so the workflow is flagged.
+    # The embedded token keeps its string as a template, and a run fills it
+    # the way the old substitution did.
+    (template,) = [
+        b for b in migrated[workflow_bindings.BINDINGS_KEY] if not b["recovered"]
+    ]
+    assert template["template"] == "photo of {{caption}}, sharp"
+    filled = comfyui_module._fill_run_inputs(migrated, "up.png", "a cat")
+    assert filled["3"]["inputs"]["text"] == "photo of a cat, sharp"
+    assert filled["2"]["inputs"]["text"] == "a cat"
+    assert filled["7"]["inputs"]["image"] == "up.png"
+    # What the string said before it became a template is gone: flagged.
     assert workflow_bindings.is_flagged(migrated)
     # Nothing left to migrate.
     assert workflow_bindings.migrate_placeholders(migrated) == (migrated, False)
@@ -365,24 +378,45 @@ def test_migration_names_the_node_in_ui_and_envelope_formats():
     assert migrated["prompt"]["5"]["inputs"]["text"] == ""
 
 
-def test_folder_migration_rewrites_once_and_skips_unreadable_files(tmp_path, caplog):
+def test_folder_migration_runs_once_backs_up_and_skips_unreadable_files(
+    tmp_path, caplog
+):
     graph = _t2i_graph()
     graph["7"] = _node("LoadImage", image="{{image_path}}")
     (tmp_path / "tokened.json").write_text(json.dumps(graph), encoding="utf-8")
-    (tmp_path / "plain.json").write_text(json.dumps(_t2i_graph()), encoding="utf-8")
+    # The old dialog's "None (text-to-image)" with a fixed reference loader:
+    # no token, and detection would otherwise start filling that loader.
+    legacy = _t2i_graph()
+    legacy["7"] = _node("LoadImage", image="pose.png")
+    (tmp_path / "legacy.json").write_text(json.dumps(legacy), encoding="utf-8")
     (tmp_path / "broken.json").write_text("{", encoding="utf-8")
+    (tmp_path / "deep.json").write_text("[" * 100000 + "]" * 100000, encoding="utf-8")
 
-    assert workflow_bindings.migrate_workflow_folder(str(tmp_path)) == 1
-    assert "broken.json" in caplog.text
+    assert workflow_bindings.migrate_workflow_folder(str(tmp_path)) == 2
+    assert "broken.json" in caplog.text and "deep.json" in caplog.text
     stored = _load(tmp_path / "tokened.json")
     assert stored[workflow_bindings.BINDINGS_KEY][0]["path"] == ["7", "inputs", "image"]
-    assert _load(tmp_path / "plain.json") == _t2i_graph()
-    assert workflow_bindings.migrate_workflow_folder(str(tmp_path)) == 0
-    assert sorted(p.name for p in tmp_path.iterdir()) == [
-        "broken.json",
-        "plain.json",
-        "tokened.json",
+    assert _load(tmp_path / "tokened.json.pre-bindings") == graph
+    assert _load(tmp_path / "legacy.json")[workflow_bindings.BINDINGS_KEY] == []
+    assert comfyui_module._missing_placeholders(_load(tmp_path / "legacy.json")) == [
+        "{{image_path}}",
+        "{{caption}}",
     ]
+
+    # A workflow imported as-is after the pass keeps detection.
+    (tmp_path / "later.json").write_text(json.dumps(legacy), encoding="utf-8")
+    assert workflow_bindings.migrate_workflow_folder(str(tmp_path)) == 0
+    assert workflow_bindings.BINDINGS_KEY not in _load(tmp_path / "later.json")
+
+
+def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, monkeypatch, caplog):
+    def refuse(_path):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(workflow_bindings.os, "listdir", refuse)
+    assert workflow_bindings.migrate_workflow_folder(str(tmp_path)) == 0
+    assert "denied" in caplog.text
+    assert not (tmp_path / workflow_bindings.MIGRATION_MARKER).exists()
 
 
 @pytest.mark.parametrize(
@@ -404,7 +438,8 @@ def test_built_ins_carry_no_token_and_are_filled_by_detection(name, image, capti
     assert "{{" not in json.dumps(document)
     assert workflow_bindings.BINDINGS_KEY not in document
     targets = workflow_bindings.run_targets(document)
-    assert targets == {"image": image, "caption": caption}
+    paths = {role: [t["path"] for t in found] for role, found in targets.items()}
+    assert paths == {"image": image, "caption": caption}
 
 
 def test_two_picture_inputs_fill_nothing_and_ui_files_are_not_filled():
@@ -436,6 +471,11 @@ def test_a_binding_that_no_longer_resolves_is_refused():
     with pytest.raises(HTTPException) as refused:
         comfyui_module._fill_run_inputs(graph, "upload.png", "")
     assert refused.value.status_code == 400
+    # A path that is not a list must not index the document as a key.
+    graph[workflow_bindings.BINDINGS_KEY] = [{"role": "image", "path": "1"}]
+    with pytest.raises(HTTPException):
+        comfyui_module._fill_run_inputs(graph, "upload.png", "")
+    assert graph["1"]["class_type"] == "CheckpointLoaderSimple"
 
 
 @pytest.fixture
@@ -455,7 +495,7 @@ def import_route(tmp_path, monkeypatch):
     endpoint = _route(comfyui_module.create_router(server), "/comfyui/workflows/import")
 
     def call(**payload):
-        return asyncio.run(endpoint(payload))
+        return endpoint(payload)
 
     try:
         yield call, user_dir, built_in, hub

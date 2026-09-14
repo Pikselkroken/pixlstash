@@ -3,10 +3,12 @@
 A workflow is stored exactly as it was imported. What a run fills comes from one
 of two places:
 
-* **Bindings**, a ``pixlstash_bindings`` list in the file. Only a workflow that
-  was stored with ``{{image_path}}`` / ``{{caption}}`` tokens has them: the
-  migration below records the spot each token sat on and puts a neutral value
-  back, so that workflow runs exactly as it did.
+* **Bindings**, a ``pixlstash_bindings`` list in the file. Only a workflow
+  stored before import kept files as-is has them: the migration below records
+  the spot each ``{{image_path}}`` / ``{{caption}}`` token sat on and puts a
+  neutral value back, and gives a file with no token an empty list, so every
+  such workflow runs exactly as it did. The old dialog let a workflow opt out of
+  an input, and detection must not opt it back in.
 * **Detection** (:mod:`pixlstash.services.workflow_io`) for everything else: the
   one picture input and the positive prompt the graph itself names.
 
@@ -38,6 +40,13 @@ _TOKENS = {"{{image_path}}": IMAGE, "{{caption}}": CAPTION}
 # input folder as LoadImage's own default; an empty prompt is the neutral text.
 _NEUTRAL = {IMAGE: "example.png", CAPTION: ""}
 
+# Written into the user folder once the start-up migration has run, so a file
+# imported as-is afterwards is never mistaken for one the old dialog wrote.
+MIGRATION_MARKER = ".placeholder-bindings-migrated"
+# The file as it was before the migration rewrote it. Not ``.json``, so the
+# workflow list never shows it.
+BACKUP_SUFFIX = ".pre-bindings"
+
 _PROMPT_FIELDS = ("text", "prompt", "value")
 
 
@@ -61,10 +70,12 @@ def migrate_placeholders(document: dict) -> tuple[dict, bool]:
     """Turn stored placeholder tokens into bindings.
 
     A token that was the whole value is bound and its spot gets a neutral
-    value. A token inside a longer string is bound too, but the text around it
-    stays with the token cut out and the binding is marked ``recovered: false``:
-    a run replaces the whole value, so what the string meant before cannot be
-    restored.
+    value. A token inside a longer string (``"photo of {{caption}}, sharp"``)
+    is bound with that string as its ``template``, so a run still fills the
+    token inside it; the spot keeps the text with the token cut out, and the
+    binding is marked ``recovered: false`` because what the string said before
+    it became a template is gone. Only graph values are read: a token in a
+    ``_meta`` title is not an input.
 
     Args:
         document: A stored workflow, any format.
@@ -81,6 +92,8 @@ def migrate_placeholders(document: dict) -> tuple[dict, bool]:
             for key, child in value.items():
                 if not path and str(key).startswith("pixlstash_"):
                     continue
+                if key == "_meta":
+                    continue
                 value[key] = walk(child, path + [key])
             return value
         if isinstance(value, list):
@@ -89,19 +102,22 @@ def migrate_placeholders(document: dict) -> tuple[dict, bool]:
             return value
         if not isinstance(value, str):
             return value
-        for token, role in _TOKENS.items():
-            if token not in value:
-                continue
-            whole = value.strip() == token
-            value = _NEUTRAL[role] if whole else value.replace(token, "")
-            bindings.append(
-                {
-                    "role": role,
-                    "node": _node_id(document, path),
-                    "path": path,
-                    "recovered": whole,
-                }
-            )
+        whole = value.strip()
+        roles = [role for token, role in _TOKENS.items() if token in value]
+        for role in roles:
+            binding = {"role": role, "node": _node_id(document, path), "path": path}
+            if whole in _TOKENS:
+                binding["recovered"] = True
+            else:
+                binding["template"] = value
+                binding["recovered"] = False
+            bindings.append(binding)
+        if not roles:
+            return value
+        if whole in _TOKENS:
+            return _NEUTRAL[_TOKENS[whole]]
+        for token in _TOKENS:
+            value = value.replace(token, "")
         return value
 
     walk(migrated, [])
@@ -112,62 +128,103 @@ def migrate_placeholders(document: dict) -> tuple[dict, bool]:
 
 
 def migrate_workflow_folder(folder: str) -> int:
-    """Migrate every tokened workflow file in *folder*, in place.
+    """Give every workflow the old import dialog stored its bindings, once.
 
-    Idempotent: a migrated file carries no token, so a second pass finds
-    nothing. Each file is replaced atomically, and one unreadable file is logged
-    and skipped rather than stopping the rest.
+    A file with tokens gets them as bindings; a file without gets an empty
+    list, because the dialog let a workflow take no picture or no caption and
+    detection would otherwise start filling those. Each rewritten file keeps
+    its original beside it as ``<name>.json.pre-bindings``. A marker file makes
+    this a one-time pass, so a workflow imported as-is later keeps detection.
+    One unreadable file is logged and skipped rather than stopping start-up.
 
     Returns:
         How many files were rewritten.
     """
-    if not os.path.isdir(folder):
+    marker = os.path.join(folder, MIGRATION_MARKER)
+    try:
+        if not os.path.isdir(folder) or os.path.exists(marker):
+            return 0
+        entries = sorted(os.listdir(folder))
+    except OSError as exc:
+        logger.error(
+            "Could not list the workflow folder %s for the placeholder migration; "
+            "it will be retried next start: %s",
+            folder,
+            exc,
+        )
         return 0
     rewritten = 0
-    for entry in sorted(os.listdir(folder)):
-        if not entry.lower().endswith(".json"):
-            continue
-        path = os.path.join(folder, entry)
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                document = json.load(handle)
-        except (OSError, ValueError) as exc:
-            logger.warning(
-                "Skipping placeholder migration of workflow %s, it cannot be read: %s",
-                path,
-                exc,
-            )
-            continue
-        if not isinstance(document, dict):
-            continue
-        migrated, changed = migrate_placeholders(document)
-        if not changed:
-            continue
-        temp_path = f"{path}.migrating"
-        try:
-            with open(temp_path, "w", encoding="utf-8") as handle:
-                json.dump(migrated, handle, indent=2, ensure_ascii=True)
-            os.replace(temp_path, path)
-        except OSError as exc:
-            logger.error(
-                "Could not write the migrated workflow %s; it keeps its "
-                "placeholder tokens and will not run until it is migrated: %s",
-                path,
-                exc,
-            )
-            continue
-        rewritten += 1
-        roles = ", ".join(b["role"] for b in migrated[BINDINGS_KEY])
-        if is_flagged(migrated):
-            logger.warning(
-                "Migrated workflow %s to bindings (%s). A token sat inside a "
-                "longer value, which cannot be restored.",
-                path,
-                roles,
-            )
-        else:
-            logger.info("Migrated workflow %s to bindings (%s).", path, roles)
+    for entry in entries:
+        if entry.lower().endswith(".json") and _migrate_file(
+            os.path.join(folder, entry)
+        ):
+            rewritten += 1
+    try:
+        with open(marker, "w", encoding="utf-8") as handle:
+            handle.write("Workflow placeholder tokens were migrated to bindings.\n")
+    except OSError as exc:
+        logger.error(
+            "Could not write %s; the placeholder migration will run again next "
+            "start and give workflows imported since then empty bindings: %s",
+            marker,
+            exc,
+        )
     return rewritten
+
+
+def _migrate_file(path: str) -> bool:
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = handle.read()
+        document = json.loads(raw)
+    except (OSError, ValueError, RecursionError) as exc:
+        logger.warning(
+            "Skipping placeholder migration of workflow %s, it cannot be read: %s",
+            path,
+            exc,
+        )
+        return False
+    if not isinstance(document, dict) or BINDINGS_KEY in document:
+        return False
+    try:
+        migrated, changed = migrate_placeholders(document)
+    except RecursionError as exc:
+        logger.warning(
+            "Skipping placeholder migration of workflow %s, it nests too deeply: %s",
+            path,
+            exc,
+        )
+        return False
+    if not changed:
+        migrated = {**document, BINDINGS_KEY: []}
+    backup_path = f"{path}{BACKUP_SUFFIX}"
+    temp_path = f"{path}.migrating"
+    try:
+        if not os.path.exists(backup_path):
+            with open(backup_path, "w", encoding="utf-8") as handle:
+                handle.write(raw)
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump(migrated, handle, indent=2, ensure_ascii=True)
+        os.replace(temp_path, path)
+    except OSError as exc:
+        logger.error(
+            "Could not write the migrated workflow %s; it keeps its placeholder "
+            "tokens, which runs no longer fill: %s",
+            path,
+            exc,
+        )
+        return False
+    roles = ", ".join(b["role"] for b in migrated[BINDINGS_KEY]) or "no inputs"
+    if is_flagged(migrated):
+        logger.warning(
+            "Migrated workflow %s to bindings (%s). A token sat inside a longer "
+            "value, which is kept as a template; the value before it is gone.",
+            path,
+            roles,
+        )
+    else:
+        logger.info("Migrated workflow %s to bindings (%s).", path, roles)
+    return True
 
 
 def is_flagged(document: dict) -> bool:
@@ -178,8 +235,8 @@ def is_flagged(document: dict) -> bool:
     )
 
 
-def run_targets(document: dict) -> dict[str, list[list]]:
-    """The JSON paths a run fills, by role.
+def run_targets(document: dict) -> dict[str, list[dict]]:
+    """What a run fills, by role: ``{"path": [...], "template": str | None}``.
 
     Bindings win when the file has them, even an empty list. Otherwise the
     detected inputs of an API-format graph: exactly one picture input (two is
@@ -187,14 +244,16 @@ def run_targets(document: dict) -> dict[str, list[list]]:
     link upstream when a primitive node feeds it. A UI-format file fills nothing,
     because the run routes can only submit API format (#1307).
     """
-    targets: dict[str, list[list]] = {IMAGE: [], CAPTION: []}
+    targets: dict[str, list[dict]] = {IMAGE: [], CAPTION: []}
     if not isinstance(document, dict):
         return targets
     bindings = document.get(BINDINGS_KEY)
     if isinstance(bindings, list):
         for binding in bindings:
             if isinstance(binding, dict) and binding.get("role") in targets:
-                targets[binding["role"]].append(list(binding.get("path") or ()))
+                targets[binding["role"]].append(
+                    {"path": binding.get("path"), "template": binding.get("template")}
+                )
         return targets
     if isinstance(document.get("nodes"), list):
         return targets
@@ -214,12 +273,14 @@ def run_targets(document: dict) -> dict[str, list[list]]:
         inputs = node.get("inputs") or {}
         for field in INPUT_IMAGE_FIELDS.get(node.get("class_type"), ("image",)):
             if isinstance(inputs.get(field), str):
-                targets[IMAGE].append(prefix + [node_id, "inputs", field])
+                targets[IMAGE].append(
+                    {"path": prefix + [node_id, "inputs", field], "template": None}
+                )
                 break
     for node_id in found.positive_prompts:
         path = _text_path(graph, node_id)
         if path:
-            targets[CAPTION].append(prefix + path)
+            targets[CAPTION].append({"path": prefix + path, "template": None})
     return targets
 
 
@@ -234,16 +295,24 @@ def _text_path(graph: dict, node_id: str, hops: int = 1) -> list | None:
     return None
 
 
-def fill(document: dict, targets: list[list], value: str) -> None:
-    """Set *value* at every path in *targets*, in place.
+def fill(document: dict, targets: list[dict], role: str, value: str) -> None:
+    """Put *value* at every target, in place; a template gets it at its token.
 
     Raises:
         BindingError: A path does not resolve, so the run would silently ignore
             what it was given.
     """
-    for path in targets:
-        if not path:
-            raise BindingError("empty binding path")
+    for target in targets:
+        path = target.get("path")
+        if not isinstance(path, list) or not path:
+            raise BindingError(f"binding path {path!r} is not a JSON path")
+        template = target.get("template")
+        if isinstance(template, str):
+            filled = template
+            for token, token_role in _TOKENS.items():
+                filled = filled.replace(token, value if token_role == role else "")
+        else:
+            filled = value
         parent = document
         try:
             for step in path[:-1]:
@@ -252,7 +321,7 @@ def fill(document: dict, targets: list[list], value: str) -> None:
                 raise IndexError(path[-1])
             if isinstance(parent, dict) and path[-1] not in parent:
                 raise KeyError(path[-1])
-            parent[path[-1]] = value
+            parent[path[-1]] = filled
         except (KeyError, IndexError, TypeError) as exc:
             raise BindingError(
                 f"binding {json.dumps(path)} does not resolve: {exc!r}"

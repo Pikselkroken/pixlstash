@@ -46,6 +46,7 @@ vi.mock("../../api/comfyui", () => ({
 
 import WorkflowShelf from "./WorkflowShelf.vue";
 import { useWorkflowShelfStore } from "../../stores/useWorkflowShelfStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 
 const globalOpts = {
   global: {
@@ -420,13 +421,22 @@ describe("dropping a workflow file", () => {
     });
     expect(listWorkflows).toHaveBeenCalledTimes(2);
     expect(useWorkflowShelfStore().selectedHash).toBe("a".repeat(64));
+    expect(useNoticeStore().notices.map((n) => n.text)).toEqual([
+      "flow.json is already here, as flow.json.",
+    ]);
   });
 
-  it("ignores a drag that carries no files", async () => {
+  it("lights up only for a drag that carries files", async () => {
     const wrapper = await mountShelf();
-    await wrapper
-      .find(".wfshelf")
-      .trigger("drop", { dataTransfer: { types: ["text/plain"], files: [] } });
+    const root = wrapper.find(".wfshelf");
+    await root.trigger("dragenter", {
+      dataTransfer: { types: ["text/plain"], files: [] },
+    });
+    expect(root.classes()).not.toContain("wfshelf--drop");
+    await root.trigger("dragenter", fileDrop([]));
+    expect(root.classes()).toContain("wfshelf--drop");
+    await root.trigger("drop", fileDrop([]));
+    expect(root.classes()).not.toContain("wfshelf--drop");
     expect(importWorkflow).not.toHaveBeenCalled();
   });
 
@@ -436,5 +446,8 @@ describe("dropping a workflow file", () => {
     await wrapper.find(".wfshelf").trigger("drop", fileDrop([file]));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(importWorkflow).not.toHaveBeenCalled();
+    expect(useNoticeStore().notices.map((n) => n.text)).toEqual([
+      "flow.json is not valid JSON.",
+    ]);
   });
 });

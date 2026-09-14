@@ -125,7 +125,7 @@
                       v-model="comfyuiCaption"
                       class="plugin-menu-textarea"
                       rows="6"
-                      placeholder="Optional caption for {{caption}}"
+                      placeholder="Optional caption"
                       @keydown.stop
                     ></textarea>
                   </template>

@@ -194,8 +194,8 @@ function openWorkflowImport() {
 }
 
 // The file is stored as it is: inputs are found from the graph, never mapped
-// here. A copy of a stored workflow is matched to it, and a name already taken
-// by a different workflow keeps both.
+// here. A copy of a stored workflow is matched to it; a name already taken by a
+// different workflow asks whether to replace it, and keeps both otherwise.
 async function handleWorkflowFileChange(event) {
   const file = event?.target?.files?.[0];
   if (!file) return;
@@ -208,11 +208,16 @@ async function handleWorkflowFileChange(event) {
       workflowImportError.value = "Failed to parse workflow JSON.";
       return;
     }
-    await importWorkflow({
-      name: file.name.replace(/\.json$/i, ""),
-      workflow,
-      keepBoth: true,
-    });
+    const name = file.name.replace(/\.json$/i, "");
+    try {
+      await importWorkflow({ name, workflow });
+    } catch (e) {
+      if (e?.response?.status !== 409) throw e;
+      const overwrite = window.confirm(
+        `Workflow '${name}' exists. Replace it? Cancel keeps both.`,
+      );
+      await importWorkflow({ name, workflow, overwrite, keepBoth: !overwrite });
+    }
     await fetchWorkflowList();
   } catch (e) {
     workflowImportError.value = errorDetail(e) || "Failed to import workflow.";

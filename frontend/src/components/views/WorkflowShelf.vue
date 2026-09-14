@@ -885,6 +885,7 @@ async function onFileDrop(event) {
   dropActive.value = false;
   const files = Array.from(event.dataTransfer.files || []);
   let landed = null;
+  let added = false;
   for (const file of files) {
     const label = file.name;
     if (!/\.json$/i.test(file.name)) {
@@ -908,6 +909,7 @@ async function onFileDrop(event) {
         workflow,
         keepBoth: true,
       });
+      added = true;
       landed = body?.topology_hash || landed;
       notices.push({
         level: "success",
@@ -922,9 +924,9 @@ async function onFileDrop(event) {
       });
     }
   }
-  if (landed) {
+  if (added) {
     await store.fetchRows();
-    store.select(landed);
+    if (landed) store.select(landed);
   }
 }
 
