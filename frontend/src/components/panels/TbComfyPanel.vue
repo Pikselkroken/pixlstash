@@ -130,7 +130,10 @@ watch(tbComfyuiSeed, (val) =>
 
 const tbValidComfyWorkflows = computed(() => {
   if (!Array.isArray(tbComfyuiWorkflows.value)) return [];
-  return tbComfyuiWorkflows.value.filter((w) => w?.workflow_type === "t2i");
+  // What run_t2i accepts, not workflow_type, until runs use detection (#1307).
+  return tbComfyuiWorkflows.value.filter((w) =>
+    w?.missing_placeholders?.includes("{{image_path}}"),
+  );
 });
 
 const tbCanRunComfyWorkflow = computed(() => !!tbComfyuiSelectedWorkflow.value);

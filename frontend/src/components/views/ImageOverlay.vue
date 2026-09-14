@@ -180,7 +180,7 @@
                     class="overlay-comfy-warning"
                   >
                     No valid workflows found. Workflows need a
-                    {{ imagePlaceholderLabel }} placeholder.
+                    {{ imagePlaceholderLabel }} placeholder and a save node.
                   </div>
                   <label class="overlay-comfy-field-label">Workflow</label>
                   <select
@@ -200,8 +200,8 @@
                     v-if="invalidComfyWorkflows.length"
                     class="overlay-comfy-note"
                   >
-                    {{ invalidComfyWorkflows.length }} workflow(s) missing
-                    required placeholders.
+                    {{ invalidComfyWorkflows.length }} workflow(s) have no save
+                    node.
                   </div>
                   <template v-if="showComfyuiCaptionInput">
                     <label class="overlay-comfy-field-label">Caption</label>
@@ -1491,14 +1491,17 @@ function persistComfyuiPromptToSession() {
   window.sessionStorage?.setItem(key, value);
 }
 
+// What run_i2i accepts, not workflow_type, until runs use detection (#1307).
+const takesImagePlaceholder = (workflow) =>
+  !workflow?.missing_placeholders?.includes(imagePlaceholderLabel);
 const validComfyWorkflows = computed(() =>
   (comfyuiWorkflows.value || []).filter(
-    (workflow) => workflow?.valid && workflow?.workflow_type === "i2i",
+    (workflow) => workflow?.valid && takesImagePlaceholder(workflow),
   ),
 );
 const invalidComfyWorkflows = computed(() =>
   (comfyuiWorkflows.value || []).filter(
-    (workflow) => !workflow?.valid && workflow?.workflow_type === "i2i",
+    (workflow) => !workflow?.valid && takesImagePlaceholder(workflow),
   ),
 );
 const selectedComfyWorkflow = computed(() =>
