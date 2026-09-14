@@ -17,6 +17,7 @@ vi.mock("vuetify/components", () => ({
 }));
 
 import AppBarButton from "./AppBarButton.vue";
+import { describedAs } from "../../testing/describedAs.js";
 
 describe("AppBarButton", () => {
   it("is a square icon-only control with a 24px glyph when it has no label", () => {
@@ -99,7 +100,7 @@ describe("AppBarButton", () => {
     expect(tip.text()).toBe("Close");
     expect(tip.attributes("data-activator")).toBe("parent");
     // The tip is the name, so it must not also describe: said twice otherwise.
-    expect(btn.attributes("aria-description")).toBeUndefined();
+    expect(btn.attributes("aria-describedby")).toBeUndefined();
   });
 
   it("lets an explicit aria-label win over the tooltip", () => {
@@ -119,9 +120,7 @@ describe("AppBarButton", () => {
     });
     await flushPromises();
     expect(w.find("button").attributes("aria-label")).toBeUndefined();
-    expect(w.find("button").attributes("aria-description")).toBe(
-      "Sort order (S)",
-    );
+    expect(describedAs(w.find("button"))).toBe("Sort order (S)");
   });
 
   it("renders no tip without a tooltip", () => {

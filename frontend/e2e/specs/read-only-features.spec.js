@@ -80,9 +80,9 @@ test.describe('read-only session: owner-only features stay visible', () => {
       await expect(duplicates).toBeVisible()
       await expect(duplicates).toHaveAttribute('aria-disabled', 'true')
       // A labelled row keeps its name; the reason is its tooltip, exposed to
-      // assistive tech as the row's description.
-      await expect(duplicates).toHaveAttribute(
-        'aria-description',
+      // assistive tech as the row's accessible description (aria-describedby,
+      // which every engine exposes, not the Chromium-only aria-description).
+      await expect(duplicates).toHaveAccessibleDescription(
         'Duplicate review is only available in your own library',
       )
       // No badge: the dot reports a fact about the library that this session
@@ -105,8 +105,7 @@ test.describe('read-only session: owner-only features stay visible', () => {
         .first()
       await expect(models).toBeVisible()
       await expect(models).toHaveAttribute('aria-disabled', 'true')
-      await expect(models).toHaveAttribute(
-        'aria-description',
+      await expect(models).toHaveAccessibleDescription(
         'The model shelf is only available in your own library',
       )
       // Unlike the Duplicates row above, this one is a <button>, so

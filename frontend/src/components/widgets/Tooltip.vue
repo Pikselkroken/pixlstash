@@ -1,6 +1,7 @@
 <template>
   <v-tooltip
     v-if="armed"
+    ref="tipRef"
     v-model="open"
     :location="location"
     :open-delay="openDelay"
@@ -41,8 +42,33 @@ function tooltipDelays() {
   }
   return delays;
 }
-</script>
 
+// Tips that are open now, as { host: () => Element, close }. A native `title`
+// shows only the innermost element's; two tips open at once on a row and the
+// button inside it is noise, so only the innermost open tip survives.
+const openTips = new Set();
+
+// The descriptions live here: one hidden node per describing tip, pointed at
+// by `aria-describedby`. `aria-description` would be simpler and is ARIA 1.3,
+// which only Chromium exposes, and some tips (a read-only row's reason) are
+// the only place their words are.
+let descriptionHost = null;
+let descriptionSeq = 0;
+function newDescriptionNode() {
+  if (!descriptionHost) {
+    descriptionHost = document.createElement("div");
+    descriptionHost.hidden = true;
+    descriptionHost.className = "app-tooltip-descriptions";
+    document.body.appendChild(descriptionHost);
+  }
+  const node = document.createElement("span");
+  node.id = `app-tooltip-desc-${++descriptionSeq}`;
+  descriptionHost.appendChild(node);
+  return node;
+}
+
+const tokens = (value) => (value || "").split(/\s+/).filter(Boolean);
+</script>
 <script setup>
 import {
   computed,
@@ -68,7 +94,8 @@ import { VTooltip } from "vuetify/components";
  * default delay is none, so a tip strobed open as the pointer crossed a bar.
  *
  * Hover waits `--tooltip-delay`; keyboard focus opens at once, because a
- * keyboard user asked for this control. Escape dismisses.
+ * keyboard user asked for this control. Escape dismisses, and so does a
+ * press. Of nested tips only the innermost stays open.
  *
  * Two ways to attach it: the `activator` slot, as with `v-tooltip`, or
  * `activator="parent"` from inside the control (how `AppButton`'s `tooltip`
@@ -80,8 +107,8 @@ const props = defineProps({
   shortcut: { type: String, default: "" },
   location: { type: String, default: "top" },
   disabled: { type: Boolean, default: false },
-  // Expose the tip to assistive tech as the control's `aria-description`. Off
-  // where the tip's text is already the control's name, or it is said twice.
+  // Describe the control with the tip's text (`aria-describedby`). Off where
+  // the text is already the control's name, or it is said twice.
   describe: { type: Boolean, default: true },
 });
 
@@ -89,95 +116,154 @@ const attrs = useAttrs();
 const slots = useSlots();
 const instance = getCurrentInstance();
 const open = ref(false);
+const tipRef = ref(null);
 
 const { openDelay, closeDelay } = tooltipDelays();
 
 const description = computed(() =>
-  props.describe && props.text ? props.text : undefined,
+  props.describe && props.text ? props.text : "",
 );
 
-// Vuetify points the activator's `aria-describedby` at the tip's id, and
-// writes it over whatever the control already had: a blocked button's
-// pointer at its visible reason is lost. The tip is not eager, so that id
-// names nothing until it opens anyway. The description travels as
-// `aria-description` instead, and the control's own `aria-describedby` is
-// left as the control set it.
-//
-// With a slot activator the key is simply dropped from what the call site binds.
+// Vuetify points the activator's `aria-describedby` at the tip's id and writes
+// it over whatever the control already had: a blocked button's pointer at its
+// visible reason is lost, and the tip is not eager, so that id names nothing
+// until it opens. With a slot activator the key is dropped from what the call
+// site binds; the description is added to the element below.
 function slotActivatorProps(slotProps) {
   const rest = { ...slotProps };
   delete rest["aria-describedby"];
-  if (description.value) rest["aria-description"] = description.value;
   return rest;
 }
 
 // With `activator="parent"` the Vuetify tooltip is not built until the control
 // is first hovered or focused. A `v-tooltip` costs roughly twenty times a
-// native `title` to mount, and a grid tile carries several (the rating stars
-// alone are five), so building them all up front made the grid pay for tips
-// nobody opened. The slot form cannot defer: arming would re-render the
-// activator under the tooltip and drop its focus.
+// native `title` to mount, and a grid tile carries several, so building them
+// all up front made the grid pay for tips nobody opened. The slot form cannot
+// defer: arming would re-render the activator under the tooltip and drop its
+// focus, which is why a repeated control should take the parent form.
 //
 // Vuetify then binds straight onto the element, so the only way to keep the
 // control's own `aria-describedby` is to hand it back. It is read at arming,
-// when the parent's attributes are set; Vue still owns later changes, because
-// this value never changes again and so is never re-bound.
+// when the parent's attributes are set; the description's id is re-added by
+// the observer below whenever anything rewrites the attribute.
 const deferred = attrs.activator === "parent";
 const armed = ref(!deferred);
 const parentEl = ref(null);
 const ownDescribedby = ref(undefined);
 let pendingOpen = 0;
 
+/** The element the tip describes and anchors to, in either form. */
+const host = () => parentEl.value ?? tipRef.value?.activatorEl ?? null;
+
 function arm(e) {
   const el = parentEl.value;
   el.removeEventListener("mouseenter", arm);
-  el.removeEventListener("focus", arm);
-  ownDescribedby.value = el.getAttribute("aria-describedby") ?? undefined;
+  const own = tokens(el.getAttribute("aria-describedby")).filter(
+    (id) => id !== descriptionNode?.id,
+  );
+  ownDescribedby.value = own.length ? own.join(" ") : undefined;
   armed.value = true;
   // Vuetify binds its own listeners a tick later and never sees the event
   // that armed it, so this one is honoured here.
-  if (props.disabled || !(props.text || slots.default)) return;
-  if (e.type === "focus") {
-    onFocus(e);
-    return;
-  }
+  if (e.type !== "mouseenter" || props.disabled) return;
+  if (!(props.text || slots.default)) return;
   pendingOpen = setTimeout(() => (open.value = true), openDelay);
   el.addEventListener("mouseleave", () => clearTimeout(pendingOpen), {
     once: true,
   });
 }
 
+// `focusin` and `focusout`, not `focus`: the parent is often a wrapper (a row,
+// a label) around the control that takes focus, and `focus` does not bubble.
+function onFocusIn(e) {
+  if (!armed.value) arm(e);
+  onFocus(e);
+}
+
+function onFocusOut(e) {
+  if (!parentEl.value?.contains(e.relatedTarget)) close();
+}
+
 onMounted(() => {
   if (!deferred) return;
-  parentEl.value = instance?.proxy?.$el?.parentElement ?? null;
-  parentEl.value?.addEventListener("mouseenter", arm);
-  parentEl.value?.addEventListener("focus", arm);
+  // Vuetify's own `parent` walk skips `data-no-activator` wrappers (a v-btn's
+  // content span); matched, so both anchor to the same element.
+  let el = instance?.proxy?.$el?.parentElement ?? null;
+  while (el?.hasAttribute("data-no-activator")) el = el.parentElement;
+  parentEl.value = el;
+  el?.addEventListener("mouseenter", arm);
+  el?.addEventListener("focusin", onFocusIn);
+  el?.addEventListener("focusout", onFocusOut);
 });
+
+// ── The description ───────────────────────────────────────────────────────
+let descriptionNode = null;
+let observer = null;
+let observedEl = null;
+
+function describeInto(el) {
+  const current = tokens(el.getAttribute("aria-describedby"));
+  const id = descriptionNode?.id;
+  const wanted = description.value && id;
+  const next = current.filter((t) => t !== id);
+  if (wanted) next.push(id);
+  if (next.join(" ") === current.join(" ")) return;
+  if (next.length) el.setAttribute("aria-describedby", next.join(" "));
+  else el.removeAttribute("aria-describedby");
+}
+
+watchEffect(() => {
+  const el = host();
+  if (description.value && !descriptionNode) {
+    descriptionNode = newDescriptionNode();
+  }
+  if (descriptionNode) descriptionNode.textContent = description.value;
+  if (!el || !descriptionNode) return;
+  if (observedEl !== el) {
+    observer?.disconnect();
+    // Vue re-renders the control's own value, and Vuetify binds and unbinds
+    // it; either drops the id, so it goes back whenever the attribute moves.
+    observer = new MutationObserver(() => describeInto(el));
+    observer.observe(el, { attributeFilter: ["aria-describedby"] });
+    observedEl = el;
+  }
+  describeInto(el);
+});
+
 // A tip can go while its control stays (`AppButton`'s `v-if="tooltip"`). On
 // teardown Vuetify removes every attribute it bound, the control's own
-// `aria-describedby` included, so the value the control holds now is put back
-// once Vuetify is done; and a description nobody shows must not be announced.
+// `aria-describedby` included, so the value the control holds now, less this
+// tip's description, is put back once Vuetify is done.
 let describedbyAtUnmount = null;
+let unmountHost = null;
 onBeforeUnmount(() => {
   clearTimeout(pendingOpen);
+  openTips.delete(registration);
+  observer?.disconnect();
+  unmountHost = host();
   const el = parentEl.value;
-  if (!el) return;
-  el.removeEventListener("mouseenter", arm);
-  el.removeEventListener("focus", arm);
-  el.removeAttribute("aria-description");
-  describedbyAtUnmount = el.getAttribute("aria-describedby");
+  if (el) {
+    el.removeEventListener("mouseenter", arm);
+    el.removeEventListener("focusin", onFocusIn);
+    el.removeEventListener("focusout", onFocusOut);
+  }
+  if (unmountHost) {
+    const own = tokens(unmountHost.getAttribute("aria-describedby")).filter(
+      (id) => id !== descriptionNode?.id,
+    );
+    describedbyAtUnmount = own.join(" ");
+  }
+  descriptionNode?.remove();
 });
 onUnmounted(() => {
-  if (describedbyAtUnmount != null) {
-    parentEl.value?.setAttribute("aria-describedby", describedbyAtUnmount);
+  if (unmountHost) {
+    if (describedbyAtUnmount) {
+      unmountHost.setAttribute("aria-describedby", describedbyAtUnmount);
+    } else {
+      unmountHost.removeAttribute("aria-describedby");
+    }
   }
   document.removeEventListener("keydown", onDocumentKeydown);
-});
-watchEffect(() => {
-  const el = parentEl.value;
-  if (!el) return;
-  if (description.value) el.setAttribute("aria-description", description.value);
-  else el.removeAttribute("aria-description");
 });
 
 // Not eager: a tip is rendered when it opens, not once per button on the page.
@@ -191,18 +277,36 @@ const activatorProps = computed(() => ({
   onMousedown: close,
 }));
 
-// Escape dismisses wherever focus is (WCAG 1.4.13). Vuetify's own Escape
-// handling never closes a tooltip, which it marks persistent, and a tip
-// opened by the pointer may not have focus anywhere near it.
+const registration = { host, close };
+
 watch(open, (isOpen) => {
-  if (isOpen) document.addEventListener("keydown", onDocumentKeydown);
-  else document.removeEventListener("keydown", onDocumentKeydown);
+  if (!isOpen) {
+    openTips.delete(registration);
+    document.removeEventListener("keydown", onDocumentKeydown);
+    return;
+  }
+  const mine = host();
+  for (const other of openTips) {
+    const theirs = other.host();
+    if (!mine || !theirs || theirs === mine) continue;
+    // An open tip inside this one's control wins; this one stays shut.
+    if (mine.contains(theirs)) {
+      open.value = false;
+      return;
+    }
+    // This one is inside an open tip's control: that one gives way.
+    if (theirs.contains(mine)) other.close();
+  }
+  openTips.add(registration);
+  // Escape dismisses wherever focus is (WCAG 1.4.13). Vuetify's own Escape
+  // handling never closes a tooltip, which it marks persistent, and a tip
+  // opened by the pointer may not have focus anywhere near it.
+  document.addEventListener("keydown", onDocumentKeydown);
 });
 
 function onFocus(e) {
-  if (!props.disabled && e.target?.matches?.(":focus-visible")) {
-    open.value = true;
-  }
+  if (props.disabled || !(props.text || slots.default)) return;
+  if (e.target?.matches?.(":focus-visible")) open.value = true;
 }
 
 function close() {

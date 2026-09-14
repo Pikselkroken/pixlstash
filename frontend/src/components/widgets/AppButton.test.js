@@ -6,7 +6,7 @@
 // busy for assistive tech, and swaps the leading icon for the app's spinner.
 
 import { describe, it, expect, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { nextTick } from "vue";
 
 vi.mock("vuetify/components", () => ({
@@ -18,6 +18,7 @@ vi.mock("vuetify/components", () => ({
 }));
 
 import AppButton from "./AppButton.vue";
+import { describedAs } from "../../testing/describedAs.js";
 
 function mountButton(props = {}) {
   return mount(AppButton, { props, slots: { default: "Save" } });
@@ -136,7 +137,10 @@ describe("AppButton tooltip", () => {
       slots: { default: "Save" },
     });
     expect(w.find("button").attributes("aria-label")).toBeUndefined();
-    await w.find("button").trigger("focus");
+    await flushPromises();
+    expect(describedAs(w.find("button"))).toBe("Writes to disk");
+    // Focus bubbles to the tip as `focusin`, which is what builds it.
+    await w.find("button").trigger("focusin");
     expect(w.find(".tip").text()).toBe("Writes to disk");
   });
 });

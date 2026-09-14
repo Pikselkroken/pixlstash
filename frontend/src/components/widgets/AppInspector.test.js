@@ -5,6 +5,7 @@ import { describe, it, expect } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 
 import AppInspector from "./AppInspector.vue";
+import { describedAs } from "../../testing/describedAs.js";
 
 const TABS = [
   { value: "a", label: "Alpha" },
@@ -41,7 +42,7 @@ describe("AppInspector", () => {
     expect(beta.attributes("disabled")).toBeDefined();
     // The reason is the tab's tooltip, which a labelled tab exposes as its
     // description (buttons.md, "Tooltips").
-    expect(beta.attributes("aria-description")).toBe("Nothing here");
+    expect(describedAs(beta)).toBe("Nothing here");
     await beta.trigger("click");
     expect(wrapper.emitted("update:modelValue")).toBeUndefined();
   });
