@@ -416,7 +416,7 @@ The same module also serves the **v1.9 tiered Duplicates queue** — `GET /dedup
 | GET | `/server-config/ghost-retention` | Which picture ghosts a purge may keep (`workflow_ghost_retention`, `workflow_ghost_retention_choices`), plus the two counts the Privacy pane's purges show: `picture_ghosts` (active library) and `model_ghosts` (hub-wide), both `null` without a hub. `covered` is the shipped default |
 | PATCH | `/server-config/ghost-retention` | Set the position (`off` / `covered` / `on`). Persists to `server-config.json` and takes effect on the next purge. Destroys nothing synchronously — clearing ghosts that are ALREADY held is the erase below |
 | DELETE | `/server-config/ghost-retention/ghosts` | Erase the active library's picture ghosts (`ghosts_erased`); other libraries' are untouched. Leaves the setting as it is |
-| DELETE | `/server-config/ghost-retention/model-ghosts` | Forget every model filename recipes keep for a model not on the shelf (`names_forgotten`). Hub-wide. Hashes and documents are untouched, so the workflows still group |
+| DELETE | `/server-config/ghost-retention/model-ghosts` | Forget every `.safetensors` filename and loader digest recipes keep for a model not on the shelf (`names_forgotten`); `?expected=N` refuses with 409 when the set is no longer the size that was confirmed. Hub-wide. Hashes and documents are untouched, so the workflows still group |
 
 ### `reference_folders.py`, `import_folders.py`, `filesystem.py`
 CRUD for reference / import folders; filesystem browsing for picker dialogs.
@@ -3100,12 +3100,17 @@ the position that holds less of the user's data.
 **Model ghosts are the other half of §5.** The readable filename of a model no
 longer on the shelf survives inside `workflow_recipe_asset`, and forgetting it
 is a row delete with no stored graph rewritten. `hub/workflows.model_ghost_names`
-is the set: every model-extension name recipes keep that matches neither a
-`model.filename` nor a `model_file` basename (a tombstoned model still counts as
-on the shelf, since the shelf still lists it). `DELETE
-/server-config/ghost-retention/model-ghosts` forgets them all, re-reading the
-set inside its own write so a model added since the count was shown keeps its
-name. Hub-wide rather than per library, because a model name is not a fact
+is the set: every `.safetensors` name recipes keep that matches neither a
+`model.filename` nor a `model_file` basename, and every loader `*_sha256` value
+matching no `model.sha256` (a digest identifies a model on a public registry as
+well as its name does). Only what the shelf can hold is judged: the scanner
+lists `.safetensors` alone, so a `.ckpt` or `.gguf` would always read as a ghost
+and its purge would forget the name of a model still on disk. A tombstoned model
+still counts as on the shelf, since the shelf still lists it; a model never
+added to it does not, and the Privacy copy says so. `DELETE
+/server-config/ghost-retention/model-ghosts?expected=N` forgets them all,
+re-reading the set inside its own write and refusing with 409 when its size is
+no longer the `N` the person confirmed. Hub-wide rather than per library, because a model name is not a fact
 about one library. A picture purge does not reach them: a model
 ghost is created by removing a model from the shelf and has no relationship to
 any one picture. The structural hash is a digest computed *from* the filenames

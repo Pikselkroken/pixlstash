@@ -291,8 +291,14 @@ export async function purgePictureGhosts() {
 /**
  * Forget every model name kept for a model that is not on the shelf.
  *
+ * @param {number} expected - the count the person confirmed; the server
+ *   refuses with 409, forgetting nothing, when the set is no longer that size.
  * @returns {Promise<{names_forgotten: number}>}
  */
-export async function purgeModelGhosts() {
-  return unwrap(apiClient.delete(`${GHOST_RETENTION_URL}/model-ghosts`));
+export async function purgeModelGhosts(expected) {
+  return unwrap(
+    apiClient.delete(`${GHOST_RETENTION_URL}/model-ghosts`, {
+      params: { expected },
+    }),
+  );
 }

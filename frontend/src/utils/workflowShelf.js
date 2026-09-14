@@ -135,7 +135,10 @@ export function modelSummary(assets, max = 2, forgotten = 0) {
   const shown = models.slice(0, max).map((asset) => modelStem(asset.name));
   const rest = models.length - shown.length;
   const named = rest > 0 ? `${shown.join(", ")}, +${rest}` : shown.join(", ");
-  return lost ? `${named}, ${lost} forgotten` : named;
+  // No number beside names: on a workflow row the names are the union across
+  // variants and the count is one variant's, so "a, b, 3 forgotten" would add
+  // two different kinds of figure into one sum.
+  return lost ? `${named}, names forgotten` : named;
 }
 
 /**

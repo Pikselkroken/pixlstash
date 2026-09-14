@@ -23,11 +23,12 @@ from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from pixlstash.hub.db import HubDatabase
+from pixlstash.services.model_folder_scanner import MODEL_SUFFIX as SHELF_MODEL_SUFFIX
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services.workflow_hash import (
     HASH_VERSION,
-    MODEL_EXTENSIONS,
+    SHA256_FIELD_RE,
     asset_reference,
     assets_from_reduction,
     document_from_reduction,
@@ -220,45 +221,66 @@ def _model_ghost_names(fetchall: Callable[[str], list]) -> set[str]:
     it, and the shelf still lists it. Both the recorded filename and every
     copy's basename count, because a copy renamed on disk is the same model.
     """
-    shelf = {
+    shelf_names = {
         normalized_filename(row[0])
         for row in fetchall("SELECT filename FROM model WHERE filename IS NOT NULL")
     }
-    shelf.update(
+    shelf_names.update(
         normalized_filename(row[0])
         for row in fetchall("SELECT relpath FROM model_file")
     )
-    return {
-        row[0]
-        for row in fetchall(
-            "SELECT DISTINCT normalized_filename FROM workflow_recipe_asset"
-        )
-        if row[0].endswith(MODEL_EXTENSIONS) and row[0] not in shelf
+    shelf_digests = {
+        row[0].lower()
+        for row in fetchall("SELECT sha256 FROM model WHERE sha256 IS NOT NULL")
     }
+    ghosts = set()
+    for widget, value in fetchall(
+        "SELECT DISTINCT widget_name, normalized_filename FROM workflow_recipe_asset"
+    ):
+        if SHA256_FIELD_RE.search(widget):
+            if value not in shelf_digests:
+                ghosts.add(value)
+        elif value.endswith(SHELF_MODEL_SUFFIX) and value not in shelf_names:
+            ghosts.add(value)
+    return ghosts
 
 
 def model_ghost_names(hub: HubDatabase) -> set[str]:
-    """The readable model filenames recipes keep for models not on the shelf.
+    """What recipes keep that names a model the shelf does not hold.
 
-    These are **model ghosts**: a name that says which model a workflow used,
-    kept after the model itself has gone (or was never here). Image filenames a
-    graph loads are not models and are not counted; neither are the loaders'
-    ``*_sha256`` values, which name nobody. Hub-wide, like the recipes: a model
-    filename is not a fact about any one library.
+    These are **model ghosts**: a ``.safetensors`` filename matching no model on
+    the shelf, or a loader's ``*_sha256`` value matching no model's digest (a
+    digest identifies a model on a public registry as surely as its name does).
+    Only what the shelf can hold is judged: it scans ``.safetensors`` alone, so
+    a ``.ckpt`` or ``.gguf`` is never on it and calling one a ghost would forget
+    the name of a model still on disk. A model that was never added to the shelf
+    counts — a picture made elsewhere names one — and the Privacy copy says so.
+    Hub-wide, like the recipes: a model name is not a fact about one library.
     """
     return _model_ghost_names(hub.fetchall)
 
 
-def forget_model_ghosts(hub: HubDatabase) -> int:
-    """Forget every model ghost's name. Returns how many names were forgotten.
+def forget_model_ghosts(
+    hub: HubDatabase, expected: Optional[int] = None
+) -> Optional[int]:
+    """Forget every model ghost. Returns how many values were forgotten.
 
-    The set is re-read inside the write, so a model added to the shelf since the
-    count was shown keeps its name. Each forget is :func:`forget_asset_names`'s
+    The set is re-read inside the write. ``expected`` is the count the person
+    confirmed: when the set has changed size since (an import filed new names,
+    or a model came back to the shelf), nothing is forgotten and ``None`` is
+    returned, so a confirm never destroys more than it showed. Each forget is a
     row delete: no document is rewritten and no hash moves, so the workflow
-    still groups and simply reads as models whose names are forgotten.
+    still groups and reads as models whose names are forgotten.
     """
     with hub.transaction() as conn:
         names = sorted(_model_ghost_names(lambda sql: conn.execute(sql).fetchall()))
+        if expected is not None and expected != len(names):
+            logger.info(
+                "Model-ghost forget refused: %d confirmed, %d now.",
+                expected,
+                len(names),
+            )
+            return None
         for batch in chunked(names):
             placeholders = ",".join("?" for _ in batch)
             conn.execute(
@@ -266,11 +288,13 @@ def forget_model_ghosts(hub: HubDatabase) -> int:
                 f"WHERE normalized_filename IN ({placeholders})",
                 tuple(batch),
             )
-    logger.info("Forgot the names of %d model(s) not on the shelf.", len(names))
+    logger.info("Forgot %d model name(s) or digest(s) not on the shelf.", len(names))
     return len(names)
 
 
-def forgotten_asset_counts(hub: HubDatabase) -> dict[str, dict[str, int]]:
+def forgotten_asset_counts(
+    hub: HubDatabase, topology_hash: Optional[str] = None
+) -> dict[str, dict[str, int]]:
     """How many of each recipe's assets no longer have a readable name.
 
     The stored document names every asset by :func:`asset_reference`, so a
@@ -278,15 +302,23 @@ def forgotten_asset_counts(hub: HubDatabase) -> dict[str, dict[str, int]]:
     that was forgotten. That is what lets a row say "3 models, names forgotten"
     rather than going blank.
 
+    Args:
+        topology_hash: Read only this topology's documents (a row's expand)
+            rather than the whole hub.
+
     Returns:
         ``{topology_hash: {structural_hash: count}}``, recipes with nothing
         forgotten absent.
     """
-    # ponytail: re-reads every document per call (~600 on a large library, one
-    # json_each pass in C); cache per hub write if the list ever feels it.
+    # ponytail: the list re-reads every document per call (~600 on a large
+    # library, one json_each pass in C); cache per hub write if it ever shows.
     known: dict[str, set[str]] = {}
+    scope = "WHERE r.topology_hash = ?" if topology_hash else ""
+    params = (topology_hash,) if topology_hash else ()
     for row in hub.fetchall(
-        "SELECT structural_hash, normalized_filename FROM workflow_recipe_asset"
+        "SELECT a.structural_hash, a.normalized_filename FROM workflow_recipe_asset a "
+        f"JOIN workflow_recipe r ON r.structural_hash = a.structural_hash {scope}",
+        params,
     ):
         known.setdefault(row["structural_hash"], set()).add(
             asset_reference(row["normalized_filename"])
@@ -298,7 +330,10 @@ def forgotten_asset_counts(hub: HubDatabase) -> dict[str, dict[str, int]]:
         "JOIN workflow_recipe r ON r.structural_hash = g.structural_hash, "
         "     json_each(g.document) n, json_each(n.value, '$.inputs') i "
         "WHERE json_valid(g.document) AND n.type = 'object' "
+        "  AND json_type(n.value, '$.inputs') = 'object' "
         "  AND i.type = 'text' AND i.value LIKE 'asset:%'"
+        + (" AND r.topology_hash = ?" if topology_hash else ""),
+        params,
     )
     counts: dict[str, dict[str, int]] = {}
     for row in rows:

@@ -520,6 +520,53 @@ def test_forgetting_model_ghosts_keeps_the_workflow_and_the_shelfs_names(
     assert owner.get(f"{API}/server-config/ghost-retention").json()["model_ghosts"] == 0
 
 
+def test_model_ghosts_judge_only_what_the_shelf_can_hold(workflow_env):
+    """The shelf scans ``.safetensors`` alone, so a ``.pth`` is never on it and
+    must never be forgotten as a ghost. A loader digest is judged against the
+    shelf's digests: the unknown one goes, the one on the shelf stays."""
+    server = workflow_env.server
+    on_shelf, unknown = _h("digest-on-shelf"), _h("digest-unknown")
+    with server.hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO workflow_recipe_asset "
+            "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
+            [
+                (BUSY_RECIPE_A, "model_name", "4x_ultrasharp.pth"),
+                (BUSY_RECIPE_A, "lora_sha256", unknown),
+                (BUSY_RECIPE_B, "lora_sha256", on_shelf),
+            ],
+        )
+        conn.execute("DELETE FROM model WHERE sha256 = ?", (on_shelf,))
+        conn.execute(
+            "INSERT INTO model (file_kind, kind, sha256, provenance) "
+            "VALUES ('adapter', 'lora', ?, 'scanned')",
+            (on_shelf,),
+        )
+    try:
+        owner = workflow_env.owner
+        base = f"{API}/server-config/ghost-retention"
+        assert owner.get(base).json()["model_ghosts"] == 2
+        # A confirm for a count that is no longer true destroys nothing.
+        r = owner.delete(f"{base}/model-ghosts", params={"expected": 1})
+        assert r.status_code == 409, r.text
+        assert owner.get(base).json()["model_ghosts"] == 2
+
+        r = owner.delete(f"{base}/model-ghosts", params={"expected": 2})
+        assert r.status_code == 200, r.text
+        assert r.json()["names_forgotten"] == 2
+        left = {
+            row["normalized_filename"]
+            for row in server.hub.fetchall(
+                "SELECT normalized_filename FROM workflow_recipe_asset"
+            )
+        }
+        assert {"4x_ultrasharp.pth", on_shelf, _SHELF_FILENAME} <= left
+        assert not {"add_detail.safetensors", unknown} & left
+    finally:
+        with server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE sha256 = ?", (on_shelf,))
+
+
 def test_a_model_back_on_the_shelf_is_not_a_ghost(workflow_env):
     """A copy's basename counts as much as the recorded filename."""
     server = workflow_env.server

@@ -291,7 +291,7 @@ def create_router(server) -> APIRouter:
         hashes = [row["structural_hash"] for row in recipes]
         activity = read_recipe_activity(server.vault, hashes)
         assets = assets_for_topology_recipes(hub, topology_hash)
-        forgotten = forgotten_asset_counts(hub).get(topology_hash, {})
+        forgotten = forgotten_asset_counts(hub, topology_hash).get(topology_hash, {})
         variants = []
         for row in recipes:
             seen = activity.get(row["structural_hash"])

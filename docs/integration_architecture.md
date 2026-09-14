@@ -429,8 +429,10 @@ The Workflows view's read side (implementation plan §F1/§F2). Four GETs, no
 mutators: naming a workflow and running one are later steps. Forgetting ghosts
 is not here either: it is two purges beside the retention setting,
 `DELETE /server-config/ghost-retention/ghosts` and
-`.../model-ghosts`, whose counts `GET /server-config/ghost-retention` returns
-as `picture_ghosts` and `model_ghosts` (Settings › Privacy, `PrivacySection`).
+`.../model-ghosts?expected=N`, whose counts `GET /server-config/ghost-retention`
+returns as `picture_ghosts` and `model_ghosts` (Settings › Privacy,
+`PrivacySection`). The client sends the model count it showed as `expected`,
+and a `409` means the set changed and nothing was forgotten.
 
 | Route | Purpose | Response |
 |---|---|---|
@@ -473,7 +475,8 @@ Five things the two sides have agreed and neither may drift from:
    ability to say which model it was is gone. `forgotten_models` counts those
    (read off the document's unresolved asset references; a maximum over
    variants on a topology row), so the client says "3 models, names forgotten"
-   and keeps "no model names" for a graph that names none. `ghosts` (this
+   (or "a, b, names forgotten", with no number beside a union of names) and
+   keeps "no model names" for a graph that names none. `ghosts` (this
    library's picture ghosts) and `model_ghosts` (names for models not on the
    shelf) are what the toolbar's Ghosts toggle filters on, client-side.
 5. **`runnable` is always `false`, and it is in the payload rather than in a

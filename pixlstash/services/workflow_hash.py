@@ -133,7 +133,7 @@ _MAX_FILENAME_LENGTH = 255
 # filename (`lora_sha256`, `checkpoint_sha256`), so the extension rules below
 # cannot see them. Without this a LoRA swap on a PixlStash node would leave the
 # recipe unchanged, which is the one error the spec calls unrecoverable.
-_SHA256_FIELD_RE = re.compile(r"(^|_)sha256$")
+SHA256_FIELD_RE = re.compile(r"(^|_)sha256$")
 
 # Defense in depth against a third-party node that puts a credential in a
 # widget. Nothing in the shipped ComfyUI-PixlStash suite does - its connection
@@ -253,7 +253,7 @@ def structural_widget_value(name: str, value: Any) -> Optional[str]:
         return None
     if not isinstance(value, str):
         return None
-    if _SHA256_FIELD_RE.search(name):
+    if SHA256_FIELD_RE.search(name):
         return value.lower()
     lowered = name.lower()
     if lowered in _TEXT_FIELD_NAMES or _TEXT_FIELD_SUFFIX_RE.search(lowered):

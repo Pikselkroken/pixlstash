@@ -105,8 +105,21 @@ describe("ghost retention", () => {
     expect(wrapper.text()).toContain("Forget 3 model names?");
     await button(wrapper, "Purge").trigger("click");
     await flushPromises();
-    expect(api.purgeModelGhosts).toHaveBeenCalledTimes(1);
+    expect(api.purgeModelGhosts).toHaveBeenCalledWith(3);
     expect(api.purgePictureGhosts).not.toHaveBeenCalled();
+  });
+
+  it("keeps the section and says why when a purge and its re-read both fail", async () => {
+    const wrapper = await mountPane();
+    api.purgeModelGhosts.mockRejectedValue({ response: { status: 409 } });
+    api.getGhostRetention.mockRejectedValue(new Error("offline"));
+    await button(wrapper, "Purge 3").trigger("click");
+    await button(wrapper, "Purge").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Model ghosts");
+    expect(wrapper.find("[role='alert']").text()).toContain(
+      "nothing was purged",
+    );
   });
 
   it("draws no ghost controls when the server has no hub", async () => {

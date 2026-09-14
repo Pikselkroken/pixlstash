@@ -1127,7 +1127,8 @@ def create_router(server) -> APIRouter:
         model_ghosts: int | None = Field(
             None,
             description=(
-                "Model names recipes keep for models not on the shelf, hub-wide. "
+                "Model names and digests recipes keep for models not on the shelf, "
+                "hub-wide. "
                 "Null without a hub."
             ),
         )
@@ -1252,14 +1253,25 @@ def create_router(server) -> APIRouter:
         summary="Forget the names of models no longer on the shelf",
         response_model=ModelGhostForgetResponse,
         description=(
-            "Permanently forgets every model filename a workflow recipe keeps "
-            "for a model that is not on the shelf. The workflows stay and still "
+            "Permanently forgets every `.safetensors` filename, and every "
+            "loader `*_sha256` digest, a workflow recipe keeps for a model that "
+            "is not on the shelf. The workflows stay and still "
             "group, because their hashes are computed from the names rather "
             "than containing them; they read as models whose names are "
             "forgotten. Hub-wide: a model name is not a fact about one library."
         ),
     )
-    def forget_model_ghost_names(request: Request):
+    def forget_model_ghost_names(
+        request: Request,
+        expected: Optional[int] = Query(
+            None,
+            ge=0,
+            description=(
+                "The count the person confirmed. When the set has changed size "
+                "since, nothing is forgotten and the answer is a 409."
+            ),
+        ),
+    ):
         _ensure_secure_when_required(request)
         hub = getattr(server, "hub", None)
         if hub is None:
@@ -1267,7 +1279,13 @@ def create_router(server) -> APIRouter:
                 status_code=503,
                 detail="No hub is attached, so there are no model ghosts.",
             )
-        return {"status": "success", "names_forgotten": forget_model_ghosts(hub)}
+        forgotten = forget_model_ghosts(hub, expected)
+        if forgotten is None:
+            raise HTTPException(
+                status_code=409,
+                detail="The model ghosts changed since they were counted. Nothing was forgotten.",
+            )
+        return {"status": "success", "names_forgotten": forgotten}
 
     @router.get(
         "/server-config/scrapheap-retention/impact",

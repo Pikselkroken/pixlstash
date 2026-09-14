@@ -90,8 +90,8 @@
 
   <!-- What a permanent delete leaves behind (#1309). A ghost is the thumbnail
        and prompt of a destroyed picture, or the filename of a model no longer
-       on the shelf. Rendered only once the server has answered: a hubless
-       server has no ghosts, and a control that cannot save is worse than none. -->
+       on the shelf. Rendered only once the server has answered; a hubless
+       server answers with null counts, so it gets the setting and no purges. -->
   <SettingsSection
     v-if="ghosts"
     title="Deleted pictures"
@@ -126,7 +126,7 @@
     <SettingsRow
       v-if="ghosts.model_ghosts != null"
       label="Model ghosts"
-      sub="Filenames workflows remember for models no longer on your shelf. The workflows stay grouped; their models read as names forgotten."
+      sub="Model filenames and digests workflows remember for models that are not on your shelf, including ones you never added. The workflows stay grouped; their models read as names forgotten."
     >
       <AppButton
         variant="secondary"
@@ -290,9 +290,9 @@ const PURGES = {
   },
   model: {
     title: (n) => `Forget ${n} model ${n === 1 ? "name" : "names"}?`,
-    body: "Workflows stop saying which models they used when those models are not on your shelf. They still group, and read as names forgotten. This cannot be undone.",
-    run: async () => {
-      await purgeModelGhosts();
+    body: "Workflows stop saying which models they used, for every model that is not on your shelf, including models you never added. They still group, and read as names forgotten. This cannot be undone.",
+    run: async (count) => {
+      await purgeModelGhosts(count);
     },
   },
 };
@@ -312,8 +312,9 @@ async function loadGhosts() {
     ghosts.value = await getGhostRetention();
   } catch (e) {
     // Owner-only route: a session that cannot read it simply has no section.
+    // One that could read it before keeps what it had, or a failed re-read
+    // after a purge would take the section away with its own error message.
     console.warn("Could not read the ghost retention setting:", e);
-    ghosts.value = null;
   }
 }
 
@@ -344,10 +345,13 @@ async function doPurge() {
   if (!kind) return;
   ghostBusy.value = true;
   try {
-    await PURGES[kind].run();
+    await PURGES[kind].run(purgeCount.value);
   } catch (e) {
     console.error(`Failed to purge ${kind} ghosts:`, e);
-    ghostError.value = "Could not purge. The server log has the reason.";
+    ghostError.value =
+      e?.response?.status === 409
+        ? "The count changed since it was shown, so nothing was purged. Check the new count and try again."
+        : "Could not purge. The server log has the reason.";
   } finally {
     // Re-read either way: the counts are the server's to say, and a purge
     // that failed half-way must not leave a stale number on the button.
