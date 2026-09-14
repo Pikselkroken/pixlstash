@@ -12,6 +12,7 @@ import {
   filterWorkflows,
   GROUP_BY_KEYS,
   groupWorkflows,
+  hasGhosts,
   libraryState,
   SHOW_KEYS,
   SORT_KEYS,
@@ -35,7 +36,13 @@ const VIEW_SCHEMA_VERSION = 1;
 const MAX_COLLAPSED_KEYS = 200;
 
 function defaultView() {
-  return { groupBy: "none", sortKey: "used", descending: true, show: "all" };
+  return {
+    groupBy: "none",
+    sortKey: "used",
+    descending: true,
+    show: "all",
+    ghosts: false,
+  };
 }
 
 function readStored(key) {
@@ -71,6 +78,7 @@ function storedView() {
   if (typeof parsed.descending === "boolean") {
     view.descending = parsed.descending;
   }
+  if (typeof parsed.ghosts === "boolean") view.ghosts = parsed.ghosts;
   const collapsed = Array.isArray(parsed.collapsed) ? parsed.collapsed : [];
   return { view, collapsed: collapsed.filter((k) => typeof k === "string") };
 }
@@ -117,13 +125,17 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
   // reset must not write its rows into the new session's store.
   let epoch = 0;
 
-  const visibleRows = computed(() =>
-    sortWorkflows(
-      filterWorkflows(rows.value, view.show),
+  const visibleRows = computed(() => {
+    const shown = filterWorkflows(rows.value, view.show);
+    return sortWorkflows(
+      view.ghosts ? shown.filter(hasGhosts) : shown,
       view.sortKey,
       view.descending,
-    ),
-  );
+    );
+  });
+
+  /** How many workflows keep a ghost, whatever the other axes show. */
+  const ghostRowCount = computed(() => rows.value.filter(hasGhosts).length);
 
   const groups = computed(() =>
     groupWorkflows(visibleRows.value, view.groupBy),
@@ -160,7 +172,7 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
    *
    * No refetch: every axis is a re-read of rows already in hand.
    *
-   * @param {Object} patch - `groupBy`, `sortKey`, `descending` or `show`.
+   * @param {Object} patch - `groupBy`, `sortKey`, `descending`, `show` or `ghosts`.
    */
   function setView(patch) {
     Object.assign(view, patch || {});
@@ -347,6 +359,7 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
     selectedHash,
     selectedRow,
     shownVariantCount,
+    ghostRowCount,
     variants,
     samples,
     setView,

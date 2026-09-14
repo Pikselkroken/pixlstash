@@ -20,17 +20,20 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services.workflow_hash import (
     HASH_VERSION,
+    MODEL_EXTENSIONS,
+    asset_reference,
     assets_from_reduction,
     document_from_reduction,
     drop_widgets,
     graph_key,
+    normalized_filename,
     promote_instance_widgets,
     reduce_api_graph,
 )
@@ -207,6 +210,104 @@ def forget_asset_names(hub: HubDatabase, normalized_filename: str) -> int:
         removed,
     )
     return removed
+
+
+def _model_ghost_names(fetchall: Callable[[str], list]) -> set[str]:
+    """See :func:`model_ghost_names`; ``fetchall`` runs one read and returns rows.
+
+    A model is on the shelf while it has a row at all, tombstone included:
+    removing a folder keeps the ``model`` row so re-adding the folder re-links
+    it, and the shelf still lists it. Both the recorded filename and every
+    copy's basename count, because a copy renamed on disk is the same model.
+    """
+    shelf = {
+        normalized_filename(row[0])
+        for row in fetchall("SELECT filename FROM model WHERE filename IS NOT NULL")
+    }
+    shelf.update(
+        normalized_filename(row[0])
+        for row in fetchall("SELECT relpath FROM model_file")
+    )
+    return {
+        row[0]
+        for row in fetchall(
+            "SELECT DISTINCT normalized_filename FROM workflow_recipe_asset"
+        )
+        if row[0].endswith(MODEL_EXTENSIONS) and row[0] not in shelf
+    }
+
+
+def model_ghost_names(hub: HubDatabase) -> set[str]:
+    """The readable model filenames recipes keep for models not on the shelf.
+
+    These are **model ghosts**: a name that says which model a workflow used,
+    kept after the model itself has gone (or was never here). Image filenames a
+    graph loads are not models and are not counted; neither are the loaders'
+    ``*_sha256`` values, which name nobody. Hub-wide, like the recipes: a model
+    filename is not a fact about any one library.
+    """
+    return _model_ghost_names(hub.fetchall)
+
+
+def forget_model_ghosts(hub: HubDatabase) -> int:
+    """Forget every model ghost's name. Returns how many names were forgotten.
+
+    The set is re-read inside the write, so a model added to the shelf since the
+    count was shown keeps its name. Each forget is :func:`forget_asset_names`'s
+    row delete: no document is rewritten and no hash moves, so the workflow
+    still groups and simply reads as models whose names are forgotten.
+    """
+    with hub.transaction() as conn:
+        names = sorted(_model_ghost_names(lambda sql: conn.execute(sql).fetchall()))
+        for batch in chunked(names):
+            placeholders = ",".join("?" for _ in batch)
+            conn.execute(
+                "DELETE FROM workflow_recipe_asset "
+                f"WHERE normalized_filename IN ({placeholders})",
+                tuple(batch),
+            )
+    logger.info("Forgot the names of %d model(s) not on the shelf.", len(names))
+    return len(names)
+
+
+def forgotten_asset_counts(hub: HubDatabase) -> dict[str, dict[str, int]]:
+    """How many of each recipe's assets no longer have a readable name.
+
+    The stored document names every asset by :func:`asset_reference`, so a
+    reference with no ``workflow_recipe_asset`` row behind it is exactly a name
+    that was forgotten. That is what lets a row say "3 models, names forgotten"
+    rather than going blank.
+
+    Returns:
+        ``{topology_hash: {structural_hash: count}}``, recipes with nothing
+        forgotten absent.
+    """
+    # ponytail: re-reads every document per call (~600 on a large library, one
+    # json_each pass in C); cache per hub write if the list ever feels it.
+    known: dict[str, set[str]] = {}
+    for row in hub.fetchall(
+        "SELECT structural_hash, normalized_filename FROM workflow_recipe_asset"
+    ):
+        known.setdefault(row["structural_hash"], set()).add(
+            asset_reference(row["normalized_filename"])
+        )
+    # json_valid first: one corrupt document must not take the whole list down.
+    rows = hub.fetchall(
+        "SELECT DISTINCT r.topology_hash, g.structural_hash, i.value AS reference "
+        "FROM workflow_recipe_graph g "
+        "JOIN workflow_recipe r ON r.structural_hash = g.structural_hash, "
+        "     json_each(g.document) n, json_each(n.value, '$.inputs') i "
+        "WHERE json_valid(g.document) AND n.type = 'object' "
+        "  AND i.type = 'text' AND i.value LIKE 'asset:%'"
+    )
+    counts: dict[str, dict[str, int]] = {}
+    for row in rows:
+        recipe = row["structural_hash"]
+        if row["reference"] in known.get(recipe, ()):
+            continue
+        per_recipe = counts.setdefault(row["topology_hash"], {})
+        per_recipe[recipe] = per_recipe.get(recipe, 0) + 1
+    return counts
 
 
 def recipes_for_topology(hub: HubDatabase, topology_hash: str) -> list[sqlite3.Row]:
@@ -467,6 +568,31 @@ def ghost_instance_hashes(hub: HubDatabase, library_uuid: str) -> list[str]:
             (library_uuid,),
         )
     ]
+
+
+def picture_ghost_count(hub: HubDatabase, library_uuid: str) -> int:
+    """How many picture ghosts one library holds — the number an erase destroys."""
+    row = hub.fetchone(
+        "SELECT COUNT(*) FROM workflow_picture_ghost WHERE library_uuid = ?",
+        (library_uuid,),
+    )
+    return int(row[0]) if row else 0
+
+
+def picture_ghosts_by_topology(hub: HubDatabase, library_uuid: str) -> dict[str, int]:
+    """One library's picture ghosts, counted per topology, for the list's filter.
+
+    A ghost whose recipe was never filed has no topology to be counted under,
+    so it is in :func:`picture_ghost_count` and absent here.
+    """
+    rows = hub.fetchall(
+        "SELECT r.topology_hash, COUNT(*) AS ghosts "
+        "FROM workflow_picture_ghost g "
+        "JOIN workflow_recipe r ON r.structural_hash = g.structural_hash "
+        "WHERE g.library_uuid = ? GROUP BY r.topology_hash",
+        (library_uuid,),
+    )
+    return {row["topology_hash"]: row["ghosts"] for row in rows}
 
 
 def erase_picture_ghosts(hub: HubDatabase, library_uuid: str) -> int:

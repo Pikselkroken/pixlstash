@@ -15,8 +15,10 @@
       one graph, however many models it was bound to; the variants under a row
       are the same graph with different models, and Right and Left open and
       close them. Group, Sort and Show choose the order, the bands and which
-      rows are listed. Nothing on this screen writes anything. Right-click a row
-      for what can be done with it. Escape clears the selection.
+      rows are listed, and Ghosts keeps only workflows that still hold something
+      of a deleted picture or model. Nothing on this screen writes anything.
+      Right-click a row for what can be done with it. Escape clears the
+      selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -152,8 +154,19 @@
         </div>
       </v-menu>
 
-      <!-- The bar deliberately ends here. F11's ghosts chip lands beside these
-           three, so the room it needs is left rather than filled. -->
+      <!-- A toggle beside the trio rather than a fourth Show position: a
+           workflow in use can hold ghosts too, so the two axes combine. The
+           badge counts across the whole list, so it says there is something
+           to find before the filter is on. -->
+      <AppBarButton
+        icon="mdi-ghost-outline"
+        :active="store.view.ghosts"
+        :aria-pressed="store.view.ghosts"
+        :badge="store.ghostRowCount || null"
+        title="Only workflows holding a ghost: a deleted picture's thumbnail and prompt, or the name of a model no longer on the shelf"
+        @click="store.setView({ ghosts: !store.view.ghosts })"
+        >Ghosts</AppBarButton
+      >
       <span class="wfshelf-spacer"></span>
     </div>
 
@@ -311,8 +324,17 @@
               <span
                 role="gridcell"
                 class="wfshelf-col--models"
-                :class="{ 'wfshelf-quiet': !modelSummary(row.assets) }"
-                >{{ modelSummary(row.assets) || "no model names" }}</span
+                :class="{
+                  'wfshelf-quiet': !modelSummary(
+                    row.assets,
+                    2,
+                    row.forgotten_models,
+                  ),
+                }"
+                >{{
+                  modelSummary(row.assets, 2, row.forgotten_models) ||
+                  "no model names"
+                }}</span
               >
 
               <span
@@ -379,8 +401,17 @@
                 <span
                   role="gridcell"
                   class="wfshelf-col--models"
-                  :class="{ 'wfshelf-quiet': !modelSummary(variant.assets) }"
-                  >{{ modelSummary(variant.assets) || "no model names" }}</span
+                  :class="{
+                    'wfshelf-quiet': !modelSummary(
+                      variant.assets,
+                      2,
+                      variant.forgotten_models,
+                    ),
+                  }"
+                  >{{
+                    modelSummary(variant.assets, 2, variant.forgotten_models) ||
+                    "no model names"
+                  }}</span
                 >
                 <span
                   role="gridcell"
@@ -461,10 +492,11 @@
 // is opened and not before, and why the expansion is drawn as rows rather than
 // as a nested widget with a scroll of its own.
 //
-// **Nothing here writes.** Naming a workflow, running one and forgetting its
-// ghosts are later steps; this is the view and the inspector, and the row menu
-// offers only what can be read today. F11's ghosts filter lands beside Group /
-// Sort / Show, so the toolbar leaves that room rather than filling it.
+// **Nothing here writes.** Naming a workflow and running one are later steps,
+// and forgetting ghosts is a purge in Settings › Privacy; this is the view and
+// the inspector, and the row menu offers only what can be read today. The
+// Ghosts toggle beside Group / Sort / Show narrows the list to what those
+// purges would reach.
 
 import { computed, onMounted, ref, watch } from "vue";
 
@@ -632,7 +664,7 @@ function workflowCount(n) {
 
 /** A variant's line: what distinguishes it from its siblings is its models. */
 function variantLabel(variant) {
-  const models = modelSummary(variant?.assets, 3);
+  const models = modelSummary(variant?.assets, 3, variant?.forgotten_models);
   return models || "models not named";
 }
 

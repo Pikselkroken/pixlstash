@@ -236,7 +236,7 @@ def _is_link(value: Any) -> bool:
     )
 
 
-def _normalized_filename(value: str) -> str:
+def normalized_filename(value: str) -> str:
     """Lowercase basename, extension kept, directory stripped (rule 5)."""
     return value.lower().rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
 
@@ -262,7 +262,7 @@ def structural_widget_value(name: str, value: Any) -> Optional[str]:
         return None
     lowered = value.lower()
     if lowered.endswith(MODEL_EXTENSIONS) or lowered.endswith(IMAGE_EXTENSIONS):
-        return _normalized_filename(value)
+        return normalized_filename(value)
     return None
 
 

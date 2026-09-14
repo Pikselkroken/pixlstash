@@ -13,7 +13,12 @@ from PIL import Image
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import User
-from pixlstash.hub.workflows import erase_picture_ghosts as hub_erase_picture_ghosts
+from pixlstash.hub.workflows import (
+    erase_picture_ghosts as hub_erase_picture_ghosts,
+    forget_model_ghosts,
+    model_ghost_names,
+    picture_ghost_count,
+)
 from pixlstash.db_models.tag import (
     DEFAULT_SMART_SCORE_PENALIZED_TAGS,
     DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
@@ -1115,10 +1120,27 @@ def create_router(server) -> APIRouter:
         status: str
         workflow_ghost_retention: str
         workflow_ghost_retention_choices: list[str]
+        picture_ghosts: int | None = Field(
+            None,
+            description="Picture ghosts the active library holds. Null without a hub.",
+        )
+        model_ghosts: int | None = Field(
+            None,
+            description=(
+                "Model names recipes keep for models not on the shelf, hub-wide. "
+                "Null without a hub."
+            ),
+        )
 
     def _ghost_retention_payload() -> dict:
         """Build the picture-ghost retention response from server-config."""
+        hub = getattr(server, "hub", None)
+        library_uuid = getattr(server.vault, "library_uuid", None)
         return {
+            "picture_ghosts": (
+                picture_ghost_count(hub, library_uuid) if hub and library_uuid else None
+            ),
+            "model_ghosts": len(model_ghost_names(hub)) if hub else None,
             "status": "success",
             "workflow_ghost_retention": workflow_ghost_service.read_ghost_retention(
                 server._server_config
@@ -1220,6 +1242,32 @@ def create_router(server) -> APIRouter:
             "status": "success",
             "ghosts_erased": hub_erase_picture_ghosts(hub, library_uuid),
         }
+
+    class ModelGhostForgetResponse(BaseModel):
+        status: str
+        names_forgotten: int
+
+    @router.delete(
+        "/server-config/ghost-retention/model-ghosts",
+        summary="Forget the names of models no longer on the shelf",
+        response_model=ModelGhostForgetResponse,
+        description=(
+            "Permanently forgets every model filename a workflow recipe keeps "
+            "for a model that is not on the shelf. The workflows stay and still "
+            "group, because their hashes are computed from the names rather "
+            "than containing them; they read as models whose names are "
+            "forgotten. Hub-wide: a model name is not a fact about one library."
+        ),
+    )
+    def forget_model_ghost_names(request: Request):
+        _ensure_secure_when_required(request)
+        hub = getattr(server, "hub", None)
+        if hub is None:
+            raise HTTPException(
+                status_code=503,
+                detail="No hub is attached, so there are no model ghosts.",
+            )
+        return {"status": "success", "names_forgotten": forget_model_ghosts(hub)}
 
     @router.get(
         "/server-config/scrapheap-retention/impact",

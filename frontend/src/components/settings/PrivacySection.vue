@@ -87,6 +87,77 @@
       </v-card>
     </v-dialog>
   </SettingsSection>
+
+  <!-- What a permanent delete leaves behind (#1309). A ghost is the thumbnail
+       and prompt of a destroyed picture, or the filename of a model no longer
+       on the shelf. Rendered only once the server has answered: a hubless
+       server has no ghosts, and a control that cannot save is worse than none. -->
+  <SettingsSection
+    v-if="ghosts"
+    title="Deleted pictures"
+    desc="When a picture is permanently deleted, PixlStash can keep its thumbnail and prompt with the workflow that made it, so it can be made again."
+  >
+    <SettingsRow
+      label="Keep picture ghosts"
+      :sub="RETENTION_SUBS[ghosts.workflow_ghost_retention] || ''"
+    >
+      <Segmented
+        :options="retentionOptions"
+        :model-value="ghosts.workflow_ghost_retention"
+        :disabled="ghostBusy"
+        aria-label="Keep picture ghosts"
+        @update:model-value="saveRetention"
+      />
+    </SettingsRow>
+
+    <SettingsRow
+      v-if="ghosts.picture_ghosts != null"
+      label="Picture ghosts"
+      sub="Thumbnails and prompts kept for pictures deleted from this library."
+    >
+      <AppButton
+        variant="secondary"
+        :disabled="!ghosts.picture_ghosts || ghostBusy"
+        @click="askPurge('picture')"
+        >{{ purgeLabel(ghosts.picture_ghosts) }}</AppButton
+      >
+    </SettingsRow>
+
+    <SettingsRow
+      v-if="ghosts.model_ghosts != null"
+      label="Model ghosts"
+      sub="Filenames workflows remember for models no longer on your shelf. The workflows stay grouped; their models read as names forgotten."
+    >
+      <AppButton
+        variant="secondary"
+        :disabled="!ghosts.model_ghosts || ghostBusy"
+        @click="askPurge('model')"
+        >{{ purgeLabel(ghosts.model_ghosts) }}</AppButton
+      >
+    </SettingsRow>
+    <p v-if="ghostError" class="pv__error" role="alert">{{ ghostError }}</p>
+
+    <v-dialog
+      :model-value="Boolean(purgeKind)"
+      max-width="420"
+      @update:model-value="(open) => !open && (purgeKind = null)"
+    >
+      <v-card v-if="purgeKind" class="pv__confirm">
+        <h3 class="pv__confirm-title">
+          {{ PURGES[purgeKind].title(purgeCount) }}
+        </h3>
+        <p class="pv__confirm-body">{{ PURGES[purgeKind].body }}</p>
+        <div class="pv__confirm-actions">
+          <AppButton variant="secondary" @click="purgeKind = null"
+            >Cancel</AppButton
+          >
+          <AppButton variant="danger" :loading="ghostBusy" @click="doPurge"
+            >Purge</AppButton
+          >
+        </div>
+      </v-card>
+    </v-dialog>
+  </SettingsSection>
 </template>
 
 <script setup>
@@ -95,11 +166,18 @@ import { VCard, VDialog, VSwitch } from "vuetify/components";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { patchUserConfig } from "../../api/config";
 import { getInstallId, recreateInstallId } from "../../api/telemetry";
+import {
+  getGhostRetention,
+  purgeModelGhosts,
+  purgePictureGhosts,
+  setGhostRetention,
+} from "../../api/serverConfig";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsTwoCol from "./SettingsTwoCol.vue";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsFieldBlock from "./SettingsFieldBlock.vue";
 import AppButton from "../widgets/AppButton.vue";
+import Segmented from "../widgets/Segmented.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -182,15 +260,117 @@ async function doRecreate() {
   }
 }
 
+// ── Ghosts ──────────────────────────────────────────────────────────────────
+const ghosts = ref(null);
+const ghostBusy = ref(false);
+const ghostError = ref("");
+/** `"picture" | "model" | null` — which purge the confirm dialog is asking about. */
+const purgeKind = ref(null);
+
+const retentionOptions = [
+  { id: "off", label: "Off" },
+  { id: "covered", label: "Covered only" },
+  { id: "on", label: "On" },
+];
+
+const RETENTION_SUBS = {
+  off: "None. A permanently deleted picture cannot be made again.",
+  covered:
+    "Only while a picture you kept has the same workflow and prompt. Deleting the last one removes the ghosts it covered.",
+  on: "Every permanently deleted picture, until you purge them below.",
+};
+
+const PURGES = {
+  picture: {
+    title: (n) => `Purge ${n} picture ${n === 1 ? "ghost" : "ghosts"}?`,
+    body: "Their thumbnails and prompts are destroyed, and the pictures they came from can no longer be made again. The workflows stay.",
+    run: async () => {
+      await purgePictureGhosts();
+    },
+  },
+  model: {
+    title: (n) => `Forget ${n} model ${n === 1 ? "name" : "names"}?`,
+    body: "Workflows stop saying which models they used when those models are not on your shelf. They still group, and read as names forgotten. This cannot be undone.",
+    run: async () => {
+      await purgeModelGhosts();
+    },
+  },
+};
+
+const purgeCount = computed(() =>
+  purgeKind.value === "model"
+    ? ghosts.value?.model_ghosts || 0
+    : ghosts.value?.picture_ghosts || 0,
+);
+
+function purgeLabel(n) {
+  return n ? `Purge ${n.toLocaleString()}` : "None kept";
+}
+
+async function loadGhosts() {
+  try {
+    ghosts.value = await getGhostRetention();
+  } catch (e) {
+    // Owner-only route: a session that cannot read it simply has no section.
+    console.warn("Could not read the ghost retention setting:", e);
+    ghosts.value = null;
+  }
+}
+
+async function saveRetention(position) {
+  const previous = ghosts.value;
+  ghostError.value = "";
+  ghostBusy.value = true;
+  ghosts.value = { ...previous, workflow_ghost_retention: position };
+  try {
+    ghosts.value = await setGhostRetention(position);
+  } catch (e) {
+    console.error("Failed to save workflow_ghost_retention:", e);
+    ghosts.value = previous;
+    ghostError.value =
+      "Could not save which ghosts to keep. Your previous choice was kept.";
+  } finally {
+    ghostBusy.value = false;
+  }
+}
+
+function askPurge(kind) {
+  ghostError.value = "";
+  purgeKind.value = kind;
+}
+
+async function doPurge() {
+  const kind = purgeKind.value;
+  if (!kind) return;
+  ghostBusy.value = true;
+  try {
+    await PURGES[kind].run();
+  } catch (e) {
+    console.error(`Failed to purge ${kind} ghosts:`, e);
+    ghostError.value = "Could not purge. The server log has the reason.";
+  } finally {
+    // Re-read either way: the counts are the server's to say, and a purge
+    // that failed half-way must not leave a stale number on the button.
+    await loadGhosts();
+    ghostBusy.value = false;
+    purgeKind.value = null;
+  }
+}
+
 // Fetching the ID creates one if absent, so only do it when the pane is
-// actually shown rather than on app start.
+// actually shown rather than on app start. The ghost counts are re-read on
+// every open, since a purge elsewhere changes them.
 onMounted(() => {
-  if (props.open) loadIdentity();
+  if (props.open) {
+    loadIdentity();
+    loadGhosts();
+  }
 });
 watch(
   () => props.open,
   (isOpen) => {
     if (isOpen && !identity.value) loadIdentity();
+    if (isOpen) loadGhosts();
   },
 );
 </script>

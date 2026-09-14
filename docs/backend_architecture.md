@@ -413,9 +413,10 @@ The same module also serves the **v1.9 tiered Duplicates queue** — `GET /dedup
 | GET | `/server-config/scrapheap-retention` | Scrapheap auto-purge window (`scrapheap_retention_days`, `scrapheap_retention_reduced_at`, `scrapheap_retention_choices`, `scrapheap_retention_grace_days`). `null` days = Never, and that is the **shipped default** |
 | PATCH | `/server-config/scrapheap-retention` | Set the window (30/60/90/120 or `null` = Never). The ONLY writer of `scrapheap_retention_days`, which is why an absent key reliably means "never chosen". Persists to `server-config.json`; stamps `scrapheap_retention_reduced_at` only on a *reduction* (turning auto-purge on counts as one). Purges nothing synchronously. |
 | GET | `/server-config/scrapheap-retention/impact` | Preview a retention reduction: `would_purge_count` (excludes protected + locked; evaluated at the grace floor so it never understates) + `first_purge_at`. Pure read — applies nothing, stamps nothing, purges nothing. `0` when `days` is not lower than the current window |
-| GET | `/server-config/ghost-retention` | Which picture ghosts a purge may keep (`workflow_ghost_retention`, `workflow_ghost_retention_choices`). `covered` is the shipped default |
+| GET | `/server-config/ghost-retention` | Which picture ghosts a purge may keep (`workflow_ghost_retention`, `workflow_ghost_retention_choices`), plus the two counts the Privacy pane's purges show: `picture_ghosts` (active library) and `model_ghosts` (hub-wide), both `null` without a hub. `covered` is the shipped default |
 | PATCH | `/server-config/ghost-retention` | Set the position (`off` / `covered` / `on`). Persists to `server-config.json` and takes effect on the next purge. Destroys nothing synchronously — clearing ghosts that are ALREADY held is the erase below |
 | DELETE | `/server-config/ghost-retention/ghosts` | Erase the active library's picture ghosts (`ghosts_erased`); other libraries' are untouched. Leaves the setting as it is |
+| DELETE | `/server-config/ghost-retention/model-ghosts` | Forget every model filename recipes keep for a model not on the shelf (`names_forgotten`). Hub-wide. Hashes and documents are untouched, so the workflows still group |
 
 ### `reference_folders.py`, `import_folders.py`, `filesystem.py`
 CRUD for reference / import folders; filesystem browsing for picker dialogs.
@@ -2919,8 +2920,19 @@ policy to check it against; inventing one with no route to check it would only
 look like the question had been settled.
 
 **Nothing here mutates**, so `AccessPolicy` aside there is no write half to
-declare yet: naming a workflow (§F3), running one (§F5) and forgetting its
-ghosts (§F10) are later steps.
+declare yet: naming a workflow (§F3) and running one (§F5) are later steps, and
+forgetting ghosts is a privacy purge beside the retention setting
+(`/server-config/ghost-retention/*`, see *Picture ghosts* below).
+
+**A row carries what the ghosts filter needs** (#1309): `ghosts` (the active
+library's picture ghosts, joined to a topology through the ghost's
+`structural_hash`, so a ghost whose recipe was never filed is counted in the
+Privacy pane and not here), `model_ghosts` (names in the row's `assets` for
+models not on the shelf) and `forgotten_models`. The last is read off the stored
+documents: every asset there is an `asset_reference`, so a reference with no
+`workflow_recipe_asset` row behind it is a forgotten name
+(`hub/workflows.forgotten_asset_counts`, one `json_each` pass). On a topology it
+is the maximum over its recipes, for the reason `adapter_slots` is.
 
 #### Picture ghosts, and the purge that reaches them (v1.11, B4)
 
@@ -3085,10 +3097,16 @@ a config we cannot parse must not license a deletion; here it must not license
 keeping a thumbnail and a prompt for a picture the user destroyed. Both fall to
 the position that holds less of the user's data.
 
-**Model ghosts are the other half of §5 and are already shipped.** The readable
-filename of a model no longer on the shelf survives inside
-`workflow_recipe_asset`, and `forget_asset_names` destroys it as a row delete
-with no stored graph rewritten. A picture purge does not reach them: a model
+**Model ghosts are the other half of §5.** The readable filename of a model no
+longer on the shelf survives inside `workflow_recipe_asset`, and forgetting it
+is a row delete with no stored graph rewritten. `hub/workflows.model_ghost_names`
+is the set: every model-extension name recipes keep that matches neither a
+`model.filename` nor a `model_file` basename (a tombstoned model still counts as
+on the shelf, since the shelf still lists it). `DELETE
+/server-config/ghost-retention/model-ghosts` forgets them all, re-reading the
+set inside its own write so a model added since the count was shown keeps its
+name. Hub-wide rather than per library, because a model name is not a fact
+about one library. A picture purge does not reach them: a model
 ghost is created by removing a model from the shelf and has no relationship to
 any one picture. The structural hash is a digest computed *from* the filenames
 rather than containing them, so a workflow whose names have been forgotten still

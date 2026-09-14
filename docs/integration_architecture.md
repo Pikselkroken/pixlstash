@@ -426,8 +426,11 @@ preview, the run and the ghosting. Five points where the wiring is load-bearing:
 ### 2.3 The `/workflows` contract (v1.11)
 
 The Workflows view's read side (implementation plan §F1/§F2). Four GETs, no
-mutators: naming a workflow, running one and forgetting its ghosts are later
-steps, so there is no write half of this contract yet.
+mutators: naming a workflow and running one are later steps. Forgetting ghosts
+is not here either: it is two purges beside the retention setting,
+`DELETE /server-config/ghost-retention/ghosts` and
+`.../model-ghosts`, whose counts `GET /server-config/ghost-retention` returns
+as `picture_ghosts` and `model_ghosts` (Settings › Privacy, `PrivacySection`).
 
 | Route | Purpose | Response |
 |---|---|---|
@@ -467,9 +470,12 @@ Five things the two sides have agreed and neither may drift from:
 
 4. **An empty `assets` list is a state, not a missing field.** Forgetting a
    model's name is a row delete in the hub, so the graph stays and only the
-   ability to say which model it was is gone. The client says the names are not
-   recorded and does **not** claim they were forgotten: nothing in the payload
-   separates that from a graph that names no model at all.
+   ability to say which model it was is gone. `forgotten_models` counts those
+   (read off the document's unresolved asset references; a maximum over
+   variants on a topology row), so the client says "3 models, names forgotten"
+   and keeps "no model names" for a graph that names none. `ghosts` (this
+   library's picture ghosts) and `model_ghosts` (names for models not on the
+   shelf) are what the toolbar's Ghosts toggle filters on, client-side.
 5. **`runnable` is always `false`, and it is in the payload rather than in a
    comment.** The stored document has its parameters, seeds and prompts nulled
    and names its assets by an opaque reference — which is what lets a workflow
