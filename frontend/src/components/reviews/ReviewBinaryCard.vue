@@ -449,10 +449,11 @@ function zoomToRegion(box) {
   font-weight: var(--weight-semibold);
   white-space: nowrap;
 }
+/* On is a chosen state, not an action: the dark-surface olive, words ink. */
 .rs-region-toggle--on {
-  border-color: rgb(var(--v-theme-accent));
-  background: color-mix(in srgb, rgb(var(--v-theme-accent)) 15%, transparent);
-  color: rgb(var(--v-theme-accent));
+  border-color: rgb(var(--v-theme-dark-surface-primary));
+  background: rgba(var(--v-theme-dark-surface-primary), 0.2);
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .rs-bin-body {
@@ -515,7 +516,10 @@ function zoomToRegion(box) {
   color: #fff;
 }
 .rs-manual-tag:hover {
-  background: rgba(0, 0, 0, 0.85);
+  background-image: linear-gradient(
+    rgba(var(--v-theme-on-dark-surface), 0.16),
+    rgba(var(--v-theme-on-dark-surface), 0.16)
+  );
 }
 
 .rs-region {

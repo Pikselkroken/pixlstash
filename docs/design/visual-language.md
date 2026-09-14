@@ -271,6 +271,10 @@ and (unchanged in value, now correct in ratio) `on-secondary`.
 
 #### Knock-ons this forces (all of them, measured)
 
+> **Superseded 2026-09-13 for items 1 and 2.** Focus and hover no longer read the
+> accent at all: the ring is ink and the hover wash is the text colour at 16%, so
+> neither moves with an action fill again. See §11. Kept as the record of why.
+
 Four things read the accent through an alpha and therefore move with it.
 
 1. **`--focus-ring` must go solid.** `rgba(accent, .55)` was **already failing** before
@@ -657,7 +661,7 @@ The photos are the hero. The chrome frames them; it does not compete.
 - **Consistent aspect handling.** Tiles share a radius (`--radius-md`) and a restrained
   border. No per-tile bespoke framing.
 - **States are designed, not defaulted.** Every tile has a real hover, a real selected
-  state (`--active-wash` / `--active-bar`), and a focus state (`--focus-ring`). The
+  state (`--active-wash` / `--active-bar`), and a focus state (the ink ring, §11). The
   selected state is how bulk work feels confident; make it unambiguous.
 - **Empty, loading, error.** Use the existing `Empty.png` / `EmptyTrash.png` art for
   empty states with a `--text-2xl` Tiny5 headline and a `--text-sm` line of guidance.
@@ -710,39 +714,44 @@ pattern, don't re-roll the numbers.
 
 These get skipped and that is exactly why a UI looks cheap.
 
-- **Focus:** every focusable element shows `--focus-ring`. Never remove an outline
-  without replacing it. This is a keyboard user's only cursor. **The ring is a solid
-  accent stroke, not a tinted one** — `0 0 0 3px rgb(var(--v-theme-accent))`. The
-  previous `rgba(accent, .55)` measured 1.96:1 (light) and 3.01:1 (dark) against the
-  canvas, i.e. it failed the 3:1 focus-indicator floor outright in the default theme.
-  A focus ring is the one place in this system where "subtle" is a defect.
-  The one exception to the stroke is a Vuetify field, whose floating label rides on the
-  top border: there the stroke is a bar through the label, so the field takes
-  `--focus-glow` (the same accent, 2px solid spread plus a 6px blur) painted beneath the
-  outline and clipped off the top edge, so it runs down the sides and under the field
-  and never behind the label. It steps aside while a select's menu is open, since the
-  menu drops flush against that bottom edge. Same colour, same contrast at the edge, and
-  keyboard-only via `:has(:focus-visible)`.
-  **There is exactly one focus language.** The theme's legacy `focus` key (`#7c4dff`
-  violet) is still consumed as `outline: 2px solid` by 10 review-surface components, so
-  the app currently shows an amber ring in the grid and a violet outline in reviews.
-  That is a consistency defect (the violet clears contrast at 3.15 – 4.81:1, which is
-  why nobody caught it). The review surfaces migrate onto `--focus-ring` and the `focus`
-  key retires after they do; `rgb(var(--v-theme-focus))` in new code is drift. Sites and
-  measurements: `design-system-handoff.md` §9.4.
-- **Hover:** `--hover-wash` (accent-tinted on light, on the chrome surfaces). Subtle.
-  The alpha is **per theme and is not a free number**: it is chosen so the wash's
-  contrast step against its own surface lands at ≈1.10 (light) and ≈1.26 (dark). If
-  the accent's lightness ever changes, the dark alpha has to be re-solved to hold that
-  step — see the action-fill knock-ons in §4.
-- **Selected:** `--active-wash` fill plus `--active-bar` edge and `--active-text`.
-  Tuned per theme in `style.css` because the same alpha reads differently on a
-  near-white canvas than a dark one. **`--active-text` is a foreground on the *wash*,
-  not on a solid fill**, so it is the surface's own text colour. The light theme had it
-  as `on-primary` (white) over an 18% olive tint — **1.32:1**, invisible; it is
-  `on-surface` (11.1 – 12.1:1), which is what the dark theme already did. This is the
-  same "`on-<x>` on a tint" trap as `on-<status>` (§4); it will keep recurring, so check
-  it every time an `on-*` token appears next to an `rgba(...)` fill.
+- **Focus is ink** (2026-09-13). Every focusable element shows one ring, drawn by
+  the single `:focus-visible` rule in `style.css`: a `--focus-width` (2px) outline in
+  `--focus-stroke` with a `--focus-offset` (2px) gap. `--focus-stroke` is its own
+  per-theme token and resolves to the text colour in both themes. The gap is the
+  point: the ring only ever meets the ground, never the fill it surrounds, so it never
+  has to contrast with amber or olive. Worst case 10.24:1 dark and 13.74:1 light, on
+  `panel`. The amber ring it replaces measured 1.27:1 against the Save button and read
+  as a second mark on an olive selection. **A component does not paint its own
+  focus colour.** A control that cannot take a gap (a 32px menu row flush in its menu)
+  uses `--focus-ring-inset`. A Vuetify field, whose label rides on its top border,
+  keeps `--focus-glow`, now in the same ink. Never remove an outline without replacing
+  it; a focus ring is the one place in this system where "subtle" is a defect.
+  **There is exactly one focus language.** The theme's legacy `focus` key and any
+  `rgb(var(--v-theme-accent))` ring are drift.
+- **Hover is an ink wash** (2026-09-13). A transparent control (row, tab, bar button,
+  segment, menu row) takes `--hover-wash`, the text colour at 16% per theme, and a
+  muted label or icon goes to full ink. It carries no hue, because amber is the action
+  and olive the selection: 1.57x on dark chrome, 1.56x on panel, 1.37x in light, 1.53x /
+  1.35x layered over a selection. A filled control darkens instead: `--hover-shade`,
+  a 20% black layer as `background-image`, which leaves the label untouched and lifts
+  white on amber from 3.41 to 5.03:1. A neutral fill takes `--hover-neutral`, which
+  lightens in dark and darkens in light. Never `filter: brightness()`, which moves the
+  label with the fill.
+- **Amber acts, olive selects.** Amber is the key action fill and the attention dot,
+  and nothing else. Everything merely chosen is olive: a selected tile, the active
+  sidebar row, a focused group, a selected tab or table row take `--active-bar` (edge
+  or ring) and `--active-wash`, the lifted olive at 0.20 in dark and the deep olive at
+  0.16 in light. **No olive text or icon on an olive wash:** the selected item's label,
+  icon and count take `--active-text`, the surface's own ink (7.5 - 11.2:1 at rest).
+  **Olive marks, words stay text:** a current value, a selected tab and an active bar
+  button keep olive on their check, underline or glyph (`--selected-ink`, lifted in
+  dark because the deep olive measures 2.72:1 on dark chrome) and set their words in
+  ink. A solid `primary` fill keeps its `on-primary` label. There is no olive button:
+  `primary_green` is retired. `--accent-on` is pure white, 3.41:1, an accepted
+  exception for one short word on a 28px target (buttons.md).
+  `--active-text` is a foreground on the *wash*, not on a solid fill, which is the
+  "`on-<x>` on a tint" trap (§4); check it every time an `on-*` token appears next to
+  an `rgba(...)` fill.
 - **Disabled:** drop to `--opacity-disabled` (0.38) of the token, never a
   different grey. The fade is legal here and only here: WCAG 1.4.3 exempts an
   inactive control, so a disabled label may sit below the contrast floor.

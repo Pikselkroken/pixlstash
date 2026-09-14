@@ -321,6 +321,9 @@ function openZoom(id, ext) {
   color: #fff;
 }
 .rs-manual-tag:hover {
-  background: rgba(0, 0, 0, 0.85);
+  background-image: linear-gradient(
+    rgba(var(--v-theme-on-dark-surface), 0.16),
+    rgba(var(--v-theme-on-dark-surface), 0.16)
+  );
 }
 </style>

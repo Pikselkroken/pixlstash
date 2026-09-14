@@ -1,6 +1,7 @@
 <script setup>
 import { kindChipColor, relativeDate } from "../../utils/snapshots";
 import { formatUserDate } from "../../utils/utils";
+import AppButton from "./AppButton.vue";
 
 defineProps({
   modelValue: { type: Boolean, default: false },
@@ -75,9 +76,9 @@ const emit = defineEmits(["update:modelValue", "update:dontShowAgain"]);
           @update:model-value="emit('update:dontShowAgain', $event)"
         />
         <v-spacer />
-        <v-btn variant="text" @click="emit('update:modelValue', false)">
+        <AppButton variant="secondary" @click="emit('update:modelValue', false)">
           Close
-        </v-btn>
+        </AppButton>
       </v-card-actions>
     </v-card>
   </v-dialog>

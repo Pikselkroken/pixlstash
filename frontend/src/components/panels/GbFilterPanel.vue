@@ -1059,10 +1059,9 @@ watch(
 }
 /* A filter that is doing something says so without being opened. The panel
    header's count and Clear button report that any filter is on; this reports
-   which one. */
+   which one: the olive edge is the mark, the value's words stay ink. */
 .gb-scope-select--on {
-  color: rgb(var(--v-theme-accent));
-  border-color: rgb(var(--v-theme-accent));
+  border-color: var(--active-bar);
 }
 
 /* ── Collapsible section header (Tag confidence, Impossible tags) ──────────── */
@@ -1208,9 +1207,9 @@ watch(
 }
 
 .tag-chip--filter {
-  background: rgba(var(--v-theme-primary), 0.18);
-  border-color: rgba(var(--v-theme-primary), 0.5);
-  color: rgb(var(--v-theme-on-panel));
+  background: var(--active-wash);
+  border-color: var(--active-bar);
+  color: var(--active-text);
 }
 
 .tag-chip--filter:hover {
@@ -1225,9 +1224,9 @@ watch(
 }
 
 .tag-chip--filter-rejected:hover {
-  background: rgba(var(--v-theme-primary), 0.18);
-  border-color: rgba(var(--v-theme-primary), 0.5);
-  color: rgb(var(--v-theme-on-panel));
+  background: var(--active-wash);
+  border-color: var(--active-bar);
+  color: var(--active-text);
 }
 
 .tag-chip--confidence-above {

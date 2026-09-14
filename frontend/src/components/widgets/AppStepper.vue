@@ -80,6 +80,18 @@ function onBlur(e) {
   background: rgb(var(--v-theme-input-background));
 }
 
+/* `overflow: hidden` clips an outline on anything inside, so the box rings
+   for its field and the flush buttons take the inset form. */
+.app-stepper:has(.app-stepper__input:focus-visible) {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
+}
+
+.app-stepper__btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-inset);
+}
+
 .app-stepper__btn {
   width: 30px;
   height: 26px;

@@ -859,9 +859,9 @@ defineExpose({ handleKey });
    full-card purple ring after every decision (GH #578, most visible in Electron
    on Windows). The ring is always spurious here - the real focus indicators live
    on the buttons/thumbnails - so suppress it on the container. Both properties:
-   the app-wide `:focus-visible` rule in style.css paints the ring with
-   `box-shadow`, so staying silent about it would put the #578 ring straight
-   back, in amber instead of purple. */
+   the app-wide `:focus-visible` rule in style.css paints the ring as an
+   `outline` (and once did as a `box-shadow`), so staying silent about either
+   would put the #578 ring straight back. */
 .rs-card:focus,
 .rs-card:focus-visible {
   outline: none;
@@ -939,7 +939,7 @@ defineExpose({ handleKey });
   color: rgb(var(--v-theme-on-dark-surface));
 }
 .rs-state-btn:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.14);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 .rs-state-btn--archive {
   border-color: color-mix(in srgb, rgb(var(--v-theme-dark-surface-success)) 60%, transparent);

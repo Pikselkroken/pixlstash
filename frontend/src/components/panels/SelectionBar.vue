@@ -59,15 +59,13 @@
               </label>
 
               <div class="plugin-menu-actions">
-                <button
-                  class="stack-btn"
-                  type="button"
+                <AppButton
+                  variant="primary"
+                  icon-left="play"
                   :disabled="!selectedPluginName || !selectedImageIds.length"
                   @click="runSelectedPlugin"
+                  >Run</AppButton
                 >
-                  <v-icon size="16">mdi-play</v-icon>
-                  <span>Run</span>
-                </button>
               </div>
             </div>
           </div>
@@ -138,15 +136,14 @@
                   </label>
 
                   <div class="plugin-menu-actions">
-                    <button
-                      class="stack-btn"
-                      type="button"
+                    <AppButton
+                      variant="primary"
+                      icon-left="play"
                       :disabled="!canRunComfyWorkflow"
+                      :loading="comfyuiRunLoading"
                       @click="runSelectedComfyWorkflow"
+                      >Run</AppButton
                     >
-                      <v-icon size="16">mdi-play</v-icon>
-                      <span>{{ comfyuiRunLoading ? "Running" : "Run" }}</span>
-                    </button>
                   </div>
                 </template>
                 <div v-else class="plugin-menu-note">
@@ -190,10 +187,12 @@
                  The count rides in the accessible name so it is read on focus,
                  which is why selecting images one at a time needs no live
                  region of its own. -->
-            <button
+            <AppBarButton
               v-bind="menuProps"
-              class="stack-btn"
-              type="button"
+              class="selection-menu-trigger"
+              shape="round"
+              icon="image-multiple-outline"
+              chevron
               :disabled="selectedCount === 0 && selectedFaceCount === 0"
               :title="triggerTitle"
               :aria-label="triggerTitle"
@@ -201,12 +200,10 @@
               :aria-expanded="selectionMenuOpen ? 'true' : 'false'"
               aria-keyshortcuts="S"
             >
-              <v-icon size="20">mdi-image-multiple-outline</v-icon>
               <!-- Never truncated by the ladder: a count is the blast radius of
                    everything else in this half. -->
               <span class="bar-btn-apply-label">{{ selectionCountLabel }}</span>
-              <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-            </button>
+            </AppBarButton>
           </template>
           <SelectionMenu
             ref="selectionMenuRef"
@@ -277,49 +274,47 @@
             />
           </v-menu>
         </div>
-        <button
+        <AppBarButton
           v-if="
             selectedCount > 0 &&
             !isScrapheapView &&
             !isReadOnly &&
             impossibleSources.length > 0
           "
-          class="stack-btn clear-impossible-btn"
-          type="button"
-          :disabled="clearingImpossible"
+          class="clear-impossible-btn"
+          shape="round"
+          icon="tag-off-outline"
+          :loading="clearingImpossible"
           :title="`Strip the impossible tags from the ${selectedCount} selected picture(s)`"
           @click="$emit('clear-impossible-tags')"
         >
-          <v-icon size="18">mdi-tag-off-outline</v-icon>
           <span class="clear-impossible-label">{{
             clearingImpossible ? "Clearing…" : "Clear impossible tags"
           }}</span>
-        </button>
-        <button
-          class="clear-btn"
-          type="button"
+        </AppBarButton>
+        <AppBarButton
+          icon="selection-off"
+          shape="round"
           :disabled="!hasSelection"
           :title="clearTitle"
           :aria-label="clearTitle"
           :aria-keyshortcuts="ownsEscape ? 'Escape' : undefined"
           @click="$emit('clear-selection')"
-        >
-          <v-icon size="20" color="primary">mdi-selection-off</v-icon>
-        </button>
+        />
         <!-- Separated from Clear selection by its own group gap. Two identical
              40px transparent icon buttons 8px apart, one of them destructive,
              is the adjacency this pill can least afford - and Delete now also
              sits in the same surface as the bulk Assign write. -->
-        <button
+        <AppBarButton
           class="delete-btn"
-          type="button"
+          shape="round"
+          icon="delete"
+          danger
           :disabled="!hasSelection || isReadOnly"
           :title="deleteTitle"
           :aria-label="deleteTitle"
           @click="$emit('delete-selected')"
-        >
-          <v-icon size="20" color="error">mdi-delete</v-icon>
-        </button>
+        />
     </div>
     <!-- /selection-ctx-bar -->
   </div>
@@ -333,6 +328,8 @@ import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import SelectionMenu from "./SelectionMenu.vue";
 import TbTagPanel from "./TbTagPanel.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
+import AppBarButton from "../widgets/AppBarButton.vue";
+import AppButton from "../widgets/AppButton.vue";
 import { isEditableElement } from "../../utils/dom.js";
 import { errorDetail } from "../../utils/apiError";
 
@@ -785,88 +782,10 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   gap: var(--space-3);
 }
 
-.clear-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  color: rgb(var(--v-theme-on-background));
-  padding: 0;
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-sm);
-  font-family: inherit;
-  flex-shrink: 0;
-}
-.clear-btn:hover:not(:disabled) {
-  background: rgba(var(--v-theme-on-background), 0.12);
-}
-.clear-btn:disabled {
-  border-color: transparent;
-  color: rgb(var(--v-theme-on-background));
-  opacity: 0.35;
-  cursor: default;
-}
-/* Solid `warning` fill, so it is one of the few places `on-warning` is the right
-   token. It is now authored (main.js) rather than Vuetify-derived: light
-   #23211d on #b8861f = 4.95:1, dark #1b1b1b on #db7900 = 5.53:1. It used to
-   resolve to #fff at 3.25:1 / 3.11:1 - a small white label under the 4.5 floor. */
-.remove-btn {
-  background: rgb(var(--v-theme-warning));
-  color: rgb(var(--v-theme-on-warning));
-  border: none;
-  padding: var(--space-1) var(--space-4);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: var(--text-sm);
-  line-height: var(--leading-snug);
-}
-.remove-btn:hover {
-  filter: brightness(1.3);
-}
+/* 8px here plus the run's own 8px gap = the --space-5 group gap that keeps the
+   destructive control off its neighbour's elbow. */
 .delete-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  /* 8px here plus the run's own 8px gap = the --space-5 group gap that keeps
-     the destructive control off its neighbour's elbow. */
   margin-left: var(--space-3);
-  color: rgb(var(--v-theme-on-background));
-  padding: 0;
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-sm);
-  font-family: inherit;
-  flex-shrink: 0;
-}
-.delete-btn:hover:not(:disabled) {
-  background: rgba(var(--v-theme-on-background), 0.12);
-}
-.delete-btn:disabled {
-  border-color: transparent;
-  color: rgb(var(--v-theme-on-background));
-  opacity: 0.35;
-  cursor: default;
-}
-.stack-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: rgb(var(--v-theme-on-background));
-  padding: 0 10px;
-  border-radius: var(--radius-sm);
-  font-size: var(--text-base);
-  font-family: inherit;
-  height: 40px;
-  white-space: nowrap;
-}
-.stack-btn:hover:not(:disabled) {
-  background: rgba(var(--v-theme-on-background), 0.12);
-}
-.stack-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
 }
 
 /* Hidden panel activators - zero-size but remain in DOM for menu positioning */
@@ -940,7 +859,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 }
 
 .plugin-run-select {
-  height: 32px;
+  height: var(--control-h-bar);
   width: 100%;
   border-radius: 4px;
   border: 1px solid rgba(var(--v-theme-primary), 0.4);
@@ -983,7 +902,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   flex-shrink: 1;
 }
 
-.bar-btn-chevron {
+:deep(.bar-btn-chevron) {
   flex-shrink: 0;
 }
 
@@ -997,13 +916,10 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 }
 
 @media (hover: none) and (pointer: coarse) {
-  .stack-btn,
-  .clear-btn,
-  .delete-btn {
+  .bar-btn {
     height: var(--bar-height);
   }
-  .clear-btn,
-  .delete-btn {
+  .bar-btn--icon {
     width: var(--bar-height);
   }
 }

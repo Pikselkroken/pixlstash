@@ -566,7 +566,7 @@ watch(
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  min-height: 32px;
+  min-height: var(--control-h-bar);
   padding: var(--space-2) var(--space-3);
   border: 0;
   border-radius: var(--radius-sm);
@@ -672,19 +672,15 @@ watch(
 /* The chosen tile wears the whole §11 selected vocabulary - `--active-wash`
    fill AND `--active-bar` edge - not the edge alone. The edge on its own is a
    2px stroke drawn INSIDE a photograph that can be any colour, so whether it
-   registers depends on the frame behind it: `--active-bar` is `primary` on
-   dark and the `accent` amber on light, and either can land on a picture that
-   already contains it. That is what "the picker doesn't get any selection
+   registers depends on the frame behind it: `--active-bar` is an olive, and
+   it can land on a picture that already contains it. That is what "the picker doesn't get any selection
    marker" was - checked in a browser against real thumbnails, in both themes.
 
-   Outline rather than a box-shadow, because the focus ring below is a
-   box-shadow and the two would fight over one property - which is how the
-   chosen state was once hidden from the reader who has no other way to see it
-   (a focused, chosen tile showed only the ring). */
-.pp-cell--on {
-  outline: var(--space-1) solid var(--active-bar);
-  outline-offset: calc(-1 * var(--space-1));
-}
+   The edge is an inset shadow on the wash pseudo-element, never the tile's
+   own outline: the global focus ring IS an outline, and the two would fight
+   over one property - which is how the chosen state was once hidden from the
+   reader who has no other way to see it (a focused, chosen tile showed only
+   the ring). */
 /* The wash, over the image rather than under it - a tile IS its picture, so
    there is no surface left to tint. A pseudo-element because it carries no
    text: nothing for the accessibility tree to pick up (unlike the tick, see
@@ -693,7 +689,9 @@ watch(
   content: "";
   position: absolute;
   inset: 0;
+  border-radius: inherit;
   background: var(--active-wash);
+  box-shadow: inset 0 0 0 var(--space-1) var(--active-bar);
   pointer-events: none;
 }
 /* The tick. `z-index` to clear the wash, which is an ::after and therefore
@@ -710,16 +708,15 @@ watch(
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-pill);
-  background: var(--active-bar);
-  color: var(--active-text);
+  /* A checked mark on a solid fill: deep olive with its own on- label, as the
+     checked checkbox is, in both themes. */
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
   box-shadow: var(--elevation-2);
   font-size: var(--text-sm);
   font-weight: var(--weight-bold);
   line-height: 1;
   pointer-events: none;
-}
-.pp-cell:focus-visible {
-  box-shadow: var(--focus-ring);
 }
 .pp-cell--gone {
   display: flex;

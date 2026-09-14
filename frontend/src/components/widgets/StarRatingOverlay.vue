@@ -86,19 +86,16 @@ function cycleRating() {
   gap: 0;
 }
 
-.star-overlay--compact:hover {
-  filter: brightness(1.25);
-}
-
 .star-overlay--compact .v-icon {
   width: 1em;
   height: 1em;
 }
 
-.star-overlay--compact .v-icon:hover {
-  width: 1em;
-  height: 1em;
-  color: rgba(var(--v-theme-accent), 0.5);
+/* Hover marks the star a click would set. Every mount sits over a photo or the
+   always-dark lightbox, so the wash is the dark-surface ink in both themes. */
+.star-overlay .v-icon:hover {
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+  border-radius: var(--radius-sm);
 }
 
 .star-overlay--number {
@@ -107,10 +104,6 @@ function cycleRating() {
   gap: var(--space-1);
   cursor: pointer;
   line-height: 1;
-}
-
-.star-overlay--number:hover {
-  filter: brightness(1.3);
 }
 
 .star-overlay--number :deep(.v-icon) {

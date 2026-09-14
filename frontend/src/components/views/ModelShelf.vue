@@ -104,32 +104,31 @@
         transition="scale-transition"
       >
         <template #activator="{ props: menuProps }">
-          <button
+          <!-- A copy of a 6 GB checkpoint is not instant, and this button is
+               the only thing on screen that knows one is running, so the glyph
+               becomes the spinner. Not `loading`: that disables the button, and
+               the menu's other rows (Add folder, ai-toolkit) stay usable while
+               a file copies; only Add file refuses. -->
+          <AppBarButton
             ref="addBtnRef"
             v-bind="menuProps"
-            class="bar-btn bar-btn--accent shelf-fold-680"
-            type="button"
+            class="bar-btn--accent shelf-fold-680"
+            :icon="adding ? '' : 'plus'"
+            chevron
+            :aria-busy="adding || undefined"
             aria-haspopup="menu"
             :aria-expanded="addMenuOpen"
-            :aria-busy="adding || undefined"
             title="Add models to the shelf"
+            ><v-icon v-if="adding" size="18" class="mdi-spin">mdi-loading</v-icon
+            >Add</AppBarButton
           >
-            <!-- A copy of a 6 GB checkpoint is not instant, and this button is
-                 the only thing on screen that knows one is running. -->
-            <v-icon v-if="adding" size="19" class="mdi-spin"
-              >mdi-loading</v-icon
-            >
-            <v-icon v-else size="19">mdi-plus</v-icon>
-            <span>Add</span>
-            <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-          </button>
         </template>
         <div class="shelf-menu" role="menu">
           <button
             class="shelf-mi"
             type="button"
             role="menuitem"
-            @click="openFolders(addBtnRef)"
+            @click="openFolders(addBtnRef?.el)"
           >
             <v-icon size="16">mdi-folder-plus-outline</v-icon>
             <span>Add folder…</span>
@@ -138,7 +137,7 @@
             class="shelf-mi"
             type="button"
             role="menuitem"
-            @click="openAddFile(addBtnRef)"
+            @click="openAddFile(addBtnRef?.el)"
           >
             <v-icon size="16">mdi-file-plus-outline</v-icon>
             <span>Add file…</span>
@@ -156,7 +155,7 @@
               class="shelf-mi"
               type="button"
               role="menuitem"
-              @click="openAddSource(addBtnRef)"
+              @click="openAddSource(addBtnRef?.el)"
             >
               <AiToolkitIcon :size="16" />
               <span>Set ai-toolkit output folder…</span>
@@ -183,17 +182,15 @@
            `aria-haspopup="dialog"` on both, and `aria-expanded` on neither:
            focus moves into the dialog rather than into anything the button
            owns. -->
-      <button
+      <AppBarButton
         ref="foldersBtnRef"
-        class="bar-btn bar-btn--boxed shelf-fold-680"
-        type="button"
+        class="shelf-fold-680"
+        icon="folder-multiple-outline"
         title="Model folders - add, rescan, move or forget a folder"
         aria-label="Model folders"
         aria-haspopup="dialog"
-        @click="openFolders(foldersBtnRef)"
-      >
-        <v-icon size="19">mdi-folder-multiple-outline</v-icon>
-      </button>
+        @click="openFolders(foldersBtnRef?.el)"
+      />
 
       <!-- Where those two land when the bar runs out of width. Only the
            "opens something, writes nothing on the press" pair folds: the ⋯ is
@@ -295,19 +292,17 @@
             transition="scale-transition"
           >
             <template #activator="{ props: menuProps }">
-              <button
+              <AppBarButton
                 v-bind="menuProps"
-                class="bar-btn bar-btn--boxed"
-                :class="{ 'bar-btn--open': groupMenuOpen }"
-                type="button"
+                :icon="activeGroup.icon"
+                chevron
+                :open="groupMenuOpen"
                 aria-haspopup="dialog"
                 :aria-expanded="groupMenuOpen"
                 :title="groupButtonTitle"
               >
-                <v-icon size="19">{{ activeGroup.icon }}</v-icon>
                 <span class="bar-btn-value">{{ activeGroup.label }}</span>
-                <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-              </button>
+              </AppBarButton>
             </template>
             <ShelfSortPanel section="group" />
           </v-menu>
@@ -333,32 +328,27 @@
               >
                 <!-- The accessible name IS the current state and flips on press,
                  which is what a keyboard user hears when focus returns. -->
-                <button
-                  class="bar-btn bar-split-toggle"
-                  type="button"
+                <AppBarButton
+                  class="bar-split-toggle"
+                  :icon="directionIcon"
                   :title="directionLabel"
                   :aria-label="directionLabel"
                   @click.stop="toggleDirection"
-                >
-                  <v-icon size="19">{{ directionIcon }}</v-icon>
-                </button>
+                />
                 <!-- `aria-haspopup="dialog"`, not `menu`: the panel is a div of
                  grouped toggles, and claiming a menu would promise roving
                  arrow keys nothing implements. Matches SearchResultBar. -->
-                <button
+                <AppBarButton
                   v-bind="menuProps"
-                  class="bar-btn bar-split-menu"
-                  type="button"
+                  class="bar-split-menu"
+                  :icon="activeSort.icon"
+                  chevron
                   aria-haspopup="dialog"
                   :aria-expanded="sortMenuOpen"
                   :title="sortButtonTitle"
                 >
-                  <v-icon size="19">{{ activeSort.icon }}</v-icon>
                   <span class="bar-btn-value">{{ activeSort.label }}</span>
-                  <v-icon size="18" class="bar-btn-chevron"
-                    >mdi-menu-down</v-icon
-                  >
-                </button>
+                </AppBarButton>
               </div>
             </template>
             <ShelfSortPanel section="sort" />
@@ -381,24 +371,17 @@
              "why is this list short", and the result counts are already on the
              group headers. -->
             <template #activator="{ props: menuProps }">
-              <button
+              <AppBarButton
                 v-bind="menuProps"
-                class="bar-btn bar-btn--boxed"
-                :class="{
-                  'bar-btn--active': store.activeCount > 0 && !showMenuOpen,
-                  'bar-btn--open': showMenuOpen,
-                }"
-                type="button"
+                class="shelf-show-btn"
+                icon="filter-outline"
+                chevron
+                :badge="store.activeCount > 0 ? store.activeCount : null"
+                :active="store.activeCount > 0 && !showMenuOpen"
+                :open="showMenuOpen"
                 :title="showButtonTitle"
-              >
-                <span class="bar-icon-badge-wrap">
-                  <v-icon size="19">mdi-filter-outline</v-icon>
-                  <span v-if="store.activeCount > 0" class="bar-filter-badge">{{
-                    store.activeCount
-                  }}</span>
-                </span>
-                <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-              </button>
+                :aria-label="showButtonTitle"
+              />
             </template>
             <ShelfShowPanel />
           </v-menu>
@@ -482,15 +465,12 @@
         <v-icon size="16">mdi-power-plug-off-outline</v-icon>
         <span class="shelf-banner-text">{{ offlineNote }}</span>
         <span class="shelf-spacer"></span>
-        <button
-          class="shelf-banner-dismiss"
-          type="button"
+        <AppBarButton
+          icon="close"
           title="Dismiss"
           aria-label="Dismiss the offline notice"
           @click="offlineDismissed = true"
-        >
-          <v-icon size="15">mdi-close</v-icon>
-        </button>
+        />
       </p>
       <p v-if="store.loading" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
@@ -502,13 +482,7 @@
            first two offer Reset. -->
       <div v-else-if="store.nothingSelected" class="shelf-state">
         <p>Nothing is selected in Show.</p>
-        <button
-          class="tbm-action tbm-action--secondary"
-          type="button"
-          @click="store.resetFilters()"
-        >
-          Reset filters
-        </button>
+        <AppButton @click="store.resetFilters()">Reset filters</AppButton>
       </div>
       <!-- Ahead of the terminal state, and gated on the selection rather than
            on `rows`: a narrowed selection only FETCHES the blocks it asks for,
@@ -522,13 +496,7 @@
         class="shelf-state"
       >
         <p>No models match these filters.</p>
-        <button
-          class="tbm-action tbm-action--secondary"
-          type="button"
-          @click="store.resetFilters()"
-        >
-          Reset filters
-        </button>
+        <AppButton @click="store.resetFilters()">Reset filters</AppButton>
       </div>
       <div v-else-if="!store.visibleRows.length" class="shelf-state">
         <p>No models found.</p>
@@ -536,15 +504,14 @@
           PixlStash lists what it finds in the model folders registered on this
           machine. Add the folder where you keep them.
         </p>
-        <button
+        <AppButton
           ref="emptyFoldersBtnRef"
-          class="tbm-action tbm-action--primary"
-          type="button"
+          variant="primary"
           aria-haspopup="dialog"
-          @click="openFolders(emptyFoldersBtnRef)"
+          @click="openFolders(emptyFoldersBtnRef?.$el)"
         >
           Add a model folder
-        </button>
+        </AppButton>
       </div>
 
       <!-- The row itself is not a focus stop unless it holds the roving one:
@@ -1489,6 +1456,7 @@ import FolderBrowser from "../editors/FolderBrowser.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import PicturePicker from "../widgets/PicturePicker.vue";
 import AppButton from "../widgets/AppButton.vue";
+import AppBarButton from "../widgets/AppBarButton.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
@@ -2705,7 +2673,7 @@ async function closeAddSource() {
   await nextTick();
   restoreFocus(
     returnTo,
-    addBtnRef.value,
+    addBtnRef.value?.el,
     overflowRef.value?.trigger?.(),
     rootEl.value,
   );
@@ -2755,7 +2723,7 @@ async function closeAddFile() {
   await nextTick();
   restoreFocus(
     returnTo,
-    addBtnRef.value,
+    addBtnRef.value?.el,
     overflowRef.value?.trigger?.(),
     rootEl.value,
   );
@@ -2888,7 +2856,7 @@ async function closeFolders() {
   // on the shelf root, rather than dropping focus to <body>.
   restoreFocus(
     returnTo,
-    foldersBtnRef.value,
+    foldersBtnRef.value?.el,
     overflowRef.value?.trigger?.(),
     rootEl.value,
   );
@@ -4079,17 +4047,6 @@ watch(
 </script>
 
 <style scoped>
-/* The spinner keeps spinning under reduced motion, slower. The global reset in
-   design-tokens.css zeroes every element's animation, and @mdi/font puts this
-   one on ::before, where the reset lands - a frozen mdi-loading reads as a
-   rendering fault rather than as "working". Same fix as `LoginScreen`. */
-@media (prefers-reduced-motion: reduce) {
-  .bar-btn .mdi-spin::before {
-    animation-duration: 2s !important;
-    animation-iteration-count: infinite !important;
-  }
-}
-
 .shelf {
   display: flex;
   flex-direction: column;
@@ -4290,8 +4247,9 @@ watch(
 
 /* The one filled button in the bar. It is the only control here with a result
    behind it - everything else changes what you are looking at - and that is
-   what the fill says. `on-primary` and not the surface ink: this is a solid
-   primary fill, which is the pairing that measures (§4).
+   what the fill says. Amber acts, olive selects: the key action's fill is
+   `accent` with its `on-accent` label, and a filled control's hover darkens
+   (`--hover-shade`) rather than taking the transparent buttons' wash.
 
    28px, not `.bar-btn`'s 32, and `--radius-sm` rather than the nothing it
    inherited. A filled control is the only kind whose box you can actually see:
@@ -4304,16 +4262,22 @@ watch(
    at a radius (0) that is not on the scale (§6). */
 .shelf-toolbar .bar-btn--accent {
   gap: var(--space-2);
-  height: 28px;
+  height: var(--control-h);
   border-radius: var(--radius-sm);
-  border-color: rgb(var(--v-theme-primary));
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
+  border-color: rgb(var(--v-theme-accent));
+  background: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-accent));
   font-weight: var(--weight-medium);
 }
 
+.shelf-toolbar .bar-btn--accent:hover:not(:disabled) {
+  background-color: rgb(var(--v-theme-accent));
+  background-image: var(--hover-shade);
+  color: rgb(var(--v-theme-on-accent));
+}
+
 .shelf-toolbar .bar-btn--accent :deep(.v-icon) {
-  color: rgb(var(--v-theme-on-primary));
+  color: rgb(var(--v-theme-on-accent));
 }
 
 /* Group and Sort carry their current VALUE as the label: their glyphs are
@@ -4432,25 +4396,6 @@ watch(
   white-space: nowrap;
 }
 
-.shelf-banner-dismiss {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  flex: none;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: rgba(var(--v-theme-on-background), 0.7);
-  cursor: pointer;
-}
-
-.shelf-banner-dismiss:hover {
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-on-background));
-}
-
 /* ── Drive bands ───────────────────────────────────────────────────────────
    The OUTER of the two levels the plan allows, drawn only under `Folder` +
    `Drive, then folder`. Deliberately NOT sticky: two sticky levels need
@@ -4538,8 +4483,8 @@ watch(
    the shelf has one drop treatment and a second dialect on the outer level
    would read as a different kind of target rather than the same one. */
 .shelf-band--drop {
-  background: rgba(var(--v-theme-primary), 0.12);
-  box-shadow: inset 0 0 0 2px rgba(var(--v-theme-primary), 0.65);
+  background: var(--active-wash);
+  box-shadow: inset 0 0 0 2px var(--active-bar);
 }
 
 /* The refusal, while the pointer is still down. `no-drop` is the same cursor
@@ -4763,6 +4708,7 @@ watch(
   height: 100%;
   padding: 0;
   border: 0;
+  border-radius: var(--radius-sm);
   background: none;
   cursor: pointer;
   transition: color var(--dur-1) var(--ease-standard);
@@ -4774,12 +4720,6 @@ watch(
 
 button.shelf-head-cell:hover {
   color: rgb(var(--v-theme-on-surface));
-}
-
-.shelf-head-cell:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: var(--radius-sm);
 }
 
 /* The sorted column is named in full ink with an arrow beside it. Both halves
@@ -4827,6 +4767,7 @@ button.shelf-head-cell:hover {
   bottom: 0;
   left: calc(var(--space-6) / -2 - var(--space-4) / 2);
   width: var(--space-6);
+  border-radius: var(--radius-sm);
   cursor: col-resize;
   touch-action: none;
 }
@@ -4851,17 +4792,12 @@ button.shelf-head-cell:hover {
 
 /* Colour only, never width: the hairline is `left: 50%` on the seam, so
    growing it would slide the line sideways under the pointer at the moment
-   the reader is aiming at it. */
+   the reader is aiming at it. Full ink, not a hue: hover and a drag in
+   progress are neither an action nor a selection. */
 .shelf-head-grip:hover::after,
 .shelf-head-grip--on::after,
 .shelf-head-grip:focus-visible::after {
-  background: rgb(var(--v-theme-primary));
-}
-
-.shelf-head-grip:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-on-background));
 }
 
 /* The key, once for the view. Wraps rather than scrolls: four short pairs at a
@@ -4974,10 +4910,10 @@ button.shelf-head-cell:hover {
 /* The drop affordance keeps the tier rail beside it rather than replacing it:
    which folder this is does not stop being true while a drag is over it. */
 .shelf-group-btn--drop {
-  background: rgba(var(--v-theme-primary), 0.12);
+  background: var(--active-wash);
   box-shadow:
     inset 3px 0 0 var(--shelf-rail, transparent),
-    inset 0 0 0 2px rgba(var(--v-theme-primary), 0.65);
+    inset 0 0 0 2px var(--active-bar);
 }
 
 .shelf-group-chevron {
@@ -5043,17 +4979,18 @@ button.shelf-head-cell:hover {
   background: var(--hover-wash);
 }
 
+/* The global ink outline, drawn inside: a flush row in a scroller has no room
+   for the gap. */
 .shelf-row:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-primary));
-  outline-offset: -2px;
+  outline-offset: calc(var(--focus-width) * -1);
 }
 
 /* A wash and an inset bar, not a border: a 1px outline on a selected row
    shifts every glyph in it by a pixel, and 200 selected rows would shimmer as
    the list scrolls. The bar is the greyscale half - the wash alone is a hue. */
 .shelf-row--selected {
-  background: rgba(var(--v-theme-primary), 0.12);
-  box-shadow: inset 3px 0 0 rgb(var(--v-theme-primary));
+  background: var(--active-wash);
+  box-shadow: inset 3px 0 0 var(--active-bar);
 }
 
 /* ── The three kinds of absence ────────────────────────────────────────────
@@ -5217,12 +5154,6 @@ button.shelf-head-cell:hover {
   border-radius: var(--radius-sm);
 }
 
-.shelf-row-rename:focus,
-.shelf-row-base-edit:focus {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 /* The absence glyph leads the name line, because it changes what everything
    after it means: the name is still true, the file behind it is not there. */
 .shelf-row-loc {
@@ -5290,7 +5221,7 @@ button.shelf-head-cell:hover {
 }
 
 .shelf-stack-badge:hover {
-  border-color: rgb(var(--v-theme-primary));
+  background-image: var(--hover-neutral);
 }
 
 .shelf-stack-badge .v-icon {

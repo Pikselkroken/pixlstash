@@ -28,6 +28,7 @@
 import { computed, nextTick, ref, watch } from "vue";
 
 import { isReadOnly } from "../../utils/apiClient";
+import AppBarButton from "../widgets/AppBarButton.vue";
 import {
   formatOperationTime,
   iconForOpType,
@@ -222,29 +223,30 @@ defineExpose({
 
 <template>
   <div ref="rootEl" class="uc" role="group" aria-label="Undo and redo">
-    <div class="uc-group" :class="{ 'uc-group--open': menuOpen }">
-      <button
-        type="button"
-        class="uc-btn uc-btn--undo"
+    <!-- The global split-button chrome: the group takes the panel fill and
+         border while History is open, and turns its chevron. -->
+    <div
+      class="bar-split-button"
+      :class="{ 'bar-split-button--open': menuOpen }"
+    >
+      <AppBarButton
+        class="uc-btn--undo"
+        icon="undo-variant"
         :aria-disabled="!canUndo"
         :title="undoTitle"
         :aria-label="undoTitle"
         :aria-keyshortcuts="undoKeyShortcut"
         @click="onUndo"
-      >
-        <v-icon size="19">mdi-undo-variant</v-icon>
-      </button>
-      <button
-        type="button"
-        class="uc-btn uc-btn--redo"
+      />
+      <AppBarButton
+        class="uc-btn--redo"
+        icon="redo-variant"
         :aria-disabled="!canRedo"
         :title="redoTitle"
         :aria-label="redoTitle"
         :aria-keyshortcuts="redoKeyShortcut"
         @click="onRedo"
-      >
-        <v-icon size="19">mdi-redo-variant</v-icon>
-      </button>
+      />
       <v-menu
         v-model="menuOpen"
         :close-on-content-click="false"
@@ -255,16 +257,14 @@ defineExpose({
         :activator-props="{ 'aria-haspopup': 'dialog' }"
       >
         <template #activator="{ props: menuProps }">
-          <button
+          <AppBarButton
             v-bind="menuProps"
-            type="button"
-            class="uc-btn uc-btn--chevron"
+            class="uc-btn--chevron"
+            chevron
             title="History"
             aria-label="History"
             :aria-expanded="menuOpen"
-          >
-            <v-icon size="18" class="uc-chevron">mdi-menu-down</v-icon>
-          </button>
+          />
         </template>
         <div
           class="tbm uc-panel"
@@ -343,65 +343,17 @@ defineExpose({
   align-items: center;
 }
 
-/* Mirrors `.bar-split-button` / `.bar-btn` from the toolbar. Deliberately its
-   own class names rather than reusing those: they live in Toolbar.vue's SCOPED
-   style block, so a child component gets none of them, and promoting them into
-   App.css is a toolbar-wide refactor that belongs to the lane that owns this
-   area - not to this change. Recorded as a follow-up. */
-.uc-group {
-  display: flex;
-  align-items: center;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-}
-
-/* Open: the whole group adopts the panel fill + border so it reads as one
-   object with its menu, exactly as the sort split button does. */
-.uc-group--open {
-  border-color: rgb(var(--v-theme-border));
-  background: rgb(var(--v-theme-panel));
-}
-
-.uc-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* 32×32, not the design's 18px-wide chevron: an 18px target is under the
-     WCAG 2.5.8 24×24 floor. */
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  flex-shrink: 0;
-  color: rgb(var(--v-theme-toolbar-text));
-  /* A transparent 1px border is reserved so the open state does not resize the
-     button and make the group jump. */
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  box-sizing: border-box;
-  font-family: inherit;
-}
-
-.uc-btn:hover {
-  background: rgba(var(--v-theme-toolbar-text), 0.1);
-}
-
 /* `aria-disabled`, not the `disabled` attribute: the design requires the
    buttons to stay tabbable and to keep naming the step ("Nothing to undo"),
    and a `disabled` button is neither focusable nor tooltip-bearing. The visual
    is the repo's own disabled treatment minus the pointer-events kill. */
-.uc-btn[aria-disabled="true"] {
+.bar-btn[aria-disabled="true"] {
   opacity: 0.35;
   filter: grayscale(30%);
   cursor: default;
 }
-.uc-btn[aria-disabled="true"]:hover {
+.bar-btn[aria-disabled="true"]:hover {
   background: transparent;
-}
-
-.uc-group--open .uc-chevron {
-  transform: rotate(180deg);
-  transition: transform var(--dur-1) var(--ease-standard);
 }
 
 /* ── History popover ─────────────────────────────────────────────────────── */
@@ -490,13 +442,8 @@ defineExpose({
   background: var(--active-wash);
   box-shadow: inset var(--space-1) 0 0 0 var(--active-bar);
 }
-/* Focus must still win over the range highlight, or a keyboard user loses the
-   cursor inside the previewed block. */
-.uc-row--willundo:focus-visible {
-  box-shadow:
-    inset var(--space-1) 0 0 0 var(--active-bar),
-    var(--focus-ring);
-}
+/* Focus inside the previewed block needs no rule of its own: the global ink
+   outline draws outside the row, so it stays visible over the range wash. */
 
 /* Undone steps: visible, struck through, inert. Mirrors the shortcuts dialog's
    own disabled-row treatment rather than inventing a second one. */
@@ -510,7 +457,6 @@ defineExpose({
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .uc-group--open .uc-chevron,
   .uc-row {
     transition: none;
   }

@@ -204,17 +204,13 @@
           existing link will lose access immediately.
         </v-card-text>
         <v-card-actions style="padding: 8px 16px 16px">
-          <v-btn variant="text" @click="revokeSharesDialogOpen = false"
-            >Cancel</v-btn
+          <AppButton @click="revokeSharesDialogOpen = false"
+            >Cancel</AppButton
           >
           <v-spacer />
-          <v-btn
-            color="error"
-            variant="tonal"
-            @click="confirmRevokePictureShares"
-          >
+          <AppButton variant="danger" @click="confirmRevokePictureShares">
             Remove all shares
-          </v-btn>
+          </AppButton>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -243,13 +239,13 @@
           />
         </v-card-text>
         <v-card-actions style="padding: 8px 16px 16px">
-          <v-btn variant="text" @click="segmentDialogOpen = false"
-            >Cancel</v-btn
+          <AppButton @click="segmentDialogOpen = false"
+            >Cancel</AppButton
           >
           <v-spacer />
-          <v-btn color="primary" variant="tonal" @click="confirmSegment">
+          <AppButton variant="primary" @click="confirmSegment">
             Detect
-          </v-btn>
+          </AppButton>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -363,14 +359,14 @@
         }}
       </span>
       <span class="multi-select-toolbar__spacer"></span>
-      <button
+      <AppBarButton
         class="multi-select-toolbar__clear"
+        icon="selection-off"
         title="Clear selection"
         @click="emit('clear-multi-selection')"
       >
-        <v-icon size="16">mdi-selection-off</v-icon>
         Deselect All
-      </button>
+      </AppBarButton>
     </div>
     <ProgressOverlay
       :visible="exportProgress.visible"
@@ -451,13 +447,14 @@
         "
         class="pending-imports-pill-anchor"
       >
-        <button
+        <AppButton
           v-if="wsStore.pendingExternalImportCount > 0"
           class="pending-imports-pill"
+          variant="primary"
+          icon-left="image-plus-outline"
           data-testid="pending-imports-pill"
           @click="emit('load-pending-imports')"
         >
-          <v-icon :size="16" aria-hidden="true">mdi-image-plus-outline</v-icon>
           {{ wsStore.pendingExternalImportCount }}
           {{
             wsStore.pendingExternalImportCount === 1
@@ -465,16 +462,17 @@
               : "new pictures"
           }}
           - Load
-        </button>
-        <button
+        </AppButton>
+        <AppButton
           v-if="wsStore.sortChangedExternalCount > 0"
           class="pending-imports-pill"
+          variant="primary"
+          icon-left="refresh"
           data-testid="sort-changed-pill"
           @click="emit('load-sort-changed')"
         >
-          <v-icon :size="16" aria-hidden="true">mdi-refresh</v-icon>
           View changed externally - Refresh
-        </button>
+        </AppButton>
       </div>
       <div v-if="dragOverlayVisible" class="drag-overlay">
         <div class="drag-overlay-message">{{ dragOverlayMessage }}</div>
@@ -519,15 +517,14 @@
           <div class="empty-state-subtitle">
             {{ emptyStateSubtitle }}
           </div>
-          <v-btn
+          <AppButton
             v-if="canShowAllPicturesButton"
-            class="empty-state-action app-btn-base"
-            color="primary"
-            variant="elevated"
+            class="empty-state-action"
+            variant="primary"
             @click.stop="handleEmptyStateReset"
           >
-            Show All Pictures
-          </v-btn>
+            Show all pictures
+          </AppButton>
         </div>
       </div>
       <div
@@ -1016,20 +1013,12 @@
         browser.
       </span>
       <template #actions>
-        <v-btn
-          color="primary"
-          variant="text"
-          @click="handleGuestConsentAccepted"
-        >
+        <AppButton variant="ghost" @click="handleGuestConsentAccepted">
           Accept
-        </v-btn>
-        <v-btn
-          color="default"
-          variant="text"
-          @click="handleGuestConsentRejected"
-        >
+        </AppButton>
+        <AppButton variant="ghost" @click="handleGuestConsentRejected">
           No thanks
-        </v-btn>
+        </AppButton>
       </template>
     </v-snackbar>
 
@@ -1043,21 +1032,16 @@
     >
       <span>{{ impossibleSnackbarText }}</span>
       <template #actions>
-        <v-btn
+        <AppButton
           v-if="lastImpossibleRemoved.length"
-          color="primary"
-          variant="text"
+          variant="ghost"
           @click="handleUndoImpossibleTags"
         >
           Undo
-        </v-btn>
-        <v-btn
-          color="default"
-          variant="text"
-          @click="impossibleSnackbarVisible = false"
-        >
+        </AppButton>
+        <AppButton variant="ghost" @click="impossibleSnackbarVisible = false">
           Dismiss
-        </v-btn>
+        </AppButton>
       </template>
     </v-snackbar>
 
@@ -1238,6 +1222,8 @@ import Toolbar from "../panels/Toolbar.vue";
 import SelectionBar from "../panels/SelectionBar.vue";
 import GridActionPill from "../panels/GridActionPill.vue";
 import ActionReceipt from "../widgets/ActionReceipt.vue";
+import AppBarButton from "../widgets/AppBarButton.vue";
+import AppButton from "../widgets/AppButton.vue";
 import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
 import SearchResultBar from "../widgets/SearchResultBar.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";

@@ -1,9 +1,13 @@
 <template>
   <v-dialog :model-value="open" max-width="560" @click:outside="emit('close')">
     <div class="editor-shell">
-      <v-btn icon size="36px" class="close-icon" @click="emit('close')">
-        <v-icon size="24px">mdi-close</v-icon>
-      </v-btn>
+      <AppBarButton
+        icon="close"
+        :icon-size="20"
+        class="close-icon"
+        aria-label="Close"
+        @click="emit('close')"
+      />
       <v-card class="editor-card">
         <v-card-title class="editor-header">
           {{
@@ -25,16 +29,15 @@
               hide-details
               @keydown.enter="save"
             />
-            <v-btn
-              variant="outlined"
-              size="small"
-              icon
+            <AppButton
+              variant="outline"
+              icon-only
+              icon-left="folder-open-outline"
               class="editor-browse-btn"
               title="Browse for folder"
+              aria-label="Browse for folder"
               @click="browseOpen = true"
-            >
-              <v-icon size="18">mdi-folder-open-outline</v-icon>
-            </v-btn>
+            />
           </div>
 
           <!-- Docker helper (create mode) -->
@@ -92,18 +95,18 @@
               <code class="editor-docker-snippet">{{
                 dockerMountSnippet
               }}</code>
-              <v-btn
-                variant="outlined"
-                size="small"
-                icon
+              <AppButton
+                variant="outline"
+                size="sm"
+                icon-only
+                icon-left="content-copy"
                 class="editor-copy-btn"
                 title="Copy mount line"
+                aria-label="Copy mount line"
                 @click="
                   copyToClipboard(dockerMountSnippet, 'Mount line copied.')
                 "
-              >
-                <v-icon size="16">mdi-content-copy</v-icon>
-              </v-btn>
+              />
             </div>
             <div class="editor-docker-title">Container restart helpers</div>
             <div class="editor-docker-note editor-docker-note--muted">
@@ -113,21 +116,21 @@
               <code class="editor-docker-snippet">{{
                 dockerRemoveContainerSnippet
               }}</code>
-              <v-btn
-                variant="outlined"
-                size="small"
-                icon
+              <AppButton
+                variant="outline"
+                size="sm"
+                icon-only
+                icon-left="content-copy"
                 class="editor-copy-btn"
                 title="Copy remove-container command"
+                aria-label="Copy remove-container command"
                 @click="
                   copyToClipboard(
                     dockerRemoveContainerSnippet,
                     'Remove-container command copied.',
                   )
                 "
-              >
-                <v-icon size="16">mdi-content-copy</v-icon>
-              </v-btn>
+              />
             </div>
             <div class="editor-docker-note">
               Full restart command (uses your local folder mapping):
@@ -143,21 +146,21 @@
                 class="editor-docker-snippet editor-docker-snippet--full"
                 >{{ dockerRestartCommandSnippet }}</code
               >
-              <v-btn
-                variant="outlined"
-                size="small"
-                icon
+              <AppButton
+                variant="outline"
+                size="sm"
+                icon-only
+                icon-left="content-copy"
                 class="editor-copy-btn"
                 title="Copy full restart command"
+                aria-label="Copy full restart command"
                 @click="
                   copyToClipboard(
                     dockerRestartCommandSnippet,
                     'Restart command copied.',
                   )
                 "
-              >
-                <v-icon size="16">mdi-content-copy</v-icon>
-              </v-btn>
+              />
             </div>
 
             <div v-if="copyStatus" class="editor-copy-status">
@@ -176,19 +179,18 @@
             <span class="editor-path-text" :title="activeFolder?.folder">{{
               activeFolder?.folder
             }}</span>
-            <v-btn
-              variant="outlined"
-              size="small"
-              icon
+            <AppButton
+              variant="outline"
+              icon-only
+              icon-left="folder-move-outline"
               class="editor-relocate-btn"
               title="Relocate folder and move files"
+              aria-label="Relocate folder and move files"
               @click="
                 emit('relocate', activeFolder);
                 emit('close');
               "
-            >
-              <v-icon size="18">mdi-folder-move-outline</v-icon>
-            </v-btn>
+            />
           </div>
 
           <!-- Reference path inputs (edit mode, Docker) -->
@@ -251,21 +253,21 @@
               <code class="editor-docker-snippet">{{
                 dockerRemoveContainerSnippet
               }}</code>
-              <v-btn
-                variant="outlined"
-                size="small"
-                icon
+              <AppButton
+                variant="outline"
+                size="sm"
+                icon-only
+                icon-left="content-copy"
                 class="editor-copy-btn"
                 title="Copy remove-container command"
+                aria-label="Copy remove-container command"
                 @click="
                   copyToClipboard(
                     dockerRemoveContainerSnippet,
                     'Remove-container command copied.',
                   )
                 "
-              >
-                <v-icon size="16">mdi-content-copy</v-icon>
-              </v-btn>
+              />
             </div>
             <div
               v-if="hasExistingMounts"
@@ -283,21 +285,21 @@
               <code class="editor-docker-snippet editor-docker-snippet--full">{{
                 dockerEditRestartCommandSnippet
               }}</code>
-              <v-btn
-                variant="outlined"
-                size="small"
-                icon
+              <AppButton
+                variant="outline"
+                size="sm"
+                icon-only
+                icon-left="content-copy"
                 class="editor-copy-btn"
                 title="Copy full restart command"
+                aria-label="Copy full restart command"
                 @click="
                   copyToClipboard(
                     dockerEditRestartCommandSnippet,
                     'Restart command copied.',
                   )
                 "
-              >
-                <v-icon size="16">mdi-content-copy</v-icon>
-              </v-btn>
+              />
             </div>
           </div>
 
@@ -453,47 +455,41 @@
           </div>
         </v-card-text>
         <v-card-actions class="editor-footer">
-          <v-btn
+          <AppButton
             v-if="isEditMode && !confirmingDelete"
-            variant="outlined"
-            color="error"
-            size="small"
+            variant="outline"
             class="editor-delete-btn"
             :loading="deleteLoading"
             @click="confirmingDelete = true"
           >
             Remove
-          </v-btn>
-          <v-btn
+          </AppButton>
+          <AppButton
             v-if="confirmingDelete"
-            variant="flat"
-            color="error"
-            size="small"
+            variant="danger"
             class="editor-delete-btn"
             :loading="deleteLoading"
             @click="doDelete"
           >
-            Confirm Remove
-          </v-btn>
-          <v-btn
+            Confirm remove
+          </AppButton>
+          <AppButton
             v-if="confirmingDelete"
-            variant="text"
-            size="small"
             @click="confirmingDelete = false"
           >
             Cancel
-          </v-btn>
+          </AppButton>
           <v-spacer></v-spacer>
           <template v-if="!confirmingDelete">
-            <v-btn class="btn-cancel" @click="emit('close')">Cancel</v-btn>
-            <v-btn
-              class="btn-save"
+            <AppButton @click="emit('close')">Cancel</AppButton>
+            <AppButton
+              variant="primary"
               :loading="saveLoading"
               :disabled="!isValid"
               @click="save"
             >
-              {{ isEditMode ? "Save" : "Add Folder" }}
-            </v-btn>
+              {{ isEditMode ? "Save" : "Add folder" }}
+            </AppButton>
           </template>
         </v-card-actions>
       </v-card>
@@ -529,6 +525,8 @@ import {
   normalizeFolderPath,
 } from "../../utils/dockerHelpers";
 import FolderBrowser from "./FolderBrowser.vue";
+import AppBarButton from "../widgets/AppBarButton.vue";
+import AppButton from "../widgets/AppButton.vue";
 import { errorDetail } from "../../utils/apiError";
 
 const appVersion = __APP_VERSION__;
@@ -1091,23 +1089,16 @@ async function copyToClipboard(value, successMessage) {
 
 .close-icon {
   position: absolute;
-  top: -16px;
-  right: -16px;
-  background-color: rgb(var(--v-theme-primary));
-  border: none;
-  color: rgb(var(--v-theme-on-primary));
-  cursor: pointer;
+  top: var(--space-4);
+  right: var(--space-3);
   z-index: 2;
-}
-
-.close-icon:hover {
-  background-color: rgb(var(--v-theme-accent));
 }
 
 .editor-header {
   font-size: var(--text-lg);
   font-weight: var(--weight-semibold);
-  padding: var(--space-6) var(--space-6) var(--space-3);
+  /* Right side clears the 32px close button. */
+  padding: var(--space-6) var(--space-8) var(--space-3) var(--space-6);
 }
 
 .editor-body {
@@ -1128,7 +1119,7 @@ async function copyToClipboard(value, successMessage) {
 }
 
 .editor-browse-btn {
-  margin-top: var(--space-2);
+  align-self: center;
   flex-shrink: 0;
 }
 
@@ -1318,7 +1309,13 @@ async function copyToClipboard(value, successMessage) {
 }
 
 .editor-sync-header:hover {
-  background: rgba(var(--v-theme-primary), 0.1);
+  background: var(--hover-wash);
+}
+
+/* Flush inside a section that clips its overflow: the ring goes inside. */
+.editor-sync-header:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-inset);
 }
 
 .editor-sync-summary {
@@ -1386,51 +1383,5 @@ async function copyToClipboard(value, successMessage) {
 
 .editor-delete-btn {
   flex-shrink: 0;
-}
-
-.btn-cancel {
-  background: rgb(var(--v-theme-cancel-button));
-  color: rgb(var(--v-theme-cancel-button-text));
-  transition: filter 0.2s;
-}
-
-.btn-cancel:hover {
-  filter: brightness(1.2);
-}
-
-.btn-save {
-  background: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
-  transition: filter 0.2s;
-}
-
-/* Pending is not disabled (visual-language.md §11): the shared AppButton keeps
-   its label legible while busy, but Save/Remove/Confirm Remove here are stock
-   Vuetify v-btn, whose own `--loading` styling sets `.v-btn__content { opacity: 0
-   }` - blanking the label entirely instead of just dimming it. Restore it so
-   these three match the pending contract the rest of #647's forms carry. */
-.btn-save :deep(.v-btn--loading .v-btn__content),
-.btn-save :deep(.v-btn--loading .v-btn__prepend),
-.btn-save :deep(.v-btn--loading .v-btn__append),
-.editor-delete-btn :deep(.v-btn--loading .v-btn__content),
-.editor-delete-btn :deep(.v-btn--loading .v-btn__prepend),
-.editor-delete-btn :deep(.v-btn--loading .v-btn__append) {
-  opacity: 1;
-}
-
-/* The spinner keeps spinning under reduced motion, the same fix AppButton takes
-   for its own mdi-spin icon: the global reset in design-tokens.css zeroes every
-   element's animation, which would freeze Vuetify's indeterminate spinner into a
-   static ring that reads as a rendering fault rather than "working". */
-@media (prefers-reduced-motion: reduce) {
-  .btn-save :deep(.v-progress-circular--indeterminate > svg),
-  .btn-save
-    :deep(.v-progress-circular--indeterminate .v-progress-circular__overlay),
-  .editor-delete-btn :deep(.v-progress-circular--indeterminate > svg),
-  .editor-delete-btn
-    :deep(.v-progress-circular--indeterminate .v-progress-circular__overlay) {
-    animation-duration: 1.4s !important;
-    animation-iteration-count: infinite !important;
-  }
 }
 </style>

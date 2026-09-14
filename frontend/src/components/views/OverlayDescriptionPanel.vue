@@ -372,7 +372,7 @@ defineExpose({
 }
 
 .section-header--collapsible:hover {
-  opacity: 0.85;
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .section-header {
@@ -400,6 +400,10 @@ defineExpose({
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+.section-meta-btn:hover:not(:disabled) {
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .section-meta-btn:disabled {
@@ -461,9 +465,9 @@ defineExpose({
 
 .overlay-icon-btn {
   color: rgb(var(--v-theme-on-dark-surface));
-  height: 32px;
+  height: var(--control-h-bar);
   padding: 6px 14px;
-  min-width: 32px;
+  min-width: var(--control-h-bar);
   border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
@@ -472,7 +476,7 @@ defineExpose({
 }
 
 .overlay-icon-btn:hover {
-  background: rgba(var(--v-theme-primary), 0.6);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 
 .description-editor--sentinel textarea {

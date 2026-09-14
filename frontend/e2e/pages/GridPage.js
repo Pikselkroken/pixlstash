@@ -40,10 +40,10 @@ export class GridPage {
     this.searchHistoryChips = page.locator('.gb-recent-row')
     // Right-click context menu (§3.5) — ImageGridContextMenu.vue.
     this.contextMenu = page.locator('.image-ctx-menu')
-    // Selection ▾ dropdown — SelectionBar.vue's activator (`.stack-btn` inside
+    // Selection ▾ dropdown — SelectionBar.vue's activator (`.selection-menu-trigger` inside
     // `.selection-ctx-bar`) opening SelectionMenu.vue's `.selection-menu-panel`.
     // The activator is disabled until something is selected.
-    this.selectionMenuButton = page.locator('.selection-ctx-bar .stack-btn')
+    this.selectionMenuButton = page.locator('.selection-ctx-bar .selection-menu-trigger')
     this.selectionMenuPanel = page.locator('.selection-menu-panel')
     this.selectionCountLabel = page.locator(
       '.selection-ctx-bar .bar-btn-apply-label',

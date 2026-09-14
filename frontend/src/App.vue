@@ -489,7 +489,16 @@ function resolveThemeName(mode) {
 watch(
   () => userPrefsStore.themeMode,
   (value) => {
-    theme.global.name.value = resolveThemeName(value);
+    const name = resolveThemeName(value);
+    theme.global.name.value = name;
+    // The state tokens (`--hover-wash`, `--active-*`, `--selected-ink`, ...) are
+    // declared per theme on the `.v-theme--*` class, which Vuetify only puts on
+    // `v-app` and its own overlays. A hand-rolled `<Teleport to="body">` popup
+    // sits outside both and would resolve every one of them to nothing, so the
+    // root carries the theme class as well.
+    const root = document.documentElement.classList;
+    root.remove("v-theme--pixlStashDark", "v-theme--pixlStashLight");
+    root.add(`v-theme--${name}`);
     // Remember it for the next launch's first paint, which happens long before
     // the config that decided this one can be asked for.
     rememberTheme(value === "dark" ? "dark" : "light");

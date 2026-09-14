@@ -376,7 +376,7 @@ watch(
 }
 
 .settings-nav-item--active {
-  color: rgb(var(--v-theme-on-surface));
+  color: var(--active-text);
   font-weight: var(--weight-semibold);
   background: var(--active-wash);
 }
@@ -388,7 +388,13 @@ watch(
   bottom: 6px;
   width: 3px;
   border-radius: 0 2px 2px 0;
-  background: rgb(var(--v-theme-accent));
+  background: var(--active-bar);
+}
+
+/* A full-width row flush in the nav column: an outset ring would be clipped. */
+.settings-nav-item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-inset);
 }
 
 .settings-nav-item__icon {

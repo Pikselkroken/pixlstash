@@ -36,15 +36,13 @@
         :close-on-content-click="false"
       >
         <template #activator="{ props: menuProps }">
-          <button
+          <AppBarButton
             v-bind="menuProps"
-            class="bar-btn"
-            type="button"
+            prefix="Group:"
             aria-haspopup="menu"
             :aria-expanded="groupMenuOpen"
+            >{{ GROUP_LABELS[store.view.groupBy].label }}</AppBarButton
           >
-            Group: {{ GROUP_LABELS[store.view.groupBy].label }}
-          </button>
         </template>
         <div class="tbm">
           <span class="tbm-caret tbm-caret--start"></span>
@@ -86,15 +84,13 @@
         :close-on-content-click="false"
       >
         <template #activator="{ props: menuProps }">
-          <button
+          <AppBarButton
             v-bind="menuProps"
-            class="bar-btn"
-            type="button"
+            prefix="Sort:"
             aria-haspopup="menu"
             :aria-expanded="sortMenuOpen"
+            >{{ SORT_LABELS[store.view.sortKey].label }}</AppBarButton
           >
-            Sort: {{ SORT_LABELS[store.view.sortKey].label }}
-          </button>
         </template>
         <div class="tbm">
           <span class="tbm-caret tbm-caret--start"></span>
@@ -149,15 +145,13 @@
         :close-on-content-click="false"
       >
         <template #activator="{ props: menuProps }">
-          <button
+          <AppBarButton
             v-bind="menuProps"
-            class="bar-btn"
-            type="button"
+            prefix="Show:"
             aria-haspopup="menu"
             :aria-expanded="showMenuOpen"
+            >{{ SHOW_LABELS[store.view.show].label }}</AppBarButton
           >
-            Show: {{ SHOW_LABELS[store.view.show].label }}
-          </button>
         </template>
         <div class="tbm">
           <span class="tbm-caret tbm-caret--start"></span>
@@ -507,6 +501,7 @@
 
 import { computed, onMounted, ref, watch } from "vue";
 
+import AppBarButton from "../widgets/AppBarButton.vue";
 import { getWorkflowGraph, listWorkflowVariants } from "../../api/workflows";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
@@ -1000,14 +995,15 @@ onMounted(() => store.fetchRows());
   background: var(--hover-wash);
 }
 
+/* Flush rows in a scrolling list have no room for the global ring's gap, so
+   the same ink outline is drawn inside the row instead. */
 .wfshelf-row:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-primary));
-  outline-offset: -2px;
+  outline-offset: calc(var(--focus-width) * -1);
 }
 
 .wfshelf-row--selected {
   background: var(--active-wash);
-  border-left-color: rgb(var(--v-theme-accent));
+  border-left-color: var(--active-bar);
 }
 
 .wfshelf-row--variant {

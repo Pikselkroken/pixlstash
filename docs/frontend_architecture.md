@@ -1248,6 +1248,10 @@ re-reads without that freshness resting on the dialog's lazy-mount behaviour.
 #### App* design-system layer (`widgets/`)
 The house-styled form/control primitives that wrap Vuetify with the PixlStash tokens (`styles/design-tokens.css`), so new UI composes from one consistent kit instead of raw Vuetify: `AppButton.vue` (263 lines), `AppDialog.vue` (217 lines), `AppInput.vue` (96 lines), `AppSelect.vue` (182 lines), `AppStepper.vue` (126 lines), `AppTextarea.vue` (61 lines), plus `FieldLabel.vue` (16 lines) for consistent field labelling. Presentational; each takes `v-model` / props and emits the matching update events.
 
+**Two button dialects** (issue #1295, spec `docs/design/buttons.md`). The app has two button components and no third. `AppButton` is the **raised** control for dialogs, panels and forms: `--control-h` 28px (`size="sm"` `--control-h-sm` 24px), `--radius-sm`, variants `primary` / `secondary` / `outline` / `danger` / `ghost`, and `block` for full width. `AppBarButton` is the **flat** control for the toolbar, the selection bar and every close/dismiss: `--control-h-bar` 32px, transparent until hovered, `shape="boxed"` (strip) or `"round"` (selection pill), with `prefix`, `badge`, `chevron`, `active`, `open` and `danger` for the anatomy a bar needs; its glyph is 24px icon-only and 18px beside a label, owned by the component. Its paint is the global `.bar-btn*` family in `App.css`, so split pairs and responsive folds can still style it from outside (a parent's scoped rule reaches the root `<button>` only; inner parts need `:deep`). Both share the disabled, pending and focus contract. `v-btn` is not used. Pressable things that are menu rows, choice controls or in-content affordances (a chip's remove, a tile's control) are not buttons and keep their own markup. Still open, and deliberately not built: an on-dark context (so the review overlay's `.rs-*` family and the lightbox chrome keep their own button shapes, though their hover, selection and focus colours follow the shared rules through the `dark-surface` family) and popovers adopting the 28px control (so `.tbm-action` stays). One exception rides on `AppBarButton`: the model shelf's Add is the bar's key action and paints the amber fill over it (`.shelf-toolbar .bar-btn--accent`).
+
+**State colours are shared, not per component** (issue #1294, `docs/design/visual-language.md` §11). Focus is one global `:focus-visible` outline in `style.css`, 2px `--focus-stroke` (ink) with a 2px gap; hover is `--hover-wash` (ink 16%), `--hover-shade` on a filled control, `--hover-neutral` on a grey one; a selected item takes `--active-wash` / `--active-bar` / `--active-text` and a chosen value's mark `--selected-ink`, all olive. These are declared per theme on the `.v-theme--*` class, and `App.vue` puts that class on `<html>` as well, because a hand-rolled `<Teleport to="body">` sits outside `v-app` and would otherwise resolve every one of them to nothing. A token composed from `--focus-stroke` (`--focus-ring-inset`, `--focus-glow`) must be restated wherever the stroke is overridden, as `ImageOverlay.css` does for the always-dark lightbox, because a custom property holding `var()` resolves where it is declared.
+
 **`AppButton loading`** (2026-07-30, issue #647): the pending state. Forces the button natively `disabled` so a create cannot be double-submitted, swaps the leading icon for `mdi-loading` + `mdi-spin`, sets `aria-busy`, and restores focus to itself when the request settles (a natively-disabled button drops focus to `<body>`, stranding a keyboard user who would otherwise have to tab all the way back). It does **not** dim and it does **not** change the label; there is no loading-text prop. Rationale and the contrast arithmetic: `docs/design/visual-language.md` §11. The behavioural half is `composables/useSubmitGuard.js` (§10.2).
 
 **`AppDialog fullscreen`** (2026-07-29): a near-viewport dialog (min(1800px, 96vw) × 94vh, flexing body) for working surfaces where the content is the point — first user: the dedup Compare dialog, per the owner's "take the full space of the grid view". Ordinary forms keep the fixed `width`.
@@ -2320,7 +2324,7 @@ undo by accident:
 - **The name is a field, and the affordance is not hover-only.** The dashed rule
   and the pencil appear on `.shelf-row:hover` **and** `:focus-within`, or a
   keyboard reader would have no sign the name is editable. Editing happens
-  **inline** — a bordered input with `--focus-ring`, committed on Enter or on
+  **inline** — a bordered input with the focus ring, committed on Enter or on
   blur, abandoned on Escape, writing through `store.editModelIds(ids, changes)`
   (the selection-free half of `editSelected`) and taking a stack cover's whole
   run, since the members share one name. The keyboard path is **F2 on the row**
@@ -2394,7 +2398,7 @@ shared and cached, never a lookup per attachment.
   37 dots and reads as a faded solid ring.
 - **The ring is a pseudo-element with a 2px gap**, never a border (which would
   push the picture in and make an assigned mark a different size from an
-  unassigned one) and never an outline (which would fight `--focus-ring`). The
+  unassigned one) and never an outline (which would fight the focus ring). The
   gap is doing the real work: a ring drawn against an arbitrary thumbnail is one
   contrast problem per image, and detached, its inner edge sits on the row
   background — a known colour in both themes. That is also why `ModelMark` is

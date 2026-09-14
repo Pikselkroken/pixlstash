@@ -108,71 +108,11 @@ body {
   position: relative;
 }
 
-.export-dialog-close {
-  position: absolute;
-  top: -16px;
-  right: -16px;
-  background-color: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  z-index: 2;
-}
-
-.export-dialog-close:hover {
-  background-color: rgb(var(--v-theme-accent));
-}
-
-/* Plain global stylesheet: ':deep()' is a Vue scoped-style construct and does
-   nothing here (global rules already cross component boundaries), so it is
-   dropped. Keeping it makes lightningcss reject ':deep' as an invalid
-   pseudo-class at build time. */
-.export-dialog-card .v-card-text {
-  padding: var(--space-4) var(--space-5) var(--space-3);
-}
-
-.export-dialog-card .v-card-actions {
-  padding: var(--space-3) var(--space-5) var(--space-4);
-  gap: var(--space-4);
-}
-
-.export-btn-cancel {
-  background: rgb(var(--v-theme-cancel-button));
-  color: rgb(var(--v-theme-cancel-button-text));
-  font-weight: var(--weight-medium);
-}
-
-.export-btn-confirm {
-  background: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
-  font-weight: var(--weight-medium);
-}
-
-.export-btn-cancel:hover,
-.export-btn-confirm:hover {
-  filter: brightness(1.2);
-}
-
 .empty-state {
   color: rgba(var(--v-theme-on-background), 0.6);
   font-size: var(--text-lg);
   margin-top: var(--space-7);
   text-align: center;
-}
-
-.app-btn-base {
-  border-radius: var(--radius-md);
-  text-transform: none;
-  letter-spacing: 0.02em;
-  font-weight: var(--weight-medium);
-  box-shadow: none;
-  border: none;
-  background-color: transparent !important;
-  color: rgb(var(--v-theme-on-background)) !important;
-}
-
-.app-btn-base:hover,
-.app-btn-base:focus-visible {
-  box-shadow: none !important;
-  background-color: transparent !important;
 }
 
 @media (min-width: 850px) {
@@ -293,8 +233,7 @@ body {
     color 0.15s ease;
 }
 .sidebar-hover-trigger:hover .sidebar-hover-trigger-tab {
-  background: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
+  background-image: var(--hover-shade);
 }
 
 @media (max-width: 640px) {
@@ -336,15 +275,15 @@ body {
   position: relative;
   z-index: 1;
 }
-/* Make disabled buttons more faded */
-.v-btn.v-btn--disabled,
-button[disabled] {
+/* Make disabled hand-rolled buttons more faded. The two button dialects own
+   their disabled state (`--opacity-disabled`, no filter) and their pending one,
+   which must not fade at all, so they are excluded rather than out-shouted. */
+button[disabled]:not(.app-btn):not(.bar-btn) {
   opacity: 0.35 !important;
   filter: grayscale(30%);
   pointer-events: none;
 }
 
-.v-btn:focus:not(:focus-visible),
 button:focus:not(:focus-visible) {
   outline: none !important;
   box-shadow: none !important;
@@ -430,44 +369,6 @@ button:focus:not(:focus-visible) {
 
 .selbar-chevron {
   margin-left: calc(var(--space-1) * -1);
-}
-
-/* Round, 34px, and the hover wash is the only thing that draws a box: a border
-   per verb would make seven of them into a fence. */
-.selbar-btn {
-  width: 34px;
-  height: 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-.selbar-btn:hover:not(:disabled) {
-  background: var(--hover-wash);
-}
-
-/* The only verb in the pill that destroys bytes. Colour is the whole signal -
-   no border, no fill - so it reads as one of the row rather than as a second
-   kind of control, and the hover wash is the error colour at the same weight
-   the neutral one uses. */
-.selbar-btn--danger {
-  color: rgb(var(--v-theme-error));
-}
-
-.selbar-btn--danger:hover:not(:disabled) {
-  background: rgba(var(--v-theme-error), 0.08);
-}
-
-/* Shown and dimmed rather than hidden, so the row of verbs never reflows under
-   the pointer as the selection grows. The reason is in the `title`. */
-.selbar-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
 }
 
 .selbar-sep {
@@ -637,7 +538,7 @@ kbd {
   border-bottom: 1px solid rgb(var(--v-theme-divider));
 }
 .tbm-header-icon {
-  color: rgb(var(--v-theme-accent));
+  opacity: var(--opacity-text-secondary);
   flex-shrink: 0;
 }
 .tbm-title {
@@ -807,16 +708,13 @@ kbd {
   flex: 0 0 auto;
   font-size: var(--text-xs);
 }
-/* Selected overlay toggle: a semi-transparent primary wash + primary border,
-   not the solid olive fill (the border space is already reserved by the base
-   1px transparent border, so selecting never changes the box size). */
+/* Selected overlay toggle: the olive selection wash and edge, words and icon in
+   ink - no olive on olive (the border space is already reserved by the base 1px
+   transparent border, so selecting never changes the box size). */
 .tbm-toggle--vertical.tbm-toggle--on {
-  background: rgba(var(--v-theme-primary), 0.18);
-  border-color: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-panel));
-}
-.tbm-toggle--vertical.tbm-toggle--on .tbm-toggle-icon {
-  color: rgb(var(--v-theme-primary));
+  background: var(--active-wash);
+  border-color: var(--active-bar);
+  color: var(--active-text);
 }
 
 /* ── Outline toggle-button group (Any / Has face / No face …) ──────────────
@@ -853,7 +751,7 @@ kbd {
   color: rgb(var(--v-theme-on-primary));
 }
 .tbm-btn--on:hover {
-  background: rgb(var(--v-theme-primary));
+  background-image: var(--hover-shade);
 }
 
 /* ── Segmented control (track + equal segments) ───────────────────────────── */
@@ -884,13 +782,15 @@ kbd {
 }
 .tbm-seg-btn:hover {
   color: rgb(var(--v-theme-on-panel));
+  background: var(--hover-wash);
 }
-.tbm-seg-btn--on {
+.tbm-seg-btn--on,
+.tbm-seg-btn--on:hover {
   color: rgb(var(--v-theme-on-primary));
   background: rgb(var(--v-theme-primary));
 }
 .tbm-seg-btn--on:hover {
-  color: rgb(var(--v-theme-on-primary));
+  background-image: var(--hover-shade);
 }
 
 /* ── Checkbox row ─────────────────────────────────────────────────────────── */
@@ -933,17 +833,11 @@ kbd {
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-  outline: none;
   box-sizing: border-box;
   transition: border-color var(--dur-1) var(--ease-standard);
 }
 .tbm-input--with-icon {
   padding-left: calc(var(--space-5) + var(--space-4));
-}
-/* Focus: a single thin accent border - not the olive border plus a thick accent
-   ring stacked (that read as an awkward double outline). */
-.tbm-input:focus {
-  border-color: rgb(var(--v-theme-accent));
 }
 
 /* ── Numeric field (mono) ─────────────────────────────────────────────────── */
@@ -957,11 +851,7 @@ kbd {
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-  outline: none;
   box-sizing: border-box;
-}
-.tbm-num:focus {
-  border-color: rgb(var(--v-theme-accent));
 }
 
 /* ── Solid action button (primary / secondary) ────────────────────────────── */
@@ -977,15 +867,18 @@ kbd {
   font-weight: var(--weight-medium);
   border-radius: var(--radius-md);
   white-space: nowrap;
-  transition: filter var(--dur-1) var(--ease-standard);
+  transition: background var(--dur-1) var(--ease-standard);
 }
-.tbm-action:hover {
-  filter: brightness(1.06);
+.tbm-action--primary:not(:disabled):hover {
+  background-image: var(--hover-shade);
+}
+.tbm-action--secondary:not(:disabled):hover,
+.tbm-action--outline:not(:disabled):hover {
+  background: var(--hover-wash);
 }
 .tbm-action:disabled {
-  opacity: 0.38;
+  opacity: var(--opacity-disabled);
   cursor: default;
-  filter: none;
 }
 .tbm-action--primary {
   background: rgb(var(--v-theme-primary));
@@ -1031,12 +924,8 @@ kbd {
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
   cursor: pointer;
-  outline: none;
   box-sizing: border-box;
   transition: border-color var(--dur-1) var(--ease-standard);
-}
-.tbm-select:focus {
-  border-color: rgb(var(--v-theme-accent));
 }
 .tbm-select:disabled {
   opacity: 0.5;
@@ -1064,12 +953,8 @@ kbd {
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-  outline: none;
   box-sizing: border-box;
   transition: border-color var(--dur-1) var(--ease-standard);
-}
-.tbm-textarea:focus {
-  border-color: rgb(var(--v-theme-accent));
 }
 
 /* ── Ghost (text) button - header actions like Clear / direction ──────────── */
@@ -1114,6 +999,9 @@ kbd {
   padding: 0 var(--space-3);
   font-size: var(--text-base);
   font-family: inherit;
+  /* Regular, not medium: chrome does not compete with content. */
+  font-weight: var(--weight-regular);
+  cursor: pointer;
   /* Icons and labels take the sidebar's treatment: the toolbar-text token
      (identical to sidebar-text) at the sidebar's muted alpha, brightening on
      hover/active - so the toolbar and sidebar chrome read as one strip. */
@@ -1122,28 +1010,69 @@ kbd {
      border) does not change the box size and make the button jump. */
   border: 1px solid transparent;
   box-sizing: border-box;
-  height: 32px;
+  height: var(--control-h-bar);
   white-space: nowrap;
   position: relative;
 }
 
-.bar-btn:hover {
-  background: rgba(var(--v-theme-toolbar-text), 0.1);
+.bar-btn:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--hover-wash);
   color: rgb(var(--v-theme-toolbar-text));
 }
 
-.bar-btn--active {
-  color: rgb(var(--v-theme-primary));
+/* Olive marks, words stay text: an active bar button colours its glyph only.
+   `--selected-ink`, not `primary`, which measures 2.72:1 on dark chrome. */
+.bar-btn--active .v-icon {
+  color: var(--selected-ink);
 }
 
 .bar-btn--boxed {
   border-radius: var(--radius-sm);
 }
 
-/* Icon-only bar button */
-.bar-btn--icon {
-  width: 32px;
-  height: 32px;
+/* The selection pill's verbs: a square verb fights a round container. */
+.bar-btn--round {
+  border-radius: var(--radius-pill);
+}
+
+/* Colour is the whole signal - no border, no fill - so a destructive verb reads
+   as one of the row rather than as a second kind of control. */
+.bar-btn--danger,
+.bar-btn--danger:hover:not(:disabled):not([aria-disabled="true"]) {
+  color: rgb(var(--v-theme-error));
+}
+.bar-btn--danger:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: rgba(var(--v-theme-error), 0.08);
+}
+
+/* Shown and dimmed rather than hidden, so a row of verbs never reflows under
+   the pointer as a selection grows. Pending is not disabled: it stays legible. */
+.bar-btn:disabled,
+.bar-btn[aria-disabled="true"] {
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+}
+.bar-btn--loading:disabled {
+  opacity: 1;
+  cursor: progress;
+}
+
+/* A bar button's spinner keeps spinning under reduced motion, slower: it is a
+   status readout, not decoration (visual-language.md §11). The global reset in
+   design-tokens.css zeroes every animation on `*::before`, which is where
+   @mdi/font puts this one, and a frozen mdi-loading reads as a rendering fault.
+   Covers the `loading` glyph and any spinner a call site slots in. */
+@media (prefers-reduced-motion: reduce) {
+  .bar-btn .mdi-spin::before {
+    animation-duration: 2s !important;
+    animation-iteration-count: infinite !important;
+  }
+}
+
+/* Icon-only bar button. Doubled class so it beats the split-pair padding. */
+.bar-btn.bar-btn--icon {
+  width: var(--control-h-bar);
+  height: var(--control-h-bar);
   padding: 0;
   display: flex;
   align-items: center;
@@ -1192,8 +1121,9 @@ kbd {
   position: absolute;
   top: -5px;
   right: -7px;
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
+  /* A count is information, not a selection or an action: neutral. */
+  background: rgb(var(--v-theme-cancel-button));
+  color: rgb(var(--v-theme-cancel-button-text));
   border-radius: var(--radius-pill);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
@@ -1262,10 +1192,9 @@ kbd {
 
 /* ── Open trigger state - the toolbar button while its menu is open ────────── */
 .bar-btn--open {
-  background: rgb(var(--v-theme-panel)) !important;
+  background: var(--hover-wash) !important;
   border: 1px solid rgb(var(--v-theme-border)) !important;
-  color: rgb(var(--v-theme-on-background)) !important;
-  border-radius: var(--radius-sm);
+  color: rgb(var(--v-theme-toolbar-text)) !important;
 }
 .bar-btn--open .bar-btn-chevron {
   transform: rotate(180deg);

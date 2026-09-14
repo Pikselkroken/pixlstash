@@ -5,6 +5,16 @@
   z-index: 1000;
 }
 
+/* The lightbox is dark in both themes, so the global focus outline takes the
+   dark-surface ink here: the per-theme stroke is near-black in light. Its two
+   menus are teleported out of `.image-overlay`, so they restate it. */
+.image-overlay,
+.overlay-comfy-panel,
+.overlay-star-menu {
+  --focus-stroke: rgb(var(--v-theme-on-dark-surface));
+  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
+}
+
 .overlay-shell {
   width: 100%;
   height: 100%;
@@ -108,7 +118,7 @@
   font-weight: var(--weight-semibold);
 }
 .overlay-close:hover {
-  background: rgba(var(--v-theme-accent), 0.85);
+  background-image: var(--hover-shade);
 }
 
 .overlay-title {
@@ -146,7 +156,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  height: 32px;
+  height: var(--control-h-bar);
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-pill);
   background: rgba(var(--v-theme-shadow), 0.4);
@@ -161,20 +171,20 @@
   right: auto;
   z-index: auto;
   padding: 6px 14px;
-  height: 32px;
+  height: var(--control-h-bar);
   background: none;
   border-radius: var(--radius-sm);
 }
 
 .star-overlay:hover {
-  background: rgba(var(--v-theme-primary), 0.6);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 
 .overlay-icon-btn {
   color: rgb(var(--v-theme-on-dark-surface));
-  height: 32px;
+  height: var(--control-h-bar);
   padding: 6px 14px;
-  min-width: 32px;
+  min-width: var(--control-h-bar);
   border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
@@ -182,12 +192,13 @@
   font-size: var(--text-base);
 }
 .overlay-icon-btn:hover {
-  background: rgba(var(--v-theme-primary), 0.6);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 
-.overlay-icon-btn--active {
-  background: rgba(var(--v-theme-primary), 0.25);
-  color: rgb(var(--v-theme-primary));
+/* Olive marks, words stay text: an active toggle or open menu colours its glyph
+   only, in the dark-surface olive. */
+.overlay-icon-btn--active .v-icon {
+  color: rgb(var(--v-theme-dark-surface-primary));
 }
 
 .overlay-star-mobile-btn {
@@ -225,11 +236,11 @@
 }
 
 .overlay-star-menu-item:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 
 .overlay-star-menu-item--active {
-  background: rgba(var(--v-theme-accent), 0.15);
+  background: rgba(var(--v-theme-dark-surface-primary), 0.2);
 }
 
 .overlay-star-menu-stars {
@@ -535,7 +546,7 @@
 }
 
 .overlay-video-download-btn:hover {
-  opacity: 0.85;
+  background-image: var(--hover-shade);
 }
 
 .overlay-nav {
@@ -661,7 +672,7 @@
 }
 
 .section-header--collapsible:hover {
-  opacity: 0.85;
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .section-header {
@@ -796,17 +807,6 @@
 }
 
 
-.metadata-tab-btn.active {
-  color: rgb(var(--v-theme-on-dark-surface));
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-}
-
-.metadata-tab-btn:hover:not(.active) {
-  color: rgba(var(--v-theme-on-dark-surface), 0.8);
-  background: rgba(var(--v-theme-on-dark-surface), 0.04);
-}
-
-
 .face-bbox-empty {
   position: absolute;
   left: 8px;
@@ -884,7 +884,7 @@
 }
 
 .overlay-draw-cancel:hover {
-  filter: brightness(0.95);
+  background-image: var(--hover-shade);
 }
 
 @media (max-width: 900px) {
@@ -917,8 +917,8 @@
   }
 
   .zoom-btn {
-    min-width: 32px;
-    width: 32px;
+    min-width: var(--control-h-bar);
+    width: var(--control-h-bar);
     padding: 6px;
   }
 

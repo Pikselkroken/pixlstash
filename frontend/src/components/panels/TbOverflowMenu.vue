@@ -1,17 +1,16 @@
 <template>
   <div ref="wrapEl" class="tbo-wrap" @keydown.esc.stop.prevent="close()">
-    <button
+    <AppBarButton
       ref="triggerEl"
-      type="button"
-      class="bar-btn bar-btn--icon tbo-trigger"
-      :class="{ 'bar-btn--open': open }"
+      class="tbo-trigger"
+      icon="dots-horizontal"
+      :open="open"
       title="More actions"
+      aria-label="More actions"
       aria-haspopup="true"
       :aria-expanded="open ? 'true' : 'false'"
       @click="toggle"
-    >
-      <v-icon size="20">mdi-dots-horizontal</v-icon>
-    </button>
+    />
     <div
       v-if="open"
       class="tbm tbo-panel"
@@ -42,6 +41,7 @@
 // `.tbm-action` recipe.
 
 import { onBeforeUnmount, onMounted, ref } from "vue";
+import AppBarButton from "../widgets/AppBarButton.vue";
 
 defineProps({
   /**
@@ -103,7 +103,7 @@ onBeforeUnmount(() => {
  * @returns {HTMLElement|null}
  */
 function trigger() {
-  return triggerEl.value ?? null;
+  return triggerEl.value?.el ?? null;
 }
 
 /**
@@ -130,33 +130,6 @@ defineExpose({ close, isOpen, trigger });
    rule from its own ladder (`.tb-overflow` at selbar ≤700, `.dq-overflow` at
    dqbar ≤1180): only the host knows when its first control folds. The rule
    lives there rather than here because the breakpoint differs per bar. */
-
-/* Mirrors `.bar-btn` from the hosts' bars (their scoped styles cannot cross
-   the component boundary - same note as UndoControl carries). */
-.tbo-trigger {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  flex-shrink: 0;
-  position: relative;
-  color: rgb(var(--v-theme-toolbar-text));
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  box-sizing: border-box;
-  font-family: inherit;
-}
-
-.tbo-trigger:hover {
-  background: rgba(var(--v-theme-toolbar-text), 0.1);
-}
-
-.bar-btn--open {
-  border-color: rgb(var(--v-theme-border));
-  background: rgb(var(--v-theme-panel));
-}
 
 /* The in-place panel: the dq-tier-wrap positioning, the shared .tbm chrome. */
 .tbo-panel {

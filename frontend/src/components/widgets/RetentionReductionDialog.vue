@@ -16,6 +16,8 @@
  * The card mirrors `DeleteForeverDialog.vue` so it carries no new visual
  * vocabulary.
  */
+import AppButton from "./AppButton.vue";
+
 const props = defineProps({
   open: { type: Boolean, default: false },
   /** Headline, e.g. "Shorten the auto-empty window?". */
@@ -73,24 +75,17 @@ function requestConfirm() {
       </div>
 
       <div class="row">
-        <button
-          type="button"
-          class="btn btn-quiet"
+        <AppButton
+          variant="secondary"
           autofocus
           :disabled="busy"
           @click="requestCancel"
         >
           Cancel
-        </button>
-        <button
-          type="button"
-          class="btn btn-danger"
-          :disabled="busy"
-          @click="requestConfirm"
-        >
-          <v-progress-circular v-if="busy" indeterminate size="16" width="2" />
-          <template v-else>{{ props.confirmLabel }}</template>
-        </button>
+        </AppButton>
+        <AppButton variant="danger" :loading="busy" @click="requestConfirm">
+          {{ props.confirmLabel }}
+        </AppButton>
       </div>
     </div>
   </v-dialog>
@@ -139,34 +134,6 @@ function requestConfirm() {
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-snug);
-  color: rgb(var(--v-theme-error));
-}
-
-.btn {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  padding: var(--space-3) var(--space-5);
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-}
-
-.btn:disabled {
-  opacity: 0.38;
-  cursor: default;
-}
-
-.btn-quiet {
-  background: rgb(var(--v-theme-cancel-button));
-  color: rgb(var(--v-theme-cancel-button-text));
-}
-
-.btn-danger {
-  background: rgba(var(--v-theme-error), 0.1);
-  border: 1px solid rgba(var(--v-theme-error), 0.55);
   color: rgb(var(--v-theme-error));
 }
 </style>

@@ -9,7 +9,7 @@
         :step="step"
         hide-details
         density="compact"
-        color="accent"
+        color="primary"
         track-color="rgba(var(--v-theme-on-surface), 0.2)"
         @update:model-value="emit('update:modelValue', $event)"
       />

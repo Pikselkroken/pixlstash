@@ -103,9 +103,10 @@
       <!-- When the decision was made, in the user's own date format. Older
            rows (or an older backend) serve no decided_at: no cell, no dash. -->
       <span v-if="decidedStamp" class="gdecided-at">{{ decidedStamp }}</span>
-      <button
-        type="button"
-        class="gbtn"
+      <AppButton
+        variant="outline"
+        icon-left="restore"
+        data-testid="dedup-clear-decision"
         :disabled="busy || readOnly"
         :title="
           bulk
@@ -114,11 +115,8 @@
         "
         @click.stop="emit('clear-decision')"
       >
-        <v-icon size="16">mdi-restore</v-icon>
-        <span>{{
-          bulk ? `Clear ${selectionCount} decisions` : "Clear decision"
-        }}</span>
-      </button>
+        {{ bulk ? `Clear ${selectionCount} decisions` : "Clear decision" }}
+      </AppButton>
     </div>
     <div v-else class="gact">
       <!-- The two verdict buttons carry what the verdict COSTS, because neither
@@ -131,9 +129,10 @@
            synonym taught in copy - while aria-keyshortcuts carries the full
            machine-readable set (the chips are aria-hidden, so this is the
            only channel that announces the keys at all). -->
-      <button
-        type="button"
-        class="gbtn gbtn--stack"
+      <AppButton
+        :variant="focused ? 'primary' : 'outline'"
+        icon-left="layers-plus"
+        data-testid="dedup-stack"
         :tabindex="focused ? 0 : -1"
         :disabled="busy || readOnly || noLegalStack"
         aria-keyshortcuts="Enter S"
@@ -146,7 +145,6 @@
         "
         @click.stop="emit('stack')"
       >
-        <v-icon size="16">mdi-layers-plus</v-icon>
         <!-- The button NAMES ITS OUTCOME (`Stack 3` / `Add 1 to stack of 4` /
              `Merge 2 stacks`), because expansion is opt-in: a user working at
              speed with Enter never opens one, so this is the last text before
@@ -167,10 +165,11 @@
           </template>
         </template>
         <kbd v-if="showsVerdictKeys" aria-hidden="true">Enter</kbd>
-      </button>
-      <button
-        type="button"
-        class="gbtn"
+      </AppButton>
+      <AppButton
+        variant="outline"
+        icon-left="call-split"
+        data-testid="dedup-keep-separate"
         :tabindex="focused ? 0 : -1"
         :disabled="busy || readOnly"
         aria-keyshortcuts="K"
@@ -181,22 +180,19 @@
         "
         @click.stop="emit('keep-separate')"
       >
-        <v-icon size="16">mdi-call-split</v-icon>
-        <span>{{
-          bulk ? `Keep ${selectionCount} separate` : "Keep separate"
-        }}</span>
+        {{ bulk ? `Keep ${selectionCount} separate` : "Keep separate" }}
         <kbd v-if="showsVerdictKeys" aria-hidden="true">K</kbd>
-      </button>
-      <button
-        type="button"
-        class="gcompare"
+      </AppButton>
+      <AppButton
+        variant="ghost"
+        icon-left="compare-horizontal"
+        data-testid="dedup-compare"
         :tabindex="focused ? 0 : -1"
         @click.stop="emit('compare')"
       >
-        <v-icon size="15">mdi-compare-horizontal</v-icon>
-        <span>Compare all {{ units.length }}</span>
+        Compare all {{ units.length }}
         <kbd v-if="focused" aria-hidden="true">C</kbd>
-      </button>
+      </AppButton>
     </div>
 
     <!-- ── The expansion: what is inside a deck (D4) ──────────────────────
@@ -937,7 +933,7 @@ function onToggle(unit) {
  * they pick the same cover twice, and Compare then opens over that state.
  * Two carve-outs keep the gesture from surprising anyone:
  *
- *   * the action buttons (`.gbtn`, `.gcompare`, the Clear on a decided row)
+ *   * the action buttons (Stack, Keep separate, Compare, the Clear on a decided row)
  *     keep their own double-click meaning - a fast double press on Stack is
  *     two Stack clicks, already guarded by `busy`, and must not ALSO open a
  *     dialog over the next group;
@@ -996,7 +992,7 @@ function onDblClick(event) {
    so it cannot shift the row's layout when the focus moves. */
 .grow--focus {
   background: var(--active-wash);
-  border-color: rgba(var(--v-theme-accent), 0.4);
+  border-color: var(--active-bar);
 }
 
 .grow--focus::before {
@@ -1005,17 +1001,13 @@ function onDblClick(event) {
   inset: 0 auto 0 0;
   width: 3px;
   border-radius: var(--radius-md) 0 0 var(--radius-md);
-  background: rgb(var(--v-theme-accent));
+  background: var(--active-bar);
 }
 
-/* Part of a multi-selection: the same accent family as the focus treatment,
-   one step quieter - no left bar, that stays the keyboard cursor's. */
+/* Part of a multi-selection: the same olive selection as the focus treatment,
+   minus the left bar, which stays the keyboard cursor's. */
 .grow--selected {
-  border-color: rgba(var(--v-theme-accent), 0.55);
-  background: var(--hover-wash);
-}
-
-.grow--selected.grow--focus {
+  border-color: var(--active-bar);
   background: var(--active-wash);
 }
 
@@ -1029,7 +1021,7 @@ function onDblClick(event) {
 }
 
 .gcaret {
-  color: rgb(var(--v-theme-accent));
+  color: var(--active-text);
   flex-shrink: 0;
   align-self: center;
   margin-left: calc(-1 * var(--space-2));
@@ -1062,8 +1054,8 @@ function onDblClick(event) {
 
 /* The decided row's verdict statement - reads as state, not as a button.
    TEXT-edge aligned with the Clear button below it (owner report: the outer
-   borders lined up, the text did not): the label wears the button's exact
-   box - a 1px border made transparent, the same horizontal padding, the same
+   borders lined up, the text did not): the label wears AppButton's md box -
+   a 1px border made transparent, the same horizontal padding, the same
    height and icon gap - so its icon and text columns start precisely where
    the button's do, in both themes. It stays a <span> with no hover, focus or
    cursor treatment, so the invisible border can never read as an affordance. */
@@ -1071,9 +1063,9 @@ function onDblClick(event) {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  height: 27px;
+  height: var(--control-h);
   border: 1px solid transparent;
-  padding: 0 var(--space-4);
+  padding: 0 var(--space-5);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   color: rgba(var(--v-theme-on-surface), 0.75);
@@ -1085,7 +1077,7 @@ function onDblClick(event) {
    column align. */
 .gdecided-at {
   border-inline: 1px solid transparent;
-  padding: 0 var(--space-4);
+  padding: 0 var(--space-5);
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
   font-variant-numeric: tabular-nums;
@@ -1156,32 +1148,10 @@ function onDblClick(event) {
   gap: var(--space-2);
 }
 
-.gbtn,
-.gcompare {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  height: 27px;
-  padding: 0 var(--space-4);
-  border-radius: var(--radius-md);
-  border: 1px solid rgb(var(--v-theme-border));
-  color: rgb(var(--v-theme-on-surface));
-  font-family: var(--font-ui);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  transition:
-    background var(--dur-1) var(--ease-standard),
-    border-color var(--dur-1) var(--ease-standard);
-}
-
-.gbtn:hover:not(:disabled),
-.gcompare:hover {
-  background: var(--hover-wash);
-}
-
-.gbtn:disabled {
-  opacity: var(--opacity-disabled);
-  cursor: default;
+/* Left-aligned, not AppButton's centred default: the stretched buttons share
+   one text edge with the verdict label above them. */
+.gact > button {
+  justify-content: flex-start;
 }
 
 /* ── The Stack label's degrade ladder ──────────────────────────────────────
@@ -1217,19 +1187,6 @@ function onDblClick(event) {
   .gsl--short {
     display: inline;
   }
-}
-
-/* The primary verdict fills only on the focused row, so the eye lands on the
-   one button `Enter` would press. */
-.grow--focus .gbtn--stack {
-  background: rgb(var(--v-theme-accent));
-  border-color: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
-}
-
-.gcompare {
-  border-color: transparent;
-  color: rgba(var(--v-theme-on-surface), 0.75);
 }
 
 kbd {

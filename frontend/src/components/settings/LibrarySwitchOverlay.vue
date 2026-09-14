@@ -110,7 +110,7 @@ function blockEscape(event) {
           <div class="library-switch-overlay__actions">
             <AppButton
               ref="stayButton"
-              variant="primary_green"
+              variant="primary"
               @click="switchStore.stayOnCurrent()"
             >
               Stay on {{ currentLibrary?.name ?? "current library" }}

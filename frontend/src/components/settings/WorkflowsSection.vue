@@ -689,7 +689,7 @@ watch(
         </div>
         <AppButton
           class="wf-action-btn"
-          variant="primary_green"
+          variant="primary"
           size="sm"
           icon-left="cog-outline"
           @click="openComfyuiConfigDialog"
@@ -706,7 +706,7 @@ watch(
         </div>
         <AppButton
           class="wf-action-btn"
-          variant="primary_green"
+          variant="primary"
           size="sm"
           icon-left="tray-arrow-down"
           @click="openWorkflowImport"
@@ -835,7 +835,7 @@ watch(
           Cancel
         </AppButton>
         <AppButton
-          variant="primary_green"
+          variant="primary"
           :disabled="workflowImportSaving"
           @click="confirmWorkflowImport"
         >
@@ -888,7 +888,7 @@ watch(
           Cancel
         </AppButton>
         <AppButton
-          variant="primary_green"
+          variant="primary"
           :disabled="comfyuiUrlLoading"
           @click="saveComfyuiUrl"
         >

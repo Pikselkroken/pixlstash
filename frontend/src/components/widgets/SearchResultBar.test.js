@@ -48,6 +48,11 @@ function characterSearchProps(overrides = {}) {
   };
 }
 
+/** The assign action, found by its accessible name. */
+function assignButton(wrapper) {
+  return wrapper.find('button[aria-label^="Assign "]');
+}
+
 /** The nth slider group in the panel: 0 is match strength, 1 is agreement. */
 function group(wrapper, index) {
   return wrapper.findAll(".threshold-group")[index];
@@ -68,7 +73,7 @@ describe("SearchResultBar - plain search", () => {
     // likeness to cut on; rendering either would be an inert control.
     const wrapper = mountBar({ statusCount: 12, statusLabel: "matches" });
     expect(wrapper.find(".search-result-threshold").exists()).toBe(false);
-    expect(wrapper.find(".assign-btn").exists()).toBe(false);
+    expect(assignButton(wrapper).exists()).toBe(false);
   });
 
   it("gives the count its own weight, separate from the sentence", () => {
@@ -108,7 +113,7 @@ describe("SearchResultBar - character face search", () => {
     // DOM text runs the count into it. The accessible name is a real string
     // built in JS and is the thing that must never degrade.
     const wrapper = mountBar(characterSearchProps());
-    expect(wrapper.find(".assign-btn").attributes("aria-label")).toBe(
+    expect(assignButton(wrapper).attributes("aria-label")).toBe(
       "Assign 41 to Alice",
     );
     expect(wrapper.find(".assign-label").text()).toContain("Assign 41");
@@ -121,7 +126,7 @@ describe("SearchResultBar - character face search", () => {
     const wrapper = mountBar(
       characterSearchProps({ assignCount: 12, assignFromSelection: true }),
     );
-    expect(wrapper.find(".assign-btn").attributes("aria-label")).toContain(
+    expect(assignButton(wrapper).attributes("aria-label")).toContain(
       "Assign 12 selected to Alice",
     );
     expect(wrapper.find(".assign-label").text()).toContain(
@@ -136,7 +141,7 @@ describe("SearchResultBar - character face search", () => {
     const wrapper = mountBar(
       characterSearchProps({ assignCount: 12, assignFromSelection: true }),
     );
-    expect(wrapper.find(".assign-btn").attributes("aria-label")).toContain(
+    expect(assignButton(wrapper).attributes("aria-label")).toContain(
       "Using your 12 selected, not all 41 matches.",
     );
   });
@@ -144,14 +149,14 @@ describe("SearchResultBar - character face search", () => {
   it("disables the assign action when nothing is above the cut", () => {
     // A button that promises "Assign 0" is a dead affordance.
     const wrapper = mountBar(characterSearchProps({ assignCount: 0 }));
-    expect(wrapper.find(".assign-btn").attributes("disabled")).toBeDefined();
+    expect(assignButton(wrapper).attributes("disabled")).toBeDefined();
   });
 
   it("disables the assign action while a write is in flight", () => {
     // Double-submitting a bulk assignment would raise two operation-log
     // entries, so Undo would only reverse half of it.
     const wrapper = mountBar(characterSearchProps({ assignBusy: true }));
-    expect(wrapper.find(".assign-btn").attributes("disabled")).toBeDefined();
+    expect(assignButton(wrapper).attributes("disabled")).toBeDefined();
   });
 
   it("drops the person's name before the count when space runs out", () => {
@@ -296,7 +301,7 @@ describe("SearchResultBar - character face search", () => {
 
   it("emits assign when the action is used", () => {
     const wrapper = mountBar(characterSearchProps());
-    wrapper.find(".assign-btn").trigger("click");
+    assignButton(wrapper).trigger("click");
     expect(wrapper.emitted("assign")).toHaveLength(1);
   });
 

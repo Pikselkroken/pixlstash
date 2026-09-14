@@ -6,7 +6,11 @@
       'app-btn',
       `app-btn--${variant}`,
       `app-btn--${size}`,
-      { 'app-btn--icon-only': iconOnly, 'app-btn--loading': loading },
+      {
+        'app-btn--icon-only': iconOnly,
+        'app-btn--loading': loading,
+        'app-btn--block': block,
+      },
     ]"
     :disabled="disabled || loading"
     :aria-busy="loading ? 'true' : undefined"
@@ -41,12 +45,15 @@ import { computed, nextTick, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 const props = defineProps({
-  // primary (amber accent) | primary_green (olive) | secondary (neutral) |
-  // danger (error) | ghost (transparent)
+  // primary (amber accent, the key action) | secondary (neutral) |
+  // outline (bordered, no fill) | danger (error) | ghost (transparent).
+  // Amber acts, olive selects: there is no olive button.
   variant: { type: String, default: "secondary" },
   size: { type: String, default: "md" }, // md | sm
   iconLeft: { type: String, default: "" },
   iconOnly: { type: Boolean, default: false },
+  // Full width of its container, for a panel-width key action.
+  block: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   // Pending / in-flight. NOT the same thing as `disabled`: "working", not "not
   // allowed" (visual-language.md §11). Forces the button disabled so a second
@@ -123,34 +130,39 @@ defineExpose({ focus });
   font-family: var(--font-ui);
   font-weight: var(--weight-medium);
   border: 1px solid transparent;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   white-space: nowrap;
   transition:
     background var(--dur-1) var(--ease-standard),
     border-color var(--dur-1) var(--ease-standard),
     color var(--dur-1) var(--ease-standard),
-    filter var(--dur-1) var(--ease-standard);
+    background-image var(--dur-1) var(--ease-standard);
 }
 
 .app-btn--md {
-  height: 27px;
+  height: var(--control-h);
   padding: 0 var(--space-5);
   font-size: var(--text-base);
 }
 
 .app-btn--sm {
-  height: 23px;
+  height: var(--control-h-sm);
   padding: 0 var(--space-4);
   font-size: var(--text-sm);
 }
 
 .app-btn--icon-only.app-btn--md {
-  width: 27px;
+  width: var(--control-h);
   padding: 0;
 }
 .app-btn--icon-only.app-btn--sm {
-  width: 23px;
+  width: var(--control-h-sm);
   padding: 0;
+}
+
+.app-btn--block {
+  display: flex;
+  width: 100%;
 }
 
 /* Both spellings of "not allowed" fade the same way. `aria-disabled`, not the
@@ -180,31 +192,37 @@ defineExpose({ focus });
   cursor: progress;
 }
 
-/* Primary - amber accent, the key action. */
+/* Primary - amber accent, the key action. A filled control's hover darkens
+   the fill 20% (`--hover-shade`, a background-image), which leaves the label
+   alone and lifts white on amber from 3.41 to 5.03:1. */
 .app-btn--primary {
-  background: rgb(var(--v-theme-accent));
+  background-color: rgb(var(--v-theme-accent));
   color: rgb(var(--v-theme-on-accent));
 }
-.app-btn--primary:not(:disabled):not([aria-disabled="true"]):hover {
-  filter: brightness(1.08);
+.app-btn--primary:not(:disabled):not([aria-disabled="true"]):hover,
+.app-btn--danger:not(:disabled):not([aria-disabled="true"]):hover {
+  background-image: var(--hover-shade);
 }
 
-/* Primary green - olive primary, used for create/import affordances. */
-.app-btn--primary_green {
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-}
-.app-btn--primary_green:not(:disabled):not([aria-disabled="true"]):hover {
-  filter: brightness(1.08);
-}
-
-/* Secondary - neutral, bordered. The Cancel partner. */
+/* Secondary - neutral. The Cancel partner. Its hover lightens in dark and
+   darkens in light (`--hover-neutral`): a darkened grey on a dark panel vanishes. */
 .app-btn--secondary {
-  background: rgb(var(--v-theme-cancel-button));
+  background-color: rgb(var(--v-theme-cancel-button));
   color: rgb(var(--v-theme-cancel-button-text));
 }
 .app-btn--secondary:not(:disabled):not([aria-disabled="true"]):hover {
-  filter: brightness(1.08);
+  background-image: var(--hover-neutral);
+}
+
+/* Outline - the neutral without a fill, for the former outlined `v-btn` sites.
+   Whether these fold into the filled neutral is still open (buttons.md). */
+.app-btn--outline {
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface));
+  border-color: rgb(var(--v-theme-border));
+}
+.app-btn--outline:not(:disabled):not([aria-disabled="true"]):hover {
+  background: var(--hover-wash);
 }
 
 /* Danger: destructive. `on-error`, not a hardcoded #fff. Both themes author
@@ -215,11 +233,8 @@ defineExpose({ focus });
    brighter in dark). Recorded because a stale contrast note is the kind of
    thing that gets "corrected" by changing the value instead of the note. */
 .app-btn--danger {
-  background: rgb(var(--v-theme-error));
+  background-color: rgb(var(--v-theme-error));
   color: rgb(var(--v-theme-on-error));
-}
-.app-btn--danger:not(:disabled):not([aria-disabled="true"]):hover {
-  filter: brightness(1.08);
 }
 
 /* Ghost - transparent, recedes until hovered. */

@@ -69,16 +69,16 @@
           transition="scale-transition"
         >
           <template #activator="{ props: menuProps }">
-            <button
+            <AppBarButton
               v-bind="menuProps"
-              class="stack-btn search-result-tune-btn"
-              type="button"
+              class="search-result-tune-btn"
+              shape="round"
+              icon="tune-variant"
               :aria-label="tuneAccessibleName"
               :title="tuneAccessibleName"
               :aria-disabled="imagesLoading ? 'true' : undefined"
               aria-haspopup="dialog"
             >
-              <v-icon size="18">mdi-tune-variant</v-icon>
               <span class="search-result-threshold-value">
                 {{ thresholdPercent }}%
               </span>
@@ -88,7 +88,7 @@
               <span v-if="refsEngaged" class="search-result-threshold-refs">
                 · {{ minRefs }}/{{ referenceCount }}
               </span>
-            </button>
+            </AppBarButton>
           </template>
           <div class="threshold-panel">
             <div class="threshold-group">
@@ -195,16 +195,15 @@
     </template>
 
     <div class="search-result-actions">
-      <button
+      <AppBarButton
         v-if="showSearchAll"
-        class="stack-btn"
-        type="button"
+        shape="round"
+        icon="magnify-expand"
         title="Search everything, not just this category"
         @click="$emit('search-all')"
       >
-        <v-icon size="18">mdi-magnify-expand</v-icon>
         <span class="search-all-label">Search everything</span>
-      </button>
+      </AppBarButton>
 
       <!-- The one accent-weight action in the pill: it is the only bulk WRITE.
            The count is on the button, never "all" - the blast radius has to be
@@ -214,43 +213,45 @@
            `Assign 14`, which was §7's intent. Ellipsising the whole label
            instead produced `Assign 2 t…`, a truncation mid-preposition that
            reads as a bug and loses the count's neighbour anyway. -->
-      <button
+      <AppButton
         v-if="assignTarget"
-        class="assign-btn"
-        type="button"
-        :disabled="assignCount === 0 || assignBusy"
+        variant="primary"
+        icon-left="account-check-outline"
+        :disabled="assignCount === 0"
+        :loading="assignBusy"
         :aria-label="assignAccessibleName"
         :title="assignAccessibleName"
         @click="$emit('assign')"
       >
-        <v-icon size="18">mdi-account-check-outline</v-icon>
         <span class="assign-label"
           >Assign {{ assignCount
           }}<span v-if="assignFromSelection"> selected</span
           ><span class="assign-target">to {{ assignTarget }}</span></span
         >
-      </button>
+      </AppButton>
 
-      <button
-        class="stack-btn clear-search-btn"
-        type="button"
+      <AppBarButton
+        class="clear-search-btn"
+        shape="round"
+        icon="magnify-close"
         :title="clearTitle"
         :aria-keyshortcuts="ownsEscape ? 'Escape' : undefined"
         @click="$emit('clear')"
       >
-        <v-icon size="18" class="clear-search-glyph">mdi-magnify-close</v-icon>
         <span class="clear-search-label">Clear search</span>
         <!-- aria-hidden: the accessible name stays the verb, and the
              machine-readable copy is aria-keyshortcuts above
              (visual-language.md §13). -->
         <kbd v-if="ownsEscape" class="key-hint" aria-hidden="true">Esc</kbd>
-      </button>
+      </AppBarButton>
     </div>
   </div>
 </template>
 
 <script setup>
 import { computed, onUnmounted, ref, useId, watch } from "vue";
+import AppBarButton from "./AppBarButton.vue";
+import AppButton from "./AppButton.vue";
 
 const props = defineProps({
   imagesLoading: { type: Boolean, default: false },
@@ -494,7 +495,7 @@ onUnmounted(() => {
   /* The one property that behaves identically across engines. Do NOT hand-roll
      ::-webkit-slider-thumb / ::-moz-range-track. The track itself follows
      `color-scheme`, which style.css pins per theme. */
-  accent-color: rgb(var(--v-theme-accent));
+  accent-color: rgb(var(--v-theme-primary));
 }
 
 .threshold-panel {
@@ -552,8 +553,8 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 32px;
-  height: 32px;
+  width: var(--control-h-bar);
+  height: var(--control-h-bar);
   border-radius: var(--radius-sm);
   color: rgb(var(--v-theme-on-surface));
 }
@@ -561,7 +562,7 @@ onUnmounted(() => {
   background: var(--hover-wash);
 }
 .threshold-step:disabled {
-  opacity: 0.35;
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
@@ -577,51 +578,6 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: var(--space-3);
-}
-
-/* Quiet control recipe. Mirrors `.stack-btn` in the selection half - scoped
-   styles cannot share it, and lifting it to a global would put a pill-specific
-   recipe in everyone's cascade. Keep the two in step. */
-.stack-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: rgb(var(--v-theme-on-background));
-  padding: 0 10px;
-  border-radius: var(--radius-sm);
-  font-size: var(--text-base);
-  font-family: inherit;
-  height: 40px;
-  white-space: nowrap;
-}
-.stack-btn:hover:not(:disabled) {
-  background: rgba(var(--v-theme-on-background), 0.12);
-}
-.stack-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.assign-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 40px;
-  padding: 0 var(--space-4);
-  border-radius: var(--radius-sm);
-  background: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
-  font-size: var(--text-base);
-  font-family: inherit;
-  font-weight: var(--weight-medium);
-  white-space: nowrap;
-}
-.assign-btn:hover:not(:disabled) {
-  filter: brightness(1.1);
-}
-.assign-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
 }
 
 .assign-label {
@@ -683,9 +639,6 @@ onUnmounted(() => {
   .key-hint {
     display: none;
   }
-  .clear-search-btn {
-    padding: 0 10px;
-  }
 }
 
 @container selbar (max-width: 560px) {
@@ -695,8 +648,7 @@ onUnmounted(() => {
 }
 
 @media (hover: none) and (pointer: coarse) {
-  .stack-btn,
-  .assign-btn {
+  .bar-btn {
     height: var(--bar-height);
   }
   /* The one thing touch still needs from the old §7 rule: the panel's own

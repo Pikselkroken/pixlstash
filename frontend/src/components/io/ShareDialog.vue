@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import { createToken } from '../../api/users'
 import { patchUserConfig } from '../../api/config'
 import { API_BASE_URL } from "../../utils/apiClient";
+import AppButton from "../widgets/AppButton.vue";
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
   resourceType: { type: String, default: '' },
@@ -206,33 +207,31 @@ async function copyUrl() {
           </p>
           <div class="share-dialog-url-row">
             <div class="share-dialog-url">{{ url }}</div>
-            <v-btn
-              icon
-              variant="text"
-              size="small"
+            <AppButton
+              variant="ghost"
+              icon-only
+              :icon-left="copied ? 'check' : 'content-copy'"
               :title="copied ? 'Copied!' : 'Copy link'"
+              aria-label="Copy link"
               @click="copyUrl"
-            >
-              <v-icon size="18">{{ copied ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
-            </v-btn>
+            />
           </div>
         </template>
       </v-card-text>
 
       <v-card-actions class="share-dialog-actions">
         <v-spacer />
-        <v-btn variant="text" @click="emit('update:modelValue', false)">
+        <AppButton variant="secondary" @click="emit('update:modelValue', false)">
           {{ token ? 'Close' : 'Cancel' }}
-        </v-btn>
-        <v-btn
+        </AppButton>
+        <AppButton
           v-if="!token"
-          variant="flat"
-          color="primary"
+          variant="primary"
           :loading="loading"
           @click="confirmCreate"
         >
-          Create Link
-        </v-btn>
+          Create link
+        </AppButton>
       </v-card-actions>
     </v-card>
   </v-dialog>

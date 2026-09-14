@@ -12,8 +12,8 @@ import { expect } from '@playwright/test'
  * Selectors verified in source: `.dq` / `[data-testid="duplicate-queue"]` (the
  * root), `.grow` (a group row) with `.grow--focus` on the focused one and
  * `data-testid="dedup-group-<signature>"` carrying the group's server id,
- * `.gthumb` (a candidate) with `--cover` / `--out` modifiers, `.gbtn--stack`,
- * `.gcompare`, `.dc-dialog` fields inside Compare, and `.sidebar-list-item`
+ * `.gthumb` (a candidate) with `--cover` / `--out` modifiers,
+ * `[data-testid="dedup-stack"]`, `[data-testid="dedup-compare"]`, `.dc-dialog` fields inside Compare, and `.sidebar-list-item`
  * carrying "Duplicates" plus its `.sidebar-dedup-dot` badge.
  */
 export class DuplicateQueuePage {
@@ -112,7 +112,7 @@ export class DuplicateQueuePage {
 
   /** How many candidates the focused row's Stack button would collect. */
   async focusedStackSize() {
-    const text = await this.focusedRow.locator('.gbtn--stack').innerText()
+    const text = await this.focusedRow.locator('[data-testid="dedup-stack"]').innerText()
     const match = text.match(/\d+/)
     return match ? Number(match[0]) : null
   }

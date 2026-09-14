@@ -193,9 +193,14 @@ const title = computed(() => {
 }
 
 /* Layered as an image so the scrim underneath is preserved: a `background`
-   shorthand on hover would drop the backing and leave the glyph on the photo. */
+   shorthand on hover would drop the backing and leave the glyph on the photo.
+   The scrim is dark in both themes, so the wash is the dark-surface ink, not the
+   per-theme `--hover-wash` (dark ink on a dark scrim in light). */
 .sbadge:hover {
-  background-image: linear-gradient(var(--hover-wash), var(--hover-wash));
+  background-image: linear-gradient(
+    rgba(var(--v-theme-on-dark-surface), 0.16),
+    rgba(var(--v-theme-on-dark-surface), 0.16)
+  );
 }
 
 /* A coloured glyph cannot reach `on-dark-surface`'s luminance, so the chip it
@@ -232,14 +237,6 @@ const title = computed(() => {
 
 .sbadge--flagged .sbico {
   color: rgb(var(--v-theme-warning));
-}
-
-/* The focus ring has to win over the inset flag ring, or a keyboard user
-   loses the one indicator they cannot do without. */
-.sbadge--flagged:focus-visible {
-  box-shadow:
-    inset 0 0 0 1px rgb(var(--v-theme-warning)),
-    var(--focus-ring);
 }
 
 /* Quieter than a real stack, deliberately. Same scrim so it stays legible over

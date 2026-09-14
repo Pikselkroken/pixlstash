@@ -17,6 +17,7 @@ import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
 import FolderTreeNode from "../editors/FolderTreeNode.vue";
 import FolderEditor from "../editors/FolderEditor.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
+import AppButton from "../widgets/AppButton.vue";
 import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
 import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
@@ -4674,8 +4675,8 @@ defineExpose({
       </v-card-text>
       <v-card-actions class="folder-type-actions">
         <v-spacer />
-        <v-btn variant="text" @click="addFolderTypeDialogOpen = false"
-          >Cancel</v-btn
+        <AppButton @click="addFolderTypeDialogOpen = false"
+          >Cancel</AppButton
         >
       </v-card-actions>
     </v-card>
@@ -4707,15 +4708,15 @@ defineExpose({
               readonly
               placeholder="Choose an empty folder"
             />
-            <v-btn
-              variant="outlined"
-              size="small"
-              icon
+            <AppButton
+              variant="outline"
+              icon-only
+              icon-left="folder-open-outline"
+              class="relocate-browse-btn"
               title="Choose destination folder"
+              aria-label="Choose destination folder"
               @click="referenceFolderRelocateBrowseOpen = true"
-            >
-              <v-icon size="18">mdi-folder-open-outline</v-icon>
-            </v-btn>
+            />
           </div>
         </div>
         <div class="relocate-warning">
@@ -4732,19 +4733,18 @@ defineExpose({
       </v-card-text>
       <v-card-actions class="relocate-actions">
         <v-spacer />
-        <v-btn variant="text" @click="closeReferenceFolderRelocateDialog">
+        <AppButton @click="closeReferenceFolderRelocateDialog">
           {{ referenceFolderRelocateResult ? "Close" : "Cancel" }}
-        </v-btn>
-        <v-btn
+        </AppButton>
+        <AppButton
           v-if="!referenceFolderRelocateResult"
-          color="primary"
-          variant="flat"
+          variant="primary"
           :loading="referenceFolderRelocateLoading"
           :disabled="!referenceFolderRelocateDestination"
           @click="relocateReferenceFolder"
         >
-          Move Files and Relocate
-        </v-btn>
+          Move files and relocate
+        </AppButton>
       </v-card-actions>
     </v-card>
   </v-dialog>
@@ -5898,16 +5898,13 @@ defineExpose({
               >mdi-folder-network-outline</v-icon
             >
             <p class="sidebar-no-projects-text">No folders configured.</p>
-            <v-btn
-              color="primary"
-              size="small"
-              prepend-icon="mdi-plus"
-              rounded="lg"
-              class="sidebar-no-projects-btn sidebar-no-projects-btn--folders"
+            <AppButton
+              variant="primary"
+              icon-left="plus"
               @click="openAddFolderTypeDialog()"
             >
               Add folder
-            </v-btn>
+            </AppButton>
           </div>
           <div
             v-else
@@ -6822,15 +6819,12 @@ defineExpose({
                 Create a project to organise your library into separate
                 collections.
               </p>
-              <v-btn
+              <AppButton
                 v-if="!isReadOnly"
-                color="primary"
-                size="small"
-                prepend-icon="mdi-plus"
-                rounded="lg"
-                class="sidebar-no-projects-btn"
+                variant="primary"
+                icon-left="plus"
                 @click="createProject"
-                >Create new project</v-btn
+                >Create new project</AppButton
               >
             </div>
 
@@ -8140,13 +8134,13 @@ defineExpose({
         </p>
       </v-card-text>
       <v-card-actions class="share-dialog-actions">
-        <v-btn variant="text" @click="revokeSharesDialogOpen = false"
-          >Cancel</v-btn
+        <AppButton @click="revokeSharesDialogOpen = false"
+          >Cancel</AppButton
         >
         <v-spacer />
-        <v-btn color="error" variant="tonal" @click="confirmRevokeShares">
+        <AppButton variant="danger" @click="confirmRevokeShares">
           Remove all shares
-        </v-btn>
+        </AppButton>
       </v-card-actions>
     </v-card>
   </v-dialog>

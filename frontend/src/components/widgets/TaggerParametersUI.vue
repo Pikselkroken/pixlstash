@@ -273,16 +273,9 @@ function setScaled(field, raw) {
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-surface));
-  outline: none;
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-}
-
-.tagger-params-input:focus-visible {
-  outline: none;
-  border-color: rgb(var(--v-theme-primary));
-  box-shadow: var(--focus-ring);
 }
 
 .tagger-params-scaled-row {

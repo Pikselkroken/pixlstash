@@ -138,11 +138,11 @@ describe("DedupGroupRow - the verdict key scheme (amendment #3)", () => {
   // before this nothing announced the keys at all.
   it("chips show Enter and K; aria-keyshortcuts carries the full set", () => {
     const wrapper = mountRow({ focused: true });
-    const stack = wrapper.find(".gbtn--stack");
+    const stack = wrapper.find('[data-testid="dedup-stack"]');
     expect(stack.find("kbd").text()).toBe("Enter");
     expect(stack.attributes("aria-keyshortcuts")).toBe("Enter S");
 
-    const keep = wrapper.findAll(".gbtn")[1];
+    const keep = wrapper.find('[data-testid="dedup-keep-separate"]');
     expect(keep.find("kbd").text()).toBe("K");
     expect(keep.attributes("aria-keyshortcuts")).toBe("K");
   });
@@ -152,7 +152,9 @@ describe("DedupGroupRow - what the verdicts cost", () => {
   // Neither verdict asks for a confirmation, so each has to say what it does
   // before it is pressed rather than after.
   it("says that stacking deletes nothing and can be undone", () => {
-    const title = mountRow().find(".gbtn--stack").attributes("title");
+    const title = mountRow()
+      .find('[data-testid="dedup-stack"]')
+      .attributes("title");
     expect(title).toContain("stays on disk");
     expect(title).toContain("Ctrl+Z");
   });
@@ -160,7 +162,9 @@ describe("DedupGroupRow - what the verdicts cost", () => {
   // The verdict is remembered, and the pictures survive it. The copy must not
   // promise a "reopen" affordance that does not exist yet.
   it("says that keeping separate is remembered and loses nothing", () => {
-    const title = mountRow().findAll(".gbtn")[1].attributes("title");
+    const title = mountRow()
+      .find('[data-testid="dedup-keep-separate"]')
+      .attributes("title");
     expect(title).toContain("stay in your library");
     expect(title).toContain("stop being suggested");
     expect(title).not.toContain("reopen");
@@ -168,11 +172,16 @@ describe("DedupGroupRow - what the verdicts cost", () => {
 
   it("locks both verdicts in a read-only session", () => {
     const wrapper = mountRow({ readOnly: true });
-    for (const button of wrapper.findAll(".gbtn")) {
+    for (const button of [
+      wrapper.find('[data-testid="dedup-stack"]'),
+      wrapper.find('[data-testid="dedup-keep-separate"]'),
+    ]) {
       expect(button.attributes("disabled")).toBeDefined();
     }
     // Comparing is reading, so it stays live.
-    expect(wrapper.find(".gcompare").attributes("disabled")).toBeUndefined();
+    expect(
+      wrapper.find('[data-testid="dedup-compare"]').attributes("disabled"),
+    ).toBeUndefined();
   });
 });
 
@@ -225,7 +234,9 @@ describe("DedupGroupRow - the decided row's timestamp and alignment", () => {
   it("the verdict label wears the Clear button's box with a transparent border", async () => {
     const wrapper = mountRow({ verdict: "stacked", decidedAt: ISO });
     expect(wrapper.find(".gverdict").element.tagName).toBe("SPAN");
-    expect(wrapper.find(".gbtn").exists()).toBe(true);
+    expect(wrapper.find('[data-testid="dedup-clear-decision"]').exists()).toBe(
+      true,
+    );
 
     const { readFileSync } = await import("node:fs");
     const source = readFileSync(
@@ -239,15 +250,19 @@ describe("DedupGroupRow - the decided row's timestamp and alignment", () => {
     };
     const label = blockOf(".gverdict");
     expect(label).toContain("border: 1px solid transparent");
-    expect(label).toContain("padding: 0 var(--space-4)");
-    expect(label).toContain("height: 27px");
-    // The same inset the button's block declares (a `.gbtn, .gcompare`
-    // selector list, so it is located by its first selector).
-    const buttonStart = source.indexOf(".gbtn,");
-    expect(buttonStart).toBeGreaterThan(-1);
-    const button = source.slice(buttonStart, source.indexOf("}", buttonStart));
-    expect(button).toContain("padding: 0 var(--space-4)");
-    expect(button).toContain("height: 27px");
+    expect(label).toContain("padding: 0 var(--space-5)");
+    expect(label).toContain("height: var(--control-h)");
+    // The same inset and height the Clear button's own box declares: it is an
+    // md AppButton, so the point of truth is AppButton's `.app-btn--md`.
+    const appButton = readFileSync(
+      `${process.cwd()}/src/components/widgets/AppButton.vue`,
+      "utf8",
+    );
+    const mdStart = appButton.indexOf(".app-btn--md {");
+    expect(mdStart).toBeGreaterThan(-1);
+    const md = appButton.slice(mdStart, appButton.indexOf("}", mdStart));
+    expect(md).toContain("padding: 0 var(--space-5)");
+    expect(md).toContain("height: var(--control-h)");
   });
 });
 
@@ -276,8 +291,8 @@ describe("DedupGroupRow - double-click opens Compare", () => {
   // must not ALSO raise a dialog over whatever group slid into the row.
   it("leaves the action buttons their own double-click meaning", async () => {
     const wrapper = mountRow();
-    await wrapper.find(".gbtn--stack").trigger("dblclick");
-    await wrapper.find(".gcompare").trigger("dblclick");
+    await wrapper.find('[data-testid="dedup-stack"]').trigger("dblclick");
+    await wrapper.find('[data-testid="dedup-compare"]').trigger("dblclick");
     expect(wrapper.emitted("compare")).toBeUndefined();
   });
 
@@ -501,9 +516,6 @@ describe("DedupGroupRow: the thumbnail's badge corners and its fade", () => {
       expect(source).not.toContain("opacity: 0.38");
       expect(source).not.toContain("0.15s ease");
     }
-    expect(blockIn(rowStyleSource(), ".gbtn:disabled")).toContain(
-      "opacity: var(--opacity-disabled)",
-    );
   });
 });
 
@@ -760,7 +772,7 @@ describe("DedupGroupRow: cover and exclusion over units", () => {
   it("counts units in Compare all N", () => {
     expect(
       mountRow({ group: stackedGroup(), coverId: 501 })
-        .find(".gcompare")
+        .find('[data-testid="dedup-compare"]')
         .text(),
     ).toContain("Compare all 3");
   });
@@ -782,7 +794,7 @@ describe("DedupGroupRow: cover and exclusion over units", () => {
 describe("DedupGroupRow: the verdict button names its outcome", () => {
   const labelOf = (wrapper) =>
     wrapper
-      .find(".gbtn--stack")
+      .find('[data-testid="dedup-stack"] .app-btn__label')
       .findAll("span")
       .map((s) => s.text());
 
@@ -1140,11 +1152,13 @@ describe("DedupGroupRow: the mixed-stack chip", () => {
       focused: true,
       flaggedStackIds: new Set(["12"]),
     });
-    const stack = wrapper.find(".gbtn--stack");
+    const stack = wrapper.find('[data-testid="dedup-stack"]');
     expect(stack.attributes("disabled")).toBeUndefined();
-    const keep = wrapper.findAll(".gbtn")[1];
+    const keep = wrapper.find('[data-testid="dedup-keep-separate"]');
     expect(keep.attributes("disabled")).toBeUndefined();
-    expect(wrapper.find(".gcompare").attributes("disabled")).toBeUndefined();
+    expect(
+      wrapper.find('[data-testid="dedup-compare"]').attributes("disabled"),
+    ).toBeUndefined();
     // And the tile still answers: the cover gesture is untouched.
     expect(
       wrapper.findAll(".gthumb")[0].attributes("disabled"),
@@ -1158,7 +1172,7 @@ describe("DedupGroupRow: the mixed-stack chip", () => {
       focused: true,
       flaggedStackIds: new Set(["12"]),
     });
-    await wrapper.find(".gbtn--stack").trigger("click");
+    await wrapper.find('[data-testid="dedup-stack"]').trigger("click");
     expect(wrapper.emitted("stack")).toHaveLength(1);
   });
 

@@ -92,28 +92,26 @@
 }
 
 .sidebar-folder-row:hover {
-  background: rgba(var(--v-theme-accent), 0.08);
+  background: var(--hover-wash);
   color: rgb(var(--v-theme-sidebar-text));
 }
 
+/* Selected is the olive wash and rail; the words keep the surface's ink, never
+   `on-primary`, which is authored for a solid fill, not a tint. */
 .sidebar-folder-row.active {
-  background: rgba(var(--v-theme-primary), 0.18);
-  color: rgb(var(--v-theme-on-primary));
-  border-left-color: rgb(var(--v-theme-primary));
+  background: var(--active-wash);
+  color: var(--active-text);
+  border-left-color: var(--active-bar);
 }
 
 .sidebar-folder-row.active:hover {
   background:
-    linear-gradient(
-      rgba(var(--v-theme-accent), 0.08),
-      rgba(var(--v-theme-accent), 0.08)
-    ),
-    rgba(var(--v-theme-primary), 0.18);
-  color: rgb(var(--v-theme-on-primary));
+    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
+  color: var(--active-text);
 }
 
+/* A solid fill, so `on-primary` is the right pair here. */
 .sidebar-folder-row.droppable {
-  filter: brightness(1.2);
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
 }
@@ -164,7 +162,7 @@
 }
 
 .sidebar-folder-row.active .sidebar-folder-count-badge {
-  color: rgba(var(--v-theme-on-primary), 0.65);
+  color: color-mix(in srgb, var(--active-text) 65%, transparent);
 }
 
 /* The refused-drop state (#757). Unscoped for the same reason as the rest of
@@ -251,7 +249,7 @@
 }
 
 .sidebar-project-tree-files .pf-header:hover {
-  background: rgba(var(--v-theme-accent), 0.08) !important;
+  background: var(--hover-wash) !important;
   color: rgb(var(--v-theme-sidebar-text)) !important;
 }
 

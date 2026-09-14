@@ -14,6 +14,7 @@ import { computed } from "vue";
 import { useBreadcrumb } from "../composables/useBreadcrumb";
 import { useVersionCheck } from "../composables/useVersionCheck";
 import WordmarkLogo from "./WordmarkLogo.vue";
+import AppBarButton from "./widgets/AppBarButton.vue";
 
 const props = defineProps({
   installType: { type: String, default: "pip" },
@@ -75,16 +76,15 @@ const close = () => desktop?.windowClose?.();
         <img src="/Logo.png" alt="PixlStash logo" class="titlebar-logo" />
       </a>
       <WordmarkLogo class="titlebar-name" />
-      <button
+      <AppBarButton
         v-if="activeLibraryName"
-        type="button"
+        icon="bookshelf"
         class="titlebar-library"
         :title="`Open Libraries settings. Active library: ${activeLibraryName}`"
         @click="emit('open-libraries')"
       >
-        <v-icon size="15" aria-hidden="true">mdi-bookshelf</v-icon>
-        <span>{{ activeLibraryName }}</span>
-      </button>
+        <span class="bar-btn-label">{{ activeLibraryName }}</span>
+      </AppBarButton>
       <nav
         v-if="breadcrumb.length"
         class="titlebar-breadcrumb"
@@ -123,16 +123,16 @@ const close = () => desktop?.windowClose?.();
           v-if="latestSecurityLevel"
           class="titlebar-update-warn"
           aria-hidden="true"
-        >⚠️</span></a
-      ><button
-        type="button"
-        class="titlebar-update-dismiss"
+          >⚠️</span
+        ></a
+      >
+      <!-- no-drag is inherited from .titlebar-update. -->
+      <AppBarButton
+        icon="close"
         aria-label="Dismiss update alert"
         :title="`Dismiss v${latestVersion} update alert`"
         @click.prevent="dismissUpdateAlert"
-      >
-        &times;
-      </button>
+      />
     </div>
     <div v-if="!isMac" class="titlebar-controls">
       <button
@@ -233,7 +233,6 @@ const close = () => desktop?.windowClose?.();
   align-items: center;
   flex-shrink: 0;
   border-radius: var(--radius-sm);
-  outline: none;
   -webkit-app-region: no-drag;
 }
 
@@ -276,32 +275,16 @@ const close = () => desktop?.windowClose?.();
   padding: 0 var(--space-4);
 }
 
+/* Chrome in the strip (AppBarButton); only its reach and its no-drag are its own. */
 .titlebar-library {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
   min-width: 0;
   max-width: 220px;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-sm);
-  color: rgb(var(--v-theme-on-background));
-  font-family: var(--font-ui);
-  font-size: var(--text-xs);
-  line-height: 1;
   -webkit-app-region: no-drag;
 }
 
-.titlebar-library span {
+.titlebar-library .bar-btn-label {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.titlebar-library:hover {
-  border-color: rgb(var(--v-theme-accent));
-  background: var(--hover-wash);
+  max-width: none;
 }
 
 /* Breadcrumb: current-view path, inline after the version. */
@@ -409,22 +392,6 @@ const close = () => desktop?.windowClose?.();
   color: rgba(var(--v-theme-error), 0.85);
 }
 
-.titlebar-update-dismiss {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  width: 12px;
-  height: 12px;
-  font-size: var(--text-2xs);
-  line-height: 1;
-  color: rgba(var(--v-theme-on-background), 0.5);
-}
-
-.titlebar-update-dismiss:hover {
-  color: rgba(var(--v-theme-on-background), 0.9);
-}
-
 .titlebar-controls {
   display: flex;
   align-self: stretch;
@@ -442,7 +409,7 @@ const close = () => desktop?.windowClose?.();
 }
 
 .tb-btn:hover {
-  background: rgba(var(--v-theme-on-surface), 0.1);
+  background: var(--hover-wash);
   opacity: 1;
 }
 

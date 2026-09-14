@@ -462,7 +462,7 @@ watch(
 }
 
 .section-header--collapsible:hover {
-  opacity: 0.85;
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .section-header {
@@ -521,14 +521,16 @@ watch(
   border-radius: 10px 10px 0 0; /* no token: must match .metadata-tabbox border-radius (10px) */
 }
 
+/* Selected is the dark-surface olive wash with the words in ink: the panel is
+   dark in both themes, so the per-theme --active-wash would be wrong in light. */
 .metadata-tab-btn.active {
   color: rgb(var(--v-theme-on-dark-surface));
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+  background: rgba(var(--v-theme-dark-surface-primary), 0.2);
 }
 
 .metadata-tab-btn:hover:not(.active) {
-  color: rgba(var(--v-theme-on-dark-surface), 0.8);
-  background: rgba(var(--v-theme-on-dark-surface), 0.04);
+  color: rgb(var(--v-theme-on-dark-surface));
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 
 .metadata-tab-panel {
@@ -625,7 +627,7 @@ watch(
 }
 
 .metadata-comfy-workflow-action:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.12);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
   color: rgb(var(--v-theme-on-dark-surface));
 }
 

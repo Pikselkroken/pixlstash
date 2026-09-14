@@ -764,7 +764,7 @@ const TAIL_TOGGLE_TITLE =
   white-space: nowrap;
 }
 .rs-board-rebuild-persistent:hover:not(:disabled) {
-  background: rgba(var(--v-theme-on-dark-surface), 0.1);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 .rs-board-rebuild-persistent:disabled {
   cursor: default;
@@ -850,10 +850,10 @@ const TAIL_TOGGLE_TITLE =
   background-color: rgb(var(--v-theme-dark-surface));
   color: rgb(var(--v-theme-on-dark-surface));
 }
-/* A scope dimension that is actively narrowing the board reads as "on". */
+/* A scope dimension that is actively narrowing the board reads as "on": the
+   olive marks it on the edge, the chosen value stays ink. */
 .rs-board-scope--set {
-  border-color: color-mix(in srgb, rgb(var(--v-theme-accent)) 60%, transparent);
-  color: rgb(var(--v-theme-accent));
+  border-color: rgb(var(--v-theme-dark-surface-primary));
 }
 .rs-board-scope {
   max-width: 150px;
@@ -1018,14 +1018,16 @@ button.rs-board-hdr {
 .rs-board-hdr--center {
   justify-content: center;
 }
+/* The sorted column: olive on the arrow (the mark), the words in ink. */
 .rs-board-hdr--active {
-  color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 .rs-board-hdr-arrow {
   opacity: 0.45;
 }
 .rs-board-hdr--active .rs-board-hdr-arrow {
   opacity: 1;
+  color: rgb(var(--v-theme-dark-surface-primary));
 }
 
 .rs-board-tag {
@@ -1132,7 +1134,7 @@ button.rs-board-hdr {
   color: rgb(var(--v-theme-on-dark-surface));
 }
 .rs-board-btn:hover:not(:disabled) {
-  background: rgba(var(--v-theme-on-dark-surface), 0.14);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 /* Blocked "Start review": the SAME treatment as `.rs-listbox-option--locked` in
    NewReviewDialog (38% on-dark-surface + not-allowed) - this board sits on the
@@ -1170,7 +1172,7 @@ button.rs-board-hdr {
   cursor: pointer;
 }
 .rs-board-more:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.1);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
   color: rgb(var(--v-theme-on-dark-surface));
 }
 

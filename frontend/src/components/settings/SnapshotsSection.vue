@@ -196,7 +196,7 @@ function handleRestore(cp) {
           label="Automatic snapshots"
           density="compact"
           hide-details
-          color="accent"
+          color="primary"
           @update:model-value="handleToggleDailySnapshots($event)"
         />
       </div>
@@ -213,7 +213,7 @@ function handleRestore(cp) {
           @enter="handleCreate"
         />
         <AppButton
-          variant="primary_green"
+          variant="primary"
           icon-left="camera"
           :disabled="!!activeJob || creating"
           @click="handleCreate"

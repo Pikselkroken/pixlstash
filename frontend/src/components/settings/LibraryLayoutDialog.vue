@@ -886,7 +886,7 @@ function netDelta(row) {
               Keep layout, move nothing
             </AppButton>
             <AppButton
-              variant="primary_green"
+              variant="primary"
               size="sm"
               icon-left="folder-move-outline"
               :disabled="!canMove"

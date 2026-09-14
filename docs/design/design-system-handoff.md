@@ -112,6 +112,10 @@ fourth distinct occurrence of that bug in this codebase.
   them here.
 ### 9.4 There are two focus languages, and the second one is not documented anywhere
 
+> **Superseded 2026-09-13.** `--focus-ring` is gone. Focus is now one global ink
+> outline (2px `--focus-stroke` with a 2px gap) drawn from `style.css`; see
+> `visual-language.md` §11. The record below is kept for why.
+
 `--focus-ring` (a 3px accent box-shadow) is the system's focus treatment. But the theme
 also carries a `focus` key, `#7c4dff` violet, and **10 review-surface components use it
 as a competing `outline: 2px solid rgb(var(--v-theme-focus))`**: `NewReviewDialog.vue`

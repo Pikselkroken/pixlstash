@@ -664,11 +664,6 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   cursor: pointer;
 }
 
-.ref-picture-pick:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 /* The selected vocabulary from §11 of the design manual, in the form ImageGrid
    already uses for a selected picture: an --active-bar edge. `outline` rather
    than a border so the 80px box does not resize as the pin moves. */
@@ -745,18 +740,8 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   font: inherit;
   color: rgb(var(--v-theme-accent));
   text-decoration: underline;
-  cursor: pointer;
-}
-
-.ref-pin-reset:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
   border-radius: var(--radius-sm);
-}
-
-.ref-picture-zoom:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
+  cursor: pointer;
 }
 
 .ref-preview-overlay {

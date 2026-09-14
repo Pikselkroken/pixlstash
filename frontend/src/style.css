@@ -35,6 +35,13 @@ body {
   text-align: left;
 }
 
+/* A filled control's hover: a 20% darken layered over its fill as a
+   background-image, so the label is untouched (white on amber goes 3.41 -> 5.03:1).
+   Theme-independent. */
+:root {
+  --hover-shade: linear-gradient(rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.2));
+}
+
 /* Interactive wash tokens for sidebar hover/selection. The raw alphas were tuned
    for the dark theme, where an accent/primary over a dark surface reads well at
    a low alpha. Over the light theme's near-white canvas those same alphas wash
@@ -57,20 +64,34 @@ body {
      Pinning it to the chosen theme is what makes the grid action pill's
      threshold slider correct in both (merged-grid-action-pill.md §9). */
   color-scheme: dark;
-  /* .08 → .14: compensates the deepened accent (#f28f3b → #b85c0c). */
-  --hover-wash: rgba(var(--v-theme-accent), 0.14);
-  /* .18 → .26: compensates the deepened primary (#8EA604 → #6b7d04). */
-  --active-wash: rgba(var(--v-theme-primary), 0.26);
+  /* HOVER IS AN INK WASH (2026-09-13): the text colour at 16%, carrying no hue,
+     because amber is the action and olive the selection. 1.57x on dark chrome,
+     1.56x on panel, 1.53x layered over a selection. A filled control darkens
+     instead (`--hover-shade`); a neutral fill lightens here (`--hover-neutral`),
+     because a darkened grey on a dark panel vanishes. */
+  --hover-wash: rgba(var(--v-theme-on-surface), 0.16);
+  --hover-neutral: linear-gradient(
+    rgba(var(--v-theme-on-surface), 0.16),
+    rgba(var(--v-theme-on-surface), 0.16)
+  );
+  /* SELECTED IS OLIVE (2026-09-13): tile, row, tab, focused group. The lifted
+     olive in dark, because the deep one measures 2.32:1 on a dark panel. */
+  --active-wash: rgba(var(--v-theme-dark-surface-primary), 0.2);
+  /* Olive as a foreground where something is merely chosen: the active bar
+     button's icon, the option row's check. Words stay `--active-text`. */
+  --selected-ink: rgb(var(--v-theme-dark-surface-primary));
+  /* Focus is ink (design-tokens.css). */
+  --focus-stroke: rgb(var(--v-theme-on-surface));
+  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
+  --focus-glow: 0 0 6px 2px var(--focus-stroke);
   /* Tint alpha behind a folder-level dropdown (LibraryLayoutDialog). Deeper
      than light: 0.10 over the dark `input-background` is a smudge, 0.14 gives
      the same 1.28 luminance step off the field that 0.10 gives on white. */
   --level-wash: 0.14;
-  --active-bar: rgb(var(--v-theme-primary));
-  /* Correct as-is: `on-primary` (now #fff) over the 26% primary tint on the
-     dark sidebar measures 11.22:1. The 1.32:1 figure in the docs is a
-     light-theme claim about a dark-theme rule; light already reads
-     `on-surface` (10.84:1) and needs no change either. */
-  --active-text: rgb(var(--v-theme-on-primary));
+  --active-bar: rgb(var(--v-theme-dark-surface-primary));
+  /* No olive text on olive: a selected item's label, icon and count take the
+     surface's own ink (7.5 - 11.2:1 at rest, 5.05 - 8.3:1 hovered). */
+  --active-text: rgb(var(--v-theme-on-surface));
 
   /* Drive-band capacity meter (#893). Three segments, so TWO adjacencies to
      keep readable: ours|other and other|free. `ours` is `primary` in both
@@ -104,13 +125,18 @@ body {
 .v-theme--pixlStashLight {
   /* See the note on the dark theme above. */
   color-scheme: light;
-  /* Selection reads warm (accent) on the light theme instead of the olive `primary`
-     green, which clashes with the warm palette. Dark keeps the green convention. */
-  --hover-wash: rgba(var(--v-theme-accent), 0.14);
-  --active-wash: rgba(var(--v-theme-accent), 0.2);
+  /* See the dark block. 1.37x on chrome and panel, 1.35x over a selection. */
+  --hover-wash: rgba(var(--v-theme-on-surface), 0.16);
+  --hover-neutral: linear-gradient(rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.2));
+  /* Olive in both themes; the deep olive clears a light ground (4.66:1 on panel). */
+  --active-wash: rgba(var(--v-theme-primary), 0.16);
+  --selected-ink: rgb(var(--v-theme-primary));
+  --focus-stroke: rgb(var(--v-theme-on-surface));
+  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
+  --focus-glow: 0 0 6px 2px var(--focus-stroke);
   /* See the dark block above. */
   --level-wash: 0.1;
-  --active-bar: rgb(var(--v-theme-accent));
+  --active-bar: rgb(var(--v-theme-primary));
   --active-text: rgb(var(--v-theme-on-surface));
 
   /* Drive-band capacity meter (#893) - see the dark block above for the rule.
@@ -278,17 +304,18 @@ button:disabled {
    rule is `.class:focus-visible` at (0,2,0) and therefore still wins, whether it
    adds to the ring (StackBadge's inset warning stroke) or replaces it
    (StatsSidebar's SVG stroke). A component that wants NO indicator must say
-   `box-shadow: none` explicitly now, not merely stay silent.
+   `outline: none` explicitly, not merely stay silent.
 
-   `.v-btn` is excluded because Vuetify paints its elevation with `box-shadow`
-   and its own rules are class-only (0,1,0): a tie we would win or lose on import
-   order, flattening an elevated button while it holds focus. Vuetify's buttons
-   keep their own focus treatment. */
+   Ink, 2px, with a 2px gap (2026-09-13): drawn as `outline` so the gap is real
+   and the ring meets only the ground, never the fill it surrounds. Being an
+   outline, it no longer fights anything painting elevation with `box-shadow`,
+   which is why `.v-btn` needed excluding while the ring was a shadow. */
 :focus-visible:not(
-  :where(.v-btn, .v-btn *, .v-overlay__content, .v-overlay__content > .v-card)
+  :where(.v-overlay__content, .v-overlay__content > .v-card)
 ) {
-  outline: none;
-  box-shadow: var(--focus-ring);
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
+  box-shadow: none;
 }
 
 /* A dialog takes focus when it opens, so the keyboard lands inside it rather
@@ -337,7 +364,7 @@ button:disabled {
   box-shadow: none;
 }
 .v-field :focus-visible {
-  box-shadow: none;
+  outline: none;
 }
 
 /* The sidebar, toolbar and title bar each paint from their OWN theme token

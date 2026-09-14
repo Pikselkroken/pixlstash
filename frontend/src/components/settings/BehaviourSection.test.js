@@ -56,21 +56,6 @@ function mountPane(stubOverrides = {}) {
         SettingsTwoCol: { template: "<div><slot /></div>" },
         SettingsFieldBlock: { template: "<div><slot /></div>" },
         PluginsTable: true,
-        VBtn: {
-          inheritAttrs: false,
-          emits: ["click"],
-          props: ["prependIcon"],
-          template: '<button @click="$emit(\'click\')"><slot /></button>',
-        },
-        // inheritAttrs:false matters: without it a native click reaches the
-        // parent's @click twice -- once through the emit, once through
-        // attribute fallthrough -- and every click-counting assertion doubles.
-        "v-btn": {
-          inheritAttrs: false,
-          emits: ["click"],
-          props: ["prependIcon"],
-          template: '<button @click="$emit(\'click\')"><slot /></button>',
-        },
         "v-tooltip": { template: "<div><slot /></div>" },
         ...stubOverrides,
       },

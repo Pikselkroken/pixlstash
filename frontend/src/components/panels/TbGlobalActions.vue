@@ -1,34 +1,27 @@
 <template>
   <span v-if="separator" class="bar-separator" aria-hidden="true"></span>
   <!-- ── Settings ──────────────────────────────────────────────────────── -->
-  <button
-    class="bar-btn bar-btn--icon"
-    type="button"
+  <AppBarButton
+    icon="cog-outline"
     title="Settings"
+    aria-label="Settings"
     @click="emit('open-settings')"
-  >
-    <v-icon size="20">mdi-cog-outline</v-icon>
-  </button>
+  />
   <!-- ── Stats toggle ──────────────────────────────────────────────────── -->
-  <button
-    class="bar-btn bar-btn--icon tb-stats-btn"
-    :class="{ 'bar-btn--active': sidebarStore.statsOpen }"
-    type="button"
-    :title="
-      tasksStore.hasActiveTasks
-        ? `${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? '' : 's'} running`
-        : sidebarStore.statsOpen
-          ? 'Hide stats sidebar'
-          : 'Show stats sidebar'
-    "
+  <!-- App-wide activity light (`--busy`, drawn as ::after): pulses whenever
+       the task manager has any active work, so background tasks are visible
+       without opening the stats sidebar. A pseudo-element rather than a
+       slotted span, because a slotted button is a labelled one and would lose
+       its icon-only size. -->
+  <AppBarButton
+    class="tb-stats-btn"
+    :class="{ 'tb-stats-btn--busy': tasksStore.hasActiveTasks }"
+    icon="chart-bar"
+    :active="sidebarStore.statsOpen"
+    :title="statsTitle"
+    :aria-label="statsTitle"
     @click="sidebarStore.toggleStats()"
-  >
-    <v-icon size="20">mdi-chart-bar</v-icon>
-    <!-- App-wide activity light: pulses whenever the task manager has any
-         active work, so background tasks are visible without opening the
-         stats sidebar. -->
-    <span v-if="tasksStore.hasActiveTasks" class="tb-stats-activity"></span>
-  </button>
+  />
 </template>
 
 <script setup>
@@ -41,8 +34,10 @@
 // stats rail in the sidebar store), so the component takes no data props; the
 // optional separator is for hosts whose bar does not already draw one.
 
+import { computed } from "vue";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTasksStore } from "../../stores/useTasksStore";
+import AppBarButton from "../widgets/AppBarButton.vue";
 
 defineProps({
   // Draw the toolbar's vertical rule ahead of the pair. The grid toolbar
@@ -54,6 +49,14 @@ const emit = defineEmits(["open-settings"]);
 
 const sidebarStore = useSidebarStore();
 const tasksStore = useTasksStore();
+
+const statsTitle = computed(() =>
+  tasksStore.hasActiveTasks
+    ? `${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? "" : "s"} running`
+    : sidebarStore.statsOpen
+      ? "Hide stats sidebar"
+      : "Show stats sidebar",
+);
 </script>
 
 <style scoped>
@@ -62,12 +65,10 @@ const tasksStore = useTasksStore();
    whoever changed one to remember the other; the five rules were still
    byte-identical, and now there is one copy. */
 
-/* App-wide task-activity light on the stats toggle. */
-.tb-stats-btn {
-  position: relative;
-}
-
-.tb-stats-activity {
+/* App-wide task-activity light on the stats toggle (`.bar-btn` is already
+   `position: relative`). */
+.tb-stats-btn--busy::after {
+  content: "";
   position: absolute;
   top: 7px;
   right: 7px;
@@ -93,7 +94,7 @@ const tasksStore = useTasksStore();
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tb-stats-activity {
+  .tb-stats-btn--busy::after {
     animation: none;
   }
 }

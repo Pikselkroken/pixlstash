@@ -22,6 +22,8 @@
  */
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useTasksStore } from "../../stores/useTasksStore";
+import AppBarButton from "../widgets/AppBarButton.vue";
+import AppButton from "../widgets/AppButton.vue";
 
 // The worker-type value the backend keys the thumbnail-regen snapshot under.
 const THUMBNAIL_WORKER_KEY = "ThumbnailGenerationTask";
@@ -198,23 +200,21 @@ function viewProgress() {
         >{{ currentLabel }} / {{ totalLabel }}</span
       >
 
-      <button
+      <AppButton
         v-if="!isDone"
-        type="button"
+        size="sm"
         class="tub-view"
         @click="viewProgress"
       >
         View progress
-      </button>
+      </AppButton>
 
-      <button
-        type="button"
+      <AppBarButton
+        icon="close"
         class="tub-dismiss"
         aria-label="Dismiss thumbnail upgrade banner"
         @click="dismiss"
-      >
-        <v-icon size="16" aria-hidden="true">mdi-close</v-icon>
-      </button>
+      />
     </div>
   </Transition>
 </template>
@@ -291,39 +291,12 @@ function viewProgress() {
 .tub-view {
   flex: none;
   margin-left: auto;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  color: rgb(var(--v-theme-primary));
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  font-family: inherit;
-}
-
-.tub-view:hover {
-  background: rgba(var(--v-theme-primary), 0.1);
 }
 
 /* When there is no "View progress" button (the done beat), the dismiss button
    still needs to push to the right edge. */
 .tub-banner--done .tub-dismiss {
   margin-left: auto;
-}
-
-.tub-dismiss {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border-radius: var(--radius-sm);
-  color: rgba(var(--v-theme-on-panel), 0.6);
-}
-
-.tub-dismiss:hover {
-  background: rgba(var(--v-theme-on-panel), 0.08);
-  color: rgb(var(--v-theme-on-panel));
 }
 
 /* Enter/leave: a calm slide-and-fade. Reduced motion is honoured globally by

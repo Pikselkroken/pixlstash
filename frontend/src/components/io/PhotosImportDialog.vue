@@ -8,6 +8,8 @@ import {
 import { listProjects } from "../../api/projects.js";
 import { listImportFolders } from "../../api/folders.js";
 import ProjectEditor from "../editors/ProjectEditor.vue";
+import AppButton from "../widgets/AppButton.vue";
+import AppBarButton from "../widgets/AppBarButton.vue";
 
 import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
@@ -202,14 +204,13 @@ watch(dialogOpen, (isOpen) => {
 <template>
   <v-dialog v-model="dialogOpen" width="980">
     <div class="google-photos-shell">
-      <v-btn
-        icon
-        size="36px"
+      <AppBarButton
+        icon="close"
+        :icon-size="20"
         class="google-photos-close"
+        aria-label="Close"
         @click="dialogOpen = false"
-      >
-        <v-icon size="24px">mdi-close</v-icon>
-      </v-btn>
+      />
       <v-card class="google-photos-card">
         <v-card-title class="google-photos-title">
           <span class="import-title-text">Import photos to</span>
@@ -269,9 +270,9 @@ watch(dialogOpen, (isOpen) => {
                     :accept="IMPORT_FILE_ACCEPT"
                     @change="handleLocalChange"
                   />
-                  <v-btn variant="outlined" @click="openLocalPicker">
-                    Choose Files
-                  </v-btn>
+                  <AppButton variant="outline" @click="openLocalPicker">
+                    Choose files
+                  </AppButton>
                 </div>
               </div>
             </v-window-item>
@@ -390,10 +391,12 @@ watch(dialogOpen, (isOpen) => {
   padding: var(--space-5);
 }
 
+/* Inside the card's corner, not straddling it: the flat close has no fill of
+   its own to sit on the backdrop with. */
 .google-photos-close {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: var(--space-6);
+  right: var(--space-6);
   z-index: 2;
 }
 
@@ -428,14 +431,10 @@ watch(dialogOpen, (isOpen) => {
   border-color: rgba(var(--v-theme-primary), 0.5);
 }
 
-.import-project-select :deep(.v-field--focused .v-field__outline__start),
-.import-project-select :deep(.v-field--focused .v-field__outline__notch),
-.import-project-select :deep(.v-field--focused .v-field__outline__end) {
-  border-color: rgb(var(--v-theme-primary));
-}
-
+/* The project reads as chosen: olive in the wash and the edge, ink in the words
+   and the chevron, never olive on olive. Focus is the global ring. */
 .import-project-select :deep(.v-field__input) {
-  color: rgb(var(--v-theme-primary));
+  color: var(--active-text);
   font-weight: var(--weight-semibold);
   font-size: var(--text-md);
   min-height: unset;
@@ -444,7 +443,7 @@ watch(dialogOpen, (isOpen) => {
 }
 
 .import-project-select :deep(.v-field) {
-  background: rgba(var(--v-theme-primary), 0.1);
+  background: var(--active-wash);
   border-radius: var(--radius-md);
 }
 
@@ -455,12 +454,12 @@ watch(dialogOpen, (isOpen) => {
 }
 
 .import-project-select :deep(.v-select__selection-text) {
-  color: rgb(var(--v-theme-primary));
+  color: var(--active-text);
   font-weight: var(--weight-semibold);
 }
 
 .import-project-select :deep(.v-field__append-inner .v-icon) {
-  color: rgb(var(--v-theme-primary));
+  color: var(--active-text);
   opacity: 0.8;
 }
 
@@ -528,8 +527,8 @@ watch(dialogOpen, (isOpen) => {
 }
 
 .local-import-dropzone.is-dragging {
-  border-color: rgba(var(--v-theme-primary), 0.7);
-  background: rgba(var(--v-theme-primary), 0.08);
+  border-color: var(--active-bar);
+  background: var(--active-wash);
 }
 
 .local-import-dropzone-text {

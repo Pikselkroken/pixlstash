@@ -15,6 +15,7 @@ import { getLabelThresholds } from "../../api/taggers";
 import { patchUserConfig } from "../../api/config";
 import TaggerParametersUI from "./TaggerParametersUI.vue";
 import { errorDetail } from "../../utils/apiError";
+import AppButton from "./AppButton.vue";
 
 const props = defineProps({
   /** Plugin object from GET /taggers (includes parameter_schema, etc.) */
@@ -133,14 +134,14 @@ watch(
           v-if="plugin.name === 'pixlstash_tagger'"
           class="tagger-settings-threshold-row"
         >
-          <v-btn
-            variant="text"
-            size="small"
-            prepend-icon="mdi-table-eye"
+          <AppButton
+            variant="ghost"
+            size="sm"
+            icon-left="table-eye"
             @click="openLabelThresholds"
           >
             Preview label thresholds
-          </v-btn>
+          </AppButton>
         </div>
 
         <!-- Downloaded artifacts panel (dormant in 1.3a) -->
@@ -157,12 +158,13 @@ watch(
             class="tagger-settings-artifact-row"
           >
             <span>{{ artifact.label || artifact.name }}</span>
-            <v-btn
-              variant="text"
-              size="x-small"
-              color="error"
-              icon="mdi-delete"
+            <AppButton
+              variant="ghost"
+              size="sm"
+              icon-only
+              icon-left="delete"
               :title="`Delete ${artifact.label || artifact.name}`"
+              :aria-label="`Delete ${artifact.label || artifact.name}`"
               @click="
                 $emit('delete-artifact', {
                   plugin: plugin.name,
@@ -179,20 +181,14 @@ watch(
       </v-card-text>
 
       <v-card-actions class="tagger-settings-actions">
-        <v-btn variant="text" size="small" @click="resetToDefaults">
+        <AppButton variant="ghost" @click="resetToDefaults">
           Reset to defaults
-        </v-btn>
+        </AppButton>
         <v-spacer />
-        <v-btn variant="text" size="small" @click="open = false">Cancel</v-btn>
-        <v-btn
-          variant="flat"
-          size="small"
-          color="primary"
-          :loading="saving"
-          @click="save"
-        >
+        <AppButton variant="secondary" @click="open = false">Cancel</AppButton>
+        <AppButton variant="primary" :loading="saving" @click="save">
           Save
-        </v-btn>
+        </AppButton>
       </v-card-actions>
     </v-card>
   </v-dialog>

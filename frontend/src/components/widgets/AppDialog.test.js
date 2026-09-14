@@ -92,4 +92,12 @@ describe("AppDialog keyboard contract", () => {
     dialog.vm.$emit("update:modelValue", false);
     expect(w.emitted("close")).toHaveLength(1);
   });
+
+  it("the header close button is named and emits close", async () => {
+    const w = mountDialog();
+    const close = w.find('button[aria-label="Close"]');
+    expect(close.exists()).toBe(true);
+    await close.trigger("click");
+    expect(w.emitted("close")).toHaveLength(1);
+  });
 });

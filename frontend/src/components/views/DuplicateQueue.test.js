@@ -376,7 +376,9 @@ describe("DuplicateQueue - the tier popover", () => {
 
   it("closes on Escape and gives the focus back to its button", async () => {
     const { wrapper } = await mountQueue([group("g1")], { tiers: TIERS });
-    const button = wrapper.find(".dq-tier-wrap .dq-btn");
+    const button = wrapper.find(
+      '.dq-tier-wrap [data-testid="dedup-tier-trigger"]',
+    );
 
     await button.trigger("click");
     expect(wrapper.findComponent({ name: "DedupTierMenu" }).exists()).toBe(
@@ -394,7 +396,9 @@ describe("DuplicateQueue - the tier popover", () => {
 
   it("closes on a pointer press outside itself", async () => {
     const { wrapper } = await mountQueue([group("g1")], { tiers: TIERS });
-    await wrapper.find(".dq-tier-wrap .dq-btn").trigger("click");
+    await wrapper
+      .find('.dq-tier-wrap [data-testid="dedup-tier-trigger"]')
+      .trigger("click");
     expect(wrapper.findComponent({ name: "DedupTierMenu" }).exists()).toBe(
       true,
     );
@@ -412,7 +416,7 @@ describe("DuplicateQueue - the tier popover", () => {
   it("leaves the popover alone for a press inside it", async () => {
     const { wrapper } = await mountQueue([group("g1")], { tiers: TIERS });
     const wrap = wrapper.find(".dq-tier-wrap");
-    await wrap.find(".dq-btn").trigger("click");
+    await wrap.find('[data-testid="dedup-tier-trigger"]').trigger("click");
 
     wrap.element.dispatchEvent(
       new window.MouseEvent("mousedown", { bubbles: true }),
@@ -444,7 +448,9 @@ describe("DuplicateQueue - the filter on the Decided page", () => {
       scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
       ...over,
     });
-    await mounted.wrapper.find(".qdecided").trigger("click");
+    await mounted.wrapper
+      .find('[data-testid="decided-toggle"]')
+      .trigger("click");
     await flushPromises();
     await mounted.wrapper.vm.$nextTick();
     return mounted;
@@ -455,7 +461,9 @@ describe("DuplicateQueue - the filter on the Decided page", () => {
   // to open the control that is actually in force.
   it("swaps the tier menu for the verdict menu", async () => {
     const { wrapper } = await decidedQueue();
-    await wrapper.find(".dq-tier-wrap .dq-btn").trigger("click");
+    await wrapper
+      .find('.dq-tier-wrap [data-testid="dedup-tier-trigger"]')
+      .trigger("click");
     expect(wrapper.findComponent({ name: "DedupVerdictMenu" }).exists()).toBe(
       true,
     );
@@ -469,7 +477,9 @@ describe("DuplicateQueue - the filter on the Decided page", () => {
   // a plain lie: the label has to name the filter that is in force.
   it("names the verdict filter on its own button", async () => {
     const { wrapper, store } = await decidedQueue();
-    const button = wrapper.find(".dq-tier-wrap .dq-btn");
+    const button = wrapper.find(
+      '.dq-tier-wrap [data-testid="dedup-tier-trigger"]',
+    );
     expect(button.attributes("aria-label")).toBe("All decisions");
 
     await store.setVerdictEnabled("keep_separate", false);
@@ -510,7 +520,9 @@ describe("DuplicateQueue - the filter on the Decided page", () => {
 
   it("narrows the page from the menu and says so", async () => {
     const { wrapper } = await decidedQueue();
-    await wrapper.find(".dq-tier-wrap .dq-btn").trigger("click");
+    await wrapper
+      .find('.dq-tier-wrap [data-testid="dedup-tier-trigger"]')
+      .trigger("click");
     listGroups.mockClear();
     wrapper
       .findComponent({ name: "DedupVerdictMenu" })
@@ -646,7 +658,7 @@ describe("DuplicateQueue - one toolbar", () => {
     const { wrapper } = await mountQueue([group("g1"), group("g2")]);
     const toolbar = wrapper.find(".dq-toolbar");
     expect(toolbar.find(".qtitle").text()).toContain("2 groups to review");
-    expect(toolbar.find(".qdecided").exists()).toBe(true);
+    expect(toolbar.find('[data-testid="decided-toggle"]').exists()).toBe(true);
     expect(wrapper.find(".qhead").exists()).toBe(false);
     expect(wrapper.find(".khint").exists()).toBe(false);
     expect(toolbar.findAll("kbd")).toHaveLength(0);
@@ -786,7 +798,9 @@ describe("DuplicateQueue - the toolbar hands the keyboard back", () => {
   // of the queue, until a click in the grid.
   it("a tier toggle returns focus to the queue and the keys act again", async () => {
     const { wrapper, store } = await mountQueue([group("g1"), group("g2")]);
-    await wrapper.find(".dq-tier-wrap .dq-btn").trigger("click");
+    await wrapper
+      .find('.dq-tier-wrap [data-testid="dedup-tier-trigger"]')
+      .trigger("click");
     wrapper
       .findComponent({ name: "DedupTierMenu" })
       .vm.$emit("toggle", "near", true);
@@ -804,7 +818,9 @@ describe("DuplicateQueue - the toolbar hands the keyboard back", () => {
 
   it("a pointer-committed threshold change hands the keyboard back with the popover open", async () => {
     const { wrapper, store } = await mountQueue([group("g1"), group("g2")]);
-    await wrapper.find(".dq-tier-wrap .dq-btn").trigger("click");
+    await wrapper
+      .find('.dq-tier-wrap [data-testid="dedup-tier-trigger"]')
+      .trigger("click");
     const menu = wrapper.findComponent({ name: "DedupTierMenu" });
     // The drag begins with a pointer press inside the popover.
     menu.element.dispatchEvent(
@@ -830,7 +846,9 @@ describe("DuplicateQueue - the toolbar hands the keyboard back", () => {
     const { wrapper, store } = await mountQueue([group("g1")]);
     // The slider is disabled until a looser tier is on.
     store.nearEnabled = true;
-    await wrapper.find(".dq-tier-wrap .dq-btn").trigger("click");
+    await wrapper
+      .find('.dq-tier-wrap [data-testid="dedup-tier-trigger"]')
+      .trigger("click");
     await wrapper.vm.$nextTick();
     const input = wrapper.find(".dth-input");
     input.element.focus();
@@ -844,7 +862,9 @@ describe("DuplicateQueue - the toolbar hands the keyboard back", () => {
 
   it("keys pressed on the threshold slider never fire verdicts", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
-    await wrapper.find(".dq-tier-wrap .dq-btn").trigger("click");
+    await wrapper
+      .find('.dq-tier-wrap [data-testid="dedup-tier-trigger"]')
+      .trigger("click");
     const input = wrapper.find(".dth-input").element;
     input.focus();
     stackGroup.mockResolvedValue({});
@@ -890,7 +910,9 @@ describe("DuplicateQueue - the toolbar hands the keyboard back", () => {
   it("Escape on the threshold slider still dismisses the popover to its trigger", async () => {
     const { wrapper, store } = await mountQueue([group("g1")]);
     store.nearEnabled = true;
-    const trigger = wrapper.find(".dq-tier-wrap .dq-btn");
+    const trigger = wrapper.find(
+      '.dq-tier-wrap [data-testid="dedup-tier-trigger"]',
+    );
     await trigger.trigger("click");
     await wrapper.vm.$nextTick();
     const input = wrapper.find(".dth-input");
@@ -913,7 +935,7 @@ describe("DuplicateQueue - the toolbar hands the keyboard back", () => {
 
   it("flipping to Decided hands the keyboard to the list", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
-    await wrapper.find(".qdecided").trigger("click");
+    await wrapper.find('[data-testid="decided-toggle"]').trigger("click");
     await flushPromises();
     expect(document.activeElement).toBe(wrapper.find(".dq").element);
     wrapper.unmount();
@@ -923,7 +945,7 @@ describe("DuplicateQueue - the toolbar hands the keyboard back", () => {
   // change hands it back.
   it("Tab through the toolbar is never claimed by the queue", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
-    const decided = wrapper.find(".qdecided").element;
+    const decided = wrapper.find('[data-testid="decided-toggle"]').element;
     decided.focus();
     const event = key("Tab", decided);
     expect(event.defaultPrevented).toBe(false);
@@ -989,9 +1011,10 @@ describe("DuplicateQueue - the shell chrome", () => {
   it("puts the ⋯ after the page toggles and before the separator", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
     const burger = wrapper.find(".dq-tb-left .dq-overflow").element;
-    expect(burger.previousElementSibling.classList.contains("qdecided")).toBe(
-      true,
-    );
+    expect(
+      burger.previousElementSibling.getAttribute("data-testid") ===
+        "mixed-toggle",
+    ).toBe(true);
     expect(burger.nextElementSibling.classList.contains("dq-tb-sep")).toBe(
       true,
     );
@@ -1013,14 +1036,17 @@ describe("DuplicateQueue - the shell chrome", () => {
     // would otherwise cut Mixed stacks down to its label and count, losing the
     // sentence that says what a mixed stack is.
     expect(rows[0].attributes("aria-label")).toBe(
-      wrapper.find(".dq-toolbar .qdecided").attributes("aria-label"),
+      wrapper.find('[data-testid="decided-toggle"]').attributes("aria-label"),
     );
     expect(rows[1].attributes("aria-label")).toBe(
       wrapper.find('[data-testid="mixed-toggle"]').attributes("aria-label"),
     );
     // Each row's bar twin carries the fold class that hides it at the same
     // width, so exactly one of the pair is ever on screen.
-    for (const toggle of wrapper.findAll(".dq-toolbar .qdecided")) {
+    for (const toggle of [
+      wrapper.find('[data-testid="decided-toggle"]'),
+      wrapper.find('[data-testid="mixed-toggle"]'),
+    ]) {
       expect(toggle.classes()).toContain("dq-fold-906");
     }
     wrapper.unmount();
@@ -1082,7 +1108,7 @@ describe("DuplicateQueue - the shell chrome", () => {
     await store.toggleDecided();
     await wrapper.vm.$nextTick();
 
-    const back = wrapper.find(".dq-toolbar .qdecided");
+    const back = wrapper.find('[data-testid="decided-toggle"]');
     expect(back.attributes("aria-label")).toBe("Back to review");
     expect(back.classes()).not.toContain("dq-fold-906");
     expect(wrapper.find(".dq-overflow").exists()).toBe(false);
@@ -1109,11 +1135,11 @@ describe("DuplicateQueue - the shell chrome", () => {
   // pressed state at every width.
   it("the Decided toggle exposes its label and keeps aria-pressed", async () => {
     const { wrapper, store } = await mountQueue([group("g1")]);
-    const toggle = wrapper.find(".dq-toolbar .qdecided");
+    const toggle = wrapper.find('[data-testid="decided-toggle"]');
     expect(toggle.attributes("title")).toBe("Decided");
     expect(toggle.attributes("aria-label")).toBe("Decided");
     expect(toggle.attributes("aria-pressed")).toBe("false");
-    expect(toggle.find(".qdecided-label").text()).toBe("Decided");
+    expect(toggle.find(".dq-toggle-label").text()).toBe("Decided");
 
     listGroups.mockResolvedValue({
       groups: [],
@@ -1124,7 +1150,7 @@ describe("DuplicateQueue - the shell chrome", () => {
     });
     await store.toggleDecided();
     await wrapper.vm.$nextTick();
-    const flipped = wrapper.find(".dq-toolbar .qdecided");
+    const flipped = wrapper.find('[data-testid="decided-toggle"]');
     expect(flipped.attributes("title")).toBe("Back to review");
     expect(flipped.attributes("aria-label")).toBe("Back to review");
     expect(flipped.attributes("aria-pressed")).toBe("true");
@@ -1136,7 +1162,9 @@ describe("DuplicateQueue - the shell chrome", () => {
   // (WCAG 4.1.2 - a hidden span would leave it empty).
   it("the tier button exposes its label as title and aria-label", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
-    const button = wrapper.find(".dq-tier-wrap .dq-btn");
+    const button = wrapper.find(
+      '.dq-tier-wrap [data-testid="dedup-tier-trigger"]',
+    );
     const label = wrapper.vm.tierLabel;
     expect(label).toBeTruthy();
     expect(button.attributes("title")).toBe(label);
@@ -1899,7 +1927,9 @@ describe("DuplicateQueue - the Decided page", () => {
     });
     await store.toggleDecided();
     await wrapper.vm.$nextTick();
-    await wrapper.find(".dq-tier-wrap .dq-btn").trigger("click");
+    await wrapper
+      .find('.dq-tier-wrap [data-testid="dedup-tier-trigger"]')
+      .trigger("click");
 
     await wrapper.find(".dq").trigger("keydown", { key: "Escape" });
     expect(wrapper.findComponent({ name: "DedupTierMenu" }).exists()).toBe(
@@ -1966,7 +1996,9 @@ describe("DuplicateQueue - the Decided page", () => {
     );
 
     reopenGroup.mockResolvedValue({ group_returned_to_queue: true });
-    const clearButtons = wrapper.findAll(".gbtn");
+    const clearButtons = wrapper.findAll(
+      '[data-testid="dedup-clear-decision"]',
+    );
     const bulkClear = clearButtons.find((b) =>
       b.text().includes("Clear 2 decisions"),
     );
@@ -2136,7 +2168,7 @@ describe("DuplicateQueue - filters in the URL", () => {
     expect(wrapper.text()).toContain("Queue clear");
     startScan.mockClear();
 
-    await wrapper.find(".qdecided").trigger("click");
+    await wrapper.find('[data-testid="decided-toggle"]').trigger("click");
     await flushPromises();
     await wrapper.vm.$nextTick();
     await flushPromises();
@@ -2197,7 +2229,9 @@ describe("DuplicateQueue - multi-select", () => {
     // The bulk scope is stated twice: once in the header, once on the very
     // buttons that will act.
     expect(wrapper.find(".qselchip").text()).toContain("2 groups selected");
-    const stackBtn = wrapper.findAll(".grow")[0].find(".gbtn--stack");
+    const stackBtn = wrapper
+      .findAll(".grow")[0]
+      .find('[data-testid="dedup-stack"]');
     expect(stackBtn.text()).toContain("Stack 2 groups");
 
     applyVerdictBatch.mockResolvedValue({
@@ -2231,7 +2265,10 @@ describe("DuplicateQueue - multi-select", () => {
         }),
     );
 
-    await wrapper.findAll(".grow")[0].find(".gbtn--stack").trigger("click");
+    await wrapper
+      .findAll(".grow")[0]
+      .find('[data-testid="dedup-stack"]')
+      .trigger("click");
     await vi.waitFor(() => expect(resolveBatch).toBeTypeOf("function"));
     await wrapper.vm.$nextTick();
 
@@ -2286,12 +2323,22 @@ describe("DuplicateQueue - multi-select", () => {
 
     const fresh = wrapper.findAll(".grow");
     // Both selected rows say where Enter acts, because it acts on both.
-    expect(fresh[0].find(".gbtn--stack kbd").exists()).toBe(true);
-    expect(fresh[1].find(".gbtn--stack kbd").exists()).toBe(true);
-    expect(fresh[2].find(".gbtn--stack kbd").exists()).toBe(false);
+    expect(fresh[0].find('[data-testid="dedup-stack"] kbd').exists()).toBe(
+      true,
+    );
+    expect(fresh[1].find('[data-testid="dedup-stack"] kbd').exists()).toBe(
+      true,
+    );
+    expect(fresh[2].find('[data-testid="dedup-stack"] kbd').exists()).toBe(
+      false,
+    );
     // Compare opens ONE group, so its chip stays with the keyboard cursor.
-    expect(fresh[0].find(".gcompare kbd").exists()).toBe(false);
-    expect(fresh[1].find(".gcompare kbd").exists()).toBe(true);
+    expect(fresh[0].find('[data-testid="dedup-compare"] kbd').exists()).toBe(
+      false,
+    );
+    expect(fresh[1].find('[data-testid="dedup-compare"] kbd').exists()).toBe(
+      true,
+    );
     // The old explicit label is gone.
     expect(wrapper.text()).not.toContain("Keyboard acts here");
   });
@@ -2309,7 +2356,9 @@ describe("DuplicateQueue - multi-select", () => {
     stackGroup.mockResolvedValue({});
     // The third row is OUTSIDE the selection: its button must say and do the
     // single-group thing.
-    const outsideBtn = wrapper.findAll(".grow")[2].find(".gbtn--stack");
+    const outsideBtn = wrapper
+      .findAll(".grow")[2]
+      .find('[data-testid="dedup-stack"]');
     expect(outsideBtn.text()).not.toContain("groups");
     await outsideBtn.trigger("click");
     await wrapper.vm.$nextTick();
@@ -2426,7 +2475,7 @@ describe("DuplicateQueue - the tier gate", () => {
     const { wrapper } = await mountQueue([group("g1")], {
       byTier: { exact: 1204, near: 96, embedding: 9 },
     });
-    wrapper.find(".dq-btn").trigger("click");
+    wrapper.find('[data-testid="dedup-tier-trigger"]').trigger("click");
     await wrapper.vm.$nextTick();
 
     const rows = wrapper.findAll(".tierrow");
@@ -2452,7 +2501,9 @@ describe("DuplicateQueue - a read-only session", () => {
     const { wrapper, store } = await mountQueue([group("g1")]);
     store.exactCount = 12;
     await wrapper.vm.$nextTick();
-    expect(wrapper.find(".dq-btn--accent").exists()).toBe(false);
+    expect(wrapper.find('[data-testid="auto-stack-trigger"]').exists()).toBe(
+      false,
+    );
     wrapper.unmount();
   });
 
@@ -2703,7 +2754,7 @@ describe("DuplicateQueue: the expansion band", () => {
     await badges(wrapper)[0].trigger("click");
     await flushPromises();
 
-    const stackButton = wrapper.find(".gbtn--stack");
+    const stackButton = wrapper.find('[data-testid="dedup-stack"]');
     expect(stackButton.attributes("disabled")).toBeUndefined();
     // The label still names the verdict's outcome over the row's units.
     expect(stackButton.text()).toContain("Add 1 to stack of 4");
@@ -2797,7 +2848,9 @@ describe("DuplicateQueue: the expansion band", () => {
     expect(band.find('[role="alert"]').text()).toContain(
       "The verdict buttons still work",
     );
-    expect(wrapper.find(".gbtn--stack").attributes("disabled")).toBeUndefined();
+    expect(
+      wrapper.find('[data-testid="dedup-stack"]').attributes("disabled"),
+    ).toBeUndefined();
 
     listStackMembers.mockImplementation((stackId) =>
       Promise.resolve(memberPage(stackId)),
@@ -3456,7 +3509,7 @@ describe("DuplicateQueue: the warning chip on a deck in the queue", () => {
     const { wrapper, store } = await mountQueue([groupWithStack("g1", 12)]);
     await store.loadMixedStacks();
     await wrapper.vm.$nextTick();
-    const stackButton = wrapper.find(".gbtn--stack");
+    const stackButton = wrapper.find('[data-testid="dedup-stack"]');
     expect(stackButton.attributes("disabled")).toBeUndefined();
     await stackButton.trigger("click");
     await flushPromises();

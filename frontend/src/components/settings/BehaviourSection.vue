@@ -5,6 +5,7 @@ import { getWorkerProgress } from "../../api/workers";
 import { listTaggers, listTaggerPluginDiagnostics } from "../../api/taggers";
 import { VSlider, VSwitch } from "vuetify/components";
 import PluginsTable from "../widgets/PluginsTable.vue";
+import AppButton from "../widgets/AppButton.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsTwoCol from "./SettingsTwoCol.vue";
 import SettingsFieldBlock from "./SettingsFieldBlock.vue";
@@ -275,7 +276,7 @@ watch(
     >
       <v-switch
         v-model="keepModelsInMemory"
-        color="accent"
+        color="primary"
         density="compact"
         hide-details
         :disabled="keepModelsInMemoryLoading"
@@ -298,7 +299,7 @@ watch(
             :step="VRAM_BUDGET_STEP_GB"
             hide-details
             density="compact"
-            color="accent"
+            color="primary"
             track-color="rgba(var(--v-theme-on-surface), 0.2)"
             :disabled="maxVramGbLoading || maxVramGbHydrating"
           />
@@ -355,9 +356,14 @@ watch(
         </li>
       </ul>
       <div class="settings-tagger-plugin-help">
-        <v-btn variant="text" size="small" prepend-icon="mdi-help-circle-outline" @click="pluginInstallHelpOpen = true">
+        <AppButton
+          variant="ghost"
+          size="sm"
+          icon-left="help-circle-outline"
+          @click="pluginInstallHelpOpen = true"
+        >
           How to install plugins
-        </v-btn>
+        </AppButton>
       </div>
     </SettingsSection>
 
@@ -416,9 +422,9 @@ watch(
         </v-card-text>
         <v-card-actions class="plugin-install-actions">
           <v-spacer />
-          <v-btn variant="text" @click="pluginInstallHelpOpen = false">
+          <AppButton variant="secondary" @click="pluginInstallHelpOpen = false">
             Close
-          </v-btn>
+          </AppButton>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -540,17 +546,12 @@ watch(
   font-weight: var(--weight-medium);
   text-decoration: underline;
   text-underline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .plugin-catalogue-link:hover,
 .plugin-catalogue-link:active {
   text-decoration-thickness: 2px;
-}
-
-.plugin-catalogue-link:focus-visible {
-  border-radius: var(--radius-sm);
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .plugin-install-commands {

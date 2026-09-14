@@ -1336,8 +1336,25 @@ defineExpose({
   opacity: 0.5;
 }
 
-.ate-btn:hover {
-  filter: brightness(1.75);
+/* A translucent fill, so a filled control's hover: the neutral step, never a
+   brightness filter. On the force-dark skin the theme's neutral would darken a
+   dark fill in the light theme, so it takes the on-dark wash instead. */
+.ate-btn:hover:not(:disabled) {
+  background-image: var(--hover-neutral);
+}
+
+.ate--force-dark .ate-btn:hover:not(:disabled) {
+  background-image: linear-gradient(
+    rgba(var(--v-theme-on-dark-surface), 0.16),
+    rgba(var(--v-theme-on-dark-surface), 0.16)
+  );
+}
+
+/* The force-dark skin stays dark in both themes, so its focus ring is the
+   on-dark ink rather than the theme's. */
+.ate--force-dark .ate-btn:focus-visible,
+.ate-menu.force-dark :focus-visible {
+  outline-color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .ate-label {
@@ -1420,7 +1437,7 @@ defineExpose({
 }
 
 .ate-menu.force-dark .ate-item:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 
 .ate-menu.force-dark .ate-item-count {
@@ -1461,6 +1478,16 @@ defineExpose({
   margin-bottom: var(--space-3);
 }
 
+/* The input draws no ring of its own; the search box it fills does. */
+.ate-search:focus-within {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
+}
+
+.ate-menu.force-dark .ate-search:focus-within {
+  outline-color: rgb(var(--v-theme-on-dark-surface));
+}
+
 .ate-search input {
   background: transparent;
   border: none;
@@ -1491,7 +1518,7 @@ defineExpose({
 }
 
 .ate-item--checked .ate-item-check {
-  color: rgb(var(--v-theme-primary));
+  color: var(--selected-ink);
 }
 
 .ate-item-name {
@@ -1507,7 +1534,7 @@ defineExpose({
 }
 
 .ate-item:hover {
-  background: rgba(var(--v-theme-on-surface), 0.08);
+  background: var(--hover-wash);
 }
 
 .ate-item--disabled {
@@ -1525,39 +1552,16 @@ defineExpose({
   color: rgba(var(--v-theme-on-surface), 0.5);
 }
 
-/* The create row. Colour is one of THREE redundant channels (WCAG 1.4.1), the
-   others being the mdi-account-plus icon and the pinned position below the
-   hairline; the trailing ellipsis stays for the same reason.
-
-   Weight 500 is load-bearing, not decoration: any colour highlight is darker
-   than its near-white neighbours in greyscale, and without the extra weight the
-   row reads as disabled. Not 600.
-
-   On the dark panel plain `primary` (#567309) is only 2.79:1 and unusable at
-   this text size, so the force-dark skin switches to `dark-surface-primary`
-   (#8EA604): 5.50:1 over the light theme's #242628 and 6.25:1 over the dark
-   theme's #181b20. The 0.12 hover alpha is a ceiling, not taste: the family's
-   neutral 0.08 hover drops the olive to 4.45:1, and 0.14 of the tint drops it
-   to 4.40:1. */
+/* The create row is an action, not a chosen value, so it takes no olive
+   (olive selects). It is told apart by the mdi-account-plus icon, the pinned
+   position below the hairline, the trailing ellipsis and weight 500, and its
+   words stay ink, which keeps them legible on the hover wash. */
 .ate-item--create {
-  color: rgb(var(--v-theme-primary));
   font-weight: var(--weight-medium);
 }
 
 .ate-item--create .ate-item-check {
   color: currentColor;
-}
-
-.ate-item--create:hover:not(.ate-item--disabled) {
-  background: rgba(var(--v-theme-primary), 0.1);
-}
-
-.ate-menu.force-dark .ate-item--create {
-  color: rgb(var(--v-theme-dark-surface-primary));
-}
-
-.ate-menu.force-dark .ate-item--create:hover:not(.ate-item--disabled) {
-  background: rgba(var(--v-theme-dark-surface-primary), 0.12);
 }
 
 /* `on-surface` flips with the theme but `dark-surface` does not, so without
@@ -1652,7 +1656,7 @@ defineExpose({
 }
 
 .ate--flyout .ate-btn:hover:not(:disabled) {
-  background: rgba(var(--v-theme-on-surface), 0.08);
+  background: var(--hover-wash);
 }
 
 .ate--flyout .ate-chevron {
@@ -1699,6 +1703,14 @@ defineExpose({
   border-radius: 0;
   padding: var(--space-2) var(--space-5);
   font-size: var(--text-sm);
+}
+
+/* Flush rows edge to edge in a menu: no room for the ring's gap, so the inset
+   form. */
+.ate--flyout .ate-btn:focus-visible,
+.ate-menu.flyout .ate-item:focus-visible {
+  box-shadow: var(--focus-ring-inset);
+  outline: none;
 }
 
 .ate--flyout .ate-item-name {

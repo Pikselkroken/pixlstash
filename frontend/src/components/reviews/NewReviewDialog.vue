@@ -443,6 +443,10 @@ async function create() {
   flex-direction: column;
   gap: 14px;
 }
+/* Dark in both themes: the global ring's width and gap, in the on-dark ink. */
+.rs-dialog :focus-visible {
+  outline-color: rgb(var(--v-theme-on-dark-surface));
+}
 .rs-dialog-title {
   font-size: 16px;
   font-weight: var(--weight-bold);
@@ -506,9 +510,12 @@ async function create() {
   font-weight: var(--weight-semibold);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
+/* A chosen option, not an action: the dark-surface olive wash and edge, words
+   in the surface's ink. */
 .rs-dialog-order-btn--on {
-  background: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
+  background: rgba(var(--v-theme-dark-surface-primary), 0.2);
+  box-shadow: inset 0 0 0 1px rgb(var(--v-theme-dark-surface-primary));
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 .rs-dialog-chips {
   display: flex;
@@ -532,9 +539,9 @@ async function create() {
   color: rgb(var(--v-theme-on-dark-surface));
 }
 .rs-dialog-chip--active {
-  border-color: rgb(var(--v-theme-accent));
-  background: color-mix(in srgb, rgb(var(--v-theme-accent)) 15%, transparent);
-  color: rgb(var(--v-theme-accent));
+  border-color: rgb(var(--v-theme-dark-surface-primary));
+  background: rgba(var(--v-theme-dark-surface-primary), 0.2);
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 .rs-dialog-chip--open {
   opacity: 0.55;
@@ -652,15 +659,14 @@ async function create() {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The keyboard's current option reads as hover; the chosen value is marked
+   by its olive check, and its words stay ink. */
 .rs-listbox-option--active {
-  background: rgba(var(--v-theme-on-dark-surface), 0.12);
-}
-.rs-listbox-option--selected {
-  color: rgb(var(--v-theme-accent));
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 .rs-listbox-check {
   flex-shrink: 0;
-  color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-dark-surface-primary));
 }
 /* Locked sets: greyed, non-interactive cursor, lock glyph. Kept legible enough
    to read the name (why it's disabled), per the disabled-state token guidance. */

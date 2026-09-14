@@ -4319,11 +4319,9 @@ describe("the app-wide toolbar tail", () => {
     const settings = wrapper.find("button[title='Settings']").element;
     const separator = wrapper.find(".shelf-bar-cluster .bar-separator").element;
     // The Show menu - the LAST of this view's own controls, and the one the
-    // tail has to come after. (`.bar-btn--boxed` alone would find the stack
-    // sweep, which sits outside the cluster and proves nothing.)
-    const showBtn = wrapper
-      .findAll(".shelf-bar-cluster .bar-btn--boxed")
-      .at(-1).element;
+    // tail has to come after. (Every bar button is `--boxed` now, the tail's
+    // own included, so the Show button is found by name.)
+    const showBtn = wrapper.find(".shelf-bar-cluster .shelf-show-btn").element;
     const follows = (a, b) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 

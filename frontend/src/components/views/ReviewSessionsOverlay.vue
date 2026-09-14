@@ -558,6 +558,17 @@ onUnmounted(() => {
   color: rgb(var(--v-theme-on-dark-surface));
 }
 
+/* Every surface of the review overlay stays dark in both themes, so the global
+   focus ring keeps its width and gap but takes the on-dark ink: the theme's
+   ink is near-black in light and would vanish here. One rule for the rail, the
+   board, the session and its cards, so no child paints its own. The tag panel
+   (`.rs-tag-apply`) is a themed surface and keeps the global colour. */
+.rs-shell :deep(:focus-visible),
+.rs-keys :focus-visible,
+.rs-zoom :focus-visible {
+  outline-color: rgb(var(--v-theme-on-dark-surface));
+}
+
 /* Positioning anchor only now - the visible bottom-right "Apply tags" button
    that used to live here was removed as a duplicate of each card's
    bottom-left `.rs-manual-tag` button (the surviving entry point); the panel
