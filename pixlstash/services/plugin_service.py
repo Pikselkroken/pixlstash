@@ -75,7 +75,8 @@ async def run_plugin_on_pictures(
 
     Raises:
         ValueError: If the plugin name is not found.
-        RuntimeError: If plugin execution fails with an unexpected error.
+        RuntimeError: If plugin execution fails with an unexpected error,
+            including a plugin raising ``SystemExit`` or ``KeyboardInterrupt``.
     """
     manager = get_image_plugin_manager()
     manager.reload()
@@ -161,6 +162,24 @@ async def run_plugin_on_pictures(
             },
         )
         raise RuntimeError(str(exc)) from exc
+    except (SystemExit, KeyboardInterrupt) as exc:
+        # From the plugin: its ``sys.exit()``, argparse, or a KeyboardInterrupt
+        # it raised. These are the two exceptions asyncio lets out of the event
+        # loop, so re-raised they would stop the server. Neither is the owner
+        # pressing Ctrl+C: uvicorn turns SIGINT into a graceful shutdown, not an
+        # exception raised into a request. The run fails like any other.
+        message = f"{type(exc).__name__}({exc})"
+        logger.warning("Plugin run for %r raised %s", name, message)
+        vault.notify(
+            EventType.PLUGIN_PROGRESS,
+            {
+                "run_id": plugin_run_id,
+                "plugin": name,
+                "status": "failed",
+                "message": message,
+            },
+        )
+        raise RuntimeError(message) from exc
 
     vault.notify(
         EventType.PLUGIN_PROGRESS,

@@ -36,6 +36,17 @@ class QueueType(str, Enum):
     GPU = "gpu"
 
 
+class TaskInterruptedError(RuntimeError):
+    """A task's ``_run_task`` raised an exception that is not an ``Exception``.
+
+    ``SystemExit`` (``sys.exit()``, ``exit()``, argparse), ``KeyboardInterrupt``,
+    or any other ``BaseException`` subclass outside ``Exception``.
+    :meth:`BaseTask.run` raises this in its place, with the original as
+    ``__cause__``, so the task is recorded as failed and the worker thread that
+    ran it keeps running.
+    """
+
+
 class BaseTask(ABC):
     """In-memory task unit executed by the TaskRunner.
 
@@ -99,6 +110,13 @@ class BaseTask(ABC):
         Returns:
             Whatever ``_run_task`` returned, or ``None`` when the task was
             cancelled before it started.
+
+        Raises:
+            TaskInterruptedError: ``_run_task`` raised something that is not an
+                ``Exception``, such as ``SystemExit``; the original is its
+                ``__cause__``.
+            Exception: Whatever else ``_run_task`` raised, after any GPU
+                out-of-memory retries.
         """
         try:
             if self._cancel_event.is_set():
@@ -143,6 +161,23 @@ class BaseTask(ABC):
                     )
                     if on_vram_oom is not None:
                         on_vram_oom(self, attempt, exc)
+                except BaseException as exc:
+                    # We want to capture a third-party plugin's sys.exit().
+                    # TaskRunner._run catches only Exception, so re-raised as it
+                    # is, this would end the worker thread, and on Apple Metal
+                    # no other thread may run GPU work.
+                    logger.warning(
+                        "Task %s (%s) raised %s, which is not an Exception; "
+                        "recording the task as failed so its worker keeps running.",
+                        self.id,
+                        self.type,
+                        type(exc).__name__,
+                        exc_info=exc,
+                    )
+                    raise TaskInterruptedError(
+                        f"Task {self.id} ({self.type}) raised "
+                        f"{type(exc).__name__}({exc})"
+                    ) from exc
         except Exception as exc:
             self.error = str(exc)
             self.status = TaskStatus.FAILED
