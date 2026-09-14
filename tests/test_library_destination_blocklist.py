@@ -29,11 +29,16 @@ would look exactly like the fix working.
 import gc
 import json
 import os
+import sqlite3
 import tempfile
+import threading
 from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
+
+from pixlstash.cli import EXIT_OK
+from pixlstash.cli import main as cli_main
 
 from pixlstash.server import Server
 from pixlstash.services import folder_structure_commit_service as svc
@@ -369,8 +374,113 @@ def test_a_library_may_not_overlap_a_watch_or_reference_folder(client, workspace
         assert inspected.json()["can_add"] is False, inspected.json()
         refused = client.post("/libraries", json={"path": folder})
         assert refused.status_code == 409, refused.text
-        assert "watch or reference folders" in refused.json().get("detail", "")
+        assert "watch or reference folder" in refused.json().get("detail", "")
 
     # Positive control: a free folder is still added.
     free = _mkdir(workspace, "free-library-folder")
     assert client.post("/libraries", json={"path": free}).status_code == 201
+
+
+def test_the_cli_library_verbs_apply_the_same_rule(client, server, workspace):
+    """``libraries create`` and ``libraries attach`` call the registry directly,
+    so the rule lives there rather than in ``POST /libraries`` (#1223)."""
+    hub = server.hub.path
+    unregistered_vault = _mkdir(workspace, "watched-parent-of-a-vault", "vault")
+    made = server.library_registry.create(unregistered_vault)
+    with server.hub.transaction() as conn:
+        conn.execute("DELETE FROM library WHERE id = ?", (made.id,))
+    watched = os.path.dirname(unregistered_vault)
+    assert _add_import_folder(client, watched, "cli-watched").status_code == 200
+
+    nested = os.path.join(watched, "created-by-the-cli")
+    assert cli_main(["--hub", hub, "libraries", "create", nested]) != EXIT_OK
+    assert not os.path.exists(os.path.join(nested, "vault.db"))
+    assert cli_main(["--hub", hub, "libraries", "attach", unregistered_vault]) != (
+        EXIT_OK
+    )
+
+    # Positive control: the CLI still creates a library in a free folder.
+    free = os.path.join(workspace, "created-by-the-cli-freely")
+    assert cli_main(["--hub", hub, "libraries", "create", free]) == EXIT_OK
+
+
+def test_a_watch_folder_of_another_library_blocks_a_library_too(
+    client, server, workspace
+):
+    """Every registered library's watch and reference folders count, read from
+    its vault file, not only the active library's: a switch must not open a
+    way around the rule, and the check must not depend on which vault is open.
+    """
+    other = server.library_registry.create(
+        os.path.join(workspace, "library-with-its-own-watch-folder"), "OwnWatch"
+    )
+    their_watch = _mkdir(workspace, "watched-by-another-library")
+    conn = sqlite3.connect(os.path.join(other.path, "vault.db"))
+    try:
+        conn.execute(
+            "INSERT INTO import_folder (folder, label, delete_after_import) "
+            "VALUES (?, ?, 0)",
+            (their_watch, "theirs"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    refused = client.post("/libraries", json={"path": _mkdir(their_watch, "a-library")})
+    assert refused.status_code == 409, refused.text
+    assert "OwnWatch" in refused.json().get("detail", "")
+
+
+def test_a_library_and_a_watch_folder_added_at_once_cannot_both_land(
+    client, server, workspace, monkeypatch
+):
+    """The check and the write are one step (#1223). A library add paused just
+    after its check, inside ``create``, must keep a watch folder around it
+    waiting, and that watch folder must then be refused rather than accepted
+    against the snapshot it read before the library existed."""
+    watched = _mkdir(workspace, "raced-watch-folder")
+    nested = _mkdir(watched, "raced-library")
+    registry = server.library_registry
+    original = registry.refuse_overlapping_watch_or_reference_folder
+    checked, release = threading.Event(), threading.Event()
+    calls = []
+
+    def pausing_check(folder):
+        original(folder)
+        calls.append(folder)
+        # The first call is the picker inspection, outside the lock; the second
+        # is `create`'s own, under it.
+        if len(calls) == 2:
+            checked.set()
+            release.wait(10)
+
+    monkeypatch.setattr(
+        registry, "refuse_overlapping_watch_or_reference_folder", pausing_check
+    )
+    results = {}
+    adding_library = threading.Thread(
+        target=lambda: results.update(
+            library=client.post("/libraries", json={"path": nested})
+        )
+    )
+    adding_watch = threading.Thread(
+        target=lambda: results.update(
+            watch=_add_import_folder(client, watched, "raced-watch")
+        )
+    )
+    adding_library.start()
+    try:
+        assert checked.wait(10), "the library add never reached its check"
+        adding_watch.start()
+        adding_watch.join(0.5)
+        assert adding_watch.is_alive(), (
+            "the watch folder was written while a library add held its check"
+        )
+    finally:
+        release.set()
+        adding_library.join(10)
+        if adding_watch.ident is not None:
+            adding_watch.join(10)
+
+    assert results["library"].status_code == 201, results["library"].text
+    assert results["watch"].status_code == 409, results["watch"].text

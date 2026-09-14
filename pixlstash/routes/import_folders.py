@@ -13,7 +13,10 @@ from pixlstash.db_models.import_folder import ImportFolder
 from pixlstash.db_models.picture import Picture
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
-from pixlstash.utils.library_roots import refuse_folder_overlapping_a_library
+from pixlstash.utils.library_roots import (
+    holding_folder_overlap_lock,
+    refuse_folder_overlapping_a_library,
+)
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 
 logger = get_logger(__name__)
@@ -143,6 +146,7 @@ def create_router(server) -> APIRouter:
         response_model=ImportFolderResponse,
         tags=["folders"],
     )
+    @holding_folder_overlap_lock
     def create_import_folder(
         request: Request,
         payload: ImportFolderCreateRequest = Body(...),

@@ -15,9 +15,11 @@ cannot interleave their way past them.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import secrets
 import sqlite3
+import threading
 import uuid as uuid_module
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -117,6 +119,18 @@ class LibraryNotFoundError(LibraryError):
 
 class ActiveLibraryError(LibraryError):
     """The operation is refused because the library is the active one."""
+
+
+class LibraryOverlapError(LibraryError):
+    """The folder overlaps a registered library's watch or reference folder."""
+
+
+#: Held across the overlap check and the write for every registration a library
+#: folder and a watch or reference folder can collide on (#1223): the library
+#: verbs here and the watch and reference folder routes. Without it two
+#: requests each pass the other's check and both write. In-process only: a CLI
+#: process racing a running server is not serialised.
+FOLDER_OVERLAP_LOCK = threading.RLock()
 
 
 def new_library_uuid() -> str:
@@ -294,6 +308,78 @@ def read_vault_uuid(folder: str) -> Optional[str]:
         return None
     finally:
         conn.close()
+
+
+def read_vault_folder_roots(folder: str) -> list[str]:
+    """The watch (import) and reference folders the library at *folder* records.
+
+    Read-only, straight from the vault file, so the answer covers every
+    registered library rather than only the one the server has open.
+
+    Returns:
+        The folders as stored; empty when the folder holds no vault file (an
+        unplugged drive) or one that is not a database, neither of which
+        anything can be reading right now.
+
+    Raises:
+        LibraryError: The vault could not be read just now (locked, busy). This
+            list is a blocklist, so "could not read" must refuse, not permit.
+    """
+    vault_path = next(
+        (
+            path
+            for path in (
+                os.path.join(folder, VAULT_FILENAME),
+                os.path.join(folder, TEMP_VAULT_FILENAME),
+            )
+            if os.path.isfile(path)
+        ),
+        None,
+    )
+    if vault_path is None:
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{vault_path}?mode=ro", uri=True, timeout=5)
+        try:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            return [
+                row[0]
+                for table in ("import_folder", "reference_folder")
+                if table in tables
+                for row in conn.execute(f"SELECT folder FROM {table}")
+                if row[0]
+            ]
+        finally:
+            conn.close()
+    except sqlite3.OperationalError as exc:
+        # Locked, busy, unreadable right now: the vault may be perfectly good
+        # and in use, so its folders are unknown rather than absent.
+        logger.warning(
+            "Could not read the watch and reference folders of %s: %s",
+            vault_path,
+            exc,
+        )
+        raise LibraryError(
+            f"Could not read the watch and reference folders of the library at "
+            f"{folder}, so this folder cannot be shown to be outside them. Try "
+            "again in a moment."
+        ) from exc
+    except sqlite3.DatabaseError as exc:
+        # Not a database at all: PixlStash cannot open this library either, so
+        # nothing is watching or scanning its folders. Refusing here would let
+        # one broken folder block every library add.
+        logger.warning(
+            "Ignoring the watch and reference folders of %s, which is not a "
+            "readable database: %s",
+            vault_path,
+            exc,
+        )
+        return []
 
 
 def _fingerprints_match(recorded: Optional[str], observed: Optional[str]) -> bool:
@@ -475,8 +561,52 @@ class LibraryRegistry:
                 overlaps.append(library)
         return overlaps
 
+    def refuse_overlapping_watch_or_reference_folder(self, folder: str) -> None:
+        """Refuse *folder* when it equals, sits inside or contains a watch or
+        reference folder of any registered library, detached included (#1223).
+
+        A watch folder imports everything below it and a reference folder scans
+        it, so a library there would have its pictures imported, or deleted
+        after import, by another subsystem.
+
+        Raises:
+            LibraryOverlapError: It overlaps one; the message names the library.
+            LibraryError: A library's vault could not be read.
+        """
+        resolved = os.path.normcase(resolve_path(folder))
+        for library in self.list_libraries(include_detached=True):
+            for root in read_vault_folder_roots(library.path):
+                other = os.path.normcase(resolve_path(root))
+                if _is_within(resolved, other) or _is_within(other, resolved):
+                    raise LibraryOverlapError(
+                        "This folder overlaps a watch or reference folder of "
+                        f'the library "{library.name}". A library cannot sit '
+                        "inside one of those, or contain one. Choose another "
+                        "folder, or remove that watch or reference folder first."
+                    )
+
+    @contextlib.contextmanager
+    def _folder_overlap_guard(self, folder: str, enabled: bool):
+        """Hold :data:`FOLDER_OVERLAP_LOCK` and refuse an overlap, when *enabled*.
+
+        Off only for the verbs no person aims: start-up registering its own
+        library, the scratch library a discard lands on, and a restore putting
+        back what an archive held. A refusal there wedges boot or a discard.
+        """
+        if not enabled:
+            yield
+            return
+        with FOLDER_OVERLAP_LOCK:
+            self.refuse_overlapping_watch_or_reference_folder(folder)
+            yield
+
     def attach(
-        self, folder: str, name: str | None = None, *, unique_name: bool = True
+        self,
+        folder: str,
+        name: str | None = None,
+        *,
+        unique_name: bool = True,
+        check_folder_overlap: bool = True,
     ) -> Library:
         """Register an existing library folder.
 
@@ -499,12 +629,15 @@ class LibraryRegistry:
             NotAVaultError: The folder is not a vault.
             LibraryExistsError: The path is already registered, or the name is
                 and *unique_name* is set.
+            LibraryOverlapError: The folder overlaps a registered library's watch
+                or reference folder (skipped when *check_folder_overlap* is off).
         """
-        resolved = resolve_path(folder)
-        validate_vault_folder(resolved)
-        return self._register(
-            resolved, name or os.path.basename(resolved), unique_name=unique_name
-        )
+        with self._folder_overlap_guard(folder, check_folder_overlap):
+            resolved = resolve_path(folder)
+            validate_vault_folder(resolved)
+            return self._register(
+                resolved, name or os.path.basename(resolved), unique_name=unique_name
+            )
 
     def register_pending(
         self,
@@ -542,7 +675,12 @@ class LibraryRegistry:
         )
 
     def create(
-        self, folder: str, name: str | None = None, *, pending_import: bool = False
+        self,
+        folder: str,
+        name: str | None = None,
+        *,
+        pending_import: bool = False,
+        check_folder_overlap: bool = True,
     ) -> Library:
         """Create a folder, initialise a fresh vault in it, and register it.
 
@@ -559,61 +697,64 @@ class LibraryRegistry:
         Raises:
             LibraryExistsError: The path or name is already registered, or the
                 folder already holds a vault (use ``attach``).
+            LibraryOverlapError: The folder overlaps a registered library's watch
+                or reference folder (skipped when *check_folder_overlap* is off).
         """
-        resolved = resolve_path(folder)
-        filename = TEMP_VAULT_FILENAME if pending_import else VAULT_FILENAME
-        vault_path = os.path.join(resolved, filename)
-        if os.path.exists(os.path.join(resolved, VAULT_FILENAME)):
-            raise LibraryExistsError(
-                f"{resolved} already contains a {VAULT_FILENAME}. Use `attach` "
-                "to register it."
-            )
-        # Either an import running right now - a second process, the CLI - or
-        # one that died without its row, which the startup sweep clears. Refuse
-        # rather than open it: this registry cannot tell the two apart, and the
-        # live one is holding that file.
-        if os.path.exists(vault_path):
-            raise LibraryExistsError(
-                f"{resolved} is already being imported, or holds a {filename} "
-                "left by an import that did not finish."
-            )
+        with self._folder_overlap_guard(folder, check_folder_overlap):
+            resolved = resolve_path(folder)
+            filename = TEMP_VAULT_FILENAME if pending_import else VAULT_FILENAME
+            vault_path = os.path.join(resolved, filename)
+            if os.path.exists(os.path.join(resolved, VAULT_FILENAME)):
+                raise LibraryExistsError(
+                    f"{resolved} already contains a {VAULT_FILENAME}. Use `attach` "
+                    "to register it."
+                )
+            # Either an import running right now - a second process, the CLI - or
+            # one that died without its row, which the startup sweep clears. Refuse
+            # rather than open it: this registry cannot tell the two apart, and the
+            # live one is holding that file.
+            if os.path.exists(vault_path):
+                raise LibraryExistsError(
+                    f"{resolved} is already being imported, or holds a {filename} "
+                    "left by an import that did not finish."
+                )
 
-        # Before anything is written. `_register` would refuse the name at the
-        # end anyway, but by then the vault exists, and a refused `create` that
-        # leaves a vault behind turns the folder into an `attach` case the owner
-        # never asked for.
-        cleaned = (name or "").strip() or os.path.basename(resolved)
-        self._refuse_duplicate_name(cleaned)
+            # Before anything is written. `_register` would refuse the name at the
+            # end anyway, but by then the vault exists, and a refused `create` that
+            # leaves a vault behind turns the folder into an `attach` case the owner
+            # never asked for.
+            cleaned = (name or "").strip() or os.path.basename(resolved)
+            self._refuse_duplicate_name(cleaned)
 
-        # Every MISSING component 0700, not only the leaf (W21: makedirs'
-        # mode stops at the leaf, so a deep new path left 0775 intermediates
-        # under umask 002 and the guarded open refused them). Existing
-        # directories keep their modes: `POST /libraries` starts a library in a
-        # folder of pictures the owner already had, and narrowing that folder to
-        # 0700 behind their back takes read access away from every other account
-        # and every other program that had it. Nothing needs it - the vault file
-        # itself is created 0600, and `TrustedSQLiteLocation` refuses only a
-        # group/world-*writable* directory, which the startup permission scan
-        # offers to repair with the owner's consent (`startup_permissions.py`).
-        # `mkdir(mode=0o700)` is not raised by a umask, so what this call
-        # creates is 0700 without a chmod after it.
-        mkdir_private(Path(resolved))
+            # Every MISSING component 0700, not only the leaf (W21: makedirs'
+            # mode stops at the leaf, so a deep new path left 0775 intermediates
+            # under umask 002 and the guarded open refused them). Existing
+            # directories keep their modes: `POST /libraries` starts a library in a
+            # folder of pictures the owner already had, and narrowing that folder to
+            # 0700 behind their back takes read access away from every other account
+            # and every other program that had it. Nothing needs it - the vault file
+            # itself is created 0600, and `TrustedSQLiteLocation` refuses only a
+            # group/world-*writable* directory, which the startup permission scan
+            # offers to repair with the owner's consent (`startup_permissions.py`).
+            # `mkdir(mode=0o700)` is not raised by a umask, so what this call
+            # creates is 0700 without a chmod after it.
+            mkdir_private(Path(resolved))
 
-        # Local import: pulls in the ORM and the image stack (numpy, PIL), which
-        # `list`, `attach` and `detach` have no use for. Importing it at module
-        # scope would make every CLI invocation pay for the one verb that needs
-        # it. Sanctioned by CLAUDE.md's startup-time exception.
-        from pixlstash.database import VaultDatabase
+            # Local import: pulls in the ORM and the image stack (numpy, PIL), which
+            # `list`, `attach` and `detach` have no use for. Importing it at module
+            # scope would make every CLI invocation pay for the one verb that needs
+            # it. Sanctioned by CLAUDE.md's startup-time exception.
+            from pixlstash.database import VaultDatabase
 
-        logger.info("Initialising a new vault at %s", vault_path)
-        vault = VaultDatabase(vault_path)
-        try:
-            registered = self._register(
-                resolved, cleaned, pending_import=pending_import
-            )
-        finally:
-            vault.close()
-        return registered
+            logger.info("Initialising a new vault at %s", vault_path)
+            vault = VaultDatabase(vault_path)
+            try:
+                registered = self._register(
+                    resolved, cleaned, pending_import=pending_import
+                )
+            finally:
+                vault.close()
+            return registered
 
     def finish_pending_import(self, name_or_id: str | int) -> Library:
         """Clear the pending mark: this library's first import finished.
@@ -829,7 +970,13 @@ class LibraryRegistry:
         logger.info("Active library is now %s (id=%d)", library.name, library.id)
         return self.get(library.id)
 
-    def relocate(self, name_or_id: str | int, new_folder: str) -> Library:
+    def relocate(
+        self,
+        name_or_id: str | int,
+        new_folder: str,
+        *,
+        check_folder_overlap: bool = True,
+    ) -> Library:
         """Point an existing library at a folder that has moved.
 
         The registration keeps its uuid, so every token stamped with it keeps
@@ -840,44 +987,47 @@ class LibraryRegistry:
         Raises:
             NotAVaultError: The new folder does not hold a vault.
             LibraryExistsError: Another library is registered at that path.
+            LibraryOverlapError: The folder overlaps a registered library's watch
+                or reference folder (skipped when *check_folder_overlap* is off).
         """
-        library = self.get(name_or_id)
-        resolved = resolve_path(new_folder)
-        validate_vault_folder(resolved)
+        with self._folder_overlap_guard(new_folder, check_folder_overlap):
+            library = self.get(name_or_id)
+            resolved = resolve_path(new_folder)
+            validate_vault_folder(resolved)
 
-        clash = self._find_by_path(resolved)
-        if clash is not None and clash.id != library.id:
-            raise LibraryExistsError(
-                f'{resolved} is already registered as "{clash.name}".'
-            )
+            clash = self._find_by_path(resolved)
+            if clash is not None and clash.id != library.id:
+                raise LibraryExistsError(
+                    f'{resolved} is already registered as "{clash.name}".'
+                )
 
-        fingerprint = read_vault_uuid(resolved)
-        if not _fingerprints_match(library.vault_uuid, fingerprint):
-            logger.warning(
-                "Relocating %s to %s, where the library carries a different "
-                "fingerprint (%s, expected %s). Proceeding because the move was "
-                "explicit, but the tokens stamped for this library will now "
-                "serve the content at the new path.",
+            fingerprint = read_vault_uuid(resolved)
+            if not _fingerprints_match(library.vault_uuid, fingerprint):
+                logger.warning(
+                    "Relocating %s to %s, where the library carries a different "
+                    "fingerprint (%s, expected %s). Proceeding because the move was "
+                    "explicit, but the tokens stamped for this library will now "
+                    "serve the content at the new path.",
+                    library.name,
+                    resolved,
+                    fingerprint,
+                    library.vault_uuid,
+                )
+
+            with self._hub.transaction() as conn:
+                conn.execute(
+                    "UPDATE library SET path = ?, vault_uuid = COALESCE(?, vault_uuid) "
+                    "WHERE id = ?",
+                    (resolved, fingerprint, library.id),
+                )
+            logger.info(
+                "Library %s (uuid=%s) moved from %s to %s",
                 library.name,
+                library.uuid,
+                library.path,
                 resolved,
-                fingerprint,
-                library.vault_uuid,
             )
-
-        with self._hub.transaction() as conn:
-            conn.execute(
-                "UPDATE library SET path = ?, vault_uuid = COALESCE(?, vault_uuid) "
-                "WHERE id = ?",
-                (resolved, fingerprint, library.id),
-            )
-        logger.info(
-            "Library %s (uuid=%s) moved from %s to %s",
-            library.name,
-            library.uuid,
-            library.path,
-            resolved,
-        )
-        return self.get(library.id)
+            return self.get(library.id)
 
     def rename(self, name_or_id: str | int, new_name: str) -> Library:
         """Change a library's label.

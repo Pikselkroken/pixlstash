@@ -36,7 +36,10 @@ from pixlstash.utils.caption_file_utils import (
     writeback_path,
 )
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
-from pixlstash.utils.library_roots import refuse_folder_overlapping_a_library
+from pixlstash.utils.library_roots import (
+    holding_folder_overlap_lock,
+    refuse_folder_overlapping_a_library,
+)
 from pixlstash.utils.library_layout import (
     DEFAULT_LAYOUT,
     folder_name,
@@ -656,6 +659,7 @@ def create_router(server) -> APIRouter:
         response_model=ReferenceFolderResponse,
         tags=["folders"],
     )
+    @holding_folder_overlap_lock
     def create_reference_folder(
         request: Request,
         payload: ReferenceFolderCreateRequest = Body(...),
@@ -770,6 +774,7 @@ def create_router(server) -> APIRouter:
         response_model=ReferenceFolderResponse,
         tags=["folders"],
     )
+    @holding_folder_overlap_lock
     def update_reference_folder(
         folder_id: int,
         request: Request,
@@ -1017,6 +1022,7 @@ def create_router(server) -> APIRouter:
         response_model=RelocateReferenceFolderResponse,
         tags=["folders"],
     )
+    @holding_folder_overlap_lock
     def relocate_reference_folder(
         folder_id: int,
         request: Request,

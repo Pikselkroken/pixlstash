@@ -95,7 +95,10 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.library_layout import Facet
 from pixlstash.utils.media_files import is_hidden_entry, is_supported_media_file
-from pixlstash.utils.library_roots import refuse_folder_overlapping_a_library
+from pixlstash.utils.library_roots import (
+    holding_folder_overlap_lock,
+    refuse_folder_overlapping_a_library,
+)
 from pixlstash.utils.path_utils import path_is_within
 from pixlstash.utils.reference_folder_validator import (
     canonical_path,
@@ -578,6 +581,7 @@ def _commit_owns_this_root(
     )
 
 
+@holding_folder_overlap_lock
 def register_reference_folder(
     server,
     root_path: str,

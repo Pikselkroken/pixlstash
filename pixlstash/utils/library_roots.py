@@ -22,12 +22,15 @@ different acts (#1223):
 * The folder export may not write inside any of these roots.
 * A watch or reference folder may overlap another watch or reference folder,
   but may not equal, sit inside or contain a library's folder; and
-  ``POST /libraries`` refuses a library inside, or around, one of this
-  library's watch or reference folders.
+  a library may not be added inside, or around, a watch or reference folder
+  of any registered library (``LibraryRegistry``, so the CLI too).
 """
+
+import functools
 
 from fastapi import HTTPException
 
+from pixlstash.hub.registry import FOLDER_OVERLAP_LOCK
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.config_service import get_import_folder_paths
 from pixlstash.utils.path_utils import LibraryRootsUnavailable, path_is_within
@@ -48,13 +51,6 @@ FOLDER_OVERLAPS_LIBRARY_DETAIL = (
     "That folder overlaps a library's folder. Watch folders and reference "
     "folders must sit outside every library and must not contain one. Choose "
     "a folder outside your libraries."
-)
-
-#: Said to a library added inside, or around, a watch or reference folder.
-LIBRARY_OVERLAPS_FOLDER_DETAIL = (
-    "This folder overlaps one of this library's watch or reference folders. A "
-    "library cannot sit inside one of those, or contain one. Choose another "
-    "folder, or remove that watch or reference folder first."
 )
 
 #: The lists below are a *blocklist*, so one that cannot be read must refuse.
@@ -196,8 +192,10 @@ def refuse_folder_overlapping_a_library(path: str, server, vault) -> None:
 
     Watch and reference folders may overlap each other; neither may equal, sit
     inside or contain a library's folder, since the library would then index
-    or move the same files the folder does (#1223). The reverse rule, a library
-    inside a watch or reference folder, is enforced by ``POST /libraries``.
+    or move the same files the folder does (#1223). The reverse rule is
+    :meth:`~pixlstash.hub.registry.LibraryRegistry.refuse_overlapping_watch_or_reference_folder`.
+    Callers hold :data:`~pixlstash.hub.registry.FOLDER_OVERLAP_LOCK` from this
+    check until their write commits; see :func:`holding_folder_overlap_lock`.
 
     Raises:
         HTTPException: 503 when the libraries could not be listed, 409 when
@@ -206,3 +204,20 @@ def refuse_folder_overlapping_a_library(path: str, server, vault) -> None:
     for root in _roots_or_503(lambda: library_folders(server, vault), path):
         if path_is_within(path, root) or path_is_within(root, path):
             raise HTTPException(status_code=409, detail=FOLDER_OVERLAPS_LIBRARY_DETAIL)
+
+
+def holding_folder_overlap_lock(func):
+    """Run *func* holding :data:`~pixlstash.hub.registry.FOLDER_OVERLAP_LOCK`.
+
+    For the watch and reference folder writes: the overlap check and the row it
+    protects must be one step, or a concurrent library add passes this check
+    and this write passes its check (#1223). ``functools.wraps`` keeps the
+    signature FastAPI reads.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with FOLDER_OVERLAP_LOCK:
+            return func(*args, **kwargs)
+
+    return wrapper
