@@ -123,7 +123,6 @@ watch(
 <template>
   <AppDialog
     :open="open"
-    :width="520"
     title="Caption files"
     @close="emit('close')"
     @accept="save"
@@ -221,20 +220,19 @@ watch(
   font-size: var(--text-xs);
   line-height: var(--leading-snug);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-  margin: 0 0 var(--space-5);
+  margin: 0;
 }
 
 .captions-dlg__error {
   font-size: var(--text-xs);
   color: rgb(var(--v-theme-error));
-  margin: 0 0 var(--space-4);
+  margin: 0;
 }
 
 .captions-dlg__row {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  margin-bottom: var(--space-4);
 }
 
 .captions-dlg__suffix {

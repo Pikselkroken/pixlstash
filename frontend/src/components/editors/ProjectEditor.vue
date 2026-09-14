@@ -107,7 +107,6 @@ async function deleteProject() {
   <AppDialog
     :open="open"
     :title="project ? 'Edit project' : 'New project'"
-    :width="480"
     @close="emit('close')"
   >
     <div class="project-editor-body">

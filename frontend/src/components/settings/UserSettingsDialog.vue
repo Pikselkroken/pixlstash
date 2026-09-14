@@ -156,7 +156,7 @@ watch(
     :open="dialogOpen"
     title="Settings"
     :subtitle="`v${appVersion}`"
-    :width="820"
+    size="xl"
     :pad-body="false"
     @close="dialogOpen = false"
   >

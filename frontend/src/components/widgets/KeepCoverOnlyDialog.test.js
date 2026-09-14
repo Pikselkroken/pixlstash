@@ -16,7 +16,7 @@ import AppButton from "./AppButton.vue";
 // Enter test is measuring the real rule rather than a convenient one.
 const AppDialogStub = {
   name: "AppDialog",
-  props: { open: Boolean, title: String, width: Number },
+  props: { open: Boolean, title: String, size: String },
   emits: ["close", "accept"],
   template: `<div class="dlg" @keydown="onKeydown">
       <h2 class="dlg-title">{{ title }}</h2>

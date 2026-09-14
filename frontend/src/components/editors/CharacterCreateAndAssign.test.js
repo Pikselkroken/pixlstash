@@ -149,7 +149,7 @@ describe("CharacterEditor - multi-project membership", () => {
         plugins: [vuetify],
         stubs: {
           AppDialog: {
-            props: ["open", "title", "width"],
+            props: ["open", "title", "size"],
             template: "<div><slot /><slot name='footer' /></div>",
           },
         },
@@ -304,7 +304,7 @@ describe("CharacterEditor - adapter tray", () => {
           // tray would be unfindable for reasons that have nothing to do with
           // the wiring under test.
           AppDialog: {
-            props: ["open", "title", "width"],
+            props: ["open", "title", "size"],
             template: "<div><slot /><slot name='footer' /></div>",
           },
           AdapterTray: AdapterTrayStub,

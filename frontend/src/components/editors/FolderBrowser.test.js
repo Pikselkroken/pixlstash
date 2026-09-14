@@ -20,12 +20,12 @@ import FolderBrowser from "./FolderBrowser.vue";
 const globalOpts = {
   global: {
     stubs: {
-      "v-dialog": { template: "<div><slot /></div>" },
-      "v-card": { template: "<div><slot /></div>" },
-      "v-card-title": { template: "<div><slot /></div>" },
-      "v-card-text": { template: "<div><slot /></div>" },
-      "v-card-actions": { template: "<div><slot /></div>" },
-      "v-spacer": true,
+      AppDialog: {
+        name: "AppDialog",
+        props: ["open", "title", "size"],
+        emits: ["close", "accept"],
+        template: '<div><slot /><slot name="footer" /></div>',
+      },
       "v-icon": true,
       "v-checkbox": true,
       "v-progress-circular": true,
@@ -130,6 +130,29 @@ describe("FolderBrowser in file mode", () => {
     expect(wrapper.emitted("select")).toBeUndefined();
 
     await selectButton(wrapper).trigger("click");
+    expect(wrapper.emitted("select")[0]).toEqual(["/home/u/Downloads"]);
+  });
+});
+
+describe("FolderBrowser plain-Enter accept", () => {
+  it("selects the browsed directory, but not while a new folder is being named", async () => {
+    // The new-folder field's own Enter creates the folder; the dialog-level
+    // accept must not also confirm the picker behind it.
+    const wrapper = await open({ allowCreateFolder: true });
+    const dialog = wrapper.findComponent({ name: "AppDialog" });
+
+    await wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("New folder"))
+      .trigger("click");
+    dialog.vm.$emit("accept");
+    expect(wrapper.emitted("select")).toBeUndefined();
+
+    await wrapper
+      .findAll("button")
+      .find((b) => b.text() === "Cancel")
+      .trigger("click");
+    dialog.vm.$emit("accept");
     expect(wrapper.emitted("select")[0]).toEqual(["/home/u/Downloads"]);
   });
 });

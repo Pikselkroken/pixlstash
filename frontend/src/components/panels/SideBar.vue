@@ -18,6 +18,7 @@ import FolderTreeNode from "../editors/FolderTreeNode.vue";
 import FolderEditor from "../editors/FolderEditor.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import AppButton from "../widgets/AppButton.vue";
+import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
 import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
 import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
@@ -4646,109 +4647,106 @@ defineExpose({
     @deleted="importFolderDeleted"
   />
 
-  <v-dialog v-model="addFolderTypeDialogOpen" max-width="420">
-    <v-card class="folder-type-card">
-      <v-card-title class="folder-type-title">Add Folder</v-card-title>
-      <v-card-text class="folder-type-body">
-        <p class="folder-type-subtitle">Choose folder type</p>
-        <div class="folder-type-options">
-          <button
-            class="folder-type-option"
-            @click="chooseFolderType('reference')"
-          >
-            <v-icon size="18">mdi-folder-network-outline</v-icon>
-            <span class="folder-type-option-text">
-              <strong>Reference folder</strong>
-              <small>Browse and filter existing files in place.</small>
-            </span>
-          </button>
-          <button
-            class="folder-type-option"
-            @click="chooseFolderType('import')"
-          >
-            <v-icon size="18">mdi-folder-download-outline</v-icon>
-            <span class="folder-type-option-text">
-              <strong>Import folder</strong>
-              <small>Watch for new files and import them automatically.</small>
-            </span>
-          </button>
-        </div>
-      </v-card-text>
-      <v-card-actions class="folder-type-actions">
-        <v-spacer />
-        <AppButton @click="addFolderTypeDialogOpen = false"
-          >Cancel</AppButton
-        >
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
-
-  <v-dialog v-model="referenceFolderRelocateOpen" max-width="560">
-    <v-card class="relocate-card">
-      <v-card-title class="relocate-title"
-        >Relocate Reference Folder</v-card-title
+  <AppDialog
+    :open="addFolderTypeDialogOpen"
+    title="Add folder"
+    size="sm"
+    @close="addFolderTypeDialogOpen = false"
+  >
+    <div class="folder-type-options">
+      <p class="folder-type-subtitle">Choose folder type</p>
+      <button
+        class="folder-type-option"
+        @click="chooseFolderType('reference')"
       >
-      <v-card-text class="relocate-body">
-        <div class="relocate-path-block">
-          <div class="relocate-path-label">Current folder</div>
-          <div
-            class="relocate-path-value"
-            :title="referenceFolderRelocateFolder?.folder"
-          >
-            {{ referenceFolderRelocateFolder?.folder }}
-          </div>
-        </div>
-        <div class="relocate-path-block">
-          <div class="relocate-path-label">Destination folder</div>
-          <div class="relocate-destination-row">
-            <AppInput
-              v-model="referenceFolderRelocateDestination"
-              readonly
-              mono
-              aria-label="Destination folder"
-              placeholder="Choose an empty folder"
-              class="relocate-destination-input"
-            />
-            <AppButton
-              variant="outline"
-              icon-only
-              icon-left="folder-open-outline"
-              class="relocate-browse-btn"
-              title="Choose destination folder"
-              aria-label="Choose destination folder"
-              @click="referenceFolderRelocateBrowseOpen = true"
-            />
-          </div>
-        </div>
-        <div class="relocate-warning">
-          This moves every file and subfolder from the current reference folder
-          into the destination folder, then updates PixlStash to use the new
-          location. The destination must be empty.
-        </div>
-        <div v-if="referenceFolderRelocateError" class="relocate-error">
-          {{ referenceFolderRelocateError }}
-        </div>
-        <div v-if="referenceFolderRelocateResult" class="relocate-result">
-          {{ referenceFolderRelocateResult }}
-        </div>
-      </v-card-text>
-      <v-card-actions class="relocate-actions">
-        <v-spacer />
-        <AppButton @click="closeReferenceFolderRelocateDialog">
-          {{ referenceFolderRelocateResult ? "Close" : "Cancel" }}
-        </AppButton>
+        <v-icon size="18">mdi-folder-network-outline</v-icon>
+        <span class="folder-type-option-text">
+          <strong>Reference folder</strong>
+          <small>Browse and filter existing files in place.</small>
+        </span>
+      </button>
+      <button class="folder-type-option" @click="chooseFolderType('import')">
+        <v-icon size="18">mdi-folder-download-outline</v-icon>
+        <span class="folder-type-option-text">
+          <strong>Import folder</strong>
+          <small>Watch for new files and import them automatically.</small>
+        </span>
+      </button>
+    </div>
+    <template #footer>
+      <AppButton variant="secondary" @click="addFolderTypeDialogOpen = false">
+        Cancel
+      </AppButton>
+    </template>
+  </AppDialog>
+
+  <AppDialog
+    :open="referenceFolderRelocateOpen"
+    title="Relocate reference folder"
+    :persistent="referenceFolderRelocateLoading"
+    @close="closeReferenceFolderRelocateDialog"
+  >
+    <div class="relocate-path-block">
+      <div class="relocate-path-label">Current folder</div>
+      <div
+        class="relocate-path-value"
+        :title="referenceFolderRelocateFolder?.folder"
+      >
+        {{ referenceFolderRelocateFolder?.folder }}
+      </div>
+    </div>
+    <div class="relocate-path-block">
+      <div class="relocate-path-label">Destination folder</div>
+      <div class="relocate-destination-row">
+        <AppInput
+          v-model="referenceFolderRelocateDestination"
+          readonly
+          mono
+          aria-label="Destination folder"
+          placeholder="Choose an empty folder"
+          class="relocate-destination-input"
+        />
         <AppButton
-          v-if="!referenceFolderRelocateResult"
-          variant="primary"
-          :loading="referenceFolderRelocateLoading"
-          :disabled="!referenceFolderRelocateDestination"
-          @click="relocateReferenceFolder"
-        >
-          Move files and relocate
-        </AppButton>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+          variant="outline"
+          icon-only
+          icon-left="folder-open-outline"
+          class="relocate-browse-btn"
+          title="Choose destination folder"
+          aria-label="Choose destination folder"
+          @click="referenceFolderRelocateBrowseOpen = true"
+        />
+      </div>
+    </div>
+    <div class="relocate-warning">
+      This moves every file and subfolder from the current reference folder
+      into the destination folder, then updates PixlStash to use the new
+      location. The destination must be empty.
+    </div>
+    <div v-if="referenceFolderRelocateError" class="relocate-error">
+      {{ referenceFolderRelocateError }}
+    </div>
+    <div v-if="referenceFolderRelocateResult" class="relocate-result">
+      {{ referenceFolderRelocateResult }}
+    </div>
+    <template #footer>
+      <AppButton
+        variant="secondary"
+        :disabled="referenceFolderRelocateLoading"
+        @click="closeReferenceFolderRelocateDialog"
+      >
+        {{ referenceFolderRelocateResult ? "Close" : "Cancel" }}
+      </AppButton>
+      <AppButton
+        v-if="!referenceFolderRelocateResult"
+        variant="primary"
+        :loading="referenceFolderRelocateLoading"
+        :disabled="!referenceFolderRelocateDestination"
+        @click="relocateReferenceFolder"
+      >
+        Move files and relocate
+      </AppButton>
+    </template>
+  </AppDialog>
 
   <FolderBrowser
     :open="referenceFolderRelocateBrowseOpen"
@@ -8084,32 +8082,26 @@ defineExpose({
   />
 
   <!-- ── Revoke all shares confirm dialog ──────────────────────── -->
-  <v-dialog v-model="revokeSharesDialogOpen" max-width="400">
-    <v-card class="share-dialog-card">
-      <v-card-title class="share-dialog-title">
-        <v-icon size="18" class="share-dialog-title-icon"
-          >mdi-link-variant-off</v-icon
-        >
+  <AppDialog
+    :open="revokeSharesDialogOpen"
+    title="Remove all shares"
+    size="sm"
+    @close="revokeSharesDialogOpen = false"
+  >
+    <p class="share-dialog-hint">
+      This will revoke all active share links for
+      <strong>{{ revokeSharesPending?.label }}</strong
+      >. Anyone with an existing link will lose access immediately.
+    </p>
+    <template #footer>
+      <AppButton variant="secondary" @click="revokeSharesDialogOpen = false">
+        Cancel
+      </AppButton>
+      <AppButton variant="danger" @click="confirmRevokeShares">
         Remove all shares
-      </v-card-title>
-      <v-card-text class="share-dialog-body">
-        <p class="share-dialog-hint">
-          This will revoke all active share links for
-          <strong>{{ revokeSharesPending?.label }}</strong
-          >. Anyone with an existing link will lose access immediately.
-        </p>
-      </v-card-text>
-      <v-card-actions class="share-dialog-actions">
-        <AppButton @click="revokeSharesDialogOpen = false"
-          >Cancel</AppButton
-        >
-        <v-spacer />
-        <AppButton variant="danger" @click="confirmRevokeShares">
-          Remove all shares
-        </AppButton>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+      </AppButton>
+    </template>
+  </AppDialog>
 </template>
 <style scoped src="./SideBar.css"></style>
 <style src="./SideBar.global.css"></style>

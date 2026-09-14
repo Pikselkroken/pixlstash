@@ -1,12 +1,13 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
 import { storeToRefs } from "pinia";
-import { VDialog, VIcon, VProgressCircular } from "vuetify/components";
+import { VIcon, VProgressCircular } from "vuetify/components";
 
 import {
   useLibrarySwitchStore,
 } from "../../stores/useLibrariesStore";
 import AppButton from "../widgets/AppButton.vue";
+import AppDialog from "../widgets/AppDialog.vue";
 import { inertSiblingOverlays } from "../../utils/inertBackground";
 
 const switchStore = useLibrarySwitchStore();
@@ -16,11 +17,14 @@ const panel = ref(null);
 const stayButton = ref(null);
 let restoreOverlayInertness = null;
 
-// Only one phase renders at a time, so a single heading id is always resolvable
-// and the accessible name follows the phase instead of going stale in one of
-// them. The error paragraph exists in the failed phase only; naming it while it
-// is absent would leave a dangling IDREF.
-const titleId = useId();
+// AppDialog names the dialog from its title, so the name follows the phase
+// instead of going stale in one of them. The error paragraph exists in the
+// failed phase only; naming it while it is absent would leave a dangling IDREF.
+const title = computed(() =>
+  phase.value === "failed"
+    ? `Could not switch to ${targetLibrary.value?.name ?? ""}`
+    : `Switching to ${targetLibrary.value?.name ?? ""}…`,
+);
 const descriptionId = useId();
 const errorId = useId();
 const describedBy = computed(() =>
@@ -48,30 +52,37 @@ watch(
 
 onBeforeUnmount(() => restoreOverlayInertness?.());
 
+// While switching, Escape must not reach any page-level handler either.
 function blockEscape(event) {
-  if (event.key !== "Escape") return;
+  if (event.key !== "Escape" || phase.value !== "switching") return;
   event.preventDefault();
   event.stopPropagation();
+}
+
+function onClose() {
+  if (phase.value === "failed") switchStore.stayOnCurrent();
 }
 </script>
 
 <template>
-  <v-dialog
-    :model-value="overlayOpen"
+  <!--
+    `role` and `aria-describedby` fall through AppDialog to Vuetify's overlay
+    root, which already carries aria-modal; AppDialog names it from the title.
+    The switch in flight has no sane close, so the dialog is persistent then and
+    close is a no-op; once it has failed, closing means staying.
+  -->
+  <AppDialog
+    :open="overlayOpen"
     class="library-switch-modal"
-    persistent
-    :scrim="true"
-    :max-width="520"
+    :title="title"
+    size="md"
+    :persistent="phase === 'switching'"
     role="alertdialog"
-    :aria-labelledby="titleId"
     :aria-describedby="describedBy"
     @keydown="blockEscape"
+    @close="onClose"
+    @accept="onClose"
   >
-    <!--
-      Vuetify's overlay root already carries the dialog role and aria-modal, so
-      the naming goes there (the attrs above fall through to it) rather than on
-      a second, nested dialog element here.
-    -->
     <section
       ref="panel"
       class="library-switch-overlay"
@@ -81,15 +92,10 @@ function blockEscape(event) {
     >
       <template v-if="phase === 'switching'">
         <v-progress-circular indeterminate size="32" width="3" />
-        <div>
-          <h2 :id="titleId">
-            Switching to {{ targetLibrary?.name }}…
-          </h2>
-          <p :id="descriptionId">
-            PixlStash is finishing or cancelling work, then it will reload this
-            window. Keep it open.
-          </p>
-        </div>
+        <p :id="descriptionId">
+          PixlStash is finishing or cancelling work, then it will reload this
+          window. Keep it open.
+        </p>
       </template>
 
       <template v-else-if="phase === 'failed'">
@@ -97,9 +103,6 @@ function blockEscape(event) {
           mdi-alert-circle-outline
         </v-icon>
         <div class="library-switch-overlay__failure">
-          <h2 :id="titleId">
-            Could not switch to {{ targetLibrary?.name }}
-          </h2>
           <p :id="descriptionId">
             PixlStash is still using
             <strong>{{ currentLibrary?.name ?? "the current library" }}</strong>.
@@ -107,19 +110,20 @@ function blockEscape(event) {
           <p :id="errorId" class="library-switch-overlay__detail">
             {{ error }}
           </p>
-          <div class="library-switch-overlay__actions">
-            <AppButton
-              ref="stayButton"
-              variant="primary"
-              @click="switchStore.stayOnCurrent()"
-            >
-              Stay on {{ currentLibrary?.name ?? "current library" }}
-            </AppButton>
-          </div>
         </div>
       </template>
     </section>
-  </v-dialog>
+
+    <template v-if="phase === 'failed'" #footer>
+      <AppButton
+        ref="stayButton"
+        variant="primary"
+        @click="switchStore.stayOnCurrent()"
+      >
+        Stay on {{ currentLibrary?.name ?? "current library" }}
+      </AppButton>
+    </template>
+  </AppDialog>
 </template>
 
 <style scoped>
@@ -127,24 +131,11 @@ function blockEscape(event) {
   display: flex;
   align-items: flex-start;
   gap: var(--space-5);
-  padding: var(--space-6);
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-lg);
-  background: rgb(var(--v-theme-surface));
-  color: rgb(var(--v-theme-on-surface));
-  box-shadow: var(--elevation-4);
   outline: none;
 }
 
-.library-switch-overlay h2 {
-  margin: 0;
-  font-size: var(--text-lg);
-  font-weight: var(--weight-semibold);
-  line-height: var(--leading-tight);
-}
-
 .library-switch-overlay p {
-  margin: var(--space-3) 0 0;
+  margin: 0;
   font-size: var(--text-base);
   line-height: var(--leading-body);
 }
@@ -158,6 +149,9 @@ function blockEscape(event) {
 }
 
 .library-switch-overlay__failure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
   flex: 1;
   min-width: 0;
 }
@@ -168,11 +162,5 @@ function blockEscape(event) {
   background: rgb(var(--v-theme-error));
   color: rgb(var(--v-theme-on-error));
   overflow-wrap: anywhere;
-}
-
-.library-switch-overlay__actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: var(--space-5);
 }
 </style>

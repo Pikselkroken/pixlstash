@@ -6,6 +6,7 @@ import { listTaggers, listTaggerPluginDiagnostics } from "../../api/taggers";
 import { VSlider, VSwitch } from "vuetify/components";
 import PluginsTable from "../widgets/PluginsTable.vue";
 import AppButton from "../widgets/AppButton.vue";
+import AppDialog from "../widgets/AppDialog.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsTwoCol from "./SettingsTwoCol.vue";
 import SettingsFieldBlock from "./SettingsFieldBlock.vue";
@@ -365,67 +366,67 @@ watch(
       </div>
     </SettingsSection>
 
-    <v-dialog
-      v-model="pluginInstallHelpOpen"
-      max-width="560"
-      @click:outside="pluginInstallHelpOpen = false"
+    <AppDialog
+      :open="pluginInstallHelpOpen"
+      title="How to install plugins"
+      @close="pluginInstallHelpOpen = false"
+      @accept="pluginInstallHelpOpen = false"
     >
-      <v-card class="plugin-install-card">
-        <v-card-title class="plugin-install-title">
-          How to install plugins
-        </v-card-title>
-        <v-card-text class="plugin-install-help-body">
-          <p>
-            Only install plugins you trust. They run with the same access as
-            PixlStash.
-          </p>
+      <p class="plugin-install-help">
+        Only install plugins you trust. They run with the same access as
+        PixlStash.
+      </p>
 
-          <h3>Find plugins</h3>
-          <p>
-            Browse the
-            <a
-              class="plugin-catalogue-link"
-              href="https://github.com/Pikselkroken/PixlStash-plugins"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              official plugin catalogue
-              <v-icon size="x-small" aria-hidden="true">mdi-open-in-new</v-icon>
-            </a>
-            or use the CLI to list published plugins, search the catalogue, and
-            show installed plugins.
-          </p>
-          <div class="plugin-install-commands">
-            <pre class="plugin-install-command"><code>{{ taggerCliAvailableHint }}</code></pre>
-            <pre class="plugin-install-command"><code>{{ taggerCliSearchHint }}</code></pre>
-            <pre class="plugin-install-command"><code>{{ taggerCliListHint }}</code></pre>
-          </div>
+      <section class="plugin-install-help">
+        <h3>Find plugins</h3>
+        <p>
+          Browse the
+          <a
+            class="plugin-catalogue-link"
+            href="https://github.com/Pikselkroken/PixlStash-plugins"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            official plugin catalogue
+            <v-icon size="x-small" aria-hidden="true">mdi-open-in-new</v-icon>
+          </a>
+          or use the CLI to list published plugins, search the catalogue, and
+          show installed plugins.
+        </p>
+        <div class="plugin-install-commands">
+          <pre class="plugin-install-command"><code>{{ taggerCliAvailableHint }}</code></pre>
+          <pre class="plugin-install-command"><code>{{ taggerCliSearchHint }}</code></pre>
+          <pre class="plugin-install-command"><code>{{ taggerCliListHint }}</code></pre>
+        </div>
+      </section>
 
-          <h3>Install with the CLI</h3>
-          <pre class="plugin-install-command"><code>{{ taggerCliHint }}</code></pre>
-          <p>
-            Use a repository name or local file/folder, then restart PixlStash.
-          </p>
+      <section class="plugin-install-help">
+        <h3>Install with the CLI</h3>
+        <pre class="plugin-install-command"><code>{{ taggerCliHint }}</code></pre>
+        <p>
+          Use a repository name or local file/folder, then restart PixlStash.
+        </p>
+      </section>
 
-          <h3>Install manually</h3>
-          <p v-if="taggerPluginDir">
-            Put the plugin file or folder in
-            <code class="settings-tagger-plugin-path">{{ taggerPluginDir }}</code>
-            and restart PixlStash.
-          </p>
-          <p v-else>
-            Put the plugin file or folder in PixlStash's custom plugin folder
-            and restart. Open this screen locally to see the exact path.
-          </p>
-        </v-card-text>
-        <v-card-actions class="plugin-install-actions">
-          <v-spacer />
-          <AppButton variant="secondary" @click="pluginInstallHelpOpen = false">
-            Close
-          </AppButton>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
+      <section class="plugin-install-help">
+        <h3>Install manually</h3>
+        <p v-if="taggerPluginDir">
+          Put the plugin file or folder in
+          <code class="settings-tagger-plugin-path">{{ taggerPluginDir }}</code>
+          and restart PixlStash.
+        </p>
+        <p v-else>
+          Put the plugin file or folder in PixlStash's custom plugin folder
+          and restart. Open this screen locally to see the exact path.
+        </p>
+      </section>
+
+      <template #footer>
+        <AppButton variant="secondary" @click="pluginInstallHelpOpen = false">
+          Close
+        </AppButton>
+      </template>
+    </AppDialog>
   </div>
 </template>
 
@@ -487,37 +488,24 @@ watch(
   padding-top: var(--space-2);
 }
 
-.plugin-install-card {
-  color: rgb(var(--v-theme-on-surface));
-  background: rgb(var(--v-theme-surface));
-  border-radius: var(--radius-lg);
-  box-shadow: var(--elevation-4);
-}
-
-.plugin-install-title {
-  padding: var(--space-5) var(--space-5) var(--space-3);
-  font-family: var(--font-ui);
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-  line-height: var(--leading-tight);
-}
-
-.plugin-install-help-body {
+/* The dialog body spaces the groups; a heading sits tighter to its own
+   paragraph and commands. */
+.plugin-install-help {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-5) var(--space-2);
+  margin: 0;
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   line-height: var(--leading-body);
 }
 
-.plugin-install-help-body p {
+.plugin-install-help p {
   margin: 0;
 }
 
-.plugin-install-help-body h3 {
-  margin: var(--space-2) 0 0;
+.plugin-install-help h3 {
+  margin: 0;
   color: rgba(var(--v-theme-on-surface), 0.65);
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
@@ -526,7 +514,7 @@ watch(
   text-transform: uppercase;
 }
 
-.plugin-install-help-body :not(pre) > code {
+.plugin-install-help :not(pre) > code {
   padding: 0 var(--space-1);
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.08);
@@ -579,30 +567,8 @@ watch(
   font: inherit;
 }
 
-.plugin-install-actions {
-  min-height: 40px;
-  padding: var(--space-3) var(--space-5) var(--space-4);
-}
-
 .settings-tagger-plugin-path {
   overflow-wrap: anywhere;
-}
-
-@media (max-width: 480px) {
-  .plugin-install-title {
-    padding-right: var(--space-4);
-    padding-left: var(--space-4);
-  }
-
-  .plugin-install-help-body {
-    padding-right: var(--space-4);
-    padding-left: var(--space-4);
-  }
-
-  .plugin-install-actions {
-    padding-right: var(--space-4);
-    padding-left: var(--space-4);
-  }
 }
 
 /* A plugin's load error is exception text from third-party code and has no
