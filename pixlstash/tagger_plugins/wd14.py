@@ -13,6 +13,7 @@ import threading
 import numpy as np
 import onnxruntime as ort
 import torch
+from onnxruntime.capi.onnxruntime_pybind11_state import EPFail
 from tqdm import tqdm
 
 from pixlstash.inference.vram_budget import ORT_ARENA_SHARE, VramBudget
@@ -28,6 +29,48 @@ WD14_GENERAL_THRESHOLD = 0.85
 WD14_UNDESIRED_TAGS = "solo, general, male_focus, meme, sensitive"
 WD14_CAPTION_SEPARATOR = ", "
 WD14_DATALOADER_TIMEOUT = 30
+
+#: Options for Apple's CoreML execution provider.
+#:
+#: ``MLComputeUnits: ALL`` lets CoreML choose between CPU, GPU and the Neural
+#: Engine.
+_COREML_OPTIONS = {"ModelFormat": "MLProgram", "MLComputeUnits": "ALL"}
+
+#: Apple's CoreML execution provider, followed by the CPU provider.
+#:
+#: onnxruntime places the operators CoreML declines on the CPU provider whether
+#: or not it is listed: a CoreML-only list still builds a
+#: ``[CoreMLExecutionProvider, CPUExecutionProvider]`` session that runs the
+#: declined nodes on the CPU. Listing it states that placement and keeps
+#: onnxruntime's ``VerifyEachNodeIsAssignedToAnEp`` warnings out of the log.
+#: CoreML takes 707 of this graph's 708 nodes.
+#:
+#: Measured against the real wd-convnext-tagger-v3 checkpoint on an M1 Pro:
+#: 4589 ms per batch of 8 on the CPU provider, 987 ms on this one. Over 28
+#: repository images the largest output difference from the CPU provider was
+#: 1.48e-05 (FP32). That is small, not zero: a score that sits on a threshold
+#: can land on the other side of it, and at a threshold of 0.64 one tag
+#: flipped (``grin``, 0.6399992 on the CPU provider against 0.6400001 here).
+#: An earlier check of four images (43,444 tag slots) found no flip at 0.35 or
+#: 0.85.
+#:
+#: Starting the session costs far more than on the CPU: 13.3 s and 11.1 s with
+#: the real checkpoint against 0.5 s, because CoreML compiles the model on
+#: every load. Loads are not rare: unless models are kept in memory, the idle
+#: unload drops WD14 at the first progress poll that finds every worker idle (at
+#: most once per ``Vault.AGGRESSIVE_UNLOAD_INTERVAL``, 180 s), and the next
+#: tagging run compiles it again. Without a ``ModelCacheDirectory`` onnxruntime
+#: compiles into ``$TMPDIR`` and removes it at exit. Setting one brought a warm
+#: load to about 7.2 s, but the cache is ~754 MB and would have to be
+#: invalidated whenever ``model.onnx`` changes, so it is not set.
+#:
+#: Every CoreML load prints two native ``E5RT encountered an STL exception ...
+#: unbounded dimension`` lines to stderr. They look like errors and are
+#: expected.
+_COREML_PROVIDERS = (
+    ("CoreMLExecutionProvider", _COREML_OPTIONS),
+    "CPUExecutionProvider",
+)
 
 
 class WD14Service:
@@ -66,6 +109,13 @@ class WD14Service:
         self._threshold = WD14_GENERAL_THRESHOLD
 
         self._ort_sess = None
+        # True while ``_ort_sess`` is a CoreML session, the only kind whose
+        # provider failure at run time moves the service onto the CPU.
+        self._on_coreml = False
+        # ``"<error type>: <message>"`` once CoreML has failed for this
+        # service, at start or during a run. Every later session is a CPU one,
+        # so a reload after the idle sweep does not go back to CoreML.
+        self._coreml_failure: str | None = None
         self._input_name: str | None = None
         self._onnx_batch_capacity: int = 1
         self._rating_tags: list | None = None
@@ -136,6 +186,7 @@ class WD14Service:
                 del self._ort_sess
                 self._ort_sess = None
                 logger.debug("WD14Service: ONNX session unloaded.")
+            self._on_coreml = False
             self._input_name = None
             self._onnx_batch_capacity = 1
             self._rating_tags = None
@@ -256,49 +307,127 @@ class WD14Service:
                 f"ONNX model not found: {onnx_path}. "
                 "Re-download with force_download=True."
             )
+        self._on_coreml = False
         if self._device == "cpu":
             logger.debug("Initialising WD14 tagger with CPUExecutionProvider")
-            self._ort_sess = ort.InferenceSession(
-                onnx_path, providers=["CPUExecutionProvider"]
-            )
+            self._ort_sess = self._create_cpu_session(onnx_path)
         else:
             logger.debug("Initialising WD14 tagger with device: %s", self._device)
-            if "OpenVINOExecutionProvider" in ort.get_available_providers():
+            available = ort.get_available_providers()
+            if "OpenVINOExecutionProvider" in available:
                 self._ort_sess = ort.InferenceSession(
                     onnx_path,
                     providers=["OpenVINOExecutionProvider"],
                     provider_options=[{"device_type": "GPU", "precision": "FP32"}],
                 )
-            else:
-                # The share alone is a hard allocation failure below ~1.25 GB
-                # of budget: it loads the model and cannot run a single image.
-                # So it is floored by what this session's arena actually
-                # needs. The floor is the measured need plus ~10 %, and the
-                # share only clears that at the 2 GB default and again above
-                # ~24 GB - across 3-16 GB the share sits within a few per cent
-                # of the true need (at 8 GB, 3276 MiB against 3160) and the
-                # floor takes over to keep a margin. WD14 is therefore capped
-                # a little above 40 % of budget in that range: a ceiling, not
-                # a reservation, and an arena only grows to what a run asks
-                # for.
-                cuda_options = self._vram_budget.ort_cuda_provider_options(
-                    ORT_ARENA_SHARE["wd14"],
-                    min_limit_mb=self._vram_budget.wd14_arena_limit_mb(),
-                )
-                logger.debug("WD14 CUDA provider options: %s", cuda_options)
-                self._ort_sess = ort.InferenceSession(
+            elif self._coreml_failure is not None:
+                # Only a CoreML session records a failure, and this host got
+                # one because it offers neither CUDA nor ROCm.
+                logger.info(
+                    "WD14 tagger: creating a CPUExecutionProvider session for "
+                    "%s because CoreMLExecutionProvider failed earlier (%s).",
                     onnx_path,
-                    providers=(
-                        [("CUDAExecutionProvider", cuda_options)]
-                        if "CUDAExecutionProvider" in ort.get_available_providers()
-                        else [("ROCMExecutionProvider", {})]
-                        if "ROCMExecutionProvider" in ort.get_available_providers()
-                        else ["CPUExecutionProvider"]
-                    ),
+                    self._coreml_failure,
                 )
-        self._warn_if_the_session_fell_back_to_cpu()
+                self._ort_sess = self._create_cpu_session(onnx_path)
+            else:
+                cuda_options = None
+                if "CUDAExecutionProvider" in available:
+                    # The share alone is a hard allocation failure below
+                    # ~1.25 GB of budget: it loads the model and cannot run a
+                    # single image. So it is floored by what this session's
+                    # arena actually needs. The floor is the measured need
+                    # plus ~10 %, and the share only clears that at the 2 GB
+                    # default and again above ~24 GB - across 3-16 GB the
+                    # share sits within a few per cent of the true need (at
+                    # 8 GB, 3276 MiB against 3160) and the floor takes over to
+                    # keep a margin. WD14 is therefore capped a little above
+                    # 40 % of budget in that range: a ceiling, not a
+                    # reservation, and an arena only grows to what a run asks
+                    # for.
+                    cuda_options = self._vram_budget.ort_cuda_provider_options(
+                        ORT_ARENA_SHARE["wd14"],
+                        min_limit_mb=self._vram_budget.wd14_arena_limit_mb(),
+                    )
+                    logger.debug("WD14 CUDA provider options: %s", cuda_options)
+                rocm = cuda_options is None and "ROCMExecutionProvider" in available
+                coreml = (
+                    cuda_options is None
+                    and not rocm
+                    and "CoreMLExecutionProvider" in available
+                )
+                if coreml:
+                    logger.debug("WD14 CoreML provider options: %s", _COREML_OPTIONS)
+                try:
+                    self._ort_sess = ort.InferenceSession(
+                        onnx_path,
+                        providers=(
+                            [("CUDAExecutionProvider", cuda_options)]
+                            if cuda_options is not None
+                            else [("ROCMExecutionProvider", {})]
+                            if rocm
+                            else list(_COREML_PROVIDERS)
+                            if coreml
+                            else ["CPUExecutionProvider"]
+                        ),
+                        # For CoreML, we handle start failures below.
+                        enable_fallback=0 if coreml else 1,
+                    )
+                except Exception as exc:
+                    if not coreml:
+                        raise
+                    self._switch_to_cpu_after_coreml_failure(onnx_path, exc, "to start")
+                else:
+                    self._on_coreml = coreml
+        # A CoreML failure has already been reported with its cause; the
+        # generic check would only guess at one.
+        if self._coreml_failure is None:
+            self._warn_if_the_session_fell_back_to_cpu()
         self._input_name = self._ort_sess.get_inputs()[0].name
         self._onnx_batch_capacity = self._resolve_batch_capacity()
+
+    @staticmethod
+    def _create_cpu_session(onnx_path: str):
+        """Build a session on the CPU provider alone.
+
+        Where the CPU sessions this service chooses are built: an explicit
+        ``cpu`` device, and a CoreML provider that failed at start or during a
+        run. The provider list in ``_init_onnx_session`` ends in
+        ``CPUExecutionProvider`` of its own for an accelerator host that offers
+        no accelerator provider.
+        """
+        return ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+
+    def _switch_to_cpu_after_coreml_failure(
+        self, onnx_path: str, exc: Exception, stage: str
+    ) -> None:
+        """Log why CoreML was abandoned and put the service on a CPU session.
+
+        The CoreML session, if there is one, is replaced under the load lock:
+        dropping a session while another is being built is the crash
+        ``_load_lock`` exists for. ``_coreml_failure`` keeps every later
+        session of this service on the CPU.
+
+        Args:
+            onnx_path: The model the session was built from.
+            exc: The error CoreML failed with.
+            stage: ``"to start"`` or ``"during a run"``, for the log.
+        """
+        with self._load_lock:
+            self._coreml_failure = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "WD14 tagger: onnxruntime's CoreMLExecutionProvider failed %s "
+                "for %s with provider options %s (%s). WD14 now runs on a "
+                "CPUExecutionProvider session for the rest of this service's "
+                "life: tagging will run on the CPU at a fraction of the speed.",
+                stage,
+                onnx_path,
+                _COREML_OPTIONS,
+                self._coreml_failure,
+            )
+            self._on_coreml = False
+            self._ort_sess = self._create_cpu_session(onnx_path)
+            self._input_name = self._ort_sess.get_inputs()[0].name
 
     def _warn_if_the_session_fell_back_to_cpu(self) -> None:
         """Say so when the session did not get the accelerator it asked for.
@@ -320,12 +449,40 @@ class WD14Service:
         logger.warning(
             "WD14 tagger asked onnxruntime for device %s, but the session "
             "loaded with %s: tagging will run on the CPU at a fraction of the "
-            "speed. The usual cause is an execution provider this build "
-            "advertises whose libraries are not installed (the CUDA provider "
-            "needs libcublasLt). Fix with: pip uninstall -y onnxruntime && "
-            "pip install onnxruntime-gpu",
+            "speed. %s",
             self._device,
             active[0],
+            self._cpu_fallback_remediation(),
+        )
+
+    def _cpu_fallback_remediation(self) -> str:
+        """Advice for getting the accelerator back, for the device we asked for.
+
+        Kept apart from the warning because the platforms want different
+        instructions. ``onnxruntime-gpu`` is the CUDA build and has no macOS
+        wheels, so the CUDA remediation is wrong on a Mac. A CoreML provider
+        that is offered but fails, at start or during a run, never reaches
+        this: ``_switch_to_cpu_after_coreml_failure`` logs that with its error.
+        """
+        if self._device == "mps":
+            available = ort.get_available_providers()
+            if "CoreMLExecutionProvider" in available:
+                return (
+                    "This onnxruntime build offers CoreMLExecutionProvider, "
+                    "but the session started without it and onnxruntime "
+                    "raised no error."
+                )
+            return (
+                f"This onnxruntime build offers {', '.join(available)} and not "
+                "CoreMLExecutionProvider; the standard 'onnxruntime' wheel for "
+                "macOS includes it. Fix with: pip uninstall -y onnxruntime && "
+                "pip install onnxruntime"
+            )
+        return (
+            "The usual cause is an execution provider this build advertises "
+            "whose libraries are not installed (the CUDA provider needs "
+            "libcublasLt). Fix with: pip uninstall -y onnxruntime && "
+            "pip install onnxruntime-gpu"
         )
 
     def _resolve_batch_capacity(self) -> int:
@@ -363,7 +520,7 @@ class WD14Service:
     def _run_batch(self, path_imgs: list, undesired_tags: set) -> dict | None:
         imgs = np.array([im for _, im in path_imgs])
         try:
-            probs = self._ort_sess.run(None, {self._input_name: imgs})[0]
+            probs = self._run_session(imgs)
         except Exception as exc:
             logger.error("Error running ONNX model: %s", exc)
             logger.error("Images causing error: %s", [p for p, _ in path_imgs])
@@ -383,6 +540,25 @@ class WD14Service:
             logger.debug("%s:", image_path)
             logger.debug("\tTags: %s", combined_tags)
         return result
+
+    def _run_session(self, imgs: np.ndarray) -> np.ndarray:
+        """Run one batch, moving a CoreML session whose provider fails to the CPU.
+
+        Only ``EPFail`` counts as the provider failing: it is the one error
+        onnxruntime's own ``run()`` fallback retries on the CPU, and the one
+        ``enable_fallback=0`` hands back instead. Anything else - a bad input,
+        a bug - propagates unchanged, and so does ``EPFail`` from a session
+        that is not CoreML's. The failed batch is retried once, on the CPU; a
+        failure there propagates too.
+        """
+        try:
+            return self._ort_sess.run(None, {self._input_name: imgs})[0]
+        except EPFail as exc:
+            if not self._on_coreml:
+                raise
+            onnx_path = os.path.join(self._model_location, "model.onnx")
+            self._switch_to_cpu_after_coreml_failure(onnx_path, exc, "during a run")
+            return self._ort_sess.run(None, {self._input_name: imgs})[0]
 
     @staticmethod
     def _collate_fn_remove_corrupted(batch: list) -> list:
