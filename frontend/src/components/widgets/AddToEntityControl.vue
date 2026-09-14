@@ -1343,7 +1343,7 @@ defineExpose({
   line-height: 1.4;
 }
 
-.ate--force-dark .ate-btn {
+:where(.ate--force-dark:not(.ate--flyout)) .ate-btn {
   background-color: rgba(var(--v-theme-dark-surface), 0.6);
   color: rgba(var(--v-theme-on-dark-surface), 1);
 }
@@ -1370,7 +1370,7 @@ defineExpose({
   background-image: var(--hover-neutral);
 }
 
-.ate--force-dark .ate-btn:hover:not(:disabled) {
+:where(.ate--force-dark:not(.ate--flyout)) .ate-btn:hover:not(:disabled) {
   background-image: linear-gradient(
     rgba(var(--v-theme-on-dark-surface), 0.16),
     rgba(var(--v-theme-on-dark-surface), 0.16)
