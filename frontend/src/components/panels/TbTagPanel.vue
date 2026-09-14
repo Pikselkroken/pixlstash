@@ -247,26 +247,38 @@
                   @click="fetchTaggerPlugins"
                 />
               </template>
-              <v-list density="compact" min-width="180">
-                <v-list-item
+              <div class="ctx-menu" role="menu" style="min-width: 180px">
+                <button
                   v-if="taggerPluginsLoading"
+                  type="button"
+                  class="ctx-item"
+                  role="menuitem"
                   disabled
-                  title="Loading..."
-                />
-                <template v-if="!taggerPluginsLoading">
-                  <v-list-item
+                >
+                  Loading...
+                </button>
+                <template v-else>
+                  <button
                     v-for="plugin in taggerPlugins"
                     :key="plugin.name"
-                    :title="plugin.display_name || plugin.name"
+                    type="button"
+                    class="ctx-item"
+                    role="menuitem"
                     @click="generateTagsForAll(plugin.name)"
-                  />
-                  <v-list-item
+                  >
+                    {{ plugin.display_name || plugin.name }}
+                  </button>
+                  <button
                     v-if="!taggerPlugins.length"
+                    type="button"
+                    class="ctx-item"
+                    role="menuitem"
                     disabled
-                    title="No taggers available"
-                  />
+                  >
+                    No taggers available
+                  </button>
                 </template>
-              </v-list>
+              </div>
             </v-menu>
           </div>
           <div v-if="generateTagsError" class="plugin-menu-error">

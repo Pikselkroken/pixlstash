@@ -275,10 +275,11 @@ body {
   position: relative;
   z-index: 1;
 }
-/* Make disabled hand-rolled buttons more faded. The two button dialects own
-   their disabled state (`--opacity-disabled`, no filter) and their pending one,
-   which must not fade at all, so they are excluded rather than out-shouted. */
-button[disabled]:not(.app-btn):not(.bar-btn) {
+/* Make disabled hand-rolled buttons more faded. The two button dialects and the
+   menu row own their disabled state (`--opacity-disabled`, no filter) and the
+   dialects their pending one, which must not fade at all, so they are excluded
+   rather than out-shouted. */
+button[disabled]:not(.app-btn):not(.bar-btn):not(.ctx-item) {
   opacity: 0.35 !important;
   filter: grayscale(30%);
   pointer-events: none;

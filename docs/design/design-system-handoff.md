@@ -92,7 +92,7 @@ the amber stays in the wash), `.kind-pill--DAILY` / `--MANUAL` / `--WEEKLY` (wor
 `on-surface`, the kind's hue moves into the wash through `--kind-hue`),
 `.layout-tree__delta--in` / `--out`, `.smart-score-status--success`, and
 `.sidebar-move-menu-group-header--current` (`sidebar-text`, set apart from its
-siblings by full opacity). A success message is therefore ink in every surface that had
+siblings by full opacity; since folded into the shared menu's `.ctx-label`). A success message is therefore ink in every surface that had
 one in amber; the words say "saved", and status colour was never meant to be the only
 cue. Two sites were found and left: `.star-number-label` sits
 over a photo or the dark lightbox, not a canvas (amber 4.45 – 5.06:1 there), and

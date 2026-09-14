@@ -53,6 +53,8 @@ function topLevelMenuLabels(rootLocator) {
       if (text) labels.push(text)
     })
     root.querySelectorAll('.ctx-item').forEach((btn) => {
+      // A flyout trigger is `.ate-btn.ctx-item`: counted once, above.
+      if (btn.matches('.ate-btn')) return
       if (btn.closest('.ctx-submenu') || btn.closest('.ate-menu')) return
       const text = label(btn)
       if (text) labels.push(text)

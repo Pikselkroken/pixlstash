@@ -1,22 +1,41 @@
-/* Shared context-menu item styles.
- * Used in Toolbar.vue (selection dropdown) and ImageGridContextMenu.vue.
- * Import globally via main.js so it works from any scoped component. */
+/* The one menu: one surface and one row (docs/design/buttons.md, "Menus: one
+ * surface and one row"; the design system's `components/core/Menu`).
+ * Global via main.js so it reaches teleported and render-function menus.
+ *
+ * A menu holds rows, separators and group labels. A surface that holds
+ * controls is a panel (`.tbm`, `--radius-lg`), not a menu. */
 
+.ctx-menu {
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-3);
+  padding: var(--space-2) 0;
+}
+
+/* Full-bleed, no radius of its own: the wash is a band across the menu. */
 .ctx-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   width: 100%;
-  padding: 7px 14px;
-  font-size: 13px;
+  min-height: var(--control-h-bar);
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-sm);
   line-height: 1.4;
   color: rgb(var(--v-theme-on-surface));
   text-align: left;
   white-space: nowrap;
-  transition: background 0.1s;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-standard);
 }
 
-.ctx-item:hover:not(:disabled) {
+.ctx-item:hover:not(:disabled, .ctx-item--disabled) {
   background: var(--hover-wash);
 }
 
@@ -26,8 +45,9 @@
   box-shadow: var(--focus-ring-inset);
 }
 
-.ctx-item:disabled {
-  opacity: 0.4;
+.ctx-item:disabled,
+.ctx-item--disabled {
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
@@ -35,32 +55,83 @@
   color: rgb(var(--v-theme-error));
 }
 
-.ctx-icon {
+/* Current value: medium words in ink, the olive rides the icon and check.
+   A navigation row marks the current place with `aria-current` instead. */
+.ctx-item[aria-checked="true"],
+.ctx-item[aria-current]:not([aria-current="false"]) {
+  font-weight: var(--weight-medium);
+}
+
+/* Both glyph slots are one box, `--gutter-glyph`. A row owns its glyph size:
+   do not pass `size` to a `v-icon` in these slots, it writes an inline style.
+   `.ctx-item` in front outranks Vuetify's `.v-icon--size-default` whatever
+   order the sheets load in. */
+.ctx-item .ctx-icon,
+.ctx-item .ctx-arrow,
+.ctx-item .ctx-check {
   flex-shrink: 0;
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+  font-size: var(--gutter-glyph);
+}
+
+.ctx-icon {
   opacity: 0.75;
+}
+
+.ctx-item[aria-checked="true"] .ctx-icon,
+.ctx-item[aria-current]:not([aria-current="false"]) .ctx-icon {
+  opacity: 1;
+  color: var(--selected-ink);
+}
+
+.ctx-check {
+  margin-left: auto;
+  color: var(--selected-ink);
+}
+
+.ctx-arrow {
+  margin-left: auto;
+  opacity: 0.6;
+}
+
+.ctx-label-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ctx-meta {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  opacity: var(--opacity-text-secondary);
 }
 
 .ctx-shortcut {
   margin-left: auto;
-  padding-left: 16px;
-  font-size: 11px;
+  padding-left: var(--space-5);
+  font-size: var(--text-2xs);
   opacity: var(--opacity-text-secondary);
 }
 
 .ctx-sep {
   height: 1px;
-  margin: 4px 0;
-  background: rgba(var(--v-theme-on-surface), 0.1);
+  margin: var(--space-2) 0;
+  background: rgb(var(--v-theme-divider));
+}
+
+/* A group heading: the only thing besides rows and separators a menu holds.
+   The type is the global `.section-label` (put both classes on it); this only
+   aligns it with the row labels. */
+.ctx-label {
+  padding: var(--space-2) var(--space-4);
 }
 
 /* ── Submenu (e.g. "Tag automatically" tagger picker) ──────────────── */
 .ctx-submenu-wrap {
   position: relative;
-}
-
-.ctx-arrow {
-  margin-left: auto;
-  opacity: 0.55;
 }
 
 .ctx-default-pill {
@@ -80,9 +151,9 @@
   top: 0;
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: var(--elevation-3);
-  padding: 4px 0;
+  padding: var(--space-2) 0;
   min-width: 185px;
   z-index: 2010;
 }
@@ -117,36 +188,55 @@
   white-space: nowrap;
 }
 
-/* ── Dark-surface skin (lightbox / overlay context menu) ────────────────
-   The menu root carries `.image-ctx-menu--on-dark` (see ImageGridContextMenu
-   scoped style); the teleported items keep the plain `.ctx-*` classes, so these
-   item/separator overrides are matched here in the global sheet. The
-   `dark-surface` tokens stay dark in both the light and dark themes. */
-.image-ctx-menu--on-dark .ctx-item {
+/* ── On a dark ground (lightbox / overlay chrome) ───────────────────────
+   The `dark-surface` family stays dark in both themes, so a menu opened over
+   it cannot take the theme's own values. Put `.ctx-menu--on-dark` on the menu
+   root; teleported rows keep the plain `.ctx-*` classes. */
+.ctx-menu--on-dark {
+  background: rgb(var(--v-theme-dark-surface));
+  color: rgb(var(--v-theme-on-dark-surface));
+  border-color: rgba(var(--v-theme-on-dark-surface), 0.14);
+}
+
+/* The lifted olive, set as a colour rather than by overriding `--selected-ink`:
+   a `v-icon` carries its own theme class, which redeclares the variable on the
+   glyph itself, so an override on the menu never reaches it. */
+.ctx-menu--on-dark .ctx-item .ctx-check,
+.ctx-menu--on-dark .ctx-item[aria-checked="true"] .ctx-icon,
+.ctx-menu--on-dark .ctx-item[aria-current]:not([aria-current="false"]) .ctx-icon {
+  color: rgb(var(--v-theme-dark-surface-primary));
+}
+
+.ctx-menu--on-dark .ctx-item {
   color: rgb(var(--v-theme-on-dark-surface));
 }
 
-.image-ctx-menu--on-dark .ctx-item:hover:not(:disabled) {
+.ctx-menu--on-dark .ctx-item:hover:not(:disabled, .ctx-item--disabled) {
   background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 
-.image-ctx-menu--on-dark .ctx-item:focus-visible {
-  box-shadow: inset 0 0 0 var(--focus-width) rgb(var(--v-theme-on-dark-surface));
+.ctx-menu--on-dark .ctx-item:focus-visible {
+  box-shadow: inset 0 0 0 var(--focus-width)
+    rgb(var(--v-theme-on-dark-surface));
 }
 
-.image-ctx-menu--on-dark .ctx-sep {
+.ctx-menu--on-dark .section-label {
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+
+.ctx-menu--on-dark .ctx-sep {
   background: rgba(var(--v-theme-on-dark-surface), 0.1);
 }
 
-.image-ctx-menu--on-dark .ctx-item--danger {
+.ctx-menu--on-dark .ctx-item--danger {
   color: rgb(var(--v-theme-dark-surface-error));
 }
 
-.image-ctx-menu--on-dark .ctx-submenu {
+.ctx-menu--on-dark .ctx-submenu {
   background: rgb(var(--v-theme-dark-surface));
   border-color: rgba(var(--v-theme-on-dark-surface), 0.14);
 }
 
-.image-ctx-menu--on-dark .ctx-default-pill {
+.ctx-menu--on-dark .ctx-default-pill {
   background: rgba(var(--v-theme-on-dark-surface), 0.12);
 }

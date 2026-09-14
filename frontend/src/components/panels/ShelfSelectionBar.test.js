@@ -375,7 +375,7 @@ describe("the selection bar", () => {
     // all of them" and "never mind" are the two things you say about a
     // selection, so they sit on the selection itself.
     const clear = wrapper
-      .findAll(".shelf-mi")
+      .findAll(".ctx-item")
       .find((item) => item.text().includes("Clear selection"));
     await clear.trigger("click");
     expect(store.selectedRows).toHaveLength(0);
@@ -485,9 +485,9 @@ describe("the delete verb", () => {
     selectRows([row(1, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     const item = wrapper
-      .findAll(".shelf-mi")
+      .findAll(".ctx-item")
       .find((mi) => mi.text().includes("Move to Trash"));
-    expect(item.classes()).toContain("shelf-mi--danger");
+    expect(item.classes()).toContain("ctx-item--danger");
 
     await item.trigger("click", { shiftKey: true });
     expect(wrapper.emitted("delete")).toEqual([[true]]);
@@ -500,7 +500,7 @@ describe("Open in file manager", () => {
   // offered, and that pressing it hands the decision to the view.
   const item = (wrapper) =>
     wrapper
-      .findAll(".shelf-mi")
+      .findAll(".ctx-item")
       .find((mi) => mi.text().includes("Open in file manager"));
 
   it("is offered for one model whose file is actually there", () => {
@@ -574,7 +574,7 @@ describe("the two verbs that act inside a run", () => {
   }
 
   function menuItem(wrapper, text) {
-    return wrapper.findAll(".shelf-mi").find((b) => b.text().includes(text));
+    return wrapper.findAll(".ctx-item").find((b) => b.text().includes(text));
   }
 
   it("offers both verbs on one member of a run", () => {

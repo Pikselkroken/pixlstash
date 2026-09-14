@@ -460,67 +460,23 @@
   align-items: center;
 }
 
-.sidebar-collapsed-project-menu {
+/* The surface and rows are the shared `.ctx-*` menu; these only place it. */
+.sidebar-collapsed-project-menu,
+.sidebar-collapsed-project-submenu {
   position: fixed;
   z-index: 300;
-  background: rgb(var(--v-theme-surface));
-  border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: var(--radius-md);
-  box-shadow: none;
-  overflow: hidden;
   min-width: 180px;
-  white-space: nowrap;
-}
-
-.sidebar-collapsed-project-menu .sidebar-project-menu-item,
-.sidebar-collapsed-project-menu .sidebar-project-menu-add,
-.sidebar-collapsed-project-submenu .sidebar-project-menu-item,
-.sidebar-collapsed-project-submenu .sidebar-project-menu-add {
-  color: rgb(var(--v-theme-on-surface));
-}
-
-/* The rail is reserved on the base (see .sidebar-project-menu-item) so `.active`
-   only recolours it. The previous rule added the border here and tried to cancel
-   it with padding the base already carried, moving the label 3px on select. */
-.sidebar-collapsed-project-menu .sidebar-project-menu-item.active,
-.sidebar-collapsed-project-submenu .sidebar-project-menu-item.active {
-  background: var(--active-wash);
-  color: var(--active-text);
-  font-weight: 600;
-  border-left-color: var(--active-bar);
 }
 
 .sidebar-collapsed-project-submenu {
-  position: fixed;
   z-index: 301;
-  background: rgb(var(--v-theme-surface));
-  border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  min-width: 180px;
   max-height: 60vh;
   overflow-y: auto;
-  white-space: nowrap;
 }
 
-.sidebar-project-menu-separator {
-  height: 1px;
-  background: rgba(var(--v-theme-border), 0.3);
-  margin: var(--space-1) 0;
-}
-
-.sidebar-project-menu-has-sub {
-  position: relative;
-}
-
+/* The parent row stays washed while its submenu is open. */
 .sidebar-project-menu-has-sub.sub-open {
   background: var(--hover-wash);
-}
-
-.sidebar-project-menu-chevron {
-  margin-left: auto;
-  opacity: 0.45;
-  flex-shrink: 0;
 }
 
 .sidebar-collapsed-item--scrapheap {
@@ -542,16 +498,14 @@
 .sidebar-collapsed-flyout-menu {
   position: fixed;
   z-index: 300;
-  background: rgb(var(--v-theme-surface));
-  border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   max-height: 60vh;
   min-width: 200px;
   width: max-content;
-  white-space: nowrap;
+  /* The header runs flush to the top edge. */
+  padding-top: 0;
 }
 
 .sidebar-collapsed-flyout-header {
@@ -585,28 +539,9 @@
   flex: 1;
 }
 
+/* Rows carry a 32px thumbnail, so they keep block padding around it. */
 .sidebar-collapsed-flyout-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  cursor: pointer;
-  color: rgb(var(--v-theme-on-surface));
-  transition: background 0.12s;
-}
-
-.sidebar-collapsed-flyout-item:hover {
-  background: var(--hover-wash);
-}
-
-.sidebar-collapsed-flyout-item.active {
-  background: var(--active-wash);
-  color: var(--active-text);
-}
-
-.sidebar-collapsed-flyout-item.active:hover {
-  background:
-    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
+  padding-block: var(--space-2);
 }
 
 .sidebar-collapsed-flyout-thumb {
@@ -615,13 +550,6 @@
   border-radius: var(--radius-sm);
   object-fit: cover;
   flex-shrink: 0;
-}
-
-.sidebar-collapsed-flyout-label {
-  font-size: var(--text-base);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
 }
 
 .sidebar-collapsed-flyout-item-actions {
@@ -650,87 +578,6 @@
 .sidebar-collapsed-flyout-item-actions .v-icon:hover {
   opacity: 1;
   background: var(--hover-wash);
-}
-
-.sidebar-project-menu-section-label {
-  padding: var(--space-3) var(--space-3) var(--space-1);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-/* An `on-<x>` token is authored against a solid, full-opacity `<x>` fill and is
-   a different colour on a tint (`on-tertiary` on the old 30% tertiary selection
-   measured 1.35:1 in light). On a wash the foreground is the surface's own ink,
-   so selection here is `--active-wash` + `--active-text`, like every row. See
-   design-system-handoff.md §9.2. */
-.sidebar-project-menu-item {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  box-sizing: border-box;
-  padding: var(--space-2) var(--space-3);
-  /* Reserved rail: `.active` recolours it, never adds it. */
-  border-left: 3px solid transparent;
-  cursor: pointer;
-  appearance: none;
-  background: transparent;
-  font-family: inherit;
-  font-size: var(--text-sm);
-  text-align: left;
-  color: rgb(var(--v-theme-on-surface));
-  transition:
-    background 0.1s,
-    color 0.1s;
-  gap: var(--space-3);
-  min-height: 26px;
-}
-
-.sidebar-project-menu-item:hover {
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.sidebar-project-menu-item.active {
-  background: var(--active-wash);
-  color: var(--active-text);
-  border-left-color: var(--active-bar);
-  font-weight: 600;
-}
-
-.sidebar-project-menu-item.active:hover {
-  background:
-    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
-}
-
-.sidebar-project-menu-item-label {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-project-menu-add {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  cursor: pointer;
-  color: rgba(var(--v-theme-on-surface), 0.65);
-  border-top: 1px solid rgba(var(--v-theme-border), 0.25);
-  min-height: 26px;
-  transition:
-    background 0.1s,
-    color 0.1s;
-}
-
-.sidebar-project-menu-add:hover {
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-on-surface));
 }
 
 /* Sidebar right edge for counts */
@@ -1196,10 +1043,7 @@
    a menu, so an outer ring with its gap is clipped on both sides. Everything
    else here (the dock's icons, header actions) takes the global ring. */
 .sidebar-section-toggle:focus-visible,
-.sidebar-list-item:focus-visible,
-.sidebar-collapsed-flyout-item:focus-visible,
-.sidebar-project-menu-item:focus-visible,
-.sidebar-ctx-item:focus-visible {
+.sidebar-list-item:focus-visible {
   box-shadow: var(--focus-ring-inset);
   outline: none;
 }
@@ -1387,71 +1231,10 @@
 .sidebar-move-menu {
   position: fixed;
   z-index: 9999;
-  background: color-mix(
-    in srgb,
-    rgb(var(--v-theme-tertiary)) 38%,
-    rgb(var(--v-theme-sidebar))
-  );
-  border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: var(--radius-md);
   min-width: 180px;
   max-width: 300px;
   max-height: 420px; /* keep in sync with MOVE_MENU_MAX_H in the script */
   overflow-y: auto;
-  padding: var(--space-2) 0;
-  box-shadow: 0 4px 16px rgba(var(--v-theme-shadow), 0.3);
-  white-space: nowrap;
-}
-
-.sidebar-move-menu-group-header {
-  padding: var(--space-3) var(--space-3) var(--space-2);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: rgba(var(--v-theme-sidebar-text), var(--opacity-text-secondary));
-  margin-top: var(--space-2);
-}
-
-.sidebar-move-menu-group-header:first-child {
-  margin-top: 0;
-}
-
-.sidebar-move-menu-group-header--current {
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-move-menu-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  font-size: var(--text-base);
-  cursor: pointer;
-  color: rgb(var(--v-theme-sidebar-text));
-  overflow: hidden;
-  text-overflow: ellipsis;
-  transition: background 0.12s;
-}
-
-.sidebar-move-menu-check {
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-
-.sidebar-move-menu-item--create {
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.3);
-  margin-bottom: var(--space-1);
-  font-style: italic;
-  opacity: 0.85;
-}
-
-.sidebar-move-menu-item--checked .sidebar-move-menu-check {
-  opacity: 1;
-}
-
-.sidebar-move-menu-item:hover {
-  background: rgba(var(--v-theme-tertiary), 0.25);
 }
 
 .sidebar-list-icon {
@@ -1580,25 +1363,6 @@
 /* The scan spinner sits between the label and the count so the count never
    moves when a scan starts: a number that jumps is a number people stop
    trusting. */
-/* Separates the duplicate entry from the object's own actions. It is a
-   different kind of thing: everything above edits or shares the object, this
-   opens a task about it. */
-.sidebar-ctx-divider {
-  height: 1px;
-  margin: var(--space-2) var(--space-3);
-  background: rgb(var(--v-theme-divider));
-}
-
-/* The count on a context-menu row. Not a badge: it sits in the row's flow
-   rather than overlaying a host, so it takes the row's own quiet foreground. */
-.sidebar-ctx-count {
-  margin-left: auto;
-  padding-left: var(--space-3);
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
-  color: rgba(var(--v-theme-sidebar-text), 0.6);
-}
-
 .sidebar-dedup-scanning {
   display: inline-flex;
   align-items: center;
@@ -2085,75 +1849,16 @@
 .sidebar-ctx-menu {
   position: fixed;
   z-index: 2000;
-  background: rgb(var(--v-theme-surface));
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: var(--radius-md);
-  box-shadow: var(--elevation-3);
-  padding: var(--space-2) 0;
   min-width: 140px;
   max-width: 260px;
   user-select: none;
 }
 
-.sidebar-ctx-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  width: 100%;
-  padding: var(--space-3) var(--space-4);
-  font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-surface));
-  text-align: left;
-  white-space: nowrap;
-  transition: background 0.1s;
-}
-
-/* Truncate long resource names in share items so the menu can't overflow. */
-.sidebar-ctx-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.sidebar-ctx-item:hover {
-  background: var(--hover-wash);
-}
-
-.sidebar-ctx-item--danger {
-  color: rgb(var(--v-theme-error));
-}
-
-.sidebar-ctx-item--disabled {
-  opacity: 0.38;
-  cursor: default;
-  pointer-events: none;
-}
-
-button.sidebar-ctx-item:disabled {
-  opacity: 0.38;
-  cursor: default;
-  pointer-events: none;
-}
-
-button.sidebar-ctx-item:disabled:hover {
-  background: transparent;
-}
-
-.sidebar-ctx-item--has-arrow {
-  justify-content: flex-start;
-}
-
-.sidebar-ctx-arrow {
-  margin-left: auto;
-  opacity: 0.5;
-  font-size: var(--text-md);
-  line-height: 1;
-}
-
+/* A 12px mark centred in the row's 16px leading glyph slot. */
 .sidebar-ctx-color-dot {
   width: 12px;
   height: 12px;
+  margin: 0 var(--space-1);
   border-radius: 50%;
   flex-shrink: 0;
 }
@@ -2316,11 +2021,6 @@ button.sidebar-ctx-item:disabled:hover {
   border-color: #fff;
   transform: scale(1.12);
   z-index: 1;
-}
-
-.sidebar-ctx-icon {
-  flex-shrink: 0;
-  opacity: 0.7;
 }
 
 .folder-type-card {

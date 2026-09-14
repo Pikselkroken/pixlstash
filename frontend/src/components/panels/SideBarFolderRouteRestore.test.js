@@ -568,7 +568,7 @@ describe("restoring /ref-folder/:id", () => {
     await rows[0].trigger("contextmenu");
     await flushPromises();
     // The context menu is teleported to <body>, so it is not under `wrapper`.
-    const remove = document.querySelector(".sidebar-ctx-item--danger");
+    const remove = document.querySelector(".sidebar-ctx-menu .ctx-item--danger");
     expect(remove).not.toBe(null);
     remove.click();
     await flushPromises();

@@ -123,24 +123,24 @@
             >Add</AppBarButton
           >
         </template>
-        <div class="shelf-menu" role="menu">
+        <div class="ctx-menu shelf-menu" role="menu">
           <button
-            class="shelf-mi"
+            class="ctx-item"
             type="button"
             role="menuitem"
             @click="openFolders(addBtnRef?.el)"
           >
-            <v-icon size="16">mdi-folder-plus-outline</v-icon>
-            <span>Add folder…</span>
+            <v-icon class="ctx-icon">mdi-folder-plus-outline</v-icon>
+            <span class="ctx-label-text">Add folder…</span>
           </button>
           <button
-            class="shelf-mi"
+            class="ctx-item"
             type="button"
             role="menuitem"
             @click="openAddFile(addBtnRef?.el)"
           >
-            <v-icon size="16">mdi-file-plus-outline</v-icon>
-            <span>Add file…</span>
+            <v-icon class="ctx-icon">mdi-file-plus-outline</v-icon>
+            <span class="ctx-label-text">Add file…</span>
           </button>
           <!-- Shown only while the output root is UNSET, because setting it is
                a once-ever act: ai-toolkit writes every run under one folder.
@@ -150,15 +150,15 @@
                are about a selection the reader just made and owe an
                explanation, and this is about a job already done. -->
           <template v-if="!hasSourceFolder">
-            <span class="shelf-mi-sep"></span>
+            <div class="ctx-sep"></div>
             <button
-              class="shelf-mi"
+              class="ctx-item"
               type="button"
               role="menuitem"
               @click="openAddSource(addBtnRef?.el)"
             >
-              <AiToolkitIcon :size="16" />
-              <span>Set ai-toolkit output folder…</span>
+              <AiToolkitIcon class="ctx-icon" />
+              <span class="ctx-label-text">Set ai-toolkit output folder…</span>
             </button>
           </template>
         </div>
@@ -199,12 +199,12 @@
            this bar would need three of them).
 
            `align="start"` because the trigger sits near the LEFT edge, and the
-           rows are the same `.shelf-mi` items the Add menu already draws - one
+           rows are the same `.ctx-item` rows the Add menu already draws - one
            recipe, so the folded form is the unfolded one moved. -->
       <TbOverflowMenu ref="overflowRef" class="shelf-overflow" align="start">
         <template #default="{ close }">
           <button
-            class="shelf-mi"
+            class="ctx-item"
             type="button"
             role="menuitem"
             @click="
@@ -212,11 +212,11 @@
               openFolders(overflowRef?.trigger?.());
             "
           >
-            <v-icon size="16">mdi-folder-plus-outline</v-icon>
-            <span>Add folder…</span>
+            <v-icon class="ctx-icon">mdi-folder-plus-outline</v-icon>
+            <span class="ctx-label-text">Add folder…</span>
           </button>
           <button
-            class="shelf-mi"
+            class="ctx-item"
             type="button"
             role="menuitem"
             @click="
@@ -224,12 +224,12 @@
               openAddFile(overflowRef?.trigger?.());
             "
           >
-            <v-icon size="16">mdi-file-plus-outline</v-icon>
-            <span>Add file…</span>
+            <v-icon class="ctx-icon">mdi-file-plus-outline</v-icon>
+            <span class="ctx-label-text">Add file…</span>
           </button>
           <template v-if="!hasSourceFolder">
             <button
-              class="shelf-mi"
+              class="ctx-item"
               type="button"
               role="menuitem"
               @click="
@@ -237,13 +237,13 @@
                 openAddSource(overflowRef?.trigger?.());
               "
             >
-              <AiToolkitIcon :size="16" />
-              <span>Set ai-toolkit output folder…</span>
+              <AiToolkitIcon class="ctx-icon" />
+              <span class="ctx-label-text">Set ai-toolkit output folder…</span>
             </button>
           </template>
-          <span class="shelf-mi-sep"></span>
+          <div class="ctx-sep"></div>
           <button
-            class="shelf-mi"
+            class="ctx-item"
             type="button"
             role="menuitem"
             @click="
@@ -251,8 +251,8 @@
               openFolders(overflowRef?.trigger?.());
             "
           >
-            <v-icon size="16">mdi-folder-multiple-outline</v-icon>
-            <span>Model folders…</span>
+            <v-icon class="ctx-icon">mdi-folder-multiple-outline</v-icon>
+            <span class="ctx-label-text">Model folders…</span>
           </button>
         </template>
       </TbOverflowMenu>
@@ -1354,34 +1354,34 @@
       origin="top start"
       :offset="2"
     >
-      <div v-if="folderMenuFolder" class="shelf-menu" role="menu">
+      <div v-if="folderMenuFolder" class="ctx-menu shelf-menu" role="menu">
         <button
           v-if="foldersDialogRef?.canScan(folderMenuFolder)"
-          class="shelf-mi"
-          :class="{ 'shelf-mi--disabled': folderScanReason }"
+          class="ctx-item"
+          :class="{ 'ctx-item--disabled': folderScanReason }"
           type="button"
           role="menuitem"
           :disabled="Boolean(folderScanReason)"
           :title="folderScanReason || undefined"
           @click="rescanFromMenu"
         >
-          <v-icon size="16">mdi-refresh</v-icon>
-          <span>{{
+          <v-icon class="ctx-icon">mdi-refresh</v-icon>
+          <span class="ctx-label-text">{{
             folderMenuFolder.last_checked ? "Rescan folder" : "Scan folder"
           }}</span>
         </button>
         <button
           v-if="folderMenuFolder.relocatable"
-          class="shelf-mi"
-          :class="{ 'shelf-mi--disabled': folderMoveReason }"
+          class="ctx-item"
+          :class="{ 'ctx-item--disabled': folderMoveReason }"
           type="button"
           role="menuitem"
           :disabled="Boolean(folderMoveReason)"
           :title="folderMoveReason || undefined"
           @click="relocateFromMenu"
         >
-          <v-icon size="16">mdi-folder-move-outline</v-icon>
-          <span>Move folder…</span>
+          <v-icon class="ctx-icon">mdi-folder-move-outline</v-icon>
+          <span class="ctx-label-text">Move folder…</span>
         </button>
       </div>
     </v-menu>
@@ -4232,7 +4232,7 @@ watch(
 
 /* Rung 3. `Add ▾` and `Model folders` fold into the ⋯ that appears in their
    place. They are the bar's only two verbs, they open something and write
-   nothing on the press, and their rows are the same `.shelf-mi` items the Add
+   nothing on the press, and their rows are the same `.ctx-item` rows the Add
    menu already draws. Buys 114px net of the ⋯ itself, and what is left - the
    tab pair, the ⋯, and the three compressed view menus - is the 565px floor:
    below that the bar overflows and there is nothing left to give. */

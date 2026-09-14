@@ -109,7 +109,7 @@ describe("overlay-mode context menu - action set", () => {
 
     // Dark-surface skin is applied.
     expect(wrapper.find(".image-ctx-menu").classes()).toContain(
-      "image-ctx-menu--on-dark",
+      "ctx-menu--on-dark",
     );
   });
 
