@@ -46,8 +46,24 @@ const VIcon = {
       h("i", { class: "v-icon" }, slots.default?.()),
 };
 
+// The one tooltip surface, reduced to what a test can read: the tip's text as
+// `data-tip`, on the activator element or on a marker inside the parent. A
+// describing tip claims its activator's `aria-describedby`, as the real one does.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "shortcut", "location", "disabled", "describe", "activator"],
+  template: `<slot
+      v-if="$slots.activator"
+      name="activator"
+      :props="{
+        'data-tip': text || undefined,
+        'aria-describedby': describe === false ? undefined : 'tooltip-stub',
+      }"
+    /><span v-else-if="text" class="tip" :data-tip="text" />`,
+};
+
 const globalOpts = {
-  stubs: { "v-icon": VIcon },
+  stubs: { Tooltip: TooltipStub, "v-icon": VIcon },
   provide: {
     "rs-backend-url": "http://backend.test",
     "rs-open-zoom": () => {},
@@ -222,6 +238,7 @@ const Blank = { name: "Blank", render: () => h("div") };
 const overlayOpts = {
   global: {
     stubs: {
+      Tooltip: TooltipStub,
       "v-icon": VIcon,
       ReviewSessionView: SessionStub,
       ReviewRail: Blank,

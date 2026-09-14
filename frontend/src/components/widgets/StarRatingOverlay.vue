@@ -7,20 +7,31 @@
     }"
   >
     <template v-if="numberMode">
-      <v-icon
-        :size="iconSize"
-        :color="
-          dScore > 0
-            ? 'rgba(var(--v-theme-accent))'
-            : 'rgba(var(--v-theme-on-background), 0.4)'
-        "
-        :title="
-          dScore > 0 ? `Rated ${dScore} - click to change` : 'Click to rate'
-        "
-        style="cursor: pointer; vertical-align: middle; display: flex"
-        @click.stop="cycleRating()"
-        >mdi-star</v-icon
-      >
+      <!-- A wrapper per star, so the tip takes the parent form and is built on
+           first hover: this renders on every grid tile. -->
+      <span class="star-slot">
+        <Tooltip
+          :text="
+            dScore > 0 ? `Rated ${dScore} - click to change` : 'Click to rate'
+          "
+          activator="parent"
+          :describe="false"
+        />
+        <v-icon
+          :size="iconSize"
+          :color="
+            dScore > 0
+              ? 'rgba(var(--v-theme-accent))'
+              : 'rgba(var(--v-theme-on-background), 0.4)'
+          "
+          :aria-label="
+            dScore > 0 ? `Rated ${dScore} - click to change` : 'Click to rate'
+          "
+          style="cursor: pointer; vertical-align: middle; display: flex"
+          @click.stop="cycleRating()"
+          >mdi-star</v-icon
+        >
+      </span>
       <span
         class="star-number-label"
         :style="{ opacity: dScore > 0 ? 1 : 0 }"
@@ -28,26 +39,32 @@
       >
     </template>
     <template v-else>
-      <v-icon
-        v-for="n in max"
-        :key="n"
-        :size="iconSize"
-        :color="
-          n <= dScore
-            ? 'rgba(var(--v-theme-accent))'
-            : 'rgba(var(--v-theme-on-background), 0.6)'
-        "
-        :title="`Set rating ${n} (${n})`"
-        style="cursor: pointer"
-        @click.stop="handleClick(n)"
-        >mdi-star</v-icon
-      >
+      <span v-for="n in max" :key="n" class="star-slot">
+        <Tooltip
+          :text="`Set rating ${n} (${n})`"
+          activator="parent"
+          :describe="false"
+        />
+        <v-icon
+          :size="iconSize"
+          :color="
+            n <= dScore
+              ? 'rgba(var(--v-theme-accent))'
+              : 'rgba(var(--v-theme-on-background), 0.6)'
+          "
+          :aria-label="`Set rating ${n} (${n})`"
+          style="cursor: pointer"
+          @click.stop="handleClick(n)"
+          >mdi-star</v-icon
+        >
+      </span>
     </template>
   </div>
 </template>
 
 <script setup>
 import { computed } from "vue";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   score: { type: Number, default: 0 },
@@ -78,6 +95,13 @@ function cycleRating() {
   align-items: center;
   gap: 0;
   box-shadow: none;
+}
+
+/* Shrink-wraps its star. A real box, not `display: contents`: the tip anchors
+   to this element's rect, and a contents box has none. */
+.star-slot {
+  display: inline-flex;
+  align-items: center;
 }
 
 .star-overlay--compact {

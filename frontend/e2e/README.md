@@ -101,7 +101,7 @@ checklist shrinks as coverage grows.
   pruning doesn't break tests (see `specs/grid.spec.js`).
 - Pictures are identified by their thumbnail `<img>` src
   (`.../thumbnails/<id>.webp`) — the only per-card picture id the grid renders.
-- Selectors are CSS/ARIA-first; prefer stable classes and `title`/`aria-label`.
+- Selectors are CSS/ARIA-first; prefer stable classes and `aria-label` (a native `title` survives only to reveal clipped text).
 - The backend boots ONE throwaway DB per `playwright test` invocation (shared
   across specs in a run), so keep mutations additive/idempotent. The logout
   spec mints an isolated session (`loginToFreshSession`) because the backend

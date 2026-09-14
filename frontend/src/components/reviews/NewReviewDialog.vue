@@ -45,13 +45,14 @@
               'rs-dialog-chip--anomaly': store.isAnomalyTag(h.tag),
             }"
             type="button"
-            :title="
-              openTags.has(h.tag)
-                ? 'Already open - jump to the session'
-                : undefined
-            "
             @click="pickTag(h.tag)"
           >
+            <Tooltip
+              :text="
+                openTags.has(h.tag) ? 'Already open - jump to the session' : ''
+              "
+              activator="parent"
+            />
             <v-icon
               v-if="store.isAnomalyTag(h.tag)"
               size="12"
@@ -98,14 +99,16 @@
               aria-haspopup="listbox"
               aria-labelledby="rs-set-label"
               :aria-expanded="setMenuOpen"
-              :title="
-                selectedSetLocked
-                  ? lockedSetTitle(selectedSetLabel)
-                  : selectedSetLabel
-              "
+              :title="selectedSetLocked ? undefined : selectedSetLabel"
               @click="toggleSetMenu"
               @keydown="onTriggerKeydown"
             >
+              <Tooltip
+                :text="
+                  selectedSetLocked ? lockedSetTitle(selectedSetLabel) : ''
+                "
+                activator="parent"
+              />
               <v-icon
                 v-if="selectedSetLocked"
                 size="14"
@@ -140,15 +143,18 @@
                 role="option"
                 :aria-selected="opt.id === setId"
                 :aria-disabled="opt.locked || undefined"
-                :title="opt.locked ? lockedSetTitle(opt.name) : undefined"
                 @click="selectSet(opt)"
                 @mousemove="activeSetIndex = i"
               >
-                <v-icon v-if="opt.locked" size="14" class="rs-listbox-lock"
+                <Tooltip
+                  :text="opt.locked ? lockedSetTitle(opt.name) : ''"
+                  activator="parent"
+                />
+                <v-icon v-if="opt.locked" size="16" class="rs-listbox-lock"
                   >mdi-lock-outline</v-icon
                 >
-                <!-- Locked rows already carry the fuller lock explanation on the
-                     <li>; an inner title would shadow it. -->
+                <!-- Locked rows carry the fuller lock explanation as the row's
+                     tip; a native title here would open beside it. -->
                 <span
                   class="rs-listbox-option-label"
                   :title="opt.locked ? undefined : opt.name"
@@ -156,7 +162,7 @@
                 >
                 <v-icon
                   v-if="opt.id === setId"
-                  size="14"
+                  size="16"
                   class="rs-listbox-check"
                   >mdi-check</v-icon
                 >
@@ -182,7 +188,7 @@
 
       <div v-if="tag" class="rs-dialog-preview">
         <div class="rs-dialog-preview-title">
-          <v-icon size="15" class="rs-dialog-preview-icon">mdi-radar</v-icon>
+          <v-icon size="16" class="rs-dialog-preview-icon">mdi-radar</v-icon>
           Scan preview
         </div>
         <div class="rs-dialog-preview-body">
@@ -212,12 +218,13 @@
           class="rs-dialog-btn rs-dialog-btn--go"
           type="button"
           :disabled="!tag || store.creating || selectedSetLocked"
-          :title="
-            selectedSetLocked ? lockedSetTitle(selectedSetLabel) : undefined
-          "
           @click="create"
         >
-          <v-icon size="15">{{
+          <Tooltip
+            :text="selectedSetLocked ? lockedSetTitle(selectedSetLabel) : ''"
+            activator="parent"
+          />
+          <v-icon size="16">{{
             store.creating ? "mdi-loading mdi-spin" : "mdi-radar"
           }}</v-icon>
           Scan &amp; create
@@ -236,6 +243,7 @@ import Segmented from "../widgets/Segmented.vue";
 // Shared with TagHealthBoard's locked-scope state so both surfaces explain a
 // locked set with the same sentence.
 import { lockedSetTitle } from "./lockedSetCopy";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   preset: { type: String, default: "" },
@@ -418,7 +426,7 @@ async function create() {
 .rs-dialog-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 4300;
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -444,7 +452,7 @@ async function create() {
   outline-color: rgb(var(--v-theme-on-dark-surface));
 }
 .rs-dialog-title {
-  font-size: 16px;
+  font-size: var(--text-md);
   font-weight: var(--weight-bold);
 }
 .rs-dialog-field {
@@ -453,7 +461,7 @@ async function create() {
   gap: 8px;
 }
 .rs-dialog-label {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -488,7 +496,7 @@ async function create() {
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
   color: rgb(var(--v-theme-on-dark-surface));
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 /* Dark in both themes, so Segmented's on-surface ink and track take the
    dark-surface values (the dark theme's own) instead of the light theme's. */
@@ -499,6 +507,12 @@ async function create() {
   --track-trough: rgba(var(--v-theme-scrim), 0.34);
   --track-ring: rgba(var(--v-theme-on-dark-surface), 0.4);
   --focus-stroke: rgb(var(--v-theme-on-dark-surface));
+  /* The selected fill too. The deep olive is a dark fill on a dark trough and
+     the elevation that carries the second cue is invisible on near-black; the
+     bright olive is the dark-theme value for exactly this, under the surface's
+     own near-black ink (5.50:1 on #242628, 6.25:1 on #181b20 - main.js). */
+  --v-theme-primary: var(--v-theme-dark-surface-primary);
+  --v-theme-on-primary: var(--v-theme-dark-surface);
 }
 .rs-dialog-chips {
   display: flex;
@@ -514,8 +528,8 @@ async function create() {
   gap: 4px;
   height: 28px;
   padding: 0 11px;
-  border-radius: 999px;
-  font-size: 12.5px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
@@ -536,7 +550,7 @@ async function create() {
   flex-shrink: 0;
 }
 .rs-dialog-nomatch {
-  font-size: 12.5px;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
   padding: 4px 2px;
 }
@@ -559,7 +573,7 @@ async function create() {
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
   color: rgb(var(--v-theme-on-dark-surface));
-  font-size: 12px;
+  font-size: var(--text-xs);
   cursor: pointer;
   color-scheme: dark;
 }
@@ -611,7 +625,7 @@ async function create() {
 }
 .rs-listbox-menu {
   position: absolute;
-  z-index: 1;
+  z-index: var(--z-raised);
   top: calc(100% + var(--space-1));
   left: 0;
   right: 0;
@@ -665,7 +679,7 @@ async function create() {
   color: rgba(var(--v-theme-on-dark-surface), 0.38);
 }
 .rs-dialog-frozen {
-  font-size: 11.5px;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
   margin-top: -6px;
 }
@@ -675,7 +689,7 @@ async function create() {
   border-radius: var(--radius-md);
   background: rgba(var(--v-theme-on-dark-surface), 0.05);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 .rs-dialog-preview-title {
   font-weight: var(--weight-semibold);
@@ -702,11 +716,11 @@ async function create() {
 }
 .rs-dialog-include-note {
   color: rgba(var(--v-theme-on-dark-surface), 0.55);
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 
 .rs-dialog-error {
-  font-size: 12.5px;
+  font-size: var(--text-xs);
   color: rgb(var(--v-theme-dark-surface-error));
 }
 
@@ -722,7 +736,7 @@ async function create() {
   height: 34px;
   padding: 0 14px;
   border-radius: var(--radius-sm);
-  font-size: 13.5px;
+  font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   background: rgba(var(--v-theme-on-dark-surface), 0.08);

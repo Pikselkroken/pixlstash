@@ -21,7 +21,7 @@ vi.mock("../../api/moves", () => ({
 
 import MovesReview from "./MovesReview.vue";
 
-const globalOpts = { global: { stubs: { "v-icon": true } } };
+const globalOpts = { global: { stubs: { "v-icon": true, VTooltip: true } } };
 
 function summary({ unambiguous = [], ambiguous = [], off_layout = [] } = {}) {
   return { unambiguous, ambiguous, off_layout };

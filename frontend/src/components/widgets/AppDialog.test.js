@@ -13,6 +13,14 @@ import { h } from "vue";
 vi.mock("vuetify/components", () => ({
   VIcon: { name: "v-icon", template: "<i><slot /></i>" },
   VDialog: { name: "v-dialog", template: "<div><slot /></div>" },
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup:
+      (_p, { slots }) =>
+      () =>
+        slots.activator?.({ props: {} }),
+  },
 }));
 
 import AppDialog from "./AppDialog.vue";
@@ -46,6 +54,12 @@ describe("AppDialog keyboard contract", () => {
     const w = mountDialog({ persistent: true });
     await w.find(".txt").trigger("keydown", { key: "Escape" });
     expect(w.emitted("close")).toBeFalsy();
+  });
+
+  it("does not accept on Enter while persistent - a destructive accept needs its button", async () => {
+    const w = mountDialog({ persistent: true });
+    await w.find(".txt").trigger("keydown", { key: "Enter" });
+    expect(w.emitted("accept")).toBeFalsy();
   });
 
   it("emits accept on plain Enter from a single-line input", async () => {
@@ -99,5 +113,19 @@ describe("AppDialog keyboard contract", () => {
     expect(close.exists()).toBe(true);
     await close.trigger("click");
     expect(w.emitted("close")).toHaveLength(1);
+  });
+
+  it("names the dialog by its heading", () => {
+    const w = mountDialog();
+    const id = w.find("h2").attributes("id");
+    expect(id).toBeTruthy();
+    expect(w.find("[aria-labelledby]").attributes("aria-labelledby")).toBe(id);
+  });
+
+  it("sizes by step, md by default", () => {
+    expect(mountDialog().find(".app-dialog").classes()).toContain("app-dialog--md");
+    expect(mountDialog({ size: "lg" }).find(".app-dialog").classes()).toContain(
+      "app-dialog--lg",
+    );
   });
 });

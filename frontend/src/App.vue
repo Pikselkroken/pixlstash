@@ -64,6 +64,7 @@ import NoticeHost from "./components/widgets/NoticeHost.vue";
 import ShortcutsDialog from "./components/widgets/ShortcutsDialog.vue";
 import ConfirmDialog from "./components/widgets/ConfirmDialog.vue";
 import LibrarySwitchOverlay from "./components/settings/LibrarySwitchOverlay.vue";
+import Tooltip from "./components/widgets/Tooltip.vue";
 import { useFloatingBottomInset } from "./composables/useBottomAnchor";
 import { toPx } from "./utils/floatingBottom.js";
 
@@ -654,10 +655,10 @@ defineExpose({
             !sidebarStore.sidebarForcedHidden
           "
           class="sidebar-hover-trigger"
-          title="Show sidebar"
           @mouseenter="sidebarStore.revealSidebar()"
           @click="sidebarStore.revealSidebar()"
         >
+          <Tooltip text="Show sidebar" activator="parent" location="end" />
           <span class="sidebar-hover-trigger-tab">
             <v-icon size="18">mdi-chevron-right</v-icon>
           </span>
@@ -856,11 +857,11 @@ defineExpose({
         'shortcuts-fab--stats-open': sidebarStore.statsOpen,
       }"
       type="button"
-      title="Keyboard shortcuts (F1)"
       :disabled="librarySwitchOverlayOpen"
       @click="shortcutsDialogOpen = true"
     >
-      <v-icon size="20">mdi-keyboard</v-icon><span>F1</span>
+      <Tooltip text="Keyboard shortcuts (F1)" activator="parent" />
+      <v-icon size="18">mdi-keyboard</v-icon><span>F1</span>
     </button>
     <ShortcutsDialog v-model="shortcutsDialogOpen" />
     <ConfirmDialog />

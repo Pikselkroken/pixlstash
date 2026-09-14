@@ -38,6 +38,14 @@ vi.mock("vuetify/components", () => ({
     template:
       '<select :data-level="label" :disabled="disabled"><slot name="selection" :index="0" /></select>',
   },
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup:
+      (_p, { slots }) =>
+      () =>
+        slots.activator?.({ props: {} }),
+  },
 }));
 
 const getLayoutSettings = vi.fn();
@@ -127,9 +135,9 @@ const PASS_DONE = {
 };
 
 const AppDialogStub = {
-  props: ["open", "title", "width", "persistent"],
+  props: ["open", "title", "size", "persistent"],
   template:
-    "<div v-if='open' class='dlg' :data-width='width'><h2>{{ title }}</h2>" +
+    "<div v-if='open' class='dlg' :data-size='size'><h2>{{ title }}</h2>" +
     "<div class='dlg-body'><slot /></div>" +
     "<footer class='dlg-foot'><slot name='footer' /></footer></div>",
 };
@@ -295,8 +303,8 @@ describe("LibraryLayoutDialog", () => {
 
   it("draws four levels on one line and nothing else in the row", async () => {
     // The width budget the row is drawn to (see MAX_LEVELS in the component):
-    // 620px dialog - 48px padding = 572px, minus three separators and six gaps
-    // = ~527px over four 120px-basis columns. It only holds while the row
+    // 720px dialog - 32px padding = 688px, minus three separators and six gaps
+    // = ~643px over four 120px-basis columns. It only holds while the row
     // carries selects and separators and NOTHING else, so a per-level remove
     // button or an add control coming back is what this fails on.
     getLayoutSettings.mockResolvedValue(FOUR_LEVELS);
@@ -411,9 +419,12 @@ describe("LibraryLayoutDialog", () => {
       "0 * var(--indent-step)",
     );
     // The full stored path is on the row whatever it managed to draw.
-    expect(rows[0].find(".layout-tree__name").attributes("title")).toBe(
-      "Harbour Nights/Nova/arm hair",
-    );
+    expect(
+      rows[0]
+        .find(".layout-tree__name")
+        .findComponent({ name: "Tooltip" })
+        .props("text"),
+    ).toBe("Harbour Nights/Nova/arm hair");
   });
 
   it("indents instead of repeating an ancestor that does have a row", async () => {

@@ -21,9 +21,10 @@
  * reload rather than a store refresh: picture ids do not mean the same thing in
  * another library, and every open view describes the old one.
  */
+import { withRef } from "../../utils/withRef.js";
 import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
-import { VCard, VDialog, VMenu, VProgressCircular } from "vuetify/components";
+import { VMenu, VProgressCircular } from "vuetify/components";
 
 import {
   LIBRARIES_DOCUMENTATION_URL,
@@ -404,8 +405,9 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
             >
               <template #activator="{ props: menuProps }">
                 <button
-                  v-bind="menuProps"
-                  :ref="(el) => (moreButtons[library.uuid] = el)"
+                  v-bind="
+                    withRef(menuProps, (el) => (moreButtons[library.uuid] = el))
+                  "
                   type="button"
                   class="library-row__more"
                   :disabled="busyUuid === library.uuid"
@@ -553,42 +555,48 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
       </p>
     </SettingsSection>
 
-    <v-dialog v-model="commandsOpen" max-width="640">
-      <v-card class="libraries-cli-dialog">
-        <h3 class="libraries-cli-dialog__title">The same things from a terminal</h3>
-
-        <ul class="libraries-cli-list">
-          <li v-for="item in cliCommands" :key="item.verb" class="libraries-cli">
-            <div class="libraries-cli__text">
-              <code class="libraries-cli__command">{{ item.command }}</code>
-              <span>{{ item.description }}</span>
-            </div>
-            <AppButton
-              class="libraries-cli__copy"
-              size="sm"
-              variant="ghost"
-              icon-left="content-copy"
-              :title="`Copy ${item.syntax} command`"
-              @click="copyCommand(item.command)"
-            >
-              {{ copiedCommand === item.command ? "Copied" : "Copy" }}
-            </AppButton>
-          </li>
-        </ul>
-
-        <div class="libraries-cli-dialog__actions">
-          <AppButton size="sm" variant="secondary" @click="commandsOpen = false">
-            Close
+    <AppDialog
+      :open="commandsOpen"
+      title="The same things from a terminal"
+      size="lg"
+      @close="commandsOpen = false"
+      @accept="commandsOpen = false"
+    >
+      <ul class="libraries-cli-list">
+        <li v-for="item in cliCommands" :key="item.verb" class="libraries-cli">
+          <div class="libraries-cli__text">
+            <code class="libraries-cli__command">{{ item.command }}</code>
+            <span>{{ item.description }}</span>
+          </div>
+          <AppButton
+            class="libraries-cli__copy"
+            size="sm"
+            variant="ghost"
+            icon-left="content-copy"
+            :tooltip="`Copy ${item.syntax} command`"
+            @click="copyCommand(item.command)"
+          >
+            {{ copiedCommand === item.command ? "Copied" : "Copy" }}
           </AppButton>
-        </div>
-      </v-card>
-    </v-dialog>
+        </li>
+      </ul>
+      <template #footer>
+        <AppButton
+          class="libraries-cli-dialog__close"
+          size="sm"
+          variant="secondary"
+          @click="commandsOpen = false"
+        >
+          Close
+        </AppButton>
+      </template>
+    </AppDialog>
 
     <AppDialog
       :open="Boolean(renaming)"
       :title="`Rename ${renaming?.name ?? ''}`"
       subtitle="Changes the label only. Nothing on disk is renamed."
-      :width="440"
+      size="sm"
       @close="renaming = null"
       @accept="commitRename"
     >
@@ -803,29 +811,17 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
   border-radius: var(--radius-sm);
 }
 
-.libraries-cli-dialog {
-  padding: var(--space-6);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.libraries-cli-dialog__title {
+.libraries-rename__error {
   margin: 0;
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-}
-
-.libraries-cli-dialog__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-3);
 }
 
 .libraries-cli-list {
   list-style: none;
-  margin: var(--space-3) 0 0;
+  margin: 0;
   padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 .libraries-cli {
@@ -833,7 +829,6 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  margin-bottom: var(--space-2);
 }
 
 .libraries-cli__text {

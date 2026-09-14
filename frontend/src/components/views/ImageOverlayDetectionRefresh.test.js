@@ -142,6 +142,7 @@ describe("ImageOverlay mounted detection refresh", () => {
     PluginParametersUI: true,
     ComfyUiRunner: true,
     ProgressOverlay: true,
+    VTooltip: true,
   };
 
   const flush = () => new Promise((r) => setTimeout(r, 0));

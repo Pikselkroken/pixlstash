@@ -12,7 +12,25 @@ import { mount } from "@vue/test-utils";
 
 import DedupVerdictMenu from "./DedupVerdictMenu.vue";
 
-const globalOpts = { global: { stubs: { "v-icon": true } } };
+// The one tooltip surface, reduced to what a test can read: the tip's text as
+// `data-tip`, on the activator element or on a marker inside the parent. A
+// describing tip claims its activator's `aria-describedby`, as the real one does.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "shortcut", "location", "disabled", "describe", "activator"],
+  template: `<slot
+      v-if="$slots.activator"
+      name="activator"
+      :props="{
+        'data-tip': text || undefined,
+        'aria-describedby': describe === false ? undefined : 'tooltip-stub',
+      }"
+    /><span v-else-if="text" class="tip" :data-tip="text" />`,
+};
+
+const globalOpts = {
+  global: { stubs: { Tooltip: TooltipStub, "v-icon": true } },
+};
 
 /** The rows the store publishes, with `over` applied per id. */
 function rows(over = {}) {
@@ -81,7 +99,9 @@ describe("DedupVerdictMenu", () => {
     });
     const last = menu.findAll(".vrow")[0];
     expect(last.attributes("disabled")).toBeDefined();
-    expect(last.attributes("title")).toContain("the page is empty");
+    expect(last.find(".tip").attributes("data-tip")).toContain(
+      "the page is empty",
+    );
     expect(menu.emitted("toggle")).toBeUndefined();
   });
 });

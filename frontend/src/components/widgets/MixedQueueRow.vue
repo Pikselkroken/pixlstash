@@ -37,16 +37,19 @@
            is blocked: a reason that lives only in a tooltip is a reason the
            keyboard never reaches. Named, because the set is what has to be
            unlocked and "locked" alone is a dead end. -->
-      <span
-        v-if="lockNote"
-        :id="lockNoteId"
-        class="mqlock"
-        :class="{ 'mqlock--flash': lockFlash }"
-        :title="lockTitle"
-      >
-        <v-icon size="13">mdi-lock-outline</v-icon>
-        {{ lockNote }}
-      </span>
+      <Tooltip v-if="lockNote" :text="lockTitle">
+        <template #activator="{ props: tipProps }">
+          <span
+            :id="lockNoteId"
+            class="mqlock"
+            :class="{ 'mqlock--flash': lockFlash }"
+            v-bind="tipProps"
+          >
+            <v-icon size="13">mdi-lock-outline</v-icon>
+            {{ lockNote }}
+          </span>
+        </template>
+      </Tooltip>
     </div>
 
     <!-- One tile per MEMBER, never collapsed: the whole point of this page is
@@ -79,21 +82,26 @@
            it keeps its place in the tab order and the reason it points at stays
            reachable. The page owns the guard, so the press is answered rather
            than dead. -->
-      <AppButton
-        v-if="!readOnly"
-        :variant="focused ? 'primary' : 'outline'"
-        :icon-left="plan.icon"
-        data-testid="mixed-resolve"
-        :tabindex="focused ? 0 : -1"
-        :disabled="busy"
-        aria-keyshortcuts="Enter"
-        :title="lockNote ? lockTitle : primaryTitle"
-        v-bind="primaryLockAttrs"
-        @click.stop="emit('resolve')"
-      >
-        {{ plan.label }}
-        <kbd v-if="focused" aria-hidden="true">Enter</kbd>
-      </AppButton>
+      <!-- The tip rides the activator slot, not AppButton's `tooltip` prop: a
+           tip bound to its parent writes that parent's `aria-describedby`, and
+           the lock note has to stay the description of a blocked primary. -->
+      <Tooltip v-if="!readOnly" :text="lockNote ? lockTitle : primaryTitle">
+        <template #activator="{ props: tipProps }">
+          <AppButton
+            :variant="focused ? 'primary' : 'outline'"
+            :icon-left="plan.icon"
+            data-testid="mixed-resolve"
+            :tabindex="focused ? 0 : -1"
+            :disabled="busy"
+            aria-keyshortcuts="Enter"
+            v-bind="mergeProps(tipProps, primaryLockAttrs)"
+            @click.stop="emit('resolve')"
+          >
+            {{ plan.label }}
+            <kbd v-if="focused" aria-hidden="true">Enter</kbd>
+          </AppButton>
+        </template>
+      </Tooltip>
       <!-- Keep is what makes this list drainable. Without it the
            legitimate-but-odd stacks sit here forever and the page becomes
            ignorable. It changes no picture, so it is not undoable; the way back
@@ -117,7 +125,7 @@
         :tabindex="focused ? 0 : -1"
         :disabled="busy"
         aria-keyshortcuts="K"
-        :title="
+        :tooltip="
           bulk
             ? `Leave all ${selectionCount} selected stacks exactly as they are. They stop being listed until their pictures change.`
             : 'This stack is fine. It stops being listed until its pictures change.'
@@ -146,7 +154,7 @@
         icon-left="format-list-checks"
         data-testid="mixed-show-queue"
         :tabindex="focused ? 0 : -1"
-        title="Show the duplicate group this stack appears in, back in the review queue."
+        tooltip="Show the duplicate group this stack appears in, back in the review queue."
         @click.stop="emit('show-queue')"
       >
         In the queue
@@ -180,11 +188,12 @@
 // selection all belong to the page (`useMixedStackQueue`); this component
 // reports what was pressed.
 
-import { computed, useId } from "vue";
+import { computed, mergeProps, useId } from "vue";
 
 import AppButton from "./AppButton.vue";
 import DedupPictureStrip from "./DedupPictureStrip.vue";
 import DedupWhyPills from "./DedupWhyPills.vue";
+import Tooltip from "./Tooltip.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import {
   isMixedStackStackable,
@@ -359,7 +368,6 @@ const tiles = computed(() =>
       chip: {
         icon: "mdi-approximately-equal",
         text: edgePercentText(member.nearestEdge),
-        title: matchSentence(member),
       },
     };
   }),

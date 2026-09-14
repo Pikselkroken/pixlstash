@@ -288,7 +288,7 @@ defineExpose({
   background: color-mix(in srgb, rgb(var(--v-theme-shadow)) 85%, transparent);
   backdrop-filter: blur(6px);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
-  border-radius: 6px; /* no clean token: 6px equidistant between --radius-sm(4px) and --radius-md(8px) */
+  border-radius: var(--radius-md);
   box-shadow: var(--elevation-3);
   display: flex;
   flex-direction: column;
@@ -328,7 +328,7 @@ defineExpose({
   display: inline-block;
   margin-left: var(--space-3);
   padding: 0 var(--space-2);
-  font-size: 0.55rem; /* no token: ~7.7px, well below --text-2xs=11px */
+  font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   letter-spacing: 0.04em;
   border-radius: var(--radius-sm);

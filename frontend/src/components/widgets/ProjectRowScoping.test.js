@@ -37,6 +37,15 @@ import { isReadOnly, sessionContext } from "../../utils/apiClient";
 import ImageGridContextMenu from "./ImageGridContextMenu.vue";
 import SelectionMenu from "../panels/SelectionMenu.vue";
 
+// The tooltip is stubbed to carry its text on the element it wraps or sits in:
+// the real one renders nothing until it opens, and needs Vuetify besides.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "activator"],
+  template:
+    '<span class="tip" :data-text="text"><slot name="activator" :props="{}" /></span>',
+};
+
 // Stubbed, but with its props preserved so the test can ask WHICH entity
 // controls were rendered rather than counting anonymous nodes.
 const AddToEntityControlStub = {
@@ -49,6 +58,7 @@ const globalStubs = {
   global: {
     stubs: {
       "v-icon": true,
+      Tooltip: TooltipStub,
       teleport: true,
       AddToEntityControl: AddToEntityControlStub,
     },

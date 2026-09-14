@@ -17,8 +17,12 @@
             },
           ]"
           @click.stop="emit('select', item.index)"
-          :title="item.description || 'Image'"
         >
+          <Tooltip
+            :text="item.description || 'Image'"
+            activator="parent"
+            :describe="false"
+          />
           <div class="filmstrip-thumb-tile" :style="item.stackTileStyle">
             <img
               v-if="item.thumbSrc && !isThumbBroken(item)"
@@ -53,10 +57,10 @@
           <div
             v-if="item.stackBadgeVisible && item.thumbSrc && item.isStackLead"
             class="filmstrip-badge filmstrip-badge--top-left"
-            :title="item.stackBadgeTitle"
             @click.stop="emit('toggle-expand', item)"
             @mouseenter.stop="emit('prefetch', item)"
           >
+            <Tooltip :text="item.stackBadgeTitle" activator="parent" />
             <v-icon size="14" :style="item.stackIconStyle">mdi-layers</v-icon>
           </div>
           <div
@@ -67,8 +71,8 @@
                 ? 'filmstrip-badge--top-left-stack'
                 : 'filmstrip-badge--top-left',
             ]"
-            :title="item.problemTitle"
           >
+            <Tooltip :text="item.problemTitle" activator="parent" />
             <v-icon size="14" color="error">mdi-emoticon-sad-outline</v-icon>
           </div>
         </button>
@@ -79,6 +83,7 @@
 
 <script setup>
 import { reactive, ref } from "vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 defineProps({
   items: { type: Array, default: () => [] },

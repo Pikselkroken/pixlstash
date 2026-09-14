@@ -347,7 +347,7 @@ onUnmounted(() => {
       >
         <template v-if="grouped.get(kind.value)?.size">
           <div class="preview-step__group-title">
-            <v-icon size="15">{{ kind.icon }}</v-icon>
+            <v-icon size="16">{{ kind.icon }}</v-icon>
             {{ grouped.get(kind.value).size }}
             {{ grouped.get(kind.value).size === 1 ? kind.label : kind.plural }}
           </div>
@@ -596,7 +596,7 @@ onUnmounted(() => {
 
 .preview-step__chip {
   padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-pill, 999px);
+  border-radius: var(--radius-pill);
   background: rgb(var(--v-theme-panel));
   box-shadow: inset 3px 0 0 rgb(var(--kind));
   font-size: var(--text-xs);

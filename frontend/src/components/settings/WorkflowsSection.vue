@@ -774,7 +774,7 @@ watch(
     <AppDialog
       :open="workflowImportDialogOpen"
       title="Import Workflow"
-      :width="640"
+      size="lg"
       @close="workflowImportDialogOpen = false"
     >
       <div class="wf-dialog-body">
@@ -847,7 +847,7 @@ watch(
     <AppDialog
       :open="comfyuiConfigDialogOpen"
       title="Configure ComfyUI"
-      :width="420"
+      size="sm"
       @close="comfyuiConfigDialogOpen = false"
     >
       <div class="wf-dialog-body">

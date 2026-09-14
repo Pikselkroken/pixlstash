@@ -67,6 +67,18 @@ vi.mock("vue-router", () => ({
 import { isReadOnly, sessionContext } from "../../utils/apiClient";
 import { FACE_DRAG_MIME, PICTURE_DRAG_MIME } from "../../utils/media.js";
 import SideBar from "./SideBar.vue";
+
+/**
+ * The element's own tooltip text: its direct `Tooltip` child, stubbed by the
+ * shallow mount. `undefined` when it has none or the text is empty, because an
+ * empty text is a disabled tip.
+ */
+function tipText(el) {
+  const tip = el
+    .findAll("tooltip-stub")
+    .find((t) => t.element.parentElement === el.element);
+  return tip?.attributes("text") || undefined;
+}
 import FolderTreeNode from "../editors/FolderTreeNode.vue";
 
 const ADA = { id: 7, name: "Ada", image_count: 3, project_image_count: 3 };
@@ -104,7 +116,7 @@ async function mountSidebar() {
 function rowByTitle(wrapper, prefix, selector = ".sidebar-list-item") {
   const row = wrapper
     .findAll(selector)
-    .find((el) => String(el.attributes("title") ?? "").startsWith(prefix));
+    .find((el) => String(tipText(el) ?? "").startsWith(prefix));
   if (!row) throw new Error(`no ${selector} titled ${prefix}`);
   return row;
 }

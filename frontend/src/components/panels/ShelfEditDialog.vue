@@ -3,7 +3,6 @@
     :open="Boolean(verb)"
     :title="title"
     :subtitle="subtitle"
-    :width="480"
     @close="emit('close')"
   >
     <!-- Rename and Set base model are one field each; Set kind is a choice plus
@@ -75,8 +74,11 @@
           v-for="option in CAPABILITIES"
           :key="option"
           class="sed-radio"
-          :title="`File these under ${capabilityLabel(option)} on the Feature axis.`"
         >
+          <Tooltip
+            :text="`File these under ${capabilityLabel(option)} on the Feature axis.`"
+            activator="parent"
+          />
           <input
             type="checkbox"
             :checked="capabilities.includes(option)"
@@ -133,6 +135,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { adapterKindKey, capabilityLabel } from "../../utils/modelShelf";
 
@@ -310,7 +313,6 @@ async function submit() {
 <style scoped>
 .sed-field {
   display: block;
-  margin-bottom: var(--space-5);
 }
 
 .sed-fieldset {

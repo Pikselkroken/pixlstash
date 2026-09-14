@@ -37,6 +37,22 @@ beforeEach(() => {
   setActivePinia(createPinia());
 });
 
+// The tooltip is stubbed to carry its text on the element it wraps or sits in:
+// the real one renders nothing until it opens, and needs Vuetify besides.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "activator"],
+  template:
+    '<span class="tip" :data-text="text"><slot name="activator" :props="{}" /></span>',
+};
+
+/** The tooltip text a control carries, whether the tip sits inside or around it. */
+function tip(wrapper) {
+  const inner = wrapper.find(".tip");
+  if (inner.exists()) return inner.attributes("data-text");
+  return wrapper.element.parentElement?.dataset.text;
+}
+
 function mountMenu(props = {}) {
   return mount(SelectionMenu, {
     props: {
@@ -49,6 +65,7 @@ function mountMenu(props = {}) {
     },
     global: {
       stubs: {
+        Tooltip: TooltipStub,
         // Renders its slot so the glyph name survives into the markup - the
         // only handle on these items once a greyed state replaces the label.
         "v-icon": { template: "<i><slot /></i>" },
@@ -113,8 +130,8 @@ describe("SelectionMenu - rotate", () => {
 
     expect(left.attributes("disabled")).toBeDefined();
     expect(right.attributes("disabled")).toBeDefined();
-    expect(left.attributes("title")).toBe(ROTATE_FORMAT_REASON);
-    expect(left.attributes("title")).toContain("Filters > Rotate");
+    expect(tip(left)).toBe(ROTATE_FORMAT_REASON);
+    expect(tip(left)).toContain("Filters > Rotate");
   });
 
   it("is greyed in a read-only session, which cannot rotate at all", () => {

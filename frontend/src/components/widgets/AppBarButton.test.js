@@ -1,7 +1,7 @@
 // AppBarButton - the flat bar dialect (docs/design/buttons.md).
 
 import { describe, it, expect, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 
 vi.mock("vuetify/components", () => ({
   VIcon: {
@@ -9,9 +9,15 @@ vi.mock("vuetify/components", () => ({
     props: ["size"],
     template: '<i :data-size="size"><slot /></i>',
   },
+  VTooltip: {
+    name: "v-tooltip",
+    props: ["activator"],
+    template: '<span class="tip" :data-activator="activator"><slot /></span>',
+  },
 }));
 
 import AppBarButton from "./AppBarButton.vue";
+import { describedAs } from "../../testing/describedAs.js";
 
 describe("AppBarButton", () => {
   it("is a square icon-only control with a 24px glyph when it has no label", () => {
@@ -77,5 +83,48 @@ describe("AppBarButton", () => {
     });
     expect(w.find("button").attributes("aria-label")).toBe("Filters");
     expect(w.find("button").attributes("aria-expanded")).toBe("false");
+  });
+
+  // One string, both jobs (buttons.md, "Tooltips"): the tip of an icon-only
+  // control is its accessible name too, so the two cannot drift.
+  it("names an icon-only button from its tooltip and renders the tip", async () => {
+    const w = mount(AppBarButton, {
+      props: { icon: "close", tooltip: "Close" },
+    });
+    await flushPromises();
+    const btn = w.find("button");
+    expect(btn.attributes("aria-label")).toBe("Close");
+    await btn.trigger("mouseenter");
+    expect(btn.attributes("title")).toBeUndefined();
+    const tip = w.find(".tip");
+    expect(tip.text()).toBe("Close");
+    expect(tip.attributes("data-activator")).toBe("parent");
+    // The tip is the name, so it must not also describe: said twice otherwise.
+    expect(btn.attributes("aria-describedby")).toBeUndefined();
+  });
+
+  it("lets an explicit aria-label win over the tooltip", () => {
+    const w = mount(AppBarButton, {
+      props: { icon: "close", tooltip: "Dismiss v1.2 update alert" },
+      attrs: { "aria-label": "Dismiss update alert" },
+    });
+    expect(w.find("button").attributes("aria-label")).toBe(
+      "Dismiss update alert",
+    );
+  });
+
+  it("describes rather than renames a labelled button", async () => {
+    const w = mount(AppBarButton, {
+      props: { icon: "sort", tooltip: "Sort order (S)" },
+      slots: { default: "Date added" },
+    });
+    await flushPromises();
+    expect(w.find("button").attributes("aria-label")).toBeUndefined();
+    expect(describedAs(w.find("button"))).toBe("Sort order (S)");
+  });
+
+  it("renders no tip without a tooltip", () => {
+    const w = mount(AppBarButton, { props: { icon: "close" } });
+    expect(w.find(".tip").exists()).toBe(false);
   });
 });

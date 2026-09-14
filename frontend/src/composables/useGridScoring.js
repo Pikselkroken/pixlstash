@@ -580,12 +580,23 @@ export function useGridScoring({
       entries.map(([id, score]) => [String(id), Number(score)]),
     );
 
-    let updatedImages = allGridImages.value.map((img) => {
-      if (!img || img.id == null) return img;
-      const key = String(img.id);
-      if (!scoreMap.has(key)) return img;
-      return { ...img, score: scoreMap.get(key) };
-    });
+    const withScores = (images) =>
+      images.map((img) => {
+        if (!img || img.id == null) return img;
+        const key = String(img.id);
+        if (!scoreMap.has(key)) return img;
+        return { ...img, score: scoreMap.get(key) };
+      });
+
+    // The fetched rows too, not only the cards: expanding or collapsing stacks
+    // and a stack-count refresh rebuild the cards from these, and the WS echo
+    // that would correct a stale value is skipped above. Without this a rating
+    // made while the grid was still settling came back as the old score.
+    if (Array.isArray(lastFetchedGridImages.value)) {
+      lastFetchedGridImages.value = withScores(lastFetchedGridImages.value);
+    }
+
+    let updatedImages = withScores(allGridImages.value);
 
     if (updateSort && isScoreSortActive()) {
       const descending = gridSortDescending.value;

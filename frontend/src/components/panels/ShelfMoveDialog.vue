@@ -3,7 +3,6 @@
     :open="open"
     title="Move files"
     :subtitle="subtitle"
-    :width="520"
     @close="emit('close')"
   >
     <label class="smd-field">
@@ -241,7 +240,6 @@ async function submit() {
 <style scoped>
 .smd-field {
   display: block;
-  margin-bottom: var(--space-4);
 }
 
 .smd-label {
@@ -265,7 +263,7 @@ async function submit() {
 .smd-facts {
   display: flex;
   gap: var(--space-5);
-  margin: 0 0 var(--space-3);
+  margin: 0;
 }
 
 .smd-fact dt {

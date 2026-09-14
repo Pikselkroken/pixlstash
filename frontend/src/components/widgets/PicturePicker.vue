@@ -3,7 +3,7 @@
     :open="open"
     title="Choose a picture"
     :subtitle="subtitle"
-    :width="820"
+    size="xl"
     :pad-body="false"
     @close="emit('close')"
     @accept="use"
@@ -120,11 +120,16 @@
               :aria-pressed="chosen?.id === pic.id"
               :aria-disabled="unavailable.has(pic.id) || undefined"
               :tabindex="i === tabStop ? 0 : -1"
-              :title="tileTitle(pic)"
+              :aria-label="tileTitle(pic)"
               @click="pick(pic)"
               @dblclick="useTile(pic)"
               @keydown="onCellKeydown($event, i)"
             >
+              <Tooltip
+                :text="tileTitle(pic)"
+                activator="parent"
+                :describe="false"
+              />
               <img
                 v-if="!unavailable.has(pic.id)"
                 :src="thumbUrl(pic)"
@@ -214,6 +219,7 @@ import { computed, nextTick, reactive, ref, watch } from "vue";
 import AppButton from "./AppButton.vue";
 import AppDialog from "./AppDialog.vue";
 import AppInput from "./AppInput.vue";
+import Tooltip from "./Tooltip.vue";
 import {
   getPictureCount,
   pictureThumbnailUrl,
@@ -698,7 +704,7 @@ watch(
    photograph, the same job it does on the image grid's own check badge. */
 .pp-tick {
   position: absolute;
-  z-index: 1;
+  z-index: var(--z-raised);
   top: var(--space-2);
   right: var(--space-2);
   width: var(--space-6);

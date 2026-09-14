@@ -482,7 +482,7 @@ watch(
 .metadata-tabbox {
   display: flex;
   flex-direction: column;
-  border-radius: 10px; /* no token: 10px is between --radius-md (8px) and --radius-lg (12px); keep as-is to preserve matched corner geometry with tab buttons */
+  border-radius: var(--radius-md);
   background: rgba(var(--v-theme-on-dark-surface), 0.06);
   overflow: hidden;
 }
@@ -506,15 +506,15 @@ watch(
 }
 
 .metadata-tab-btn:first-child {
-  border-radius: 10px 0 0 0; /* no token: must match .metadata-tabbox border-radius (10px) */
+  border-radius: var(--radius-md) 0 0 0;
 }
 
 .metadata-tab-btn:last-child {
-  border-radius: 0 10px 0 0; /* no token: must match .metadata-tabbox border-radius (10px) */
+  border-radius: 0 var(--radius-md) 0 0;
 }
 
 .metadata-tab-btn:only-child {
-  border-radius: 10px 10px 0 0; /* no token: must match .metadata-tabbox border-radius (10px) */
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
 }
 
 /* Selected is the dark-surface olive wash with the words in ink: the panel is

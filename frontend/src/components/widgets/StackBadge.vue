@@ -8,13 +8,13 @@
       'sbadge--tinted': variant === 'tinted',
       'sbadge--flagged': variant === 'flagged',
     }"
-    :title="title"
     :aria-label="title"
     :aria-expanded="expanded === null ? undefined : String(expanded)"
     :data-flagged="variant === 'flagged' ? 'true' : undefined"
     data-testid="stack-badge"
     @click.stop="emit('activate')"
   >
+    <Tooltip :text="title" activator="parent" :describe="false" />
     <v-icon v-if="showsGlyph" class="sbico" size="14" :style="glyphStyle">{{
       glyph
     }}</v-icon>
@@ -50,6 +50,7 @@
 // the disclosure it is on that surface and as a plain count everywhere else.
 
 import { computed } from "vue";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   /** How many pictures this tile stands for. Below 2 there is nothing to say. */

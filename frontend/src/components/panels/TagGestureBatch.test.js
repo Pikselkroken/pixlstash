@@ -40,7 +40,12 @@ vi.mock("../../api/users", () => ({ getPenalisedTags: vi.fn(async () => []) }));
 import OverlayTagsPanel from "../views/OverlayTagsPanel.vue";
 import TbTagPanel from "./TbTagPanel.vue";
 
-const STUBS = { "v-icon": true, "v-btn": true, "v-progress-circular": true };
+const STUBS = {
+  "v-icon": true,
+  "v-btn": true,
+  "v-progress-circular": true,
+  Tooltip: true,
+};
 
 /** Every `batchId` the mocked api calls were given, in call order. */
 function batchIdsOf(...mocks) {

@@ -110,15 +110,16 @@
                the menu's other rows (Add folder, ai-toolkit) stay usable while
                a file copies; only Add file refuses. -->
           <AppBarButton
-            ref="addBtnRef"
-            v-bind="menuProps"
+            v-bind="
+              withRef(menuProps, (el) => (addBtnRef = el))
+            "
             class="bar-btn--accent shelf-fold-680"
             :icon="adding ? '' : 'plus'"
             chevron
             :aria-busy="adding || undefined"
             aria-haspopup="menu"
             :aria-expanded="addMenuOpen"
-            title="Add models to the shelf"
+            tooltip="Add models to the shelf"
             ><v-icon v-if="adding" size="18" class="mdi-spin">mdi-loading</v-icon
             >Add</AppBarButton
           >
@@ -189,7 +190,7 @@
         ref="foldersBtnRef"
         class="shelf-fold-680"
         icon="folder-multiple-outline"
-        title="Model folders - add, rescan, move or forget a folder"
+        tooltip="Model folders - add, rescan, move or forget a folder"
         aria-label="Model folders"
         aria-haspopup="dialog"
         @click="openFolders(foldersBtnRef?.el)"
@@ -302,7 +303,7 @@
                 :open="groupMenuOpen"
                 aria-haspopup="dialog"
                 :aria-expanded="groupMenuOpen"
-                :title="groupButtonTitle"
+                :tooltip="groupButtonTitle"
               >
                 <span class="bar-btn-value">{{ activeGroup.label }}</span>
               </AppBarButton>
@@ -334,8 +335,7 @@
                 <AppBarButton
                   class="bar-split-toggle"
                   :icon="directionIcon"
-                  :title="directionLabel"
-                  :aria-label="directionLabel"
+                  :tooltip="directionLabel"
                   @click.stop="toggleDirection"
                 />
                 <!-- `aria-haspopup="dialog"`, not `menu`: the panel is a div of
@@ -348,7 +348,7 @@
                   chevron
                   aria-haspopup="dialog"
                   :aria-expanded="sortMenuOpen"
-                  :title="sortButtonTitle"
+                  :tooltip="sortButtonTitle"
                 >
                   <span class="bar-btn-value">{{ activeSort.label }}</span>
                 </AppBarButton>
@@ -382,8 +382,7 @@
                 :badge="store.activeCount > 0 ? store.activeCount : null"
                 :active="store.activeCount > 0 && !showMenuOpen"
                 :open="showMenuOpen"
-                :title="showButtonTitle"
-                :aria-label="showButtonTitle"
+                :tooltip="showButtonTitle"
               />
             </template>
             <ShelfShowPanel />
@@ -463,14 +462,14 @@
       <p
         v-if="offlineNote && !offlineDismissed"
         class="shelf-banner"
-        :title="offlineMountPaths"
       >
+        <Tooltip :text="offlineMountPaths" activator="parent" />
         <v-icon size="16">mdi-power-plug-off-outline</v-icon>
         <span class="shelf-banner-text">{{ offlineNote }}</span>
         <span class="shelf-spacer"></span>
         <AppBarButton
           icon="close"
-          title="Dismiss"
+          tooltip="Dismiss"
           aria-label="Dismiss the offline notice"
           @click="offlineDismissed = true"
         />
@@ -551,9 +550,13 @@
               }"
               type="button"
               :aria-label="columnSortLabel(NAME_COLUMN)"
-              :title="columnSortLabel(NAME_COLUMN)"
               @click="sortByColumn(NAME_COLUMN.sort)"
             >
+              <Tooltip
+                :text="columnSortLabel(NAME_COLUMN)"
+                activator="parent"
+                :describe="false"
+              />
               <span class="shelf-head-text">{{ NAME_COLUMN.label }}</span>
               <v-icon class="shelf-head-arrow" size="14" aria-hidden="true">{{
                 directionIcon
@@ -579,9 +582,13 @@
               }"
               type="button"
               :aria-label="columnSortLabel(col)"
-              :title="columnSortLabel(col)"
               @click="sortByColumn(col.sort)"
             >
+              <Tooltip
+                :text="columnSortLabel(col)"
+                activator="parent"
+                :describe="false"
+              />
               <span class="shelf-head-text">{{ col.label }}</span>
               <v-icon class="shelf-head-arrow" size="14" aria-hidden="true">{{
                 directionIcon
@@ -610,7 +617,6 @@
               :aria-valuemin="MIN_COLUMN_WIDTHS[col.key]"
               :aria-valuemax="widenable(col.key, MAX_COLUMN_WIDTH)"
               tabindex="0"
-              :title="`Drag to resize the ${col.label} column, double-click to reset it`"
               @pointerdown="startResize(col.key, $event)"
               @pointermove="onResizeMove"
               @pointerup="endResize"
@@ -618,7 +624,12 @@
               @lostpointercapture="endResize"
               @dblclick="resetColumn(col.key)"
               @keydown="onGripKeydown(col.key, $event)"
-            ></span>
+            >
+              <Tooltip
+                :text="`Drag to resize the ${col.label} column, double-click to reset it`"
+                activator="parent"
+              />
+            </span>
           </span>
         </div>
         <!-- The scrollport, and the reason the strip above it is a sibling
@@ -694,14 +705,13 @@
                      `Managed` chips one level down. The word is in the title
                      for the reader who wants it, and null draws the plain
                      disk - never the word "Unknown". -->
-                <v-icon
-                  size="15"
-                  class="shelf-band-icon"
-                  :title="DRIVE_KINDS[group.band.kind]?.label"
-                  >{{
-                    DRIVE_KINDS[group.band.kind]?.icon || "mdi-harddisk"
-                  }}</v-icon
-                >
+                <Tooltip :text="DRIVE_KINDS[group.band.kind]?.label || ''">
+                  <template #activator="{ props: tipProps }">
+                    <v-icon v-bind="tipProps" size="16" class="shelf-band-icon">{{
+                      DRIVE_KINDS[group.band.kind]?.icon || "mdi-harddisk"
+                    }}</v-icon>
+                  </template>
+                </Tooltip>
                 <span class="shelf-band-name">{{ group.band.label }}</span>
                 <!-- Only when it says something the name did not. With no
                      volume label the name IS the mount point, and drawing both
@@ -1015,14 +1025,20 @@
                     <!-- The absence glyph leads the line, because it changes what
                          everything after it means: the name is still true, the
                          file behind it is not there. -->
-                    <v-icon
+                    <Tooltip
                       v-if="row.locState !== 'present'"
-                      size="14"
-                      class="shelf-row-loc"
-                      :class="`shelf-row-loc--${row.locState}`"
-                      :title="LOC_TITLE[row.locState]"
-                      >{{ LOC_ICON[row.locState] }}</v-icon
+                      :text="LOC_TITLE[row.locState]"
                     >
+                      <template #activator="{ props: tipProps }">
+                        <v-icon
+                          v-bind="tipProps"
+                          size="14"
+                          class="shelf-row-loc"
+                          :class="`shelf-row-loc--${row.locState}`"
+                          >{{ LOC_ICON[row.locState] }}</v-icon
+                        >
+                      </template>
+                    </Tooltip>
                     <!-- The name is a FIELD, and it has four states, because
                          naming is the commonest fix on this shelf and the reader
                          has to be able to tell "somebody chose this" from "we
@@ -1053,8 +1069,10 @@
                       <span
                         v-if="row.name.state === 'from-file'"
                         class="shelf-name-tag"
-                        :title="FROM_FILE_TAG_TITLE"
-                        >from filename</span
+                        ><Tooltip
+                          :text="FROM_FILE_TAG_TITLE"
+                          activator="parent"
+                        />from filename</span
                       >
                     </template>
                     <!-- Beside the name rather than in a column of its own: the
@@ -1066,9 +1084,12 @@
                       class="shelf-stack-badge"
                       type="button"
                       :aria-expanded="isStackOpen(row.stack_id)"
-                      :title="`${row.memberCount} files in this run`"
                       @click.stop="toggleStack(row.stack_id)"
                     >
+                      <Tooltip
+                        :text="`${row.memberCount} files in this run`"
+                        activator="parent"
+                      />
                       {{ row.memberCount }}
                       <v-icon
                         size="13"
@@ -1099,8 +1120,10 @@
                         row.stack_position === 0
                       "
                       class="shelf-chip"
-                      title="This file is what the shelf draws for the whole run."
-                      >Cover</span
+                      ><Tooltip
+                        text="This file is what the shelf draws for the whole run."
+                        activator="parent"
+                      />Cover</span
                     >
                     <!-- The step, on any row that is not a stack cover.
                          `deriveModelName` strips the trailing step from the
@@ -1130,10 +1153,11 @@
                          tooltip is the folder: the header names it only under
                          `groupBy: 'folder'`, so on every other axis this line is
                          the one place left that can say where the file is. -->
-                    <span
-                      class="shelf-row-file"
-                      :title="copyPathsTitle(row.locations) || undefined"
-                    >
+                    <span class="shelf-row-file">
+                      <Tooltip
+                        :text="copyPathsTitle(row.locations) || ''"
+                        activator="parent"
+                      />
                       {{ row.filename
                       }}<template v-if="LOC_NOTE[row.locState]">
                         · {{ LOC_NOTE[row.locState] }}</template
@@ -1205,8 +1229,9 @@
                   <span
                     role="gridcell"
                     class="shelf-col shelf-col--date"
-                    :title="dateTitle(row)"
-                    >{{ dateCell(row) }}</span
+                    ><Tooltip :text="dateTitle(row)" activator="parent" />{{
+                      dateCell(row)
+                    }}</span
                   >
                 </li>
 
@@ -1251,8 +1276,10 @@
                       }}</span>
                       <span
                         class="shelf-row-file"
-                        :title="copyPathsTitle(member.locations) || undefined"
-                        >{{ member.filename }}</span
+                        ><Tooltip
+                          :text="copyPathsTitle(member.locations) || ''"
+                          activator="parent"
+                        />{{ member.filename }}</span
                       >
                     </span>
                     <!-- A step of a run has no kind or base of its own - those
@@ -1277,8 +1304,10 @@
                     <span
                       role="gridcell"
                       class="shelf-col shelf-col--date"
-                      :title="dateTitle(member, true)"
-                      >{{ dateCell(member, true) }}</span
+                      ><Tooltip
+                        :text="dateTitle(member, true)"
+                        activator="parent"
+                      />{{ dateCell(member, true) }}</span
                     >
                   </li>
                 </template>
@@ -1368,9 +1397,9 @@
           type="button"
           role="menuitem"
           :disabled="Boolean(folderScanReason)"
-          :title="folderScanReason || undefined"
           @click="rescanFromMenu"
         >
+          <Tooltip :text="folderScanReason || ''" activator="parent" />
           <v-icon class="ctx-icon">mdi-refresh</v-icon>
           <span class="ctx-label-text">{{
             folderMenuFolder.last_checked ? "Rescan folder" : "Scan folder"
@@ -1383,9 +1412,9 @@
           type="button"
           role="menuitem"
           :disabled="Boolean(folderMoveReason)"
-          :title="folderMoveReason || undefined"
           @click="relocateFromMenu"
         >
+          <Tooltip :text="folderMoveReason || ''" activator="parent" />
           <v-icon class="ctx-icon">mdi-folder-move-outline</v-icon>
           <span class="ctx-label-text">Move folder…</span>
         </button>
@@ -1436,6 +1465,7 @@
 </template>
 
 <script setup>
+import { withRef } from "../../utils/withRef.js";
 import {
   computed,
   nextTick,
@@ -1463,6 +1493,7 @@ import ModelMark from "../widgets/ModelMark.vue";
 import PicturePicker from "../widgets/PicturePicker.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
@@ -5352,7 +5383,7 @@ button.shelf-head-cell:hover {
 .shelf-dim {
   position: absolute;
   inset: 0;
-  z-index: calc(var(--z-sticky) + 10);
+  z-index: var(--z-floating);
   background: rgba(var(--v-theme-background), 0.55);
 }
 </style>

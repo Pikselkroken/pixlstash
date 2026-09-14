@@ -40,14 +40,18 @@
           <span class="rs-pair-conf">{{ confText(pane.conf) }}</span>
         </figcaption>
         <div class="rs-pair-imgwrap">
-          <img
-            class="rs-pair-img"
-            :src="imgSrc(pane.id, pane.ext)"
-            :alt="`picture ${pane.id}`"
-            title="Click to zoom"
-            @click="openZoom(pane.id, pane.ext)"
-            @error="onImgError($event, pane.id)"
-          />
+          <Tooltip text="Click to zoom">
+            <template #activator="{ props: tipProps }">
+              <img
+                class="rs-pair-img"
+                :src="imgSrc(pane.id, pane.ext)"
+                :alt="`picture ${pane.id}`"
+                v-bind="tipProps"
+                @click="openZoom(pane.id, pane.ext)"
+                @error="onImgError($event, pane.id)"
+              />
+            </template>
+          </Tooltip>
           <!-- On a PAIR card a locked pane is not an inert reference: both of
                its pictures are written by some corner (fix-twin / swap), so a
                lock here BLOCKS decisions. The badge is the "which half" answer
@@ -55,20 +59,30 @@
                remedy. (The backend degrades a locked-twin pair to a binary card
                at read time, so this only shows on a client-cached card that
                predates the lock.) -->
-          <span
+          <Tooltip
             v-if="paneLockNames(pane.id).length"
-            class="rs-lock-badge"
-            :title="blockingPaneTitle(paneLockNames(pane.id))"
+            :text="blockingPaneTitle(paneLockNames(pane.id))"
           >
-            <v-icon size="14">mdi-lock-outline</v-icon>
-          </span>
+            <template #activator="{ props: tipProps }">
+              <span class="rs-lock-badge" v-bind="tipProps">
+                <v-icon size="14">mdi-lock-outline</v-icon>
+              </span>
+            </template>
+          </Tooltip>
           <button
             v-if="pane.tagged"
             class="rs-manual-tag"
             type="button"
-            title="Tag manually (T)"
+            aria-label="Tag manually"
+            aria-keyshortcuts="T"
             @click.stop="openTagApply()"
           >
+            <Tooltip
+              text="Tag manually"
+              shortcut="T"
+              activator="parent"
+              :describe="false"
+            />
             <v-icon size="16">mdi-tag-plus-outline</v-icon>
           </button>
         </div>
@@ -86,6 +100,7 @@ import { computed, inject } from "vue";
 import { pairSides } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { blockingPaneTitle, lockedSetNamesOf } from "./lockedSetCopy";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   item: { type: Object, required: true },
@@ -215,11 +230,11 @@ function openZoom(id, ext) {
 }
 .rs-pair-new {
   flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: var(--text-2xs);
   font-weight: var(--weight-bold);
   letter-spacing: 0.05em;
   padding: 3px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: rgb(var(--v-theme-on-dark-surface));
   background: color-mix(in srgb, rgb(var(--v-theme-accent)) 18%, transparent);
 }
@@ -253,7 +268,7 @@ function openZoom(id, ext) {
 }
 .rs-pair-id {
   font-family: var(--font-mono, monospace);
-  font-size: 12.5px;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 .rs-pair-state {

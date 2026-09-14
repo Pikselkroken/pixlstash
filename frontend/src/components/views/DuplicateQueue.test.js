@@ -221,6 +221,9 @@ const BOUNDS = {
   max_page_size: 200,
 };
 
+/** The text of the one-surface tooltip a control carries. */
+const tipText = (el) => el.findComponent({ name: "Tooltip" }).props("text");
+
 const globalOpts = {
   global: {
     stubs: {
@@ -230,6 +233,11 @@ const globalOpts = {
       DedupAutoStackDialog: true,
       ActionReceipt: true,
       "v-slider": true,
+      // Renders the activator, never the tip: a control attached through the
+      // slot must still be there to press.
+      VTooltip: {
+        template: '<slot name="activator" :props="{}" :is-active="false" />',
+      },
       // Its History popover needs Vuetify's v-menu; the queue only needs to
       // know the control is mounted.
       UndoControl: true,
@@ -957,7 +965,7 @@ describe("DuplicateQueue - the toolbar hands the keyboard back", () => {
   // nothing may steal it to the queue.
   it("opening Settings leaves focus with the dialog flow", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
-    const btn = wrapper.find('button[title="Settings"]');
+    const btn = wrapper.find('button[aria-label="Settings"]');
     btn.element.focus();
     await btn.trigger("click");
     expect(document.activeElement).toBe(btn.element);
@@ -971,7 +979,7 @@ describe("DuplicateQueue - the shell chrome", () => {
   // grid's and must not vanish with it.
   it("carries Settings, the stats toggle and undo/redo like every other view", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
-    expect(wrapper.find('button[title="Settings"]').exists()).toBe(true);
+    expect(wrapper.find('button[aria-label="Settings"]').exists()).toBe(true);
     expect(wrapper.find(".tb-stats-btn").exists()).toBe(true);
     expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(true);
     wrapper.unmount();
@@ -979,7 +987,7 @@ describe("DuplicateQueue - the shell chrome", () => {
 
   it("asks App.vue for the settings dialog, like the grid toolbar does", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
-    await wrapper.find('button[title="Settings"]').trigger("click");
+    await wrapper.find('button[aria-label="Settings"]').trigger("click");
     expect(wrapper.emitted("open-settings")).toHaveLength(1);
     wrapper.unmount();
   });
@@ -993,7 +1001,7 @@ describe("DuplicateQueue - the shell chrome", () => {
     const { wrapper } = await mountQueue([group("g1")]);
     const undo = wrapper.findComponent({ name: "UndoControl" }).element;
     // TbGlobalActions is multi-root; its Settings button is a stable anchor.
-    const globalActions = wrapper.find('button[title="Settings"]').element;
+    const globalActions = wrapper.find('button[aria-label="Settings"]').element;
     const follows = (a, b) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 
@@ -1136,7 +1144,7 @@ describe("DuplicateQueue - the shell chrome", () => {
   it("the Decided toggle exposes its label and keeps aria-pressed", async () => {
     const { wrapper, store } = await mountQueue([group("g1")]);
     const toggle = wrapper.find('[data-testid="decided-toggle"]');
-    expect(toggle.attributes("title")).toBe("Decided");
+    expect(tipText(toggle)).toBe("Decided");
     expect(toggle.attributes("aria-label")).toBe("Decided");
     expect(toggle.attributes("aria-pressed")).toBe("false");
     expect(toggle.find(".dq-toggle-label").text()).toBe("Decided");
@@ -1151,7 +1159,7 @@ describe("DuplicateQueue - the shell chrome", () => {
     await store.toggleDecided();
     await wrapper.vm.$nextTick();
     const flipped = wrapper.find('[data-testid="decided-toggle"]');
-    expect(flipped.attributes("title")).toBe("Back to review");
+    expect(tipText(flipped)).toBe("Back to review");
     expect(flipped.attributes("aria-label")).toBe("Back to review");
     expect(flipped.attributes("aria-pressed")).toBe("true");
     wrapper.unmount();
@@ -1160,14 +1168,14 @@ describe("DuplicateQueue - the shell chrome", () => {
   // The tier trigger's label ellipsizes under pressure and hides entirely at
   // ≤1087, so the button must carry its own accessible name at every width
   // (WCAG 4.1.2 - a hidden span would leave it empty).
-  it("the tier button exposes its label as title and aria-label", async () => {
+  it("the tier button exposes its label as tooltip and aria-label", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
     const button = wrapper.find(
       '.dq-tier-wrap [data-testid="dedup-tier-trigger"]',
     );
     const label = wrapper.vm.tierLabel;
     expect(label).toBeTruthy();
-    expect(button.attributes("title")).toBe(label);
+    expect(tipText(button)).toBe(label);
     expect(button.attributes("aria-label")).toBe(label);
     expect(button.find(".dq-tier-label").text()).toBe(label);
     wrapper.unmount();
@@ -1180,7 +1188,7 @@ describe("DuplicateQueue - the shell chrome", () => {
     readOnlyRef.value = true;
     const { wrapper } = await mountQueue([group("g1")]);
     expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(true);
-    expect(wrapper.find('button[title="Settings"]').exists()).toBe(true);
+    expect(wrapper.find('button[aria-label="Settings"]').exists()).toBe(true);
     wrapper.unmount();
   });
 });

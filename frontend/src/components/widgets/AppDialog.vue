@@ -1,21 +1,22 @@
 <template>
   <v-dialog
     :model-value="open"
-    :max-width="fullscreen ? undefined : width"
     :scrim="true"
     :persistent="persistent"
-    transition="dialog-bottom-transition"
+    :transition="reducedMotion ? false : undefined"
+    :aria-labelledby="title ? titleId : undefined"
     @update:model-value="(v) => !v && emit('close')"
   >
     <div
       class="app-dialog"
-      :class="{ 'app-dialog--fullscreen': fullscreen }"
-      :style="fullscreen ? undefined : { width: width + 'px' }"
+      :class="[
+        fullscreen ? 'app-dialog--fullscreen' : `app-dialog--${size}`,
+      ]"
       @keydown="onKeydown"
     >
       <header class="app-dialog__header">
         <div class="app-dialog__titlewrap">
-          <h2 class="app-dialog__title">{{ title }}</h2>
+          <h2 :id="titleId" class="app-dialog__title">{{ title }}</h2>
           <span v-if="subtitle" class="app-dialog__subtitle">{{
             subtitle
           }}</span>
@@ -25,8 +26,7 @@
           <AppBarButton
             icon="close"
             :icon-size="20"
-            title="Close"
-            aria-label="Close"
+            tooltip="Close"
             @click="emit('close')"
           />
         </div>
@@ -44,6 +44,7 @@
 </template>
 
 <script setup>
+import { useId } from "vue";
 import { VDialog } from "vuetify/components";
 import AppBarButton from "./AppBarButton.vue";
 
@@ -51,8 +52,13 @@ const props = defineProps({
   open: { type: Boolean, default: false },
   title: { type: String, default: "" },
   subtitle: { type: String, default: "" },
-  // Numeric pixel width - the proposal sizes dialogs at fixed widths.
-  width: { type: Number, default: 480 },
+  // One of four width steps (--dialog-w-*). Never a pixel width at a call
+  // site: that is how sixteen widths accumulated (docs/design/buttons.md).
+  size: {
+    type: String,
+    default: "md",
+    validator: (v) => ["sm", "md", "lg", "xl"].includes(v),
+  },
   // When false the body is flush (no padding) - used by the two-pane Settings
   // dialog where the nav rail and content own their own padding.
   padBody: { type: Boolean, default: true },
@@ -63,6 +69,16 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["close", "accept"]);
+
+// The dialog names itself: Vuetify puts role="dialog" on the overlay root but
+// wires no name, so the heading's id is passed through as aria-labelledby.
+const titleId = useId();
+
+// Vuetify's default dialog transition is a Web Animations call, which the
+// global CSS reduce rule cannot reach, so reduced motion turns it off here.
+const reducedMotion =
+  typeof window !== "undefined" &&
+  !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 // `update:model-value` is the one close source. Vuetify emits `click:outside`
 // even on a persistent dialog (it only stops closing itself), which let a stray
@@ -78,7 +94,8 @@ const ENTER_EXEMPT =
 /**
  * The dialog keyboard contract (owner decision, 2026-07-29 - see
  * docs/frontend_architecture.md "App* design-system primitives"): Escape
- * dismisses, plain Enter accepts. Handled here, on the dialog's own subtree,
+ * dismisses, plain Enter accepts. `persistent` suppresses both, so a
+ * destructive accept only ever fires from its own button. Handled here, on the dialog's own subtree,
  * so every AppDialog gets it and no page-level Escape owner is consulted
  * first. `accept` only fires for dialogs that listen for it.
  */
@@ -90,6 +107,7 @@ function onKeydown(e) {
     return;
   }
   if (e.key !== "Enter" || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+  if (props.persistent) return;
   // A descendant that handled Enter itself (e.g. a role="radio" row) has
   // already preventDefault-ed; respect that instead of double-acting.
   if (e.defaultPrevented) return;
@@ -125,7 +143,9 @@ function onKeydown(e) {
   justify-content: space-between;
   gap: var(--space-5);
   flex-shrink: 0;
-  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-6);
+  /* 16px left onto the shared gutter; the right stays 12px, where the 32px
+     close button's own inset carries the edge (docs/design/buttons.md). */
+  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-5);
   border-bottom: 1px solid rgb(var(--v-theme-divider));
 }
 
@@ -157,9 +177,36 @@ function onKeydown(e) {
   flex-shrink: 0;
 }
 
+.app-dialog--sm {
+  width: var(--dialog-w-sm);
+}
+.app-dialog--md {
+  width: var(--dialog-w-md);
+}
+.app-dialog--lg {
+  width: var(--dialog-w-lg);
+}
+.app-dialog--xl {
+  width: var(--dialog-w-xl);
+}
+
+/* One 16px gutter with the footer. The body spaces its own children with
+   `gap`: a field must not carry a trailing margin, which would stack under
+   this padding as dead space. */
 .app-dialog__body {
   overflow-y: auto;
-  padding: var(--space-6);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* The body scrolls, not its children: a child that scrolls itself would
+   otherwise be squeezed by the column before the body ever overflows. */
+.app-dialog:not(.app-dialog--fullscreen)
+  > .app-dialog__body:not(.app-dialog__body--flush)
+  > * {
+  flex-shrink: 0;
 }
 
 /* A working surface, not a form: take (nearly) the whole viewport and let the
@@ -172,14 +219,14 @@ function onKeydown(e) {
 .app-dialog--fullscreen .app-dialog__body {
   flex: 1;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
 }
 
 .app-dialog__body--flush {
   padding: 0;
   overflow: hidden;
   display: flex;
+  flex-direction: row;
+  gap: 0;
   min-height: 0;
 }
 

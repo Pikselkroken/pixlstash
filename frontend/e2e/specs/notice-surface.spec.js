@@ -344,7 +344,7 @@ test.describe('notice surface', () => {
     await grid.searchButton.focus()
     const before = await page.evaluate(() => ({
       tag: document.activeElement?.tagName,
-      title: document.activeElement?.getAttribute('title'),
+      name: document.activeElement?.getAttribute('aria-label'),
     }))
     expect(before.tag).toBe('BUTTON')
 
@@ -354,11 +354,12 @@ test.describe('notice surface', () => {
     await page.waitForTimeout(400)
     const after = await page.evaluate(() => ({
       tag: document.activeElement?.tagName,
-      title: document.activeElement?.getAttribute('title'),
+      name: document.activeElement?.getAttribute('aria-label'),
       inNotice: !!document.activeElement?.closest('.notice-host'),
     }))
     expect(after.inNotice).toBe(false)
-    expect(after).toMatchObject({ tag: before.tag, title: before.title })
+    expect(before.name).toBeTruthy()
+    expect(after).toMatchObject({ tag: before.tag, name: before.name })
   })
 
   test('action and dismiss are keyboard-reachable with a visible focus ring', async ({

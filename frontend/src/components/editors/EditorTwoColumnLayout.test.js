@@ -9,7 +9,7 @@
 // The close-transition case is the subtle one. Hosts null `character` in the
 // same tick they set `open` false (`SideBar.closeCharacterEditor`) while
 // Vuetify keeps the body mounted for the leave animation, so a width computed
-// straight off the prop would snap 720 → 480 mid-exit.
+// straight off the prop would snap lg → md mid-exit.
 
 import { describe, it, expect, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
@@ -38,6 +38,11 @@ vi.mock("../../api/pictureSets", () => ({
 
 vi.mock("vuetify/components", () => ({
   VIcon: { name: "v-icon", template: "<i><slot /></i>" },
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup: (_p, { slots }) => () => slots.activator?.({ props: {} }),
+  },
 }));
 
 import { getReferencePictures } from "../../api/characters";
@@ -45,10 +50,10 @@ import { listPicturesByIds } from "../../api/pictures";
 import CharacterEditor from "./CharacterEditor.vue";
 import PictureSetEditor from "./PictureSetEditor.vue";
 
-// Renders the default slot only, and exposes the width the editor asked for.
+// Renders the default slot only, and exposes the size step the editor asked for.
 const AppDialog = {
   name: "AppDialog",
-  props: ["open", "title", "width"],
+  props: ["open", "title", "size"],
   template: `<div class="app-dialog-stub"><slot /><slot name="footer" /></div>`,
 };
 
@@ -77,23 +82,23 @@ function mountCharacter(props) {
   return mount(CharacterEditor, { props, global: { stubs } });
 }
 
-function widthOf(wrapper) {
-  return wrapper.findComponent({ name: "AppDialog" }).props("width");
+function sizeOf(wrapper) {
+  return wrapper.findComponent({ name: "AppDialog" }).props("size");
 }
 
 describe("CharacterEditor layout", () => {
-  it("creating is one column at 480 - both right-column blocks need an id", () => {
+  it("creating is one column at md - both right-column blocks need an id", () => {
     const w = mountCharacter({ open: true, character: null });
 
-    expect(widthOf(w)).toBe(480);
+    expect(sizeOf(w)).toBe("md");
     expect(w.find(".editor-body").classes()).not.toContain("editor-body--split");
     expect(w.findAll(".editor-col")).toHaveLength(1);
   });
 
-  it("editing is two columns at 720 with the tray spanning", () => {
+  it("editing is two columns at lg with the tray spanning", () => {
     const w = mountCharacter({ open: true, character: { id: 7, name: "A" } });
 
-    expect(widthOf(w)).toBe(720);
+    expect(sizeOf(w)).toBe("lg");
     expect(w.find(".editor-body").classes()).toContain("editor-body--split");
     expect(w.findAll(".editor-col")).toHaveLength(2);
     expect(w.find(".adapter-tray-stub").classes()).toContain("editor-span");
@@ -108,12 +113,12 @@ describe("CharacterEditor layout", () => {
 
     // Exactly what SideBar.closeCharacterEditor does, in one flush. The body
     // stays mounted for the leave transition, so anything recomputed here is
-    // on screen: a 720 → 480 snap, or "No reference images yet" under a person
+    // on screen: an lg → md snap, or "No reference images yet" under a person
     // who has them.
     await w.setProps({ open: false, character: null });
     await flushPromises();
 
-    expect(widthOf(w)).toBe(720);
+    expect(sizeOf(w)).toBe("lg");
     expect(w.findAll(".editor-col")).toHaveLength(2);
     expect(w.findAll(".ref-picture-item")).toHaveLength(1);
     expect(w.find(".ref-pictures-empty").exists()).toBe(false);
@@ -300,20 +305,20 @@ describe("CharacterEditor layout", () => {
     await w.setProps({ open: false, character: null });
     await w.setProps({ open: true });
 
-    expect(widthOf(w)).toBe(480);
+    expect(sizeOf(w)).toBe("md");
     expect(w.findAll(".editor-col")).toHaveLength(1);
   });
 });
 
 describe("PictureSetEditor layout", () => {
-  it("is two columns at 720, with the appearance row and tray spanning", () => {
+  it("is two columns at lg, with the appearance row and tray spanning", () => {
     setActivePinia(createPinia());
     const w = mount(PictureSetEditor, {
       props: { open: true, set: { id: 3, name: "Set" } },
       global: { stubs },
     });
 
-    expect(widthOf(w)).toBe(720);
+    expect(sizeOf(w)).toBe("lg");
     expect(w.findAll(".editor-col")).toHaveLength(2);
     // The appearance block cannot fit in half a dialog - it has to span, or the
     // 8-column icon grid is what pays for it.
@@ -393,7 +398,9 @@ describe("PictureSetEditor layout", () => {
     // or the tooltip's hover target changes.
     const row = w.find(".appearance-row");
     expect(row.classes()).toContain("appearance-row--locked");
-    expect(row.attributes("title")).toContain("locked");
+    expect(row.findComponent({ name: "Tooltip" }).props("text")).toContain(
+      "locked",
+    );
     // The per-field disabled state is asserted live in PictureSetEditor.test.js
     // (against a stub that renders it as `data-disabled`, which is what makes
     // that assertion able to fail); it is not repeated here.

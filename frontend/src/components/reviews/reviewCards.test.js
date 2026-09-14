@@ -53,8 +53,24 @@ const VIcon = {
   setup: (_props, { slots }) => () => h("i", { class: "v-icon" }, slots.default?.()),
 };
 
+// The one tooltip surface, reduced to what a test can read: the tip's text as
+// `data-tip`, on the activator element or on a marker inside the parent. A
+// describing tip claims its activator's `aria-describedby`, as the real one does.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "shortcut", "location", "disabled", "describe", "activator"],
+  template: `<slot
+      v-if="$slots.activator"
+      name="activator"
+      :props="{
+        'data-tip': text || undefined,
+        'aria-describedby': describe === false ? undefined : 'tooltip-stub',
+      }"
+    /><span v-else-if="text" class="tip" :data-tip="text" />`,
+};
+
 const globalOpts = {
-  stubs: { "v-icon": VIcon },
+  stubs: { Tooltip: TooltipStub, "v-icon": VIcon },
   provide: {
     "rs-backend-url": "http://backend.test",
     "rs-open-zoom": () => {},
@@ -158,8 +174,14 @@ describe("ReviewBinaryCard", () => {
     const w = mount(ReviewBinaryCard, { props: { item: binaryItem() }, global: globalOpts });
     const locks = w.findAll(".rs-thumb-lock");
     expect(locks).toHaveLength(1);
-    expect(locks[0].attributes("title")).toContain("Reference only");
-    expect(locks[0].attributes("title")).toContain("Frozen eval");
+    // The reason rides the thumb's own tip: a second tip on the chip inside it
+    // would open on top of the first.
+    const thumb = w
+      .findAll(".rs-thumb")
+      .find((t) => t.find(".rs-thumb-lock").exists());
+    const tip = thumb.find(".tip").attributes("data-tip");
+    expect(tip).toContain("Reference only");
+    expect(tip).toContain("Frozen eval");
   });
 
   it("shows no thumb lock when no neighbour is locked", () => {
@@ -203,7 +225,7 @@ describe("ReviewPairCard", () => {
     const w = mount(ReviewPairCard, { props: { item: pairItem() }, global: globalOpts });
     const badges = w.findAll(".rs-lock-badge");
     expect(badges).toHaveLength(1);
-    const title = badges[0].attributes("title");
+    const title = badges[0].attributes("data-tip");
     expect(title).toContain("Frozen eval");
     expect(title).toContain("unavailable");
     expect(title).not.toContain("Reference only");
@@ -222,7 +244,7 @@ describe("ReviewPairCard", () => {
     });
     const badges = w.findAll(".rs-lock-badge");
     expect(badges).toHaveLength(1);
-    expect(badges[0].attributes("title")).toContain("Holiday 2019");
+    expect(badges[0].attributes("data-tip")).toContain("Holiday 2019");
   });
 
   it("shows no lock badge when neither pane is locked", () => {
@@ -287,7 +309,7 @@ describe("ReviewDecisionBar", () => {
     expect(no.attributes("aria-disabled")).toBe("true");
     expect(yes.attributes("disabled")).toBeUndefined();
     expect(no.attributes("disabled")).toBeUndefined();
-    expect(yes.attributes("title")).toBe(reason);
+    expect(yes.attributes("data-tip")).toBe(reason);
 
     // The reason is co-located and pointed at, so it is heard on focus.
     const chip = w.find(".rs-decide-lock");
@@ -543,7 +565,7 @@ describe("ReviewSessionView", () => {
     // Focusable, marked, and explained - not a dead `disabled` control.
     expect(undo.attributes("aria-disabled")).toBe("true");
     expect(undo.attributes("disabled")).toBeUndefined();
-    expect(undo.attributes("title")).toContain("Holiday 2019");
+    expect(undo.attributes("data-tip")).toContain("Holiday 2019");
 
     await undo.trigger("click");
     await flushPromises();
@@ -588,7 +610,7 @@ describe("ReviewSessionView", () => {
     const chip = w.find(".rs-session-locked");
     expect(chip.exists()).toBe(true);
     expect(chip.text()).toContain("4 frozen");
-    expect(chip.attributes("title")).toContain("held out of this review");
+    expect(chip.attributes("data-tip")).toContain("held out of this review");
   });
 
   it("shows no locked chip when progress.locked is 0", async () => {

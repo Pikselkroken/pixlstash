@@ -1,12 +1,16 @@
 <template>
-  <span
-    class="rs-sticker"
-    :class="{ 'rs-sticker--fresh': fresh }"
-    :style="stickerStyle"
-    :title="label"
-  >
-    <v-icon :size="iconSize">{{ icon }}</v-icon>
-  </span>
+  <Tooltip :text="label">
+    <template #activator="{ props: tipProps }">
+      <span
+        class="rs-sticker"
+        :class="{ 'rs-sticker--fresh': fresh }"
+        :style="stickerStyle"
+        v-bind="tipProps"
+      >
+        <v-icon :size="iconSize">{{ icon }}</v-icon>
+      </span>
+    </template>
+  </Tooltip>
 </template>
 
 <script setup>
@@ -15,6 +19,7 @@
 // tilt and shadow. `fresh` plays the landing bounce when it arrives in the
 // shelf.
 import { computed } from "vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   icon: { type: String, required: true },

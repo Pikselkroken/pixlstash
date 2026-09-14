@@ -32,12 +32,21 @@ const REQUIRED = {
   backendUrl: "http://x",
 };
 
+// The tooltip is stubbed to carry its text on the element it wraps or sits in:
+// the real one renders nothing until it opens, and needs Vuetify besides.
+const TooltipStub = {
+  name: "Tooltip",
+  props: ["text", "activator"],
+  template:
+    '<span class="tip" :data-text="text"><slot name="activator" :props="{}" /></span>',
+};
+
 // Stub the flyouts: this test exercises the menu's forwarding, not the flyout
 // internals (those are covered in AddToEntityControl.test.js). Teleport is
 // stubbed so the menu renders inline where the wrapper can query it.
 const globalStubs = {
   global: {
-    stubs: { "v-icon": true, teleport: true, AddToEntityControl: true },
+    stubs: { "v-icon": true, Tooltip: TooltipStub, teleport: true, AddToEntityControl: true },
   },
 };
 

@@ -15,9 +15,9 @@
       :class="{ 'vrow--on': verdict.enabled }"
       :disabled="isLast(verdict)"
       :aria-pressed="verdict.enabled"
-      :title="reasonFor(verdict)"
       @click="emit('toggle', verdict.id, !verdict.enabled)"
     >
+      <Tooltip :text="reasonFor(verdict)" activator="parent" />
       <span class="cbox" :class="{ 'cbox--on': verdict.enabled }">
         <v-icon v-if="verdict.enabled" size="14">mdi-check</v-icon>
       </span>
@@ -54,6 +54,8 @@
 // turning it back on would add rather than the zero its own exclusion produced.
 
 import { computed } from "vue";
+
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   /**

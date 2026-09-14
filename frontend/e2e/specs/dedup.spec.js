@@ -211,7 +211,7 @@ test.describe.serial('duplicates queue (§21)', () => {
           bar: Math.round(inline),
           overflow: Math.round(bar.scrollWidth - bar.clientWidth),
           spill: Math.round(spill),
-          settings: inside(bar.querySelector('button[title="Settings"]')),
+          settings: inside(bar.querySelector('button[aria-label="Settings"]')),
           stats: inside(bar.querySelector('.tb-stats-btn')),
           undo: inside(bar.querySelector('.uc-btn--undo')),
           size: Boolean(size) && size.getBoundingClientRect().width > 0,

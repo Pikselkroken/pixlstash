@@ -293,6 +293,22 @@
      width. */
   --notice-max-w: 420px;
 
+  /* Dialog widths: four steps and nothing else (docs/design/buttons.md,
+     approved 2026-09-12). 44 dialogs had hand-typed 16 widths between 380 and
+     980; these are the clusters they formed. `md` is AppDialog's default. A
+     layout fixture, like --sidebar-width, so not off the spacing scale. */
+  --dialog-w-sm: 420px; /* a confirm, or one field and two verbs */
+  --dialog-w-md: 520px; /* the default: a short form */
+  --dialog-w-lg: 720px; /* a list, a tree, two columns */
+  --dialog-w-xl: 840px; /* the settings and picker shells */
+
+  /* Tooltip (buttons.md, "Tooltips"). The one surface is `Tooltip.vue`.
+     `--tooltip-delay` is a starting value, not a measurement: Vuetify's own
+     default is no delay at all, so a tip strobed open as the pointer crossed a
+     toolbar. Hover waits this long; keyboard focus opens at once. */
+  --tooltip-max-w: 280px;
+  --tooltip-delay: 400ms;
+
   /* ---------------------------------------------------------------------------
      LAYERS (`--z-*`) - the stacking ladder. See visual-language.md §14.
 
@@ -302,10 +318,16 @@
      NAME, not a number. Steps are 10× apart on purpose: there is always room to
      wedge one component between two strata without inventing a ninth stratum.
 
-     A raw z-index is now drift. Migrating the existing 40+ call sites is
-     opportunistic follow-up work - touch a rule, move it onto the ladder - not
-     a big-bang rewrite, because each move is pixel-visible in a different
-     screen and has to be eyeballed there.
+     A raw z-index is drift (buttons.md, "Off-token values").
+
+     THE LADDER STOPS AT --z-drawer. Vuetify stacks its overlays at runtime from
+     2000 upward, +10 per open overlay, so a hand-written number above 1000 is
+     betting against a number that moves. If it must clear a modal it must BE an
+     overlay (teleported, ordered by the stack), not a positioned element with a
+     bigger number. The rungs above stay for the few surfaces that remain in the
+     document; no fourth one gets added. And there is no "just above my own
+     layer": two elements that need +1 belong in one stacking context, ordered
+     by DOM order.
      --------------------------------------------------------------------------- */
   --z-base: 0;         /* in-flow content; the grid itself */
   --z-raised: 10;      /* lifted over an immediate sibling: a tile badge, a hover scrim */

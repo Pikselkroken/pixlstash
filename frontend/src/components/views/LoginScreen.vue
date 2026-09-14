@@ -1,7 +1,7 @@
 <template>
   <div class="login-screen">
     <div v-if="tokenError" class="token-error-banner">
-      <v-icon size="20" class="token-error-icon">mdi-link-off</v-icon>
+      <v-icon size="16" class="token-error-icon">mdi-link-off</v-icon>
       {{ tokenError }}
     </div>
     <h1 class="sr-only">

@@ -2,6 +2,8 @@
 import { kindChipColor, relativeDate } from "../../utils/snapshots";
 import { formatUserDate } from "../../utils/utils";
 import AppButton from "./AppButton.vue";
+import Tooltip from "./Tooltip.vue";
+import AppDialog from "./AppDialog.vue";
 
 defineProps({
   modelValue: { type: Boolean, default: false },
@@ -13,86 +15,79 @@ const emit = defineEmits(["update:modelValue", "update:dontShowAgain"]);
 </script>
 
 <template>
-  <v-dialog
-    :model-value="modelValue"
-    max-width="520"
-    @update:model-value="emit('update:modelValue', $event)"
+  <AppDialog
+    :open="modelValue"
+    title="Deleted pictures still in snapshots"
+    @close="emit('update:modelValue', false)"
+    @accept="emit('update:modelValue', false)"
   >
-    <v-card class="snap-del-card">
-      <v-card-title class="snap-del-title">
-        <v-icon size="18" class="mr-2">mdi-shield-alert-outline</v-icon>
-        Deleted pictures still in snapshots
-      </v-card-title>
+    <div class="snap-del-hints">
+      <p class="snap-del-hint">
+        The pictures you just permanently deleted still have their metadata
+        (tags, descriptions, and other details) stored inside the snapshots
+        below. The image files are gone, but that metadata remains until the
+        snapshot itself is deleted.
+      </p>
+      <p class="snap-del-hint">
+        The snapshots can be deleted from from
+        <strong>Settings → Snapshots</strong>.
+      </p>
+    </div>
 
-      <v-card-text class="snap-del-body">
-        <p class="snap-del-hint">
-          The pictures you just permanently deleted still have their metadata
-          (tags, descriptions, and other details) stored inside the snapshots
-          below. The image files are gone, but that metadata remains until the
-          snapshot itself is deleted.
-        </p>
-        <p class="snap-del-hint">
-          The snapshots can be deleted from from
-          <strong>Settings → Snapshots</strong>.
-        </p>
+    <ul class="snap-del-list">
+      <li v-for="snap in snapshots" :key="snap.id" class="snap-del-item">
+        <v-chip
+          size="x-small"
+          label
+          :color="kindChipColor(snap.kind)"
+          class="snap-del-kind"
+        >
+          {{ snap.kind }}
+        </v-chip>
+        <div class="snap-del-item-text">
+          <div class="snap-del-item-title">
+            {{ snap.label || `${snap.kind} snapshot` }}
+          </div>
+          <div class="snap-del-item-subtitle">
+            <Tooltip
+              :text="formatUserDate(snap.created_at, 'iso')"
+              activator="parent"
+            />
+            {{ relativeDate(snap.created_at) }} ·
+            {{ snap.matched_count }}
+            {{ snap.matched_count === 1 ? "picture" : "pictures" }}
+          </div>
+        </div>
+      </li>
+    </ul>
 
-        <ul class="snap-del-list">
-          <li v-for="snap in snapshots" :key="snap.id" class="snap-del-item">
-            <v-chip
-              size="x-small"
-              label
-              :color="kindChipColor(snap.kind)"
-              class="snap-del-kind"
-            >
-              {{ snap.kind }}
-            </v-chip>
-            <div class="snap-del-item-text">
-              <div class="snap-del-item-title">
-                {{ snap.label || `${snap.kind} snapshot` }}
-              </div>
-              <div
-                class="snap-del-item-subtitle"
-                :title="formatUserDate(snap.created_at, 'iso')"
-              >
-                {{ relativeDate(snap.created_at) }} ·
-                {{ snap.matched_count }}
-                {{ snap.matched_count === 1 ? "picture" : "pictures" }}
-              </div>
-            </div>
-          </li>
-        </ul>
-      </v-card-text>
-
-      <v-card-actions class="snap-del-actions">
-        <v-checkbox
-          :model-value="dontShowAgain"
-          label="Don't show this again"
-          density="compact"
-          hide-details
-          class="snap-del-dont-show"
-          @update:model-value="emit('update:dontShowAgain', $event)"
-        />
-        <v-spacer />
-        <AppButton variant="secondary" @click="emit('update:modelValue', false)">
-          Close
-        </AppButton>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+    <template #footer>
+      <v-checkbox
+        :model-value="dontShowAgain"
+        label="Don't show this again"
+        density="compact"
+        hide-details
+        class="snap-del-dont-show"
+        @update:model-value="emit('update:dontShowAgain', $event)"
+      />
+      <AppButton variant="secondary" @click="emit('update:modelValue', false)">
+        Close
+      </AppButton>
+    </template>
+  </AppDialog>
 </template>
 
 <style scoped>
-.snap-del-title {
+.snap-del-hints {
   display: flex;
-  align-items: center;
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
+  flex-direction: column;
+  gap: var(--space-3);
 }
 .snap-del-hint {
   font-size: var(--text-sm);
   line-height: 1.4;
   opacity: 0.85;
-  margin-bottom: var(--space-3);
+  margin: 0;
 }
 .snap-del-list {
   list-style: none;
@@ -124,6 +119,10 @@ const emit = defineEmits(["update:modelValue", "update:dontShowAgain"]);
 .snap-del-item-subtitle {
   font-size: var(--text-xs);
   opacity: var(--opacity-text-secondary);
+}
+/* The checkbox takes the footer's left edge; Close stays right. */
+.snap-del-dont-show {
+  margin-right: auto;
 }
 .snap-del-dont-show :deep(.v-label) {
   font-size: var(--text-sm);

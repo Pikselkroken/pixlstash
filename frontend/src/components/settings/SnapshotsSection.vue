@@ -18,6 +18,7 @@ import { formatUserDate } from "../../utils/utils";
 import { relativeDate } from "../../utils/snapshots";
 import AppInput from "../widgets/AppInput.vue";
 import AppButton from "../widgets/AppButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsInfoCard from "./SettingsInfoCard.vue";
 import { errorDetail } from "../../utils/apiError";
@@ -260,14 +261,20 @@ function handleRestore(cp) {
           <span
             v-if="!cp.is_compatible"
             class="kind-pill kind-pill--incompatible"
-            title="Schema version is newer than the live database; restore not supported."
           >
+            <Tooltip
+              text="Schema version is newer than the live database; restore not supported."
+              activator="parent"
+            />
             incompatible
           </span>
           <span
             class="snapshot-created-at"
-            :title="formatUserDate(cp.created_at, 'iso')"
           >
+            <Tooltip
+              :text="formatUserDate(cp.created_at, 'iso')"
+              activator="parent"
+            />
             {{ relativeDate(cp.created_at) }}
           </span>
         </div>
@@ -292,32 +299,39 @@ function handleRestore(cp) {
             v-else
             class="snapshot-label-text"
             :class="{ 'snapshot-label-text--empty': !cp.label }"
-            title="Double-click to rename"
             @dblclick="!activeJob && startEditing(cp)"
           >
+            <Tooltip text="Double-click to rename" activator="parent" />
             {{ cp.label || "—" }}
           </span>
         </div>
 
         <!-- Stats -->
         <div class="snapshot-row-stats">
-          <span title="Pictures">
+          <span>
+            <Tooltip text="Pictures" activator="parent" />
             <v-icon size="13">mdi-image-multiple-outline</v-icon>
             {{ cp.picture_count }}
           </span>
-          <span v-if="cp.picture_set_count" title="Sets">
+          <span v-if="cp.picture_set_count">
+            <Tooltip text="Sets" activator="parent" />
             <v-icon size="13">mdi-folder-multiple-outline</v-icon>
             {{ cp.picture_set_count }}
           </span>
-          <span v-if="cp.project_count" title="Projects">
+          <span v-if="cp.project_count">
+            <Tooltip text="Projects" activator="parent" />
             <v-icon size="13">mdi-briefcase-outline</v-icon>
             {{ cp.project_count }}
           </span>
-          <span v-if="cp.character_count" title="Characters">
+          <span v-if="cp.character_count">
+            <Tooltip text="Characters" activator="parent" />
             <v-icon size="13">mdi-account-multiple-outline</v-icon>
             {{ cp.character_count }}
           </span>
-          <span title="Size">{{ humanBytes(cp.byte_size) }}</span>
+          <span>
+            <Tooltip text="Size" activator="parent" />
+            {{ humanBytes(cp.byte_size) }}
+          </span>
         </div>
 
         <!-- Actions -->
@@ -328,7 +342,7 @@ function handleRestore(cp) {
             icon-left="restore"
             icon-only
             :disabled="!!activeJob || !cp.is_compatible"
-            :title="
+            :tooltip="
               !cp.is_compatible
                 ? 'Restore not available: snapshot schema is newer than live DB'
                 : 'Restore everything from this snapshot'
@@ -340,7 +354,7 @@ function handleRestore(cp) {
             size="sm"
             icon-left="delete-outline"
             icon-only
-            title="Delete"
+            tooltip="Delete"
             :disabled="!!activeJob || deletingId === cp.id"
             @click="handleDelete(cp)"
           />

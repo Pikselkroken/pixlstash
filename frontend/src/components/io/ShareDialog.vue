@@ -4,6 +4,7 @@ import { createToken } from '../../api/users'
 import { patchUserConfig } from '../../api/config'
 import { API_BASE_URL } from "../../utils/apiClient";
 import AppButton from "../widgets/AppButton.vue";
+import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -141,125 +142,93 @@ async function copyUrl() {
 </script>
 
 <template>
-  <v-dialog
-    :model-value="modelValue"
-    max-width="460"
-    @update:model-value="emit('update:modelValue', $event)"
+  <AppDialog
+    :open="modelValue"
+    :title="resourceLabel ? `Share &quot;${resourceLabel}&quot;` : 'Share image'"
+    @close="emit('update:modelValue', false)"
+    @accept="!token && !loading && confirmCreate()"
   >
-    <v-card class="share-dialog-card">
-      <v-card-title class="share-dialog-title">
-        <v-icon size="18" class="share-dialog-title-icon">mdi-share-variant-outline</v-icon>
-        {{ resourceLabel ? `Share "${resourceLabel}"` : 'Share image' }}
-      </v-card-title>
-
-      <v-card-text class="share-dialog-body">
-        <!-- Step 1: configure link -->
-        <template v-if="!token">
-          <p class="share-dialog-hint">
-            <template v-if="resourceFormat">
-              Creates a direct image link. Anyone with the link can view the
-              full-resolution file.
-            </template>
-            <template v-else>
-              This will create a sharable read-only link that can be emailed or
-              posted online.
-            </template>
-          </p>
-
-          <template v-if="isGalleryMode()">
-            <p class="share-dialog-hint">Optionally set an expiry date.</p>
-            <AppInput
-              v-model="expiresAt"
-              label="Expires on (optional)"
-              type="date"
-              :min="expiryMin()"
-              :max="expiryMax()"
-              :error="expiryError"
-              class="share-dialog-date"
-            />
-            <v-checkbox
-              v-if="resourceType === 'project'"
-              v-model="includeAttachments"
-              label="Include project attachments"
-              density="compact"
-              hide-details
-              class="share-dialog-attachments-cb"
-            />
-          </template>
-
-          <v-checkbox
-            v-model="watermark"
-            label="Embed watermark"
-            density="compact"
-            hide-details
-            class="share-dialog-attachments-cb"
-          />
-
-          <p v-if="apiError" class="share-dialog-error">{{ apiError }}</p>
+    <!-- Step 1: configure link -->
+    <template v-if="!token">
+      <p class="share-dialog-hint">
+        <template v-if="resourceFormat">
+          Creates a direct image link. Anyone with the link can view the
+          full-resolution file.
         </template>
-
-        <!-- Step 2: show link -->
         <template v-else>
-          <p class="share-dialog-hint">
-            Copy this link. Anyone with it gets read-only access.
-          </p>
-          <div class="share-dialog-url-row">
-            <div class="share-dialog-url">{{ url }}</div>
-            <AppButton
-              variant="ghost"
-              icon-only
-              :icon-left="copied ? 'check' : 'content-copy'"
-              :title="copied ? 'Copied!' : 'Copy link'"
-              aria-label="Copy link"
-              @click="copyUrl"
-            />
-          </div>
+          This will create a sharable read-only link that can be emailed or
+          posted online.
         </template>
-      </v-card-text>
+      </p>
 
-      <v-card-actions class="share-dialog-actions">
-        <v-spacer />
-        <AppButton variant="secondary" @click="emit('update:modelValue', false)">
-          {{ token ? 'Close' : 'Cancel' }}
-        </AppButton>
+      <template v-if="isGalleryMode()">
+        <p class="share-dialog-hint">Optionally set an expiry date.</p>
+        <AppInput
+          v-model="expiresAt"
+          label="Expires on (optional)"
+          type="date"
+          :min="expiryMin()"
+          :max="expiryMax()"
+          :error="expiryError"
+        />
+        <v-checkbox
+          v-if="resourceType === 'project'"
+          v-model="includeAttachments"
+          label="Include project attachments"
+          density="compact"
+          hide-details
+        />
+      </template>
+
+      <v-checkbox
+        v-model="watermark"
+        label="Embed watermark"
+        density="compact"
+        hide-details
+      />
+
+      <p v-if="apiError" class="share-dialog-error">{{ apiError }}</p>
+    </template>
+
+    <!-- Step 2: show link -->
+    <template v-else>
+      <p class="share-dialog-hint">
+        Copy this link. Anyone with it gets read-only access.
+      </p>
+      <div class="share-dialog-url-row">
+        <div class="share-dialog-url">{{ url }}</div>
         <AppButton
-          v-if="!token"
-          variant="primary"
-          :loading="loading"
-          @click="confirmCreate"
-        >
-          Create link
-        </AppButton>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+          variant="ghost"
+          icon-only
+          :icon-left="copied ? 'check' : 'content-copy'"
+          :tooltip="copied ? 'Copied!' : 'Copy link'"
+          aria-label="Copy link"
+          @click="copyUrl"
+        />
+      </div>
+    </template>
+
+    <template #footer>
+      <AppButton variant="secondary" @click="emit('update:modelValue', false)">
+        {{ token ? 'Close' : 'Cancel' }}
+      </AppButton>
+      <AppButton
+        v-if="!token"
+        variant="primary"
+        :loading="loading"
+        @click="confirmCreate"
+      >
+        Create link
+      </AppButton>
+    </template>
+  </AppDialog>
 </template>
 
 <style scoped>
-.share-dialog-card {
-  background: rgb(var(--v-theme-surface));
-}
-.share-dialog-title {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  font-size: var(--text-md);
-  font-weight: 600;
-  padding: var(--space-5) var(--space-5) var(--space-3);
-}
-.share-dialog-title-icon {
-  opacity: 0.8;
-}
-.share-dialog-body {
-  padding: var(--space-3) var(--space-5) var(--space-2);
-}
 .share-dialog-hint {
+  margin: 0;
   font-size: var(--text-base);
   opacity: 0.75;
-  margin-bottom: var(--space-4);
-}
-.share-dialog-date {
-  margin-bottom: var(--space-2);
 }
 .share-dialog-url-row {
   display: flex;
@@ -274,14 +243,11 @@ async function copyUrl() {
   font-size: var(--text-2xs);
   word-break: break-all;
   opacity: 0.9;
-  font-family: monospace;
-}
-.share-dialog-actions {
-  padding: var(--space-3) var(--space-5) var(--space-5);
+  font-family: var(--font-mono);
 }
 .share-dialog-error {
+  margin: 0;
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-error));
-  margin-top: var(--space-3);
 }
 </style>

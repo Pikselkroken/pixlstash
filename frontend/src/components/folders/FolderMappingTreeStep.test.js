@@ -16,6 +16,11 @@ vi.mock("vuetify/components", () => ({
       return () => h("div", { class: "v-menu-stub" }, [slots.activator?.({ props: {} }), slots.default?.()]);
     },
   },
+  // Tooltip.vue wraps VTooltip: render the activator only, as a closed tip does.
+  VTooltip: {
+    name: "VTooltip",
+    setup: (_p, { slots }) => () => slots.activator?.({ props: {} }),
+  },
 }));
 
 import FolderMappingTreeStep from "./FolderMappingTreeStep.vue";

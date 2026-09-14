@@ -206,6 +206,7 @@ describe("ImageOverlay mounted smart-score refresh", () => {
     PluginParametersUI: true,
     ComfyUiRunner: true,
     ProgressOverlay: true,
+    VTooltip: true,
     // Real-but-thin panel so we can read the `image` prop it renders from.
     OverlayMetadataPanel: {
       name: "OverlayMetadataPanel",

@@ -100,6 +100,9 @@ const props = defineProps({
 const store = useModelShelfStore();
 const view = store.view;
 
+// `icon` renders in the OptionRows lists; the Segmented axes take the default
+// label variant, where a glyph costs the room a label like "Drive, then folder"
+// needs. One mapper either way.
 const asOptions = (keys, labels) =>
   keys.map((key) => ({
     id: key,

@@ -162,7 +162,7 @@
   box-shadow: var(--elevation-3);
   padding: var(--space-2) 0;
   min-width: 185px;
-  z-index: 2010;
+  z-index: var(--z-dropdown);
 }
 
 /* Flip submenus to open leftward when the parent menu is near the right edge */

@@ -464,12 +464,12 @@
 .sidebar-collapsed-project-menu,
 .sidebar-collapsed-project-submenu {
   position: fixed;
-  z-index: 300;
+  z-index: var(--z-dropdown);
   min-width: 180px;
 }
 
 .sidebar-collapsed-project-submenu {
-  z-index: 301;
+  z-index: var(--z-dropdown);
   max-height: 60vh;
   overflow-y: auto;
 }
@@ -497,7 +497,7 @@
 
 .sidebar-collapsed-flyout-menu {
   position: fixed;
-  z-index: 300;
+  z-index: var(--z-dropdown);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1230,7 +1230,7 @@
 
 .sidebar-move-menu {
   position: fixed;
-  z-index: 9999;
+  z-index: var(--z-overlay);
   min-width: 180px;
   max-width: 300px;
   max-height: 420px; /* keep in sync with MOVE_MENU_MAX_H in the script */
@@ -1631,7 +1631,7 @@
   font-size: var(--text-base);
   white-space: nowrap;
   pointer-events: none;
-  z-index: 1000 !important;
+  z-index: var(--z-drawer) !important;
 }
 
 @media (hover: none) and (pointer: coarse) {
@@ -1848,7 +1848,7 @@
 /* ── Sidebar context menu ────────────────────────────── */
 .sidebar-ctx-menu {
   position: fixed;
-  z-index: 2000;
+  z-index: var(--z-overlay);
   min-width: 140px;
   max-width: 260px;
   user-select: none;
@@ -1866,7 +1866,7 @@
 /* Appearance panel (icon / color picker) that floats next to the context menu */
 .sidebar-ctx-appearance-panel {
   position: fixed;
-  z-index: 2100;
+  z-index: var(--z-overlay);
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
   border-radius: var(--radius-md);
@@ -2014,33 +2014,26 @@
 
 .sidebar-ctx-color-swatch:hover {
   transform: scale(1.12);
-  z-index: 1;
+  z-index: var(--z-raised);
 }
 
 .sidebar-ctx-color-swatch.selected {
   border-color: #fff;
   transform: scale(1.12);
-  z-index: 1;
-}
-
-.folder-type-card {
-  border-radius: var(--radius-lg);
-}
-
-.folder-type-title {
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-  padding: var(--space-5) var(--space-5) var(--space-3);
-}
-
-.folder-type-body {
-  padding: var(--space-3) var(--space-5) 0;
+  z-index: var(--z-raised);
 }
 
 .folder-type-subtitle {
-  margin: 0 0 var(--space-3);
+  margin: 0;
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.62);
+}
+
+.share-dialog-hint {
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
+  color: rgba(var(--v-theme-on-surface), 0.85);
 }
 
 .folder-type-options {
@@ -2082,36 +2075,15 @@
   color: rgba(var(--v-theme-on-surface), 0.62);
 }
 
-.folder-type-actions {
-  padding: var(--space-3) var(--space-5) var(--space-4);
-}
-
-.relocate-card {
-  border-radius: 14px;
-}
-
-.relocate-title {
-  font-size: 1.04rem;
-  font-weight: 700;
-  padding: 16px 18px 8px;
-}
-
-.relocate-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 8px 18px 0;
-}
-
 .relocate-path-block {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--space-2);
 }
 
 .relocate-path-label {
-  font-size: 0.74rem;
-  font-weight: 700;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   opacity: 0.68;
   text-transform: uppercase;
 }
@@ -2120,11 +2092,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-surface-variant), 0.35);
-  padding: 8px 10px;
-  font-family: monospace;
-  font-size: 0.82rem;
+  padding: var(--space-3) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
 }
 
 .relocate-destination-row {
@@ -2143,27 +2115,23 @@
 }
 
 .relocate-warning {
-  font-size: 0.8rem;
-  line-height: 1.35;
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
   color: rgba(var(--v-theme-on-surface), 0.72);
 }
 
 .relocate-error {
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
   color: rgb(var(--v-theme-error));
   background: rgba(var(--v-theme-error), 0.08);
   border: 1px solid rgba(var(--v-theme-error), 0.22);
-  border-radius: 6px;
-  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-3);
 }
 
 .relocate-result {
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-surface));
-}
-
-.relocate-actions {
-  padding: 10px 16px 14px;
 }
 
 /* A fixed destination rendered as a real button rather than a clickable div,

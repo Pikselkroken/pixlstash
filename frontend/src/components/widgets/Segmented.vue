@@ -17,11 +17,18 @@
       :aria-checked="o.id === modelValue ? 'true' : 'false'"
       :tabindex="o.id === tabStop ? 0 : -1"
       :disabled="disabled || o.disabled"
-      :title="variant === 'icon' ? o.title || o.label : undefined"
       :aria-label="variant === 'icon' ? o.title || o.label : undefined"
       :data-testid="o.testid"
       @click="select(o)"
     >
+      <!-- An icon-only option's name is its tip as well (buttons.md,
+           "Tooltips"): one string, so the two cannot drift. -->
+      <Tooltip
+        v-if="variant === 'icon'"
+        :text="o.title || o.label"
+        activator="parent"
+        :describe="false"
+      />
       <span v-if="variant === 'stacked'" class="seg__media">
         <slot name="media" :option="o">
           <v-icon v-if="o.icon" size="24">{{ iconName(o.icon) }}</v-icon>
@@ -52,6 +59,7 @@
  */
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
+import Tooltip from "./Tooltip.vue";
 import { arrowStep, tabStopId } from "../../utils/radioGroup.js";
 
 const props = defineProps({
@@ -66,7 +74,10 @@ const props = defineProps({
   ariaLabel: { type: String, default: "" },
 });
 
-const emit = defineEmits(["update:modelValue"]);
+// `pick` fires for every click, the current value included, like OptionRows:
+// a group whose value has SLACK (the zoom snaps match within 1%) reads as
+// already selected while the thing it names is off the stop.
+const emit = defineEmits(["update:modelValue", "pick"]);
 
 const tabStop = computed(() => tabStopId(props.options, props.modelValue));
 
@@ -77,6 +88,7 @@ function iconName(icon) {
 function select(option) {
   if (props.disabled || option.disabled) return;
   if (option.id !== props.modelValue) emit("update:modelValue", option.id);
+  emit("pick", option.id);
 }
 
 function onKeydown(event) {
