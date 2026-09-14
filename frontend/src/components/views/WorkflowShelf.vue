@@ -5,18 +5,24 @@
   <div
     ref="rootEl"
     class="wfshelf"
+    :class="{ 'wfshelf--drop': dropActive }"
     role="region"
     tabindex="-1"
     aria-label="Workflows"
     aria-describedby="wf-help"
+    @dragenter="onFileDragEnter"
+    @dragover="onFileDragOver"
+    @dragleave="onFileDragLeave"
+    @drop="onFileDrop"
   >
     <p id="wf-help" class="visually-hidden">
       Every workflow PixlStash has found in the pictures it has read. One row is
       one graph, however many models it was bound to; the variants under a row
       are the same graph with different models, and Right and Left open and
       close them. Group, Sort and Show choose the order, the bands and which
-      rows are listed. Nothing on this screen writes anything. Right-click a row
-      for what can be done with it. Escape clears the selection.
+      rows are listed. Drop a workflow JSON file here to add it, unchanged.
+      Right-click a row for what can be done with it. Escape clears the
+      selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -461,9 +467,9 @@
 // is opened and not before, and why the expansion is drawn as rows rather than
 // as a nested widget with a scroll of its own.
 //
-// **Nothing here writes.** Naming a workflow, running one and forgetting its
-// ghosts are later steps; this is the view and the inspector, and the row menu
-// offers only what can be read today. F11's ghosts filter lands beside Group /
+// **Dropping a workflow file is the only write.** Naming a workflow, running one
+// and forgetting its ghosts are later steps; the row menu offers only what can
+// be read today. F11's ghosts filter lands beside Group /
 // Sort / Show, so the toolbar leaves that room rather than filling it.
 
 import { computed, onMounted, ref, watch } from "vue";
@@ -472,10 +478,12 @@ import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import OptionRows from "../widgets/OptionRows.vue";
 import Segmented from "../widgets/Segmented.vue";
+import { importWorkflow } from "../../api/comfyui";
 import { getWorkflowGraph, listWorkflowVariants } from "../../api/workflows";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useWorkflowShelfStore } from "../../stores/useWorkflowShelfStore";
+import { errorDetail } from "../../utils/apiError";
 import { copyText } from "../../utils/clipboard";
 import { formatUserDate, formatUserDay } from "../../utils/utils";
 import {
@@ -839,10 +847,96 @@ watch(
   { immediate: true },
 );
 
+/**
+ * Dropping workflow files. Only a drag carrying files is a drop target, so a
+ * text or row drag passes over the list untouched. `dragenter` and `dragleave`
+ * fire for every child crossed, hence a depth count rather than a boolean.
+ */
+const dropActive = ref(false);
+let dragDepth = 0;
+
+function carriesFiles(event) {
+  return Array.from(event.dataTransfer?.types || []).includes("Files");
+}
+
+function onFileDragEnter(event) {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  dragDepth += 1;
+  dropActive.value = true;
+}
+
+function onFileDragOver(event) {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "copy";
+}
+
+function onFileDragLeave(event) {
+  if (!carriesFiles(event)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) dropActive.value = false;
+}
+
+async function onFileDrop(event) {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  dragDepth = 0;
+  dropActive.value = false;
+  const files = Array.from(event.dataTransfer.files || []);
+  let landed = null;
+  for (const file of files) {
+    const label = file.name;
+    if (!/\.json$/i.test(file.name)) {
+      notices.push({
+        level: "error",
+        text: `${label} is not a workflow: only .json files can be added here.`,
+      });
+      continue;
+    }
+    let workflow;
+    try {
+      workflow = JSON.parse(await file.text());
+    } catch (err) {
+      console.warn(`[workflows] ${label} is not valid JSON`, err);
+      notices.push({ level: "error", text: `${label} is not valid JSON.` });
+      continue;
+    }
+    try {
+      const body = await importWorkflow({
+        name: file.name.replace(/\.json$/i, ""),
+        workflow,
+        keepBoth: true,
+      });
+      landed = body?.topology_hash || landed;
+      notices.push({
+        level: "success",
+        text: body?.matched
+          ? `${label} is already here, as ${body.name}.`
+          : `Added ${body?.name || label}.`,
+      });
+    } catch (err) {
+      notices.push({
+        level: "error",
+        text: `Could not add ${label}: ${errorDetail(err) || "import failed"}.`,
+      });
+    }
+  }
+  if (landed) {
+    await store.fetchRows();
+    store.select(landed);
+  }
+}
+
 onMounted(() => store.fetchRows());
 </script>
 
 <style scoped>
+/* The whole view is the drop target, marked the way a model-shelf band is. */
+.wfshelf--drop {
+  box-shadow: inset 0 0 0 2px var(--active-bar);
+}
+
 .wfshelf {
   display: flex;
   flex-direction: column;

@@ -2,6 +2,7 @@ import asyncio
 import functools
 import json
 import os
+import sqlite3
 import threading
 import uuid
 from copy import deepcopy
@@ -37,6 +38,9 @@ from pixlstash.services.comfyui_recipe_service import (
     sanitize_prompt_graph,
     unchecked_preflight,
 )
+from pixlstash.hub.workflows import record_api_graph, record_ui_graph
+from pixlstash.services import workflow_bindings
+from pixlstash.services.workflow_hash import WorkflowGraphError
 from pixlstash.services.workflow_io import detect_workflow_io
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_utils import resolve_path_within
@@ -56,7 +60,6 @@ from pixlstash.services.comfyui_service import (
     _extract_output_node_ids,
     _process_comfyui_outputs,
     _randomize_seeds,
-    _replace_placeholders,
     _submit_comfyui_prompt,
     _upload_image_to_comfyui,
     graph_has_pixlstash_nodes,
@@ -191,12 +194,47 @@ def _resolve_fixed_seed(payload: dict, max_seed: int = MAX_SEED) -> int | None:
 
 
 def _missing_placeholders(payload: dict) -> list[str]:
-    dump = json.dumps(payload, ensure_ascii=False)
+    """What a run of *payload* cannot fill, under the names the menus know.
+
+    No file carries a token any more; the names are kept so the ComfyUI menus
+    keep choosing workflows by what the run routes accept. A role is missing
+    when neither a binding nor detection gives it a target
+    (``services/workflow_bindings.py``).
+    """
+    targets = workflow_bindings.run_targets(payload)
     return [
         placeholder
-        for placeholder in (PLACEHOLDER_IMAGE, PLACEHOLDER_CAPTION)
-        if placeholder not in dump
+        for placeholder, role in (
+            (PLACEHOLDER_IMAGE, workflow_bindings.IMAGE),
+            (PLACEHOLDER_CAPTION, workflow_bindings.CAPTION),
+        )
+        if not targets[role]
     ]
+
+
+def _fill_run_inputs(workflow: dict, image: str | None, caption: str) -> dict:
+    """A copy of *workflow* with the picture and caption put where a run reads them.
+
+    An empty caption leaves the prompt as the workflow has it: a migrated
+    binding already holds the neutral empty prompt, and a detected prompt is the
+    workflow's own text, which an unset caption must not wipe.
+    """
+    instance = deepcopy(workflow)
+    targets = workflow_bindings.run_targets(workflow)
+    try:
+        if image is not None:
+            workflow_bindings.fill(instance, targets[workflow_bindings.IMAGE], image)
+        if caption:
+            workflow_bindings.fill(
+                instance, targets[workflow_bindings.CAPTION], caption
+            )
+    except workflow_bindings.BindingError as exc:
+        logger.warning("Workflow binding does not resolve: %s", exc)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Workflow input binding no longer matches the graph: {exc}",
+        ) from exc
+    return instance
 
 
 # ponytail: one entry per file version; stale versions age out of the LRU.
@@ -216,6 +254,7 @@ def _describe_workflow(path: str, source: str, mtime_ns: int, size: int) -> dict
             "valid": False,
             "missing_placeholders": [PLACEHOLDER_IMAGE, PLACEHOLDER_CAPTION],
             "workflow_type": "t2i",
+            "flagged": False,
         }
     try:
         detected = detect_workflow_io(payload)
@@ -230,11 +269,13 @@ def _describe_workflow(path: str, source: str, mtime_ns: int, size: int) -> dict
             "valid": False,
             "missing_placeholders": missing,
             "workflow_type": "t2i",
+            "flagged": workflow_bindings.is_flagged(payload),
         }
     return {
         "valid": detected.valid,
         "missing_placeholders": missing,
         "workflow_type": detected.workflow_type,
+        "flagged": workflow_bindings.is_flagged(payload),
     }
 
 
@@ -415,6 +456,8 @@ class ComfyUIWorkflowItemResponse(BaseModel):
     missing_placeholders: list[str] = []
     source: Optional[str] = None
     workflow_type: Optional[str] = None
+    # A placeholder migration could not restore a value a token replaced.
+    flagged: bool = False
 
 
 class ComfyUIWorkflowListResponse(BaseModel):
@@ -478,6 +521,10 @@ class ComfyUIWorkflowImportResponse(BaseModel):
     status: str
     name: str
     workflow_dir: str
+    # True when the workflow was already stored, under ``name``.
+    matched: bool = False
+    # The Workflows view row it is filed under; None when it could not be.
+    topology_hash: Optional[str] = None
 
 
 class ComfyUIPictureWorkflowResponse(BaseModel):
@@ -818,13 +865,13 @@ def create_router(server) -> APIRouter:
 
         workflow_payload = _load_workflow_json(workflow_path)
         missing = _missing_placeholders(workflow_payload)
-        # Refused even when the caption placeholder makes the workflow a valid
-        # t2i: without the image placeholder the selected picture never reaches
-        # the graph, and its output would be stacked onto a picture it ignored.
+        # Refused even when the workflow is a valid t2i: with no picture input
+        # to fill, the selected picture never reaches the graph, and its output
+        # would be stacked onto a picture it ignored.
         if PLACEHOLDER_IMAGE in missing:
             raise HTTPException(
                 status_code=400,
-                detail=f"Workflow missing placeholders: {', '.join(missing)}",
+                detail="Workflow has no picture input to fill.",
             )
         output_node_ids = _extract_output_node_ids(workflow_payload, payload)
 
@@ -850,12 +897,8 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(status_code=404, detail="Picture file missing")
 
             uploaded_name = _upload_image_to_comfyui(comfyui_url, resolved_path)
-            replacements = {
-                PLACEHOLDER_IMAGE: uploaded_name,
-                PLACEHOLDER_CAPTION: caption,
-            }
-            workflow_instance = _replace_placeholders(
-                deepcopy(workflow_payload), replacements
+            workflow_instance = _fill_run_inputs(
+                workflow_payload, uploaded_name, caption
             )
             if fixed_seed is not None:
                 _apply_fixed_seed(workflow_instance, fixed_seed)
@@ -986,7 +1029,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Workflow not found")
 
         workflow_payload = _load_workflow_json(workflow_path)
-        if PLACEHOLDER_IMAGE in json.dumps(workflow_payload, ensure_ascii=False):
+        if PLACEHOLDER_IMAGE not in _missing_placeholders(workflow_payload):
             raise HTTPException(
                 status_code=400,
                 detail="This workflow requires an image input and cannot be used for text-to-image generation.",
@@ -1000,10 +1043,7 @@ def create_router(server) -> APIRouter:
 
         fixed_seed = _resolve_fixed_seed(payload)
 
-        replacements = {PLACEHOLDER_CAPTION: caption}
-        workflow_instance = _replace_placeholders(
-            deepcopy(workflow_payload), replacements
-        )
+        workflow_instance = _fill_run_inputs(workflow_payload, None, caption)
         if fixed_seed is not None:
             _apply_fixed_seed(workflow_instance, fixed_seed)
         else:
@@ -1047,7 +1087,12 @@ def create_router(server) -> APIRouter:
         "/comfyui/workflows/import",
         include_in_schema=False,
         summary="Import ComfyUI workflow",
-        description="Saves a workflow JSON into the user workflow directory, optionally overwriting an existing file.",
+        description=(
+            "Stores a workflow JSON, UI or API format, unchanged in the user "
+            "workflow directory. A copy of a workflow already stored is matched "
+            "to it rather than stored twice. A name taken by a different "
+            "workflow is refused unless overwrite or keep_both is set."
+        ),
         response_model=ComfyUIWorkflowImportResponse,
     )
     async def import_comfyui_workflow(payload: dict = Body(...)):
@@ -1060,6 +1105,11 @@ def create_router(server) -> APIRouter:
                 status_code=400, detail="workflow must be a JSON object"
             )
         overwrite = bool(payload.get("overwrite"))
+        keep_both = bool(payload.get("keep_both"))
+        # A file exported while workflows carried placeholder tokens is stored
+        # the way the start-up migration left its siblings, so it can run and
+        # so a copy of a migrated workflow matches it.
+        workflow, _migrated = workflow_bindings.migrate_placeholders(workflow)
 
         workflow_dir = _workflow_user_dir()
         os.makedirs(workflow_dir, exist_ok=True)
@@ -1067,15 +1117,92 @@ def create_router(server) -> APIRouter:
             path = resolve_path_within(workflow_dir, name)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid workflow name")
+
+        existing = _find_stored_copy(workflow)
+        if existing is not None:
+            return {
+                "status": "success",
+                "name": existing,
+                "workflow_dir": workflow_dir,
+                "matched": True,
+                "topology_hash": _file_in_hub(workflow),
+            }
         if os.path.exists(path) and not overwrite:
-            raise HTTPException(status_code=409, detail="Workflow already exists")
+            if not keep_both:
+                raise HTTPException(status_code=409, detail="Workflow already exists")
+            stem = os.path.splitext(name)[0]
+            counter = 2
+            while os.path.exists(path):
+                name = f"{stem} ({counter}).json"
+                path = resolve_path_within(workflow_dir, name)
+                counter += 1
 
         _save_workflow_json(path, workflow)
         return {
             "status": "success",
             "name": name,
             "workflow_dir": workflow_dir,
+            "matched": False,
+            "topology_hash": _file_in_hub(workflow),
         }
+
+    def _find_stored_copy(workflow: dict) -> str | None:
+        """The name of a stored workflow with the same content, if any."""
+        wanted = workflow_bindings.canonical(workflow)
+        for source, folder in _workflow_dirs():
+            if not os.path.isdir(folder):
+                continue
+            for entry in sorted(os.listdir(folder)):
+                if not entry.lower().endswith(".json"):
+                    continue
+                path = os.path.join(folder, entry)
+                try:
+                    stored = _load_workflow_json(path)
+                except (OSError, ValueError) as exc:
+                    logger.warning(
+                        "Could not read %s workflow %s to compare an import: %s",
+                        source,
+                        path,
+                        exc,
+                    )
+                    continue
+                if (
+                    isinstance(stored, dict)
+                    and workflow_bindings.canonical(stored) == wanted
+                ):
+                    return entry
+        return None
+
+    def _file_in_hub(workflow: dict) -> str | None:
+        """File the workflow in the library, returning its topology hash.
+
+        Content-addressed and idempotent, so a workflow the library already has
+        from its pictures lands on that same row. Not being filed does not stop
+        the import: the file is what runs.
+        """
+        hub = getattr(server, "hub", None)
+        if hub is None:
+            return None
+        try:
+            if isinstance(workflow.get("nodes"), list):
+                return record_ui_graph(hub, workflow)
+            graph = workflow.get("prompt")
+            if not isinstance(graph, dict):
+                graph = workflow
+            return record_api_graph(hub, graph).topology_hash
+        except WorkflowGraphError as exc:
+            logger.info(
+                "Imported workflow is not filed in the library, its graph "
+                "cannot be keyed: %s",
+                exc,
+            )
+        except sqlite3.Error as exc:
+            logger.error(
+                "Could not file an imported workflow in the library; it is "
+                "stored and runs, but the Workflows view will not list it: %s",
+                exc,
+            )
+        return None
 
     @router.get(
         "/comfyui/pictures/{picture_id}/workflow",

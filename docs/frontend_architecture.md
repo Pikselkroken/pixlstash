@@ -4231,9 +4231,14 @@ explore. `useWorkflowShelfStore` fetches the list whole and shapes it in
 `utils/workflowShelf.js`, so Group, Sort and Show are re-reads of an array
 already in hand and cost no request.
 
-**Nothing on this surface writes.** Naming a workflow, running one and forgetting
-its ghosts are later steps (implementation plan §F3, §F5, §F10); the row menu
-offers only what can be read today, and F11's ghosts filter is drawn beside
+**Dropping a file is the one write.** A `.json` dragged onto the view (a drag
+carrying `Files`; anything else passes over) is posted to
+`POST /comfyui/workflows/import` unchanged, with `keep_both`, and the list is
+refetched and the row named by the response's `topology_hash` selected, so a copy
+of a workflow the library already has lands on that row rather than adding one.
+A notice per file says whether it was added or already there. Naming a workflow,
+running one and forgetting its ghosts are later steps (implementation plan §F3,
+§F5, §F10); the row menu offers only what can be read today, and F11's ghosts filter is drawn beside
 Group / Sort / Show, so the toolbar leaves that room rather than filling it.
 
 **The right rail is the same inspector, in its fourth use** (§F2), and both are

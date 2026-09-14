@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { ref, watch } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
 import {
   listWorkflows,
@@ -33,16 +33,7 @@ const comfyuiUrlSuccess = ref("");
 
 // ── Workflow import state ────────────────────────────────────────────────────
 const workflowImportInputRef = ref(null);
-const workflowImportDialogOpen = ref(false);
 const workflowImportError = ref("");
-const workflowImportName = ref("");
-const workflowImportPayload = ref(null);
-const workflowImportInputs = ref([]);
-const workflowImportOutputs = ref([]);
-const workflowImportImageTarget = ref("");
-const workflowImportCaptionTarget = ref("");
-const workflowImportOutputTargets = ref([]);
-const workflowImportSaving = ref(false);
 
 // ── Saved workflow list ──────────────────────────────────────────────────────
 const workflowList = ref([]);
@@ -54,14 +45,6 @@ function resetForm() {
   comfyuiUrlSuccess.value = "";
   comfyuiConfigDialogOpen.value = false;
   workflowImportError.value = "";
-  workflowImportName.value = "";
-  workflowImportPayload.value = null;
-  workflowImportInputs.value = [];
-  workflowImportOutputs.value = [];
-  workflowImportImageTarget.value = "";
-  workflowImportCaptionTarget.value = "";
-  workflowImportOutputTargets.value = [];
-  workflowImportSaving.value = false;
   workflowListError.value = "";
 }
 
@@ -210,448 +193,33 @@ function openWorkflowImport() {
   workflowImportInputRef.value?.click();
 }
 
+// The file is stored as it is: inputs are found from the graph, never mapped
+// here. A copy of a stored workflow is matched to it, and a name already taken
+// by a different workflow keeps both.
 async function handleWorkflowFileChange(event) {
   const file = event?.target?.files?.[0];
   if (!file) return;
   workflowImportError.value = "";
-  workflowImportPayload.value = null;
-  workflowImportInputs.value = [];
-  workflowImportOutputs.value = [];
-  workflowImportImageTarget.value = "";
-  workflowImportCaptionTarget.value = "";
-  workflowImportOutputTargets.value = [];
-  workflowImportName.value = file.name.replace(/\.json$/i, "");
   try {
-    const text = await file.text();
-    const payload = JSON.parse(text);
-    const inputs = extractWorkflowInputs(payload);
-    const outputs = extractWorkflowOutputs(payload);
-    workflowImportPayload.value = payload;
-    workflowImportInputs.value = inputs;
-    workflowImportOutputs.value = outputs;
-    if (!inputs.length) {
-      workflowImportError.value =
-        "No inputs found. This workflow may not be in prompt format.";
-    }
-    const { imageTarget, captionTarget } = guessWorkflowTargets(inputs);
-    workflowImportImageTarget.value = imageTarget || "";
-    workflowImportCaptionTarget.value = hasCaptionInputs(inputs)
-      ? captionTarget || ""
-      : "";
-    workflowImportOutputTargets.value = guessWorkflowOutputTargets(
-      payload,
-      outputs,
-    );
-    workflowImportDialogOpen.value = true;
-  } catch {
-    workflowImportError.value = "Failed to parse workflow JSON.";
-  } finally {
-    event.target.value = "";
-  }
-}
-
-function isNodeDisabled(node) {
-  if (!node || typeof node !== "object") return false;
-  if (node.disabled === true || node.is_disabled === true) return true;
-  if (node.flags && typeof node.flags === "object") {
-    if (node.flags.disabled === true) return true;
-  }
-  return false;
-}
-
-function extractWorkflowInputs(payload) {
-  const entries = [];
-  if (!payload || typeof payload !== "object") return entries;
-
-  const prompt =
-    payload.prompt && typeof payload.prompt === "object"
-      ? payload.prompt
-      : null;
-  if (prompt) {
-    Object.entries(prompt).forEach(([nodeId, node]) => {
-      if (isNodeDisabled(node)) return;
-      const inputs =
-        node?.inputs && typeof node.inputs === "object" ? node.inputs : null;
-      if (!inputs) return;
-      Object.entries(inputs).forEach(([key, value]) => {
-        if (value == null) return;
-        if (typeof value !== "string" && typeof value !== "number") return;
-        const nodeType = node?.class_type || node?.type || "Node";
-        entries.push({
-          id: `prompt:${nodeId}:${key}`,
-          label: `${nodeType} · ${key}`,
-          type: "prompt",
-          nodeId,
-          inputKey: key,
-          nodeType,
-        });
-      });
-    });
-  }
-
-  if (!prompt && !Array.isArray(payload.nodes)) {
-    const values = Object.values(payload);
-    const looksLikeGraph =
-      values.length > 0 &&
-      values.every(
-        (node) =>
-          node &&
-          typeof node === "object" &&
-          node.inputs &&
-          typeof node.inputs === "object" &&
-          (node.class_type || node.type),
-      );
-    if (looksLikeGraph) {
-      Object.entries(payload).forEach(([nodeId, node]) => {
-        if (isNodeDisabled(node)) return;
-        const nodeType = node?.class_type || node?.type || "Node";
-        const inputs =
-          node?.inputs && typeof node.inputs === "object" ? node.inputs : null;
-        if (!inputs) return;
-        Object.entries(inputs).forEach(([key, value]) => {
-          if (value == null) return;
-          if (typeof value !== "string" && typeof value !== "number") return;
-          entries.push({
-            id: `graph:${nodeId}:${key}`,
-            label: `${nodeType} · ${key}`,
-            type: "graph",
-            nodeId,
-            inputKey: key,
-            nodeType,
-          });
-        });
-      });
-    }
-  }
-
-  if (Array.isArray(payload.nodes)) {
-    payload.nodes.forEach((node, nodeIndex) => {
-      if (isNodeDisabled(node)) return;
-      const nodeType = node?.type || node?.class_type || "Node";
-      if (node?.inputs && typeof node.inputs === "object") {
-        Object.entries(node.inputs).forEach(([key, value]) => {
-          if (value == null) return;
-          if (typeof value !== "string" && typeof value !== "number") return;
-          entries.push({
-            id: `node:${nodeIndex}:${key}`,
-            label: `${nodeType} · ${key}`,
-            type: "node_input",
-            nodeIndex,
-            inputKey: key,
-            nodeType,
-          });
-        });
-      }
-      if (Array.isArray(node?.widgets_values)) {
-        node.widgets_values.forEach((value, widgetIndex) => {
-          if (typeof value !== "string") return;
-          entries.push({
-            id: `widget:${nodeIndex}:${widgetIndex}`,
-            label: `${nodeType} · Widget ${widgetIndex + 1}`,
-            type: "widget",
-            nodeIndex,
-            widgetIndex,
-            nodeType,
-          });
-        });
-      }
-    });
-  }
-
-  return entries;
-}
-
-// Nodes that end a graph with an image PixlStash can own: SaveImage writes a
-// file the backend collects, the ComfyUI-PixlStash saver uploads to the vault
-// itself. Keep in sync with SAVE_NODE_CLASSES in services/comfyui_service.py.
-const SAVE_NODE_TYPES = new Set(["SaveImage", "PixlStashPictureSaver"]);
-
-function extractWorkflowOutputs(payload) {
-  const entries = [];
-  if (!payload || typeof payload !== "object") return entries;
-
-  const prompt =
-    payload.prompt && typeof payload.prompt === "object"
-      ? payload.prompt
-      : null;
-  if (prompt) {
-    Object.entries(prompt).forEach(([nodeId, node]) => {
-      if (isNodeDisabled(node)) return;
-      const nodeType = node?.class_type || node?.type || "Node";
-      if (!SAVE_NODE_TYPES.has(nodeType)) return;
-      entries.push({
-        id: String(nodeId),
-        label: `${nodeType} · ${nodeId}`,
-        type: "prompt",
-        nodeId,
-        nodeType,
-      });
-    });
-  }
-
-  if (!prompt && !Array.isArray(payload.nodes)) {
-    const values = Object.values(payload);
-    const looksLikeGraph =
-      values.length > 0 &&
-      values.every(
-        (node) =>
-          node &&
-          typeof node === "object" &&
-          node.inputs &&
-          typeof node.inputs === "object" &&
-          (node.class_type || node.type),
-      );
-    if (looksLikeGraph) {
-      Object.entries(payload).forEach(([nodeId, node]) => {
-        if (isNodeDisabled(node)) return;
-        const nodeType = node?.class_type || node?.type || "Node";
-        if (!SAVE_NODE_TYPES.has(nodeType)) return;
-        entries.push({
-          id: String(nodeId),
-          label: `${nodeType} · ${nodeId}`,
-          type: "graph",
-          nodeId,
-          nodeType,
-        });
-      });
-    }
-  }
-
-  if (Array.isArray(payload.nodes)) {
-    payload.nodes.forEach((node, nodeIndex) => {
-      if (isNodeDisabled(node)) return;
-      const nodeType = node?.type || node?.class_type || "Node";
-      if (!SAVE_NODE_TYPES.has(nodeType)) return;
-      entries.push({
-        id: String(nodeIndex),
-        label: `${nodeType} · ${nodeIndex + 1}`,
-        type: "node",
-        nodeIndex,
-        nodeType,
-      });
-    });
-  }
-
-  return entries;
-}
-
-function guessWorkflowTargets(entries) {
-  const loadImageTarget = entries.find((entry) =>
-    /loadimage/i.test(entry.nodeType || ""),
-  );
-  const imageTarget =
-    loadImageTarget ||
-    entries.find((entry) =>
-      /image/i.test(entry.nodeType || entry.inputKey || entry.label || ""),
-    );
-  const captionTarget = entries.find((entry) =>
-    /cliptextencode|prompt|text|caption/i.test(
-      entry.nodeType || entry.inputKey || entry.label || "",
-    ),
-  );
-  return {
-    imageTarget: imageTarget?.id || "",
-    captionTarget: captionTarget?.id || "",
-  };
-}
-
-function hasCaptionInputs(entries) {
-  return entries.some((entry) =>
-    /cliptextencode|prompt|text|caption/i.test(
-      entry.nodeType || entry.inputKey || entry.label || "",
-    ),
-  );
-}
-
-function guessWorkflowOutputTargets(payload, outputs) {
-  const safeOutputs = outputs ?? [];
-  const rawTargets =
-    payload?.pixlstash_output_nodes ??
-    payload?.pixlstash_output_node ??
-    payload?.output_node_ids ??
-    payload?.output_node_id ??
-    null;
-  const available = new Set(safeOutputs.map((entry) => entry.id));
-  const normalizeTargets = (value) => {
-    if (value == null) return [];
-    const list = Array.isArray(value) ? value : [value];
-    return list
-      .map((item) => String(item))
-      .filter((item) => !available.size || available.has(item));
-  };
-  const explicit = normalizeTargets(rawTargets);
-  if (explicit.length) return explicit;
-  return safeOutputs.map((entry) => entry.id);
-}
-
-function getWorkflowInputPreview(payload, targetId) {
-  if (!payload || !targetId) return "";
-  const entry = workflowImportInputs.value.find((item) => item.id === targetId);
-  if (!entry) return "";
-  if (entry.type === "prompt") {
-    const node = payload.prompt?.[entry.nodeId];
-    return node?.inputs?.[entry.inputKey] ?? "";
-  }
-  if (entry.type === "graph") {
-    const node = payload?.[entry.nodeId];
-    return node?.inputs?.[entry.inputKey] ?? "";
-  }
-  if (entry.type === "node_input") {
-    const node = payload.nodes?.[entry.nodeIndex];
-    return node?.inputs?.[entry.inputKey] ?? "";
-  }
-  if (entry.type === "widget") {
-    const node = payload.nodes?.[entry.nodeIndex];
-    if (!node?.widgets_values) return "";
-    return node.widgets_values[entry.widgetIndex] ?? "";
-  }
-  return "";
-}
-
-function applyWorkflowPlaceholders(payload, imageTargetId, captionTargetId) {
-  const cloned = JSON.parse(JSON.stringify(payload));
-  const replacements = [{ id: imageTargetId, value: "{{image_path}}" }];
-  if (captionTargetId) {
-    replacements.push({ id: captionTargetId, value: "{{caption}}" });
-  }
-  replacements.forEach(({ id, value }) => {
-    const entry = workflowImportInputs.value.find((item) => item.id === id);
-    if (!entry) return;
-    if (entry.type === "prompt") {
-      if (!cloned.prompt || !cloned.prompt[entry.nodeId]) return;
-      const inputs = cloned.prompt[entry.nodeId].inputs || {};
-      inputs[entry.inputKey] = value;
-      cloned.prompt[entry.nodeId].inputs = inputs;
+    let workflow;
+    try {
+      workflow = JSON.parse(await file.text());
+    } catch {
+      workflowImportError.value = "Failed to parse workflow JSON.";
       return;
     }
-    if (entry.type === "graph") {
-      if (!cloned[entry.nodeId] || !cloned[entry.nodeId].inputs) return;
-      cloned[entry.nodeId].inputs[entry.inputKey] = value;
-      return;
-    }
-    if (entry.type === "node_input") {
-      const node = cloned.nodes?.[entry.nodeIndex];
-      if (!node || !node.inputs) return;
-      node.inputs[entry.inputKey] = value;
-      return;
-    }
-    if (entry.type === "widget") {
-      const node = cloned.nodes?.[entry.nodeIndex];
-      if (!node || !Array.isArray(node.widgets_values)) return;
-      node.widgets_values[entry.widgetIndex] = value;
-    }
-  });
-  return cloned;
-}
-
-function applyWorkflowOutputTargets(payload, outputTargets) {
-  if (!payload || typeof payload !== "object") return payload;
-  const targets = Array.isArray(outputTargets)
-    ? outputTargets.filter(Boolean).map((value) => String(value))
-    : [];
-  if (targets.length) {
-    payload.pixlstash_output_nodes = targets;
-    if (payload.pixlstash_output_node != null) {
-      delete payload.pixlstash_output_node;
-    }
-  } else {
-    if (payload.pixlstash_output_nodes != null) {
-      delete payload.pixlstash_output_nodes;
-    }
-    if (payload.pixlstash_output_node != null) {
-      delete payload.pixlstash_output_node;
-    }
-  }
-  return payload;
-}
-
-async function confirmWorkflowImport() {
-  if (!workflowImportPayload.value) return;
-  const name = String(workflowImportName.value || "").trim();
-  if (!name) {
-    workflowImportError.value = "Workflow name is required.";
-    return;
-  }
-  workflowImportSaving.value = true;
-  workflowImportError.value = "";
-  try {
-    const listBody = await listWorkflows();
-    const existing = Array.isArray(listBody?.workflows)
-      ? listBody.workflows
-      : [];
-    const exists = existing.some(
-      (workflow) =>
-        workflow?.name === `${name}.json` || workflow?.name === name,
-    );
-    let overwrite = false;
-    if (exists) {
-      overwrite = window.confirm(`Workflow '${name}' exists. Overwrite it?`);
-      if (!overwrite) {
-        workflowImportSaving.value = false;
-        return;
-      }
-    }
-
-    const updated = applyWorkflowPlaceholders(
-      workflowImportPayload.value,
-      workflowImportImageTarget.value,
-      workflowImportCaptionTarget.value,
-    );
-    const outputTargets = Array.isArray(workflowImportOutputTargets.value)
-      ? workflowImportOutputTargets.value
-      : [];
-    const updatedWithOutputs = applyWorkflowOutputTargets(
-      updated,
-      outputTargets,
-    );
     await importWorkflow({
-      name,
-      workflow: updatedWithOutputs,
-      overwrite,
+      name: file.name.replace(/\.json$/i, ""),
+      workflow,
+      keepBoth: true,
     });
-    workflowImportDialogOpen.value = false;
     await fetchWorkflowList();
   } catch (e) {
     workflowImportError.value = errorDetail(e) || "Failed to import workflow.";
   } finally {
-    workflowImportSaving.value = false;
+    event.target.value = "";
   }
 }
-
-// ── Computed: select option lists and preview values ─────────────────────────
-const workflowImageInputOptions = computed(() => [
-  { title: "None (text-to-image)", value: "" },
-  ...(workflowImportInputs.value || []).map((entry) => ({
-    title: entry.label,
-    value: entry.id,
-  })),
-]);
-
-const workflowCaptionInputOptions = computed(() => [
-  { title: "No caption", value: "" },
-  ...workflowImageInputOptions.value,
-]);
-
-const workflowOutputNodeOptions = computed(() =>
-  (workflowImportOutputs.value || []).map((entry) => ({
-    title: entry.label,
-    value: entry.id,
-  })),
-);
-
-const workflowImportImagePreview = computed(() => {
-  return getWorkflowInputPreview(
-    workflowImportPayload.value,
-    workflowImportImageTarget.value,
-  );
-});
-
-const workflowImportCaptionPreview = computed(() => {
-  return getWorkflowInputPreview(
-    workflowImportPayload.value,
-    workflowImportCaptionTarget.value,
-  );
-});
 
 // ── Lifecycle: fetch data when the parent dialog opens ───────────────────────
 watch(
@@ -702,7 +270,7 @@ watch(
     <SettingsSection title="Import Workflow">
       <div class="wf-action-row">
         <div class="wf-import-line">
-          Import a ComfyUI workflow JSON and map its image/caption inputs.
+          Import a ComfyUI workflow JSON, UI or API format, as it is.
         </div>
         <AppButton
           class="wf-action-btn"
@@ -735,9 +303,9 @@ watch(
             v-if="workflow.source !== 'built-in'"
             :label="workflow.display_name || workflow.name"
             :meta="
-              workflow.valid
+              (workflow.valid
                 ? `valid ${workflow.workflow_type || 'i2i'}`
-                : 'invalid'
+                : 'invalid') + (workflow.flagged ? ' · check inputs' : '')
             "
             :meta-color="workflow.valid ? '' : 'rgb(var(--v-theme-error))'"
             @remove="deleteWorkflow(workflow)"
@@ -770,79 +338,6 @@ watch(
       style="display: none"
       @change="handleWorkflowFileChange"
     />
-
-    <AppDialog
-      :open="workflowImportDialogOpen"
-      title="Import Workflow"
-      size="lg"
-      @close="workflowImportDialogOpen = false"
-    >
-      <div class="wf-dialog-body">
-        <AppInput v-model="workflowImportName" label="Workflow name" />
-        <v-select
-          v-model="workflowImportImageTarget"
-          :items="workflowImageInputOptions"
-          item-title="title"
-          item-value="value"
-          label="Image input"
-          density="compact"
-          variant="outlined"
-          hide-details
-        />
-        <div v-if="workflowImportImagePreview" class="wf-dialog-note">
-          Current value: {{ workflowImportImagePreview }}
-        </div>
-        <v-select
-          v-model="workflowImportCaptionTarget"
-          :items="workflowCaptionInputOptions"
-          item-title="title"
-          item-value="value"
-          label="Caption input"
-          density="compact"
-          variant="outlined"
-          hide-details
-        />
-        <div v-if="workflowImportCaptionPreview" class="wf-dialog-note">
-          Current value: {{ workflowImportCaptionPreview }}
-        </div>
-        <v-select
-          v-model="workflowImportOutputTargets"
-          :items="workflowOutputNodeOptions"
-          item-title="title"
-          item-value="value"
-          label="Output nodes"
-          multiple
-          density="compact"
-          variant="outlined"
-          hide-details
-          :disabled="!workflowOutputNodeOptions.length"
-        />
-        <div v-if="!workflowOutputNodeOptions.length" class="wf-dialog-note">
-          No save nodes detected. Outputs will be auto-detected.
-        </div>
-        <div v-else class="wf-status">
-          Leave empty to use all save nodes.
-        </div>
-        <div v-if="workflowImportError" class="wf-error">
-          {{ workflowImportError }}
-        </div>
-      </div>
-      <template #footer>
-        <AppButton
-          variant="secondary"
-          @click="workflowImportDialogOpen = false"
-        >
-          Cancel
-        </AppButton>
-        <AppButton
-          variant="primary"
-          :disabled="workflowImportSaving"
-          @click="confirmWorkflowImport"
-        >
-          Import
-        </AppButton>
-      </template>
-    </AppDialog>
 
     <AppDialog
       :open="comfyuiConfigDialogOpen"
@@ -991,11 +486,6 @@ watch(
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-}
-
-.wf-dialog-note {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
 .wf-footer-spacer {

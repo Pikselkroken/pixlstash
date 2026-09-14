@@ -38,7 +38,14 @@ vi.mock("../../api/workflows", () => ({
   getWorkflowGraph: (...args) => getWorkflowGraph(...args),
 }));
 
+const importWorkflow = vi.fn();
+
+vi.mock("../../api/comfyui", () => ({
+  importWorkflow: (...args) => importWorkflow(...args),
+}));
+
 import WorkflowShelf from "./WorkflowShelf.vue";
+import { useWorkflowShelfStore } from "../../stores/useWorkflowShelfStore";
 
 const globalOpts = {
   global: {
@@ -92,6 +99,7 @@ beforeEach(() => {
   listWorkflowVariants.mockReset().mockResolvedValue([]);
   listWorkflowPictures.mockReset().mockResolvedValue([]);
   getWorkflowGraph.mockReset();
+  importWorkflow.mockReset();
 });
 
 describe("the list", () => {
@@ -382,5 +390,51 @@ describe("exporting a workflow's graph", () => {
     expect(wrapper.vm.canExport).toBe(false);
     await wrapper.vm.exportGraph();
     expect(getWorkflowGraph).not.toHaveBeenCalled();
+  });
+});
+
+describe("dropping a workflow file", () => {
+  function fileDrop(files) {
+    return {
+      dataTransfer: { types: ["Files"], files, dropEffect: "none" },
+    };
+  }
+
+  it("stores the parsed file as it is and selects the row it landed on", async () => {
+    const graph = { 1: { class_type: "SaveImage", inputs: {} } };
+    importWorkflow.mockResolvedValue({
+      name: "flow.json",
+      matched: true,
+      topology_hash: "a".repeat(64),
+    });
+    const wrapper = await mountShelf();
+    const file = new File([JSON.stringify(graph)], "flow.json");
+    await wrapper.find(".wfshelf").trigger("drop", fileDrop([file]));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+
+    expect(importWorkflow).toHaveBeenCalledWith({
+      name: "flow",
+      workflow: graph,
+      keepBoth: true,
+    });
+    expect(listWorkflows).toHaveBeenCalledTimes(2);
+    expect(useWorkflowShelfStore().selectedHash).toBe("a".repeat(64));
+  });
+
+  it("ignores a drag that carries no files", async () => {
+    const wrapper = await mountShelf();
+    await wrapper
+      .find(".wfshelf")
+      .trigger("drop", { dataTransfer: { types: ["text/plain"], files: [] } });
+    expect(importWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("refuses a file that is not JSON without importing it", async () => {
+    const wrapper = await mountShelf();
+    const file = new File(["{"], "flow.json");
+    await wrapper.find(".wfshelf").trigger("drop", fileDrop([file]));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(importWorkflow).not.toHaveBeenCalled();
   });
 });

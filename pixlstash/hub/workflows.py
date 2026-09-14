@@ -33,6 +33,7 @@ from pixlstash.services.workflow_hash import (
     graph_key,
     promote_instance_widgets,
     reduce_api_graph,
+    reduce_ui_graph,
 )
 
 logger = get_logger(__name__)
@@ -153,6 +154,29 @@ def record_api_graph(hub: HubDatabase, api_graph: dict) -> WorkflowKeys:
             ],
         )
     return keys
+
+
+def record_ui_graph(hub: HubDatabase, workflow: dict) -> str:
+    """File a UI-format workflow's topology, returning its hash.
+
+    Topology only: a UI file names its widget values by position, so it has no
+    recipe until ``object_info`` can name them. The row is the same one an API
+    graph of that workflow files, so a dropped ``workflow.json`` lands on the
+    Workflows view row its pictures already made.
+
+    Raises:
+        pixlstash.services.workflow_hash.WorkflowGraphError: Nothing keyable.
+    """
+    nodes = reduce_ui_graph(workflow)
+    topology = graph_key(nodes)
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_topology "
+            "(topology_hash, hash_version, node_count, first_seen_at) "
+            "VALUES (?, ?, ?, ?)",
+            (topology, HASH_VERSION, len(nodes), _now()),
+        )
+    return topology
 
 
 def get_document(hub: HubDatabase, structural_hash: str) -> Optional[dict]:
