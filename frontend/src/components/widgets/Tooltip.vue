@@ -273,12 +273,23 @@ onUnmounted(() => {
 // Not eager: a tip is rendered when it opens, not once per button on the page.
 // Merged after Vuetify's own activator handlers, which still run their delay;
 // opening here first only makes focus immediate.
-const activatorProps = computed(() => ({
-  "aria-describedby": ownDescribedby.value,
-  onFocus,
-  onMousedown: onPress,
-  onMouseleave: onRelease,
-}));
+//
+// Handlers go here for the slot form only. With `activator="parent"` Vuetify
+// merges these with its own and hands the result to `addEventListener`, and
+// where both name an event (`onFocus`, `onMouseleave`) the merge is an array,
+// which is not a listener: the browser throws on the event and Vuetify's own
+// handler never runs either. The parent form attaches its listeners itself
+// (see `onMounted`), so it passes the describedby hand-back alone.
+const activatorProps = computed(() =>
+  deferred
+    ? { "aria-describedby": ownDescribedby.value }
+    : {
+        "aria-describedby": ownDescribedby.value,
+        onFocus,
+        onMousedown: onPress,
+        onMouseleave: onRelease,
+      },
+);
 
 const registration = { host, close };
 
