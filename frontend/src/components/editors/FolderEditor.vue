@@ -19,15 +19,14 @@
         <v-card-text class="editor-body">
           <!-- Path input (create mode, non-Docker) -->
           <div v-if="!isEditMode && !props.inDocker" class="editor-path-row">
-            <v-text-field
+            <AppInput
               ref="pathInputRef"
               v-model="localPath"
               label="Folder path *"
               placeholder="/path/to/folder"
-              density="comfortable"
-              variant="filled"
-              hide-details
-              @keydown.enter="save"
+              mono
+              class="editor-path-input"
+              @enter="save"
             />
             <AppButton
               variant="outline"
@@ -44,24 +43,19 @@
             v-else-if="!isEditMode && props.inDocker"
             class="editor-docker-helper"
           >
-            <v-text-field
+            <AppInput
               ref="pathInputRef"
               v-model="localHostPath"
               label="Local folder (host path)"
               placeholder="/home/you/Pictures/import"
-              density="comfortable"
-              variant="filled"
-              hide-details
-              @keydown.enter="save"
+              mono
+              @enter="save"
             />
-            <v-text-field
+            <AppInput
               v-model="localLabel"
               label="Display name"
               placeholder="Auto-filled from host path (editable)"
-              density="comfortable"
-              variant="filled"
-              hide-details
-              @keydown.enter="save"
+              @enter="save"
             />
 
             <div class="editor-docker-path-row">
@@ -76,15 +70,12 @@
 
             <div class="editor-docker-format-row">
               <div class="editor-docker-title">Docker mount line</div>
-              <v-btn-toggle
+              <Segmented
                 v-model="shellFormat"
-                mandatory
-                density="compact"
+                :options="SHELL_FORMAT_OPTIONS"
+                aria-label="Shell format"
                 class="editor-docker-shell-btns"
-              >
-                <v-btn value="linux" size="small">Linux / Mac</v-btn>
-                <v-btn value="windows" size="small">Windows</v-btn>
-              </v-btn-toggle>
+              />
             </div>
             <div class="editor-docker-note">
               Add this <code>-v</code> mount to your
@@ -193,24 +184,20 @@
             v-else-if="isEditMode && !isImport && props.inDocker"
             class="editor-docker-helper"
           >
-            <v-text-field
+            <AppInput
               ref="pathInputRef"
               v-model="localHostPath"
               label="Local folder (host path)"
               placeholder="/home/you/Pictures"
-              density="comfortable"
-              variant="filled"
-              hide-details
-              @keydown.enter="save"
+              mono
+              @enter="save"
             />
-            <v-text-field
+            <AppInput
               v-model="localPath"
               label="Container path"
               placeholder="/data/ref/pictures-001"
-              density="comfortable"
-              variant="filled"
-              hide-details
-              @keydown.enter="save"
+              mono
+              @enter="save"
             />
           </div>
 
@@ -231,15 +218,12 @@
           >
             <div class="editor-docker-format-row">
               <div class="editor-docker-title">Docker restart command</div>
-              <v-btn-toggle
+              <Segmented
                 v-model="shellFormat"
-                mandatory
-                density="compact"
+                :options="SHELL_FORMAT_OPTIONS"
+                aria-label="Shell format"
                 class="editor-docker-shell-btns"
-              >
-                <v-btn value="linux" size="small">Linux / Mac</v-btn>
-                <v-btn value="windows" size="small">Windows</v-btn>
-              </v-btn-toggle>
+              />
             </div>
             <div class="editor-docker-note">
               Copy this if you need to restart with the current folder mounts.
@@ -297,15 +281,12 @@
           </div>
 
           <!-- Display label -->
-          <v-text-field
+          <AppInput
             v-if="isEditMode || !props.inDocker"
             v-model="localLabel"
             label="Display label"
             placeholder="Leave blank to use folder name"
-            density="comfortable"
-            variant="filled"
-            hide-details
-            @keydown.enter="save"
+            @enter="save"
           />
 
           <!-- Import-only: delete after import toggle -->
@@ -358,13 +339,11 @@
                     hide-details
                   />
                   <div v-if="localSyncTags" class="editor-sync-suffix">
-                    <v-text-field
+                    <AppInput
                       v-model="localTagsSuffix"
                       label="Suffix for new tags files"
                       :placeholder="DEFAULT_TAGS_SUFFIX"
-                      density="compact"
-                      variant="filled"
-                      hide-details
+                      mono
                     />
                     <div class="editor-toggle-desc">
                       e.g. <code>{{ tagsExample }}</code>
@@ -381,13 +360,11 @@
                     hide-details
                   />
                   <div v-if="localSyncDescriptions" class="editor-sync-suffix">
-                    <v-text-field
+                    <AppInput
                       v-model="localDescriptionSuffix"
                       label="Suffix for new description files"
                       :placeholder="DEFAULT_DESCRIPTION_SUFFIX"
-                      density="compact"
-                      variant="filled"
-                      hide-details
+                      mono
                     />
                     <div class="editor-toggle-desc">
                       e.g. <code>{{ descriptionExample }}</code>
@@ -520,6 +497,8 @@ import {
 import FolderBrowser from "./FolderBrowser.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
+import AppInput from "../widgets/AppInput.vue";
+import Segmented from "../widgets/Segmented.vue";
 import { errorDetail } from "../../utils/apiError";
 
 const appVersion = __APP_VERSION__;
@@ -589,6 +568,10 @@ const defaultShellFormat = navigator.userAgent.toLowerCase().includes("win")
   ? "windows"
   : "linux";
 const shellFormat = ref(defaultShellFormat);
+const SHELL_FORMAT_OPTIONS = [
+  { id: "linux", label: "Linux / Mac" },
+  { id: "windows", label: "Windows" },
+];
 
 // --- Core computed ---
 
@@ -1101,18 +1084,20 @@ async function copyToClipboard(value, successMessage) {
   padding: var(--space-4) var(--space-6) var(--space-3);
 }
 
+/* The field's caption sits above it, so the button aligns to the field's
+   bottom edge; both are --control-h. */
 .editor-path-row {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   gap: var(--space-3);
 }
 
-.editor-path-row .v-text-field {
+.editor-path-input {
   flex: 1;
+  min-width: 0;
 }
 
 .editor-browse-btn {
-  align-self: center;
   flex-shrink: 0;
 }
 

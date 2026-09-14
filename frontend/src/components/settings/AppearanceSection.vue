@@ -7,7 +7,7 @@ import { useTasksStore } from "../../stores/useTasksStore";
 import { VSwitch } from "vuetify/components";
 import AppSelect from "../widgets/AppSelect.vue";
 import AppButton from "../widgets/AppButton.vue";
-import Tooltip from "../widgets/Tooltip.vue";
+import Segmented from "../widgets/Segmented.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsSliderRow from "./SettingsSliderRow.vue";
 
@@ -31,9 +31,7 @@ const emit = defineEmits([
 
 // Thumbnail layout: 'square' (uniform grid) vs 'justified' (variable-width rows).
 // A two-option radiogroup, not a switch; both layouts are peers of a binary
-// visual choice (ui-ux-expert decision). Arrow keys move between the options;
-// Space/Enter selects the focused one.
-const THUMBNAIL_MODES = ["square", "justified"];
+// visual choice (ui-ux-expert decision).
 
 // Justified needs the whole-frame aspect-ratio thumbnails. After the v1.8.0
 // upgrade those regenerate in the background; until that finishes, justified
@@ -59,28 +57,15 @@ const justifiedDisabled = computed(
     (props.thumbnailMode ?? "square") !== "justified",
 );
 
-function setThumbnailMode(next) {
-  if (!THUMBNAIL_MODES.includes(next)) return;
-  if (next === "justified" && justifiedDisabled.value) return;
-  if (next === (props.thumbnailMode ?? "square")) return;
-  emit("update:thumbnail-mode", next);
-}
-function onThumbnailModeKeydown(event) {
-  const cur = THUMBNAIL_MODES.indexOf(props.thumbnailMode ?? "square");
-  let nextIdx = null;
-  if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-    nextIdx = (cur + 1) % THUMBNAIL_MODES.length;
-  } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-    nextIdx = (cur - 1 + THUMBNAIL_MODES.length) % THUMBNAIL_MODES.length;
-  }
-  if (nextIdx === null) return;
-  event.preventDefault();
-  // Skip past the disabled option rather than landing focus on a dead target.
-  if (THUMBNAIL_MODES[nextIdx] === "justified" && justifiedDisabled.value) {
-    return;
-  }
-  setThumbnailMode(THUMBNAIL_MODES[nextIdx]);
-}
+const thumbnailModeOptions = computed(() => [
+  { id: "square", label: "Square" },
+  { id: "justified", label: "Justified", disabled: justifiedDisabled.value },
+]);
+
+const SIDEBAR_WIDTH_OPTIONS = [
+  { id: "full", label: "Full" },
+  { id: "dock", label: "Dock" },
+];
 
 const sidebarThumbnailSizeModel = computed({
   get: () => props.sidebarThumbnailSize ?? 32,
@@ -190,54 +175,29 @@ async function clearGuestSession() {
 
     <SettingsSection>
       <div class="thumb-layout-row">
-        <span id="thumb-layout-label" class="thumb-layout-label"
+        <span class="thumb-layout-label"
           >Thumbnail layout</span
         >
-        <div
-          class="thumb-layout-toggle"
-          role="radiogroup"
-          aria-labelledby="thumb-layout-label"
-          @keydown="onThumbnailModeKeydown"
+        <Segmented
+          :model-value="props.thumbnailMode ?? 'square'"
+          :options="thumbnailModeOptions"
+          variant="stacked"
+          aria-label="Thumbnail layout"
+          @update:model-value="(id) => emit('update:thumbnail-mode', id)"
         >
-          <button
-            class="thumb-layout-opt"
-            :class="{ active: (props.thumbnailMode ?? 'square') === 'square' }"
-            type="button"
-            role="radio"
-            :aria-checked="(props.thumbnailMode ?? 'square') === 'square'"
-            :tabindex="(props.thumbnailMode ?? 'square') === 'square' ? 0 : -1"
-            @click="setThumbnailMode('square')"
-          >
-            <Tooltip text="Uniform squares for a tidy grid" activator="parent" />
-            <span class="tli tli--square" aria-hidden="true"
+          <template #media="{ option }">
+            <span
+              v-if="option.id === 'square'"
+              class="tli tli--square"
+              aria-hidden="true"
               ><i></i><i></i><i></i><i></i><i></i><i></i
             ></span>
-            <span class="thumb-layout-optlabel">Square</span>
-          </button>
-          <button
-            class="thumb-layout-opt"
-            :class="{
-              active: props.thumbnailMode === 'justified',
-              disabled: justifiedDisabled,
-            }"
-            type="button"
-            role="radio"
-            :aria-checked="props.thumbnailMode === 'justified'"
-            :aria-disabled="justifiedDisabled"
-            :disabled="justifiedDisabled"
-            :tabindex="props.thumbnailMode === 'justified' ? 0 : -1"
-            @click="setThumbnailMode('justified')"
-          >
-            <Tooltip
-              text="Each photo keeps its own shape, like Google Photos"
-              activator="parent"
-            />
-            <span class="tli tli--just" aria-hidden="true"
+            <span v-else class="tli tli--just" aria-hidden="true"
               ><span class="tli-row"><i></i><i></i><i></i></span
-              ><span class="tli-row"><i></i><i></i></span></span>
-            <span class="thumb-layout-optlabel">Justified</span>
-          </button>
-        </div>
+              ><span class="tli-row"><i></i><i></i></span
+            ></span>
+          </template>
+        </Segmented>
         <p v-if="justifiedDisabled" class="thumb-layout-notice" role="status">
           Available when thumbnails finish updating<template
             v-if="thumbnailRegen.total"
@@ -253,32 +213,20 @@ async function clearGuestSession() {
       title="Sidebar Width"
       desc="Show the sidebar at full width or as a narrow icon dock."
     >
-      <div class="sidebar-width-toggle">
-        <button
-          class="sidebar-width-opt"
-          :class="{ active: !sidebarStore.sidebarDocked }"
-          type="button"
-          @click="sidebarStore.setSidebarDocked(false)"
-        >
-          <span class="swi swi--full">
+      <Segmented
+        :model-value="sidebarStore.sidebarDocked ? 'dock' : 'full'"
+        :options="SIDEBAR_WIDTH_OPTIONS"
+        variant="stacked"
+        aria-label="Sidebar width"
+        @update:model-value="(id) => sidebarStore.setSidebarDocked(id === 'dock')"
+      >
+        <template #media="{ option }">
+          <span :class="['swi', `swi--${option.id}`]" aria-hidden="true">
             <span class="swi-rail"></span>
             <span class="swi-content"></span>
           </span>
-          <span class="sidebar-width-label">Full</span>
-        </button>
-        <button
-          class="sidebar-width-opt"
-          :class="{ active: sidebarStore.sidebarDocked }"
-          type="button"
-          @click="sidebarStore.setSidebarDocked(true)"
-        >
-          <span class="swi swi--dock">
-            <span class="swi-rail"></span>
-            <span class="swi-content"></span>
-          </span>
-          <span class="sidebar-width-label">Dock</span>
-        </button>
-      </div>
+        </template>
+      </Segmented>
     </SettingsSection>
 
     <div class="appearance-selects">
@@ -361,9 +309,6 @@ async function clearGuestSession() {
   margin-top: var(--space-2);
 }
 
-/* Thumbnail-layout radiogroup: a two-option segmented control mirroring the
-   Sidebar Width toggle's token treatment (olive edge + wash when active),
-   built as a real radiogroup for keyboard/AT. */
 .thumb-layout-row {
   display: flex;
   flex-direction: column;
@@ -373,32 +318,6 @@ async function clearGuestSession() {
   font-size: var(--text-base);
   font-weight: var(--weight-medium);
   color: rgb(var(--v-theme-on-surface));
-}
-.thumb-layout-toggle {
-  display: flex;
-  gap: var(--space-3);
-}
-.thumb-layout-opt {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-2);
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
-  background: rgba(var(--v-theme-on-surface), 0.04);
-  color: rgb(var(--v-theme-on-surface));
-  font-family: inherit;
-  font-size: var(--text-base);
-  font-weight: var(--weight-medium);
-  transition:
-    border-color 0.12s,
-    background 0.12s,
-    color 0.12s;
-}
-.thumb-layout-optlabel {
-  font-weight: var(--weight-semibold);
 }
 /* Mini layout illustration: an even grid (square) vs uneven justified rows.
    currentColor, so it follows the option's ink (mirrors the Sidebar Width .swi). */
@@ -453,22 +372,6 @@ async function clearGuestSession() {
 .tli--just .tli-row:last-child i:nth-child(2) {
   flex: 2;
 }
-.thumb-layout-opt:hover {
-  background: var(--hover-wash);
-}
-.thumb-layout-opt.active {
-  border-color: var(--active-bar);
-  background: var(--active-wash);
-  color: var(--active-text);
-}
-.thumb-layout-opt.disabled,
-.thumb-layout-opt:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  background: rgba(var(--v-theme-on-surface), 0.04);
-  border-color: rgba(var(--v-theme-on-surface), 0.16);
-  color: rgb(var(--v-theme-on-surface));
-}
 .thumb-layout-notice {
   margin: 0;
   font-size: var(--text-xs);
@@ -476,37 +379,6 @@ async function clearGuestSession() {
   line-height: var(--leading-snug);
 }
 
-.sidebar-width-toggle {
-  display: flex;
-  gap: var(--space-3);
-}
-.sidebar-width-opt {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-2);
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
-  background: rgba(var(--v-theme-on-surface), 0.04);
-  color: rgb(var(--v-theme-on-surface));
-  font-family: inherit;
-  font-size: var(--text-base);
-  font-weight: var(--weight-medium);
-  transition:
-    border-color 0.12s,
-    background 0.12s,
-    color 0.12s;
-}
-.sidebar-width-opt:hover {
-  background: var(--hover-wash);
-}
-.sidebar-width-opt.active {
-  border-color: var(--active-bar);
-  background: var(--active-wash);
-  color: var(--active-text);
-}
 /* Mini layout illustration: a window frame with a filled left rail (wide for
    full, narrow for dock) over a dotted content area. currentColor, so it follows
    the option's ink: no olive glyph on the olive selection wash. */
@@ -535,8 +407,5 @@ async function clearGuestSession() {
   background: radial-gradient(currentColor 1px, transparent 1.5px) 0 0 / 10px
     10px;
   opacity: 0.35;
-}
-.sidebar-width-label {
-  font-weight: var(--weight-semibold);
 }
 </style>

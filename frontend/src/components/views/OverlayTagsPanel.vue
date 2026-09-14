@@ -48,22 +48,42 @@
               <v-icon size="10">mdi-chevron-down</v-icon>
             </button>
           </template>
-          <v-list density="compact" min-width="160">
-            <v-list-item v-if="tagPluginsLoading" disabled title="Loading..." />
-            <template v-if="!tagPluginsLoading">
-              <v-list-item
+          <div
+            class="ctx-menu ctx-menu--on-dark"
+            role="menu"
+            style="min-width: 160px"
+          >
+            <button
+              v-if="tagPluginsLoading"
+              type="button"
+              class="ctx-item"
+              role="menuitem"
+              disabled
+            >
+              Loading...
+            </button>
+            <template v-else>
+              <button
                 v-for="plugin in tagPlugins"
                 :key="plugin.name"
-                :title="plugin.display_name || plugin.name"
+                type="button"
+                class="ctx-item"
+                role="menuitem"
                 @click="refreshPictureTags(plugin.name)"
-              />
-              <v-list-item
+              >
+                {{ plugin.display_name || plugin.name }}
+              </button>
+              <button
                 v-if="!tagPlugins.length"
+                type="button"
+                class="ctx-item"
+                role="menuitem"
                 disabled
-                title="No taggers available"
-              />
+              >
+                No taggers available
+              </button>
             </template>
-          </v-list>
+          </div>
         </v-menu>
         <button
           v-if="props.image && !readOnly"

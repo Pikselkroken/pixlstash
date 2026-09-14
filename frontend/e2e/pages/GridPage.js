@@ -156,7 +156,7 @@ export class GridPage {
   async openSortMenu() {
     await this.sortMenuButton.click()
     await expect(
-      this.page.locator('.gb-sort-panel .tbm-toggle').first(),
+      this.sortOptions().first(),
     ).toBeVisible()
   }
 
@@ -166,10 +166,15 @@ export class GridPage {
     await expect(this.columnsSlider).toBeVisible()
   }
 
-  sortOption(label) {
+  /** The sort-order radios (OptionRows), not the Group strictness buttons. */
+  sortOptions() {
     return this.page
-      .locator('.gb-sort-panel .tbm-toggle', { hasText: label })
-      .first()
+      .getByRole('radiogroup', { name: 'Sort order' })
+      .getByRole('radio')
+  }
+
+  sortOption(label) {
+    return this.sortOptions().filter({ hasText: label }).first()
   }
 
   /** Right-click a card (first by default) to open the context menu. */
@@ -179,9 +184,15 @@ export class GridPage {
     await expect(this.contextMenu).toBeVisible()
   }
 
-  /** A context-menu action item by its visible label. */
+  /**
+   * A context-menu action item by its visible label. The Project / Person / Set
+   * flyout rows are `.ctx-item` too and sit (hidden) before the actions, so
+   * they are excluded or a set named like an action would match first.
+   */
   contextMenuItem(label) {
-    return this.contextMenu.locator('.ctx-item', { hasText: label }).first()
+    return this.contextMenu
+      .locator('.ctx-item:not(.ate-menu .ctx-item)', { hasText: label })
+      .first()
   }
 
   /**

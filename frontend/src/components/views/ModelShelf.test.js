@@ -3806,7 +3806,7 @@ describe("the model-folders door", () => {
       .find('.shelf-toolbar .tip[data-text="Add models to the shelf"]')
       .element.closest("button");
     const addItem = wrapper
-      .findAll(".shelf-mi")
+      .findAll(".ctx-item")
       .find((b) => b.text().includes("Add folder"));
     await closeFoldersFrom(wrapper, addItem);
     expect(document.activeElement).toBe(add);
@@ -4092,7 +4092,7 @@ describe("Add file", () => {
     // share the one accented control (#904).
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const item = wrapper
-      .findAll(".shelf-mi")
+      .findAll(".ctx-item")
       .find((entry) => entry.text().includes("Add file"));
     expect(item).toBeDefined();
   });
@@ -4141,7 +4141,7 @@ describe("Add file", () => {
     document.body.appendChild(wrapper.element);
 
     const item = wrapper
-      .findAll(".shelf-mi")
+      .findAll(".ctx-item")
       .find((entry) => entry.text().includes("Add file"));
     await item.trigger("click");
     wrapper.findComponent({ name: "FolderBrowser" }).vm.$emit("close");
@@ -4165,7 +4165,7 @@ describe("Add file", () => {
 
     await wrapper.find(".tbo-trigger").trigger("click");
     const item = wrapper
-      .findAll(".tbo-panel .shelf-mi")
+      .findAll(".tbo-panel .ctx-item")
       .find((entry) => entry.text().includes("Add file"));
     await item.trigger("click");
     wrapper.findComponent({ name: "FolderBrowser" }).vm.$emit("close");
@@ -4576,7 +4576,7 @@ describe("setting the ai-toolkit output folder", () => {
   };
 
   const addItems = (wrapper) =>
-    wrapper.findAll(".shelf-mi").map((b) => b.text());
+    wrapper.findAll(".ctx-item").map((b) => b.text());
 
   it("offers to set it while none is registered", async () => {
     const wrapper = await mountShelf([]);
@@ -4604,7 +4604,7 @@ describe("setting the ai-toolkit output folder", () => {
     // sidebar entry.
     const wrapper = await mountShelf([]);
     const setItem = wrapper
-      .findAll(".shelf-mi")
+      .findAll(".ctx-item")
       .find((b) => b.text().includes("Set ai-toolkit"));
     await setItem.trigger("click");
     await wrapper.vm.$nextTick();
@@ -4761,7 +4761,7 @@ describe("the two views of the shelf", () => {
     ]);
 
     await wrapper.find(".tbo-trigger").trigger("click");
-    const rows = wrapper.findAll(".tbo-panel .shelf-mi").map((b) => b.text());
+    const rows = wrapper.findAll(".tbo-panel .ctx-item").map((b) => b.text());
     expect(rows).toEqual([
       "Add folder…",
       "Add file…",
@@ -4769,7 +4769,7 @@ describe("the two views of the shelf", () => {
       "Model folders…",
     ]);
 
-    await wrapper.findAll(".tbo-panel .shelf-mi").at(-1).trigger("click");
+    await wrapper.findAll(".tbo-panel .ctx-item").at(-1).trigger("click");
     expect(
       wrapper.findComponent({ name: "ModelFoldersDialog" }).props("open"),
     ).toBe(true);

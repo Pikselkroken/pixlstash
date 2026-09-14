@@ -191,7 +191,7 @@ function toggleRow(level, folder) {
 }
 
 function onRowClick(level, folder, event) {
-  if (event.target.closest(".map-tree__kdd, .map-tree__menu")) return;
+  if (event.target.closest(".map-tree__kdd, .ctx-menu")) return;
   ensureLevel(level);
   if (event.shiftKey && anchorId !== null) {
     const rows = visibleFolders(level);
@@ -383,22 +383,22 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
                 <v-icon size="12">mdi-chevron-down</v-icon>
               </button>
             </template>
-            <div class="map-tree__menu" role="menu">
+            <div class="ctx-menu" role="menu" style="min-width: 180px">
               <template v-for="(group, gi) in menuGroups(level.proposal?.candidates)" :key="gi">
-                <div v-if="gi" class="map-tree__menu-divider" />
+                <div v-if="gi" class="ctx-sep" role="separator" />
                 <button
                   v-for="kind in group"
                   :key="kind.value"
                   type="button"
                   role="menuitem"
-                  class="map-tree__menu-item"
+                  class="ctx-item"
                   :data-kind="kind.value"
                   :style="kindStyle(kind.value)"
                   @click="applyToLevel(level, kind.value)"
                 >
-                  <v-icon size="16">{{ kind.icon }}</v-icon>
+                  <v-icon class="ctx-icon map-tree__kind-icon">{{ kind.icon }}</v-icon>
                   {{ kind.label }}
-                  <kbd class="map-tree__menu-digit">{{ kind.digit }}</kbd>
+                  <kbd class="ctx-shortcut">{{ kind.digit }}</kbd>
                 </button>
               </template>
             </div>
@@ -455,22 +455,22 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
                   <v-icon size="12">mdi-chevron-down</v-icon>
                 </button>
               </template>
-              <div class="map-tree__menu" role="menu">
+              <div class="ctx-menu" role="menu" style="min-width: 180px">
                 <template v-for="(group, gi) in menuGroups(folder.proposal?.candidates)" :key="gi">
-                  <div v-if="gi" class="map-tree__menu-divider" />
+                  <div v-if="gi" class="ctx-sep" role="separator" />
                   <button
                     v-for="kind in group"
                     :key="kind.value"
                     type="button"
                     role="menuitem"
-                    class="map-tree__menu-item"
+                    class="ctx-item"
                     :data-kind="kind.value"
                     :style="kindStyle(kind.value)"
                     @click="applyToRow(level, folder, kind.value)"
                   >
-                    <v-icon size="16">{{ kind.icon }}</v-icon>
+                    <v-icon class="ctx-icon map-tree__kind-icon">{{ kind.icon }}</v-icon>
                     {{ kind.label }}
-                    <kbd class="map-tree__menu-digit">{{ kind.digit }}</kbd>
+                    <kbd class="ctx-shortcut">{{ kind.digit }}</kbd>
                   </button>
                 </template>
               </div>
@@ -779,54 +779,10 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
   border-left: 0;
 }
 
-.map-tree__menu {
-  display: flex;
-  flex-direction: column;
-  min-width: 180px;
-  padding: var(--space-2);
-  border-radius: var(--radius-md);
-  background: rgb(var(--v-theme-panel));
-  box-shadow: var(--elevation-3);
-}
-
-.map-tree__menu-divider {
-  margin: var(--space-2) 0;
-  border-top: 1px solid rgb(var(--v-theme-divider));
-}
-
-.map-tree__menu-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2);
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: inherit;
-  font-size: var(--text-sm);
-  text-align: left;
-  cursor: pointer;
-}
-
-.map-tree__menu-item .v-icon {
+/* The kind's own colour is the legend; it rides the menu glyph at full ink. */
+.map-tree__kind-icon {
   color: rgb(var(--kind));
-}
-
-.map-tree__menu-item:hover {
-  background: var(--hover-wash);
-}
-
-.map-tree__menu-digit {
-  margin-left: auto;
-  min-width: 18px;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid currentColor;
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  line-height: 1;
-  text-align: center;
-  opacity: var(--opacity-text-secondary);
+  opacity: 1;
 }
 
 .map-tree__footer {

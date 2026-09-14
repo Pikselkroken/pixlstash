@@ -36,7 +36,7 @@ const emit = defineEmits(["update:modelValue"]);
   resize: vertical;
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   color: rgb(var(--v-theme-on-surface));
   font-family: var(--font-ui);
   font-size: var(--text-base);

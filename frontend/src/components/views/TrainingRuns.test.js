@@ -314,13 +314,13 @@ describe("choosing runs", () => {
     const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")]);
     await tick(wrapper, "Clementine");
     await wrapper
-      .findAll(".shelf-mi")
+      .findAll(".ctx-item")
       .find((b) => b.text().includes("Select all shown"))
       .trigger("click");
     expect(wrapper.findAll(".tr-card--checked")).toHaveLength(3);
 
     await wrapper
-      .findAll(".shelf-mi")
+      .findAll(".ctx-item")
       .find((b) => b.text().includes("Clear selection"))
       .trigger("click");
     expect(wrapper.findAll(".tr-card--checked")).toHaveLength(0);

@@ -500,6 +500,24 @@ describe("DedupCompareDialog: the wheel", () => {
     expect(wrapper.vm.zoomLevel()).toBeCloseTo(0.5, 5);
     wrapper.unmount();
   });
+
+  it("the Fit / Actual pixels radios follow the snap stop and snap on click", async () => {
+    const wrapper = mountDialog();
+    wrapper.vm.openZoom(0);
+    await wrapper.vm.$nextTick();
+    await primeZoom(wrapper);
+    const radios = () =>
+      Array.from(
+        zoomEl().querySelectorAll('[aria-label="Zoom"] [role="radio"]'),
+      ).map((r) => r.getAttribute("aria-checked"));
+    expect(radios()).toEqual(["true", "false"]);
+
+    zoomEl().querySelectorAll('[aria-label="Zoom"] [role="radio"]')[1].click();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.zoomLevel()).toBe(1);
+    expect(radios()).toEqual(["false", "true"]);
+    wrapper.unmount();
+  });
 });
 
 describe("DedupCompareDialog: closing peels one layer", () => {

@@ -18,27 +18,25 @@
         </div>
         <div v-if="allowCreateFolder" class="browse-create-bar">
           <template v-if="creatingFolder">
-            <v-text-field
+            <AppInput
               ref="createFolderInputRef"
               v-model="newFolderName"
               label="New folder name"
-              density="compact"
-              variant="filled"
-              hide-details
+              mono
+              class="browse-create-input"
               :error="Boolean(createFolderError)"
-              @keydown.enter="createFolder"
+              @enter="createFolder"
               @keydown.esc="cancelCreateFolder"
             />
             <AppButton
               variant="primary"
-              size="sm"
               :loading="createFolderLoading"
               :disabled="!newFolderName.trim()"
               @click="createFolder"
             >
               Create
             </AppButton>
-            <AppButton size="sm" @click="cancelCreateFolder">
+            <AppButton @click="cancelCreateFolder">
               Cancel
             </AppButton>
           </template>
@@ -125,6 +123,7 @@ import { useSubmitGuard } from "../../composables/useSubmitGuard";
 import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import AppInput from "../widgets/AppInput.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -346,8 +345,14 @@ const { pending: createFolderLoading, run: createFolder } =
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.16);
 }
 
-.browse-create-bar .v-text-field {
+/* The caption sits above the field, so the buttons align to its bottom. */
+.browse-create-bar:has(.browse-create-input) {
+  align-items: flex-end;
+}
+
+.browse-create-input {
   flex: 1;
+  min-width: 0;
 }
 
 .browse-create-error {

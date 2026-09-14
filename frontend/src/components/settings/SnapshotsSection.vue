@@ -12,7 +12,6 @@ import {
   VProgressLinear,
   VProgressCircular,
   VIcon,
-  VTextField,
 } from "vuetify/components";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { formatUserDate } from "../../utils/utils";
@@ -283,15 +282,12 @@ function handleRestore(cp) {
         <!-- Label (inline edit or display) -->
         <div class="snapshot-row-label">
           <template v-if="editingLabel[cp.id] !== undefined">
-            <v-text-field
+            <AppInput
               v-model="editingLabel[cp.id]"
-              density="compact"
-              variant="outlined"
-              hide-details
               autofocus
+              aria-label="Snapshot label"
               class="snapshot-edit-field"
-              :loading="savingLabel[cp.id]"
-              @keydown.enter="saveLabel(cp.id)"
+              @enter="saveLabel(cp.id)"
               @keydown.esc="cancelEditing(cp.id)"
               @blur="saveLabel(cp.id)"
             />

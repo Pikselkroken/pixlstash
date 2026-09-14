@@ -38,8 +38,9 @@
  * so nothing here has to survive one.
  */
 import { computed, onUnmounted, ref, watch } from "vue";
-import { VCheckbox, VIcon, VSelect, VTextField } from "vuetify/components";
+import { VCheckbox, VIcon, VSelect } from "vuetify/components";
 import AppButton from "../widgets/AppButton.vue";
+import AppInput from "../widgets/AppInput.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
@@ -694,12 +695,10 @@ function netDelta(row) {
           text="Where a picture with no project, person, set or tag is written"
         >
           <template #activator="{ props: tipProps }">
-            <v-text-field
+            <AppInput
               v-bind="tipProps"
               :model-value="unfiled"
-              density="compact"
-              variant="outlined"
-              hide-details
+              mono
               class="layout-unfiled__name"
               aria-label="Folder for unassigned pictures"
               :disabled="migrating"
@@ -1020,12 +1019,6 @@ function netDelta(row) {
 
 .layout-unfiled__name {
   flex: 0 1 180px;
-}
-
-.layout-unfiled__name :deep(.v-field__input) {
-  padding-inline: var(--space-3);
-  min-height: 34px;
-  font-size: var(--text-sm);
 }
 
 /* ---- what files a picture ------------------------------------------------ */

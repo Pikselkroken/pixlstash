@@ -328,7 +328,7 @@ describe("Toolbar - Recently changed stacks", () => {
     const stacked = mountToolbar();
     await openSortMenu(stacked);
     expect(stacked.text()).toContain("Recently changed stacks");
-    const badge = stacked.find(".tbm-toggle-filter-badge");
+    const badge = stacked.find(".gb-sort-filter-badge");
     expect(badge.exists()).toBe(true);
     expect(badge.findComponent({ name: "Tooltip" }).props("text")).toBe(
       "Only available when viewing stacks",
@@ -460,7 +460,7 @@ describe("Toolbar - the export control names what it will export", () => {
     await wrapper.find(".tbo-trigger").trigger("click");
     const labels = wrapper
       .find(".tbo-panel")
-      .findAll(".tbm-action")
+      .findAll(".ctx-item")
       .map((b) => b.text());
     expect(labels).toContain("Export 3 pictures to zip");
     expect(labels).not.toContain("Export grid to zip");
@@ -482,7 +482,7 @@ describe("Toolbar - the ⋯ overflow mirrors its controls", () => {
     filterStore.comfyuiConfigured = true;
     const wrapper = mountToolbar();
     const panel = await openOverflow(wrapper);
-    const labels = panel.findAll(".tbm-action").map((b) => b.text());
+    const labels = panel.findAll(".ctx-item").map((b) => b.text());
     expect(labels).toEqual([
       "Export grid to zip",
       "Import photos…",
@@ -497,7 +497,7 @@ describe("Toolbar - the ⋯ overflow mirrors its controls", () => {
   it("mirrors the v-ifs: ComfyUI row only when configured", async () => {
     const wrapper = mountToolbar();
     const panel = await openOverflow(wrapper);
-    const labels = panel.findAll(".tbm-action").map((b) => b.text());
+    const labels = panel.findAll(".ctx-item").map((b) => b.text());
     expect(labels).not.toContain("Generate with ComfyUI…");
   });
 
@@ -505,7 +505,7 @@ describe("Toolbar - the ⋯ overflow mirrors its controls", () => {
     readOnlyRef.value = true;
     const wrapper = mountToolbar();
     const panel = await openOverflow(wrapper);
-    const labels = panel.findAll(".tbm-action").map((b) => b.text());
+    const labels = panel.findAll(".ctx-item").map((b) => b.text());
     expect(labels).not.toContain("Import photos…");
     // Review never folds (amendment #2), so no row exists to gate.
     expect(labels).not.toContain("Review and fix tags…");
@@ -515,7 +515,7 @@ describe("Toolbar - the ⋯ overflow mirrors its controls", () => {
     const wrapper = mountToolbar();
     const panel = await openOverflow(wrapper);
     const row = (label) =>
-      panel.findAll(".tbm-action").find((b) => b.text() === label);
+      panel.findAll(".ctx-item").find((b) => b.text() === label);
 
     await row("Export grid to zip").trigger("click");
     expect(wrapper.emitted("confirm-export-zip")).toHaveLength(1);

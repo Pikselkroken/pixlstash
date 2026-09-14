@@ -855,12 +855,14 @@ watch(
           v-model="comfyuiEditHost"
           label="Host"
           placeholder="e.g. 127.0.0.1"
+          mono
           :disabled="comfyuiUrlLoading"
         />
         <AppInput
           v-model="comfyuiEditPort"
           label="Port"
           placeholder="e.g. 8188"
+          mono
           :disabled="comfyuiUrlLoading"
           @enter="saveComfyuiUrl"
         />

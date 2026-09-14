@@ -13,12 +13,7 @@ vi.mock("vuetify/components", () => ({
     template:
       '<label><input type="checkbox" :checked="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', $event.target.checked)" />{{ label }}</label>',
   },
-  VTextField: {
-    props: { modelValue: String, disabled: Boolean, label: String },
-    emits: ["update:modelValue"],
-    template:
-      '<input :aria-label="label" :value="modelValue" :disabled="disabled" @input="$emit(\'update:modelValue\', $event.target.value)" />',
-  },
+  VIcon: { template: "<i><slot /></i>" },
 }));
 
 const getCaptionSettings = vi.fn();
@@ -29,6 +24,14 @@ vi.mock("../../api/serverConfig", () => ({
 }));
 
 import LibraryCaptionsDialog from "./LibraryCaptionsDialog.vue";
+
+// The field whose caption reads `label` (AppInput puts the label above the box).
+function field(wrapper, label) {
+  const box = wrapper
+    .findAll("label.app-input")
+    .find((el) => el.find(".field-label").text() === label);
+  return box ? box.find("input") : wrapper.find("input.no-such-field");
+}
 
 const STORED = {
   sync_tags: true,
@@ -76,8 +79,8 @@ describe("LibraryCaptionsDialog", () => {
 
     const boxes = wrapper.findAll("input[type=checkbox]");
     expect(boxes.map((b) => b.element.checked)).toEqual([true, false]);
-    expect(wrapper.find("input[aria-label='Suffix for new tags files']").element.value).toBe(".txt");
-    expect(wrapper.find("input[aria-label='Suffix for new description files']").exists()).toBe(false);
+    expect(field(wrapper, "Suffix for new tags files").element.value).toBe(".txt");
+    expect(field(wrapper, "Suffix for new description files").exists()).toBe(false);
     expect(wrapper.text()).toContain("image.txt");
     expect(saveButton(wrapper).attributes("disabled")).toBeUndefined();
   });
@@ -86,7 +89,7 @@ describe("LibraryCaptionsDialog", () => {
     const wrapper = mountDialog();
     await flushPromises();
     await wrapper.findAll("input[type=checkbox]")[1].setValue(true);
-    await wrapper.find("input[aria-label='Suffix for new description files']").setValue(" _caption.txt ");
+    await field(wrapper, "Suffix for new description files").setValue(" _caption.txt ");
     await saveButton(wrapper).trigger("click");
     await flushPromises();
 

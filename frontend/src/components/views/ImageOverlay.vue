@@ -322,19 +322,25 @@
                 }}</span>
               </button>
             </template>
-            <div class="overlay-star-menu">
+            <div
+              class="overlay-star-menu ctx-menu ctx-menu--on-dark"
+              role="menu"
+              aria-label="Rating"
+            >
               <button
                 v-for="n in [0, 1, 2, 3, 4, 5]"
                 :key="n"
-                class="overlay-star-menu-item"
-                :class="{
-                  'overlay-star-menu-item--active':
-                    (isReadOnly ? guestScore || 0 : image?.score || 0) === n,
-                }"
+                class="ctx-item"
+                role="menuitemradio"
+                :aria-checked="
+                  (isReadOnly ? guestScore || 0 : image?.score || 0) === n
+                    ? 'true'
+                    : 'false'
+                "
                 type="button"
                 @click.stop="setScore(n)"
               >
-                <span class="overlay-star-menu-stars">
+                <span class="overlay-star-menu-stars" aria-hidden="true">
                   <v-icon
                     v-for="s in 5"
                     :key="s"
@@ -342,14 +348,19 @@
                     :color="
                       s <= n
                         ? 'rgba(var(--v-theme-accent))'
-                        : 'rgba(255,255,255,0.2)'
+                        : 'rgba(var(--v-theme-on-dark-surface), 0.2)'
                     "
                     >mdi-star</v-icon
                   >
                 </span>
-                <span class="overlay-star-menu-label">{{
+                <span class="ctx-label-text">{{
                   n === 0 ? "No rating" : n
                 }}</span>
+                <v-icon
+                  v-if="(isReadOnly ? guestScore || 0 : image?.score || 0) === n"
+                  class="ctx-check"
+                  >mdi-check</v-icon
+                >
               </button>
             </div>
           </v-menu>

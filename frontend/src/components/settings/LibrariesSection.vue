@@ -172,7 +172,7 @@ async function switchTo(library, event) {
   // from is no longer in the document and `.focus()` is a silent no-op that
   // drops the keyboard on <body>. The ⋯ button that opened the menu is where
   // focus belongs anyway, and it outlives the menu.
-  const trigger = invoker?.classList?.contains("library-menu__item")
+  const trigger = invoker?.classList?.contains("ctx-item")
     ? (moreButtons[library.uuid] ?? null)
     : invoker;
   const shareCount = Number(activeLibrary.value?.active_share_links ?? 0);
@@ -415,74 +415,74 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
                   ⋯
                 </button>
               </template>
-              <ul class="library-menu" role="menu">
-                <li v-if="!library.is_active" role="none">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    class="library-menu__item"
-                    :disabled="!library.is_reachable"
-                    @click="
-                      openMenuUuid = '';
-                      switchTo(library, $event);
-                    "
-                  >
-                    Open this library
-                  </button>
-                </li>
-                <li role="none">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    class="library-menu__item"
-                    @click="startRename(library)"
-                  >
-                    Rename…
-                  </button>
-                </li>
+              <div class="ctx-menu" role="menu" style="min-width: 200px">
+                <button
+                  v-if="!library.is_active"
+                  type="button"
+                  role="menuitem"
+                  class="ctx-item"
+                  :disabled="!library.is_reachable"
+                  @click="
+                    openMenuUuid = '';
+                    switchTo(library, $event);
+                  "
+                >
+                  Open this library
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="ctx-item"
+                  @click="startRename(library)"
+                >
+                  Rename…
+                </button>
                 <!-- Only on the active library: the layout routes address the
                      open one, so offering this on a row that is not open would
                      silently edit a different library's folders. -->
-                <li v-if="library.is_active" role="none">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    class="library-menu__item"
-                    @click="
-                      openMenuUuid = '';
-                      layoutDialogOpen = true;
-                    "
-                  >
-                    Choose a layout…
-                  </button>
-                </li>
-                <li v-if="library.is_active" role="none">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    class="library-menu__item"
-                    @click="
-                      openMenuUuid = '';
-                      captionsDialogOpen = true;
-                    "
-                  >
-                    Caption files…
-                  </button>
-                </li>
+                <button
+                  v-if="library.is_active"
+                  type="button"
+                  role="menuitem"
+                  class="ctx-item"
+                  @click="
+                    openMenuUuid = '';
+                    layoutDialogOpen = true;
+                  "
+                >
+                  Choose a layout…
+                </button>
+                <button
+                  v-if="library.is_active"
+                  type="button"
+                  role="menuitem"
+                  class="ctx-item"
+                  @click="
+                    openMenuUuid = '';
+                    captionsDialogOpen = true;
+                  "
+                >
+                  Caption files…
+                </button>
                 <!-- Absent on the active library on purpose: detaching it is
                      refused by the registry, and an item that can only fail is
-                     worse than no item. -->
-                <li v-if="!library.is_active" role="none">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    class="library-menu__item library-menu__item--separated"
-                    @click="stopUsing(library)"
-                  >
-                    Stop using this…
-                  </button>
-                </li>
-              </ul>
+                     worse than no item. The separator sets it apart: it is the
+                     only item whose consequence is not obvious from its name. -->
+                <div
+                  v-if="!library.is_active"
+                  class="ctx-sep"
+                  role="separator"
+                />
+                <button
+                  v-if="!library.is_active"
+                  type="button"
+                  role="menuitem"
+                  class="ctx-item"
+                  @click="stopUsing(library)"
+                >
+                  Stop using this…
+                </button>
+              </div>
             </v-menu>
           </div>
         </li>
@@ -776,54 +776,6 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
 .library-row__more:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.library-menu {
-  list-style: none;
-  margin: 0;
-  padding: var(--space-2);
-  min-width: 200px;
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
-  background: rgb(var(--v-theme-surface));
-}
-
-.library-menu__item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: var(--space-2) var(--space-3);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: rgb(var(--v-theme-on-surface));
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-
-.library-menu__item:hover:not(:disabled) {
-  background: var(--hover-wash);
-}
-
-/* A row flush in its menu has no room for the ring's gap. */
-.library-menu__item:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring-inset);
-}
-
-.library-menu__item:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-/* The destructive-sounding one is set apart, the way the artboard sets it
-   apart: it is the only item in this menu whose consequence is not obvious
-   from its name. */
-.library-menu__item--separated {
-  margin-top: var(--space-2);
-  padding-top: var(--space-3);
-  border-top: 1px solid rgb(var(--v-theme-border));
-  border-radius: 0;
 }
 
 .libraries-note {

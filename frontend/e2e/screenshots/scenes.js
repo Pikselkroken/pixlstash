@@ -250,7 +250,7 @@ export const scenes = [
       // selection-scoped (shows the score range header), and highlight "Set".
       await selectN(grid, 3)
       await grid.openContextMenu(grid.thumbnails.first())
-      // "Set" is an AddToEntityControl (.ate-btn), not a .ctx-item. Highlight it.
+      // "Set" is an AddToEntityControl trigger (.ate-btn). Highlight it.
       const setItem = grid.contextMenu.locator('.ate-btn', { hasText: 'Set' }).first()
       await setItem.hover({ timeout: 3000 }).catch(() => {})
       await page.waitForTimeout(300)
@@ -436,7 +436,7 @@ export const scenes = [
       await settings.openTab('Libraries')
       const row = page.locator('.library-row:not(.library-row--active)').first()
       await row.locator('.library-row__more').click()
-      await expect(page.locator('.library-menu')).toBeVisible()
+      await expect(page.getByRole('menu')).toBeVisible()
       await page.waitForTimeout(300)
       return settings.card
     },

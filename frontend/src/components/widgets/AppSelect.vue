@@ -107,14 +107,14 @@ function toggleValue(value, checked) {
   padding: var(--space-2);
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
 }
 
 .app-select__multiple-option {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  min-height: 27px;
+  min-height: var(--control-h);
   padding: 0 var(--space-2);
   color: rgb(var(--v-theme-on-surface));
   font-family: var(--font-ui);
@@ -146,10 +146,10 @@ function toggleValue(value, checked) {
   appearance: none;
   -webkit-appearance: none;
   width: 100%;
-  height: 27px;
+  height: var(--control-h);
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   color: rgb(var(--v-theme-on-surface));
   font-family: var(--font-ui);
   font-size: var(--text-base);
@@ -159,7 +159,7 @@ function toggleValue(value, checked) {
 }
 
 .app-select__field--compact {
-  height: 21px;
+  height: var(--control-h-sm);
   font-size: var(--text-xs);
   padding: 0 24px 0 var(--space-3);
 }

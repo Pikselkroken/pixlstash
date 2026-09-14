@@ -54,24 +54,13 @@
           </div>
           <div class="tbm-section">
             <span class="tbm-label">Group by</span>
-            <div class="tbm-grid-3" role="group" aria-label="Group by">
-              <button
-                v-for="key in GROUP_BY_KEYS"
-                :key="key"
-                class="tbm-toggle"
-                :class="{ 'tbm-toggle--on': store.view.groupBy === key }"
-                type="button"
-                :aria-pressed="store.view.groupBy === key"
-                @click="store.setView({ groupBy: key })"
-              >
-                <v-icon size="18" class="tbm-toggle-icon">{{
-                  GROUP_LABELS[key].icon
-                }}</v-icon>
-                <span class="tbm-toggle-label">{{
-                  GROUP_LABELS[key].label
-                }}</span>
-              </button>
-            </div>
+            <Segmented
+              :options="groupOptions"
+              :model-value="store.view.groupBy"
+              full
+              aria-label="Group by"
+              @update:model-value="(key) => store.setView({ groupBy: key })"
+            />
           </div>
         </div>
       </v-menu>
@@ -115,24 +104,13 @@
           </div>
           <div class="tbm-section">
             <span class="tbm-label">Sort by</span>
-            <div class="tbm-grid-2" role="group" aria-label="Sort by">
-              <button
-                v-for="key in SORT_KEYS"
-                :key="key"
-                class="tbm-toggle"
-                :class="{ 'tbm-toggle--on': store.view.sortKey === key }"
-                type="button"
-                :aria-pressed="store.view.sortKey === key"
-                @click="store.setView({ sortKey: key })"
-              >
-                <v-icon size="18" class="tbm-toggle-icon">{{
-                  SORT_LABELS[key].icon
-                }}</v-icon>
-                <span class="tbm-toggle-label">{{
-                  SORT_LABELS[key].label
-                }}</span>
-              </button>
-            </div>
+            <OptionRows
+              :options="sortOptions"
+              :model-value="store.view.sortKey"
+              :columns="2"
+              aria-label="Sort by"
+              @update:model-value="(key) => store.setView({ sortKey: key })"
+            />
           </div>
         </div>
       </v-menu>
@@ -163,24 +141,13 @@
           </div>
           <div class="tbm-section">
             <span class="tbm-label">Which workflows</span>
-            <div class="tbm-grid-3" role="group" aria-label="Which workflows">
-              <button
-                v-for="key in SHOW_KEYS"
-                :key="key"
-                class="tbm-toggle"
-                :class="{ 'tbm-toggle--on': store.view.show === key }"
-                type="button"
-                :aria-pressed="store.view.show === key"
-                @click="store.setView({ show: key })"
-              >
-                <v-icon size="18" class="tbm-toggle-icon">{{
-                  SHOW_LABELS[key].icon
-                }}</v-icon>
-                <span class="tbm-toggle-label">{{
-                  SHOW_LABELS[key].label
-                }}</span>
-              </button>
-            </div>
+            <Segmented
+              :options="showOptions"
+              :model-value="store.view.show"
+              full
+              aria-label="Which workflows"
+              @update:model-value="(key) => store.setView({ show: key })"
+            />
           </div>
         </div>
       </v-menu>
@@ -440,40 +407,40 @@
       origin="top start"
       :offset="2"
     >
-      <div class="tbm wfshelf-menu" role="menu">
+      <div class="ctx-menu" role="menu">
         <button
           v-if="menuRow && menuRow.variants > 1"
-          class="tbm-btn"
+          class="ctx-item"
           type="button"
           role="menuitem"
           @click="store.toggleOpen(menuRow.topology_hash)"
         >
-          <v-icon size="16">mdi-file-tree</v-icon>
-          <span>{{
+          <v-icon class="ctx-icon">mdi-file-tree</v-icon>
+          <span class="ctx-label-text">{{
             store.isOpen(menuRow.topology_hash)
               ? "Close its variants"
               : `Show its ${menuRow.variants} variants`
           }}</span>
         </button>
         <button
-          class="tbm-btn"
+          class="ctx-item"
           type="button"
           role="menuitem"
           :disabled="!canExport"
           @click="exportGraph()"
         >
           <Tooltip :text="exportTitle" activator="parent" />
-          <v-icon size="16">mdi-code-json</v-icon>
-          <span>Export the graph…</span>
+          <v-icon class="ctx-icon">mdi-code-json</v-icon>
+          <span class="ctx-label-text">Export the graph…</span>
         </button>
         <button
-          class="tbm-btn"
+          class="ctx-item"
           type="button"
           role="menuitem"
           @click="copyHash()"
         >
-          <v-icon size="16">mdi-identifier</v-icon>
-          <span>Copy its identity</span>
+          <v-icon class="ctx-icon">mdi-identifier</v-icon>
+          <span class="ctx-label-text">Copy its identity</span>
         </button>
       </div>
     </v-menu>
@@ -503,6 +470,8 @@ import { computed, onMounted, ref, watch } from "vue";
 
 import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import OptionRows from "../widgets/OptionRows.vue";
+import Segmented from "../widgets/Segmented.vue";
 import { getWorkflowGraph, listWorkflowVariants } from "../../api/workflows";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
@@ -555,6 +524,16 @@ const SHOW_LABELS = {
   in_use: { label: "In use", icon: "mdi-image-check-outline" },
   unused: { label: "Unused", icon: "mdi-image-off-outline" },
 };
+
+const asOptions = (keys, labels) =>
+  keys.map((key) => ({
+    id: key,
+    label: labels[key].label,
+    icon: labels[key].icon,
+  }));
+const groupOptions = asOptions(GROUP_BY_KEYS, GROUP_LABELS);
+const sortOptions = asOptions(SORT_KEYS, SORT_LABELS);
+const showOptions = asOptions(SHOW_KEYS, SHOW_LABELS);
 
 /** What each empty state says, and which of the three it is. */
 const EMPTY_STATES = {
@@ -1134,12 +1113,5 @@ onMounted(() => store.fetchRows());
 .wfshelf-note--error {
   border-left: 3px solid rgb(var(--v-theme-error));
   background: rgba(var(--v-theme-error), 0.08);
-}
-
-.wfshelf-menu {
-  display: flex;
-  flex-direction: column;
-  padding: var(--space-2);
-  gap: var(--space-1);
 }
 </style>

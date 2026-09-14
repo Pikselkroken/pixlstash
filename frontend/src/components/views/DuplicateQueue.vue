@@ -145,7 +145,8 @@
           <template #default="{ close }">
             <button
               type="button"
-              class="tbm-action"
+              role="menuitem"
+              class="ctx-item"
               :aria-label="decidedToggleLabel"
               data-testid="decided-row"
               @click="
@@ -158,12 +159,13 @@
                 activator="parent"
                 :describe="false"
               />
-              <v-icon size="16">mdi-history</v-icon>
-              <span>{{ decidedToggleLabel }}</span>
+              <v-icon class="ctx-icon">mdi-history</v-icon>
+              <span class="ctx-label-text">{{ decidedToggleLabel }}</span>
             </button>
             <button
               type="button"
-              class="tbm-action"
+              role="menuitem"
+              class="ctx-item"
               :aria-label="mixedToggleTitle"
               data-testid="mixed-row"
               @click="
@@ -176,8 +178,8 @@
                 activator="parent"
                 :describe="false"
               />
-              <v-icon size="16">mdi-alert-outline</v-icon>
-              <span>{{ mixedToggleLabel }}</span>
+              <v-icon class="ctx-icon">mdi-alert-outline</v-icon>
+              <span class="ctx-label-text">{{ mixedToggleLabel }}</span>
               <span
                 v-if="store.mixedTotal"
                 class="qmixed-count"

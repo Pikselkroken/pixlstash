@@ -27,21 +27,12 @@
               @keydown.escape.stop.prevent="emit('close')"
             />
           </div>
-          <div class="rs-dialog-order">
-            <button
-              v-for="[v, lbl] in [
-                ['suggested', 'Suggested'],
-                ['alpha', 'Alphabetical'],
-              ]"
-              :key="v"
-              class="rs-dialog-order-btn"
-              :class="{ 'rs-dialog-order-btn--on': order === v }"
-              type="button"
-              @click="order = v"
-            >
-              {{ lbl }}
-            </button>
-          </div>
+          <Segmented
+            v-model="order"
+            class="rs-dialog-order"
+            :options="ORDER_OPTIONS"
+            aria-label="Tag order"
+          />
         </div>
         <div class="rs-dialog-chips">
           <button
@@ -248,6 +239,7 @@
 // jumps to the open session instead of dead-ending on a disabled chip.
 import { computed, nextTick, onMounted, ref } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
+import Segmented from "../widgets/Segmented.vue";
 // Shared with TagHealthBoard's locked-scope state so both surfaces explain a
 // locked set with the same sentence.
 import { lockedSetTitle } from "./lockedSetCopy";
@@ -268,6 +260,10 @@ const store = useReviewSessionsStore();
 const tag = ref(props.preset || "");
 const q = ref("");
 const order = ref("suggested");
+const ORDER_OPTIONS = [
+  { id: "suggested", label: "Suggested" },
+  { id: "alpha", label: "Alphabetical" },
+];
 const includeReviewed = ref(false);
 const projectId = ref(props.initialScope.projectId ?? null);
 const setId = ref(props.initialScope.setId ?? null);
@@ -502,28 +498,15 @@ async function create() {
   color: rgb(var(--v-theme-on-dark-surface));
   font-size: var(--text-sm);
 }
+/* Dark in both themes, so Segmented's on-surface ink and track take the
+   dark-surface values (the dark theme's own) instead of the light theme's. */
 .rs-dialog-order {
-  display: inline-flex;
   flex-shrink: 0;
-  padding: 2px;
-  border-radius: var(--radius-sm);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-}
-.rs-dialog-order-btn {
-  height: 24px;
-  padding: 0 10px;
-  border-radius: calc(var(--radius-sm) - 2px);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-/* A chosen option, not an action: the dark-surface olive wash and edge, words
-   in the surface's ink. */
-.rs-dialog-order-btn--on {
-  background: rgba(var(--v-theme-dark-surface-primary), 0.2);
-  box-shadow: inset 0 0 0 1px rgb(var(--v-theme-dark-surface-primary));
-  color: rgb(var(--v-theme-on-dark-surface));
+  --v-theme-on-surface: var(--v-theme-on-dark-surface);
+  --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
+  --track-trough: rgba(var(--v-theme-scrim), 0.34);
+  --track-ring: rgba(var(--v-theme-on-dark-surface), 0.4);
+  --focus-stroke: rgb(var(--v-theme-on-dark-surface));
 }
 .rs-dialog-chips {
   display: flex;

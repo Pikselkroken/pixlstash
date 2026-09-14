@@ -45,17 +45,17 @@ describe("the folder layout sub-choice", () => {
 
     const section = layoutSection(wrapper);
     expect(section.exists()).toBe(true);
-    const buttons = section.findAll("button");
+    const buttons = section.findAll('[role="radio"]');
     expect(buttons).toHaveLength(2);
 
     // Seeded to drive: the first question a shelf of 438 GB is asked is which
     // disk is filling up.
     expect(store.view.folderLayout).toBe("drive");
-    expect(buttons[0].attributes("aria-pressed")).toBe("true");
+    expect(buttons[0].attributes("aria-checked")).toBe("true");
 
     await buttons[1].trigger("click");
     expect(store.view.folderLayout).toBe("alpha");
-    expect(buttons[1].attributes("aria-pressed")).toBe("true");
+    expect(buttons[1].attributes("aria-checked")).toBe("true");
   });
 
   it("remembers the layout across a trip through another axis", async () => {
@@ -70,7 +70,9 @@ describe("the folder layout sub-choice", () => {
 
     expect(store.view.folderLayout).toBe("alpha");
     expect(
-      layoutSection(wrapper).findAll("button")[1].attributes("aria-pressed"),
+      layoutSection(wrapper)
+        .findAll('[role="radio"]')[1]
+        .attributes("aria-checked"),
     ).toBe("true");
   });
 });

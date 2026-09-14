@@ -53,26 +53,42 @@
               <v-icon size="10">mdi-chevron-down</v-icon>
             </button>
           </template>
-          <v-list density="compact" min-width="160">
-            <v-list-item
+          <div
+            class="ctx-menu ctx-menu--on-dark"
+            role="menu"
+            style="min-width: 160px"
+          >
+            <button
               v-if="descPluginsLoading"
+              type="button"
+              class="ctx-item"
+              role="menuitem"
               disabled
-              title="Loading..."
-            />
-            <template v-if="!descPluginsLoading">
-              <v-list-item
+            >
+              Loading...
+            </button>
+            <template v-else>
+              <button
                 v-for="plugin in descPlugins"
                 :key="plugin.name"
-                :title="plugin.display_name || plugin.name"
+                type="button"
+                class="ctx-item"
+                role="menuitem"
                 @click="refreshDescription(plugin.name)"
-              />
-              <v-list-item
+              >
+                {{ plugin.display_name || plugin.name }}
+              </button>
+              <button
                 v-if="!descPlugins.length"
+                type="button"
+                class="ctx-item"
+                role="menuitem"
                 disabled
-                title="No description models available"
-              />
+              >
+                No description models available
+              </button>
             </template>
-          </v-list>
+          </div>
         </v-menu>
         <button
           class="section-meta-btn"

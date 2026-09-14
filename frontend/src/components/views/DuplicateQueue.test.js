@@ -1036,7 +1036,7 @@ describe("DuplicateQueue - the shell chrome", () => {
   it("carries a row for each folded page toggle and nothing else", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
     await wrapper.find(".dq-overflow .tbo-trigger").trigger("click");
-    const rows = wrapper.findAll(".dq-overflow .tbm-action");
+    const rows = wrapper.findAll(".dq-overflow .ctx-item");
     expect(rows).toHaveLength(2);
     expect(rows[0].text()).toContain("Decided");
     expect(rows[1].text()).toContain("Mixed stacks");
@@ -1096,7 +1096,7 @@ describe("DuplicateQueue - the shell chrome", () => {
     await wrapper.find('[data-testid="mixed-row"]').trigger("click");
     await wrapper.vm.$nextTick();
     expect(store.showingMixed).toBe(true);
-    expect(wrapper.find(".dq-overflow .tbm-action").exists()).toBe(false);
+    expect(wrapper.find(".dq-overflow .ctx-item").exists()).toBe(false);
     wrapper.unmount();
   });
 

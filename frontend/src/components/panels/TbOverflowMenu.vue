@@ -12,7 +12,7 @@
     />
     <div
       v-if="open"
-      class="tbm tbo-panel"
+      class="ctx-menu tbo-panel"
       :class="`tbo-panel--${align}`"
       role="menu"
       aria-label="More actions"
@@ -36,8 +36,8 @@
 //
 // The trigger itself stays hidden until the host's first fold step (the host
 // owns that rule; it knows its own ladder). Escape closes back to the
-// trigger, a pointer press outside dismisses, and the rows use the global
-// `.tbm-action` recipe.
+// trigger, a pointer press outside dismisses, and the rows are the one menu
+// row, `.ctx-item` (styles/context-menu.css).
 
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
@@ -130,16 +130,12 @@ defineExpose({ close, isOpen, trigger });
    dqbar ≤1180): only the host knows when its first control folds. The rule
    lives there rather than here because the breakpoint differs per bar. */
 
-/* The in-place panel: the dq-tier-wrap positioning, the shared .tbm chrome. */
+/* The in-place menu: the dq-tier-wrap positioning, the shared .ctx-menu surface. */
 .tbo-panel {
   position: absolute;
   top: calc(100% + var(--space-2));
   z-index: var(--z-dropdown);
   min-width: 220px;
-  padding: var(--space-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
 }
 
 /* Which edge the panel hangs from; see the `align` prop. */
