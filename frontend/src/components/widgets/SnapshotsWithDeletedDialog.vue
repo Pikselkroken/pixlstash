@@ -36,34 +36,31 @@ const emit = defineEmits(["update:modelValue", "update:dontShowAgain"]);
           <strong>Settings → Snapshots</strong>.
         </p>
 
-        <v-list class="snap-del-list" density="compact">
-          <v-list-item
-            v-for="snap in snapshots"
-            :key="snap.id"
-            class="snap-del-item"
-          >
-            <template #prepend>
-              <v-chip
-                size="x-small"
-                label
-                :color="kindChipColor(snap.kind)"
-                class="snap-del-kind"
-              >
-                {{ snap.kind }}
-              </v-chip>
-            </template>
-            <v-list-item-title class="snap-del-item-title">
-              {{ snap.label || `${snap.kind} snapshot` }}
-            </v-list-item-title>
-            <v-list-item-subtitle
-              :title="formatUserDate(snap.created_at, 'iso')"
+        <ul class="snap-del-list">
+          <li v-for="snap in snapshots" :key="snap.id" class="snap-del-item">
+            <v-chip
+              size="x-small"
+              label
+              :color="kindChipColor(snap.kind)"
+              class="snap-del-kind"
             >
-              {{ relativeDate(snap.created_at) }} ·
-              {{ snap.matched_count }}
-              {{ snap.matched_count === 1 ? "picture" : "pictures" }}
-            </v-list-item-subtitle>
-          </v-list-item>
-        </v-list>
+              {{ snap.kind }}
+            </v-chip>
+            <div class="snap-del-item-text">
+              <div class="snap-del-item-title">
+                {{ snap.label || `${snap.kind} snapshot` }}
+              </div>
+              <div
+                class="snap-del-item-subtitle"
+                :title="formatUserDate(snap.created_at, 'iso')"
+              >
+                {{ relativeDate(snap.created_at) }} ·
+                {{ snap.matched_count }}
+                {{ snap.matched_count === 1 ? "picture" : "pictures" }}
+              </div>
+            </div>
+          </li>
+        </ul>
       </v-card-text>
 
       <v-card-actions class="snap-del-actions">
@@ -98,20 +95,35 @@ const emit = defineEmits(["update:modelValue", "update:dontShowAgain"]);
   margin-bottom: var(--space-3);
 }
 .snap-del-list {
-  background: transparent;
+  list-style: none;
+  margin: 0;
+  padding: 0;
   max-height: 260px;
   overflow-y: auto;
 }
 .snap-del-item {
-  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
 }
 .snap-del-kind {
-  margin-right: var(--space-3);
+  flex-shrink: 0;
   min-width: 64px;
   justify-content: center;
 }
+.snap-del-item-text {
+  min-width: 0;
+}
 .snap-del-item-title {
   font-size: var(--text-base);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.snap-del-item-subtitle {
+  font-size: var(--text-xs);
+  opacity: var(--opacity-text-secondary);
 }
 .snap-del-dont-show :deep(.v-label) {
   font-size: var(--text-sm);

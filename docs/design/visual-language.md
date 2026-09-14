@@ -915,10 +915,10 @@ bar** — is one pattern. It reuses the grid; only the bar changes.
 When a 36px toolbar runs out of width, controls do not shrink, wrap, or
 vanish — they **fold** into the ⋯ overflow (`TbOverflowMenu`, a
 `bar-btn--icon` trigger wearing `mdi-dots-horizontal`, opening an in-place
-`.tbm` panel at `--z-dropdown`). The rules of the pattern:
+`.ctx-menu` at `--z-dropdown`). The rules of the pattern:
 
 - **Fold = CSS both ways.** A foldable control exists twice with one `v-if`:
-  as its bar button and as a `.tbm-action` row in the panel. The bar's
+  as its bar button and as a `.ctx-item` row in the menu. The bar's
   container queries flip which of the pair is visible; no JS ever measures
   the bar. Each bar's ladder is a decision, not an accident — recorded in
   `toolbar-responsive-decisions.md`.

@@ -1,7 +1,7 @@
 <template>
   <div
     ref="selectionMenuPanelRef"
-    class="selection-menu-panel"
+    class="selection-menu-panel ctx-menu"
     :class="{ 'ctx-flip-sub': selectionPanelFlipped }"
     @keydown="onSelectionMenuKeydown"
   >
@@ -62,7 +62,7 @@
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
+        <v-icon class="ctx-icon">mdi-layers-off</v-icon>
         Unstack
       </button>
       <button
@@ -75,7 +75,7 @@
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-layers</v-icon>
+        <v-icon class="ctx-icon">mdi-layers</v-icon>
         Stack
       </button>
       <button
@@ -88,7 +88,7 @@
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
+        <v-icon class="ctx-icon">mdi-layers-off</v-icon>
         Unstack all
       </button>
       <button
@@ -101,7 +101,7 @@
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-layers-plus</v-icon>
+        <v-icon class="ctx-icon">mdi-layers-plus</v-icon>
         Stack groups
       </button>
       <div v-if="showAnyStackAction" class="ctx-sep" />
@@ -118,7 +118,7 @@
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
+        <v-icon class="ctx-icon">mdi-tag-plus</v-icon>
         Tag
       </button>
       <div
@@ -132,9 +132,9 @@
           class="ctx-item"
           :disabled="selectedCount === 0 || isReadOnly"
         >
-          <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
+          <v-icon class="ctx-icon">mdi-tag-outline</v-icon>
           Tag automatically
-          <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+          <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
         </button>
         <div v-if="autoTagSubmenuOpen" class="ctx-submenu">
           <button
@@ -147,7 +147,7 @@
               $emit('close');
             "
           >
-            <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
+            <v-icon class="ctx-icon">mdi-tag-outline</v-icon>
             {{ plugin.display_name || plugin.name }}
             <span v-if="plugin.default_enabled" class="ctx-default-pill"
               >default</span
@@ -166,9 +166,9 @@
           class="ctx-item"
           :disabled="selectedCount === 0 || isReadOnly"
         >
-          <v-icon class="ctx-icon" size="15">mdi-text-box-outline</v-icon>
+          <v-icon class="ctx-icon">mdi-text-box-outline</v-icon>
           Generate description
-          <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+          <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
         </button>
         <div v-if="descriptionSubmenuOpen" class="ctx-submenu">
           <button
@@ -181,7 +181,7 @@
               $emit('close');
             "
           >
-            <v-icon class="ctx-icon" size="15">mdi-text-box-outline</v-icon>
+            <v-icon class="ctx-icon">mdi-text-box-outline</v-icon>
             {{ plugin.display_name || plugin.name }}
             <span v-if="plugin.default_enabled" class="ctx-default-pill"
               >default</span
@@ -198,7 +198,7 @@
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-tune-variant</v-icon>
+        <v-icon class="ctx-icon">mdi-tune-variant</v-icon>
         Filters
       </button>
       <button
@@ -210,7 +210,7 @@
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-auto-fix</v-icon>
+        <v-icon class="ctx-icon">mdi-auto-fix</v-icon>
         Edit with ComfyUI
       </button>
       <div class="ctx-sep" />
@@ -228,9 +228,9 @@
           class="ctx-item"
           :disabled="selectedCount === 0 || isReadOnly"
         >
-          <v-icon class="ctx-icon" size="15">mdi-restore</v-icon>
+          <v-icon class="ctx-icon">mdi-restore</v-icon>
           Restore from snapshot
-          <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+          <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
         </button>
         <div v-if="restoreSubmenuOpen" class="ctx-submenu">
           <button
@@ -245,14 +245,14 @@
             "
             @click="handleRestoreFromSnapshot(cp.id)"
           >
-            <v-icon class="ctx-icon" size="14">mdi-camera-outline</v-icon>
+            <v-icon class="ctx-icon">mdi-camera-outline</v-icon>
             {{ cp.label || cp.kind }}
             <span class="ctx-default-pill">{{
               cp.created_at ? formatSnapshotDate(cp.created_at) : ""
             }}</span>
           </button>
           <button class="ctx-item" @click="handleRestoreMore">
-            <v-icon class="ctx-icon" size="14">mdi-dots-horizontal</v-icon>
+            <v-icon class="ctx-icon">mdi-dots-horizontal</v-icon>
             More…
           </button>
         </div>
@@ -270,7 +270,7 @@
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-image-search-outline</v-icon>
+        <v-icon class="ctx-icon">mdi-image-search-outline</v-icon>
         Reverse image search
       </button>
       <!-- ── Segment ───────────────────────────────────────
@@ -287,7 +287,7 @@
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-shape-outline</v-icon>
+        <v-icon class="ctx-icon">mdi-shape-outline</v-icon>
         Segment
       </button>
       <!-- ── Rotate in place ───────────────────────────────
@@ -307,7 +307,7 @@
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-rotate-left</v-icon>
+        <v-icon class="ctx-icon">mdi-rotate-left</v-icon>
         {{ rotateLeftLabel }}
       </button>
       <button
@@ -319,7 +319,7 @@
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon" size="15">mdi-rotate-right</v-icon>
+        <v-icon class="ctx-icon">mdi-rotate-right</v-icon>
         {{ rotateRightLabel }}
       </button>
       <div class="ctx-sep" />
@@ -344,7 +344,7 @@
         $emit('close');
       "
     >
-      <v-icon class="ctx-icon" size="15">{{ KEEP_COVER_ONLY_ICON }}</v-icon>
+      <v-icon class="ctx-icon">{{ KEEP_COVER_ONLY_ICON }}</v-icon>
       {{ keepCoverOnlyLabel }}
     </button>
     <button
@@ -367,7 +367,7 @@
         $emit('close');
       "
     >
-      <v-icon class="ctx-icon" size="15">mdi-delete</v-icon>
+      <v-icon class="ctx-icon">mdi-delete</v-icon>
       {{ deleteButtonLabel }}
     </button>
   </div>
@@ -762,13 +762,8 @@ defineExpose({ focusFirst, containsFocus });
 </script>
 
 <style scoped>
+/* Surface and rows come from styles/context-menu.css (`.ctx-menu`). */
 .selection-menu-panel {
   min-width: 160px;
-  background: rgba(var(--v-theme-surface), 0.98);
-  color: rgb(var(--v-theme-on-surface));
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  border-radius: var(--radius-md);
-  box-shadow: var(--elevation-3);
-  padding: var(--space-2) 0;
 }
 </style>

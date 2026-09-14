@@ -37,21 +37,21 @@
           <v-icon size="15" class="selbar-chevron">mdi-menu-down</v-icon>
         </button>
       </template>
-      <div class="shelf-menu" role="menu">
+      <div class="ctx-menu shelf-menu" role="menu">
         <button
-          class="shelf-mi"
+          class="ctx-item"
           type="button"
           role="menuitem"
           @click="store.selectVisible()"
         >
-          <v-icon size="16">mdi-select-all</v-icon>
-          <span>Select all shown</span>
-          <span class="shelf-mi-kbd">{{ selectAllHint }}</span>
+          <v-icon class="ctx-icon">mdi-select-all</v-icon>
+          <span class="ctx-label-text">Select all shown</span>
+          <span class="ctx-shortcut">{{ selectAllHint }}</span>
         </button>
-        <button class="shelf-mi" type="button" role="menuitem" @click="clear">
-          <v-icon size="16">mdi-close</v-icon>
-          <span>Clear selection</span>
-          <span class="shelf-mi-kbd">Esc</span>
+        <button class="ctx-item" type="button" role="menuitem" @click="clear">
+          <v-icon class="ctx-icon">mdi-close</v-icon>
+          <span class="ctx-label-text">Clear selection</span>
+          <span class="ctx-shortcut">Esc</span>
         </button>
       </div>
     </v-menu>
@@ -88,7 +88,7 @@
           :title="assignTitle || 'Assign to person or set'"
         />
       </template>
-      <div class="shelf-menu shelf-menu--assign">
+      <div class="ctx-menu shelf-menu shelf-menu--assign">
         <AddToEntityControl
           type="character"
           label="Assign to person"
@@ -884,9 +884,9 @@ const VerbMenu = (props) => {
       "button",
       {
         class: [
-          "shelf-mi",
-          disabled && "shelf-mi--disabled",
-          danger && "shelf-mi--danger",
+          "ctx-item",
+          disabled && "ctx-item--disabled",
+          danger && "ctx-item--danger",
         ],
         type: "button",
         role: "menuitem",
@@ -895,12 +895,15 @@ const VerbMenu = (props) => {
         onClick: on,
       },
       [
-        h("i", { class: `v-icon mdi ${icon}`, "aria-hidden": "true" }),
-        h("span", label),
-        kbd ? h("span", { class: "shelf-mi-kbd" }, kbd) : null,
+        h("i", {
+          class: `v-icon mdi ${icon} ctx-icon`,
+          "aria-hidden": "true",
+        }),
+        h("span", { class: "ctx-label-text" }, label),
+        kbd ? h("span", { class: "ctx-shortcut" }, kbd) : null,
       ],
     );
-  const sep = () => h("span", { class: "shelf-mi-sep" });
+  const sep = () => h("div", { class: "ctx-sep" });
   // No `floatMenu`: it teleports the panel below the row, which a flyout cannot
   // use, and the picker now refuses the pair anyway.
   const assign = (type, label) =>
@@ -916,7 +919,7 @@ const VerbMenu = (props) => {
       onDetach: (entity) => props.onAttach(entity, false),
     });
 
-  return h("div", { class: "shelf-menu", role: "menu" }, [
+  return h("div", { class: "ctx-menu shelf-menu", role: "menu" }, [
     props.single
       ? item("mdi-pencil-outline", "Rename", {
           on: () => props.onVerb("rename"),
@@ -1044,139 +1047,37 @@ defineExpose({
 });
 </script>
 
-<style scoped>
-/* ── The verb menu ─────────────────────────────────────────────────────────
-   The same panel vocabulary as the toolbar popovers and the undo receipt:
-   surface, hairline, `--elevation-4`. Global rather than scoped because the
-   items are built in a render function, which scoped CSS cannot reach. */
-</style>
-
 <style>
+/* The rows are the global `.ctx-*` menu (styles/context-menu.css). What is left
+   here is sizing, and it is global because the verb menu is a render function,
+   which scoped CSS cannot reach. */
 .shelf-menu {
   min-width: 210px;
-  padding: var(--space-2);
-  background: rgb(var(--v-theme-surface));
-  border: 1px solid rgb(var(--v-theme-divider));
-  border-radius: var(--radius-md);
-  box-shadow: var(--elevation-4);
-  font-size: var(--text-sm);
 }
 
-.shelf-menu--assign {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-.shelf-mi {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
+/* The Assign popover's two pickers float their listbox (`float-menu`), so they
+   are not in flyout mode and keep their toolbar-button skin; drawn here as the
+   menu's rows. `.ate` is repeated past the scoped `.ate-btn[data-v-…]`. */
+.shelf-menu--assign .ate {
   width: 100%;
-  padding: var(--space-2) var(--space-3);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: rgb(var(--v-theme-on-surface));
-  font: inherit;
-  font-size: var(--text-sm);
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
 }
 
-.shelf-mi:hover:not(:disabled) {
+.shelf-menu--assign .ate .ate-btn {
+  width: 100%;
+  min-height: var(--control-h-bar);
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.shelf-menu--assign .ate .ate-btn:hover:not(:disabled) {
   background: var(--hover-wash);
 }
 
-.shelf-mi > .v-icon {
-  width: 18px;
-  flex: none;
-  font-size: 16px;
-  color: rgba(var(--v-theme-on-surface), 0.7);
-}
-
-/* The current value's check is the olive mark; its words stay ink. */
-.shelf-mi[aria-checked="true"] > .v-icon {
-  color: var(--selected-ink);
-}
-
-/* The destructive row. Both the label and its glyph take the error colour: the
-   menu is a list of neutral verbs and this is the one that cannot be undone. */
-.shelf-mi--danger,
-.shelf-mi--danger > .v-icon {
-  color: rgb(var(--v-theme-error));
-}
-
-.shelf-mi--danger:hover:not(:disabled) {
-  background: rgba(var(--v-theme-error), 0.08);
-}
-
-.shelf-mi--disabled,
-.shelf-mi:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.shelf-mi-kbd {
-  margin-left: auto;
-  padding-left: var(--space-5);
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), 0.7);
-}
-
-.shelf-mi-sep {
-  display: block;
-  height: 1px;
-  margin: var(--space-2);
-  background: rgb(var(--v-theme-divider));
-}
-
-/* The two pickers inside the verb menu are full-width rows in it, not the
-   bordered buttons they are in a toolbar. */
-.shelf-menu .ate {
-  width: 100%;
-}
-
-.shelf-menu .ate-btn {
-  width: 100%;
-  justify-content: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  font-size: var(--text-sm);
-}
-
-/* The flyout skin is drawn for the grid's context menu, whose rows are
-   `.ctx-item`: 14px inset, square full-bleed hover, an 18px glyph at full
-   strength. Every one of those is wrong beside a `.shelf-mi`, and the indent is
-   only the one that is obvious - the two Assign rows also drew a square hover
-   wash in a menu of rounded ones, in neutral grey where every neighbour uses
-   the `--hover-wash` token.
-
-   `.ate` is repeated to reach (0,4,0). The rule being overridden is SCOPED, so
-   it compiles to `.ate--flyout .ate-btn[data-v-…]` and counts three - which is
-   also why the plain `.shelf-menu .ate-btn` above it has never applied to a
-   flyout. */
-.shelf-menu .ate.ate--flyout .ate-btn {
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-}
-
-.shelf-menu .ate.ate--flyout .ate-btn:hover:not(:disabled) {
-  background: var(--hover-wash);
-}
-
-/* The trigger's own glyph, not the trailing chevron, which the flyout skin
-   already dims. Colour only: a `v-icon` with a numeric `size` writes `font-size`
-   as an INLINE style, so the 18px glyph cannot be brought down to the 16px the
-   `.shelf-mi` rows use without `!important`. Its box is 18px either way, so the
-   labels still line up - the glyph is a shade larger and that is all. */
-.shelf-menu .ate--flyout .ate-btn > .v-icon:not(.ate-chevron) {
-  color: rgba(var(--v-theme-on-surface), 0.7);
+.shelf-menu--assign .ate .ate-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-inset);
 }
 </style>

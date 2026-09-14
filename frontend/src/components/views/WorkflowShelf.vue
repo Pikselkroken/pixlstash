@@ -440,40 +440,40 @@
       origin="top start"
       :offset="2"
     >
-      <div class="tbm wfshelf-menu" role="menu">
+      <div class="ctx-menu" role="menu">
         <button
           v-if="menuRow && menuRow.variants > 1"
-          class="tbm-btn"
+          class="ctx-item"
           type="button"
           role="menuitem"
           @click="store.toggleOpen(menuRow.topology_hash)"
         >
-          <v-icon size="18">mdi-file-tree</v-icon>
-          <span>{{
+          <v-icon class="ctx-icon">mdi-file-tree</v-icon>
+          <span class="ctx-label-text">{{
             store.isOpen(menuRow.topology_hash)
               ? "Close its variants"
               : `Show its ${menuRow.variants} variants`
           }}</span>
         </button>
         <button
-          class="tbm-btn"
+          class="ctx-item"
           type="button"
           role="menuitem"
           :disabled="!canExport"
           :title="exportTitle"
           @click="exportGraph()"
         >
-          <v-icon size="18">mdi-code-json</v-icon>
-          <span>Export the graph…</span>
+          <v-icon class="ctx-icon">mdi-code-json</v-icon>
+          <span class="ctx-label-text">Export the graph…</span>
         </button>
         <button
-          class="tbm-btn"
+          class="ctx-item"
           type="button"
           role="menuitem"
           @click="copyHash()"
         >
-          <v-icon size="18">mdi-identifier</v-icon>
-          <span>Copy its identity</span>
+          <v-icon class="ctx-icon">mdi-identifier</v-icon>
+          <span class="ctx-label-text">Copy its identity</span>
         </button>
       </div>
     </v-menu>
@@ -1133,12 +1133,5 @@ onMounted(() => store.fetchRows());
 .wfshelf-note--error {
   border-left: 3px solid rgb(var(--v-theme-error));
   background: rgba(var(--v-theme-error), 0.08);
-}
-
-.wfshelf-menu {
-  display: flex;
-  flex-direction: column;
-  padding: var(--space-2);
-  gap: var(--space-1);
 }
 </style>

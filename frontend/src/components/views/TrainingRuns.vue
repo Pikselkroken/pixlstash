@@ -154,25 +154,25 @@
               <v-icon size="15" class="selbar-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
-          <div class="shelf-menu" role="menu">
+          <div class="ctx-menu shelf-menu" role="menu">
             <button
-              class="shelf-mi"
+              class="ctx-item"
               type="button"
               role="menuitem"
               @click="selectAll"
             >
-              <v-icon size="16">mdi-select-all</v-icon>
-              <span>Select all shown</span>
+              <v-icon class="ctx-icon">mdi-select-all</v-icon>
+              <span class="ctx-label-text">Select all shown</span>
             </button>
             <button
-              class="shelf-mi"
+              class="ctx-item"
               type="button"
               role="menuitem"
               @click="clearSelection"
             >
-              <v-icon size="16">mdi-close</v-icon>
-              <span>Clear selection</span>
-              <span class="shelf-mi-kbd">Esc</span>
+              <v-icon class="ctx-icon">mdi-close</v-icon>
+              <span class="ctx-label-text">Clear selection</span>
+              <span class="ctx-shortcut">Esc</span>
             </button>
           </div>
         </v-menu>
@@ -204,11 +204,11 @@
               <v-icon size="15" class="selbar-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
-          <div class="shelf-menu">
+          <div class="ctx-menu shelf-menu">
             <label
               v-for="cp in single.checkpoints"
               :key="cp.filename"
-              class="shelf-mi tr-step"
+              class="ctx-item tr-step"
             >
               <input
                 v-model="chosenSteps"
@@ -216,8 +216,10 @@
                 :value="cp.step ?? null"
                 :disabled="working"
               />
-              <span>{{ cp.step === null ? "Final" : `Step ${cp.step}` }}</span>
-              <span class="tr-step-size">{{ formatModelSize(cp.size) }}</span>
+              <span class="ctx-label-text">{{
+                cp.step === null ? "Final" : `Step ${cp.step}`
+              }}</span>
+              <span class="ctx-meta">{{ formatModelSize(cp.size) }}</span>
             </label>
           </div>
         </v-menu>
@@ -237,20 +239,20 @@
               <v-icon size="15" class="selbar-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
-          <div class="shelf-menu" role="menu">
+          <div class="ctx-menu shelf-menu" role="menu">
             <button
               v-for="folder in destinations"
               :key="folder.id"
-              class="shelf-mi"
+              class="ctx-item"
               type="button"
               role="menuitemradio"
               :aria-checked="folder.id === destinationId"
               @click="destinationId = folder.id"
             >
-              <v-icon size="16">{{
-                folder.id === destinationId ? "mdi-check" : "mdi-blank"
-              }}</v-icon>
-              <span>{{ folder.path }}</span>
+              <span class="ctx-label-text">{{ folder.path }}</span>
+              <v-icon v-if="folder.id === destinationId" class="ctx-check"
+                >mdi-check</v-icon
+              >
             </button>
           </div>
         </v-menu>
@@ -945,17 +947,6 @@ function batchReceipt(imported, failed) {
 .tr-card-note {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-background), 0.7);
-}
-
-.tr-step {
-  cursor: pointer;
-}
-
-.tr-step-size {
-  margin-left: auto;
-  padding-left: var(--space-3);
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
 .tr-loading {

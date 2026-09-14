@@ -528,49 +528,53 @@
           <template #default="{ close }">
             <button
               type="button"
-              class="tbm-action tb-row-700"
+              role="menuitem"
+              class="ctx-item tb-row-700"
               @click="
                 emit('confirm-export-zip');
                 close();
               "
             >
-              <v-icon size="18">mdi-tray-arrow-down</v-icon>
+              <v-icon class="ctx-icon">mdi-tray-arrow-down</v-icon>
               <span>{{ exportActionLabel("Export grid to zip") }}</span>
             </button>
             <button
               v-if="!isReadOnly"
               type="button"
-              class="tbm-action tb-row-700"
+              role="menuitem"
+              class="ctx-item tb-row-700"
               @click="
                 emit('open-import');
                 close();
               "
             >
-              <v-icon size="18">mdi-cloud-upload-outline</v-icon>
+              <v-icon class="ctx-icon">mdi-cloud-upload-outline</v-icon>
               <span>Import photos…</span>
             </button>
             <button
               v-if="filterStore.comfyuiConfigured"
               type="button"
-              class="tbm-action tb-row-700"
+              role="menuitem"
+              class="ctx-item tb-row-700"
               :disabled="isReadOnly"
               @click="
                 close();
                 tbComfyuiMenuOpen = true;
               "
             >
-              <v-icon size="18">mdi-image-plus-outline</v-icon>
+              <v-icon class="ctx-icon">mdi-image-plus-outline</v-icon>
               <span>Generate with ComfyUI…</span>
             </button>
             <button
               type="button"
-              class="tbm-action tb-row-600"
+              role="menuitem"
+              class="ctx-item tb-row-600"
               @click="
                 close();
                 gbViewMenuOpen = true;
               "
             >
-              <v-icon size="18">mdi-view-grid</v-icon>
+              <v-icon class="ctx-icon">mdi-view-grid</v-icon>
               <span>View options…</span>
             </button>
           </template>

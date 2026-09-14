@@ -179,9 +179,15 @@ export class GridPage {
     await expect(this.contextMenu).toBeVisible()
   }
 
-  /** A context-menu action item by its visible label. */
+  /**
+   * A context-menu action item by its visible label. The Project / Person / Set
+   * flyout rows are `.ctx-item` too and sit (hidden) before the actions, so
+   * they are excluded or a set named like an action would match first.
+   */
   contextMenuItem(label) {
-    return this.contextMenu.locator('.ctx-item', { hasText: label }).first()
+    return this.contextMenu
+      .locator('.ctx-item:not(.ate-menu .ctx-item)', { hasText: label })
+      .first()
   }
 
   /**

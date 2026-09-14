@@ -6,11 +6,11 @@
 }
 
 /* The lightbox is dark in both themes, so the global focus outline takes the
-   dark-surface ink here: the per-theme stroke is near-black in light. Its two
-   menus are teleported out of `.image-overlay`, so they restate it. */
+   dark-surface ink here: the per-theme stroke is near-black in light. The
+   ComfyUI panel is teleported out of `.image-overlay`, so it restates it (the
+   rating menu's rows take the on-dark ring from `.ctx-menu--on-dark`). */
 .image-overlay,
-.overlay-comfy-panel,
-.overlay-star-menu {
+.overlay-comfy-panel {
   --focus-stroke: rgb(var(--v-theme-on-dark-surface));
   --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
 }
@@ -214,43 +214,15 @@
   min-width: 10px;
 }
 
+/* Surface and rows are the shared `.ctx-menu--on-dark` / `.ctx-item`
+   (styles/context-menu.css); the current rating is its current value. */
 .overlay-star-menu {
-  background: rgba(var(--v-theme-dark-surface), 0.97);
-  border-radius: 10px;
-  padding: var(--space-2);
-  display: flex;
-  flex-direction: column;
   min-width: 160px;
-  box-shadow: var(--elevation-4);
-}
-
-.overlay-star-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: var(--space-3) var(--space-4);
-  border-radius: 6px;
-  color: rgb(var(--v-theme-on-dark-surface));
-  width: 100%;
-  text-align: left;
-}
-
-.overlay-star-menu-item:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.16);
-}
-
-.overlay-star-menu-item--active {
-  background: rgba(var(--v-theme-dark-surface-primary), 0.2);
 }
 
 .overlay-star-menu-stars {
   display: flex;
   gap: var(--space-1);
-}
-
-.overlay-star-menu-label {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.8);
 }
 
 .overlay-comfy-activator {
@@ -767,8 +739,7 @@
 
 /* The person menu's trigger keeps the exact look and metrics of the <select>
    it replaced. Only the trigger: the menu rows themselves stay at the shared
-   --text-xs of the .ate-item family rather than inheriting this row's
-   --text-2xs. */
+   menu row's --text-sm rather than inheriting this row's --text-2xs. */
 .face-assign-person {
   width: 100%;
 }

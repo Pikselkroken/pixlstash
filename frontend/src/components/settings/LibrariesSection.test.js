@@ -155,7 +155,7 @@ function rowFor(wrapper, name) {
 /** A menu item inside a row, by its label. */
 function menuItem(wrapper, name, label) {
   return rowFor(wrapper, name)
-    .findAll(".library-menu__item")
+    .findAll(".ctx-item")
     .find((item) => item.text().includes(label));
 }
 
@@ -509,7 +509,7 @@ describe("the row menu", () => {
     const wrapper = await settle(mountPane());
 
     const labels = rowFor(wrapper, "Client work")
-      .findAll(".library-menu__item")
+      .findAll(".ctx-item")
       .map((item) => item.text());
     expect(labels).toEqual([
       "Open this library",
