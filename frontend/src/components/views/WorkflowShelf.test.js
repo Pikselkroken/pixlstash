@@ -38,7 +38,16 @@ vi.mock("../../api/workflows", () => ({
   getWorkflowGraph: (...args) => getWorkflowGraph(...args),
 }));
 
+const listWorkflowFiles = vi.fn();
+
+vi.mock("../../api/comfyui", () => ({
+  listWorkflows: (...args) => listWorkflowFiles(...args),
+  getWorkflowInputs: vi.fn(),
+  setWorkflowInputs: vi.fn(),
+}));
+
 import WorkflowShelf from "./WorkflowShelf.vue";
+import { useWorkflowShelfStore } from "../../stores/useWorkflowShelfStore";
 
 const globalOpts = {
   global: {
@@ -92,6 +101,55 @@ beforeEach(() => {
   listWorkflowVariants.mockReset().mockResolvedValue([]);
   listWorkflowPictures.mockReset().mockResolvedValue([]);
   getWorkflowGraph.mockReset();
+  listWorkflowFiles.mockReset().mockResolvedValue({ workflows: [] });
+});
+
+describe("the saved workflows", () => {
+  it("lists the files that run, and says which a selection cannot offer", async () => {
+    listWorkflowFiles.mockResolvedValue({
+      workflows: [
+        {
+          name: "edit.json",
+          display_name: "edit",
+          valid: true,
+          workflow_type: "i2i",
+          has_selection_input: false,
+        },
+        {
+          name: "t2i.json",
+          display_name: "t2i",
+          valid: true,
+          workflow_type: "t2i",
+          has_selection_input: false,
+        },
+      ],
+    });
+    const wrapper = await mountShelf();
+    const rows = wrapper
+      .findAll("button.wfshelf-file")
+      .map((b) => [
+        b.find(".wfshelf-file-name").text(),
+        b.find(".wfshelf-row-sub").text(),
+      ]);
+    expect(rows).toEqual([
+      ["edit", "image to image · not offered on a selection"],
+      ["t2i", "text to image"],
+    ]);
+  });
+
+  it("shares one selection with the graphs below", async () => {
+    listWorkflowFiles.mockResolvedValue({
+      workflows: [{ name: "edit.json", valid: true, workflow_type: "i2i" }],
+    });
+    const wrapper = await mountShelf();
+    const store = useWorkflowShelfStore();
+    store.select("a".repeat(64));
+    await wrapper.find("button.wfshelf-file").trigger("click");
+    expect(store.selectedFile).toBe("edit.json");
+    expect(store.selectedHash).toBe(null);
+    store.select("a".repeat(64));
+    expect(store.selectedFile).toBe(null);
+  });
 });
 
 describe("the list", () => {

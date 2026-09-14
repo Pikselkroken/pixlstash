@@ -11,12 +11,14 @@
     aria-describedby="wf-help"
   >
     <p id="wf-help" class="visually-hidden">
-      Every workflow PixlStash has found in the pictures it has read. One row is
+      Saved workflows come first: they are the files that run, and selecting one
+      shows in the inspector how each picture it takes is filled. Below them is
+      every workflow PixlStash has found in the pictures it has read. One row is
       one graph, however many models it was bound to; the variants under a row
       are the same graph with different models, and Right and Left open and
       close them. Group, Sort and Show choose the order, the bands and which
-      rows are listed. Nothing on this screen writes anything. Right-click a row
-      for what can be done with it. Escape clears the selection.
+      rows are listed. Right-click a row for what can be done with it. Escape
+      clears the selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -157,15 +159,6 @@
       <span class="wfshelf-spacer"></span>
     </div>
 
-    <div class="wfshelf-head" aria-hidden="true">
-      <span class="wfshelf-head-ident"></span>
-      <span class="wfshelf-head-cell wfshelf-col--name">Name</span>
-      <span class="wfshelf-head-cell wfshelf-col--num">Pictures</span>
-      <span class="wfshelf-head-cell wfshelf-col--num">Variants</span>
-      <span class="wfshelf-head-cell wfshelf-col--models">Models</span>
-      <span class="wfshelf-head-cell wfshelf-col--date">Last used</span>
-    </div>
-
     <div class="wfshelf-scroll">
       <div
         v-if="store.error"
@@ -173,6 +166,62 @@
         role="alert"
       >
         {{ store.error }}
+      </div>
+
+      <div v-if="store.filesError" class="wfshelf-note wfshelf-note--error">
+        {{ store.filesError }}
+      </div>
+
+      <!-- The saved workflow files, which are what runs (§F3). Their own band
+           above the graphs, not rows among them: a file has no pictures,
+           variants or last use until something made with it has been read. -->
+      <section
+        v-if="store.files.length"
+        class="wfshelf-files"
+        aria-labelledby="wf-files-label"
+      >
+        <h3 id="wf-files-label" class="wfshelf-group wfshelf-files-head">
+          <span class="wfshelf-group-label">Saved workflows</span>
+          <span class="wfshelf-spacer"></span>
+          <span class="wfshelf-group-count num">{{
+            workflowCount(store.files.length)
+          }}</span>
+        </h3>
+        <ul class="wfshelf-list">
+          <li v-for="file in store.files" :key="file.name">
+            <button
+              type="button"
+              class="wfshelf-row wfshelf-file"
+              :class="{
+                'wfshelf-row--selected': store.selectedFile === file.name,
+              }"
+              :aria-pressed="store.selectedFile === file.name"
+              @click="store.selectFile(file.name)"
+              @keydown.escape="store.clearSelection()"
+            >
+              <span class="wfshelf-row-ident">
+                <v-icon size="16">mdi-file-cog-outline</v-icon>
+              </span>
+              <span class="wfshelf-col--name">
+                <span class="wfshelf-file-name">{{
+                  file.display_name || file.name
+                }}</span>
+                <span class="wfshelf-row-sub">{{ fileLine(file) }}</span>
+              </span>
+            </button>
+          </li>
+        </ul>
+      </section>
+
+      <!-- Sticky inside the scroll rather than above it, so it heads the graphs
+           and not the saved workflows above them, which have no such columns. -->
+      <div class="wfshelf-head" aria-hidden="true">
+        <span class="wfshelf-head-ident"></span>
+        <span class="wfshelf-head-cell wfshelf-col--name">Name</span>
+        <span class="wfshelf-head-cell wfshelf-col--num">Pictures</span>
+        <span class="wfshelf-head-cell wfshelf-col--num">Variants</span>
+        <span class="wfshelf-head-cell wfshelf-col--models">Models</span>
+        <span class="wfshelf-head-cell wfshelf-col--date">Last used</span>
       </div>
 
       <!-- The four states of an empty list. Three of them are the first thing a
@@ -461,9 +510,10 @@
 // is opened and not before, and why the expansion is drawn as rows rather than
 // as a nested widget with a scroll of its own.
 //
-// **Nothing here writes.** Naming a workflow, running one and forgetting its
-// ghosts are later steps; this is the view and the inspector, and the row menu
-// offers only what can be read today. F11's ghosts filter lands beside Group /
+// **Nothing in the list writes.** The saved workflows above it are set up in the
+// inspector (§F3: how each picture input is filled). Naming a workflow, running
+// one and forgetting its ghosts are later steps, and the row menu offers only
+// what can be read today. F11's ghosts filter lands beside Group /
 // Sort / Show, so the toolbar leaves that room rather than filling it.
 
 import { computed, onMounted, ref, watch } from "vue";
@@ -628,6 +678,15 @@ async function resolveExportHash() {
   if (known?.length) return known[0].structural_hash;
   const fetched = await listWorkflowVariants(row.topology_hash);
   return fetched.length ? fetched[0].structural_hash : null;
+}
+
+/** A saved workflow's second line: what it takes, and where it is offered. */
+function fileLine(file) {
+  if (!file.valid) return "cannot run: no save node";
+  if (file.workflow_type !== "i2i") return "text to image";
+  return file.has_selection_input
+    ? "image to image"
+    : "image to image · not offered on a selection";
 }
 
 function workflowCount(n) {
@@ -839,7 +898,10 @@ watch(
   { immediate: true },
 );
 
-onMounted(() => store.fetchRows());
+onMounted(() => {
+  store.fetchRows();
+  store.fetchFiles();
+});
 </script>
 
 <style scoped>
@@ -891,6 +953,10 @@ onMounted(() => store.fetchRows());
    grouped list is one grid per band, and a visible heading row per band is
    exactly what this strip exists to avoid. */
 .wfshelf-head {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: rgb(var(--v-theme-background));
   display: flex;
   align-items: center;
   gap: var(--space-4);
@@ -982,6 +1048,31 @@ onMounted(() => store.fetchRows());
    the same ink outline is drawn inside the row instead. */
 .wfshelf-row:focus-visible {
   outline-offset: calc(var(--focus-width) * -1);
+}
+
+.wfshelf-file {
+  width: 100%;
+  border-top: 0;
+  border-right: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.wfshelf-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wfshelf-files-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: rgb(var(--v-theme-toolbar));
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
 }
 
 .wfshelf-row--selected {

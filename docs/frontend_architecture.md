@@ -4231,9 +4231,28 @@ explore. `useWorkflowShelfStore` fetches the list whole and shapes it in
 `utils/workflowShelf.js`, so Group, Sort and Show are re-reads of an array
 already in hand and cost no request.
 
-**Nothing on this surface writes.** Naming a workflow, running one and forgetting
-its ghosts are later steps (implementation plan §F3, §F5, §F10); the row menu
-offers only what can be read today, and F11's ghosts filter is drawn beside
+**The saved workflow files sit in their own band above the graphs** (§F3,
+#1305). They are what runs, and a file is not a topology until a picture made
+with it has been read, so they are buttons in a list of their own rather than
+rows of the treegrid; the column strip is sticky inside the scroll so it heads
+the graphs and not the files. `useWorkflowShelfStore` holds them (`files`,
+`selectedFile`) from `GET /comfyui/workflows`, and a file and a graph share one
+selection: choosing either clears the other.
+
+Selecting a file puts **Pictures in** in the inspector: one entry per picture
+input, the graph's title with its node id beside it (two inputs are often both
+"Load Image"), and a `Segmented` Selection / Picker / Fixed. The setup is read
+on every selection, because a file can be replaced under its name. Choosing
+Selection moves it off whichever input held it, in the same write. Choosing
+Fixed opens `PicturePicker` and writes nothing until a picture is chosen; the
+picker stays open when the write fails. An unchanged Fixed input is sent without
+a picture, so the server keeps its own. The selection pill, the overlay's
+ComfyUI menu and Remix's templates leave out a workflow whose
+`has_selection_input` is false.
+
+**Nothing in the graph list writes.** Naming a workflow, running one and
+forgetting its ghosts are later steps (implementation plan §F5, §F10); the row
+menu offers only what can be read today, and F11's ghosts filter is drawn beside
 Group / Sort / Show, so the toolbar leaves that room rather than filling it.
 
 **The right rail is the same inspector, in its fourth use** (§F2), and both are

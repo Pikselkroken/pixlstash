@@ -24,6 +24,15 @@ vi.mock("../../api/workflows", () => ({
   getWorkflowGraph: vi.fn(),
 }));
 
+const getWorkflowInputs = vi.fn();
+const setWorkflowInputs = vi.fn();
+
+vi.mock("../../api/comfyui", () => ({
+  listWorkflows: vi.fn().mockResolvedValue({ workflows: [] }),
+  getWorkflowInputs: (...args) => getWorkflowInputs(...args),
+  setWorkflowInputs: (...args) => setWorkflowInputs(...args),
+}));
+
 vi.mock("vue-router", () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
@@ -34,8 +43,19 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const HASH = "a".repeat(64);
 
+// The picker is its own suite's; here it only has to open and hand back one.
+const PicturePickerStub = {
+  name: "PicturePicker",
+  props: ["open", "subtitle"],
+  emits: ["pick", "close"],
+  template:
+    "<div v-if='open' class='picker-stub'><button class='picker-pick' @click=\"$emit('pick', { id: 42 })\">pick</button></div>",
+};
+
 const globalOpts = {
-  global: { stubs: { "v-icon": true, Tooltip: true } },
+  global: {
+    stubs: { "v-icon": true, Tooltip: true, PicturePicker: PicturePickerStub },
+  },
 };
 
 function workflow(overrides = {}) {
@@ -86,6 +106,8 @@ beforeEach(() => {
   listWorkflows.mockReset();
   listWorkflowVariants.mockReset().mockResolvedValue([]);
   listWorkflowPictures.mockReset().mockResolvedValue([]);
+  getWorkflowInputs.mockReset();
+  setWorkflowInputs.mockReset();
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -158,5 +180,117 @@ describe("the tab strip", () => {
     const tabs = wrapper.findAll("button.inspector-tab").map((b) => b.text());
     expect(tabs[0]).toContain("Workflow");
     expect(tabs[1]).toContain("Pictures");
+  });
+});
+
+describe("a saved workflow's pictures in", () => {
+  function input(nodeId, mode, overrides = {}) {
+    return {
+      node_id: nodeId,
+      title: "Load Image",
+      mode,
+      picture_id: null,
+      picture_missing: false,
+      ...overrides,
+    };
+  }
+
+  async function mountFile(inputs) {
+    getWorkflowInputs.mockResolvedValue({ workflow: "edit.json", inputs });
+    const store = useWorkflowShelfStore();
+    store.files = [
+      {
+        name: "edit.json",
+        display_name: "edit",
+        source: "user",
+        valid: true,
+        workflow_type: "i2i",
+        has_selection_input: true,
+      },
+    ];
+    store.selectFile("edit.json");
+    const wrapper = mount(WorkflowInspector, globalOpts);
+    await flush(wrapper);
+    return { wrapper, store };
+  }
+
+  function segment(wrapper, index, label) {
+    const row = wrapper.findAll(".wfins-input")[index];
+    return row
+      .findAll("button[role='radio']")
+      .find((b) => b.text() === label);
+  }
+
+  it("names each input by its title and node id, with its mode chosen", async () => {
+    const { wrapper } = await mountFile([
+      input("76", "picker"),
+      input("81", "selection"),
+    ]);
+    const heads = wrapper
+      .findAll(".wfins-input-head")
+      .map((h) => h.findAll("span").map((span) => span.text()));
+    expect(heads).toEqual([
+      ["Load Image", "#76"],
+      ["Load Image", "#81"],
+    ]);
+    expect(segment(wrapper, 1, "Selection").attributes("aria-checked")).toBe(
+      "true",
+    );
+  });
+
+  it("moves Selection off the other input in the same write", async () => {
+    const { wrapper } = await mountFile([
+      input("76", "picker"),
+      input("81", "selection"),
+    ]);
+    setWorkflowInputs.mockResolvedValue({
+      workflow: "edit.json",
+      inputs: [input("76", "selection"), input("81", "picker")],
+    });
+    await segment(wrapper, 0, "Selection").trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowInputs).toHaveBeenCalledTimes(1);
+    expect(setWorkflowInputs).toHaveBeenCalledWith("edit.json", [
+      { node_id: "76", mode: "selection" },
+      { node_id: "81", mode: "picker" },
+    ]);
+  });
+
+  it("asks for a picture before an input becomes Fixed", async () => {
+    const { wrapper } = await mountFile([
+      input("76", "fixed", { picture_id: 7 }),
+      input("81", "selection"),
+    ]);
+    await segment(wrapper, 1, "Fixed").trigger("click");
+    await flush(wrapper);
+    // Nothing is written until a picture is chosen.
+    expect(setWorkflowInputs).not.toHaveBeenCalled();
+    expect(wrapper.find(".picker-stub").exists()).toBe(true);
+
+    setWorkflowInputs.mockResolvedValue({
+      workflow: "edit.json",
+      inputs: [
+        input("76", "fixed", { picture_id: 7 }),
+        input("81", "fixed", { picture_id: 42 }),
+      ],
+    });
+    await wrapper.find(".picker-pick").trigger("click");
+    await flush(wrapper);
+    // The other Fixed input is sent without a picture, so it keeps its own.
+    expect(setWorkflowInputs).toHaveBeenCalledWith("edit.json", [
+      { node_id: "76", mode: "fixed" },
+      { node_id: "81", mode: "fixed", picture_id: 42 },
+    ]);
+    expect(wrapper.find(".picker-stub").exists()).toBe(false);
+    expect(textOf(wrapper)).toContain("not offered on a selection");
+  });
+
+  it("says a Fixed picture has left the library rather than drawing a blank", async () => {
+    const { wrapper } = await mountFile([
+      input("76", "fixed", { picture_missing: true }),
+    ]);
+    expect(textOf(wrapper)).toContain(
+      "Its picture is no longer in this library.",
+    );
   });
 });

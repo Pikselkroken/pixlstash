@@ -37,6 +37,37 @@ export async function deleteWorkflow(name) {
 }
 
 /**
+ * Each picture input of a saved workflow and how it is filled.
+ *
+ * `mode` is `selection` (the grid's selection fills it; at most one), `picker`
+ * (asked at run time) or `fixed` (one picture, `picture_id`, chosen at setup).
+ * `picture_missing` is a fixed input whose picture has left this library.
+ *
+ * @param {string} name - the workflow's `name` as listed.
+ * @returns {Promise<{workflow: string, inputs: Array<Object>}>}
+ */
+export async function getWorkflowInputs(name) {
+  return unwrap(apiClient.get(
+    comfyUrl(`/workflows/${encodeURIComponent(name)}/inputs`),
+  ));
+}
+
+/**
+ * Replace how every picture input of a saved workflow is filled.
+ *
+ * @param {string} name - the workflow's `name` as listed.
+ * @param {Array<{node_id: string, mode: string, picture_id?: number}>} inputs -
+ *   one entry per picture input.
+ * @returns {Promise<{workflow: string, inputs: Array<Object>}>} the stored setup.
+ */
+export async function setWorkflowInputs(name, inputs) {
+  return unwrap(apiClient.put(
+    comfyUrl(`/workflows/${encodeURIComponent(name)}/inputs`),
+    { inputs },
+  ));
+}
+
+/**
  * Import a workflow graph, optionally replacing one of the same name.
  *
  * `overwrite` is the caller's answer to the "already exists" prompt; sending

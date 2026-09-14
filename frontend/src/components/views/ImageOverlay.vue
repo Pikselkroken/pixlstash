@@ -1491,17 +1491,19 @@ function persistComfyuiPromptToSession() {
   window.sessionStorage?.setItem(key, value);
 }
 
-// What run_i2i accepts, not workflow_type, until runs use detection (#1307).
-const takesImagePlaceholder = (workflow) =>
+// What run_i2i accepts, not workflow_type, until runs use detection (#1307),
+// and only a workflow with an input the selection fills.
+const offeredOnSelection = (workflow) =>
+  workflow?.has_selection_input &&
   !workflow?.missing_placeholders?.includes(imagePlaceholderLabel);
 const validComfyWorkflows = computed(() =>
   (comfyuiWorkflows.value || []).filter(
-    (workflow) => workflow?.valid && takesImagePlaceholder(workflow),
+    (workflow) => workflow?.valid && offeredOnSelection(workflow),
   ),
 );
 const invalidComfyWorkflows = computed(() =>
   (comfyuiWorkflows.value || []).filter(
-    (workflow) => !workflow?.valid && takesImagePlaceholder(workflow),
+    (workflow) => !workflow?.valid && offeredOnSelection(workflow),
   ),
 );
 const selectedComfyWorkflow = computed(() =>
