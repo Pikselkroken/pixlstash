@@ -673,7 +673,6 @@ kbd {
 }
 .tbm-toggle-end {
   margin-left: auto;
-  color: rgb(var(--v-theme-on-primary));
   display: inline-flex;
   flex-shrink: 0;
 }

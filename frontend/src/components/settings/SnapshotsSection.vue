@@ -471,18 +471,26 @@ function handleRestore(cp) {
   padding: 0 var(--space-2);
   border-radius: var(--radius-pill);
   white-space: nowrap;
-  color: rgba(var(--v-theme-on-surface), 0.6);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   background: color-mix(in oklab, currentColor 16%, transparent);
 }
 
+/* The kind's hue rides on the wash; the word stays ink (§4: these four fills are
+   never small text on a canvas). */
+.kind-pill--DAILY,
+.kind-pill--MANUAL,
+.kind-pill--WEEKLY {
+  color: rgb(var(--v-theme-on-surface));
+  background: color-mix(in oklab, rgb(var(--kind-hue)) 16%, transparent);
+}
 .kind-pill--DAILY {
-  color: rgb(var(--v-theme-tertiary));
+  --kind-hue: var(--v-theme-tertiary);
 }
 .kind-pill--MANUAL {
-  color: rgb(var(--v-theme-accent));
+  --kind-hue: var(--v-theme-accent);
 }
 .kind-pill--WEEKLY {
-  color: rgb(var(--v-theme-secondary));
+  --kind-hue: var(--v-theme-secondary);
 }
 .kind-pill--incompatible {
   color: rgb(var(--v-theme-error));

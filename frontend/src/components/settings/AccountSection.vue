@@ -918,7 +918,7 @@ watch(
 
 .account-success {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-surface));
 }
 
 /* ── Sharing + Watermark ──────────────────────────────────────────────── */

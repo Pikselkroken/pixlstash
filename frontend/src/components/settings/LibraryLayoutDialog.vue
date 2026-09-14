@@ -1102,7 +1102,7 @@ function netDelta(row) {
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   font-weight: var(--weight-medium);
-  color: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-surface));
   border: 1px solid rgb(var(--v-theme-primary));
   border-radius: var(--radius-pill);
   padding: 0 var(--space-2);
@@ -1120,12 +1120,9 @@ function netDelta(row) {
   font-weight: var(--weight-medium);
 }
 
-.layout-tree__delta--in {
-  color: rgb(var(--v-theme-primary));
-}
-
+.layout-tree__delta--in,
 .layout-tree__delta--out {
-  color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .layout-tree__delta--none {
