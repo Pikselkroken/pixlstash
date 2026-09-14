@@ -50,11 +50,8 @@ def server():
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "server-config.json")
         with Server(config_path) as srv:
-            # Kept so a test can still inspect what the vault registered.
-            srv.detached_finders = {
-                task_type: srv.vault._planner_work_finders.pop(task_type)
-                for task_type in _CONFLICTING_FINDERS
-            }
+            for task_type in _CONFLICTING_FINDERS:
+                srv.vault._planner_work_finders.pop(task_type)
             srv.vault._work_planner.detach_finders(_CONFLICTING_FINDERS)
 
             # The root scan waits for the first import offer to be answered
@@ -290,19 +287,6 @@ def test_the_finder_hands_out_the_root_scan_once_per_interval(server):
 
     finder._note_root_scanned()
     assert finder.root_scan_complete() is True
-
-
-def test_the_hub_aware_purge_finder_keeps_the_root_scan_gate(server):
-    """``Vault.__init__`` swaps in a purge finder that can run the covered-ghost
-    cascade; the swap must keep the planner's ``is_ready`` gate, or the sweep
-    races the root scan again."""
-    finders = server.detached_finders
-    purge_finder = finders[TaskType.MISSING_FILE_PURGE]
-    assert purge_finder._hub is not None, "expected the hub-aware replacement"
-    assert (
-        purge_finder._is_ready
-        == finders[TaskType.REFERENCE_FOLDER_SCAN].root_scan_complete
-    )
 
 
 def test_the_purge_sweep_waits_for_the_first_root_scan():

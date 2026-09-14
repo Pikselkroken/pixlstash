@@ -161,10 +161,6 @@ class WorkPlanner:
             TaskType.SOURCE_FACE_LIKENESS: MissingSourceFaceLikenessCharacterFinder(
                 database=database,
             ),
-            # Re-registered with a hub in ``Vault.__init__`` when the vault was
-            # opened through a hub registration: this hubless instance still
-            # purges rows for vanished files, it just cannot run the
-            # covered-ghost cascade (§B4) because there is no ghost store.
             TaskType.MISSING_FILE_PURGE: MissingFilePurgeFinder(
                 database=database,
                 is_ready=reference_folder_scan_finder.root_scan_complete,

@@ -324,30 +324,15 @@ class Vault:
         # CLI tools, most tests - has no hub to reach), and harmless in the
         # multi-library case because only one vault is live at a time.
         if registered_hub is not None:
-            # The missing-file purge is the one OTHER path that removes a
-            # picture row for good, so it has to be able to run the
-            # covered-ghost cascade (§B4). It can never write a ghost — the file
-            # it purges is already gone — but it can destroy the last picture
-            # covering an instance hash, and a ghost that quietly stops being
-            # covered is the decay library plan §5 forbids. The retention
-            # position is read through a callable because it is saved at runtime
-            # and this finder outlives the save. It keeps the planner's
-            # ``is_ready`` gate: replacing the finder must not let this sweep
-            # race the library-root scan.
-            from pixlstash.tasks.missing_file_purge_finder import (
-                MissingFilePurgeFinder,
-            )
+            # Every permanent delete of a picture row, on whatever path, leaves
+            # its instance hash in ``pending_ghost_cascade`` (a vault trigger,
+            # migration 0117), and this finder is what runs the covered-ghost
+            # cascade over them (§B4). Hub-only because ghosts live in the hub;
+            # a hubless vault keeps the queue until a hub opens it.
+            from pixlstash.tasks.ghost_cascade_finder import GhostCascadeFinder
 
-            self._planner_work_finders[TaskType.MISSING_FILE_PURGE] = (
-                MissingFilePurgeFinder(
-                    database=self.db,
-                    is_ready=self._planner_work_finders[
-                        TaskType.REFERENCE_FOLDER_SCAN
-                    ].root_scan_complete,
-                    hub=registered_hub,
-                    library_uuid=self._library_uuid,
-                    ghost_retention_source=lambda: self._ghost_retention,
-                )
+            self._planner_work_finders[TaskType.GHOST_CASCADE] = GhostCascadeFinder(
+                vault=self
             )
             from pixlstash.tasks.missing_checkpoint_hash_finder import (
                 MissingCheckpointHashFinder,
@@ -806,8 +791,8 @@ class Vault:
 
         Takes effect on the next purge. It never destroys anything
         synchronously: turning the setting down is a statement about what future
-        purges may keep, and clearing what is ALREADY kept is Settings ›
-        Privacy's own purge (§F10), which is separately confirmed.
+        purges may keep, and clearing what is ALREADY kept is its own request,
+        ``DELETE /server-config/ghost-retention/ghosts``.
         """
         self._ghost_retention = retention
 

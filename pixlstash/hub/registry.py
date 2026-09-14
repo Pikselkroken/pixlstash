@@ -812,6 +812,12 @@ class LibraryRegistry:
                 f'Cannot forget "{library.name}": it is the active library.'
             )
         with self._hub.transaction() as conn:
+            # Its ghosts go with it: nothing could ever cover them again, and a
+            # registration that no longer exists cannot be erased by name.
+            conn.execute(
+                "DELETE FROM workflow_picture_ghost WHERE library_uuid = ?",
+                (library.uuid,),
+            )
             conn.execute("DELETE FROM library WHERE id = ?", (library.id,))
         logger.info("Forgot the registration for %s at %s", library.name, library.path)
 
