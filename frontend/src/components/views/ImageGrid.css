@@ -1126,3 +1126,11 @@
     opacity: 1;
   }
 }
+
+/* Body copy for the grid's own confirm dialogs (revoke shares, detect objects). */
+.grid-dialog-text {
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
+  color: rgba(var(--v-theme-on-surface), 0.85);
+}

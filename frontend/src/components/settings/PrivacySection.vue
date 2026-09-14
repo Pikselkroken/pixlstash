@@ -65,27 +65,28 @@
       queries, or your file paths.
     </p>
 
-    <v-dialog v-model="confirmOpen" max-width="420">
-      <v-card class="pv__confirm">
-        <h3 class="pv__confirm-title">Replace your install ID?</h3>
-        <p class="pv__confirm-body">
-          The current ID is discarded and a new random one takes its place.
-          Nothing links the two. Any history recorded under the old ID stops
-          updating.
-        </p>
-        <div class="pv__confirm-actions">
-          <AppButton variant="secondary" @click="confirmOpen = false"
-            >Cancel</AppButton
-          >
-          <AppButton
-            variant="primary"
-            :loading="recreating"
-            @click="doRecreate"
-            >Replace</AppButton
-          >
-        </div>
-      </v-card>
-    </v-dialog>
+    <!-- No @accept: replacing the ID is irreversible, so it only fires from
+         its own button. -->
+    <AppDialog
+      :open="confirmOpen"
+      title="Replace your install ID?"
+      size="sm"
+      @close="confirmOpen = false"
+    >
+      <p class="pv__confirm-body">
+        The current ID is discarded and a new random one takes its place.
+        Nothing links the two. Any history recorded under the old ID stops
+        updating.
+      </p>
+      <template #footer>
+        <AppButton variant="secondary" @click="confirmOpen = false"
+          >Cancel</AppButton
+        >
+        <AppButton variant="primary" :loading="recreating" @click="doRecreate"
+          >Replace</AppButton
+        >
+      </template>
+    </AppDialog>
   </SettingsSection>
 
   <!-- What a permanent delete leaves behind (#1309). A ghost is the thumbnail
@@ -137,32 +138,32 @@
     </SettingsRow>
     <p v-if="ghostError" class="pv__error" role="alert">{{ ghostError }}</p>
 
-    <v-dialog
-      :model-value="Boolean(purgeKind)"
-      max-width="420"
-      @update:model-value="(open) => !open && (purgeKind = null)"
+    <!-- No @accept: a purge is irreversible, so it only fires from its own
+         button, like the install-ID replace above. -->
+    <AppDialog
+      :open="Boolean(purgeKind)"
+      :title="purgeKind ? PURGES[purgeKind].title(purgeCount) : ''"
+      size="sm"
+      @close="purgeKind = null"
     >
-      <v-card v-if="purgeKind" class="pv__confirm">
-        <h3 class="pv__confirm-title">
-          {{ PURGES[purgeKind].title(purgeCount) }}
-        </h3>
-        <p class="pv__confirm-body">{{ PURGES[purgeKind].body }}</p>
-        <div class="pv__confirm-actions">
-          <AppButton variant="secondary" @click="purgeKind = null"
-            >Cancel</AppButton
-          >
-          <AppButton variant="danger" :loading="ghostBusy" @click="doPurge"
-            >Purge</AppButton
-          >
-        </div>
-      </v-card>
-    </v-dialog>
+      <p v-if="purgeKind" class="pv__confirm-body">
+        {{ PURGES[purgeKind].body }}
+      </p>
+      <template #footer>
+        <AppButton variant="secondary" @click="purgeKind = null"
+          >Cancel</AppButton
+        >
+        <AppButton variant="danger" :loading="ghostBusy" @click="doPurge"
+          >Purge</AppButton
+        >
+      </template>
+    </AppDialog>
   </SettingsSection>
 </template>
 
 <script setup>
 import { onMounted, computed, ref, watch } from "vue";
-import { VCard, VDialog, VSwitch } from "vuetify/components";
+import { VSwitch } from "vuetify/components";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { patchUserConfig } from "../../api/config";
 import { getInstallId, recreateInstallId } from "../../api/telemetry";
@@ -177,6 +178,7 @@ import SettingsTwoCol from "./SettingsTwoCol.vue";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsFieldBlock from "./SettingsFieldBlock.vue";
 import AppButton from "../widgets/AppButton.vue";
+import AppDialog from "../widgets/AppDialog.vue";
 import Segmented from "../widgets/Segmented.vue";
 
 const props = defineProps({
@@ -408,29 +410,10 @@ watch(
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
-.pv__confirm {
-  padding: var(--space-6);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.pv__confirm-title {
-  margin: 0;
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-}
-
 .pv__confirm-body {
   margin: 0;
   font-size: var(--text-sm);
   line-height: var(--leading-body);
   color: rgba(var(--v-theme-on-surface), 0.75);
-}
-
-.pv__confirm-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-3);
 }
 </style>

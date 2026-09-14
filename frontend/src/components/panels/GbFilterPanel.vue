@@ -1044,11 +1044,11 @@ watch(
      rather than being forced wider by its longest option. */
   min-width: 0;
 }
-/* The panel's fields are denser than the settings screens the base `.tbm-select`
-   was sized for; a third of 350px has to hold "Unstacked" without truncating.
-   Same local-override shape as `.tb-import-project .tbm-select`. */
+/* The height comes from the base `.tbm-select` (--control-h), so these sit
+   level with the fields beside them; only the horizontal room and the type size
+   are local, because a third of 350px has to hold "Unstacked" without
+   truncating. Same local-override shape as `.tb-import-project .tbm-select`. */
 .gb-scope-select {
-  min-height: 34px;
   padding-right: var(--space-6);
   padding-left: var(--space-3);
   font-size: var(--text-sm);

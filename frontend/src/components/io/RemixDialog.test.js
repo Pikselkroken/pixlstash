@@ -52,7 +52,7 @@ const VIcon = {
 // body and footer are in the wrapper's own tree.
 const AppDialogStub = {
   name: "AppDialog",
-  props: ["open", "title", "subtitle", "width", "persistent"],
+  props: ["open", "title", "subtitle", "size", "persistent"],
   setup:
     (props, { slots }) =>
     () =>

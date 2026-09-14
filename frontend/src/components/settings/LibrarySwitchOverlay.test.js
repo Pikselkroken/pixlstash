@@ -48,6 +48,9 @@ describe("LibrarySwitchOverlay", () => {
     expect(wrapper.text()).toContain("Switching to Client work");
     await panel.trigger("keydown", { key: "Escape" });
     expect(store.phase).toBe("switching");
+    // The close button is a no-op while the switch is in flight.
+    await wrapper.find('button[aria-label="Close"]').trigger("click");
+    expect(store.phase).toBe("switching");
 
     rejectSwitch({ response: { data: { detail: "Drive went away" } } });
     await begin;
@@ -75,16 +78,37 @@ describe("LibrarySwitchOverlay", () => {
     expect(wrapper.text()).toContain("Could not switch to Client work");
     expect(wrapper.text()).toContain("still using Family Photos");
     expect(wrapper.text()).toContain("Drive went away");
+    // One action besides AppDialog's close, and closing means staying too.
     const buttons = wrapper.findAll("button");
-    expect(buttons).toHaveLength(1);
-    expect(buttons[0].text()).toContain("Stay on Family Photos");
+    expect(buttons).toHaveLength(2);
+    const stay = buttons.find((b) => b.text().includes("Stay on Family Photos"));
+    expect(stay).toBeTruthy();
 
-    await buttons[0].trigger("click");
+    await stay.trigger("click");
     await nextTick();
     expect(store.phase).toBe("idle");
     expect(document.activeElement).toBe(trigger);
 
     wrapper.unmount();
     trigger.remove();
+  });
+
+  it("closing the failed dialog stays on the current library", async () => {
+    setActiveLibrary.mockRejectedValue({
+      response: { data: { detail: "Drive went away" } },
+    });
+    const wrapper = mount(LibrarySwitchOverlay, {
+      global: { plugins: [pinia] },
+    });
+    const store = useLibrarySwitchStore();
+    await store.begin(
+      { uuid: "b", name: "Client work" },
+      { uuid: "a", name: "Family Photos" },
+      null,
+    );
+    await nextTick();
+
+    await wrapper.find('button[aria-label="Close"]').trigger("click");
+    expect(store.phase).toBe("idle");
   });
 });

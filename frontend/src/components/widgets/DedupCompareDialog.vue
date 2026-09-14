@@ -2237,6 +2237,7 @@ function onZoomContextMenu() {
           @update:model-value="
             (id) => snapZoomTo(id === 'fit' ? zoomFitScale : 1)
           "
+          @pick="(id) => snapZoomTo(id === 'fit' ? zoomFitScale : 1)"
           @mousedown.prevent
         />
         <span v-if="zoomPercent !== null" class="dc-zv-pct">{{
@@ -2586,7 +2587,6 @@ function onZoomContextMenu() {
    it is the flexible child and gives up the height, so opening a band never
    squeezes the band itself into a scrolling sliver. */
 .dc-expansion {
-  margin-top: var(--space-4);
   flex-shrink: 0;
 }
 
@@ -2607,7 +2607,6 @@ function onZoomContextMenu() {
    own two rules itself: the strip above is the flexible child and gives up the
    height, which is what stops this line being squeezed into a scrolling sliver. */
 .dc-mixed-error {
-  margin-top: var(--space-4);
   flex-shrink: 0;
 }
 
@@ -2650,7 +2649,6 @@ function onZoomContextMenu() {
 
 /* ── Why pills ───────────────────────────────────────────────────────────── */
 .dc-why {
-  margin-top: var(--space-4);
   flex-shrink: 0;
 }
 
@@ -2739,6 +2737,12 @@ function onZoomContextMenu() {
   --track-trough: rgba(var(--v-theme-scrim), 0.34);
   --track-ring: rgba(var(--v-theme-on-dark-surface), 0.4);
   --focus-stroke: rgb(var(--v-theme-on-dark-surface));
+  /* The selected fill too. The deep olive is a dark fill on a dark trough and
+     the elevation that carries the second cue is invisible on near-black; the
+     bright olive is the dark-theme value for exactly this, under the surface's
+     own near-black ink (5.50:1 on #242628, 6.25:1 on #181b20 - main.js). */
+  --v-theme-primary: var(--v-theme-dark-surface-primary);
+  --v-theme-on-primary: var(--v-theme-dark-surface);
 }
 
 /* The live magnification, in the photo-tool convention (100% = 1:1). Same

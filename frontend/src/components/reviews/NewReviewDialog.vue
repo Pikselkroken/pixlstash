@@ -499,6 +499,12 @@ async function create() {
   --track-trough: rgba(var(--v-theme-scrim), 0.34);
   --track-ring: rgba(var(--v-theme-on-dark-surface), 0.4);
   --focus-stroke: rgb(var(--v-theme-on-dark-surface));
+  /* The selected fill too. The deep olive is a dark fill on a dark trough and
+     the elevation that carries the second cue is invisible on near-black; the
+     bright olive is the dark-theme value for exactly this, under the surface's
+     own near-black ink (5.50:1 on #242628, 6.25:1 on #181b20 - main.js). */
+  --v-theme-primary: var(--v-theme-dark-surface-primary);
+  --v-theme-on-primary: var(--v-theme-dark-surface);
 }
 .rs-dialog-chips {
   display: flex;

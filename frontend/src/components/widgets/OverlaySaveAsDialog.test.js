@@ -4,7 +4,7 @@ import { mount } from "@vue/test-utils";
 import OverlaySaveAsDialog from "./OverlaySaveAsDialog.vue";
 
 const AppDialogStub = {
-  props: ["open", "title", "subtitle", "width"],
+  props: ["open", "title", "subtitle", "size"],
   template:
     '<div v-if="open"><slot /><div><slot name="footer" /></div></div>',
 };

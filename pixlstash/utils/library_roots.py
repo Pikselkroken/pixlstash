@@ -20,10 +20,20 @@ Two rules read it, because writing files and naming a folder to read are
 different acts (#1223):
 
 * The folder export may not write inside any of these roots.
-* A watch or reference folder may overlap another watch or reference folder,
-  but may not equal, sit inside or contain a library's folder; and
-  a library may not be added inside, or around, a watch or reference folder
-  of any registered library (``LibraryRegistry``, so the CLI too).
+* A watch or reference folder may not equal, sit inside or contain a library's
+  folder or another watch or reference folder; and a library may not be added
+  inside, or around, a watch or reference folder of any registered library
+  (``LibraryRegistry``, so the CLI too).
+
+Watch and reference folders were allowed to overlap each other for one release
+and the allowance bought nothing. Whichever worker reaches a shared file first
+decides what happens to it: ``WatchFolderImportTask`` copies it into
+``image_root`` while ``ReferenceFolderScanTask`` indexes the original in place
+under its own row, so the same pixels land twice; and a watch folder carrying
+``delete_after_import`` unlinks the original, which is a file the owner asked
+to have indexed where it lies. The third outcome is the scan winning the race
+and the import skipping the file on its hash, i.e. nothing at all. Duplicate,
+destroy or no-op (#1223).
 """
 
 import functools
@@ -34,6 +44,7 @@ from pixlstash.hub.registry import FOLDER_OVERLAP_LOCK
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.config_service import get_import_folder_paths
 from pixlstash.utils.path_utils import LibraryRootsUnavailable, path_is_within
+from pixlstash.utils.reference_folder_validator import canonical_path
 
 logger = get_logger(__name__)
 
@@ -61,6 +72,23 @@ ROOTS_UNAVAILABLE_DETAIL = (
     "libraries just now, so it cannot confirm this folder is outside them. "
     "Try again in a moment."
 )
+
+
+def folder_overlaps_folder_detail(other: str) -> str:
+    """Said to a watch or reference folder that overlaps *other*.
+
+    *other* is named because this refusal replaced messages that named it
+    (``validate_reference_folder_conflicts`` still produces those for the
+    reference-folder routes, one step later), and a refusal that will not say
+    which of a dozen registered folders is in the way cannot be acted on.
+    """
+    return (
+        "That folder overlaps one of your watch folders or reference folders "
+        f"({other}). Two of them covering the same files index those files "
+        "twice, and a watch folder set to delete after import would take files "
+        "a reference folder indexes where they lie. Choose a folder outside "
+        "your watch and reference folders."
+    )
 
 
 def library_folders(server, vault) -> list[str]:
@@ -187,23 +215,56 @@ def refuse_path_inside_a_library(
             )
 
 
-def refuse_folder_overlapping_a_library(path: str, server, vault) -> None:
-    """Refuse a watch or reference folder that overlaps a library's folder.
+def _overlaps(path: str, root: str) -> bool:
+    """Whether *path* and *root* cover any of the same files, either way round."""
+    return path_is_within(path, root) or path_is_within(root, path)
 
-    Watch and reference folders may overlap each other; neither may equal, sit
-    inside or contain a library's folder, since the library would then index
-    or move the same files the folder does (#1223). The reverse rule is
+
+def refuse_overlapping_folder(
+    path: str,
+    server,
+    vault,
+    *,
+    exclude: str | None = None,
+) -> None:
+    """Refuse a watch or reference folder that overlaps one of the others.
+
+    A watch or reference folder may not equal, sit inside or contain a
+    library's folder, nor another watch or reference folder: two roots over one
+    file index it twice, and a ``delete_after_import`` watcher unlinks it
+    (#1223). The reverse rule, a library added over one of these folders, is
     :meth:`~pixlstash.hub.registry.LibraryRegistry.refuse_overlapping_watch_or_reference_folder`.
     Callers hold :data:`~pixlstash.hub.registry.FOLDER_OVERLAP_LOCK` from this
     check until their write commits; see :func:`holding_folder_overlap_lock`.
 
+    Only the active library's watch and reference folders are known here;
+    another library's live in ITS vault, which is the same limit
+    :func:`library_content_roots` documents.
+
+    Args:
+        path: The folder a caller wants to register or repoint to.
+        server: The running server, for the hub's library registry.
+        vault: The vault holding the active lease.
+        exclude: A registered folder that is the caller's OWN row and therefore
+            not a conflict with itself - the reference folder being repointed,
+            or the one a resumed folder-structure commit registered last time.
+            Matched by canonical path, so an alias of it is excluded too.
+
     Raises:
-        HTTPException: 503 when the libraries could not be listed, 409 when
-            *path* overlaps one of them.
+        HTTPException: 503 when a list could not be read, 409 when *path*
+            overlaps a library, a watch folder or a reference folder.
     """
     for root in _roots_or_503(lambda: library_folders(server, vault), path):
-        if path_is_within(path, root) or path_is_within(root, path):
+        if _overlaps(path, root):
             raise HTTPException(status_code=409, detail=FOLDER_OVERLAPS_LIBRARY_DETAIL)
+    excluded = canonical_path(exclude) if exclude else None
+    for root in _roots_or_503(lambda: watch_and_reference_folders(vault), path):
+        if excluded is not None and canonical_path(root) == excluded:
+            continue
+        if _overlaps(path, root):
+            raise HTTPException(
+                status_code=409, detail=folder_overlaps_folder_detail(root)
+            )
 
 
 def holding_folder_overlap_lock(func):

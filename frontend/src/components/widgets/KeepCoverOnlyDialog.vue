@@ -197,7 +197,7 @@ watch(
 </script>
 
 <template>
-  <AppDialog :open="open" :title="title" :width="520" @close="emit('close')">
+  <AppDialog :open="open" :title="title" @close="emit('close')">
     <p class="kco-lede">
       Each stack keeps its cover. Every other picture in it moves to the
       Scrapheap, where you can restore it. A stack collapses whole, even if you
@@ -301,7 +301,7 @@ watch(
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
-  margin: var(--space-5) 0 0;
+  margin: 0;
   padding: var(--space-3);
   border-radius: var(--radius-md);
   background: rgba(var(--v-theme-warning), 0.12);
@@ -317,7 +317,7 @@ watch(
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  margin: var(--space-6) 0 0;
+  margin: 0;
   padding-left: var(--space-4);
   border-left: var(--rail-w) solid rgb(var(--v-theme-error));
 }
@@ -342,7 +342,7 @@ watch(
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
-  margin: var(--space-5) 0 0;
+  margin: 0;
   font-size: var(--text-sm);
   line-height: var(--leading-body);
   color: rgba(var(--v-theme-on-surface), 0.8);
@@ -354,7 +354,7 @@ watch(
 }
 
 .kco-skips {
-  margin: var(--space-5) 0 0;
+  margin: 0;
   padding: var(--space-3);
   border: 1px solid rgba(var(--v-theme-warning), 0.35);
   border-radius: var(--radius-md);
@@ -386,7 +386,7 @@ watch(
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
-  margin: var(--space-5) 0 0;
+  margin: 0;
   padding: var(--space-4);
   border: 1px solid rgba(var(--v-theme-info), 0.5);
   background: rgba(var(--v-theme-info), 0.08);
@@ -411,7 +411,7 @@ watch(
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin: var(--space-5) 0 0;
+  margin: 0;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
 }

@@ -1553,10 +1553,16 @@ def test_a_reference_commit_refuses_a_root_that_swallows_another(owner_env):
     _make_tree(inner, {"": ["a.jpg"]})
     folder_id = _insert_reference_folder(server, inner, last_scanned=time.time())
     try:
-        with pytest.raises(svc.CommitError, match="inside this path"):
+        # Both directions are refused by `refuse_overlapping_folder` one step
+        # ahead of `validate_reference_folder_conflicts` since #1223 closed the
+        # watch-folder half of the same rule; it names the folder in the way,
+        # which is what these assert on.
+        with pytest.raises(svc.CommitError, match="overlaps one of your watch") as up:
             svc.register_reference_folder(server, outer)
-        with pytest.raises(svc.CommitError, match="inside an existing reference"):
+        assert inner in str(up.value)
+        with pytest.raises(svc.CommitError, match="overlaps one of your watch") as down:
             svc.register_reference_folder(server, os.path.join(inner, "deeper-still"))
+        assert inner in str(down.value)
     finally:
         _forget_reference_folder(server, folder_id)
 

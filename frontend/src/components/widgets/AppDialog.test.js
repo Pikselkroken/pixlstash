@@ -48,6 +48,12 @@ describe("AppDialog keyboard contract", () => {
     expect(w.emitted("close")).toBeFalsy();
   });
 
+  it("does not accept on Enter while persistent - a destructive accept needs its button", async () => {
+    const w = mountDialog({ persistent: true });
+    await w.find(".txt").trigger("keydown", { key: "Enter" });
+    expect(w.emitted("accept")).toBeFalsy();
+  });
+
   it("emits accept on plain Enter from a single-line input", async () => {
     const w = mountDialog();
     await w.find(".txt").trigger("keydown", { key: "Enter" });
@@ -99,5 +105,19 @@ describe("AppDialog keyboard contract", () => {
     expect(close.exists()).toBe(true);
     await close.trigger("click");
     expect(w.emitted("close")).toHaveLength(1);
+  });
+
+  it("names the dialog by its heading", () => {
+    const w = mountDialog();
+    const id = w.find("h2").attributes("id");
+    expect(id).toBeTruthy();
+    expect(w.find("[aria-labelledby]").attributes("aria-labelledby")).toBe(id);
+  });
+
+  it("sizes by step, md by default", () => {
+    expect(mountDialog().find(".app-dialog").classes()).toContain("app-dialog--md");
+    expect(mountDialog({ size: "lg" }).find(".app-dialog").classes()).toContain(
+      "app-dialog--lg",
+    );
   });
 });
