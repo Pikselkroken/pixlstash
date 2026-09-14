@@ -17,7 +17,7 @@ if TYPE_CHECKING:  # annotations only - see the function-local import note below
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TaggerPlugin
 from pixlstash.utils.model_utils import from_pretrained_local_first
-from pixlstash.utils.vram_utils import is_vram_oom
+from pixlstash.utils.vram_utils import is_device_error, is_vram_oom
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 
 # ML imports (torch / torchvision) are deliberately FUNCTION-LOCAL throughout
@@ -345,7 +345,7 @@ class Florence2Service:
 
         Args:
             image_path: Path to the image or video file.
-            _retry_on_cpu: When True, retry on CPU if a CUDA error occurs.
+            _retry_on_cpu: When True, retry on CPU if the accelerator fails.
 
         Returns:
             Caption string, or None on failure.
@@ -383,7 +383,7 @@ class Florence2Service:
             return caption
 
         except Exception as e:
-            if _retry_on_cpu and self._is_cuda_error(e):
+            if _retry_on_cpu and is_device_error(e, self._model_device):
                 logger.warning(
                     "Florence-2 captioning failed on GPU (%s); retrying on CPU.", e
                 )
@@ -404,7 +404,7 @@ class Florence2Service:
 
         Args:
             image_paths: List of file paths (non-video only).
-            _retry_on_cpu: When True, retry on CPU if a CUDA error occurs.
+            _retry_on_cpu: When True, retry on CPU if the accelerator fails.
             stop_event: Optional :class:`threading.Event` to interrupt
                 inference mid-batch.
 
@@ -478,7 +478,7 @@ class Florence2Service:
             return captions
 
         except Exception as e:
-            if _retry_on_cpu and self._is_cuda_error(e):
+            if _retry_on_cpu and is_device_error(e, self._model_device):
                 logger.warning(
                     "Florence-2 batch captioning failed on GPU (%s); retrying on CPU.",
                     e,
@@ -529,7 +529,7 @@ class Florence2Service:
             prompt: Optional phrase to ground. Empty/None → dense ``<OD>``.
             max_new_tokens: Generation cap; detection token strings are long.
             max_dim: Longest side (px) each image is resized to before inference.
-            _retry_on_cpu: When True, retry once on CPU after a CUDA error.
+            _retry_on_cpu: When True, retry once on CPU after an accelerator failure.
 
         Returns:
             ``{path: [(label, [x1, y1, x2, y2], score_or_None), ...]}``.  Paths
@@ -612,7 +612,7 @@ class Florence2Service:
             return detections
 
         except Exception as e:
-            if _retry_on_cpu and self._is_cuda_error(e):
+            if _retry_on_cpu and is_device_error(e, self._model_device):
                 logger.warning(
                     "Florence-2 detection failed on GPU (%s); retrying on CPU.", e
                 )
@@ -645,7 +645,8 @@ class Florence2Service:
             image_paths: Still-image file paths.
             max_new_tokens: Generation cap; a dense page needs many tokens.
             max_dim: Longest side (px) each image is resized to first.
-            _retry_on_cpu: When True, retry once on CPU after a CUDA error.
+            _retry_on_cpu: When True, retry once on CPU after a device fault
+                that is not out of memory (``is_device_error``).
 
         Returns:
             ``{path: lines}`` as :func:`_words_from_ocr_regions` returns them.
@@ -718,7 +719,7 @@ class Florence2Service:
                 # Out of memory is the task runner's to retry once VRAM is freed;
                 # falling back to CPU here would move captioning there too.
                 raise
-            if _retry_on_cpu and self._is_cuda_error(e):
+            if _retry_on_cpu and is_device_error(e, self._model_device):
                 logger.warning(
                     "Florence-2 text reading failed on GPU (%s); retrying on CPU.", e
                 )
@@ -961,30 +962,6 @@ class Florence2Service:
                     score = None
             detections.append((str(label).strip(), [x1, y1, x2, y2], score))
         return detections
-
-    def _is_cuda_error(self, error: Exception) -> bool:
-        import torch
-
-        if (
-            self._model_device is None
-            or getattr(self._model_device, "type", "") != "cuda"
-        ):
-            return False
-        # PyTorch's typed OOM deliberately does not promise the word "cuda" in
-        # its message. Type identity is the stable signal; the string fallback
-        # retains compatibility with provider/runtime errors raised outside
-        # PyTorch's own exception hierarchy.
-        oom_type = getattr(torch, "OutOfMemoryError", None)
-        cuda_error_type = getattr(torch.cuda, "CudaError", None)
-        typed_cuda_errors = tuple(
-            error_type
-            for error_type in (oom_type, cuda_error_type)
-            if isinstance(error_type, type)
-        )
-        if typed_cuda_errors and isinstance(error, typed_cuda_errors):
-            return True
-        message = str(error).lower()
-        return "cuda" in message or "cudnn" in message or "cublas" in message
 
 
 class Florence2Plugin(TaggerPlugin):

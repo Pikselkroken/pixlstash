@@ -23,6 +23,7 @@ if TYPE_CHECKING:  # annotations only - see the function-local import note below
 
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
 from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
+from pixlstash.utils.vram_utils import is_device_error
 
 # ML imports (torch / torchvision) are deliberately FUNCTION-LOCAL throughout
 # this module. They cost seconds to import, and this module sits on the API
@@ -320,20 +321,18 @@ class PixlStashTaggerService:
             True if the model is successfully loaded, False if loading
             failed on both GPU and CPU.
         """
-        import torch
-
         if self.is_loaded():
             return True
         try:
             self.init()
             return True
         except Exception as exc:
-            is_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
-                "out of memory" in str(exc).lower()
-            )
-            if is_oom and self._device != "cpu":
+            if is_device_error(exc, self._device):
                 logger.warning(
-                    "PixlStash tagger GPU load failed (OOM); retrying on CPU: %s", exc
+                    "PixlStash tagger failed to load on %s (%s: %s); retrying on CPU.",
+                    self._device,
+                    type(exc).__name__,
+                    exc,
                 )
                 self._device = "cpu"
                 try:
@@ -363,7 +362,7 @@ class PixlStashTaggerService:
         """
         import torch
 
-        logger.warning("PixlStash tagger GPU inference failed; reloading on CPU...")
+        logger.warning("PixlStash tagger reloading on CPU from %s...", self._device)
         with self._load_lock:
             return self._reload_on_cpu_locked(torch)
 
@@ -482,12 +481,13 @@ class PixlStashTaggerService:
                     logits = self._model(inputs)
                     probs = torch.sigmoid(logits).cpu().numpy()
             except Exception as exc:
-                is_cuda_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
-                    "CUDA out of memory" in str(exc)
-                )
-                if is_cuda_oom and device == "cuda":
+                if is_device_error(exc, device):
                     logger.warning(
-                        "PixlStash tagger CUDA OOM; falling back to CPU for this run."
+                        "PixlStash tagger inference failed on %s (%s: %s); "
+                        "falling back to CPU for this run.",
+                        device,
+                        type(exc).__name__,
+                        exc,
                     )
                     if self.reload_on_cpu():
                         logger.warning("PixlStash tagger is now running on CPU.")
@@ -596,12 +596,13 @@ class PixlStashTaggerService:
                     logits = self._model(inputs)
                     probs = torch.sigmoid(logits).float().cpu().numpy()
             except Exception as exc:
-                is_cuda_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
-                    "CUDA out of memory" in str(exc)
-                )
-                if is_cuda_oom and device == "cuda":
+                if is_device_error(exc, device):
                     logger.warning(
-                        "PixlStash tagger CUDA OOM; falling back to CPU for this run."
+                        "PixlStash tagger inference failed on %s (%s: %s); "
+                        "falling back to CPU for this run.",
+                        device,
+                        type(exc).__name__,
+                        exc,
                     )
                     if self.reload_on_cpu():
                         logger.warning("PixlStash tagger is now running on CPU.")
@@ -744,12 +745,13 @@ class PixlStashTaggerService:
                     logits = self._model(inputs)
                     probs = torch.sigmoid(logits).cpu().numpy()
             except Exception as exc:
-                is_cuda_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
-                    "CUDA out of memory" in str(exc)
-                )
-                if is_cuda_oom and device == "cuda":
+                if is_device_error(exc, device):
                     logger.warning(
-                        "Custom scorer CUDA OOM; falling back to CPU for this batch."
+                        "Custom scorer inference failed on %s (%s: %s); "
+                        "falling back to CPU for this batch.",
+                        device,
+                        type(exc).__name__,
+                        exc,
                     )
                     if self.reload_on_cpu():
                         inputs = inputs.to(device="cpu", dtype=torch.float32)

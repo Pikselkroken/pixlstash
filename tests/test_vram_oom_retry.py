@@ -150,6 +150,29 @@ def test_a_non_oom_failure_is_not_retried():
     assert task.vram_oom_attempts == 0
 
 
+def test_an_oversized_metal_buffer_is_not_retried_as_an_oom():
+    """Metal refusing one allocation over its maximum buffer is not transient.
+
+    The same allocation is refused the same way on every attempt, so three
+    attempts with pauses and an out-of-memory toast cannot help. The services
+    move to the CPU on it instead (``is_device_error``). A GPU-queue task, so
+    only the OOM predicate stands between it and the retry.
+    """
+
+    class _OversizedBufferTask(_OomTask):
+        def _run_task(self):
+            self.attempts += 1
+            raise RuntimeError("Invalid buffer size: 18.00 GB")
+
+    task = _OversizedBufferTask(fail_times=0)
+    assert task.queue_type == QueueType.GPU
+
+    with pytest.raises(RuntimeError, match="Invalid buffer size"):
+        task.run(on_vram_oom=lambda *_: pytest.fail("not an OOM, so no retry notice"))
+    assert task.attempts == 1
+    assert task.vram_oom_attempts == 0
+
+
 def _run_through_the_worker(task, monkeypatch):
     """Submit *task* to a real ``TaskRunner`` and return the events it emitted.
 

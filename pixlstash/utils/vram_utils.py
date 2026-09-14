@@ -1,9 +1,11 @@
 """VRAM budget utilities for GPU memory-aware batch sizing."""
 
+import re
 import subprocess
 import sys
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.device_utils import is_accelerator
 
 logger = get_logger(__name__)
 
@@ -69,10 +71,86 @@ def vram_limited_batch_cap(
 #: would retry a task that has nothing to do with the GPU.
 _DEVICE_WORDS = ("cuda", "gpu", "hip", "vram")
 
+#: Metal's OOM reads ``MPS backend out of memory`` and carries none of the words
+#: above, so ``mps`` joins them for :func:`is_vram_oom` - as a whole word, which
+#: keeps "clamps" and "timestamps" from reading as a device.
+_MPS_DEVICE_WORD = re.compile(r"\bmps\b")
+
+#: What a CUDA fault says: ``CUDA error:`` from the runtime (cuBLAS statuses and
+#: "no kernel image" arrive inside it), ``CUDA driver`` and ``CUDA unknown
+#: error`` from the driver and device enumeration, and cuDNN's ``cuDNN error:``,
+#: version mismatch and frontend errors. When no convolution algorithm or engine
+#: fits, usually for want of workspace memory, cuDNN says so without the word
+#: "error", and the CPU can still run the pass. The engine message is prefixed
+#: with the heuristic mode torch asked for - ``GET`` in the default mode,
+#: ``FIND`` when ``torch.backends.cudnn.benchmark`` is on - so the mode word is
+#: left out and both match. cuDNN's older convolution path says ``no valid
+#: convolution algorithms available``, and its frontend reports a plan the card
+#: cannot run with a bare ``CUDNN_STATUS_`` code. Faults that arrive through
+#: other layers: the caching allocator's ``NVML_SUCCESS == r`` assert, and
+#: Triton's ``Triton Error [CUDA]`` from a compiled kernel. ``cudnn`` alone is
+#: not enough: torch's argument checks name the cuDNN op a misplaced or
+#: mistyped tensor reached ("... while checking arguments for
+#: cudnn_batch_norm"), and a bug must raise, not move to the CPU.
+_CUDA_FAULT = re.compile(
+    r"cuda error|cuda driver|cuda unknown error"
+    r"|cudnn error|cudnn version|cudnn frontend error|cudnn_status_"
+    r"|unable to find a valid cudnn algorithm"
+    r"|no valid convolution algorithms available"
+    r"|was unable to find an engine"
+    r"|nvml_success == r internal assert failed"
+    r"|triton error \[cuda\]"
+)
+
+#: What a Metal fault says besides its OOM: ``Invalid buffer size`` for one
+#: allocation larger than the device's maximum buffer, and the MPS backend's
+#: other size limits (matmul output, channels, graph dims); an operator or an
+#: input shape it does not implement; float64, which Metal cannot represent,
+#: and the dtypes and dtype combinations it cannot run. The buffer refusal is
+#: not an out-of-memory condition and is_vram_oom does not read it: the same
+#: allocation is refused the same way on every attempt, so only the CPU, which
+#: has no such limit, can run it. The rest are capability gaps rather than
+#: failures; the CPU can run what Metal cannot, so they retry there as well.
+#: The phrases are torch's own and deliberately narrower than "MPS does not
+#: support": "MPS device does not support linear for non-float inputs" is an
+#: input the CPU refuses too against float weights, and a bug must raise, not
+#: move to the CPU.
+_MPS_FAULT = re.compile(
+    r"invalid buffer size"
+    r"|not supported on mps"
+    r"|not supported at the mps device"
+    r"|mpsgraph does not support tensor dims larger than"
+    r"|not currently implemented for the mps device"
+    r"|not implemented on mps device yet"
+    r"|mps framework doesn't support float64"
+    r"|to the mps backend but it does not have support for that dtype"
+    r"|scaled_dot_product_attention for mps does not support"
+)
+
+#: The fault phrases for each accelerator in ``device_utils.ACCELERATORS``.
+_DEVICE_FAULTS = {"cuda": _CUDA_FAULT, "mps": _MPS_FAULT}
+
 #: How far up the ``__cause__``/``__context__`` chain to look. A plugin that
 #: wraps the driver's error in its own class is the common case; a chain deeper
 #: than this is not.
 _CAUSE_DEPTH = 5
+
+
+def _iter_causes(error: BaseException):
+    """Yield *error* and what it was raised from, nearest first.
+
+    ``raise RuntimeError(...) from oom`` is how a plugin reports a failure its
+    own way, so a classifier that reads only the exception it was handed misses
+    the one underneath. :data:`_CAUSE_DEPTH` bounds it, which is also what makes
+    the loop ``__context__`` can form - two handlers re-raising at each other -
+    terminate without needing cycle detection.
+    """
+    current: BaseException | None = error
+    for _ in range(_CAUSE_DEPTH):
+        if current is None:
+            return
+        yield current
+        current = current.__cause__ or current.__context__
 
 
 def is_vram_oom(error: BaseException) -> bool:
@@ -94,12 +172,7 @@ def is_vram_oom(error: BaseException) -> bool:
     """
     torch = sys.modules.get("torch")
     oom_type = getattr(torch, "OutOfMemoryError", None) if torch else None
-    seen = set()
-    current: BaseException | None = error
-    for _ in range(_CAUSE_DEPTH):
-        if current is None or id(current) in seen:
-            return False
-        seen.add(id(current))
+    for current in _iter_causes(error):
         if isinstance(oom_type, type) and isinstance(current, oom_type):
             return True
         message = str(current).lower()
@@ -112,9 +185,67 @@ def is_vram_oom(error: BaseException) -> bool:
         # as transient as torch's.
         if "failed to allocate memory for requested buffer" in message:
             return True
-        if "out of memory" in message and any(w in message for w in _DEVICE_WORDS):
+        if "out of memory" in message and (
+            any(w in message for w in _DEVICE_WORDS) or _MPS_DEVICE_WORD.search(message)
+        ):
             return True
-        current = current.__cause__ or current.__context__
+    return False
+
+
+def is_device_error(error: BaseException, device) -> bool:
+    """True when *error* is a fault of *device* worth retrying on the CPU.
+
+    Broader than :func:`is_vram_oom`, which answers only "the device ran out of
+    memory". This also covers a card the installed build cannot drive, a
+    driver-level fault and, on Metal, an operation the backend cannot run -
+    conditions that are not OOM but have the same remedy, which is to reload
+    on the CPU and carry on.
+
+    Each accelerator is matched on what its own faults say, never on its name:
+    a tensor left on the wrong device and a ``view`` that needed ``reshape``
+    both name the device too, and they are bugs, so they raise. ``None`` and
+    ``"cpu"`` are never device errors.
+
+    Args:
+        error: The exception raised by the failed inference.
+        device: The device the model was running on when it raised; a string
+            such as ``"mps:0"`` or a ``torch.device``.
+
+    Returns:
+        ``True`` when the caller should move to the CPU and retry.
+    """
+    if not is_accelerator(device):
+        return False
+
+    # Everything that is an out-of-memory condition, in any of its spellings:
+    # torch's typed OOM, the CUDA and Metal texts and onnxruntime's arena
+    # message. Already chain-aware.
+    if is_vram_oom(error):
+        return True
+
+    # Normalised as is_accelerator does: a torch.device or a string, no index.
+    name = getattr(device, "type", None) or str(device)
+    device_type = name.split(":", 1)[0].lower()
+    fault_phrases = _DEVICE_FAULTS[device_type]
+
+    # A driver-level fault carries no reliable words at all: CudaError renders
+    # whatever cudaGetErrorString returns, so type identity is the only stable
+    # signal for it. torch.OutOfMemoryError is deliberately NOT listed here -
+    # is_vram_oom already matches it by type, and a second copy would be a
+    # branch no test could ever isolate.
+    cuda_error = None
+    if device_type == "cuda":
+        torch = sys.modules.get("torch")
+        cuda_error = getattr(getattr(torch, "cuda", None), "CudaError", None)
+
+    # A plugin reporting a device failure as its own exception type is the
+    # common case, so the chain is walked here as it is in is_vram_oom.
+    for current in _iter_causes(error):
+        if isinstance(cuda_error, type) and isinstance(current, cuda_error):
+            return True
+        if fault_phrases.search(str(current).lower()):
+            return True
+
     return False
 
 
