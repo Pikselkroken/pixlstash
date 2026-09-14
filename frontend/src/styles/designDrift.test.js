@@ -67,6 +67,23 @@ describe("design drift", () => {
     ).toEqual([]);
   });
 
+  // Vue's mergeProps keeps whichever `ref` comes last, so an activator's slot
+  // props and a template ref on one element silently drop one of the two:
+  // the tip or menu opens unanchored, or the app's ref stays null.
+  it("binds an activator's props and a template ref through withRef", () => {
+    const tag = /<[A-Za-z][\w-]*\b(?:[^>"']|"[^"]*"|'[^']*')*>/g;
+    const found = files.flatMap(({ name, text }) =>
+      [...text.matchAll(tag)]
+        .map((m) => m[0])
+        .filter(
+          (t) =>
+            /\sv-bind="\w*[Pp]rops"/.test(t) && /\s:?ref=/.test(t),
+        )
+        .map((t) => `${name}: ${t.replace(/\s+/g, " ").slice(0, 80)}`),
+    );
+    expect(found).toEqual([]);
+  });
+
   it("has no sub-pixel type", () => {
     expect(
       hits(/font-size:\s*(?:\d+\.\d+px|\d*\.\d+rem)/g).filter(

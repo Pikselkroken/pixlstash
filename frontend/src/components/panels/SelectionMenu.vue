@@ -20,8 +20,9 @@
       >
         <template #activator="{ props: tipProps }">
           <AddToEntityControl
-            v-bind="tipProps"
-            ref="ateProjectRef"
+            v-bind="
+              withRef(tipProps, (el) => (ateProjectRef = el))
+            "
             type="project"
             placement="right"
             :subject-ids="selectedImageIds"
@@ -34,8 +35,9 @@
       <Tooltip :text="groupingLockReason || ''">
         <template #activator="{ props: tipProps }">
           <AddToEntityControl
-            v-bind="tipProps"
-            ref="ateCharacterRef"
+            v-bind="
+              withRef(tipProps, (el) => (ateCharacterRef = el))
+            "
             type="character"
             placement="right"
             :subject-ids="selectedImageIds"
@@ -49,8 +51,9 @@
       <Tooltip :text="groupingLockReason || ''">
         <template #activator="{ props: tipProps }">
           <AddToEntityControl
-            v-bind="tipProps"
-            ref="ateSetRef"
+            v-bind="
+              withRef(tipProps, (el) => (ateSetRef = el))
+            "
             type="set"
             placement="right"
             :subject-ids="selectedImageIds"
@@ -406,6 +409,7 @@
 </template>
 
 <script setup>
+import { withRef } from "../../utils/withRef.js";
 import { computed, nextTick, ref, watch } from "vue";
 import { hashCompareSnapshot } from "../../api/snapshots";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";

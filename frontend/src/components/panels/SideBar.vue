@@ -1,4 +1,5 @@
 <script setup>
+import { withRef } from "../../utils/withRef.js";
 import {
   computed,
   ref,
@@ -1562,19 +1563,6 @@ function refreshLabelOverflows() {
   for (const [key, el] of labelRefs.entries()) {
     updateLabelOverflow(key, el);
   }
-}
-
-function mergeTooltipRef(refProps, key) {
-  return (el) => {
-    if (refProps?.ref) {
-      if (typeof refProps.ref === "function") {
-        refProps.ref(el);
-      } else {
-        refProps.ref.value = el;
-      }
-    }
-    registerLabelRef(key, el);
-  };
 }
 
 const sidebarNotice = ref(null);
@@ -6796,8 +6784,11 @@ defineExpose({
                       >
                         <template #activator="{ props }">
                           <span
-                            v-bind="props"
-                            :ref="mergeTooltipRef(props, `char-${char.id}`)"
+                            v-bind="
+                              withRef(props, (el) =>
+                                registerLabelRef(`char-${char.id}`, el),
+                              )
+                            "
                             class="sidebar-list-label-text"
                             >{{
                               char.name.charAt(0).toUpperCase() +
@@ -7004,8 +6995,11 @@ defineExpose({
                       >
                         <template #activator="{ props }">
                           <span
-                            v-bind="props"
-                            :ref="mergeTooltipRef(props, `set-${pset.id}`)"
+                            v-bind="
+                              withRef(props, (el) =>
+                                registerLabelRef(`set-${pset.id}`, el),
+                              )
+                            "
                             class="sidebar-list-label-text"
                             >{{ pset.name }}</span
                           >
@@ -7383,9 +7377,10 @@ defineExpose({
                           >
                             <template #activator="{ props: tipProps }">
                               <span
-                                v-bind="tipProps"
-                                :ref="
-                                  mergeTooltipRef(tipProps, `char-${char.id}`)
+                                v-bind="
+                                  withRef(tipProps, (el) =>
+                                    registerLabelRef(`char-${char.id}`, el),
+                                  )
                                 "
                                 class="sidebar-list-label-text"
                                 >{{
@@ -7619,9 +7614,10 @@ defineExpose({
                           >
                             <template #activator="{ props: tipProps }">
                               <span
-                                v-bind="tipProps"
-                                :ref="
-                                  mergeTooltipRef(tipProps, `set-${pset.id}`)
+                                v-bind="
+                                  withRef(tipProps, (el) =>
+                                    registerLabelRef(`set-${pset.id}`, el),
+                                  )
                                 "
                                 class="sidebar-list-label-text"
                                 >{{ pset.name }}</span

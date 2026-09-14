@@ -60,11 +60,12 @@
         <Tooltip text="Click to zoom">
           <template #activator="{ props: tipProps }">
             <img
-              ref="imgRef"
               class="rs-bin-img"
               :src="imgSrc(item.picture_id, item.picture_ext)"
               :alt="`picture ${item.picture_id}`"
-              v-bind="tipProps"
+              v-bind="
+                withRef(tipProps, (el) => (imgRef = el))
+              "
               @click="openZoom(item.picture_id, item.picture_ext)"
               @load="onImgLoad"
               @error="onImgError($event, item.picture_id)"
@@ -188,6 +189,7 @@
 // evidence (which of the k nearest neighbours carry the tag); the evidence-
 // region overlay shows where the model saw the tag (Grad-CAM), toggled with H
 // and persisted (same preference key as the old overlay).
+import { withRef } from "../../utils/withRef.js";
 import { computed, inject, onUnmounted, ref, watch } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import {

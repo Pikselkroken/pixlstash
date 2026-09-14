@@ -258,8 +258,9 @@
           >
             <template #activator="{ props: menuProps }">
               <div
-                v-bind="menuProps"
-                ref="tagBtnRef"
+                v-bind="
+                  withRef(menuProps, (el) => (tagBtnRef = el))
+                "
                 class="hidden-panel-activator"
                 aria-hidden="true"
               ></div>
@@ -319,6 +320,7 @@
 </template>
 
 <script setup>
+import { withRef } from "../../utils/withRef.js";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import { listWorkflows, runImageToImage } from "../../api/comfyui";

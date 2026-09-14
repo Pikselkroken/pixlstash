@@ -110,8 +110,9 @@
                the menu's other rows (Add folder, ai-toolkit) stay usable while
                a file copies; only Add file refuses. -->
           <AppBarButton
-            ref="addBtnRef"
-            v-bind="menuProps"
+            v-bind="
+              withRef(menuProps, (el) => (addBtnRef = el))
+            "
             class="bar-btn--accent shelf-fold-680"
             :icon="adding ? '' : 'plus'"
             chevron
@@ -1458,6 +1459,7 @@
 </template>
 
 <script setup>
+import { withRef } from "../../utils/withRef.js";
 import {
   computed,
   nextTick,

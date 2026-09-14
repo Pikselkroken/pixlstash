@@ -27,8 +27,9 @@
         <Tooltip :text="isLockedSet ? LOCK_REASON : ''">
           <template #activator="{ props: tipProps }">
             <AppInput
-              ref="nameInputRef"
-              v-bind="tipProps"
+              v-bind="
+                withRef(tipProps, (el) => (nameInputRef = el))
+              "
               v-model="localSet.name"
               label="Name *"
               placeholder="Picture set name"
@@ -215,6 +216,7 @@
 </template>
 
 <script setup>
+import { withRef } from "../../utils/withRef.js";
 import { computed, ref, watch, nextTick, onUnmounted } from "vue";
 import { VIcon } from "vuetify/components";
 import {

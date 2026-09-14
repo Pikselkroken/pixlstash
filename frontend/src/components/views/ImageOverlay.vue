@@ -258,9 +258,10 @@
           >
             <template #activator="{ props: setTipProps }">
               <AddToEntityControl
-                v-bind="setTipProps"
+                v-bind="
+                  withRef(setTipProps, (el) => (addToSetControlRef = el))
+                "
                 type="set"
-                ref="addToSetControlRef"
                 :key="addToSetControlKey"
                 :subject-ids="[image.id]"
                 :include-deleted-members="true"
@@ -889,6 +890,7 @@
 </template>
 
 <script setup>
+import { withRef } from "../../utils/withRef.js";
 import {
   onMounted,
   onUnmounted,
