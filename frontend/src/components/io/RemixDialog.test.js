@@ -169,6 +169,7 @@ beforeEach(() => {
         valid: true,
         workflow_type: "i2i",
         missing_placeholders: [],
+        has_selection_input: true,
       },
       {
         name: "T2I.json",
@@ -176,6 +177,16 @@ beforeEach(() => {
         valid: true,
         workflow_type: "t2i",
         missing_placeholders: ["{{image_path}}"],
+        has_selection_input: false,
+      },
+      {
+        // Set up with no input the picture fills, so it is not offered here.
+        name: "Pinned.json",
+        display_name: "Pinned",
+        valid: true,
+        workflow_type: "i2i",
+        missing_placeholders: [],
+        has_selection_input: false,
       },
     ],
   });

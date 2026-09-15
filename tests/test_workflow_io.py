@@ -14,6 +14,13 @@ import pixlstash.server as server_module
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflows import topology_exists
 from pixlstash.services import workflow_bindings
+from pixlstash.services.workflow_inputs import (
+    FIXED,
+    PICKER,
+    SELECTION,
+    resolve_input_modes,
+    validate_requested_modes,
+)
 from pixlstash.services.workflow_hash import topology_hash
 from pixlstash.services.workflow_io import detect_workflow_io
 
@@ -723,3 +730,228 @@ def test_an_imported_tokened_file_is_stored_migrated(import_route):
     assert stored[workflow_bindings.BINDINGS_KEY][0]["path"] == ["2", "inputs", "text"]
     # Re-dropping the same old export is a copy of what was stored.
     assert call(name="again", workflow=graph)["matched"] is True
+
+
+# ---------------------------------------------------------------------------
+# How each picture input is filled (#1305)
+# ---------------------------------------------------------------------------
+
+
+def _two_input_graph(bound: str | None = "81") -> dict:
+    """Flux2BasicEdit's shape: two inputs, both titled Load Image.
+
+    *bound* is the input the old import dialog put its token on, stored the way
+    the migration leaves it: a binding, and a neutral value in its place.
+    """
+    graph = _t2i_graph()
+    for node_id in ("76", "81"):
+        graph[node_id] = _node("LoadImage", image="Logo.png")
+        graph[node_id]["_meta"] = {"title": "Load Image"}
+    if bound:
+        graph = workflow_bindings.migrate_placeholders(
+            {**graph, bound: _node("LoadImage", image="{{image_path}}")}
+        )[0]
+        graph[bound]["_meta"] = {"title": "Load Image"}
+    return graph
+
+
+def _inputs(graph: dict) -> dict[str, str]:
+    found = detect_workflow_io(graph)
+    return dict(zip(found.picture_inputs, found.picture_input_classes))
+
+
+def _modes(resolved) -> dict[str, tuple]:
+    return {item.node_id: (item.mode, item.pixel_sha) for item in resolved}
+
+
+def test_the_bound_input_defaults_to_selection_and_the_rest_to_picker():
+    graph = _two_input_graph(bound="81")
+    resolved = resolve_input_modes(graph, _inputs(graph), [])
+    assert _modes(resolved) == {"76": (PICKER, None), "81": (SELECTION, None)}
+    assert [item.title for item in resolved] == ["Load Image", "Load Image"]
+
+
+def test_with_nothing_filled_by_a_run_the_first_input_is_selection():
+    graph = _two_input_graph(bound=None)
+    del graph["81"]["_meta"]
+    resolved = resolve_input_modes(graph, _inputs(graph), [])
+    assert _modes(resolved) == {"76": (SELECTION, None), "81": (PICKER, None)}
+    # No title in the file: the class names it.
+    assert resolved[1].title == "LoadImage"
+
+
+def test_stored_modes_win_and_a_new_input_is_never_a_second_selection():
+    graph = _two_input_graph()
+    stored = [{"node_id": "76", "mode": FIXED, "pixel_sha": "abc"}]
+    assert _modes(resolve_input_modes(graph, _inputs(graph), stored)) == {
+        "76": (FIXED, "abc"),
+        "81": (PICKER, None),
+    }
+    stored = [
+        {"node_id": "76", "mode": SELECTION, "pixel_sha": None},
+        {"node_id": "81", "mode": PICKER, "pixel_sha": None},
+    ]
+    assert _modes(resolve_input_modes(graph, _inputs(graph), stored))["76"] == (
+        SELECTION,
+        None,
+    )
+
+
+def test_a_setup_naming_only_nodes_the_file_lost_falls_back_to_defaults():
+    graph = _two_input_graph(bound="81")
+    stored = [{"node_id": "999", "mode": PICKER, "pixel_sha": None}]
+    assert _modes(resolve_input_modes(graph, _inputs(graph), stored))["81"] == (
+        SELECTION,
+        None,
+    )
+
+
+def test_a_replaced_file_that_lost_its_selection_input_gets_a_default_one():
+    graph = _two_input_graph(bound="81")
+    stored = [
+        {"node_id": "76", "mode": PICKER, "pixel_sha": None},
+        {"node_id": "99", "mode": SELECTION, "pixel_sha": None},
+    ]
+    assert _modes(resolve_input_modes(graph, _inputs(graph), stored)) == {
+        "76": (PICKER, None),
+        "81": (SELECTION, None),
+    }
+
+
+def test_a_valid_setup_is_returned_in_order():
+    inputs = _inputs(_two_input_graph())
+    assert validate_requested_modes(
+        inputs,
+        [
+            {"node_id": "81", "mode": SELECTION},
+            {"node_id": "76", "mode": FIXED, "picture_id": 5},
+        ],
+    ) == [("81", SELECTION, None), ("76", FIXED, 5)]
+    # No Selection at all is a choice: the workflow leaves the selection pill.
+    assert validate_requested_modes(
+        inputs,
+        [{"node_id": "81", "mode": PICKER}, {"node_id": "76", "mode": PICKER}],
+    ) == [("81", PICKER, None), ("76", PICKER, None)]
+
+
+@pytest.mark.parametrize(
+    "requested, message",
+    [
+        (
+            [
+                {"node_id": "81", "mode": SELECTION},
+                {"node_id": "76", "mode": SELECTION},
+            ],
+            "at most one",
+        ),
+        ([{"node_id": "81", "mode": SELECTION}], "exactly once"),
+        (
+            [
+                {"node_id": "81", "mode": SELECTION},
+                {"node_id": "81", "mode": PICKER},
+                {"node_id": "76", "mode": PICKER},
+            ],
+            "exactly once",
+        ),
+        (
+            [
+                {"node_id": "81", "mode": SELECTION},
+                {"node_id": "76", "mode": FIXED, "picture_id": True},
+            ],
+            "picture_id",
+        ),
+        (
+            [{"node_id": "81", "mode": "grid"}, {"node_id": "76", "mode": PICKER}],
+            "mode must be",
+        ),
+        ([{"node_id": 81, "mode": SELECTION}, {"node_id": "76"}], "node_id"),
+        ({"81": SELECTION}, "list"),
+    ],
+)
+def test_a_bad_setup_is_refused(requested, message):
+    with pytest.raises(ValueError, match=message):
+        validate_requested_modes(_inputs(_two_input_graph()), requested)
+
+
+def test_modes_are_keyed_on_the_files_own_spelling(tmp_path):
+    (tmp_path / "Edit.json").write_text("{}", encoding="utf-8")
+    assert comfyui_module._on_disk_name(str(tmp_path / "edit.json")) == "Edit.json"
+    assert comfyui_module._on_disk_name(str(tmp_path / "Edit.json")) == "Edit.json"
+
+
+def _list_endpoint():
+    router = comfyui_module.create_router(MagicMock())
+    return next(
+        route.endpoint
+        for route in router.routes
+        if getattr(route, "path", None) == "/comfyui/workflows"
+        and "GET" in route.methods
+    )
+
+
+def test_the_list_says_which_workflows_the_selection_pill_may_offer(
+    tmp_path, monkeypatch
+):
+    graph = _two_input_graph()
+    # A loader detection does not recognise, bound by the old dialog.
+    unrecognised = workflow_bindings.migrate_placeholders(
+        {**_t2i_graph(), "7": _node("MyPictureSource", image="{{image_path}}")}
+    )[0]
+    unbound = _two_input_graph(bound=None)
+    for name, document in (
+        ("edit.json", graph),
+        ("unset.json", graph),
+        ("unbound.json", unbound),
+        ("t2i.json", _t2i_graph()),
+        ("custom.json", unrecognised),
+    ):
+        (tmp_path / name).write_text(json.dumps(document), encoding="utf-8")
+    monkeypatch.setattr(comfyui_module, "_workflow_dirs", lambda: [("user", tmp_path)])
+    stored = {
+        "edit.json": [
+            {"node_id": "76", "mode": PICKER, "pixel_sha": None},
+            {"node_id": "81", "mode": FIXED, "pixel_sha": "abc"},
+        ]
+    }
+    monkeypatch.setattr(comfyui_module, "input_modes_by_workflow", lambda *_: stored)
+    comfyui_module._describe_workflow.cache_clear()
+
+    listed = {
+        item["name"]: item["has_selection_input"]
+        for item in _list_endpoint()()["workflows"]
+    }
+    assert listed == {
+        "edit.json": False,
+        "unset.json": True,
+        # Two inputs and no binding: a run fills neither until #1307.
+        "unbound.json": False,
+        "t2i.json": False,
+        # A loader detection misses keeps its binding.
+        "custom.json": True,
+    }
+
+
+def test_run_i2i_refuses_a_workflow_with_no_selection_input(tmp_path, monkeypatch):
+    (tmp_path / "edit.json").write_text(
+        json.dumps(_two_input_graph()), encoding="utf-8"
+    )
+    monkeypatch.setattr(comfyui_module, "_workflow_dirs", lambda: [("user", tmp_path)])
+    stored = {
+        "edit.json": [
+            {"node_id": "76", "mode": PICKER, "pixel_sha": None},
+            {"node_id": "81", "mode": PICKER, "pixel_sha": None},
+        ]
+    }
+    monkeypatch.setattr(comfyui_module, "input_modes_by_workflow", lambda *_: stored)
+    router = comfyui_module.create_router(MagicMock())
+    endpoint = next(
+        route.endpoint
+        for route in router.routes
+        if getattr(route, "path", None) == "/comfyui/run_i2i"
+    )
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(
+            endpoint(MagicMock(), {"workflow_name": "edit", "picture_ids": [1]})
+        )
+    assert refused.value.status_code == 400
+    assert "selection" in refused.value.detail

@@ -678,6 +678,37 @@ CREATE TABLE IF NOT EXISTS workflow_picture_ghost (
 )
 """
 
+# How each picture input of a runnable workflow file is filled (implementation
+# plan §F3): by the grid's selection, by a picker at run time, or by one picture
+# fixed here. Stored BESIDE the workflow and keyed by node id, never written
+# into the file (§1 rule 1).
+#
+# Keyed by library as well as by file, for the ghost table's reason: a Fixed
+# picture is a picture in ONE vault, and a vault id means nothing in another.
+# It is named by ``pixel_sha`` rather than by id because SQLite reuses a vault
+# id the moment the next import lands. The modes travel with the library too,
+# which costs a second library its own setup and never hands it a picture it
+# does not hold.
+#
+# No row for a workflow means "never configured" and the defaults apply. Rows
+# for nodes the file no longer has are ignored rather than pruned, so replacing
+# a file with a version that still has the node keeps its setting.
+#
+# A Fixed row always has a picture. Any other row MAY keep the one it had, so
+# stepping an input off Fixed (one arrow key) and back does not lose it.
+_V2_WORKFLOW_PICTURE_INPUT_CHECK = "CHECK (mode <> 'fixed' OR pixel_sha IS NOT NULL)"
+_V2_WORKFLOW_PICTURE_INPUT = """
+CREATE TABLE IF NOT EXISTS workflow_picture_input (
+    library_uuid   TEXT NOT NULL,
+    workflow_name  TEXT NOT NULL,
+    node_id        TEXT NOT NULL,
+    mode           TEXT NOT NULL CHECK (mode IN ('selection', 'picker', 'fixed')),
+    pixel_sha      TEXT,
+    CHECK (mode <> 'fixed' OR pixel_sha IS NOT NULL),
+    PRIMARY KEY (library_uuid, workflow_name, node_id)
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -701,6 +732,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_RECIPE_GRAPH,
     _V2_WORKFLOW_RECIPE_ASSET,
     _V2_WORKFLOW_PICTURE_GHOST,
+    _V2_WORKFLOW_PICTURE_INPUT,
     *_V2_WORKFLOW_INDEXES,
 )
 
@@ -915,6 +947,21 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     # that user out of a downgrade. CREATE TABLE IF NOT EXISTS throughout, so
     # re-running is a no-op and an existing developer hub picks these up on its
     # next open.
+    # An unreleased branch briefly created workflow_picture_input with a CHECK
+    # forbidding a picture on a non-Fixed row. IF NOT EXISTS cannot loosen it,
+    # so a developer hub holding that shape is rebuilt with its rows.
+    input_ddl = existing.get("workflow_picture_input")
+    if input_ddl is not None and _V2_WORKFLOW_PICTURE_INPUT_CHECK not in input_ddl:
+        rows = conn.execute("SELECT * FROM workflow_picture_input").fetchall()
+        conn.execute("DROP TABLE workflow_picture_input")
+        conn.execute(_V2_WORKFLOW_PICTURE_INPUT)
+        conn.executemany(
+            "INSERT INTO workflow_picture_input "
+            "(library_uuid, workflow_name, node_id, mode, pixel_sha) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [tuple(row) for row in rows],
+        )
+
     for statement in _V2_WORKFLOW_TABLES:
         conn.execute(statement)
 

@@ -492,6 +492,24 @@ them would learn the size of the whole library one workflow at a time. There is
 therefore no scoped/narrowed variant of these routes, and adding one means adding
 a narrowing parameter and a policy to check it against.
 
+**A saved workflow's picture inputs (#1305)** are the one write the view makes,
+and they live on the ComfyUI routes because they belong to the file, not to a
+topology:
+
+| Route | Purpose | Response |
+|---|---|---|
+| `GET /api/v1/comfyui/workflows/{workflow_name}/inputs` | How each picture input is filled | `{workflow, inputs: [{node_id, title, mode, picture_id, picture_missing}]}` |
+| `PUT /api/v1/comfyui/workflows/{workflow_name}/inputs` | Replace that setup, body `{inputs: [{node_id, mode, picture_id?}]}` | the same shape |
+
+`mode` is `selection`, `picker` or `fixed`. The body names every detected input
+exactly once and holds at most one `selection` (400 otherwise). A `fixed` entry
+with a `picture_id` chooses that picture (404 if it is not a kept picture, 409 if
+it is not hashed yet); without one it keeps the picture already stored (400 if
+there is none). `picture_missing` is a Fixed input whose picture is no longer in
+this library. Both are `OWNER_ONLY`: the setup names pictures by id.
+`GET /api/v1/comfyui/workflows` carries `has_selection_input`, and the selection
+path offers only a workflow where it is true.
+
 ---
 
 
