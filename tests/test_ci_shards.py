@@ -1420,7 +1420,7 @@ def _budget_annotation(reporter) -> str | None:
     return None
 
 
-def test_test_time_budget_fires_on_over_budget_input():
+def test_test_time_budget_fires_on_over_budget_input(tmp_path, monkeypatch):
     """The ceiling trips on synthetic time, and stays quiet under it.
 
     Both directions on purpose: a budget that can only be observed to fire is
@@ -1430,7 +1430,13 @@ def test_test_time_budget_fires_on_over_budget_input():
     The signal asserted on is the annotation, not the exit status: a shard
     failed for being slow cannot be harvested by
     ``record-test-durations.yml``, which is the workflow that fixes it.
+
+    The step summary is redirected: under Actions the real one belongs to the
+    shard running this test, and the synthetic breaches below landed on its
+    run page as a genuine "shard 2 exceeded its budget" report.
     """
+    summary = tmp_path / "step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     ceiling = shard_conftest.TEST_TIME_BUDGET_SECONDS / 4
 
     over = _BudgetStubReporter([ceiling * 0.6, ceiling * 0.6])
@@ -1445,6 +1451,11 @@ def test_test_time_budget_fires_on_over_budget_input():
     )
     assert any("NOT A TEST FAILURE" in line for line in over.lines), (
         "The banner must be unmistakable from a failing test"
+    )
+    over_total = f"{ceiling * 1.2:.6g}s"
+    assert summary.exists() and over_total in summary.read_text(encoding="utf-8"), (
+        "The synthetic breach did not go to the redirected step summary, so it "
+        "went to whichever one the environment named"
     )
 
     under = _BudgetStubReporter([ceiling * 0.6, ceiling * 0.3])
