@@ -541,7 +541,8 @@ without refuses a selection and runs once (`picture_id: null`), filing its outpu
 into the view context instead. Every Picker input must be named once in
 `pictures`; a Fixed input is read from the stored setup and is 409 when its
 picture has left the library. `values` are checked against the untyped
-`/parameters` description (400 on a mismatch; ranges are ComfyUI's to refuse);
+`/parameters` description, by broad type only (400 on a mismatch; ranges and
+options are ComfyUI's to refuse);
 `seed_mode` is `random` (the default, every sampler re-rolled), `fixed` with a
 `seed`, or `keep`, which leaves the seeds as the file and `values` have them.
 Every refusal comes before anything is uploaded or submitted. A ComfyUI failure

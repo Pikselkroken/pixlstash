@@ -1825,9 +1825,7 @@ def create_router(server) -> APIRouter:
             "example.png" if takes_selection else None,
         )
 
-        user = server.auth.get_user_for_request(request)
-        comfyui_url = getattr(user, "comfyui_url", None) if user else None
-        comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
+        comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
 
         def upload(pic) -> str:
             # Named by the picture, not by the file's own name: two pictures

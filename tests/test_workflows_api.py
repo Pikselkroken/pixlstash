@@ -1737,7 +1737,7 @@ def test_a_fixed_input_is_filled_from_the_setup_and_a_lost_one_runs_nothing(
 
 
 def test_a_run_that_cannot_be_filled_submits_nothing(
-    workflow_env, edit_workflow, sampler_workflow, fake_comfyui
+    workflow_env, edit_workflow, fake_comfyui
 ):
     owner = workflow_env.owner
     ids = _picture_ids(workflow_env.server)
