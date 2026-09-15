@@ -709,6 +709,18 @@ CREATE TABLE IF NOT EXISTS workflow_picture_input (
 )
 """
 
+# Which of a workflow file's parameters its form shows before "All N
+# parameters" (#1306), in order. One row per FILE, not per library: a pin is a
+# choice about the workflow, and it names node ids and input names, never a
+# picture. No row means "never pinned" and the defaults apply; a row holding
+# ``[]`` is somebody who unpinned everything, which is not the same thing.
+_V2_WORKFLOW_PARAMETER_PINS = """
+CREATE TABLE IF NOT EXISTS workflow_parameter_pins (
+    workflow_name  TEXT PRIMARY KEY,
+    pins           TEXT NOT NULL
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -733,6 +745,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_RECIPE_ASSET,
     _V2_WORKFLOW_PICTURE_GHOST,
     _V2_WORKFLOW_PICTURE_INPUT,
+    _V2_WORKFLOW_PARAMETER_PINS,
     *_V2_WORKFLOW_INDEXES,
 )
 

@@ -93,7 +93,7 @@ IMAGE_EXTENSIONS = (
 
 # §Unknown-node defaults rule 2 and 3: a seed is volatile, an output path names
 # where a file lands rather than what it is.
-_SEED_RE = re.compile(r"(^|_)(seed|noise_seed)$")
+SEED_FIELD_RE = re.compile(r"(^|_)(seed|noise_seed)$")
 _OUTPUT_PATH_RE = re.compile(r"^(output|save)_?(path|name)")
 
 # Inputs that carry what a person WROTE. The extension rules below are
@@ -214,7 +214,7 @@ def _digest(payload: Any) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _is_link(value: Any) -> bool:
+def is_link(value: Any) -> bool:
     """True for an API-format ``[node_id, output_slot]`` connection.
 
     **The node id must be a string, and that is load-bearing rather than
@@ -247,7 +247,7 @@ def structural_widget_value(name: str, value: Any) -> Optional[str]:
     ``None`` means the widget is bucket P or V and its value is nulled. A
     returned string is a topology asset (bucket TA), normalized per rule 5.
     """
-    if _SEED_RE.search(name) or name == "filename_prefix":
+    if SEED_FIELD_RE.search(name) or name == "filename_prefix":
         return None
     if _OUTPUT_PATH_RE.match(name):
         return None
@@ -283,7 +283,7 @@ def instance_widget_value(name: str, value: Any) -> Any:
     drops them before bucketing, so they are absent from this key as well as
     from the stored document.
     """
-    if _SEED_RE.search(name) or name == "filename_prefix":
+    if SEED_FIELD_RE.search(name) or name == "filename_prefix":
         return None
     if _OUTPUT_PATH_RE.match(name):
         return None
@@ -347,7 +347,7 @@ def reduce_api_graph(graph: dict) -> dict[str, ReducedNode]:
             )
         for name, value in raw_inputs.items():
             name = str(name)
-            if _is_link(value):
+            if is_link(value):
                 inputs.append((name, str(value[0]), int(value[1])))
             elif SECRET_FIELD_RE.search(name):
                 # Dropped here rather than nulled, so a credential-named widget

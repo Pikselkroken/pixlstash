@@ -757,3 +757,57 @@ def forget_input_modes(hub: HubDatabase, workflow_name: str) -> int:
             ).rowcount
             or 0
         )
+
+
+# ---------------------------------------------------------------------------
+# Which parameters a workflow's form shows first (#1306)
+# ---------------------------------------------------------------------------
+
+
+def parameter_pins(hub: HubDatabase, workflow_name: str) -> Optional[list[list[str]]]:
+    """A workflow file's pins as ``[node_id, name]`` pairs, or ``None`` if unset.
+
+    A stored value that does not read as pairs is logged and treated as unset,
+    so the defaults apply rather than the form failing to open.
+    """
+    row = hub.fetchone(
+        "SELECT pins FROM workflow_parameter_pins WHERE workflow_name = ?",
+        (workflow_name,),
+    )
+    if row is None:
+        return None
+    try:
+        pins = json.loads(row["pins"])
+        if not all(
+            isinstance(pin, list)
+            and len(pin) == 2
+            and all(isinstance(p, str) for p in pin)
+            for pin in pins
+        ):
+            raise ValueError("not a list of [node_id, name] pairs")
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "Stored pins of workflow %s are unreadable, using the defaults: %s",
+            workflow_name,
+            exc,
+        )
+        return None
+    return pins
+
+
+def replace_parameter_pins(
+    hub: HubDatabase, workflow_name: str, pins: Optional[list[tuple[str, str]]]
+) -> None:
+    """Store a workflow file's pins whole, or forget them with ``None``."""
+    with hub.transaction() as conn:
+        if pins is None:
+            conn.execute(
+                "DELETE FROM workflow_parameter_pins WHERE workflow_name = ?",
+                (workflow_name,),
+            )
+            return
+        conn.execute(
+            "INSERT INTO workflow_parameter_pins (workflow_name, pins) VALUES (?, ?) "
+            "ON CONFLICT(workflow_name) DO UPDATE SET pins = excluded.pins",
+            (workflow_name, json.dumps([list(pin) for pin in pins])),
+        )
