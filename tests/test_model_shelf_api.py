@@ -674,7 +674,9 @@ def test_companions_answers_the_owner_and_refuses_a_share_token(shelf_env):
 
     r = shelf_env.owner.post(f"{API}/models/companions", json=body)
     assert r.status_code == 200, r.text
-    assert r.json() == {
+    answer = r.json()
+    assert isinstance(answer.pop("unrecorded"), int)
+    assert answer == {
         "orphaned": [],
         "shared": [],
         "unknown": [],

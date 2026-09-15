@@ -3047,12 +3047,16 @@ so the gap is `_plan_deletions`, whose every gate is deliberately per model.
 `confirmDelete` posts the exact ids it will delete to `POST /models/companions`
 before the prompt opens, and `companionsSentences` (`utils/modelShelf.js`)
 turns the answer into sentences appended to the prompt's `message`: support
-files nothing else would use, ones other models still use, ones a same-named
+files that only ran with the models being deleted (never worded as "nothing
+uses it", and followed by how many kept base models have no workflow on
+record), ones other models still use, ones a same-named
 file makes unknowable, and models no workflow names. It is text in the existing
 prompt, not a new dialog and not a checkbox: an orphaned file is named, and the
 owner deletes it with a second selection. A failed read is said in the prompt
 ("could not check") rather than left out, since silence would read as nothing
-being affected, and the delete is still offered.
+being affected, and the delete is still offered. The read sits before the
+prompt opens, so `confirmDelete` ignores a second Delete press until the first
+prompt has settled.
 
 #### The three kinds of absence (#898, #926)
 

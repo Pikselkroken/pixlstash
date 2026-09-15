@@ -4440,9 +4440,29 @@ describe("Delete", () => {
 
     expect(fetchModelCompanions).toHaveBeenCalledWith([1]);
     const said = confirmSpy.mock.calls[0][0];
-    expect(said).toContain("Nothing else on the shelf uses ae.safetensors");
+    expect(said).toContain("ae.safetensors ran only with models you are deleting");
     expect(said).toContain("clip_l.safetensors is still used by other models");
     expect(deleteModels).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("opens one prompt however often Delete is pressed while it is being prepared", async () => {
+    let answer;
+    fetchModelCompanions.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const wrapper = await mountWithSelection();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await pressDelete();
+    await pressDelete();
+    answer({ orphaned: [], shared: [], unknown: [], in_use: [], no_evidence: [] });
+    await pressDelete();
+
+    expect(fetchModelCompanions).toHaveBeenCalledTimes(1);
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
     wrapper.unmount();
   });
 

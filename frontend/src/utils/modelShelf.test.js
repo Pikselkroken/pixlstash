@@ -1776,7 +1776,10 @@ describe("companionsSentences", () => {
       1,
     );
     expect(said).toContain("clip_g is still used by models you are keeping.");
-    expect(said).toContain("Nothing else on the shelf uses ae and t5xxl; they stay on disk.");
+    expect(said).toContain(
+      "In the workflows PixlStash has read, ae and t5xxl ran only with models you are deleting; they stay on disk.",
+    );
+    expect(said).not.toContain("no workflow on record");
     expect(said).toContain("clip_l is still used by other models.");
     expect(said).toContain("Whether twin is still needed is unknown");
     expect(said).not.toMatch(/safe/i);
@@ -1784,8 +1787,14 @@ describe("companionsSentences", () => {
 
   it("cuts a long list to three names and a count", () => {
     expect(companionsSentences({ ...none, orphaned: named("a", "b", "c", "d", "e") }, 1)).toContain(
-      "uses a, b, c and 2 more;",
+      "read, a, b, c and 2 more ran only",
     );
+  });
+
+  it("says kept models with no workflow on record may still need an orphan", () => {
+    expect(
+      companionsSentences({ ...none, orphaned: named("ae"), unrecorded: 3 }, 1),
+    ).toContain("3 other base models have no workflow on record and may still need it.");
   });
 
   it("says when it cannot tell, rather than saying nothing", () => {

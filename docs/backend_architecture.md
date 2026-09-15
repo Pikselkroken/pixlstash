@@ -2584,8 +2584,8 @@ models, and nothing on disk says which.
   them (`_recipe_asset_index`): a `*_sha256` widget is that model, any other
   name is every row whose filename or copy has that basename.
 - **Every recipe on the hub counts, from every library, kept pictures or not.**
-  The companions plan scoped evidence to the active library; widening it can
-  only make a file read as still needed, never offer one. A recipe whose
+  Scoping evidence to the active library would only ever drop evidence;
+  widening it can only make a file read as still needed, never offer one. A recipe whose
   pictures were all deleted still proves the files ran together.
 - **Consumers are base models.** For a support file sharing a recipe with a
   model being deleted, its consumers are every `checkpoint` or `unknown` row
@@ -2593,23 +2593,28 @@ models, and nothing on disk says which.
   not that base model's VAE, so counting it would keep A's VAE "in use" by A's
   LoRA after A is gone) and `unknown` is included, because it may be a base
   model the classifier missed and keeping a file is the answer to not knowing.
-  Every consumer being deleted is **orphaned**; any kept consumer is
-  **shared** and named.
+  Every recorded consumer being deleted is **orphaned**; any kept consumer is
+  **shared** and named. **Orphaned is not "nothing uses it"**: a kept base
+  model no recipe names (downloaded and never used, or used only in graphs
+  whose pictures were never filed) may need the file, and the answer carries
+  `unrecorded`, the count of those, so the prompt can say so.
 - **`unknown` is never orphaned.** A support file a recipe reached only by a
   basename two shelf rows share could be either of them, so it is reported as
-  unknown. A model being deleted that no recipe names is `no_evidence`: the
+  unknown. So is one beside a `*_sha256` widget that matches no row while any
+  non-engine row still waits for its hash, the rule
+  `hub/workflows._model_ghost_names` already applies: the pending checkpoint may
+  be the model the digest names. A model being deleted that no recipe names is `no_evidence`: the
   absence of a recipe is not evidence that nothing needs it, and its companions
   are simply not examined.
 - **It offers, it never deletes.** The shelf's confirmation lists the answer;
   an orphaned file stays on disk until the owner selects and deletes it. Every
   path still ends at a person choosing a file.
-- **Not yet read:** ComfyUI's own history and saved workflows (companions plan
-  phase 2, source 3). Models used only in graphs that never produced a picture
+- **Not yet read:** ComfyUI's own history and saved workflows. Models used only in graphs that never produced a picture
   PixlStash filed are invisible here, which the `no_evidence` answer says out
   loud rather than hiding.
 
-`model.family`, `model.quant` and `model.weights_id` are the header half
-(companions plan phase 1), written by the scanner from the header it already
+`model.family`, `model.quant` and `model.weights_id` are the header half,
+written by the scanner from the header it already
 reads (`adapter_header.family_from_header`, `quant_from_header`,
 `weights_id_from_header`). None of them is a group. `family` is the
 architecture the tensors show for a support file (`vae_4ch`, `vae_16ch`,
@@ -2621,7 +2626,11 @@ most of the **parameters** (not tensors), or `mixed`. `weights_id` hashes tensor
 names and shapes without dtypes, so clean casts of one model share it and a
 repack with scale tensors does not. Rows registered before the columns get them
 on the next scan: the unchanged-file fast path re-reads the header, never the
-bytes, for a row whose `weights_id` is NULL.
+bytes, for a row whose `weights_id` is NULL. `CheckpointHashTask._merge`
+carries them to the surviving row like the other scan-derived columns. Nothing
+reads them to decide a delete yet: `family` speaks two vocabularies (base-model
+families and tensor layouts), and joining a checkpoint's `flux1` to a
+`vae_16ch` needs a compatibility table this change does not invent.
 
 #### The unlink is authorised by exactly one committed row (#1017)
 

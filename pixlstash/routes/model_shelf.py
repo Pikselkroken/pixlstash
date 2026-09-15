@@ -610,8 +610,9 @@ class ModelCompanionsResponse(BaseModel):
 
     orphaned: list[CompanionFile] = Field(
         description=(
-            "Support files every recorded user of which is being deleted. "
-            "They are not deleted by the delete; they are named so they can be."
+            "Support files whose every user a recipe records is being deleted. "
+            "Not proof nothing needs them: a kept base model no recipe names "
+            "may (see `unrecorded`). The delete does not take them."
         )
     )
     shared: list[CompanionFile] = Field(
@@ -620,7 +621,8 @@ class ModelCompanionsResponse(BaseModel):
     unknown: list[CompanionFile] = Field(
         description=(
             "Support files a recipe named only by a filename two shelf rows "
-            "share, so which one ran is not known. Never counted as orphaned."
+            "share, or beside a model digest the shelf cannot yet match "
+            "because a hash is pending. Never counted as orphaned."
         )
     )
     in_use: list[CompanionFile] = Field(
@@ -633,6 +635,12 @@ class ModelCompanionsResponse(BaseModel):
         description=(
             "Ids being deleted that no recipe names, so nothing can be said "
             "about what they use."
+        )
+    )
+    unrecorded: int = Field(
+        description=(
+            "Base models staying on the shelf that no recipe names, any of "
+            "which could use an `orphaned` file."
         )
     )
 
@@ -1334,7 +1342,7 @@ def create_router(server) -> APIRouter:
         summary="What deleting models would leave behind",
         description=(
             "Given the models about to be deleted, which VAEs and text "
-            "encoders they ran with would be left with nothing that uses them "
+            "encoders they ran with no recipe pairs with any kept model "
             "(`orphaned`), which are still used by a model staying on the "
             "shelf (`shared`), and which cannot be told apart from another "
             "file of the same name (`unknown`). Also which of the deleted "

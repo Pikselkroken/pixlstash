@@ -1936,6 +1936,8 @@ def test_deleting_a_checkpoint_orphans_its_own_vae_and_names_who_shares_the_rest
     ]
     assert result["unknown"] == [] and result["in_use"] == []
     assert result["no_evidence"] == []
+    # `lonely` stays and no recipe names it, so the orphan is not proof.
+    assert result["unrecorded"] == 1
 
 
 def test_a_support_file_a_basename_cannot_tell_apart_is_unknown_not_orphaned(
@@ -1948,6 +1950,7 @@ def test_a_support_file_a_basename_cannot_tell_apart_is_unknown_not_orphaned(
     assert set(companion_ids(result, "orphaned")) == {ids["vae_a"], ids["clip_shared"]}
     assert set(companion_ids(result, "unknown")) == {ids["twin_1"], ids["twin_2"]}
     assert result["shared"] == []
+    assert result["unrecorded"] == 1  # `lonely`, the one kept base model
 
 
 def test_a_deleted_support_file_names_the_kept_models_that_use_it(companions_shelf):
@@ -1963,6 +1966,48 @@ def test_a_deleted_support_file_names_the_kept_models_that_use_it(companions_she
     }
     assert result["no_evidence"] == [ids["lonely"]]
     assert result["orphaned"] == [] and result["unknown"] == []
+    assert result["shared"] == []
+
+
+def test_an_unknown_file_kind_still_keeps_a_support_file_in_use(hub):
+    """`unknown` may be a base model the classifier missed, so it counts."""
+    ckpt = shelf_file(hub, "base-x.safetensors", "checkpoint")
+    mystery = shelf_file(hub, "mystery-x.safetensors", "unknown")
+    vae = shelf_file(hub, "vae-x.safetensors", "vae")
+    for base in ("base-x.safetensors", "mystery-x.safetensors"):
+        record_api_graph(
+            hub, generation_graph(base, "vae-x.safetensors", "clip-x.safetensors")
+        )
+
+    result = fetch_companions(hub, [ckpt])
+
+    assert companion_ids(result, "shared") == [vae]
+    assert [m["id"] for m in result["shared"][0]["used_with"]] == [mystery]
+    assert result["orphaned"] == []
+
+
+def test_a_digest_the_shelf_cannot_match_yet_makes_its_companions_unknown(hub):
+    """While a checkpoint waits for its hash, a recipe naming a model by digest
+    may name that checkpoint, so nothing in that recipe is called orphaned."""
+    doomed = shelf_file(hub, "base-y.safetensors", "checkpoint")
+    vae = shelf_file(hub, "vae-y.safetensors", "vae")
+    graph = generation_graph(
+        "base-y.safetensors", "vae-y.safetensors", "clip-y.safetensors"
+    )
+    graph["11"] = {
+        "class_type": "PixlStashCheckpointLoader",
+        "inputs": {"ckpt_sha256": "ef" * 32},
+    }
+    record_api_graph(hub, graph)
+
+    assert companion_ids(fetch_companions(hub, [doomed]), "unknown") == [vae]
+
+    with hub.transaction() as conn:
+        # Every row hashed: an unmatched digest now names nothing on the shelf.
+        conn.execute(
+            "UPDATE model SET sha256 = printf('%064d', id) WHERE sha256 IS NULL"
+        )
+    assert companion_ids(fetch_companions(hub, [doomed]), "orphaned") == [vae]
 
 
 # ---------------------------------------------------------------------------

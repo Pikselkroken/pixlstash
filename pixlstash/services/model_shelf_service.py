@@ -504,11 +504,14 @@ def fetch_companions(hub, ids: list[int]) -> dict:
     a model being deleted, its **consumers** are the base models across *all* of
     its recipes (adapters and support files excluded, ``unknown`` included):
 
-    * **orphaned** - every consumer is being deleted;
+    * **orphaned** - every consumer *a recipe records* is being deleted. That
+      is all it means: a kept base model no recipe names may need the file
+      too, which is why ``unrecorded`` counts those models beside it;
     * **shared** - some consumer stays, and it is named;
     * **unknown** - a recipe reached the file only by a basename another shelf
-      row also has, so which of the two the graph loaded is not known. Never
-      reported as orphaned.
+      row also has, or named a model by a digest while some shelf row is still
+      waiting for its hash, so a consumer may be missing. Never reported as
+      orphaned.
 
     **The absence of a recipe is not evidence.** A deleted model no recipe names
     is listed under ``no_evidence``, so the caller can say it cannot tell, and
@@ -522,9 +525,11 @@ def fetch_companions(hub, ids: list[int]) -> dict:
         ids: ``model.id`` values about to be deleted.
 
     Returns:
-        ``{"orphaned", "shared", "unknown", "in_use", "no_evidence"}``. The first
-        four are lists of ``{"id", "name", ...}``, ``shared`` and ``in_use``
-        entries also carrying ``used_with``; ``no_evidence`` is a list of ids.
+        ``{"orphaned", "shared", "unknown", "in_use", "no_evidence",
+        "unrecorded"}``. The first four are lists of ``{"id", "name", ...}``,
+        ``shared`` and ``in_use`` entries also carrying ``used_with``;
+        ``no_evidence`` is a list of ids; ``unrecorded`` counts the base models
+        staying on the shelf that no recipe names.
     """
     deleting = set(ids)
     models = {
@@ -534,9 +539,17 @@ def fetch_companions(hub, ids: list[int]) -> dict:
         )
     }
     by_name, by_digest = _recipe_asset_index(hub)
+    # The ghost reader's rule (`hub/workflows._model_ghost_names`): a digest that
+    # matches nothing proves nothing while a row still waits for its hash, since
+    # that row may be the model the digest names.
+    digests_are_complete = not hub.fetchall(
+        "SELECT 1 FROM model WHERE sha256 IS NULL AND file_kind <> ? LIMIT 1",
+        (FILE_ENGINE,),
+    )
 
     recipe_models: dict[str, set[int]] = {}
     ambiguous: dict[str, set[int]] = {}
+    unresolved: set[str] = set()
     for row in hub.fetchall(
         "SELECT structural_hash, widget_name, normalized_filename "
         "FROM workflow_recipe_asset"
@@ -545,6 +558,8 @@ def fetch_companions(hub, ids: list[int]) -> dict:
         if SHA256_FIELD_RE.search(row["widget_name"]):
             digest_match = by_digest.get(row["normalized_filename"])
             matched = {digest_match} if digest_match is not None else set()
+            if digest_match is None and not digests_are_complete:
+                unresolved.add(recipe)
         else:
             matched = by_name.get(row["normalized_filename"], set())
             if len(matched) > 1:
@@ -594,6 +609,13 @@ def fetch_companions(hub, ids: list[int]) -> dict:
             for model_id in deleting
             if model_id in models and model_id not in recipes_of
         ),
+        "unrecorded": sum(
+            1
+            for model_id, row in models.items()
+            if model_id not in deleting
+            and model_id not in recipes_of
+            and row["file_kind"] not in _NOT_CONSUMERS
+        ),
     }
 
     candidates: set[int] = set()
@@ -617,7 +639,10 @@ def fetch_companions(hub, ids: list[int]) -> dict:
             # It shares a recipe with a deleted adapter or support file only;
             # this delete does not change what it serves.
             continue
-        if any(support_id in ambiguous.get(r, ()) for r in recipes_of[support_id]):
+        if any(
+            support_id in ambiguous.get(r, ()) or r in unresolved
+            for r in recipes_of[support_id]
+        ):
             result["unknown"].append(entry(support_id))
         elif users - deleting:
             result["shared"].append(

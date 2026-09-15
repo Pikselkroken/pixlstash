@@ -1260,9 +1260,10 @@ function nameList(items) {
  * Built from `POST /models/companions`. Every clause names files, because
  * "some support files may be unused" is a sentence nobody can act on. None of
  * them says a file is safe to delete: `orphaned` means every model a recipe
- * ran it with is going, and the prompt says it stays on disk, since this
- * delete does not take it. `unknown` and `no_evidence` are said out loud
- * rather than left out, because silence would read as "nothing is affected".
+ * ran it with is going, which is what the sentence says - never "nothing uses
+ * it" - and `unrecorded` then says how many kept base models no workflow names,
+ * any of which could. `unknown` and `no_evidence` are said out loud rather than
+ * left out, because silence would read as "nothing is affected".
  *
  * @param {Object|null} companions - the route's answer, or null when it could
  *   not be read.
@@ -1283,9 +1284,16 @@ export function companionsSentences(companions, count) {
   }
   if (orphaned.length) {
     said.push(
-      `Nothing else on the shelf uses ${nameList(orphaned)}; ` +
-        `${plural(orphaned, "it stays", "they stay")} on disk.`,
+      `In the workflows PixlStash has read, ${nameList(orphaned)} ran only with ` +
+        `models you are deleting; ${plural(orphaned, "it stays", "they stay")} on disk.`,
     );
+    const unrecorded = companions.unrecorded ?? 0;
+    if (unrecorded) {
+      said.push(
+        `${unrecorded === 1 ? "1 other base model has" : `${unrecorded} other base models have`} ` +
+          `no workflow on record and may still need ${plural(orphaned, "it", "them")}.`,
+      );
+    }
   }
   if (shared.length) {
     said.push(

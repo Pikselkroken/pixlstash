@@ -1641,6 +1641,11 @@ async function confirmForget() {
   if (ok) await store.forgetSelected();
 }
 
+// Set while the delete prompt is being prepared or shown. The companions read
+// sits before the prompt opens, and a second Delete press in that window would
+// otherwise open a second prompt over the first and strand its promise.
+let deletePromptOpen = false;
+
 /**
  * The third confirmation, and the only one standing in front of real bytes.
  *
@@ -1662,6 +1667,16 @@ async function confirmForget() {
  * @param {boolean} permanent - Shift was down: unlink rather than trash.
  */
 async function confirmDelete(permanent) {
+  if (deletePromptOpen) return;
+  deletePromptOpen = true;
+  try {
+    await askAndDelete(permanent);
+  } finally {
+    deletePromptOpen = false;
+  }
+}
+
+async function askAndDelete(permanent) {
   const rows = deletableModels(store.selectedRows, foldersById.value);
   // MODELS, not rows: a stack is one row and six checkpoints, and it is deleted
   // whole exactly as it is moved whole. Counting rows would have offered
