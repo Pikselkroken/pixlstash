@@ -34,6 +34,7 @@ class MissingTagPredictionFinder(SimpleMissingFinder):
     def __init__(self, database, engine_getter: Callable):
         super().__init__(database)
         self._engine_getter = engine_getter
+        self._reset_generation = 0
 
     def finder_name(self) -> str:
         return "MissingTagPredictionFinder"

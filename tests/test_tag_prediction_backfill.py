@@ -7,9 +7,10 @@ rows while never touching the Tag table.
 
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import event
 from sqlalchemy.pool import NullPool
-from sqlmodel import SQLModel, Session, create_engine, select
+from sqlmodel import SQLModel, Session, create_engine, delete, select
 
 from pixlstash.db_models import TAG_PENDING_SENTINEL
 from pixlstash.db_models.picture import Picture
@@ -193,8 +194,15 @@ def test_backfill_pins_to_the_pixlstash_tagger_even_when_a_plugin_is_active(tmp_
         assert workflow.active_model_version("pixlstash_tagger") == "v7"
 
 
-def test_backfill_drops_pictures_retagged_since_it_read_them(tmp_path):
-    """A retag mid-backfill must not get built-in rows from the old tags (#1367)."""
+@pytest.mark.parametrize("scored", [True, False])
+def test_backfill_drops_pictures_retagged_since_it_read_them(tmp_path, scored):
+    """A retag mid-backfill must not get rows from the old pass (#1367).
+
+    Scored: a plugin retag leaves only the sentinel, and the stale scores would
+    become REJECTED built-in rows. Unscored (decode failure): a sidecar import
+    replaces the tags, and the zero-confidence path would confirm them. Either
+    way the dropped picture keeps no predictions, so a later sweep backfills it.
+    """
     engine = _make_engine(tmp_path)
     with Session(engine) as session:
         retagged = _add_picture(session, "a.jpg", tags=["dog"])
@@ -207,10 +215,21 @@ def test_backfill_drops_pictures_retagged_since_it_read_them(tmp_path):
             def run_task(self, func, *args, priority=None, **kwargs):
                 return func(session, *args)
 
+        class _RetagMidInference(_RecordingWorkflow):
+            def tag_images(self, image_paths, out_raw_scores=None, **kwargs):
+                # The reset lands while inference runs, rows first, then marked.
+                session.exec(delete(Tag).where(Tag.picture_id == retagged))
+                new_tag = TAG_PENDING_SENTINEL if scored else "wolf"
+                session.add(Tag(picture_id=retagged, tag=new_tag))
+                session.commit()
+                db.tag_resets.mark_reset([retagged])
+                if scored:
+                    for path in image_paths:
+                        out_raw_scores[path] = {"dog": 0.9, "cat": 0.8}
+                return {}
+
         db = _Db()
-        task = TagPredictionBackfillTask(db, _RecordingWorkflow(None), pictures)
-        db.tag_resets.mark_reset([retagged])
-        # The stand-in workflow scores nothing, so both take the unscored path.
+        task = TagPredictionBackfillTask(db, _RetagMidInference(None), pictures)
         task._run_task()
 
         rows = session.exec(select(TagPrediction.picture_id)).all()
@@ -221,6 +240,7 @@ def test_backfill_drops_pictures_retagged_since_it_read_them(tmp_path):
 def test_finder_captures_the_reset_generation_before_reading():
     """A retag landing during the finder's read still makes the task stale."""
     registry = TagResetRegistry()
+    registry.mark_reset([99])  # before the finder ran: not stale
     picture = SimpleNamespace(id=1, file_path="a.jpg")
 
     class _Db:
@@ -240,4 +260,4 @@ def test_finder_captures_the_reset_generation_before_reading():
     finder = MissingTagPredictionFinder(_Db(), engine_getter=lambda: engine)
     task = finder.find_task()
 
-    assert task._tag_resets.reset_since([picture.id], task._reset_generation) == {1}
+    assert registry.reset_since([picture.id, 99], task._reset_generation) == {1}
