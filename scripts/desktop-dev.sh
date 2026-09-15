@@ -43,7 +43,8 @@ build() {
 }
 
 run() {
-  local python="${PIXLSTASH_DEV_BACKEND:-$(find_venv_python)}"
+  local python
+  python="${PIXLSTASH_DEV_BACKEND:-$(find_venv_python)}"
   echo "desktop-dev: backend $python on $ROOT"
   cd "$ROOT/electron"
   # PYTHONPATH makes this checkout's pixlstash win over an editable install
