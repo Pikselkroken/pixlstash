@@ -21,6 +21,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from "vue";
 import { VMenu } from "vuetify/components";
 
 import { ALL_KINDS, JUST_A_FOLDER_KIND, kindByDigit, kindByValue, kindStyle } from "../../utils/folderMappingKinds";
+import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
@@ -383,7 +384,10 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
                 <v-icon size="12">mdi-chevron-down</v-icon>
               </button>
             </template>
-            <div class="ctx-menu" role="menu" style="min-width: 180px">
+            <div class="ctx-menu" role="menu" style="min-width: 180px"
+              tabindex="-1"
+              @keydown="onMenuKeydown"
+            >
               <template v-for="(group, gi) in menuGroups(level.proposal?.candidates)" :key="gi">
                 <div v-if="gi" class="ctx-sep" role="separator" />
                 <button
@@ -455,7 +459,10 @@ onUnmounted(() => window.removeEventListener("resize", measureSb));
                   <v-icon size="12">mdi-chevron-down</v-icon>
                 </button>
               </template>
-              <div class="ctx-menu" role="menu" style="min-width: 180px">
+              <div class="ctx-menu" role="menu" style="min-width: 180px"
+                tabindex="-1"
+                @keydown="onMenuKeydown"
+              >
                 <template v-for="(group, gi) in menuGroups(folder.proposal?.candidates)" :key="gi">
                   <div v-if="gi" class="ctx-sep" role="separator" />
                   <button

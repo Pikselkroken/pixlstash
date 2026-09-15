@@ -44,6 +44,7 @@ from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, ReferenceFolder
 from pixlstash.hub.workflows import PictureGhost, record_picture_ghosts
+from pixlstash.services.workflow_hash import asset_reference
 from pixlstash.server import Server
 from pixlstash.tasks.ghost_cascade_task import GhostCascadeTask
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
@@ -59,6 +60,14 @@ _WORKFLOW_ROUTES = (
     ("GET", "/api/v1/workflows/{topology_hash}/variants"),
     ("GET", "/api/v1/workflows/{topology_hash}/pictures"),
     ("GET", "/api/v1/workflows/recipes/{structural_hash}/graph"),
+    # The ghost routes. Pinned here as well as refused in the authz test below:
+    # every token that test can mint is READ, which the middleware refuses on a
+    # DELETE before the gate reads the declaration, so a loosened entry would
+    # leave that test green.
+    ("GET", "/api/v1/server-config/ghost-retention"),
+    ("PATCH", "/api/v1/server-config/ghost-retention"),
+    ("DELETE", "/api/v1/server-config/ghost-retention/ghosts"),
+    ("DELETE", "/api/v1/server-config/ghost-retention/model-ghosts"),
 )
 
 
@@ -96,12 +105,50 @@ _SEED_ASSETS = (
     (BUSY_RECIPE_B, "ckpt_name", "realvisxl.safetensors"),
 )
 
+# The stored shape: every asset an ``asset_reference``. The forgotten recipe's
+# three references have no asset row behind them, which is what "names
+# forgotten" is read from.
 _DOCUMENTS = {
-    BUSY_RECIPE_A: {"nodes": {"1": {"class_type": "CheckpointLoaderSimple"}}},
-    BUSY_RECIPE_B: {"nodes": {"1": {"class_type": "CheckpointLoaderSimple"}}},
-    BINNED_RECIPE: {"nodes": {}},
-    FORGOTTEN_RECIPE: {"nodes": {}},
+    BUSY_RECIPE_A: {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": asset_reference("realvisxl.safetensors")},
+        },
+        "2": {
+            "class_type": "LoraLoader",
+            "inputs": {
+                "lora_name": asset_reference("add_detail.safetensors"),
+                "strength_model": None,
+                "model": ["1", 0],
+            },
+        },
+    },
+    BUSY_RECIPE_B: {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": asset_reference("realvisxl.safetensors")},
+        },
+    },
+    BINNED_RECIPE: {"1": {"class_type": "SaveImage", "inputs": {}}},
+    FORGOTTEN_RECIPE: {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": asset_reference("gone_base.safetensors")},
+        },
+        "2": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": asset_reference("gone_one.safetensors")},
+        },
+        "3": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": asset_reference("gone_two.safetensors")},
+        },
+    },
 }
+
+# The one model on the shelf: BUSY's checkpoint. Its LoRA is not, which makes
+# ``add_detail.safetensors`` a model ghost.
+_SHELF_FILENAME = "realvisxl.safetensors"
 
 # (file_path, topology, structural, deleted, created_at)
 _SEED_PICTURES = (
@@ -143,6 +190,17 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_recipe")
         conn.execute("DELETE FROM workflow_topology")
         conn.execute("DELETE FROM workflow_picture_ghost")
+        conn.execute(
+            "DELETE FROM model WHERE filename IN (?, ?)",
+            (_SHELF_FILENAME, "add_detail.safetensors"),
+        )
+        # Hashed, like a checkpoint the finder has already read: an unhashed
+        # one holds back every digest judgement (see the digest tests below).
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('checkpoint', ?, ?, 'scanned')",
+            (_SHELF_FILENAME, _h("realvisxl-digest")),
+        )
         for topology, node_count, first_seen in (
             (BUSY_TOPOLOGY, 47, "2026-08-01T00:00:00Z"),
             (BINNED_TOPOLOGY, 12, "2026-08-03T00:00:00Z"),
@@ -325,7 +383,7 @@ def _bearer(server, token: str) -> TestClient:
 
 
 def test_every_workflow_route_is_declared_owner_only():
-    """§16.1: the declaration IS the enforcement, so pin all four cells.
+    """§16.1: the declaration IS the enforcement, so pin every cell.
 
     OWNER_ONLY is a decision here rather than a default: the counts are read
     across every non-deleted picture in the vault, so a scoped token holding
@@ -406,6 +464,179 @@ def test_forgotten_model_names_leave_the_row_intact_and_the_assets_empty(
     assert row["assets"] == []
     assert row["node_count"] == 38
     assert row["pictures"] == 1
+
+
+def test_forgotten_names_are_counted_so_the_row_can_say_how_many(workflow_env):
+    """The hash does not move when a name goes, so the row still groups; the
+    document's unresolved references are what say three models were there."""
+    rows = _by_hash(workflow_env.owner.get(f"{API}/workflows").json())
+    assert rows[FORGOTTEN_TOPOLOGY]["forgotten_models"] == 3
+    assert rows[BUSY_TOPOLOGY]["forgotten_models"] == 0
+    (variant,) = workflow_env.owner.get(
+        f"{API}/workflows/{FORGOTTEN_TOPOLOGY}/variants"
+    ).json()
+    assert variant["forgotten_models"] == 3
+
+
+def test_a_row_carries_its_ghosts_for_the_filter(workflow_env):
+    """Picture ghosts are this library's; model ghosts are names for models
+    not on the shelf. Each positive sits beside a row that must read zero."""
+    server = workflow_env.server
+    record_picture_ghosts(
+        server.hub,
+        [
+            PictureGhost(
+                library_uuid=server.vault.library_uuid,
+                pixel_sha="sha-binned-ghost",
+                instance_hash=_h("binned-instance"),
+                structural_hash=BINNED_RECIPE,
+                thumbnail=b"thumbnail-bytes",
+            ),
+            PictureGhost(
+                library_uuid=_h("another-library"),
+                pixel_sha="sha-elsewhere",
+                instance_hash=_h("binned-instance"),
+                structural_hash=BUSY_RECIPE_A,
+                thumbnail=b"thumbnail-bytes",
+            ),
+        ],
+    )
+    rows = _by_hash(workflow_env.owner.get(f"{API}/workflows").json())
+    assert rows[BINNED_TOPOLOGY]["ghosts"] == 1
+    assert rows[BUSY_TOPOLOGY]["ghosts"] == 0
+    assert rows[BUSY_TOPOLOGY]["model_ghosts"] == 1
+    assert rows[FORGOTTEN_TOPOLOGY]["model_ghosts"] == 0
+
+    settings = workflow_env.owner.get(f"{API}/server-config/ghost-retention").json()
+    assert settings["picture_ghosts"] == 1
+    assert settings["model_ghosts"] == 1
+
+
+def test_forgetting_model_ghosts_keeps_the_workflow_and_the_shelfs_names(
+    workflow_env,
+):
+    """The purge forgets the LoRA the shelf no longer has, keeps the checkpoint
+    it does, and the workflow stays one row of two variants."""
+    owner = workflow_env.owner
+    r = owner.delete(f"{API}/server-config/ghost-retention/model-ghosts")
+    assert r.status_code == 200, r.text
+    assert r.json()["names_forgotten"] == 1
+
+    row = _by_hash(owner.get(f"{API}/workflows").json())[BUSY_TOPOLOGY]
+    assert [a["name"] for a in row["assets"]] == [_SHELF_FILENAME]
+    assert row["variants"] == 2
+    assert row["model_ghosts"] == 0
+    assert row["forgotten_models"] == 1
+    assert owner.get(f"{API}/server-config/ghost-retention").json()["model_ghosts"] == 0
+
+
+def test_model_ghosts_judge_only_what_the_shelf_can_hold(workflow_env):
+    """The shelf scans ``.safetensors`` alone, so a ``.pth`` is never on it and
+    must never be forgotten as a ghost. A loader digest is judged against the
+    shelf's digests: the unknown one goes, the one on the shelf stays."""
+    server = workflow_env.server
+    on_shelf, unknown = _h("digest-on-shelf"), _h("digest-unknown")
+    with server.hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO workflow_recipe_asset "
+            "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
+            [
+                (BUSY_RECIPE_A, "model_name", "4x_ultrasharp.pth"),
+                (BUSY_RECIPE_A, "lora_sha256", unknown),
+                (BUSY_RECIPE_B, "lora_sha256", on_shelf),
+                # An unset loader and a blank download digest name no model.
+                (BUSY_RECIPE_B, "checkpoint_sha256", ""),
+                (BUSY_RECIPE_B, "expected_sha256", "not-a-digest"),
+            ],
+        )
+        conn.execute("DELETE FROM model WHERE sha256 = ?", (on_shelf,))
+        conn.execute(
+            "INSERT INTO model (file_kind, kind, sha256, provenance) "
+            "VALUES ('adapter', 'lora', ?, 'scanned')",
+            (on_shelf,),
+        )
+    try:
+        owner = workflow_env.owner
+        base = f"{API}/server-config/ghost-retention"
+        assert owner.get(base).json()["model_ghosts"] == 2
+        # A confirm for a count that is no longer true destroys nothing.
+        r = owner.delete(f"{base}/model-ghosts", params={"expected": 1})
+        assert r.status_code == 409, r.text
+        assert owner.get(base).json()["model_ghosts"] == 2
+
+        r = owner.delete(f"{base}/model-ghosts", params={"expected": 2})
+        assert r.status_code == 200, r.text
+        assert r.json()["names_forgotten"] == 2
+        left = {
+            row["normalized_filename"]
+            for row in server.hub.fetchall(
+                "SELECT normalized_filename FROM workflow_recipe_asset"
+            )
+        }
+        assert {
+            "4x_ultrasharp.pth",
+            on_shelf,
+            _SHELF_FILENAME,
+            "",
+            "not-a-digest",
+        } <= left
+        assert not {"add_detail.safetensors", unknown} & left
+    finally:
+        with server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE sha256 = ?", (on_shelf,))
+
+
+def test_digests_wait_while_a_shelf_checkpoint_is_unhashed(workflow_env):
+    """Until the hash finder reads it, a checkpoint's loader digest matches
+    nothing on the shelf, so judging it then would forget a model on disk."""
+    server = workflow_env.server
+    digest = _h("digest-of-unhashed-checkpoint")
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_recipe_asset "
+            "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
+            (BUSY_RECIPE_B, "checkpoint_sha256", digest),
+        )
+        conn.execute("DELETE FROM model WHERE filename = 'unhashed.safetensors'")
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('checkpoint', 'unhashed.safetensors', 'scanned')"
+        )
+    base = f"{API}/server-config/ghost-retention"
+    try:
+        # Only the seeded LoRA name; the digest is not judged yet.
+        assert workflow_env.owner.get(base).json()["model_ghosts"] == 1
+    finally:
+        with server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE filename = 'unhashed.safetensors'")
+    # Positive control: with nothing waiting, the same digest is a ghost.
+    assert workflow_env.owner.get(base).json()["model_ghosts"] == 2
+
+
+def test_a_model_back_on_the_shelf_is_not_a_ghost(workflow_env):
+    """A copy's basename counts as much as the recorded filename."""
+    server = workflow_env.server
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('checkpoint', NULL, 'scanned')"
+        )
+        model_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        folder_id = conn.execute("SELECT id FROM model_folder LIMIT 1").fetchone()[0]
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+            "VALUES (?, ?, 'loras/Add_Detail.safetensors', 'present')",
+            (model_id, folder_id),
+        )
+    try:
+        r = workflow_env.owner.delete(
+            f"{API}/server-config/ghost-retention/model-ghosts"
+        )
+        assert r.json()["names_forgotten"] == 0
+    finally:
+        with server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model_file WHERE model_id = ?", (model_id,))
+            conn.execute("DELETE FROM model WHERE id = ?", (model_id,))
 
 
 def test_a_row_carries_each_asset_its_variants_name_exactly_once(workflow_env):
@@ -671,7 +902,14 @@ def test_the_ghost_routes_are_the_owners_alone(workflow_env, monkeypatch):
             assert r.status_code == 403, f"{label} PATCH: {r.status_code} {r.text}"
             r = client.delete(f"{base}/ghosts")
             assert r.status_code == 403, f"{label} DELETE: {r.status_code} {r.text}"
+            assert_real_route(server.api, "DELETE", f"{base}/model-ghosts")
+            r = client.delete(f"{base}/model-ghosts")
+            assert r.status_code == 403, f"{label} forget: {r.status_code} {r.text}"
         assert _ghost_shas(server) == {"sha-authz", "sha-other-library"}
+        assert server.hub.fetchone(
+            "SELECT 1 FROM workflow_recipe_asset "
+            "WHERE normalized_filename = 'add_detail.safetensors'"
+        )
         assert server.vault.ghost_retention == "covered"
 
         owner = workflow_env.owner
@@ -683,6 +921,9 @@ def test_the_ghost_routes_are_the_owners_alone(workflow_env, monkeypatch):
         assert r.json()["ghosts_erased"] == 1
         # The erase is the active library's: another library's ghost stays.
         assert _ghost_shas(server) == {"sha-other-library"}
+        r = owner.delete(f"{base}/model-ghosts")
+        assert r.status_code == 200, r.text
+        assert r.json()["names_forgotten"] == 1
     finally:
         server.authz._enforcing = previously_enforcing
 

@@ -133,6 +133,16 @@ describe("the list", () => {
     expect(textOf(wrapper)).toContain("47 nodes");
   });
 
+  it("says how many models it loads when their names were forgotten", async () => {
+    listWorkflows.mockResolvedValue({
+      scan: { pictures: 28172, scanned: 28172 },
+      workflows: [topology({ assets: [], forgotten_models: 3 })],
+    });
+    const wrapper = await mountShelf();
+    expect(textOf(wrapper)).toContain("3 models, names forgotten");
+    expect(textOf(wrapper)).not.toContain("no model names");
+  });
+
   it("counts families and variants in the subtitle", async () => {
     const wrapper = await mountShelf();
     expect(textOf(wrapper)).toContain("1 family · 3 variants");
@@ -283,6 +293,90 @@ describe("the view axes", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].attributes("data-row-key")).toBe("b".repeat(64));
     expect(listWorkflows).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the ghosts filter", () => {
+  it("keeps only workflows holding a picture or model ghost, and counts them", async () => {
+    listWorkflows.mockResolvedValue({
+      scan: { pictures: 28172, scanned: 28172 },
+      workflows: [
+        topology({ topology_hash: "a".repeat(64), ghosts: 2 }),
+        topology({ topology_hash: "b".repeat(64) }),
+        topology({ topology_hash: "c".repeat(64), model_ghosts: 1 }),
+      ],
+    });
+    const wrapper = await mountShelf();
+    const toggle = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Ghosts"));
+    expect(toggle.text()).toContain("2");
+    expect(wrapper.findAll(".wfshelf-row")).toHaveLength(3);
+
+    await toggle.trigger("click");
+    const keys = wrapper
+      .findAll(".wfshelf-row")
+      .map((row) => row.attributes("data-row-key"));
+    expect(keys.sort()).toEqual(["a".repeat(64), "c".repeat(64)]);
+    expect(toggle.attributes("aria-pressed")).toBe("true");
+    expect(listWorkflows).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("after a purge", () => {
+  it("says the filters match nothing, not that the library has no workflows", async () => {
+    listWorkflows.mockResolvedValue({
+      scan: { pictures: 28172, scanned: 28172 },
+      workflows: [topology()],
+    });
+    const wrapper = await mountShelf();
+    wrapper.vm.store.setView({ ghosts: true });
+    await wrapper.vm.$nextTick();
+    expect(textOf(wrapper)).toContain("No workflows match");
+    expect(textOf(wrapper)).not.toContain("No workflows in this library");
+
+    const clear = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Show every workflow"));
+    await clear.trigger("click");
+    expect(wrapper.findAll(".wfshelf-row")).toHaveLength(1);
+  });
+
+  it("drops the variants it holds and reads the list again when invalidated", async () => {
+    const hash = "a".repeat(64);
+    listWorkflowVariants.mockResolvedValue([
+      {
+        structural_hash: "c".repeat(64),
+        node_count: 47,
+        first_seen_at: "2026-08-01T00:00:00Z",
+        pictures: 5,
+        assets: [{ widget: "lora_name", name: "secret_name.safetensors" }],
+      },
+    ]);
+    const wrapper = await mountShelf();
+    await wrapper.vm.store.toggleOpen(hash);
+    await wrapper.vm.$nextTick();
+    expect(textOf(wrapper)).toContain("secret_name");
+
+    listWorkflowVariants.mockResolvedValue([
+      {
+        structural_hash: "c".repeat(64),
+        node_count: 47,
+        first_seen_at: "2026-08-01T00:00:00Z",
+        pictures: 5,
+        assets: [],
+        forgotten_models: 1,
+      },
+    ]);
+    wrapper.vm.store.invalidate();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+    expect(textOf(wrapper)).not.toContain("secret_name");
+    expect(listWorkflows).toHaveBeenCalledTimes(2);
+
+    await wrapper.vm.store.toggleOpen(hash);
+    await wrapper.vm.$nextTick();
+    expect(listWorkflowVariants).toHaveBeenCalledTimes(2);
   });
 });
 

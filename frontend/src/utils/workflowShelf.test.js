@@ -77,6 +77,17 @@ describe("modelSummary", () => {
   it("says nothing rather than nothing-with-punctuation when there are no names", () => {
     expect(modelSummary([])).toBe("");
   });
+
+  it("counts models whose names were all forgotten, in the singular too", () => {
+    expect(modelSummary([], 2, 3)).toBe("3 models, names forgotten");
+    expect(modelSummary([], 2, 1)).toBe("1 model, name forgotten");
+  });
+
+  it("says some names were forgotten beside the ones that remain, with no number", () => {
+    expect(modelSummary([CHECKPOINT], 2, 2)).toBe(
+      "realvisxlv40, names forgotten",
+    );
+  });
 });
 
 describe("workflowDescriptor", () => {

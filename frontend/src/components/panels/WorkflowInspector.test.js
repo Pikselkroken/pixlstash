@@ -89,6 +89,22 @@ beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
+describe("the Models section", () => {
+  it("says the names were forgotten only when the payload says so", async () => {
+    const store = useWorkflowShelfStore();
+    store.rows = [workflow({ assets: [], forgotten_models: 3 })];
+    store.select(HASH);
+    const wrapper = mount(WorkflowInspector, globalOpts);
+    await flush(wrapper);
+    expect(textOf(wrapper)).toContain("3 models' names were forgotten.");
+
+    store.rows = [workflow({ assets: [] })];
+    await flush(wrapper);
+    expect(textOf(wrapper)).toContain("model names are not recorded");
+    expect(textOf(wrapper)).not.toContain("forgotten");
+  });
+});
+
 describe("the Pictures tab's three answers", () => {
   it("draws the tiles when they arrive", async () => {
     listWorkflowPictures.mockResolvedValue([11, 12, 13]);

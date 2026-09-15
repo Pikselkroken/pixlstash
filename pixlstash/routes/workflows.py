@@ -23,9 +23,10 @@ tiles are made of. Declared in ``pixlstash/authz/registry.py``, never inline.
 They also refuse remote plaintext under ``require_ssl``, like the model-shelf
 reads that name the same model files.
 
-**Nothing here mutates.** Naming a workflow, forgetting its ghosts and running
-one are later steps (§F3, §F10, §F5); this module is the view's read side and
-it is deliberately the whole of it.
+**Nothing here mutates.** Naming a workflow and running one are later steps
+(§F3, §F5), and forgetting ghosts is a privacy purge that lives with the
+retention setting in ``routes/config.py``; this module is the view's read side
+and it is deliberately the whole of it.
 """
 
 from __future__ import annotations
@@ -39,7 +40,10 @@ from pixlstash.hub.workflows import (
     adapter_slots_by_topology,
     assets_by_topology,
     assets_for_topology_recipes,
+    forgotten_asset_counts,
     get_document,
+    model_ghost_names,
+    picture_ghosts_by_topology,
     recipe_exists,
     recipes_for_topology,
     topology_exists,
@@ -92,6 +96,9 @@ class WorkflowVariant(BaseModel):
     pictures: int = 0
     last_used: str | None = None
     assets: list[WorkflowAsset] = Field(default_factory=list)
+    forgotten_models: int = Field(
+        0, description="Models this recipe loads whose names were forgotten."
+    )
 
 
 class WorkflowSummary(BaseModel):
@@ -116,6 +123,20 @@ class WorkflowSummary(BaseModel):
     last_used: str | None = None
     assets: list[WorkflowAsset] = Field(default_factory=list)
     adapter_slots: int = 0
+    forgotten_models: int = Field(
+        0,
+        description=(
+            "Models one variant loads whose names were forgotten: the most any "
+            "variant has, for the reason ``adapter_slots`` is a maximum."
+        ),
+    )
+    ghosts: int = Field(
+        0, description="Picture ghosts the active library holds for this workflow."
+    )
+    model_ghosts: int = Field(
+        0,
+        description="Model names in ``assets`` for models no longer on the shelf.",
+    )
 
 
 class WorkflowScan(BaseModel):
@@ -215,11 +236,16 @@ def create_router(server) -> APIRouter:
         topologies = topology_index(hub)
         assets = assets_by_topology(hub)
         slots = adapter_slots_by_topology(hub)
+        forgotten = forgotten_asset_counts(hub)
+        ghost_names = model_ghost_names(hub)
+        library_uuid = getattr(server.vault, "library_uuid", None)
+        ghosts = picture_ghosts_by_topology(hub, library_uuid) if library_uuid else {}
         activity, progress = read_library(server.vault)
 
         workflows = []
         for row in topologies:
             seen = activity.get(row["topology_hash"])
+            row_assets = assets.get(row["topology_hash"], [])
             workflows.append(
                 WorkflowSummary(
                     topology_hash=row["topology_hash"],
@@ -229,8 +255,15 @@ def create_router(server) -> APIRouter:
                     variants=row["variant_count"],
                     pictures=seen.pictures if seen else 0,
                     last_used=_iso(seen.last_used) if seen else None,
-                    assets=_assets(assets.get(row["topology_hash"], [])),
+                    assets=_assets(row_assets),
                     adapter_slots=slots.get(row["topology_hash"], 0),
+                    forgotten_models=max(
+                        forgotten.get(row["topology_hash"], {}).values(), default=0
+                    ),
+                    ghosts=ghosts.get(row["topology_hash"], 0),
+                    model_ghosts=len(
+                        {a["normalized_filename"] for a in row_assets} & ghost_names
+                    ),
                 )
             )
         return WorkflowLibrary(
@@ -258,6 +291,7 @@ def create_router(server) -> APIRouter:
         hashes = [row["structural_hash"] for row in recipes]
         activity = read_recipe_activity(server.vault, hashes)
         assets = assets_for_topology_recipes(hub, topology_hash)
+        forgotten = forgotten_asset_counts(hub, topology_hash).get(topology_hash, {})
         variants = []
         for row in recipes:
             seen = activity.get(row["structural_hash"])
@@ -269,6 +303,7 @@ def create_router(server) -> APIRouter:
                     pictures=seen.pictures if seen else 0,
                     last_used=_iso(seen.last_used) if seen else None,
                     assets=_assets(assets.get(row["structural_hash"], [])),
+                    forgotten_models=forgotten.get(row["structural_hash"], 0),
                 )
             )
         return variants

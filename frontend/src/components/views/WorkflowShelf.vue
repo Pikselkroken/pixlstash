@@ -20,7 +20,9 @@
       one graph, however many models it was bound to; the variants under a row
       are the same graph with different models, and Right and Left open and
       close them. Group, Sort and Show choose the order, the bands and which
-      rows are listed. Drop a workflow JSON file here to add it, unchanged.
+      rows are listed, and Ghosts keeps only workflows that still hold something
+      of a deleted picture or model. Drop a workflow JSON file here to add it,
+      unchanged.
       Right-click a row for what can be done with it. Escape clears the
       selection.
     </p>
@@ -158,8 +160,19 @@
         </div>
       </v-menu>
 
-      <!-- The bar deliberately ends here. F11's ghosts chip lands beside these
-           three, so the room it needs is left rather than filled. -->
+      <!-- A toggle beside the trio rather than a fourth Show position: a
+           workflow in use can hold ghosts too, so the two axes combine. The
+           badge counts across the whole list, so it says there is something
+           to find before the filter is on. -->
+      <AppBarButton
+        icon="mdi-ghost-outline"
+        :active="store.view.ghosts"
+        :aria-pressed="store.view.ghosts"
+        :badge="store.ghostRowCount || null"
+        tooltip="Only workflows holding a ghost: a deleted picture's thumbnail and prompt, or the name of a model not on the shelf"
+        @click="store.setView({ ghosts: !store.view.ghosts })"
+        >Ghosts</AppBarButton
+      >
       <span class="wfshelf-spacer"></span>
     </div>
 
@@ -191,6 +204,12 @@
         }}</v-icon>
         <p class="wfshelf-empty-title">{{ emptyState.title }}</p>
         <p class="wfshelf-empty-body">{{ emptyState.body }}</p>
+        <AppButton
+          v-if="emptyState.clearFilters"
+          variant="secondary"
+          @click="store.setView({ show: 'all', ghosts: false })"
+          >Show every workflow</AppButton
+        >
       </div>
 
       <div v-for="group in store.groups" :key="group.key ?? '__flat__'">
@@ -317,8 +336,17 @@
               <span
                 role="gridcell"
                 class="wfshelf-col--models"
-                :class="{ 'wfshelf-quiet': !modelSummary(row.assets) }"
-                >{{ modelSummary(row.assets) || "no model names" }}</span
+                :class="{
+                  'wfshelf-quiet': !modelSummary(
+                    row.assets,
+                    2,
+                    row.forgotten_models,
+                  ),
+                }"
+                >{{
+                  modelSummary(row.assets, 2, row.forgotten_models) ||
+                  "no model names"
+                }}</span
               >
 
               <span role="gridcell" class="wfshelf-col--date"
@@ -385,8 +413,17 @@
                 <span
                   role="gridcell"
                   class="wfshelf-col--models"
-                  :class="{ 'wfshelf-quiet': !modelSummary(variant.assets) }"
-                  >{{ modelSummary(variant.assets) || "no model names" }}</span
+                  :class="{
+                    'wfshelf-quiet': !modelSummary(
+                      variant.assets,
+                      2,
+                      variant.forgotten_models,
+                    ),
+                  }"
+                  >{{
+                    modelSummary(variant.assets, 2, variant.forgotten_models) ||
+                    "no model names"
+                  }}</span
                 >
                 <span role="gridcell" class="wfshelf-col--date"
                   ><Tooltip
@@ -413,7 +450,10 @@
       origin="top start"
       :offset="2"
     >
-      <div class="ctx-menu" role="menu">
+      <div class="ctx-menu" role="menu"
+        tabindex="-1"
+        @keydown="onMenuKeydown"
+      >
         <button
           v-if="menuRow && menuRow.variants > 1"
           class="ctx-item"
@@ -467,14 +507,15 @@
 // is opened and not before, and why the expansion is drawn as rows rather than
 // as a nested widget with a scroll of its own.
 //
-// **Dropping a workflow file is the only write.** Naming a workflow, running one
-// and forgetting its ghosts are later steps; the row menu offers only what can
-// be read today. F11's ghosts filter lands beside Group /
-// Sort / Show, so the toolbar leaves that room rather than filling it.
+// **Dropping a workflow file is the only write.** Naming a workflow and running
+// one are later steps, and forgetting ghosts is a purge in Settings › Privacy;
+// the row menu offers only what can be read today. The Ghosts toggle beside
+// Group / Sort / Show narrows the list to what those purges would reach.
 
 import { computed, onMounted, ref, watch } from "vue";
 
 import AppBarButton from "../widgets/AppBarButton.vue";
+import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import OptionRows from "../widgets/OptionRows.vue";
 import Segmented from "../widgets/Segmented.vue";
@@ -494,6 +535,7 @@ import {
   modelSummary,
   workflowDescriptor,
 } from "../../utils/workflowShelf";
+import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 
 const store = useWorkflowShelfStore();
 const notices = useNoticeStore();
@@ -570,9 +612,26 @@ const EMPTY_STATES = {
   },
 };
 
-const emptyState = computed(() =>
-  store.state === "listed" ? null : EMPTY_STATES[store.state],
-);
+// The fourth kind of empty: the library has workflows and the filters leave
+// none. The Ghosts toggle is remembered and a purge is meant to empty it, so
+// this is the ordinary sight after a purge, and it must not read as a library
+// with no workflows.
+const FILTERED_EMPTY = {
+  icon: "mdi-filter-off-outline",
+  title: "No workflows match",
+  clearFilters: true,
+};
+
+const emptyState = computed(() => {
+  if (store.state !== "listed") return EMPTY_STATES[store.state];
+  if (store.visibleRows.length) return null;
+  return {
+    ...FILTERED_EMPTY,
+    body: store.view.ghosts
+      ? "None of the workflows shown holds a ghost. Turn off Ghosts to see the rest."
+      : "None of the workflows in this library fits what Show asks for.",
+  };
+});
 
 const subtitle = computed(() => {
   const families = store.visibleRows.length;
@@ -644,7 +703,7 @@ function workflowCount(n) {
 
 /** A variant's line: what distinguishes it from its siblings is its models. */
 function variantLabel(variant) {
-  const models = modelSummary(variant?.assets, 3);
+  const models = modelSummary(variant?.assets, 3, variant?.forgotten_models);
   return models || "models not named";
 }
 

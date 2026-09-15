@@ -51,7 +51,9 @@
           <div
             class="ctx-menu ctx-menu--on-dark"
             role="menu"
+            tabindex="-1"
             style="min-width: 160px"
+            @keydown="onMenuKeydown"
           >
             <button
               v-if="tagPluginsLoading"
@@ -318,6 +320,7 @@ import {
   isSentinelTag,
   formatSentinelTag,
 } from "../../utils/tags.js";
+import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 
 const props = defineProps({
   image: { type: Object, default: null },
