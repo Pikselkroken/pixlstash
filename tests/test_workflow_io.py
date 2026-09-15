@@ -1,9 +1,12 @@
-"""Detection of a workflow's inputs and outputs (#1302), and import as-is (#1303)."""
+"""Detection of a workflow's inputs and outputs (#1302), import as-is (#1303),
+and the watched workflows folder (#1304)."""
 
 import asyncio
 import json
 import os
 import pathlib
+import shutil
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,7 +16,7 @@ import pixlstash.routes.comfyui as comfyui_module
 import pixlstash.server as server_module
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflows import topology_exists
-from pixlstash.services import workflow_bindings
+from pixlstash.services import workflow_bindings, workflow_inbox
 from pixlstash.services.workflow_inputs import (
     FIXED,
     PICKER,
@@ -492,6 +495,16 @@ def test_server_start_up_runs_the_migration_on_the_user_folder(tmp_path, monkeyp
     (user_dir / "old.json").write_text(json.dumps(graph), encoding="utf-8")
     monkeypatch.setattr(server_module, "workflow_user_dir", lambda: str(user_dir))
     monkeypatch.setattr(server_module.Server, "DEFAULT_MIGRATE_WORKFLOW_TOKENS", True)
+    # The inbox is reconciled after the migration and watched from start-up.
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "dropped.json").write_text(json.dumps(_t2i_graph()), encoding="utf-8")
+    monkeypatch.setattr(server_module, "workflow_inbox_dir", lambda: str(inbox))
+    monkeypatch.setattr(comfyui_module, "workflow_user_dir", lambda: str(user_dir))
+    monkeypatch.setattr(
+        comfyui_module, "_workflow_dirs", lambda: [("user", str(user_dir))]
+    )
+    monkeypatch.setattr(server_module.Server, "DEFAULT_WATCH_WORKFLOW_INBOX", True)
     config_path = tmp_path / "config" / "server-config.json"
     config_path.parent.mkdir()
     config_path.write_text(json.dumps({"port": 8000}), encoding="utf-8")
@@ -500,6 +513,8 @@ def test_server_start_up_runs_the_migration_on_the_user_folder(tmp_path, monkeyp
     try:
         assert workflow_bindings.BINDINGS_KEY in _load(user_dir / "old.json")
         assert (user_dir / workflow_bindings.MIGRATION_MARKER).exists()
+        assert _load(user_dir / "dropped.json") == _t2i_graph()
+        assert server._workflow_inbox_watcher is not None
     finally:
         server.__exit__(None, None, None)
 
@@ -616,6 +631,17 @@ def import_route(tmp_path, monkeypatch):
         "_workflow_dirs",
         lambda: [("user", str(user_dir)), ("built-in", str(built_in))],
     )
+    # Never the machine's own inbox or trash.
+    inbox = tmp_path / "workflows"
+    trash = tmp_path / "trash"
+    trash.mkdir()
+
+    def fake_trash(path):
+        shutil.move(path, trash / os.path.basename(path))
+
+    monkeypatch.setattr(workflow_inbox, "workflow_inbox_dir", lambda: str(inbox))
+    monkeypatch.setattr(workflow_inbox, "send2trash", fake_trash)
+    monkeypatch.setattr(comfyui_module, "send2trash", fake_trash)
     hub = HubDatabase(str(tmp_path / "hub.db"))
     server = MagicMock()
     server.hub = hub
@@ -624,6 +650,16 @@ def import_route(tmp_path, monkeypatch):
     def call(**payload):
         return endpoint(payload)
 
+    call.inbox = inbox
+    call.trash = trash
+    call.store = lambda name, workflow: comfyui_module._store_workflow(
+        hub, name, workflow, keep_both=True
+    )
+    call.delete = _route(
+        comfyui_module.create_router(server),
+        "/comfyui/workflows/{workflow_name}",
+        "DELETE",
+    )
     try:
         yield call, user_dir, built_in, hub
     finally:
@@ -707,17 +743,12 @@ def test_an_unfileable_or_too_deep_import_is_handled(import_route):
     assert not (user_dir / "deep.json").exists()
 
 
-def test_deleting_a_workflow_removes_its_migration_backup(import_route, monkeypatch):
-    _call, user_dir, _built_in, _hub = import_route
+def test_deleting_a_workflow_removes_its_migration_backup(import_route):
+    call, user_dir, _built_in, _hub = import_route
     user_dir.mkdir()
     (user_dir / "old.json").write_text("{}", encoding="utf-8")
     (user_dir / "old.json.pre-bindings").write_text("{}", encoding="utf-8")
-    endpoint = _route(
-        comfyui_module.create_router(MagicMock()),
-        "/comfyui/workflows/{workflow_name}",
-        "DELETE",
-    )
-    asyncio.run(endpoint("old"))
+    call.delete("old")
     assert sorted(p.name for p in user_dir.iterdir()) == []
 
 
@@ -730,6 +761,147 @@ def test_an_imported_tokened_file_is_stored_migrated(import_route):
     assert stored[workflow_bindings.BINDINGS_KEY][0]["path"] == ["2", "inputs", "text"]
     # Re-dropping the same old export is a copy of what was stored.
     assert call(name="again", workflow=graph)["matched"] is True
+
+
+def _inbox_names(call) -> list[str]:
+    return sorted(p.name for p in call.inbox.iterdir())
+
+
+def test_a_file_in_the_inbox_is_imported_and_named_by_its_content(import_route):
+    call, user_dir, _built_in, hub = import_route
+    call.inbox.mkdir()
+    graph = _t2i_graph()
+    (call.inbox / "flow.json").write_text(json.dumps(graph), encoding="utf-8")
+    digest = workflow_inbox.content_hash(graph)
+
+    assert workflow_inbox.reconcile(str(call.inbox), call.store) == 1
+    assert _load(user_dir / "flow.json") == graph
+    assert topology_exists(hub, topology_hash(graph))
+    assert _inbox_names(call) == [f"flow.{digest}.json"]
+
+    # Idempotent, and a file already named by its hash is not renamed again.
+    assert workflow_inbox.reconcile(str(call.inbox), call.store) == 0
+    assert _inbox_names(call) == [f"flow.{digest}.json"]
+
+    # A different workflow under a taken name is kept beside it, like a drop.
+    other = _t2i_graph()
+    other["2"]["inputs"]["text"] = "a dog"
+    (call.inbox / "flow.json").write_text(json.dumps(other), encoding="utf-8")
+    assert workflow_inbox.reconcile(str(call.inbox), call.store) == 1
+    assert _load(user_dir / "flow (2).json") == other
+
+    # An inbox: removing its files never deletes a workflow.
+    for path in call.inbox.iterdir():
+        path.unlink()
+    assert workflow_inbox.reconcile(str(call.inbox), call.store) == 0
+    assert sorted(p.name for p in user_dir.iterdir()) == ["flow (2).json", "flow.json"]
+
+
+def test_a_broken_inbox_file_is_left_and_the_rest_imported(import_route, caplog):
+    call, user_dir, _built_in, _hub = import_route
+    call.inbox.mkdir()
+    (call.inbox / "broken.json").write_text("{not json", encoding="utf-8")
+    (call.inbox / "list.json").write_text("[]", encoding="utf-8")
+    (call.inbox / "fine.json").write_text(json.dumps(_t2i_graph()), encoding="utf-8")
+    assert workflow_inbox.reconcile(str(call.inbox), call.store) == 1
+    assert "broken.json" in caplog.text and "list.json" in caplog.text
+    assert "broken.json" in _inbox_names(call) and "list.json" in _inbox_names(call)
+    assert sorted(p.name for p in user_dir.iterdir()) == ["fine.json"]
+
+
+def test_deleting_a_workflow_trashes_it_by_way_of_the_inbox(import_route):
+    call, user_dir, _built_in, _hub = import_route
+    graph = _t2i_graph()
+    call(name="flow", workflow=graph)
+    digest = workflow_inbox.content_hash(graph)
+    # A copy dropped under another name carries the same hash and goes too, or
+    # the next start would import the deleted workflow again.
+    call.inbox.mkdir()
+    (call.inbox / f"copy.{digest}.json").write_text(json.dumps(graph), encoding="utf-8")
+    # And one the watcher has not renamed yet.
+    (call.inbox / "fresh.json").write_text(json.dumps(graph), encoding="utf-8")
+
+    assert call.delete("flow") == {"status": "success", "name": "flow.json"}
+    assert not (user_dir / "flow.json").exists()
+    assert _inbox_names(call) == []
+    assert sorted(p.name for p in call.trash.iterdir()) == [
+        f"copy.{digest}.json",
+        f"flow.{digest}.json",
+        "fresh.json",
+    ]
+    assert _load(call.trash / f"flow.{digest}.json") == graph
+
+    # Restoring it from the trash puts it back in the inbox, under its name.
+    shutil.move(call.trash / f"flow.{digest}.json", call.inbox)
+    assert workflow_inbox.reconcile(str(call.inbox), call.store) == 1
+    assert _load(user_dir / "flow.json") == graph
+
+
+def test_deleting_keeps_an_inbox_edit_the_watcher_has_not_imported(import_route):
+    call, user_dir, _built_in, _hub = import_route
+    graph = _t2i_graph()
+    call.inbox.mkdir()
+    (call.inbox / "flow.json").write_text(json.dumps(graph), encoding="utf-8")
+    workflow_inbox.reconcile(str(call.inbox), call.store)
+    digest = workflow_inbox.content_hash(graph)
+    # Edited in place: the name still carries the old hash.
+    edited = _t2i_graph()
+    edited["2"]["inputs"]["text"] = "an edited cat"
+    (call.inbox / f"flow.{digest}.json").write_text(
+        json.dumps(edited), encoding="utf-8"
+    )
+
+    call.delete("flow")
+
+    assert _load(call.inbox / f"flow.{digest}.json") == edited
+    assert _inbox_names(call) == [f"flow.{digest}.json"]
+    assert [p.name for p in call.trash.iterdir()] == [f"flow (2).{digest}.json"]
+    assert _load(call.trash / f"flow (2).{digest}.json") == graph
+    assert workflow_inbox.reconcile(str(call.inbox), call.store) == 1
+    assert _load(user_dir / "flow.json") == edited
+
+
+def test_a_workflow_the_trash_refuses_is_kept(import_route, monkeypatch):
+    call, user_dir, _built_in, _hub = import_route
+    call(name="flow", workflow=_t2i_graph())
+
+    def no_trash(path):
+        raise OSError("no trash on this mount")
+
+    monkeypatch.setattr(workflow_inbox, "send2trash", no_trash)
+    with pytest.raises(HTTPException) as refused:
+        call.delete("flow")
+    assert refused.value.status_code == 500
+    assert _load(user_dir / "flow.json") == _t2i_graph()
+
+
+def test_an_unreadable_stored_workflow_is_trashed_as_it_is(import_route):
+    call, user_dir, _built_in, _hub = import_route
+    user_dir.mkdir()
+    (user_dir / "broken.json").write_text("{not json", encoding="utf-8")
+    call.delete("broken")
+    assert not (user_dir / "broken.json").exists()
+    assert (call.trash / "broken.json").read_text(encoding="utf-8") == "{not json"
+
+
+def test_the_watcher_imports_a_file_put_in_the_inbox(import_route, monkeypatch):
+    call, user_dir, _built_in, _hub = import_route
+    monkeypatch.setattr(workflow_inbox, "_DEBOUNCE_S", 0.05)
+    watcher = workflow_inbox.WorkflowInboxWatcher(str(call.inbox), call.store)
+    watcher.start()
+    try:
+        (call.inbox / "dropped.json").write_text(
+            json.dumps(_t2i_graph()), encoding="utf-8"
+        )
+        digest = workflow_inbox.content_hash(_t2i_graph())
+        deadline = time.monotonic() + 10
+        # The rename is the last thing a reconcile does.
+        while not (call.inbox / f"dropped.{digest}.json").exists():
+            assert time.monotonic() < deadline, "the watcher never imported the file"
+            time.sleep(0.05)
+    finally:
+        watcher.stop()
+    assert _load(user_dir / "dropped.json") == _t2i_graph()
 
 
 # ---------------------------------------------------------------------------

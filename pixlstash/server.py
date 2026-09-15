@@ -66,6 +66,11 @@ from pixlstash.hub.bootstrap import (
 from pixlstash.hub.registry import LibraryRegistry
 from pixlstash.services.library_switch_service import LibrarySwitchService
 from pixlstash.services.workflow_bindings import migrate_workflow_folder
+from pixlstash.services.workflow_inbox import (
+    WorkflowInboxWatcher,
+    reconcile as reconcile_workflow_inbox,
+    workflow_inbox_dir,
+)
 from pixlstash.services.library_generation_coordinator import (
     LibraryGenerationCoordinator,
 )
@@ -96,6 +101,7 @@ from pixlstash.routes.pictures import (
     create_router as create_pictures_router,
 )
 from pixlstash.routes.comfyui import (
+    _store_workflow,
     create_router as create_comfyui_router,
     workflow_user_dir,
 )
@@ -278,6 +284,9 @@ class Server(
             test suite for the same reason as the model roots: the folder is
             machine-global, so a test server would rewrite the developer's own
             workflows.
+        DEFAULT_WATCH_WORKFLOW_INBOX: Whether start-up imports the watched
+            ``workflows/`` folder and keeps watching it. ``False`` in the test
+            suite: that folder is machine-global too.
     """
 
     DEFAULT_MAX_VRAM_GB: float | None = None
@@ -288,6 +297,7 @@ class Server(
     DEFAULT_INSIGHTFACE_MODEL_PACK: str | None = None
     DEFAULT_DECLARE_MODEL_ROOTS: bool = True
     DEFAULT_MIGRATE_WORKFLOW_TOKENS: bool = True
+    DEFAULT_WATCH_WORKFLOW_INBOX: bool = True
 
     @staticmethod
     def running_in_docker() -> bool:
@@ -635,6 +645,34 @@ class Server(
             # gets bindings instead. One pass; a migrated file has no token.
             migrate_workflow_folder(workflow_user_dir())
             _log_stage("workflow placeholder migration")
+        self._workflow_inbox_watcher = None
+        if Server.DEFAULT_WATCH_WORKFLOW_INBOX:
+            # After the migration, so a file the inbox matches against has
+            # its bindings already.
+            inbox = workflow_inbox_dir()
+            try:
+                reconcile_workflow_inbox(inbox, self._store_inbox_workflow)
+            except Exception as exc:
+                # A strange file must not stop start-up; the watcher retries.
+                logger.error(
+                    "Reconciling the workflow inbox %s failed with %s: %s",
+                    inbox,
+                    type(exc).__name__,
+                    exc,
+                    exc_info=True,
+                )
+            try:
+                watcher = WorkflowInboxWatcher(inbox, self._store_inbox_workflow)
+                watcher.start()
+                self._workflow_inbox_watcher = watcher
+            except OSError as exc:
+                logger.error(
+                    "Could not watch the workflow inbox %s; files put there are "
+                    "imported at the next start only: %s",
+                    inbox,
+                    exc,
+                )
+            _log_stage("workflow inbox reconcile")
         if self._hub_bootstrap.migrated:
             logger.info(
                 "First run after the hub/vault split: identity now lives in %s",
@@ -885,11 +923,19 @@ class Server(
         violation on ``hub.db``. That leak was every remaining failure in
         backend-windows shard 2 once the earlier startup defects were fixed.
         """
+        watcher = getattr(self, "_workflow_inbox_watcher", None)
+        if watcher is not None:
+            self._workflow_inbox_watcher = None
+            watcher.stop()
         if getattr(self, "vault", None) is not None:
             logger.info("Closing the vault and cleaning up resources")
             self._close_active_vault()
         self._close_hub()
         gc.collect()
+
+    def _store_inbox_workflow(self, name: str, workflow: dict) -> dict:
+        """Store one inbox file the way a drag and drop does: keep both."""
+        return _store_workflow(self.hub, name, workflow, keep_both=True)
 
     def request_fatal_shutdown(self) -> None:
         """Ask every programmatic listener to exit after fatal vault loss."""

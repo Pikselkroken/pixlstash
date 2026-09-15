@@ -413,6 +413,7 @@ def pytest_configure(config):
     # The user workflow folder is machine-global too; never migrate the
     # developer's own workflows from a test server.
     Server.DEFAULT_MIGRATE_WORKFLOW_TOKENS = False
+    Server.DEFAULT_WATCH_WORKFLOW_INBOX = False
     # Pick a free port for the test session so Server instances don't collide
     # with the production app when it is already running on the default port.
     Server.DEFAULT_PORT = _find_free_port()
