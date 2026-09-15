@@ -1095,8 +1095,8 @@ def test_the_list_says_which_workflows_the_selection_pill_may_offer(
     assert listed == {
         "edit.json": False,
         "unset.json": True,
-        # Two inputs and no binding: a run fills neither until #1307.
-        "unbound.json": False,
+        # Two inputs and no binding: the run route fills each by its mode.
+        "unbound.json": True,
         "t2i.json": False,
         # A loader detection misses keeps its binding.
         "custom.json": True,

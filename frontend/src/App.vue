@@ -21,6 +21,7 @@ import { useFilterStore } from "./stores/useFilterStore";
 import { useGridStore } from "./stores/useGridStore";
 import { useSidebarStore } from "./stores/useSidebarStore";
 import { useUserPrefsStore } from "./stores/useUserPrefsStore";
+import { useWorkflowRunStore } from "./stores/useWorkflowRunStore";
 import { useFolderMappingStore } from "./stores/useFolderMappingStore";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
@@ -95,6 +96,11 @@ const WorkflowShelf = defineAsyncComponent(
 const WorkflowInspector = defineAsyncComponent(
   () => import("./components/panels/WorkflowInspector.vue"),
 );
+// The run panel takes the stats panel's place in the rail while it is open
+// (#1307), for the same reason the workflow inspector does.
+const WorkflowRunPanel = defineAsyncComponent(
+  () => import("./components/panels/WorkflowRunPanel.vue"),
+);
 
 // --- Stores ---
 const selectionStore = useSelectionStore();
@@ -102,6 +108,7 @@ const filterStore = useFilterStore();
 const gridStore = useGridStore();
 const sidebarStore = useSidebarStore();
 const userPrefsStore = useUserPrefsStore();
+const workflowRunStore = useWorkflowRunStore();
 const projectStore = useProjectStore();
 const wsStore = useWsStore();
 const reviewSessionsStore = useReviewSessionsStore();
@@ -833,6 +840,7 @@ defineExpose({
              library it carries the selected workflow; everywhere else it is the
              statistics panel it has always been. -->
         <WorkflowInspector v-if="isWorkflowsView" />
+        <WorkflowRunPanel v-else-if="workflowRunStore.open" />
         <StatsSidebar v-else ref="statsSidebarRef" />
       </div>
       <ReviewSessionsOverlay
