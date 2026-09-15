@@ -76,6 +76,7 @@ _SHELF_ROUTES = (
     ("GET", "/api/v1/adapters/{sha256}"),
     ("GET", "/api/v1/checkpoints"),
     ("GET", "/api/v1/models/base-models"),
+    ("POST", "/api/v1/models/companions"),
 )
 
 
@@ -641,6 +642,62 @@ def test_unauthenticated_is_refused_on_every_shelf_route(shelf_env):
         assert r.status_code == 401, (
             f"{path} answered an unauthenticated caller: {r.status_code} {r.text}"
         )
+
+
+def test_rows_carry_the_header_facts_and_fold_family_from_the_base_model(shelf_env):
+    """`family` follows a corrected base model; `quant` and `weights_id` are the
+    columns as the scan wrote them."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET family = 'vae_4ch', quant = 'f16', weights_id = 'w' "
+            "WHERE id = ?",
+            (alice,),
+        )
+
+    rows = {
+        row["id"]: row
+        for row in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    }
+
+    assert rows[alice]["family"] == "sdxl"
+    assert (rows[alice]["quant"], rows[alice]["weights_id"]) == ("f16", "w")
+    dana = rows[shelf_env.model_ids["dana.safetensors"]]
+    assert (dana["family"], dana["quant"], dana["weights_id"]) == (None, None, None)
+
+
+def test_companions_answers_the_owner_and_refuses_a_share_token(shelf_env):
+    """Both directions on the one POST read. The route is exercised in depth in
+    `tests/test_workflow_library.py`; this pins that it resolves and is gated."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    body = {"ids": [alice]}
+
+    r = shelf_env.owner.post(f"{API}/models/companions", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "orphaned": [],
+        "shared": [],
+        "unknown": [],
+        "in_use": [],
+        "no_evidence": [alice],
+    }
+
+    token = _mint(
+        shelf_env.owner,
+        "companions character token",
+        resource_type="character",
+        resource_id=shelf_env.character_id,
+    )
+    client = _bearer(shelf_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200
+    r = client.post(f"{API}/models/companions", json=body)
+    assert r.status_code == 403, r.text
+    assert (
+        TestClient(shelf_env.server.api)
+        .post(f"{API}/models/companions", json=body)
+        .status_code
+        == 401
+    )
 
 
 # ===========================================================================

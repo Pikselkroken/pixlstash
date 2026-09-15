@@ -1499,7 +1499,7 @@ import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { addModelFile } from "../../api/modelFiles";
 import { getPictureThumbnailBlob } from "../../api/pictures";
-import { openModelLocation } from "../../api/modelShelf";
+import { fetchModelCompanions, openModelLocation } from "../../api/modelShelf";
 import {
   createStack,
   removeStackMember,
@@ -1531,6 +1531,7 @@ import {
   bandProjection,
   bandUsage,
   capabilityLabel,
+  companionsSentences,
   copyPathsTitle,
   dateColumnKey,
   defaultSortDirection,
@@ -1682,13 +1683,28 @@ async function confirmDelete(permanent) {
   const many = ids.length !== 1;
   const subject = many ? `${ids.length} models` : "this model";
   const trash = trashName();
+  // Asked before the prompt opens, so the reader decides with it in front of
+  // them (#1314). A failed read is said in the prompt rather than skipped:
+  // leaving the section out would read as "nothing else is affected".
+  let companions = null;
+  try {
+    companions = await fetchModelCompanions(ids);
+  } catch (err) {
+    console.warn("[ModelShelf] could not read what the delete leaves behind", {
+      ids,
+      err,
+    });
+  }
+  const leftBehind = companionsSentences(companions, ids.length);
   const ok = await confirm({
     title: permanent
       ? `Permanently delete ${many ? `${ids.length} models?` : "this model?"}`
       : `Move ${many ? `${ids.length} models` : "this model"} to the ${trash}?`,
-    message: permanent
-      ? `The files for ${subject} are deleted permanently from this machine, along with everything recorded about them.`
-      : `The files for ${subject} go to your ${trash}, where you can put them back. The shelf stops listing them.`,
+    message:
+      (permanent
+        ? `The files for ${subject} are deleted permanently from this machine, along with everything recorded about them.`
+        : `The files for ${subject} go to your ${trash}, where you can put them back. The shelf stops listing them.`) +
+      (leftBehind ? ` ${leftBehind}` : ""),
     warning: permanent
       ? "There is no undo for this."
       : `A very large file may be too big for the ${trash} and be deleted outright.`,

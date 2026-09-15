@@ -533,6 +533,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # constraints would reject) and that is a data check, not a scope one.
     ("PATCH", "/api/v1/models"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/models/forget"): RoutePolicy(_OWNER),
+    # The question in front of Delete (#1314): which support files the models
+    # would leave with nothing to serve. Reads hub rows only and changes
+    # nothing, so it sits with the shelf reads rather than with the delete's
+    # §16.3 tier.
+    ("POST", "/api/v1/models/companions"): RoutePolicy(_OWNER),
     # The shelf's sixth verb, and the one route on this block that spawns a
     # process on the host's desktop. Same authority - and same red-line tier -
     # as POST /pictures/{id}/open-location: what it can do is bounded by what

@@ -26,6 +26,7 @@ const listUnclassified = vi.fn();
 // `listAdapters.mockResolvedValue` here would answer them with adapter rows.
 const listSupport = vi.fn();
 const deleteModels = vi.fn();
+const fetchModelCompanions = vi.fn();
 
 vi.mock("../../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
@@ -43,6 +44,8 @@ vi.mock("../../api/modelShelf", () => ({
   // really called it would be asserting the server's gate rather than the
   // view's.
   deleteModels: (...args) => deleteModels(...args),
+  // Asked before the delete prompt opens; answered per test.
+  fetchModelCompanions: (...args) => fetchModelCompanions(...args),
   // The base-model field asks for its completion list as it opens. Answered
   // with nothing here: the list is the widget's own suite's business, and left
   // unmocked this is a network call on a double-click.
@@ -4410,6 +4413,50 @@ describe("Delete", () => {
       permanent: false,
       refused: [],
     });
+    fetchModelCompanions.mockReset();
+    fetchModelCompanions.mockResolvedValue({
+      orphaned: [],
+      shared: [],
+      unknown: [],
+      in_use: [],
+      no_evidence: [],
+    });
+  });
+
+  it("says in the prompt what the delete leaves behind", async () => {
+    // #1314: the question is asked for exactly the ids the call will send,
+    // and its answer is in front of the reader before they agree.
+    fetchModelCompanions.mockResolvedValue({
+      orphaned: [{ id: 5, name: "ae.safetensors" }],
+      shared: [{ id: 6, name: "clip_l.safetensors", used_with: [] }],
+      unknown: [],
+      in_use: [],
+      no_evidence: [],
+    });
+    const wrapper = await mountWithSelection();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await pressDelete();
+
+    expect(fetchModelCompanions).toHaveBeenCalledWith([1]);
+    const said = confirmSpy.mock.calls[0][0];
+    expect(said).toContain("Nothing else on the shelf uses ae.safetensors");
+    expect(said).toContain("clip_l.safetensors is still used by other models");
+    expect(deleteModels).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("still asks, and says so, when what it leaves behind cannot be read", async () => {
+    fetchModelCompanions.mockRejectedValue(new Error("offline"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const wrapper = await mountWithSelection();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await pressDelete();
+
+    expect(confirmSpy.mock.calls[0][0]).toContain("could not check");
+    expect(deleteModels).toHaveBeenCalledWith([1], { permanent: false });
+    wrapper.unmount();
   });
 
   // The `window.confirm` spies below are restored here rather than at the end

@@ -12,6 +12,7 @@ import {
   deletableModels,
   undeletableNotice,
   trashName,
+  companionsSentences,
   RING_STYLES,
   bandGroups,
   bandProjection,
@@ -1752,6 +1753,49 @@ describe("trashName", () => {
     expect(trashName({ userAgent: "Mozilla/5.0 (Macintosh)" })).toBe("Trash");
     // No navigator at all (a worker, an old jsdom) still names something.
     expect(trashName(null)).toBe("Trash");
+  });
+});
+
+describe("companionsSentences", () => {
+  const none = { orphaned: [], shared: [], unknown: [], in_use: [], no_evidence: [] };
+  const named = (...names) => names.map((name, id) => ({ id, name }));
+
+  it("says nothing when the delete affects nothing it knows of", () => {
+    expect(companionsSentences(none, 2)).toBe("");
+  });
+
+  it("names every bucket, and never calls an orphan safe to delete", () => {
+    const said = companionsSentences(
+      {
+        ...none,
+        in_use: named("clip_g"),
+        orphaned: named("ae", "t5xxl"),
+        shared: named("clip_l"),
+        unknown: named("twin"),
+      },
+      1,
+    );
+    expect(said).toContain("clip_g is still used by models you are keeping.");
+    expect(said).toContain("Nothing else on the shelf uses ae and t5xxl; they stay on disk.");
+    expect(said).toContain("clip_l is still used by other models.");
+    expect(said).toContain("Whether twin is still needed is unknown");
+    expect(said).not.toMatch(/safe/i);
+  });
+
+  it("cuts a long list to three names and a count", () => {
+    expect(companionsSentences({ ...none, orphaned: named("a", "b", "c", "d", "e") }, 1)).toContain(
+      "uses a, b, c and 2 more;",
+    );
+  });
+
+  it("says when it cannot tell, rather than saying nothing", () => {
+    expect(companionsSentences({ ...none, no_evidence: [3] }, 1)).toContain(
+      "No workflow PixlStash has read uses this model",
+    );
+    expect(companionsSentences({ ...none, no_evidence: [3] }, 4)).toContain(
+      "uses 1 of these models, so which support files it needs",
+    );
+    expect(companionsSentences(null, 2)).toContain("could not check");
   });
 });
 

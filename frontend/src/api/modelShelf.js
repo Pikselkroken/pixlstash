@@ -160,6 +160,22 @@ export async function forgetModels(ids) {
 }
 
 /**
+ * What deleting these models would leave behind: the VAEs and text encoders
+ * nothing else would use (`orphaned`), the ones a kept model still uses
+ * (`shared`), the ones a same-named file makes impossible to tell (`unknown`),
+ * the deleted support files a kept model still runs with (`in_use`), and the
+ * ids no recipe names at all (`no_evidence`). Read from the recipes the hub
+ * has seen; changes nothing.
+ *
+ * @param {Array<number>} ids - hub `model.id` values about to be deleted.
+ * @returns {Promise<{orphaned: Array<Object>, shared: Array<Object>,
+ *   unknown: Array<Object>, in_use: Array<Object>, no_evidence: Array<number>}>}
+ */
+export async function fetchModelCompanions(ids) {
+  return unwrap(apiClient.post("/models/companions", { ids }));
+}
+
+/**
  * Delete models from disk, and their shelf rows with them.
  *
  * The one shelf call that destroys the owner's bytes, so its caller confirms
