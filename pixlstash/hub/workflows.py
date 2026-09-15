@@ -663,6 +663,18 @@ def destroy_ghosts_for_instances(
     return removed
 
 
+def ghost_instance_hashes(hub: HubDatabase, library_uuid: str) -> list[str]:
+    """Every instance hash this library's ghosts lean on."""
+    return [
+        row["instance_hash"]
+        for row in hub.fetchall(
+            "SELECT DISTINCT instance_hash FROM workflow_picture_ghost "
+            "WHERE library_uuid = ? ORDER BY instance_hash",
+            (library_uuid,),
+        )
+    ]
+
+
 def retained_instance_hashes(hub: HubDatabase, library_uuid: str) -> list[str]:
     """Every instance hash this library keeps a ghost or an instance row for.
 

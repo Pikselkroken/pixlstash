@@ -107,6 +107,7 @@ from pixlstash.hub.workflows import (
     destroy_ghosts_for_instances,
     destroy_uncovered_instances,
     erase_picture_ghosts,
+    ghost_instance_hashes,
     record_picture_ghosts,
     retained_instance_hashes,
 )
@@ -486,12 +487,16 @@ def erase_library_ghosts(vault_db, hub, library_uuid: str) -> int:
 
     An instance row a ghost alone was keeping has lost its reason with the
     ghost, and no picture delete will ever queue its hash, so the erase queues
-    the library's retained hashes for the cascade itself. Returns how many
-    ghosts were erased.
+    the erased ghosts' hashes for the cascade itself. Only those: no other
+    instance row's cover changed, and a library holds about one row per prompt.
+    Read before the erase, which is what leaves nothing to read. Returns how
+    many ghosts were erased.
     """
+    hashes = ghost_instance_hashes(hub, library_uuid)
     erased = erase_picture_ghosts(hub, library_uuid)
     try:
-        requeue_library_ghosts(vault_db, hub, library_uuid)
+        if hashes:
+            vault_db.run_task(enqueue_ghost_cascade_in_session, hashes)
     except Exception as exc:
         # The erase has happened and cannot be un-happened, so it is reported as
         # done. What is lost is only the re-check of instance rows the erased

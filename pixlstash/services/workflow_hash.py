@@ -575,11 +575,25 @@ def instance_document_from_reduction(nodes: dict[str, ReducedNode]) -> dict:
 
 
 def _nested_assets_as_references(name: str, value: Any) -> Any:
-    """``value`` with every filename-shaped string in it swapped for a reference."""
+    """``value`` with every filename-shaped string in it swapped for a reference.
+
+    A nested value gets the rules :func:`reduce_api_graph` applies to a node's
+    own inputs, because this is the first place a nested value is STORED rather
+    than only hashed: a credential-named key is dropped, and a seed or output
+    path is nulled like its top-level counterpart. The instance hash is keyed
+    on the raw widgets and does not change.
+    """
     if isinstance(value, dict):
         return {
-            key: _nested_assets_as_references(str(key), item)
+            key: (
+                None
+                if _SEED_RE.search(str(key))
+                or str(key) == "filename_prefix"
+                or _OUTPUT_PATH_RE.match(str(key))
+                else _nested_assets_as_references(str(key), item)
+            )
             for key, item in value.items()
+            if not SECRET_FIELD_RE.search(str(key))
         }
     if isinstance(value, list):
         return [_nested_assets_as_references(name, item) for item in value]

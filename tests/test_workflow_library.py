@@ -1104,6 +1104,41 @@ def test_a_credential_widget_reaches_no_tier_including_the_instance():
     assert instance_hash(dirty) == instance_hash(api_graph(TXT2IMG))
 
 
+def test_a_nested_credential_seed_or_output_path_is_never_stored(hub):
+    """The instance document is the first place a nested value is kept, so a
+    nested key gets the rules a node's own inputs already had."""
+    graph = api_graph(
+        TXT2IMG
+        + [
+            (
+                8,
+                "Power Lora Loader (rgthree)",
+                [("model", 1, 0)],
+                {
+                    "lora_1": {
+                        "lora": "example-subject.safetensors",
+                        "api_key": "test-nested-credential",
+                        "seed": 42,
+                        "output_path": "renders/example",
+                        "strength": 0.8,
+                    }
+                },
+            )
+        ]
+    )
+    keys = record_api_graph(hub, graph, LIBRARY)
+
+    row = instance_row(hub, LIBRARY, keys.instance_hash)
+    assert "test-nested-credential" not in row["document"]
+    lora = json.loads(row["document"])["8"]["inputs"]["lora_1"]
+    assert lora == {
+        "lora": asset_reference("example-subject.safetensors"),
+        "seed": None,
+        "output_path": None,
+        "strength": 0.8,
+    }
+
+
 def instance_row(hub, library_uuid, instance):
     return hub.fetchone(
         "SELECT * FROM workflow_recipe_instance "
@@ -2813,6 +2848,15 @@ def test_a_ghost_keeps_its_instance_row_until_it_is_erased(store):
     cascade(store, GHOST_RETENTION_ON)
     assert instance_row(store.hub, LIBRARY, instance) is not None
 
+    # Another instance whose cover the erase does not touch.
+    other = write_png(
+        Path(store.image_root),
+        "unghosted.png",
+        api=api_graph(edited(TXT2IMG, 2, text="a harbour at noon")),
+    )
+    run_extraction(store, [add_picture(store, other)])
+
     assert erase_library_ghosts(store.vault, store.hub, LIBRARY) == 1
+    assert pending_hashes(store) == [instance], "only the erased ghosts' hashes"
     cascade(store, GHOST_RETENTION_ON)
     assert instance_row(store.hub, LIBRARY, instance) is None

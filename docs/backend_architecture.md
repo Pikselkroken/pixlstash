@@ -3136,8 +3136,8 @@ up, not the whole hub; the restore requeue is bounded by the ghosts.
 
 **Erasing is its own request.** `DELETE /server-config/ghost-retention/ghosts`
 destroys the active library's ghosts (`workflow_ghost_service.erase_library_ghosts`)
-and re-queues the library's retained hashes, so an instance row only a ghost was
-keeping goes on the next drain. `LibraryRegistry.forget` (a discarded first
+and re-queues the erased ghosts' instance hashes (read before the erase), so an
+instance row only a ghost was keeping goes on the next drain. `LibraryRegistry.forget` (a discarded first
 import) destroys that library's ghosts and instance rows in the same transaction
 as its row. Detaching a library does not: detach keeps the
 registration so the same folder comes back with its uuid, and its vault still
