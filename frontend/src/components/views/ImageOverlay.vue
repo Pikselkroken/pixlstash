@@ -1491,7 +1491,7 @@ function persistComfyuiPromptToSession() {
   window.sessionStorage?.setItem(key, value);
 }
 
-// What run_i2i accepts, not workflow_type, until runs use detection (#1307),
+// What run_i2i accepts, not workflow_type: this menu still runs through it,
 // and only a workflow with an input the selection fills. Absent reads as
 // offered, which is the backend's own default for an unconfigured workflow.
 const takesImagePlaceholder = (workflow) =>

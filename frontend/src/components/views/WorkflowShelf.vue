@@ -568,7 +568,7 @@
 //
 // **Writes are the setup and the drop.** The saved workflows above the list are
 // set up in the inspector (§F3: how each picture input is filled), and dropping
-// a workflow file adds one. Naming a workflow and running one are later steps,
+// a workflow file adds one. Naming a workflow is a later step, running one is the run panel,
 // and forgetting ghosts is a purge in Settings › Privacy; the row menu offers
 // only what can be read today. The Ghosts toggle beside Group / Sort / Show
 // narrows the list to what those purges would reach.
