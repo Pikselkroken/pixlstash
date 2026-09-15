@@ -309,6 +309,7 @@ import {
   rejectTagPrediction,
 } from "../../api/tags";
 import { resetPictureTags } from "../../api/pictures";
+import { confirmRetag } from "../../composables/confirmRetag";
 import { listTaggers } from "../../api/taggers";
 import { getUserConfig } from "../../api/config";
 import { getPenalisedTags } from "../../api/users";
@@ -1010,6 +1011,7 @@ async function refreshPictureTags(model = null) {
   if (!props.image?.id || !props.backendUrl) return;
   if (isTagsRefreshing.value) return;
   const capturedImageId = props.image.id;
+  if (!(await confirmRetag(1))) return;
 
   isTagsRefreshing.value = true;
   try {
