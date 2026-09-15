@@ -129,9 +129,12 @@ def trash_workflow(folder: str, name: str, workflow: dict) -> None:
     """Write *workflow* back to the inbox and move it to the system trash.
 
     Every inbox file holding the workflow goes, not just the one written here,
-    renamed or not yet, or a copy dropped under another name would import it
-    again at the next reconcile. Call it holding :data:`INBOX_LOCK`, and remove the stored
-    workflow before releasing it.
+    or a copy dropped under another name would import it again at the next
+    reconcile. What a file holds is read from it, never taken from its name: a
+    file edited in place still carries its old hash until the watcher renames
+    it, and that edit must stay for the watcher to import. For the same reason
+    the copy is written to a name no file has yet. Call it holding
+    :data:`INBOX_LOCK`, and remove the stored workflow before releasing it.
 
     Raises:
         OSError, send2trash.TrashPermissionError: The file could not be written
@@ -139,19 +142,25 @@ def trash_workflow(folder: str, name: str, workflow: dict) -> None:
     """
     digest = content_hash(workflow)
     os.makedirs(folder, exist_ok=True)
-    written = f"{_split(name)[0]}.{digest}.json"
-    with open(os.path.join(folder, written), "w", encoding="utf-8") as handle:
-        json.dump(workflow, handle, indent=2, ensure_ascii=True)
+    stem = _split(name)[0]
+    written, counter = f"{stem}.{digest}.json", 2
+    while True:
+        try:
+            # "x": never over a file already there.
+            with open(os.path.join(folder, written), "x", encoding="utf-8") as handle:
+                json.dump(workflow, handle, indent=2, ensure_ascii=True)
+            break
+        except FileExistsError:
+            written = f"{stem} ({counter}).{digest}.json"
+            counter += 1
     for entry in _entries(folder):
-        if _file_hash(os.path.join(folder, entry), entry) == digest:
-            send2trash(os.path.join(folder, entry))
+        path = os.path.join(folder, entry)
+        if _file_hash(path) == digest:
+            send2trash(path)
 
 
-def _file_hash(path: str, entry: str) -> str | None:
-    """The hash an inbox file is named by, or read from it when not renamed yet."""
-    named = _split(entry)[1]
-    if named is not None:
-        return named
+def _file_hash(path: str) -> str | None:
+    """The hash of what an inbox file holds, or None when it is not a workflow."""
     try:
         with open(path, "r", encoding="utf-8") as handle:
             workflow = json.load(handle)

@@ -837,6 +837,30 @@ def test_deleting_a_workflow_trashes_it_by_way_of_the_inbox(import_route):
     assert _load(user_dir / "flow.json") == graph
 
 
+def test_deleting_keeps_an_inbox_edit_the_watcher_has_not_imported(import_route):
+    call, user_dir, _built_in, _hub = import_route
+    graph = _t2i_graph()
+    call.inbox.mkdir()
+    (call.inbox / "flow.json").write_text(json.dumps(graph), encoding="utf-8")
+    workflow_inbox.reconcile(str(call.inbox), call.store)
+    digest = workflow_inbox.content_hash(graph)
+    # Edited in place: the name still carries the old hash.
+    edited = _t2i_graph()
+    edited["2"]["inputs"]["text"] = "an edited cat"
+    (call.inbox / f"flow.{digest}.json").write_text(
+        json.dumps(edited), encoding="utf-8"
+    )
+
+    call.delete("flow")
+
+    assert _load(call.inbox / f"flow.{digest}.json") == edited
+    assert _inbox_names(call) == [f"flow.{digest}.json"]
+    assert [p.name for p in call.trash.iterdir()] == [f"flow (2).{digest}.json"]
+    assert _load(call.trash / f"flow (2).{digest}.json") == graph
+    assert workflow_inbox.reconcile(str(call.inbox), call.store) == 1
+    assert _load(user_dir / "flow.json") == edited
+
+
 def test_a_workflow_the_trash_refuses_is_kept(import_route, monkeypatch):
     call, user_dir, _built_in, _hub = import_route
     call(name="flow", workflow=_t2i_graph())
