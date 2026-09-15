@@ -513,13 +513,15 @@ reason:
 
 | Route | Purpose | Response |
 |---|---|---|
-| `GET /api/v1/comfyui/workflows/{workflow_name}/parameters` | The form's controls, typed from ComfyUI | `{workflow, readable, typed, comfyui_error, pins_saved, pins: [{node_id, name}], parameters: [{node_id, node_title, class_type, name, kind, value, min, max, step, options, multiline, pinned}]}` |
+| `GET /api/v1/comfyui/workflows/{workflow_name}/parameters` | The form's controls, typed from ComfyUI | `{workflow, readable, typed, comfyui_error, pins_saved, pins: [{node_id, name}], parameters: [{node_id, node_title, class_type, name, kind, value, typed, min, max, step, options, multiline, pinned}]}` |
 | `PUT /api/v1/comfyui/workflows/{workflow_name}/pins` | Replace the pins, body `{pins: [{node_id, name}] \| null}` | `{workflow, pins_saved, pins: [{node_id, name}] \| null}` |
 
 `kind` is `int`, `float`, `seed`, `boolean`, `string`, `choice` or `model`.
-`typed: false` means ComfyUI could not be reached: `value` is the file's own and
-`min`/`max`/`step`/`options` are `null`. `readable: false` is a UI-format file,
-with no parameters. `pins` is what shows before "All N parameters", in order;
+`comfyui_error` set means ComfyUI could not be reached: every parameter's `typed`
+is false, `value` is the file's own and `min`/`max`/`step`/`options` are `null`.
+Top-level `typed` is whether `object_info` was read; it is also false, with no
+error, for a file with nothing to set, which is never sent to ComfyUI.
+`readable: false` is a UI-format file, with no parameters. `pins` is what shows before "All N parameters", in order;
 `null` pins restore the defaults. A seed `value` or `max` can exceed 2^53, which a
 plain JavaScript number rounds. Both are `OWNER_ONLY`: the read makes the server ask the
 owner's ComfyUI.

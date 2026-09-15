@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from pixlstash.services import workflow_bindings
+from pixlstash.services.workflow_io import api_graph
 
 SELECTION = "selection"
 PICKER = "picker"
@@ -54,8 +55,7 @@ def _raw_node(document: dict, node_id: str) -> dict:
             ),
             {},
         )
-    graph = document["prompt"] if isinstance(document.get("prompt"), dict) else document
-    node = graph.get(node_id)
+    node = (api_graph(document) or {}).get(node_id)
     return node if isinstance(node, dict) else {}
 
 

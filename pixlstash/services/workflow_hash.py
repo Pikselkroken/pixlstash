@@ -214,7 +214,7 @@ def _digest(payload: Any) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _is_link(value: Any) -> bool:
+def is_link(value: Any) -> bool:
     """True for an API-format ``[node_id, output_slot]`` connection.
 
     **The node id must be a string, and that is load-bearing rather than
@@ -347,7 +347,7 @@ def reduce_api_graph(graph: dict) -> dict[str, ReducedNode]:
             )
         for name, value in raw_inputs.items():
             name = str(name)
-            if _is_link(value):
+            if is_link(value):
                 inputs.append((name, str(value[0]), int(value[1])))
             elif SECRET_FIELD_RE.search(name):
                 # Dropped here rather than nulled, so a credential-named widget

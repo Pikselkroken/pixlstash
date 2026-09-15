@@ -4,9 +4,10 @@ Every widget value in the graph is a parameter, except:
 
 - a **connected** input, whose value comes from another node (a width wired
   from a primitive is set on the primitive, which is a parameter of its own);
-- a **bound** input, which a run fills: the picture inputs and the prompt that
+- a **bound** input, which a run fills: every detected picture input's picture
+  field, and the prompt that
   :func:`pixlstash.services.workflow_bindings.run_targets` names;
-- a credential-named field (``api_key``, ``auth_token``, ``password``...);
+- a credential-named field (``api_key``, ``secret_key``, ``hfToken``...);
 - a value that is not a number, a string or a boolean (a list or an object),
   which no form control edits.
 
@@ -14,8 +15,10 @@ Every widget value in the graph is a parameter, except:
 ``min`` / ``max`` / ``step``, a combo has the options that ComfyUI actually
 has installed, and a seed is the input ComfyUI itself re-rolls. Without
 ``object_info`` (ComfyUI unreachable) the recorded values are still described,
-typed from the JSON value alone and with no ranges or options: a form can show
-what the file holds, but not what else ComfyUI would accept.
+with ``typed`` False, no ranges or options, and a kind guessed from the JSON
+value. The guess is only a hint for display: a value for an untyped parameter is
+checked by its broad type alone, so a ``cfg`` stored as ``1`` still takes
+``1.5``.
 
 Only API-format graphs are read. A UI-format file stores its widget values as an
 unnamed list whose layout depends on the node version, and the run routes can
@@ -24,6 +27,7 @@ only submit API format anyway.
 
 from __future__ import annotations
 
+import math
 import re
 from copy import deepcopy
 from dataclasses import dataclass
@@ -31,19 +35,29 @@ from typing import Any, Optional
 
 from pixlstash.services import workflow_bindings
 from pixlstash.services.comfyui_recipe_service import (
-    INPUT_IMAGE_FIELDS,
     MODEL_FILENAME_FIELDS,
     SEED_PASSTHROUGH_CLASSES,
     find_input_spec,
 )
-from pixlstash.services.workflow_hash import MODEL_EXTENSIONS, SEED_FIELD_RE
+from pixlstash.services.workflow_hash import MODEL_EXTENSIONS, SEED_FIELD_RE, is_link
 from pixlstash.services.workflow_inputs import node_title
-from pixlstash.services.workflow_io import detect_workflow_io
+from pixlstash.services.workflow_io import (
+    WorkflowIO,
+    api_graph,
+    detect_workflow_io,
+    picture_fields,
+)
 
-# Anchored on the last word, unlike the library's SECRET_FIELD_RE: that one
-# scrubs stored documents and may over-match, but here an over-match hides a real
-# setting (``token_normalization``, ``max_tokens``, ``author``).
-_CREDENTIAL_RE = re.compile(r"(^|_)(api_?key|token|password|secret)$", re.I)
+# Matched anywhere in the name, case-blind, so ``secret_key`` and ``hfToken``
+# are caught. The exceptions are settings that only contain the word: a token
+# count, a tokenizer, an author.
+_CREDENTIAL_RE = re.compile(
+    r"api_?key|access_?key|private_?key|secret|passw(or)?d|token|auth", re.I
+)
+_NOT_CREDENTIAL_RE = re.compile(
+    r"(^|_)(max_|num_)?tokens($|_)|token_normalization|tokenizer|(^|_)author($|_)",
+    re.I,
+)
 
 INT = "int"
 FLOAT = "float"
@@ -53,7 +67,8 @@ STRING = "string"
 CHOICE = "choice"
 MODEL = "model"
 
-# The settings shown before "All N parameters", besides every model and seed.
+# The settings shown before "All N parameters", besides every model and seed. A
+# primitive counts when it drives one of these (Flux2-Klein sets its size so).
 # ponytail: a name list; per-class rules if custom packs name these differently.
 _FEATURED_NAMES = frozenset(
     {
@@ -73,8 +88,9 @@ _FEATURED_NAMES = frozenset(
 class Parameter:
     """One settable widget value of a workflow.
 
-    ``minimum``, ``maximum``, ``step`` and ``options`` are ``None`` when
-    ComfyUI did not describe them, which is every one of them offline.
+    ``typed`` is True when ComfyUI described the input. ``minimum``,
+    ``maximum``, ``step`` and ``options`` are ``None`` when it did not say.
+    ``drives`` names the inputs a passthrough primitive's value is wired into.
     """
 
     node_id: str
@@ -83,11 +99,13 @@ class Parameter:
     name: str
     kind: str
     value: Any
+    typed: bool = False
     minimum: Optional[int | float] = None
     maximum: Optional[int | float] = None
     step: Optional[int | float] = None
     options: Optional[tuple[Any, ...]] = None
     multiline: bool = False
+    drives: tuple[str, ...] = ()
 
     @property
     def key(self) -> tuple[str, str]:
@@ -95,26 +113,21 @@ class Parameter:
         return self.node_id, self.name
 
 
-def api_graph(document: dict) -> Optional[dict]:
-    """The API-format graph in *document*, or ``None`` for a UI-format file."""
-    if not isinstance(document, dict) or isinstance(document.get("nodes"), list):
-        return None
-    if isinstance(document.get("prompt"), dict):
-        return document["prompt"]
-    return document
-
-
 def describe_parameters(
-    document: dict, object_info: Optional[dict] = None
+    document: dict,
+    object_info: Optional[dict] = None,
+    detected: Optional[WorkflowIO] = None,
 ) -> list[Parameter]:
     """Every parameter of *document*, in node-id then input order.
 
     Args:
         document: A stored workflow file. A UI-format one has no parameters
-            here; check :func:`api_graph` to tell that apart from a graph with
-            nothing to set.
+            here; check :func:`pixlstash.services.workflow_io.api_graph` to tell
+            that apart from a graph with nothing to set.
         object_info: ComfyUI's ``/object_info`` map, or ``None`` when ComfyUI
             could not be reached.
+        detected: ``detect_workflow_io(document)`` when the caller already has
+            it, so the graph is not reduced again.
 
     Raises:
         WorkflowGraphError: The graph cannot be read.
@@ -122,36 +135,43 @@ def describe_parameters(
     graph = api_graph(document)
     if graph is None:
         return []
-    bound = _bound_inputs(document)
-    seed_feeders = {
-        str(value[0])
-        for node in graph.values()
-        if isinstance(node, dict) and isinstance(node.get("inputs"), dict)
-        for name, value in node["inputs"].items()
-        if _is_link(value) and SEED_FIELD_RE.search(name)
-    }
+    detected = detected or detect_workflow_io(document)
+    bound = _bound_inputs(document, graph, detected)
+    feeds = _passthrough_feeds(graph)
+    info = object_info or {}
     parameters = []
     for node_id in sorted(graph, key=_node_order):
         node = graph[node_id]
         if not isinstance(node, dict) or not isinstance(node.get("inputs"), dict):
             continue
+        node_id = str(node_id)
         class_type = str(node.get("class_type") or "")
-        spec = (object_info or {}).get(class_type)
-        title = node_title(document, str(node_id), class_type)
+        title = node_title(document, node_id, class_type)
+        consumers = feeds.get(node_id, ())
+        is_seed = None
+        if class_type in SEED_PASSTHROUGH_CLASSES:
+            is_seed = any(_feeds_seed(info, *consumer) for consumer in consumers)
         for name, value in node["inputs"].items():
-            if _is_link(value) or (str(node_id), name) in bound:
+            if is_link(value) or (node_id, name) in bound:
                 continue
-            if _CREDENTIAL_RE.search(name):
+            if _CREDENTIAL_RE.search(name) and not _NOT_CREDENTIAL_RE.search(name):
                 continue
             if not isinstance(value, (bool, int, float, str)):
                 continue
-            is_seed = (
-                str(node_id) in seed_feeders
-                if class_type in SEED_PASSTHROUGH_CLASSES
-                else None
-            )
             parameters.append(
-                _typed(str(node_id), title, class_type, name, value, spec, is_seed)
+                _typed(
+                    Parameter(
+                        node_id=node_id,
+                        node_title=title,
+                        class_type=class_type,
+                        name=name,
+                        kind=STRING,
+                        value=value,
+                        drives=tuple(input_name for _, input_name in consumers),
+                    ),
+                    info.get(class_type),
+                    is_seed,
+                )
             )
     return parameters
 
@@ -161,7 +181,9 @@ def default_pins(parameters: list[Parameter]) -> list[tuple[str, str]]:
     return [
         p.key
         for p in parameters
-        if p.kind in (MODEL, SEED) or p.name in _FEATURED_NAMES
+        if p.kind in (MODEL, SEED)
+        or p.name in _FEATURED_NAMES
+        or _FEATURED_NAMES.intersection(p.drives)
     ]
 
 
@@ -221,67 +243,79 @@ def apply_values(document: dict, parameters: list[Parameter], values: object) ->
 def _node_order(node_id: str) -> tuple:
     """Numeric ids in number order, so node 10 does not sort before node 9."""
     return tuple(
-        (0, int(part), "") if part.isdigit() else (1, 0, part)
+        (0, int(part), "") if part.isdecimal() else (1, 0, part)
         for part in str(node_id).split(":")
     )
 
 
-def _is_link(value: Any) -> bool:
-    return (
-        isinstance(value, list)
-        and len(value) == 2
-        and isinstance(value[0], str)
-        and isinstance(value[1], int)
-    )
-
-
-def _bound_inputs(document: dict) -> set[tuple[str, str]]:
+def _bound_inputs(
+    document: dict, graph: dict, detected: WorkflowIO
+) -> set[tuple[str, str]]:
     """``(node_id, field)`` of every input a run fills."""
     bound = set()
-    for targets in workflow_bindings.run_targets(document).values():
+    for targets in workflow_bindings.run_targets(document, detected).values():
         for target in targets:
             path = target.get("path")
             if isinstance(path, list) and len(path) >= 3 and path[-2] == "inputs":
                 bound.add((str(path[-3]), str(path[-1])))
     # Every picture input, not only the one a run fills today: #1305 gives each
     # one a mode, and none of them is a setting.
-    graph = api_graph(document) or {}
-    for node_id in detect_workflow_io(document).picture_inputs:
-        class_type = (graph.get(node_id) or {}).get("class_type")
-        for field in INPUT_IMAGE_FIELDS.get(class_type, ("image",)):
+    for node_id, class_type in zip(
+        detected.picture_inputs, detected.picture_input_classes
+    ):
+        for field in picture_fields(class_type):
             bound.add((node_id, field))
     return bound
 
 
-def _typed(
-    node_id: str,
-    title: str,
-    class_type: str,
-    name: str,
-    value: Any,
-    spec: Any,
-    is_seed: Optional[bool],
-) -> Parameter:
+def _passthrough_feeds(graph: dict) -> dict[str, list[tuple[str, str]]]:
+    """``(consumer class, input name)`` each passthrough primitive is wired into."""
+    feeds: dict[str, list[tuple[str, str]]] = {}
+    for node in graph.values():
+        if not isinstance(node, dict) or not isinstance(node.get("inputs"), dict):
+            continue
+        for name, value in node["inputs"].items():
+            if not is_link(value):
+                continue
+            source = graph.get(value[0])
+            if isinstance(source, dict) and (
+                source.get("class_type") in SEED_PASSTHROUGH_CLASSES
+            ):
+                feeds.setdefault(value[0], []).append(
+                    (str(node.get("class_type") or ""), str(name))
+                )
+    return feeds
+
+
+def _feeds_seed(object_info: dict, consumer_class: str, input_name: str) -> bool:
+    """Whether the input a primitive drives is one a run re-rolls.
+
+    Decided the way ``detect_seed_targets`` decides it: by the consumer's
+    ``control_after_generate``, when ComfyUI described the consumer, and by the
+    seed name rule otherwise.
+    """
+    found = find_input_spec(object_info.get(consumer_class), input_name)
+    if found is not None:
+        type_field, opts = found
+        return type_field == "INT" and bool(opts.get("control_after_generate"))
+    return bool(SEED_FIELD_RE.search(input_name))
+
+
+def _typed(parameter: Parameter, spec: Any, is_seed: Optional[bool]) -> Parameter:
     """Type one value, from *spec* when ComfyUI described it.
 
     *is_seed* decides for a passthrough primitive (``PrimitiveInt``), which
     ComfyUI flags as re-rollable even when it drives a width: it is a seed only
     when it feeds a seed input. ``None`` leaves the decision to the spec.
     """
-    base = {
-        "node_id": node_id,
-        "node_title": title,
-        "class_type": class_type,
-        "name": name,
-        "value": value,
-    }
-    is_model_field = name in MODEL_FILENAME_FIELDS.get(class_type, ()) or (
+    name, value = parameter.name, parameter.value
+    is_model_field = name in MODEL_FILENAME_FIELDS.get(parameter.class_type, ()) or (
         isinstance(value, str) and value.lower().endswith(MODEL_EXTENSIONS)
     )
     found = find_input_spec(spec, name) if spec else None
     if found is None:
-        return Parameter(
-            kind=_kind_of_value(name, value, is_model_field, is_seed), **base
+        return _replace(
+            parameter, kind=_kind_of_value(name, value, is_model_field, is_seed)
         )
 
     type_field, opts = found
@@ -302,10 +336,11 @@ def _typed(
                 )
                 or None
             )
-        return Parameter(
+        return _replace(
+            parameter,
+            typed=True,
             kind=MODEL if is_model_field else CHOICE,
             options=options,
-            **base,
         )
     if type_field in ("INT", "FLOAT"):
         rerolled = bool(opts.get("control_after_generate"))
@@ -313,19 +348,28 @@ def _typed(
             kind = SEED
         else:
             kind = INT if type_field == "INT" else FLOAT
-        return Parameter(
+        return _replace(
+            parameter,
+            typed=True,
             kind=kind,
             minimum=_number(opts.get("min")),
             maximum=_number(opts.get("max")),
             step=_number(opts.get("step")),
-            **base,
         )
     if type_field == "BOOLEAN":
-        return Parameter(kind=BOOLEAN, **base)
+        return _replace(parameter, typed=True, kind=BOOLEAN)
     if type_field == "STRING":
-        return Parameter(kind=STRING, multiline=bool(opts.get("multiline")), **base)
+        return _replace(
+            parameter, typed=True, kind=STRING, multiline=bool(opts.get("multiline"))
+        )
     # A custom widget type ComfyUI describes but this form has no control for.
-    return Parameter(kind=_kind_of_value(name, value, is_model_field, is_seed), **base)
+    return _replace(
+        parameter, kind=_kind_of_value(name, value, is_model_field, is_seed)
+    )
+
+
+def _replace(parameter: Parameter, **changes) -> Parameter:
+    return Parameter(**{**parameter.__dict__, **changes})
 
 
 def _kind_of_value(
@@ -358,15 +402,38 @@ def _key_of(item: object) -> tuple[str, str]:
     return node_id, name
 
 
+def _is_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
 def _check_value(parameter: Parameter, value: Any) -> None:
     label = f"{parameter.node_id}.{parameter.name}"
     kind = parameter.kind
+    if not parameter.typed:
+        # The kind was guessed from the stored value, so only the broad type
+        # is held to: a cfg stored as 1 takes 1.5, ComfyUI judges the rest.
+        stored = parameter.value
+        if isinstance(stored, bool):
+            fits = isinstance(value, bool)
+        elif isinstance(stored, (int, float)):
+            fits = _is_number(value)
+        else:
+            fits = isinstance(value, str)
+        if not fits:
+            raise ValueError(
+                f"{label} must be a {type(stored).__name__} like its value"
+            )
+        return
     if kind in (INT, SEED):
-        if isinstance(value, bool) or not isinstance(value, int):
+        if not _is_number(value) or not isinstance(value, int):
             raise ValueError(f"{label} must be a whole number")
     elif kind == FLOAT:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError(f"{label} must be a number")
+        if not _is_number(value):
+            raise ValueError(f"{label} must be a finite number")
     elif kind == BOOLEAN:
         if not isinstance(value, bool):
             raise ValueError(f"{label} must be true or false")
