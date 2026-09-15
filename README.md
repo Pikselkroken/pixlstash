@@ -743,6 +743,33 @@ If a plugin copies substantial GPL backend code or depends directly on other
 GPL-only backend internals, different obligations may apply.
 
 
+## Connecting an AI agent (MCP)
+
+`pixlstash-mcp` is a read-only [MCP](https://modelcontextprotocol.io) server:
+an agent can search the library and read pictures, tags and ComfyUI recipes,
+and it has no tools that change anything. It talks to a running PixlStash
+server with an API token and sees exactly what that token sees. Give it a
+**Read-only share** token from **API Tokens** in your account settings,
+restricted to a set, character or project if the agent should see only that:
+a full-access token works too, but then the agent can read the whole library.
+`get_recipe` also asks your ComfyUI whether a recipe's nodes and models are
+installed.
+
+```json
+{
+  "mcpServers": {
+    "pixlstash": {
+      "command": "pixlstash-mcp",
+      "args": ["--url", "http://127.0.0.1:9537"],
+      "env": { "PIXLSTASH_TOKEN": "<your read-only token>" }
+    }
+  }
+}
+```
+
+Tools: `search_pictures`, `list_pictures`, `get_picture`, `view_picture`,
+`list_tags`, `get_recipe`.
+
 ## Troubleshooting
 
 - If the page does not load, confirm the server process is running.
