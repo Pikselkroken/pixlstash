@@ -17,20 +17,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from pixlstash.hub.db import HubDatabase
+from pixlstash.services.model_folder_scanner import MODEL_SUFFIX as SHELF_MODEL_SUFFIX
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services.workflow_hash import (
     HASH_VERSION,
+    SHA256_FIELD_RE,
+    asset_reference,
     assets_from_reduction,
     document_from_reduction,
     drop_widgets,
     graph_key,
+    normalized_filename,
     promote_instance_widgets,
     reduce_api_graph,
 )
@@ -42,6 +47,10 @@ logger = get_logger(__name__)
 # retained thumbnail at once. Membership tests use ``sql_chunking.chunked``'s
 # own default, which is sized against SQLite's bound-parameter cap.
 _GHOST_WRITE_CHUNK = 100
+
+# What a loader's ``*_sha256`` value must look like to name a model at all.
+# ``structural_widget_value`` lowercases it, so lowercase hex is the whole form.
+_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -207,6 +216,149 @@ def forget_asset_names(hub: HubDatabase, normalized_filename: str) -> int:
         removed,
     )
     return removed
+
+
+def _model_ghost_names(fetchall: Callable[[str], list]) -> set[str]:
+    """See :func:`model_ghost_names`; ``fetchall`` runs one read and returns rows.
+
+    A model is on the shelf while it has a row at all, tombstone included:
+    removing a folder keeps the ``model`` row so re-adding the folder re-links
+    it, and the shelf still lists it. Both the recorded filename and every
+    copy's basename count, because a copy renamed on disk is the same model.
+
+    **Digests are judged only when every shelf model has one.** A checkpoint
+    waits for ``MissingCheckpointHashFinder`` with ``sha256`` NULL, and until it
+    is read its loader digest matches nothing, so judging then would forget the
+    digest of a model still on disk. ``engine`` rows never carry a digest and
+    are left out of that wait. A value that is not a 64-hex digest (an unset
+    loader, a download node's ``expected_sha256`` left blank) names no model
+    and is never a ghost.
+    """
+    shelf_names = {
+        normalized_filename(row[0])
+        for row in fetchall("SELECT filename FROM model WHERE filename IS NOT NULL")
+    }
+    shelf_names.update(
+        normalized_filename(row[0])
+        for row in fetchall("SELECT relpath FROM model_file")
+    )
+    shelf_digests = {
+        row[0].lower()
+        for row in fetchall("SELECT sha256 FROM model WHERE sha256 IS NOT NULL")
+    }
+    judge_digests = not fetchall(
+        "SELECT 1 FROM model WHERE sha256 IS NULL AND file_kind <> 'engine' LIMIT 1"
+    )
+    ghosts = set()
+    for widget, value in fetchall(
+        "SELECT DISTINCT widget_name, normalized_filename FROM workflow_recipe_asset"
+    ):
+        if SHA256_FIELD_RE.search(widget):
+            if judge_digests and _DIGEST_RE.match(value) and value not in shelf_digests:
+                ghosts.add(value)
+        elif value.endswith(SHELF_MODEL_SUFFIX) and value not in shelf_names:
+            ghosts.add(value)
+    return ghosts
+
+
+def model_ghost_names(hub: HubDatabase) -> set[str]:
+    """What recipes keep that names a model the shelf does not hold.
+
+    These are **model ghosts**: a ``.safetensors`` filename matching no model on
+    the shelf, or a loader's ``*_sha256`` value matching no model's digest (a
+    digest identifies a model on a public registry as surely as its name does).
+    Only what the shelf can hold is judged: it scans ``.safetensors`` alone, so
+    a ``.ckpt`` or ``.gguf`` is never on it and calling one a ghost would forget
+    the name of a model still on disk. A model that was never added to the shelf
+    counts — a picture made elsewhere names one — and the Privacy copy says so.
+    Hub-wide, like the recipes: a model name is not a fact about one library.
+    """
+    return _model_ghost_names(hub.fetchall)
+
+
+def forget_model_ghosts(
+    hub: HubDatabase, expected: Optional[int] = None
+) -> Optional[int]:
+    """Forget every model ghost. Returns how many values were forgotten.
+
+    The set is re-read inside the write. ``expected`` is the count the person
+    confirmed: when the set has changed size since (an import filed new names,
+    or a model came back to the shelf), nothing is forgotten and ``None`` is
+    returned, so a confirm never destroys more than it showed. Each forget is a
+    row delete: no document is rewritten and no hash moves, so the workflow
+    still groups and reads as models whose names are forgotten.
+    """
+    with hub.transaction() as conn:
+        names = sorted(_model_ghost_names(lambda sql: conn.execute(sql).fetchall()))
+        if expected is not None and expected != len(names):
+            logger.info(
+                "Model-ghost forget refused: %d confirmed, %d now.",
+                expected,
+                len(names),
+            )
+            return None
+        for batch in chunked(names):
+            placeholders = ",".join("?" for _ in batch)
+            conn.execute(
+                "DELETE FROM workflow_recipe_asset "
+                f"WHERE normalized_filename IN ({placeholders})",
+                tuple(batch),
+            )
+    logger.info("Forgot %d model name(s) or digest(s) not on the shelf.", len(names))
+    return len(names)
+
+
+def forgotten_asset_counts(
+    hub: HubDatabase, topology_hash: Optional[str] = None
+) -> dict[str, dict[str, int]]:
+    """How many of each recipe's assets no longer have a readable name.
+
+    The stored document names every asset by :func:`asset_reference`, so a
+    reference with no ``workflow_recipe_asset`` row behind it is exactly a name
+    that was forgotten. That is what lets a row say "3 models, names forgotten"
+    rather than going blank.
+
+    Args:
+        topology_hash: Read only this topology's documents (a row's expand)
+            rather than the whole hub.
+
+    Returns:
+        ``{topology_hash: {structural_hash: count}}``, recipes with nothing
+        forgotten absent.
+    """
+    # ponytail: the list re-reads every document per call (~600 on a large
+    # library, one json_each pass in C); cache per hub write if it ever shows.
+    known: dict[str, set[str]] = {}
+    scope = "WHERE r.topology_hash = ?" if topology_hash else ""
+    params = (topology_hash,) if topology_hash else ()
+    for row in hub.fetchall(
+        "SELECT a.structural_hash, a.normalized_filename FROM workflow_recipe_asset a "
+        f"JOIN workflow_recipe r ON r.structural_hash = a.structural_hash {scope}",
+        params,
+    ):
+        known.setdefault(row["structural_hash"], set()).add(
+            asset_reference(row["normalized_filename"])
+        )
+    # json_valid first: one corrupt document must not take the whole list down.
+    rows = hub.fetchall(
+        "SELECT DISTINCT r.topology_hash, g.structural_hash, i.value AS reference "
+        "FROM workflow_recipe_graph g "
+        "JOIN workflow_recipe r ON r.structural_hash = g.structural_hash, "
+        "     json_each(g.document) n, json_each(n.value, '$.inputs') i "
+        "WHERE json_valid(g.document) AND n.type = 'object' "
+        "  AND json_type(n.value, '$.inputs') = 'object' "
+        "  AND i.type = 'text' AND i.value LIKE 'asset:%'"
+        + (" AND r.topology_hash = ?" if topology_hash else ""),
+        params,
+    )
+    counts: dict[str, dict[str, int]] = {}
+    for row in rows:
+        recipe = row["structural_hash"]
+        if row["reference"] in known.get(recipe, ()):
+            continue
+        per_recipe = counts.setdefault(row["topology_hash"], {})
+        per_recipe[recipe] = per_recipe.get(recipe, 0) + 1
+    return counts
 
 
 def recipes_for_topology(hub: HubDatabase, topology_hash: str) -> list[sqlite3.Row]:
@@ -467,6 +619,31 @@ def ghost_instance_hashes(hub: HubDatabase, library_uuid: str) -> list[str]:
             (library_uuid,),
         )
     ]
+
+
+def picture_ghost_count(hub: HubDatabase, library_uuid: str) -> int:
+    """How many picture ghosts one library holds — the number an erase destroys."""
+    row = hub.fetchone(
+        "SELECT COUNT(*) FROM workflow_picture_ghost WHERE library_uuid = ?",
+        (library_uuid,),
+    )
+    return int(row[0]) if row else 0
+
+
+def picture_ghosts_by_topology(hub: HubDatabase, library_uuid: str) -> dict[str, int]:
+    """One library's picture ghosts, counted per topology, for the list's filter.
+
+    A ghost whose recipe was never filed has no topology to be counted under,
+    so it is in :func:`picture_ghost_count` and absent here.
+    """
+    rows = hub.fetchall(
+        "SELECT r.topology_hash, COUNT(*) AS ghosts "
+        "FROM workflow_picture_ghost g "
+        "JOIN workflow_recipe r ON r.structural_hash = g.structural_hash "
+        "WHERE g.library_uuid = ? GROUP BY r.topology_hash",
+        (library_uuid,),
+    )
+    return {row["topology_hash"]: row["ghosts"] for row in rows}
 
 
 def erase_picture_ghosts(hub: HubDatabase, library_uuid: str) -> int:

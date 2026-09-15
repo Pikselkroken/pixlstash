@@ -248,3 +248,57 @@ export async function runLayoutMigrationPass({
     }),
   );
 }
+
+/** The picture-ghost retention topic (GET + PATCH), and its two purges. */
+const GHOST_RETENTION_URL = "/server-config/ghost-retention";
+
+/**
+ * Read which traces of destroyed pictures this install keeps.
+ *
+ * @returns {Promise<Object>} the response body:
+ *   - `workflow_ghost_retention`: `"off" | "covered" | "on"`
+ *   - `workflow_ghost_retention_choices`: the accepted positions
+ *   - `picture_ghosts`: ghosts the active library holds, or null without a hub
+ *   - `model_ghosts`: model names kept for models not on the shelf, or null
+ */
+export async function getGhostRetention() {
+  return unwrap(apiClient.get(GHOST_RETENTION_URL));
+}
+
+/**
+ * Set the retention position. Saving destroys nothing already kept.
+ *
+ * @param {"off"|"covered"|"on"} position
+ * @returns {Promise<Object>} the same body as {@link getGhostRetention}.
+ */
+export async function setGhostRetention(position) {
+  return unwrap(
+    apiClient.patch(GHOST_RETENTION_URL, {
+      workflow_ghost_retention: position,
+    }),
+  );
+}
+
+/**
+ * Destroy every picture ghost the active library holds.
+ *
+ * @returns {Promise<{ghosts_erased: number}>}
+ */
+export async function purgePictureGhosts() {
+  return unwrap(apiClient.delete(`${GHOST_RETENTION_URL}/ghosts`));
+}
+
+/**
+ * Forget every model name kept for a model that is not on the shelf.
+ *
+ * @param {number} expected - the count the person confirmed; the server
+ *   refuses with 409, forgetting nothing, when the set is no longer that size.
+ * @returns {Promise<{names_forgotten: number}>}
+ */
+export async function purgeModelGhosts(expected) {
+  return unwrap(
+    apiClient.delete(`${GHOST_RETENTION_URL}/model-ghosts`, {
+      params: { expected },
+    }),
+  );
+}

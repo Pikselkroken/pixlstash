@@ -71,11 +71,12 @@ prompt lives in ``picture.comfyui_positive_prompt`` *and*, in vector form, in
 picture whose ghost is refused leaves neither behind. Nothing in the hub holds an
 embedding, so destroying a ghost is a row delete with no derived copy to chase.
 
-Model ghosts — the readable filename of a model no longer on the shelf, surviving
-inside ``workflow_recipe_asset`` — are the other half of library plan §5 and are
-destroyed by :func:`pixlstash.hub.workflows.forget_asset_names`. They are not
-reached by a picture purge: a model ghost is created by removing a model from the
-shelf and has no relationship to any one picture.
+Model ghosts — a model filename or digest a recipe keeps in
+``workflow_recipe_asset`` for a model the shelf does not hold — are the other
+half of library plan §5 (:func:`pixlstash.hub.workflows.model_ghost_names`,
+forgotten by ``DELETE /server-config/ghost-retention/model-ghosts``). They are
+not reached by a picture purge: a model ghost has no relationship to any one
+picture.
 """
 
 from __future__ import annotations

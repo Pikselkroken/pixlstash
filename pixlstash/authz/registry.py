@@ -388,6 +388,16 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "than a §16.3 host capability."
         ),
     ),
+    ("DELETE", "/api/v1/server-config/ghost-retention/model-ghosts"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Owner privacy purge; DELETE is blocked for READ tokens, so only an "
+            "unscoped owner reaches it. Sibling of DELETE "
+            "/server-config/ghost-retention/ghosts. Forgets the model filenames "
+            "hub recipes keep for models not on the shelf and nothing on disk, "
+            "so owner data hygiene rather than a §16.3 host capability."
+        ),
+    ),
     ("POST", "/api/v1/server-config/open"): RoutePolicy(
         _LOOPBACK,
         justification="§16.3.1 RED LINE: opens the server config path in the host file browser (_open_in_os → os.startfile/open/xdg-open - same host-GUI spawn as pictures/open-location and reference-folders/open); loopback-only, allow_remote_host_ops can NOT loosen it",
