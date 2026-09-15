@@ -102,13 +102,13 @@ def _workflow_builtin_dir() -> str:
     )
 
 
-def _workflow_user_dir() -> str:
+def workflow_user_dir() -> str:
     return os.path.join(user_data_dir("pixlstash"), "comfyui-workflows", "user")
 
 
 def _workflow_dirs() -> list[tuple[str, str]]:
     return [
-        ("user", _workflow_user_dir()),
+        ("user", workflow_user_dir()),
         ("built-in", _workflow_builtin_dir()),
     ]
 
@@ -193,7 +193,7 @@ def _resolve_fixed_seed(payload: dict, max_seed: int = MAX_SEED) -> int | None:
     return seed_int
 
 
-def _missing_placeholders(payload: dict) -> list[str]:
+def _missing_placeholders(payload: dict, detected=None) -> list[str]:
     """What a run of *payload* cannot fill, under the names the menus know.
 
     No file carries a token any more; the names are kept so the ComfyUI menus
@@ -201,7 +201,7 @@ def _missing_placeholders(payload: dict) -> list[str]:
     when neither a binding nor detection gives it a target
     (``services/workflow_bindings.py``).
     """
-    targets = workflow_bindings.run_targets(payload)
+    targets = workflow_bindings.run_targets(payload, detected)
     return [
         placeholder
         for placeholder, role in (
@@ -220,22 +220,15 @@ def _fill_run_inputs(workflow: dict, image: str | None, caption: str) -> dict:
     workflow's own text, which an unset caption must not wipe.
     """
     instance = deepcopy(workflow)
-    targets = workflow_bindings.run_targets(workflow)
     try:
-        if image is not None:
-            workflow_bindings.fill(
-                instance,
-                targets[workflow_bindings.IMAGE],
-                workflow_bindings.IMAGE,
-                image,
-            )
-        if caption:
-            workflow_bindings.fill(
-                instance,
-                targets[workflow_bindings.CAPTION],
-                workflow_bindings.CAPTION,
-                caption,
-            )
+        workflow_bindings.fill(
+            instance,
+            workflow_bindings.run_targets(workflow),
+            {
+                workflow_bindings.IMAGE: image,
+                workflow_bindings.CAPTION: caption or None,
+            },
+        )
     except workflow_bindings.BindingError as exc:
         logger.warning("Workflow binding does not resolve: %s", exc)
         raise HTTPException(
@@ -255,7 +248,6 @@ def _describe_workflow(path: str, source: str, mtime_ns: int, size: int) -> dict
     """
     try:
         payload = _load_workflow_json(path)
-        missing = _missing_placeholders(payload)
     except Exception as exc:
         logger.warning("Failed to read %s workflow %s: %s", source, path, exc)
         return {
@@ -275,13 +267,13 @@ def _describe_workflow(path: str, source: str, mtime_ns: int, size: int) -> dict
         )
         return {
             "valid": False,
-            "missing_placeholders": missing,
+            "missing_placeholders": _missing_placeholders(payload),
             "workflow_type": "t2i",
             "flagged": workflow_bindings.is_flagged(payload),
         }
     return {
         "valid": detected.valid,
-        "missing_placeholders": missing,
+        "missing_placeholders": _missing_placeholders(payload, detected),
         "workflow_type": detected.workflow_type,
         "flagged": workflow_bindings.is_flagged(payload),
     }
@@ -795,7 +787,7 @@ def create_router(server) -> APIRouter:
         normalized = _normalize_workflow_name(workflow_name)
         if not normalized:
             raise HTTPException(status_code=400, detail="workflow_name is required")
-        workflow_dir = _workflow_user_dir()
+        workflow_dir = workflow_user_dir()
         try:
             path = resolve_path_within(workflow_dir, normalized)
         except ValueError:
@@ -807,6 +799,18 @@ def create_router(server) -> APIRouter:
         except OSError as exc:
             logger.warning("Failed to delete workflow %s: %s", normalized, exc)
             raise HTTPException(status_code=500, detail="Failed to delete workflow")
+        # The placeholder migration's backup goes with the workflow it copied.
+        backup = f"{path}{workflow_bindings.BACKUP_SUFFIX}"
+        if os.path.exists(backup):
+            try:
+                os.remove(backup)
+            except OSError as exc:
+                logger.warning(
+                    "Deleted workflow %s but not its migration backup %s: %s",
+                    normalized,
+                    backup,
+                    exc,
+                )
         return {"status": "success", "name": normalized}
 
     @router.post(
@@ -1120,16 +1124,25 @@ def create_router(server) -> APIRouter:
         # A file exported while workflows carried placeholder tokens is stored
         # the way the start-up migration left its siblings, so it can run and
         # so a copy of a migrated workflow matches it.
-        workflow, _migrated = workflow_bindings.migrate_placeholders(workflow)
+        try:
+            workflow, _migrated = workflow_bindings.migrate_placeholders(workflow)
+            wanted = workflow_bindings.canonical(workflow)
+        except RecursionError as exc:
+            logger.warning("Refused a workflow import that nests too deeply: %s", exc)
+            raise HTTPException(
+                status_code=400, detail="Workflow JSON nests too deeply"
+            ) from exc
 
-        workflow_dir = _workflow_user_dir()
+        workflow_dir = workflow_user_dir()
         os.makedirs(workflow_dir, exist_ok=True)
         try:
             path = resolve_path_within(workflow_dir, name)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid workflow name")
 
-        existing = _find_stored_copy(workflow)
+        # A copy is the same workflow whatever it is called, so it matches
+        # before the name is looked at, and keep_both has nothing to keep.
+        existing = _find_stored_copy(wanted)
         if existing is not None:
             return {
                 "status": "success",
@@ -1157,9 +1170,8 @@ def create_router(server) -> APIRouter:
             "topology_hash": _file_in_hub(workflow),
         }
 
-    def _find_stored_copy(workflow: dict) -> str | None:
-        """The name of a stored workflow with the same content, if any."""
-        wanted = workflow_bindings.canonical(workflow)
+    def _find_stored_copy(wanted: str) -> str | None:
+        """The name of a stored workflow whose canonical content is *wanted*."""
         for source, folder in _workflow_dirs():
             if not os.path.isdir(folder):
                 continue
@@ -1169,19 +1181,18 @@ def create_router(server) -> APIRouter:
                 path = os.path.join(folder, entry)
                 try:
                     stored = _load_workflow_json(path)
-                except (OSError, ValueError) as exc:
+                    if (
+                        isinstance(stored, dict)
+                        and workflow_bindings.canonical(stored) == wanted
+                    ):
+                        return entry
+                except (OSError, ValueError, RecursionError) as exc:
                     logger.warning(
                         "Could not read %s workflow %s to compare an import: %s",
                         source,
                         path,
                         exc,
                     )
-                    continue
-                if (
-                    isinstance(stored, dict)
-                    and workflow_bindings.canonical(stored) == wanted
-                ):
-                    return entry
         return None
 
     def _file_in_hub(workflow: dict) -> str | None:
@@ -1211,6 +1222,17 @@ def create_router(server) -> APIRouter:
             logger.error(
                 "Could not file an imported workflow in the library; it is "
                 "stored and runs, but the Workflows view will not list it: %s",
+                exc,
+            )
+        except Exception as exc:
+            # The graph reducers index into whatever the file holds, and a
+            # malformed file (a non-dict `definitions`, say) raises something
+            # other than WorkflowGraphError. Filing is secondary to storing, so
+            # it is logged with its type and the import still succeeds.
+            logger.error(
+                "Imported workflow is not filed in the library, reading its "
+                "graph failed with %s: %s",
+                type(exc).__name__,
                 exc,
             )
         return None

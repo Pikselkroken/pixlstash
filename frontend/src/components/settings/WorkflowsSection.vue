@@ -195,7 +195,9 @@ function openWorkflowImport() {
 
 // The file is stored as it is: inputs are found from the graph, never mapped
 // here. A copy of a stored workflow is matched to it; a name already taken by a
-// different workflow asks whether to replace it, and keeps both otherwise.
+// different workflow asks: replace it, keep both, or cancel.
+const nameClash = ref(null);
+
 async function handleWorkflowFileChange(event) {
   const file = event?.target?.files?.[0];
   if (!file) return;
@@ -213,16 +215,30 @@ async function handleWorkflowFileChange(event) {
       await importWorkflow({ name, workflow });
     } catch (e) {
       if (e?.response?.status !== 409) throw e;
-      const overwrite = window.confirm(
-        `Workflow '${name}' exists. Replace it? Cancel keeps both.`,
-      );
-      await importWorkflow({ name, workflow, overwrite, keepBoth: !overwrite });
+      nameClash.value = { name, workflow };
+      return;
     }
     await fetchWorkflowList();
   } catch (e) {
     workflowImportError.value = errorDetail(e) || "Failed to import workflow.";
   } finally {
     event.target.value = "";
+  }
+}
+
+async function resolveNameClash(choice) {
+  const clash = nameClash.value;
+  nameClash.value = null;
+  if (!clash || choice === "cancel") return;
+  try {
+    await importWorkflow({
+      ...clash,
+      overwrite: choice === "replace",
+      keepBoth: choice === "keep",
+    });
+    await fetchWorkflowList();
+  } catch (e) {
+    workflowImportError.value = errorDetail(e) || "Failed to import workflow.";
   }
 }
 
@@ -343,6 +359,29 @@ watch(
       style="display: none"
       @change="handleWorkflowFileChange"
     />
+
+    <AppDialog
+      :open="Boolean(nameClash)"
+      title="Workflow name taken"
+      size="sm"
+      @close="resolveNameClash('cancel')"
+    >
+      <div class="wf-dialog-body">
+        A different workflow is already saved as '{{ nameClash?.name }}'.
+      </div>
+      <template #footer>
+        <AppButton variant="danger" @click="resolveNameClash('replace')">
+          Replace
+        </AppButton>
+        <span class="wf-footer-spacer" />
+        <AppButton variant="secondary" @click="resolveNameClash('cancel')">
+          Cancel
+        </AppButton>
+        <AppButton variant="primary" @click="resolveNameClash('keep')">
+          Keep both
+        </AppButton>
+      </template>
+    </AppDialog>
 
     <AppDialog
       :open="comfyuiConfigDialogOpen"

@@ -4231,12 +4231,18 @@ explore. `useWorkflowShelfStore` fetches the list whole and shapes it in
 `utils/workflowShelf.js`, so Group, Sort and Show are re-reads of an array
 already in hand and cost no request.
 
-**Dropping a file is the one write.** A `.json` dragged onto the view (a drag
-carrying `Files`; anything else passes over) is posted to
-`POST /comfyui/workflows/import` unchanged, with `keep_both`, and the list is
-refetched and the row named by the response's `topology_hash` selected, so a copy
-of a workflow the library already has lands on that row rather than adding one.
-A notice per file says whether it was added or already there. Naming a workflow
+**Dropping a file is the one write.** Each `.json` in a drag carrying `Files`
+is posted to `POST /comfyui/workflows/import` unchanged, with `keep_both`; the
+list is refetched and the row named by the response's `topology_hash` selected,
+so a copy of a workflow the library already has lands on that row rather than
+adding one. A new workflow has no pictures, so when Show or Ghosts would hide
+that row the view widens to every workflow rather than select something
+invisible. A notice per file says whether it was added or already there.
+Anything else in the drop is not this view's: `useWindowFileImport` listens in
+the capture phase and stands aside only for a drop of JSON files alone onto
+`.wfshelf`, so pictures dropped here still import and are not reported twice.
+Settings › Workflows imports through the same route; a name taken by different
+content opens a Replace / Keep both / Cancel dialog, and Cancel writes nothing. Naming a workflow
 and running one are later steps (implementation plan §F3, §F5), and forgetting
 ghosts is the two counted purges in Settings › Privacy (`PrivacySection`, beside
 the Off / Covered only / On retention control); the row menu offers only what

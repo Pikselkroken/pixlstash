@@ -524,7 +524,7 @@ import { getWorkflowGraph, listWorkflowVariants } from "../../api/workflows";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useWorkflowShelfStore } from "../../stores/useWorkflowShelfStore";
-import { errorDetail } from "../../utils/apiError";
+import { errorMessage } from "../../utils/apiError";
 import { copyText } from "../../utils/clipboard";
 import { formatUserDate, formatUserDay } from "../../utils/utils";
 import {
@@ -937,20 +937,31 @@ function onFileDragLeave(event) {
   if (!dragDepth) dropActive.value = false;
 }
 
+/** Larger than any real workflow; a bigger file is not read into memory. */
+const MAX_WORKFLOW_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Add the dropped workflow files. Only `.json` files are this view's: anything
+ * else in the same drop is the window-wide importer's (`useWindowFileImport`
+ * stands aside only for a drop of JSON alone), so it is left to that and not
+ * reported twice.
+ */
 async function onFileDrop(event) {
   if (!carriesFiles(event)) return;
   event.preventDefault();
   dragDepth = 0;
   dropActive.value = false;
-  const files = Array.from(event.dataTransfer.files || []);
+  const files = Array.from(event.dataTransfer.files || []).filter((file) =>
+    /\.json$/i.test(file.name),
+  );
   let landed = null;
   let added = false;
   for (const file of files) {
     const label = file.name;
-    if (!/\.json$/i.test(file.name)) {
+    if (file.size > MAX_WORKFLOW_BYTES) {
       notices.push({
         level: "error",
-        text: `${label} is not a workflow: only .json files can be added here.`,
+        text: `${label} is too large to be a workflow.`,
       });
       continue;
     }
@@ -977,25 +988,43 @@ async function onFileDrop(event) {
           : `Added ${body?.name || label}.`,
       });
     } catch (err) {
+      const reason = errorMessage(err, "import failed");
+      console.warn(`[workflows] could not import ${label}: ${reason}`, err);
       notices.push({
         level: "error",
-        text: `Could not add ${label}: ${errorDetail(err) || "import failed"}.`,
+        text: `Could not add ${label}: ${reason}.`,
       });
     }
   }
-  if (added) {
-    await store.fetchRows();
-    if (landed) store.select(landed);
+  if (!added) return;
+  await store.fetchRows();
+  if (!landed) return;
+  // A new workflow has no pictures, so Show "In use" or Ghosts would hide the
+  // very row the notice just announced. Widen the list rather than select a
+  // row nobody can see.
+  if (!store.visibleRows.some((row) => row.topology_hash === landed)) {
+    store.setView({ show: "all", ghosts: false });
   }
+  store.select(landed);
 }
 
 onMounted(() => store.fetchRows());
 </script>
 
 <style scoped>
-/* The whole view is the drop target, marked the way a model-shelf band is. */
-.wfshelf--drop {
-  box-shadow: inset 0 0 0 2px var(--active-bar);
+/* The whole view is the drop target, marked the way a model-shelf band is: a
+   wash and a ring. Drawn on a layer above the toolbar and the rows, which are
+   opaque and would otherwise hide the ring along the top; an outline rather
+   than a shadow so it survives forced colours. */
+.wfshelf--drop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-floating);
+  pointer-events: none;
+  background: var(--active-wash);
+  outline: 2px solid var(--active-bar);
+  outline-offset: -2px;
 }
 
 .wfshelf {

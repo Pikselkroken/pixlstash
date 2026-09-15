@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import pathlib
 from unittest.mock import MagicMock
 
@@ -9,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 import pixlstash.routes.comfyui as comfyui_module
+import pixlstash.server as server_module
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflows import topology_exists
 from pixlstash.services import workflow_bindings
@@ -326,8 +328,11 @@ def test_migration_binds_tokens_and_restores_neutral_values():
 
     assert changed
     assert json.dumps(graph, sort_keys=True) == original
+    assert migrated["7"]["_meta"] == {"title": "{{image_path}} loader"}
+    del migrated["7"]["_meta"]
     body = {k: v for k, v in migrated.items() if k != workflow_bindings.BINDINGS_KEY}
-    assert "{{" not in json.dumps(body).replace("{{image_path}} loader", "")
+    assert "{{" not in json.dumps(body)
+    migrated["7"]["_meta"] = {"title": "{{image_path}} loader"}
     assert migrated["2"]["inputs"]["text"] == ""
     assert migrated["7"]["inputs"]["image"] == "example.png"
     assert migrated["3"]["inputs"]["text"] == "photo of , sharp"
@@ -402,6 +407,9 @@ def test_folder_migration_runs_once_backs_up_and_skips_unreadable_files(
         "{{image_path}}",
         "{{caption}}",
     ]
+    # A broken file cannot run either way, so it is not queued for a retry.
+    assert _load(tmp_path / workflow_bindings.MIGRATION_MARKER) == {"retry": []}
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".migrating")]
 
     # A workflow imported as-is after the pass keeps detection.
     (tmp_path / "later.json").write_text(json.dumps(legacy), encoding="utf-8")
@@ -409,14 +417,101 @@ def test_folder_migration_runs_once_backs_up_and_skips_unreadable_files(
     assert workflow_bindings.BINDINGS_KEY not in _load(tmp_path / "later.json")
 
 
-def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, monkeypatch, caplog):
-    def refuse(_path):
-        raise PermissionError("denied")
+def test_a_fresh_install_takes_the_marker_so_an_as_is_import_keeps_detection(
+    tmp_path, monkeypatch
+):
+    # Start-up on a machine with no workflow folder yet, then an as-is import,
+    # then a restart: the import must not be given empty bindings.
+    user_dir = tmp_path / "user"
+    assert workflow_bindings.migrate_workflow_folder(str(user_dir)) == 0
+    assert (user_dir / workflow_bindings.MIGRATION_MARKER).exists()
 
-    monkeypatch.setattr(workflow_bindings.os, "listdir", refuse)
-    assert workflow_bindings.migrate_workflow_folder(str(tmp_path)) == 0
-    assert "denied" in caplog.text
-    assert not (tmp_path / workflow_bindings.MIGRATION_MARKER).exists()
+    monkeypatch.setattr(comfyui_module, "workflow_user_dir", lambda: str(user_dir))
+    monkeypatch.setattr(
+        comfyui_module, "_workflow_dirs", lambda: [("user", str(user_dir))]
+    )
+    endpoint = _route(
+        comfyui_module.create_router(MagicMock(hub=None)), "/comfyui/workflows/import"
+    )
+    graph = _t2i_graph()
+    graph["7"] = _node("LoadImage", image="a.png")
+    endpoint({"name": "mine", "workflow": graph})
+
+    assert workflow_bindings.migrate_workflow_folder(str(user_dir)) == 0
+    stored = _load(user_dir / "mine.json")
+    assert stored == graph
+    assert comfyui_module._missing_placeholders(stored) == []
+
+
+def test_a_file_that_could_not_be_written_is_retried_and_nothing_else(
+    tmp_path, monkeypatch
+):
+    graph = _t2i_graph()
+    graph["2"]["inputs"]["text"] = "{{caption}}"
+    (tmp_path / "locked.json").write_text(json.dumps(graph), encoding="utf-8")
+    (tmp_path / "fine.json").write_text(json.dumps(graph), encoding="utf-8")
+    real_replace = workflow_bindings.os.replace
+
+    def locked_replace(src, dst):
+        if dst.endswith("locked.json"):
+            raise PermissionError("held by another program")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(workflow_bindings.os, "replace", locked_replace)
+    assert workflow_bindings.migrate_workflow_folder(str(tmp_path)) == 1
+    assert _load(tmp_path / workflow_bindings.MIGRATION_MARKER) == {
+        "retry": ["locked.json"]
+    }
+    assert "{{caption}}" in (tmp_path / "locked.json").read_text(encoding="utf-8")
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".migrating")]
+
+    # Next start: only the stranded file is tried, and an as-is import made in
+    # between is left alone.
+    monkeypatch.setattr(workflow_bindings.os, "replace", real_replace)
+    (tmp_path / "new.json").write_text(json.dumps(_t2i_graph()), encoding="utf-8")
+    assert workflow_bindings.migrate_workflow_folder(str(tmp_path)) == 1
+    assert workflow_bindings.BINDINGS_KEY in _load(tmp_path / "locked.json")
+    assert workflow_bindings.BINDINGS_KEY not in _load(tmp_path / "new.json")
+    assert _load(tmp_path / workflow_bindings.MIGRATION_MARKER) == {"retry": []}
+
+
+def test_server_start_up_runs_the_migration_on_the_user_folder(tmp_path, monkeypatch):
+    # The suite turns the migration off (conftest) because the real folder is
+    # machine-global. Here it is a tmp folder, so the wiring itself is checked.
+    user_dir = tmp_path / "workflows"
+    user_dir.mkdir()
+    graph = _t2i_graph()
+    graph["2"]["inputs"]["text"] = "{{caption}}"
+    (user_dir / "old.json").write_text(json.dumps(graph), encoding="utf-8")
+    monkeypatch.setattr(server_module, "workflow_user_dir", lambda: str(user_dir))
+    monkeypatch.setattr(server_module.Server, "DEFAULT_MIGRATE_WORKFLOW_TOKENS", True)
+    config_path = tmp_path / "config" / "server-config.json"
+    config_path.parent.mkdir()
+    config_path.write_text(json.dumps({"port": 8000}), encoding="utf-8")
+
+    server = server_module.Server(str(config_path))
+    try:
+        assert workflow_bindings.BINDINGS_KEY in _load(user_dir / "old.json")
+        assert (user_dir / workflow_bindings.MIGRATION_MARKER).exists()
+    finally:
+        server.__exit__(None, None, None)
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="needs a user that a mode-000 folder refuses",
+)
+def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
+    folder = tmp_path / "user"
+    folder.mkdir()
+    folder.chmod(0o300)  # writable, so the marker can be taken; not listable
+    try:
+        assert workflow_bindings.migrate_workflow_folder(str(folder)) == 0
+    finally:
+        folder.chmod(0o700)
+    assert "could not list" in caplog.text.lower()
+    # Released, so the next start tries the pass again.
+    assert not (folder / workflow_bindings.MIGRATION_MARKER).exists()
 
 
 @pytest.mark.parametrize(
@@ -472,10 +567,35 @@ def test_a_binding_that_no_longer_resolves_is_refused():
         comfyui_module._fill_run_inputs(graph, "upload.png", "")
     assert refused.value.status_code == 400
     # A path that is not a list must not index the document as a key.
-    graph[workflow_bindings.BINDINGS_KEY] = [{"role": "image", "path": "1"}]
-    with pytest.raises(HTTPException):
-        comfyui_module._fill_run_inputs(graph, "upload.png", "")
+    targets = {"image": [{"path": "1", "template": None}], "caption": []}
+    with pytest.raises(workflow_bindings.BindingError):
+        workflow_bindings.fill(graph, targets, {"image": "upload.png"})
     assert graph["1"]["class_type"] == "CheckpointLoaderSimple"
+
+
+def test_two_positive_prompts_fill_neither():
+    # A fixed style prompt combined with the subject prompt: which one is "the"
+    # prompt is ambiguous, and overwriting both destroys the style.
+    graph = _t2i_graph()
+    graph["8"] = _node("CLIPTextEncode", text="oil painting", clip=["1", 1])
+    graph["9"] = _node(
+        "ConditioningCombine", conditioning_1=["2", 0], conditioning_2=["8", 0]
+    )
+    graph["4"]["inputs"]["positive"] = ["9", 0]
+    assert detect_workflow_io(graph).positive_prompts == ("2", "8")
+    assert workflow_bindings.run_targets(graph)["caption"] == []
+    filled = comfyui_module._fill_run_inputs(graph, None, "a dog")
+    assert filled["8"]["inputs"]["text"] == "oil painting"
+
+
+def test_a_string_holding_both_tokens_gets_both_values():
+    graph = _t2i_graph()
+    graph["2"]["inputs"]["text"] = "file {{image_path}} of {{caption}}"
+    migrated, _ = workflow_bindings.migrate_placeholders(graph)
+    filled = comfyui_module._fill_run_inputs(migrated, "up.png", "a cat")
+    assert filled["2"]["inputs"]["text"] == "file up.png of a cat"
+    filled = comfyui_module._fill_run_inputs(migrated, "up.png", "")
+    assert filled["2"]["inputs"]["text"] == "file up.png of "
 
 
 @pytest.fixture
@@ -483,7 +603,7 @@ def import_route(tmp_path, monkeypatch):
     user_dir = tmp_path / "user"
     built_in = tmp_path / "built-in"
     built_in.mkdir()
-    monkeypatch.setattr(comfyui_module, "_workflow_user_dir", lambda: str(user_dir))
+    monkeypatch.setattr(comfyui_module, "workflow_user_dir", lambda: str(user_dir))
     monkeypatch.setattr(
         comfyui_module,
         "_workflow_dirs",
@@ -559,6 +679,39 @@ def test_a_taken_name_is_refused_or_kept_beside(import_route):
     assert call(name="flow", workflow=other, keep_both=True)["name"] == "flow (2).json"
     assert _load(user_dir / "flow (2).json") == other
     assert _load(user_dir / "flow.json") == _t2i_graph()
+
+
+def test_an_unfileable_or_too_deep_import_is_handled(import_route):
+    call, user_dir, _built_in, _hub = import_route
+    # Reducing this raises AttributeError, not WorkflowGraphError: the file is
+    # still stored, just not filed.
+    odd = {"nodes": [{"id": 1, "type": "SaveImage"}], "definitions": ["x"]}
+    body = call(name="odd", workflow=odd)
+    assert body["topology_hash"] is None
+    assert _load(user_dir / "odd.json") == odd
+
+    deep = current = {}
+    for _ in range(5000):
+        current["n"] = {}
+        current = current["n"]
+    with pytest.raises(HTTPException) as refused:
+        call(name="deep", workflow=deep)
+    assert refused.value.status_code == 400
+    assert not (user_dir / "deep.json").exists()
+
+
+def test_deleting_a_workflow_removes_its_migration_backup(import_route, monkeypatch):
+    _call, user_dir, _built_in, _hub = import_route
+    user_dir.mkdir()
+    (user_dir / "old.json").write_text("{}", encoding="utf-8")
+    (user_dir / "old.json.pre-bindings").write_text("{}", encoding="utf-8")
+    endpoint = _route(
+        comfyui_module.create_router(MagicMock()),
+        "/comfyui/workflows/{workflow_name}",
+        "DELETE",
+    )
+    asyncio.run(endpoint("old"))
+    assert sorted(p.name for p in user_dir.iterdir()) == []
 
 
 def test_an_imported_tokened_file_is_stored_migrated(import_route):

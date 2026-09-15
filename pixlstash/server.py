@@ -96,8 +96,8 @@ from pixlstash.routes.pictures import (
     create_router as create_pictures_router,
 )
 from pixlstash.routes.comfyui import (
-    _workflow_user_dir as workflow_user_dir,
     create_router as create_comfyui_router,
+    workflow_user_dir,
 )
 from pixlstash.routes.tag_predictions import (
     create_router as create_tag_predictions_router,
