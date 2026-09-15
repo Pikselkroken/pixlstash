@@ -49,7 +49,11 @@ from pixlstash.services.model_features import (
     FEATURE_TAGGER,
 )
 from pixlstash.services.stack_detector import repair_stacks
-from pixlstash.services.workflow_hash import SHA256_FIELD_RE, normalized_filename
+from pixlstash.services.workflow_hash import (
+    SHA256_FIELD_RE,
+    digests_with_prefix,
+    normalized_filename,
+)
 from pixlstash.services.workflow_library_service import recipe_picture_counts
 from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
@@ -402,7 +406,8 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
     """How many kept pictures in the active library used each model, by tier.
 
     ``verified`` counts pictures whose recipe names the model by its digest (a
-    PixlStash loader's ``*_sha256``): that exact file. ``by_filename`` counts
+    PixlStash loader's ``*_sha256``, or an A1111 short hash only this model's
+    digest starts with): that exact file. ``by_filename`` counts
     the rest whose recipe names a file called what one of the model's copies is
     called: a file of that name, which is all the graph says. The two are never
     summed here, because a count that mixes them claims a certainty the data
@@ -434,6 +439,7 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
         row["sha256"].lower(): row["id"]
         for row in hub.fetchall("SELECT id, sha256 FROM model WHERE sha256 IS NOT NULL")
     }
+    digests = sorted(by_digest)
 
     verified: dict[int, set[str]] = {}
     named: dict[int, set[str]] = {}
@@ -445,9 +451,11 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
         if recipe not in pictures:
             continue
         if SHA256_FIELD_RE.search(row["widget_name"]):
-            model_id = by_digest.get(row["normalized_filename"])
-            if model_id is not None:
-                verified.setdefault(model_id, set()).add(recipe)
+            # An A1111 short hash is verified only when one digest starts with
+            # it; otherwise its picture is left to the filename tier.
+            matches = digests_with_prefix(row["normalized_filename"], digests)
+            if len(matches) == 1:
+                verified.setdefault(by_digest[matches[0]], set()).add(recipe)
         else:
             for model_id in by_name.get(row["normalized_filename"], ()):
                 named.setdefault(model_id, set()).add(recipe)
