@@ -448,6 +448,18 @@ describe("deleting a saved workflow", () => {
     expect(deleteWorkflow).not.toHaveBeenCalled();
   });
 
+  it("re-reads the list when the delete fails, so a file already gone leaves", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    deleteWorkflow.mockRejectedValue({ response: { status: 404 } });
+    const { wrapper, store } = await mountFile("user");
+
+    await deleteButton(wrapper).trigger("click");
+    await flush(wrapper);
+
+    expect(store.files).toEqual([]);
+    expect(store.selectedFile).toBe(null);
+  });
+
   it("offers no delete for a built-in workflow", async () => {
     const { wrapper } = await mountFile("built-in");
     expect(deleteButton(wrapper)).toBeUndefined();

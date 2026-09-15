@@ -269,7 +269,7 @@ run with workers ON.
 
 Requires a live ComfyUI server.
 
-- [ ] Settings → **Workflows**: enter the ComfyUI server URL → Save → the host appears in the dialog
+- [ ] Settings → **Compute** (in a browser too): Configure Host → enter host and port → Save → the host appears in the section
 - [ ] Toolbar ComfyUI menu: run a text-to-image workflow with a prompt — progress shows; the output picture appears in the grid
 - [ ] Run an image-to-image workflow from a source picture — output appears and is linked to the source
 - [ ] **Abort** during a run — execution stops and the progress indicator disappears

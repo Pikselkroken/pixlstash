@@ -4319,7 +4319,8 @@ terminal. It dims rather than disappearing when a workflow has outlived
 everything it made, so the panel keeps its shape. A selected saved workflow that
 is not built in carries **Delete workflow**, which confirms and calls
 `DELETE /comfyui/workflows/{name}`: the server writes the file back to the
-watched folder and moves it to the system trash, so restoring it adds it back.
+watched folder and moves it to the system trash (the server machine's), and the
+file list is re-read whether or not the delete succeeded.
 
 **Its tiles have three states and the store records all three separately**, because
 two bugs have now lived in that one branch. A failed fetch used to be cached as

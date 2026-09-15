@@ -479,8 +479,8 @@ const deleting = ref(false);
 
 /**
  * Delete the selected saved workflow. The server writes it back to the
- * workflows folder and moves that file to the system trash, so restoring it
- * from there imports it again.
+ * workflows folder and moves that file to the system trash. The list is
+ * re-read on failure too: a 404 means it is already gone.
  */
 async function deleteFile() {
   const target = file.value;
@@ -488,7 +488,7 @@ async function deleteFile() {
   const label = target.display_name || target.name;
   const confirmed = await confirm({
     title: "Delete workflow",
-    message: `Delete '${label}'? It goes to the system trash, and restoring it from there adds it back.`,
+    message: `Delete '${label}'? A copy goes to the system trash on the machine PixlStash runs on.`,
     confirmLabel: "Delete",
     danger: true,
   });
@@ -503,6 +503,7 @@ async function deleteFile() {
       level: "error",
       text: errorDetail(err) || `Could not delete '${label}'.`,
     });
+    await store.fetchFiles();
   } finally {
     deleting.value = false;
   }
