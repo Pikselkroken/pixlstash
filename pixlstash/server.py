@@ -65,6 +65,7 @@ from pixlstash.hub.bootstrap import (
 )
 from pixlstash.hub.registry import LibraryRegistry
 from pixlstash.services.library_switch_service import LibrarySwitchService
+from pixlstash.services.workflow_bindings import migrate_workflow_folder
 from pixlstash.services.library_generation_coordinator import (
     LibraryGenerationCoordinator,
 )
@@ -94,7 +95,10 @@ from pixlstash.routes.dedup import create_router as create_dedup_router
 from pixlstash.routes.pictures import (
     create_router as create_pictures_router,
 )
-from pixlstash.routes.comfyui import create_router as create_comfyui_router
+from pixlstash.routes.comfyui import (
+    create_router as create_comfyui_router,
+    workflow_user_dir,
+)
 from pixlstash.routes.tag_predictions import (
     create_router as create_tag_predictions_router,
 )
@@ -269,6 +273,11 @@ class Server(
             them at a temp directory instead is no longer an option - since #905
             the downloaders read the same accessor, so a temp directory means
             every engine is downloaded again.
+        DEFAULT_MIGRATE_WORKFLOW_TOKENS: Whether start-up migrates the user
+            workflow folder's placeholder tokens to bindings. ``False`` in the
+            test suite for the same reason as the model roots: the folder is
+            machine-global, so a test server would rewrite the developer's own
+            workflows.
     """
 
     DEFAULT_MAX_VRAM_GB: float | None = None
@@ -278,6 +287,7 @@ class Server(
     DEFAULT_CLEANUP_MISSING_PICTURES: bool = False
     DEFAULT_INSIGHTFACE_MODEL_PACK: str | None = None
     DEFAULT_DECLARE_MODEL_ROOTS: bool = True
+    DEFAULT_MIGRATE_WORKFLOW_TOKENS: bool = True
 
     @staticmethod
     def running_in_docker() -> bool:
@@ -619,6 +629,12 @@ class Server(
                         exc,
                     )
         _log_stage("model shelf declarations (builtin/insightface/huggingface)")
+        if Server.DEFAULT_MIGRATE_WORKFLOW_TOKENS:
+            # Workflows are stored as imported now, so a file still carrying
+            # {{image_path}} / {{caption}} tokens from the old import dialog
+            # gets bindings instead. One pass; a migrated file has no token.
+            migrate_workflow_folder(workflow_user_dir())
+            _log_stage("workflow placeholder migration")
         if self._hub_bootstrap.migrated:
             logger.info(
                 "First run after the hub/vault split: identity now lives in %s",

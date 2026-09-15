@@ -410,6 +410,9 @@ def pytest_configure(config):
     # means an empty temp directory now costs every engine a fresh download on
     # every shard, rather than the warm model cache CI restores.
     Server.DEFAULT_DECLARE_MODEL_ROOTS = False
+    # The user workflow folder is machine-global too; never migrate the
+    # developer's own workflows from a test server.
+    Server.DEFAULT_MIGRATE_WORKFLOW_TOKENS = False
     # Pick a free port for the test session so Server instances don't collide
     # with the production app when it is already running on the default port.
     Server.DEFAULT_PORT = _find_free_port()

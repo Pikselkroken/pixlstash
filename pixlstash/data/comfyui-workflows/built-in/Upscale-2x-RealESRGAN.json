@@ -26,7 +26,7 @@
   },
   "3": {
     "inputs": {
-      "image": "{{image_path}}"
+      "image": "example.png"
     },
     "class_type": "LoadImage",
     "_meta": {

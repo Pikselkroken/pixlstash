@@ -38,7 +38,15 @@ vi.mock("../../api/workflows", () => ({
   getWorkflowGraph: (...args) => getWorkflowGraph(...args),
 }));
 
+const importWorkflow = vi.fn();
+
+vi.mock("../../api/comfyui", () => ({
+  importWorkflow: (...args) => importWorkflow(...args),
+}));
+
 import WorkflowShelf from "./WorkflowShelf.vue";
+import { useWorkflowShelfStore } from "../../stores/useWorkflowShelfStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 
 const globalOpts = {
   global: {
@@ -92,6 +100,7 @@ beforeEach(() => {
   listWorkflowVariants.mockReset().mockResolvedValue([]);
   listWorkflowPictures.mockReset().mockResolvedValue([]);
   getWorkflowGraph.mockReset();
+  importWorkflow.mockReset();
 });
 
 describe("the list", () => {
@@ -476,5 +485,110 @@ describe("exporting a workflow's graph", () => {
     expect(wrapper.vm.canExport).toBe(false);
     await wrapper.vm.exportGraph();
     expect(getWorkflowGraph).not.toHaveBeenCalled();
+  });
+});
+
+describe("dropping a workflow file", () => {
+  function fileDrop(files, types = ["Files"]) {
+    return { dataTransfer: { types, files, dropEffect: "none" } };
+  }
+
+  async function settle(wrapper) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+  }
+
+  it("stores the parsed file as it is and shows the row it landed on", async () => {
+    const graph = { 1: { class_type: "SaveImage", inputs: {} } };
+    const fresh = topology({ topology_hash: "b".repeat(64), pictures: 0 });
+    importWorkflow.mockImplementation(async () => {
+      // The row exists only once the import has filed it, so the selection
+      // has to come after the refetch to survive it.
+      listWorkflows.mockResolvedValue({
+        scan: { pictures: 28172, scanned: 28172 },
+        workflows: [topology(), fresh],
+      });
+      return { name: "flow.json", matched: false, topology_hash: fresh.topology_hash };
+    });
+    const wrapper = await mountShelf();
+    const store = useWorkflowShelfStore();
+    // A new workflow has no pictures, so "In use" would hide it.
+    store.setView({ show: "in_use" });
+    const file = new File([JSON.stringify(graph)], "flow.json");
+    const note = new File(["x"], "holiday.jpg");
+    await wrapper.find(".wfshelf").trigger("drop", fileDrop([file, note]));
+    await settle(wrapper);
+
+    expect(importWorkflow).toHaveBeenCalledTimes(1);
+    expect(importWorkflow).toHaveBeenCalledWith({
+      name: "flow",
+      workflow: graph,
+      keepBoth: true,
+    });
+    expect(store.selectedHash).toBe(fresh.topology_hash);
+    expect(store.view.show).toBe("all");
+    expect(store.visibleRows.map((row) => row.topology_hash)).toContain(
+      fresh.topology_hash,
+    );
+    // The picture is the window importer's, and is not reported here.
+    expect(useNoticeStore().notices.map((n) => n.text)).toEqual([
+      "Added flow.json.",
+    ]);
+  });
+
+  it("says a copy is already there", async () => {
+    importWorkflow.mockResolvedValue({
+      name: "stored.json",
+      matched: true,
+      topology_hash: "a".repeat(64),
+    });
+    const wrapper = await mountShelf();
+    await wrapper
+      .find(".wfshelf")
+      .trigger("drop", fileDrop([new File(["{}"], "flow.json")]));
+    await settle(wrapper);
+    expect(useNoticeStore().notices.map((n) => n.text)).toEqual([
+      "flow.json is already here, as stored.json.",
+    ]);
+  });
+
+  it("takes a drag that carries files, and nothing else", async () => {
+    const wrapper = await mountShelf();
+    const root = wrapper.find(".wfshelf");
+    const json = new File(["{}"], "flow.json");
+
+    const textDrag = fileDrop([json], ["text/plain"]);
+    await root.trigger("dragenter", textDrag);
+    await root.trigger("dragover", textDrag);
+    expect(root.classes()).not.toContain("wfshelf--drop");
+    await root.trigger("drop", textDrag);
+    await settle(wrapper);
+    expect(importWorkflow).not.toHaveBeenCalled();
+
+    const over = new Event("dragover", { bubbles: true, cancelable: true });
+    over.dataTransfer = { types: ["Files"], files: [], dropEffect: "none" };
+    await root.trigger("dragenter", fileDrop([]));
+    root.element.dispatchEvent(over);
+    // Without this the browser opens the file instead of dropping it.
+    expect(over.defaultPrevented).toBe(true);
+    expect(root.classes()).toContain("wfshelf--drop");
+
+    const dropped = new Event("drop", { bubbles: true, cancelable: true });
+    dropped.dataTransfer = { types: ["Files"], files: [], dropEffect: "none" };
+    root.element.dispatchEvent(dropped);
+    await settle(wrapper);
+    expect(dropped.defaultPrevented).toBe(true);
+    expect(root.classes()).not.toContain("wfshelf--drop");
+  });
+
+  it("refuses a file that is not JSON without importing it", async () => {
+    const wrapper = await mountShelf();
+    const file = new File(["{"], "flow.json");
+    await wrapper.find(".wfshelf").trigger("drop", fileDrop([file]));
+    await settle(wrapper);
+    expect(importWorkflow).not.toHaveBeenCalled();
+    expect(useNoticeStore().notices.map((n) => n.text)).toEqual([
+      "flow.json is not valid JSON.",
+    ]);
   });
 });
