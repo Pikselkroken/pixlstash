@@ -30,6 +30,12 @@
  *     an on-disk original dies. This is a recoverable soft delete, one op-log
  *     batch and one Ctrl+Z; borrowing the heavier ceremony would flatten the
  *     distinction between "recoverable" and "gone".
+ *
+ * With `keep-recipes` it is the Keep recipes only consent (#1315): the same
+ * dialog, moving only the copies that could be made again, naming why the rest
+ * stay, and offering to keep every ghost. Ticking that box re-runs the preview
+ * (the parent listens for `update:keepEveryGhost`), so the figure always
+ * describes what the button will do.
  */
 import { computed, nextTick, ref, watch } from "vue";
 import AppDialog from "./AppDialog.vue";
@@ -43,6 +49,8 @@ import {
   keepCoverOnlySkipReasons,
   keepCoverOnlySkippedCount,
   keepCoverOnlyTitle,
+  keepRecipesOnlyStayingCount,
+  keepRecipesOnlyStayingReasons,
 } from "../../utils/keepCoverOnly";
 
 const props = defineProps({
@@ -69,9 +77,13 @@ const props = defineProps({
   previewFailed: { type: Boolean, default: false },
   /** True while the real run is in flight. */
   busy: { type: Boolean, default: false },
+  /** Keep recipes only: move just the copies that could be made again. */
+  keepRecipes: { type: Boolean, default: false },
+  /** Keep recipes only: the keep-every-ghost box, owned by the parent. */
+  keepEveryGhost: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["close", "confirm"]);
+const emit = defineEmits(["close", "confirm", "update:keepEveryGhost"]);
 
 /**
  * True while no figure from the server may be shown.
@@ -109,7 +121,34 @@ const headlineFigure = computed(() =>
     : picturesMoving.value.toLocaleString(),
 );
 
-const title = computed(() => keepCoverOnlyTitle(stacksEligible.value));
+const title = computed(() =>
+  keepCoverOnlyTitle(stacksEligible.value, props.keepRecipes),
+);
+
+const stayingReasons = computed(() =>
+  figuresUnknown.value || !props.keepRecipes
+    ? []
+    : keepRecipesOnlyStayingReasons(props.preview),
+);
+
+const stayingSummary = computed(() => {
+  const count = keepRecipesOnlyStayingCount(props.preview);
+  return `${count.toLocaleString()} ${count === 1 ? "picture stays" : "pictures stay"} in ${count === 1 ? "its stack" : "their stacks"}`;
+});
+
+/**
+ * Offered only where it changes something: while ticked (so it can be
+ * unticked), or when some copies stay only because their ghost would not be
+ * kept. Never when the setting is already `on`.
+ */
+const showEveryGhost = computed(
+  () =>
+    props.keepRecipes &&
+    (props.keepEveryGhost ||
+      (!figuresUnknown.value &&
+        props.preview.ghost_retention !== "on" &&
+        Number(props.preview.pictures_staying_ghost_not_kept) > 0)),
+);
 const confirmLabel = computed(() =>
   keepCoverOnlyConfirmLabel(picturesMoving.value),
 );
@@ -198,7 +237,13 @@ watch(
 
 <template>
   <AppDialog :open="open" :title="title" @close="emit('close')">
-    <p class="kco-lede">
+    <p v-if="keepRecipes" class="kco-lede">
+      Each stack keeps its cover. Every other picture in it that could be made
+      again from its recipe moves to the Scrapheap, where you can restore it.
+      When the Scrapheap is emptied, each keeps its thumbnail and recipe.
+      Loose pictures are left alone.
+    </p>
+    <p v-else class="kco-lede">
       Each stack keeps its cover. Every other picture in it moves to the
       Scrapheap, where you can restore it. A stack collapses whole, even if you
       only picked some of its pictures, and loose pictures are left alone.
@@ -245,6 +290,43 @@ watch(
           {{ reason.text }}
         </li>
       </ul>
+    </section>
+
+    <section
+      v-if="stayingReasons.length || showEveryGhost"
+      class="kco-skips"
+      role="status"
+      aria-labelledby="keep-recipes-staying-title"
+    >
+      <p
+        v-if="stayingReasons.length"
+        id="keep-recipes-staying-title"
+        class="kco-skips-title"
+      >
+        <v-icon size="16" class="kco-icon">mdi-image-multiple-outline</v-icon>
+        {{ stayingSummary }}
+      </p>
+      <ul v-if="stayingReasons.length">
+        <li v-for="reason in stayingReasons" :key="reason.key">
+          {{ reason.text }}
+        </li>
+      </ul>
+      <v-checkbox
+        v-if="showEveryGhost"
+        :model-value="keepEveryGhost"
+        :disabled="busy || loading"
+        density="compact"
+        hide-details
+        class="kco-every-ghost"
+        data-testid="keep-every-ghost"
+        label="Keep a ghost of every picture deleted from the Scrapheap"
+        @update:model-value="emit('update:keepEveryGhost', !!$event)"
+      />
+      <p v-if="showEveryGhost" class="kco-every-ghost-note">
+        Sets Keep picture ghosts to On in Settings › Privacy, so the thumbnail
+        and prompt of any picture you delete for good stay until you purge
+        them.
+      </p>
     </section>
 
     <!-- Info-tinted, not error-tinted: recovery is the reassuring half, and
@@ -380,6 +462,21 @@ watch(
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+.kco-every-ghost {
+  margin-top: var(--space-2);
+}
+
+.kco-every-ghost :deep(.v-label) {
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.kco-every-ghost-note {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
 }
 
 .kco-recovery {

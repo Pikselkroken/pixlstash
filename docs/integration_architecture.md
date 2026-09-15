@@ -290,7 +290,20 @@ created. Design: `docs/design/keep-cover-only.md`; backend: §22.12 of
 | `POST /stacks/keep-cover-only` | collapse every eligible stack to its cover | `KeepCoverOnlyResponse` |
 
 Both take the same body: `{ stack_ids?: int[], picture_ids?: int[], batch_id?:
-string }`. At least one id list must be non-empty (400 otherwise); they are
+string, keep_recipes?: bool, keep_every_ghost?: bool }`.
+
+**`keep_recipes: true` is Keep recipes only (#1315)**, the same routes and the
+same rules below with one more condition per copy: it moves only if it could be
+made again after the Scrapheap is emptied. The rest stay live and are counted,
+one reason each, in `pictures_staying_no_recipe`, `_model_missing`,
+`_no_thumbnail` and `_ghost_not_kept` (per stack in `staying_picture_ids`). A
+stack with no such copy is a fifth stack bucket,
+`stacks_skipped_nothing_reproducible`, and `ghost_retention` says which retention
+position the plan assumed. `keep_every_ghost: true` plans under `on`, and the
+real call sets the server's `workflow_ghost_retention` to `on` once something
+moved: the dialog re-previews when that box changes so the figure stays the
+button's. The op type is `stack.keep_recipes_only`; the setting change is not
+part of its undo. At least one id list must be non-empty (400 otherwise); they are
 unioned, and **the unit is the stack**, any picture named pulls in its whole
 stack, so a partial selection inside a stack collapses the whole stack. Loose
 pictures name no stack and are ignored.

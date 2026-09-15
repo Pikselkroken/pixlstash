@@ -277,6 +277,29 @@ surface picking 3px". Three components already carry a raw 3px rail.
    is what "matching the sibling verbatim" asks for above; converging them is one
    change across all the surfaces that carry keycaps, not a per-dialog decision.
 
+## Keep recipes only (#1315)
+
+The sibling that moves only the copies that could be made again from their
+recipe, so what leaves keeps its thumbnail and recipe when the Scrapheap is
+emptied. Named from the recipe-panel design loop ("Recipe only" members, "Keep
+recipes only" as the action), in the same family as this one so it reads as a
+narrower Keep cover only rather than a new kind of risk. Same dialog, same
+routes (`keep_recipes: true`), same keyboard, same one undo.
+
+* **Eligibility is per copy, and every copy that stays is named.** No recorded
+  workflow, a model not on the shelf, no thumbnail yet, or a ghost the privacy
+  setting would not keep. Each stays in its stack; a stack with nothing left to
+  move "won't change".
+* **The consent can turn on keeping every ghost**, offered only when some copies
+  stay for that reason. Ticking it re-runs the preview, and the setting changes
+  only when the confirmed run moved something. It is a privacy setting, turned
+  back down in Settings › Privacy, and not part of the undo.
+* **The headline is the picture count, not a reclaim figure.** This follows the
+  rule above (a figure is for what changes now) and is how the recipe-panel loop
+  drew it. The release plan asked for the reclaim number instead; that ruling is
+  still the owner's, and changing it is copy in `KeepCoverOnlyDialog.vue`, not a
+  contract change.
+
 ## Acceptance criteria
 
 1. No figure in the dialog derives from a different query than the one the button

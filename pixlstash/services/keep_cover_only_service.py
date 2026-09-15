@@ -62,6 +62,24 @@ nothing. Nothing is freed until the Scrapheap is emptied, and
 install it never empties on its own. The live
 ``scrapheap_retention_days`` setting is served alongside it so the client can
 render "never" instead of hardcoding "30 days".
+
+Keep recipes only
+-----------------
+The same action with one more condition on every copy: it moves only when it
+could be **made again** after the Scrapheap is emptied (issue #1315). That needs
+four things, checked in this order so each copy that stays has exactly one
+reason (:data:`STAYING_REASONS`): an instance row in the hub (the parameters
+and, filed with it, the recipe), every model the recipe loads still on the shelf,
+a thumbnail (a ghost is never written without one), and a ghost the retention
+setting will actually keep at purge (:mod:`~pixlstash.services.workflow_ghost_service`).
+Copies that fail stay in their stack, live. A stack with no copy that passes is
+skipped as :data:`SKIP_NOTHING_REPRODUCIBLE`, never collapsed to nothing.
+
+The pixels still leave through the Scrapheap and nothing else: the ghost is
+written by the purge, under the setting in force then. The dialog can raise that
+setting to ``on`` (``keep_every_ghost``), which is the only way this action
+changes anything outside the library, and it is planned under that position so
+the figures describe what the button does.
 """
 
 from __future__ import annotations
@@ -75,6 +93,7 @@ from sqlmodel import Session, select
 from pixlstash.db_models import Character, Face, Picture, Tag
 from pixlstash.db_models.tag import is_tag_sentinel
 from pixlstash.event_types import EventType
+from pixlstash.hub.workflows import filed_instance_hashes, recipes_missing_a_model
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import operation_log_service, scrapheap_service
 from pixlstash.services.dedup_verdict_service import apply_metadata_union_in_session
@@ -83,6 +102,11 @@ from pixlstash.services.set_lock_service import (
     locked_sets_for_pictures,
 )
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
+from pixlstash.services.workflow_ghost_service import (
+    GHOST_RETENTION_COVERED,
+    GHOST_RETENTION_ON,
+)
+from pixlstash.utils.sql_chunking import chunked
 from pixlstash.stacking import normalize_stack_positions
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -130,16 +154,65 @@ SKIP_CHARACTER_ON_COPY = "character_only_on_copy"
 SKIP_SINGLE_MEMBER = "single_member"
 """Skip reason: fewer than :data:`MIN_STACK_MEMBERS` live members, nothing to do."""
 
-SKIP_REASONS = (SKIP_SINGLE_MEMBER, SKIP_LOCKED, SKIP_CHARACTER_ON_COPY)
+SKIP_NOTHING_REPRODUCIBLE = "nothing_reproducible"
+"""Skip reason (Keep recipes only): no copy in the stack could be made again."""
+
+SKIP_REASONS = (
+    SKIP_SINGLE_MEMBER,
+    SKIP_LOCKED,
+    SKIP_NOTHING_REPRODUCIBLE,
+    SKIP_CHARACTER_ON_COPY,
+)
 """Every skip reason, in the order :func:`plan_in_session` evaluates them.
 
 A stack can satisfy more than one; it is reported under the **first** that
-matches, so the buckets stay disjoint.
+matches, so the buckets stay disjoint. :data:`SKIP_NOTHING_REPRODUCIBLE` only
+occurs under Keep recipes only.
 """
+
+OP_TYPE_KEEP_RECIPES_ONLY = operation_log_service.OP_STACK_KEEP_RECIPES_ONLY
+"""Dotted op type recorded for Keep recipes only."""
+
+STAY_NO_RECIPE = "no_recipe"
+"""A copy stays: the hub holds no instance of its recipe for this library."""
+
+STAY_MODEL_MISSING = "model_missing"
+"""A copy stays: its recipe loads a model the shelf does not hold."""
+
+STAY_NO_THUMBNAIL = "no_thumbnail"
+"""A copy stays: it has no thumbnail yet, and a ghost is never written without one."""
+
+STAY_GHOST_NOT_KEPT = "ghost_not_kept"
+"""A copy stays: the retention setting would not keep its ghost at purge."""
+
+STAYING_REASONS = (
+    STAY_NO_RECIPE,
+    STAY_MODEL_MISSING,
+    STAY_NO_THUMBNAIL,
+    STAY_GHOST_NOT_KEPT,
+)
+"""Why a copy stays under Keep recipes only, in evaluation order (first wins)."""
 
 
 class KeepCoverOnlyError(Exception):
     """Raised when a keep-cover-only request cannot be honoured as asked."""
+
+
+@dataclass(frozen=True)
+class RecipeCheck:
+    """What Keep recipes only needs beyond the vault.
+
+    Attributes:
+        hub: The hub database, or ``None`` for a vault opened without one, in
+            which case no copy can be made again and every copy stays.
+        library_uuid: The active library, which keys instance rows and ghosts.
+        ghost_retention: The position to plan under: the live setting, or
+            ``on`` when the dialog's keep-every-ghost box is ticked.
+    """
+
+    hub: Any
+    library_uuid: Optional[str]
+    ghost_retention: str
 
 
 # --- The plan ---------------------------------------------------------------
@@ -170,6 +243,10 @@ class StackPlan:
         lost_characters: ``[{"id", "name", "picture_ids"}, ...]`` naming each
             character whose only link sits on a copy. Non-empty only for
             :data:`SKIP_CHARACTER_ON_COPY`.
+        staying_copies: Keep recipes only: ``{reason: [picture ids]}`` for the
+            copies that stay live, one of :data:`STAYING_REASONS` each. Empty
+            for Keep cover only and for a stack refused before eligibility was
+            judged (single member, locked).
     """
 
     stack_id: int
@@ -183,6 +260,7 @@ class StackPlan:
     skip_reason: Optional[str] = None
     locked_sets: list[dict] = field(default_factory=list)
     lost_characters: list[dict] = field(default_factory=list)
+    staying_copies: dict[str, list[int]] = field(default_factory=dict)
 
     @property
     def eligible(self) -> bool:
@@ -204,6 +282,9 @@ class StackPlan:
             "skip_reason": self.skip_reason,
             "locked_sets": [dict(entry) for entry in self.locked_sets],
             "lost_characters": [dict(entry) for entry in self.lost_characters],
+            "staying_picture_ids": {
+                reason: list(ids) for reason, ids in self.staying_copies.items()
+            },
         }
 
 
@@ -434,7 +515,9 @@ def _faces_by_picture(session: Session, picture_ids: list[int]) -> dict[int, set
 
 
 def _character_loss(
-    members: list[Picture], faces_by_picture: dict[int, set[int]]
+    members: list[Picture],
+    faces_by_picture: dict[int, set[int]],
+    leaving_ids: Optional[set[int]] = None,
 ) -> dict[int, list[int]]:
     """Characters this stack would lose, mapped to the copies that carry them.
 
@@ -449,6 +532,10 @@ def _character_loss(
     * With more than one character the union writes nothing, so every character
       the cover does not already hold walks out with its copy.
 
+    ``leaving_ids`` narrows who leaves (Keep recipes only moves some copies and
+    not others): a character a staying copy still carries is not lost. ``None``
+    means every copy leaves.
+
     A copy's own ``pending_character_id`` is deliberately **not** treated as a
     link to preserve. It is an unconfirmed suggestion, and it is what the union
     itself writes, so counting it would make an already-unioned stack look like
@@ -461,6 +548,8 @@ def _character_loss(
     if len(members) < MIN_STACK_MEMBERS:
         return {}
     cover = members[0]
+    if leaving_ids is None:
+        leaving_ids = {int(member.id) for member in members[1:]}
     stack_characters: set[int] = set()
     for member in members:
         stack_characters |= faces_by_picture.get(int(member.id), set())
@@ -479,15 +568,84 @@ def _character_loss(
         return {}
     carriers: dict[int, list[int]] = {}
     for member in members[1:]:
+        # A staying copy keeps its own link, so only a leaving carrier loses one.
+        if int(member.id) not in leaving_ids:
+            continue
         for character_id in faces_by_picture.get(int(member.id), set()) & lost:
             carriers.setdefault(character_id, []).append(int(member.id))
     return {cid: sorted(pids) for cid, pids in carriers.items()}
+
+
+def _staying_reasons_in_session(
+    session: Session, copies: list[Picture], recipes: RecipeCheck
+) -> dict[int, str]:
+    """Why each copy that cannot be made again stays, as ``{picture_id: reason}``.
+
+    A copy absent from the answer can move. Each copy gets the **first** of
+    :data:`STAYING_REASONS` it fails, so the per-picture buckets are disjoint.
+
+    Coverage (``covered``) is judged against what survives the action: a live
+    picture carrying the same instance hash that is not itself one of the copies
+    about to move. Two copies covering only each other both stay. That is a
+    single pass and fails toward keeping pixels: a copy left to stay for another
+    reason could have been cover, and is not counted as such.
+    """
+    reasons: dict[int, str] = {}
+    hub, library_uuid = recipes.hub, recipes.library_uuid
+    if hub is None or not library_uuid:
+        return {int(pic.id): STAY_NO_RECIPE for pic in copies}
+
+    filed = filed_instance_hashes(
+        hub,
+        library_uuid,
+        [pic.workflow_instance_hash for pic in copies if pic.workflow_instance_hash],
+    )
+    missing_model = recipes_missing_a_model(
+        hub,
+        [
+            pic.workflow_structural_hash
+            for pic in copies
+            if pic.workflow_structural_hash
+        ],
+    )
+    passing: list[Picture] = []
+    for pic in copies:
+        if not pic.workflow_instance_hash or pic.workflow_instance_hash not in filed:
+            reasons[int(pic.id)] = STAY_NO_RECIPE
+        elif pic.workflow_structural_hash in missing_model:
+            reasons[int(pic.id)] = STAY_MODEL_MISSING
+        elif pic.thumbnail_width is None:
+            reasons[int(pic.id)] = STAY_NO_THUMBNAIL
+        else:
+            passing.append(pic)
+
+    if recipes.ghost_retention == GHOST_RETENTION_ON:
+        return reasons
+    covered: set[str] = set()
+    if recipes.ghost_retention == GHOST_RETENTION_COVERED:
+        moving_ids = {int(pic.id) for pic in passing}
+        for batch in chunked(sorted({pic.workflow_instance_hash for pic in passing})):
+            covered.update(
+                instance_hash
+                for picture_id, instance_hash in session.exec(
+                    select(Picture.id, Picture.workflow_instance_hash).where(
+                        Picture.workflow_instance_hash.in_(batch),
+                        Picture.deleted.is_(False),
+                    )
+                ).all()
+                if int(picture_id) not in moving_ids
+            )
+    for pic in passing:
+        if pic.workflow_instance_hash not in covered:
+            reasons[int(pic.id)] = STAY_GHOST_NOT_KEPT
+    return reasons
 
 
 def plan_in_session(
     session: Session,
     stack_ids: Optional[Iterable[int]] = None,
     picture_ids: Optional[Iterable[int]] = None,
+    recipes: Optional[RecipeCheck] = None,
 ) -> KeepCoverOnlyPlan:
     """Decide, in one read, exactly what Keep cover only would do.
 
@@ -506,7 +664,10 @@ def plan_in_session(
        The **whole** stack is refused: stack membership reconciles to the union
        of its members' sets, so removing one member is the mutation the lock
        forbids, and a partial collapse is the worst outcome available.
-    3. :data:`SKIP_CHARACTER_ON_COPY`: see :func:`_character_loss`.
+    3. :data:`SKIP_NOTHING_REPRODUCIBLE` (Keep recipes only): no copy could be
+       made again, so there is nothing to move.
+    4. :data:`SKIP_CHARACTER_ON_COPY`: see :func:`_character_loss`, over the
+       copies that would actually leave.
 
     Everything else is eligible. No bucket is ever computed by subtraction: each
     stack is appended to exactly one, and :func:`preview_in_session` asserts the
@@ -516,6 +677,8 @@ def plan_in_session(
         session: Pre-opened DB session.
         stack_ids: Stacks named directly.
         picture_ids: Pictures whose stacks should be collapsed.
+        recipes: Plan Keep recipes only instead: a copy moves only when it could
+            be made again. ``None`` is Keep cover only.
 
     Returns:
         A :class:`KeepCoverOnlyPlan`.
@@ -534,10 +697,31 @@ def plan_in_session(
     # an N+1, and this is the same helper the bulk soft-delete and the scrapheap
     # purge use, so the three cannot disagree about what is frozen.
     locked_by_picture = locked_sets_for_pictures(session, all_member_ids)
+    staying: Optional[dict[int, str]] = None
+    if recipes is not None:
+        # Judged only over stacks that could still collapse, so a locked stack's
+        # copies are neither counted as staying nor as moving: they are cover.
+        staying = _staying_reasons_in_session(
+            session,
+            [
+                pic
+                for members in members_by_stack.values()
+                if len(members) >= MIN_STACK_MEMBERS
+                and not any(locked_by_picture.get(int(m.id)) for m in members)
+                for pic in members[1:]
+            ],
+            recipes,
+        )
     # Computed once per stack and threaded through, so the names query and the
     # per-stack classification can never disagree about what would be lost.
     loss_by_stack = {
-        stack_id: _character_loss(members, faces_by_picture)
+        stack_id: _character_loss(
+            members,
+            faces_by_picture,
+            None
+            if staying is None
+            else {int(pic.id) for pic in members[1:] if int(pic.id) not in staying},
+        )
         for stack_id, members in members_by_stack.items()
     }
     character_names = _character_names(
@@ -566,6 +750,7 @@ def plan_in_session(
                 locked_by_picture,
                 loss_by_stack.get(stack_id) or {},
                 character_names,
+                staying,
             )
         )
     return KeepCoverOnlyPlan(plans, sorted(set(unknown)))
@@ -592,13 +777,21 @@ def _plan_one_stack(
     locked_by_picture: dict[int, list[dict]],
     lost_characters: dict[int, list[int]],
     character_names: dict[int, str],
+    staying: Optional[dict[int, str]] = None,
 ) -> StackPlan:
     """Classify one stack into exactly one bucket. See :func:`plan_in_session`."""
     cover = members[0]
     cover_id = int(cover.id)
+    member_ids = [int(pic.id) for pic in members]
+    staying_copies: dict[str, list[int]] = {}
     copies = list(members[1:])
+    if staying is not None:
+        for pic in copies:
+            reason = staying.get(int(pic.id))
+            if reason is not None:
+                staying_copies.setdefault(reason, []).append(int(pic.id))
+        copies = [pic for pic in copies if int(pic.id) not in staying]
     copy_ids = [int(pic.id) for pic in copies]
-    member_ids = [cover_id, *copy_ids]
 
     cover_tags = tags_by_picture.get(cover_id, set())
     union_tags: set[str] = set()
@@ -635,10 +828,19 @@ def _plan_one_stack(
             **common,
         )
 
+    if staying is not None and not copies:
+        return StackPlan(
+            copy_ids=[],
+            skip_reason=SKIP_NOTHING_REPRODUCIBLE,
+            staying_copies=staying_copies,
+            **common,
+        )
+
     if lost_characters:
         return StackPlan(
             copy_ids=[],
             skip_reason=SKIP_CHARACTER_ON_COPY,
+            staying_copies=staying_copies,
             lost_characters=[
                 {
                     "id": cid,
@@ -650,7 +852,7 @@ def _plan_one_stack(
             **common,
         )
 
-    return StackPlan(copy_ids=copy_ids, **common)
+    return StackPlan(copy_ids=copy_ids, staying_copies=staying_copies, **common)
 
 
 # --- The dry run ------------------------------------------------------------
@@ -661,6 +863,7 @@ def preview_in_session(
     stack_ids: Optional[Iterable[int]] = None,
     picture_ids: Optional[Iterable[int]] = None,
     retention_days: Optional[int] = None,
+    recipes: Optional[RecipeCheck] = None,
 ) -> dict[str, Any]:
     """The confirm dialog's only source of truth, in one read.
 
@@ -672,6 +875,7 @@ def preview_in_session(
             the handler from server-config and passed in so the client never
             hardcodes a window. ``None`` means "Never", the default, in which
             case the Scrapheap never empties on its own.
+        recipes: Preview Keep recipes only; see :func:`plan_in_session`.
 
     Returns:
         The response body documented on
@@ -679,11 +883,12 @@ def preview_in_session(
         are disjoint and sum to ``stacks_selected``; the sum is asserted here so
         a future bucket cannot be added without being counted.
     """
-    plan = plan_in_session(session, stack_ids, picture_ids)
+    plan = plan_in_session(session, stack_ids, picture_ids, recipes)
     eligible = plan.eligible
     skipped_locked = plan.skipped(SKIP_LOCKED)
     skipped_character = plan.skipped(SKIP_CHARACTER_ON_COPY)
     skipped_single = plan.skipped(SKIP_SINGLE_MEMBER)
+    skipped_nothing = plan.skipped(SKIP_NOTHING_REPRODUCIBLE)
 
     moving = plan.moving_picture_ids
     reference_moving = sorted(pid for row in eligible for pid in row.reference_copy_ids)
@@ -698,6 +903,7 @@ def preview_in_session(
         + len(skipped_locked)
         + len(skipped_character)
         + len(skipped_single)
+        + len(skipped_nothing)
     )
     if buckets != len(plan.stacks):
         # Not a fallback: the arithmetic is the dialog's whole safety property,
@@ -729,6 +935,20 @@ def preview_in_session(
         "scrapheap_retention_days": retention_days,
         "unknown_stack_ids": list(plan.unknown_stack_ids),
         "stacks": [row.as_dict() for row in plan.stacks],
+        "keep_recipes": recipes is not None,
+        "stacks_skipped_nothing_reproducible": len(skipped_nothing),
+        "ghost_retention": recipes.ghost_retention if recipes else None,
+        # Keep recipes only: the copies that stay live, per reason. Counted over
+        # the stacks that are eligible or have nothing reproducible, which are the
+        # only ones whose copies were judged one by one, so a copy of a locked
+        # stack is never in two places.
+        **{
+            f"pictures_staying_{reason}": sum(
+                len(row.staying_copies.get(reason, []))
+                for row in [*eligible, *skipped_nothing]
+            )
+            for reason in STAYING_REASONS
+        },
     }
 
 
@@ -743,6 +963,7 @@ def keep_cover_only_in_session(
     actor: Optional[str] = None,
     source: str = "external",
     origin_client_id: Optional[str] = None,
+    recipes: Optional[RecipeCheck] = None,
 ) -> dict[str, Any]:
     """Collapse every eligible stack in the selection to its cover.
 
@@ -766,12 +987,14 @@ def keep_cover_only_in_session(
         batch_id: Operation-log batch; minted server-side when absent.
         actor / source / origin_client_id: §21 origin discipline, read from the
             request in the handler and passed down explicitly.
+        recipes: Keep recipes only; see :func:`plan_in_session`. Copies that
+            could not be made again stay live in their stack.
 
     Returns:
         The response body documented on ``POST /api/v1/stacks/keep-cover-only``,
         plus ``event_picture_ids`` for the vault wrapper's announcement.
     """
-    plan = plan_in_session(session, stack_ids, picture_ids)
+    plan = plan_in_session(session, stack_ids, picture_ids, recipes)
     eligible = plan.eligible
     moving = plan.moving_picture_ids
 
@@ -795,6 +1018,13 @@ def keep_cover_only_in_session(
             row.stack_id for row in plan.skipped(SKIP_SINGLE_MEMBER)
         ],
         "unknown_stack_ids": list(plan.unknown_stack_ids),
+        "keep_recipes": recipes is not None,
+        "stacks_skipped_nothing_reproducible": [
+            row.as_dict() for row in plan.skipped(SKIP_NOTHING_REPRODUCIBLE)
+        ],
+        "pictures_staying": sum(
+            len(ids) for row in eligible for ids in row.staying_copies.values()
+        ),
         "batch_id": None,
         "event_picture_ids": [],
     }
@@ -867,12 +1097,18 @@ def keep_cover_only_in_session(
     after = operation_log_service.capture_state_in_session(session, undo_targets)
     recorded = operation_log_service.record_operation_in_session(
         session,
-        op_type=OP_TYPE_KEEP_COVER_ONLY,
+        op_type=OP_TYPE_KEEP_COVER_ONLY
+        if recipes is None
+        else OP_TYPE_KEEP_RECIPES_ONLY,
         before=before,
         after=after,
         batch_id=batch_id,
-        summary=operation_log_service.keep_cover_only_summary(
-            len(eligible), len(moving)
+        summary=(
+            operation_log_service.keep_cover_only_summary(len(eligible), len(moving))
+            if recipes is None
+            else operation_log_service.keep_recipes_only_summary(
+                len(eligible), len(moving)
+            )
         ),
         actor=actor,
         source=source,
@@ -932,6 +1168,7 @@ def preview(
     stack_ids: Optional[Iterable[int]] = None,
     picture_ids: Optional[Iterable[int]] = None,
     retention_days: Optional[int] = None,
+    recipes: Optional[RecipeCheck] = None,
 ) -> dict[str, Any]:
     """Read-only vault wrapper around :func:`preview_in_session`."""
     return vault.db.run_immediate_read_task(
@@ -939,6 +1176,7 @@ def preview(
         list(stack_ids or []),
         list(picture_ids or []),
         retention_days,
+        recipes,
     )
 
 
@@ -950,6 +1188,7 @@ def keep_cover_only(
     actor: Optional[str] = None,
     source: str = "external",
     origin_client_id: Optional[str] = None,
+    recipes: Optional[RecipeCheck] = None,
 ) -> dict[str, Any]:
     """Write-path vault wrapper around :func:`keep_cover_only_in_session`."""
     result = vault.db.run_task(
@@ -960,6 +1199,7 @@ def keep_cover_only(
         actor,
         source,
         origin_client_id,
+        recipes,
     )
     moved = result.get("picture_ids_moved") or []
     covers = result.get("cover_picture_ids") or []
@@ -1030,16 +1270,36 @@ def read_retention_days(server) -> Optional[int]:
     return scrapheap_service.read_retention_days(getattr(server, "_server_config", {}))
 
 
+def recipe_check(vault: "Vault", keep_every_ghost: bool = False) -> RecipeCheck:
+    """The :class:`RecipeCheck` for the active library, planned under the live
+    ghost retention, or under ``on`` when the dialog asked to keep every ghost."""
+    return RecipeCheck(
+        hub=vault.hub,
+        library_uuid=vault.library_uuid,
+        ghost_retention=GHOST_RETENTION_ON
+        if keep_every_ghost
+        else vault.ghost_retention,
+    )
+
+
 __all__ = [
     "KeepCoverOnlyError",
     "KeepCoverOnlyPlan",
     "MAX_SELECTION_IDS",
     "MIN_STACK_MEMBERS",
     "OP_TYPE_KEEP_COVER_ONLY",
+    "OP_TYPE_KEEP_RECIPES_ONLY",
+    "RecipeCheck",
     "SKIP_CHARACTER_ON_COPY",
     "SKIP_LOCKED",
+    "SKIP_NOTHING_REPRODUCIBLE",
     "SKIP_REASONS",
     "SKIP_SINGLE_MEMBER",
+    "STAYING_REASONS",
+    "STAY_GHOST_NOT_KEPT",
+    "STAY_MODEL_MISSING",
+    "STAY_NO_RECIPE",
+    "STAY_NO_THUMBNAIL",
     "StackPlan",
     "coerce_selection_ids",
     "enforce_selection_budget",
@@ -1049,5 +1309,6 @@ __all__ = [
     "preview",
     "preview_in_session",
     "read_retention_days",
+    "recipe_check",
     "resolve_selection_in_session",
 ]
