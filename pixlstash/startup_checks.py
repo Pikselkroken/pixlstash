@@ -463,12 +463,18 @@ class StartupChecks:
                     "inference. " + self._metal_onnx_note()
                 )
                 return
+            # A CUDA config on a Mac: naming Metal tells the owner the machine
+            # has a GPU this server can use, and the hint says how to reach it.
+            metal_host = is_explicit_gpu and _mps_available(torch)
+            host_note = " (this host has Apple Metal)" if metal_host else ""
             self._handle_gpu_check_failure(
                 outcome,
                 is_auto_mode,
                 is_explicit_gpu,
                 f"{accel_name} is unavailable; forcing CPU inference.",
-                f"{accel_name} is unavailable while default_device is set to cuda.",
+                f"{accel_name} is unavailable{host_note} while default_device is "
+                "set to cuda.",
+                metal_host=metal_host,
             )
             return
 
@@ -578,14 +584,16 @@ class StartupChecks:
         is_explicit_gpu: bool,
         fallback_warning: str,
         explicit_gpu_failure: str,
+        metal_host: bool = False,
     ) -> None:
         if is_explicit_gpu and not is_auto_mode:
             # Refusing rather than silently downgrading is deliberate: the owner
             # named a device, so booting on a different one is a lie. But a
             # refusal that does not say how to boot strands them, so the failure
-            # carries the config path and the two values that start the server.
+            # carries the config path and the values that start the server -
+            # the one that uses this host's Metal, or cpu and auto elsewhere.
             outcome.hard_failures.append(
-                f"{explicit_gpu_failure}\n{self._device_config_hint()}"
+                f"{explicit_gpu_failure}\n{self._device_config_hint(metal_host)}"
             )
             return
         self._force_cpu_with_warning(
@@ -656,12 +664,21 @@ class StartupChecks:
                 continue
         return "unknown"
 
-    def _device_config_hint(self) -> str:
-        """How to change the device, named exactly enough to act on."""
-        return (
-            f"Server config path: {self._server_config_path}.\n"
-            "Set `default_device` to `cpu` or `auto` there to avoid strict CUDA startup checks."
-        )
+    def _device_config_hint(self, metal_host: bool = False) -> str:
+        """How to change the device, named exactly enough to act on.
+
+        Args:
+            metal_host: Whether this host has Apple Metal. ``auto`` is then the
+                one value that uses its GPU; ``cpu`` would boot without it.
+        """
+        if metal_host:
+            advice = "Set `default_device` to `auto` there to use Apple Metal."
+        else:
+            advice = (
+                "Set `default_device` to `cpu` or `auto` there to avoid strict "
+                "CUDA startup checks."
+            )
+        return f"Server config path: {self._server_config_path}.\n{advice}"
 
     def _onnx_cuda_remediation_hint(
         self, onnx_package: str, gpu_arch_note: str = ""

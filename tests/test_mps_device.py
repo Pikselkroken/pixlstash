@@ -753,6 +753,49 @@ def test_an_explicit_cuda_on_a_mac_with_metal_still_refuses(patch_runtime, confi
     assert "Metal" not in " ".join(outcome.notes)
 
 
+@pytest.mark.parametrize("configured", ["cuda", "gpu"])
+def test_a_cuda_refusal_on_a_mac_names_metal_and_points_at_auto(
+    patch_runtime, configured
+):
+    """The refusal says the machine has Metal and that ``auto`` reaches it.
+
+    ``cpu`` would boot too, on the CPU; an owner with a GPU needs the one value
+    that uses it.
+    """
+    patch_runtime(_fake_torch(cuda=False, mps=True))
+    outcome = StartupCheckOutcome()
+    _checks(configured)._check_device_and_vram(outcome)
+
+    assert len(outcome.hard_failures) == 1, outcome.hard_failures
+    failure = outcome.hard_failures[0]
+    assert failure.startswith(
+        "CUDA is unavailable (this host has Apple Metal) while default_device is "
+        "set to cuda.\n"
+    ), failure
+    assert failure.endswith(
+        "Set `default_device` to `auto` there to use Apple Metal."
+    ), failure
+
+
+def test_a_cuda_refusal_without_metal_names_nothing(patch_runtime):
+    # Control for the test above: no Metal, so nothing is named and the hint
+    # still offers both ways to boot.
+    patch_runtime(_fake_torch(cuda=False, mps=False))
+    outcome = StartupCheckOutcome()
+    _checks("cuda")._check_device_and_vram(outcome)
+
+    assert len(outcome.hard_failures) == 1, outcome.hard_failures
+    failure = outcome.hard_failures[0]
+    assert failure.startswith(
+        "CUDA is unavailable while default_device is set to cuda.\n"
+    ), failure
+    assert "Apple Metal" not in failure
+    assert failure.endswith(
+        "Set `default_device` to `cpu` or `auto` there to avoid strict CUDA "
+        "startup checks."
+    ), failure
+
+
 def test_a_metal_probe_that_raises_is_logged_at_warning(patch_runtime, caplog):
     # A working torch answers False on a machine with no Metal; a raise is a
     # broken install, and auto mode reports it only as "forcing CPU".
