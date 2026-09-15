@@ -886,6 +886,7 @@ class ReferenceFolderScanTask(BaseTask):
                                 )
                     session.flush()
                 session.commit()
+                self._db.tag_resets.mark_reset(retagged)
 
             self._db.run_task(
                 apply_caption_updates, caption_updates, priority=DBPriority.LOW

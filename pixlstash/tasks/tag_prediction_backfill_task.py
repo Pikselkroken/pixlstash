@@ -48,6 +48,7 @@ class TagPredictionBackfillTask(BaseTask):
         database,
         tagging_workflow: TaggingWorkflow,
         pictures: list,
+        reset_generation: int | None = None,
     ):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
         super().__init__(
@@ -60,6 +61,13 @@ class TagPredictionBackfillTask(BaseTask):
         self._db = database
         self._tagging_workflow = tagging_workflow
         self._pictures = pictures or []
+        # `database.tag_resets.current()` read BEFORE the pictures were, as for
+        # `TagTask`: a picture retagged after it gets no rows from this pass
+        # (#1367). The registry is optional on the database object.
+        self._tag_resets = getattr(database, "tag_resets", None)
+        if reset_generation is None and self._tag_resets is not None:
+            reset_generation = self._tag_resets.current()
+        self._reset_generation = reset_generation
 
     @property
     def priority(self) -> TaskPriority:
@@ -137,7 +145,7 @@ class TagPredictionBackfillTask(BaseTask):
             engine_override="pixlstash_tagger"
         )
         written = self._db.run_task(
-            self._backfill_predictions,
+            self._backfill_predictions_unless_reset,
             label_scores_by_pic_id,
             attempted_pic_ids,
             model_version,
@@ -157,6 +165,41 @@ class TagPredictionBackfillTask(BaseTask):
             "backfilled": int(written or 0),
             "pictures": len(attempted_pic_ids),
         }
+
+    def _backfill_predictions_unless_reset(
+        self,
+        session: Session,
+        label_scores_by_pic_id: dict,
+        attempted_picture_ids: list,
+        model_version: str,
+    ) -> int:
+        """``_backfill_predictions`` minus pictures retagged since the read (#1367).
+
+        Their scores were taken against the replaced tags, and a retag by a
+        plugin tagger never deletes built-in rows, so they would outlive it.
+        Must run on the writer thread, where the resets also run.
+        """
+        if self._tag_resets is not None:
+            stale = self._tag_resets.reset_since(
+                attempted_picture_ids, self._reset_generation
+            )
+            if stale:
+                logger.info(
+                    "TagPredictionBackfillTask %s: dropping %d picture(s) retagged "
+                    "since it read them: %s",
+                    self.id,
+                    len(stale),
+                    sorted(stale),
+                )
+                label_scores_by_pic_id = {
+                    p: v for p, v in label_scores_by_pic_id.items() if p not in stale
+                }
+                attempted_picture_ids = [
+                    p for p in attempted_picture_ids if p not in stale
+                ]
+        return self._backfill_predictions(
+            session, label_scores_by_pic_id, attempted_picture_ids, model_version
+        )
 
     @staticmethod
     def _backfill_predictions(
