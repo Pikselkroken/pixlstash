@@ -95,6 +95,20 @@
         </template>
       </div>
 
+      <!-- A built-in workflow ships with the app and has nothing to delete. -->
+      <div v-if="file.source !== 'built-in'" class="inspector-section">
+        <AppButton
+          size="sm"
+          variant="danger"
+          icon-left="delete-outline"
+          class="wfins-action"
+          :disabled="deleting"
+          @click="deleteFile"
+        >
+          Delete workflow
+        </AppButton>
+      </div>
+
       <PicturePicker
         :open="pickerFor !== null"
         :subtitle="pickerFor ? `for ${pickerFor.title} #${pickerFor.node_id}` : ''"
@@ -272,11 +286,14 @@
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
+import { deleteWorkflow } from "../../api/comfyui";
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { useConfirm } from "../../composables/useConfirm";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useWorkflowShelfStore } from "../../stores/useWorkflowShelfStore";
+import { errorDetail } from "../../utils/apiError";
 import { formatUserDay } from "../../utils/utils";
 import {
   baseModelName,
@@ -312,6 +329,7 @@ const notices = useNoticeStore();
 const sidebarStore = useSidebarStore();
 const userPrefs = useUserPrefsStore();
 const router = useRouter();
+const { confirm } = useConfirm();
 
 const tab = ref("workflow");
 
@@ -455,6 +473,39 @@ async function onPicked(picture) {
   );
   if (failed) notices.push({ level: "error", text: failed });
   else pickerFor.value = null;
+}
+
+const deleting = ref(false);
+
+/**
+ * Delete the selected saved workflow. The server writes it back to the
+ * workflows folder and moves that file to the system trash, so restoring it
+ * from there imports it again.
+ */
+async function deleteFile() {
+  const target = file.value;
+  if (!target) return;
+  const label = target.display_name || target.name;
+  const confirmed = await confirm({
+    title: "Delete workflow",
+    message: `Delete '${label}'? It goes to the system trash, and restoring it from there adds it back.`,
+    confirmLabel: "Delete",
+    danger: true,
+  });
+  if (!confirmed) return;
+  deleting.value = true;
+  try {
+    await deleteWorkflow(target.name);
+    await store.fetchFiles();
+  } catch (err) {
+    console.warn("[workflows] could not delete", target.name, err);
+    notices.push({
+      level: "error",
+      text: errorDetail(err) || `Could not delete '${label}'.`,
+    });
+  } finally {
+    deleting.value = false;
+  }
 }
 
 function day(iso) {

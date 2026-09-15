@@ -26,13 +26,17 @@ const sectionStub = vi.hoisted(() => ({
 vi.mock("./AccountSection.vue", () => ({ default: sectionStub }));
 vi.mock("./AppearanceSection.vue", () => ({ default: sectionStub }));
 vi.mock("./BehaviourSection.vue", () => ({ default: sectionStub }));
-vi.mock("./ComputeSection.vue", () => ({ default: sectionStub }));
+vi.mock("./ComputeSection.vue", () => ({
+  default: { template: '<div class="compute-stub" />' },
+}));
 vi.mock("./LibrariesSection.vue", () => ({ default: sectionStub }));
 vi.mock("./PrivacySection.vue", () => ({ default: sectionStub }));
 vi.mock("./ScrapheapSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SnapshotsSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SmartScoreSection.vue", () => ({ default: sectionStub }));
-vi.mock("./WorkflowsSection.vue", () => ({ default: sectionStub }));
+vi.mock("./ComfyuiHostSection.vue", () => ({
+  default: { template: '<div class="comfyui-host-stub" />' },
+}));
 
 import UserSettingsDialog from "./UserSettingsDialog.vue";
 import { sessionContext } from "../../utils/apiClient";
@@ -75,14 +79,14 @@ describe("UserSettingsDialog library navigation", () => {
 
     // The whole order, not an adjacency: an index comparison between two
     // entries also holds when one of them is missing from the rail entirely.
-    // Compute and Backend are desktop-only and absent under jsdom.
+    // Backend is desktop-only and absent under jsdom; Compute stays, because
+    // the ComfyUI host lives there.
     expect(
       wrapper.findAll(".settings-nav-item").map((n) => n.attributes("id")),
     ).toEqual([
       "settings-nav-appearance",
       "settings-nav-behaviour",
       "settings-nav-smart-score",
-      "settings-nav-workflows",
       "settings-nav-libraries",
       // No Library layout rail item: the layout is a property of whichever
       // library is *open*, so it is a dialog off the active library's overflow
@@ -90,6 +94,7 @@ describe("UserSettingsDialog library navigation", () => {
       "settings-nav-scrapheap",
       "settings-nav-snapshots",
       "settings-nav-privacy",
+      "settings-nav-compute",
       "settings-nav-account",
     ]);
   });
@@ -105,6 +110,18 @@ describe("UserSettingsDialog library navigation", () => {
       expect(pane.attributes("role")).toBe("region");
       expect(pane.attributes("aria-labelledby")).toBe(item.attributes("id"));
     }
+  });
+
+  it("keeps the ComfyUI host on Compute in a browser, without acceleration", async () => {
+    // Acceleration needs the desktop bridge; the ComfyUI host does not, and
+    // Compute is the only place left to set it.
+    sessionContext.value = { scope: "ALL" };
+    const wrapper = mountDialog();
+    await nextTick();
+
+    const pane = wrapper.find("#settings-pane-compute");
+    expect(pane.find(".comfyui-host-stub").exists()).toBe(true);
+    expect(pane.find(".compute-stub").exists()).toBe(false);
   });
 
   it("does not disclose the nav entry or pane in read-only/share mode", async () => {
