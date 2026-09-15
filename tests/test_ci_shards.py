@@ -1433,7 +1433,7 @@ def test_test_time_budget_fires_on_over_budget_input(tmp_path, monkeypatch):
 
     The step summary is redirected: under Actions the real one belongs to the
     shard running this test, and the synthetic breaches below landed on its
-    run page as a genuine "shard 2 exceeded its budget" report.
+    run page as a genuine "shard exceeded its budget" report.
     """
     summary = tmp_path / "step-summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
