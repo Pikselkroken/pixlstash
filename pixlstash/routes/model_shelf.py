@@ -116,6 +116,7 @@ from pixlstash.services.model_shelf_service import (
     fetch_locations,
     fetch_model_by_hash,
     fetch_models,
+    fetch_picture_counts,
     forget_models,
     replace_attachments,
     update_models,
@@ -349,6 +350,22 @@ class ModelResponse(BaseModel):
             "draws as a generated mark rather than as a blank cell. A hash "
             "rather than a URL so several rows sharing a logo are visibly the "
             "same object and the browser caches one response for all of them."
+        ),
+    )
+    pictures_verified: int = Field(
+        default=0,
+        description=(
+            "Pictures in the active library, Scrapheap excluded, whose workflow "
+            "loaded this model by its sha256: that exact file."
+        ),
+    )
+    pictures_by_filename: int = Field(
+        default=0,
+        description=(
+            "Further pictures whose workflow names a file with this model's "
+            "filename. Unverified: a file of that name, not necessarily this "
+            "one. Never folded into `pictures_verified`, and a picture counted "
+            "there is not counted here."
         ),
     )
     locations: list[ModelLocation] = Field(
@@ -599,7 +616,9 @@ def _to_response(
     locations: dict[int, list[dict]],
     attachments: dict[str, list[dict]],
     capabilities: dict[int, list[str]],
+    picture_counts: dict[int, dict[str, int]],
 ) -> ModelResponse:
+    counts = picture_counts.get(int(row["id"]), {})
     return ModelResponse(
         id=int(row["id"]),
         sha256=row["sha256"],
@@ -630,6 +649,8 @@ def _to_response(
             ModelAttachment(**att) for att in attachments.get(row["sha256"] or "", [])
         ],
         capabilities=capabilities.get(int(row["id"]), []),
+        pictures_verified=counts.get("verified", 0),
+        pictures_by_filename=counts.get("by_filename", 0),
     )
 
 
@@ -690,7 +711,11 @@ def create_router(server) -> APIRouter:
         locations = fetch_locations(server.hub)
         attachments = fetch_attachments(server.vault)
         capabilities = fetch_capabilities(server.hub)
-        return [_to_response(row, locations, attachments, capabilities) for row in rows]
+        picture_counts = fetch_picture_counts(server.hub, server.vault)
+        return [
+            _to_response(row, locations, attachments, capabilities, picture_counts)
+            for row in rows
+        ]
 
     @router.get(
         "/adapters",
@@ -799,6 +824,7 @@ def create_router(server) -> APIRouter:
             fetch_locations(server.hub, int(row["id"])),
             fetch_attachments(server.vault, sha256=sha256),
             fetch_capabilities(server.hub, int(row["id"])),
+            fetch_picture_counts(server.hub, server.vault),
         )
 
     @router.get(
