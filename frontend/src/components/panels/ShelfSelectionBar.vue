@@ -37,7 +37,10 @@
           <v-icon size="16" class="selbar-chevron">mdi-menu-down</v-icon>
         </button>
       </template>
-      <div class="ctx-menu shelf-menu" role="menu">
+      <div class="ctx-menu shelf-menu" role="menu"
+        tabindex="-1"
+        @keydown="onMenuKeydown"
+      >
         <button
           class="ctx-item"
           type="button"
@@ -279,6 +282,7 @@ import {
   movableCopies,
   trashName,
 } from "../../utils/modelShelf";
+import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 
 const emit = defineEmits([
   "rename",

@@ -124,7 +124,10 @@
             >Add</AppBarButton
           >
         </template>
-        <div class="ctx-menu shelf-menu" role="menu">
+        <div class="ctx-menu shelf-menu" role="menu"
+          tabindex="-1"
+          @keydown="onMenuKeydown"
+        >
           <button
             class="ctx-item"
             type="button"
@@ -1383,7 +1386,10 @@
       origin="top start"
       :offset="2"
     >
-      <div v-if="folderMenuFolder" class="ctx-menu shelf-menu" role="menu">
+      <div v-if="folderMenuFolder" class="ctx-menu shelf-menu" role="menu"
+        tabindex="-1"
+        @keydown="onMenuKeydown"
+      >
         <button
           v-if="foldersDialogRef?.canScan(folderMenuFolder)"
           class="ctx-item"
@@ -1546,6 +1552,7 @@ import {
   unstackReceipt,
   sortDirectionLabel,
 } from "../../utils/modelShelf";
+import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 
 // Settings lives in App.vue's sidebar dialog, so the toolbar's Settings button
 // asks for it the way the duplicates queue does. The stats toggle needs no

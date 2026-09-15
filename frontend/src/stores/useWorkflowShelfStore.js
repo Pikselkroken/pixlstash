@@ -17,6 +17,7 @@ import {
   filterWorkflows,
   GROUP_BY_KEYS,
   groupWorkflows,
+  hasGhosts,
   libraryState,
   SHOW_KEYS,
   SORT_KEYS,
@@ -40,7 +41,13 @@ const VIEW_SCHEMA_VERSION = 1;
 const MAX_COLLAPSED_KEYS = 200;
 
 function defaultView() {
-  return { groupBy: "none", sortKey: "used", descending: true, show: "all" };
+  return {
+    groupBy: "none",
+    sortKey: "used",
+    descending: true,
+    show: "all",
+    ghosts: false,
+  };
 }
 
 function readStored(key) {
@@ -76,6 +83,7 @@ function storedView() {
   if (typeof parsed.descending === "boolean") {
     view.descending = parsed.descending;
   }
+  if (typeof parsed.ghosts === "boolean") view.ghosts = parsed.ghosts;
   const collapsed = Array.isArray(parsed.collapsed) ? parsed.collapsed : [];
   return { view, collapsed: collapsed.filter((k) => typeof k === "string") };
 }
@@ -137,21 +145,26 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
   // reset must not write its rows into the new session's store.
   let epoch = 0;
 
-  const visibleRows = computed(() =>
-    sortWorkflows(
-      filterWorkflows(rows.value, view.show),
+  const visibleRows = computed(() => {
+    const shown = filterWorkflows(rows.value, view.show);
+    return sortWorkflows(
+      view.ghosts ? shown.filter(hasGhosts) : shown,
       view.sortKey,
       view.descending,
-    ),
-  );
+    );
+  });
+
+  /** How many workflows keep a ghost, whatever the other axes show. */
+  const ghostRowCount = computed(() => rows.value.filter(hasGhosts).length);
 
   const groups = computed(() =>
     groupWorkflows(visibleRows.value, view.groupBy),
   );
 
-  const state = computed(() =>
-    libraryState(scan.value, visibleRows.value.length),
-  );
+  // The whole list, not what the filters leave: a filter that matches nothing
+  // is not a library with no workflows, and saying so would be the wrong
+  // sentence for exactly the list the Ghosts toggle is meant to empty.
+  const state = computed(() => libraryState(scan.value, rows.value.length));
 
   const selectedRow = computed(
     () =>
@@ -184,7 +197,7 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
    *
    * No refetch: every axis is a re-read of rows already in hand.
    *
-   * @param {Object} patch - `groupBy`, `sortKey`, `descending` or `show`.
+   * @param {Object} patch - `groupBy`, `sortKey`, `descending`, `show` or `ghosts`.
    */
   function setView(patch) {
     Object.assign(view, patch || {});
@@ -441,6 +454,20 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
     return samplesFailed.value.has(topologyHash);
   }
 
+  /**
+   * Forget what was read and read the list again, after something outside this
+   * view changed what the rows say (a ghost purge in Settings › Privacy).
+   *
+   * The variants go too, and the open rows with them: a variant fetched before
+   * a model-name purge still carries the names, and it is otherwise kept for
+   * the whole session. Tile ids are picture ids, which a purge does not touch.
+   */
+  function invalidate() {
+    openHashes.value = new Set();
+    for (const key of Object.keys(variants)) delete variants[key];
+    if (loaded.value) fetchRows();
+  }
+
   function resetForSession() {
     epoch += 1;
     rows.value = [];
@@ -490,6 +517,7 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
     loadInputs,
     inputsDidFail,
     setInputMode,
+    ghostRowCount,
     variants,
     samples,
     setView,
@@ -504,6 +532,7 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
     isSamplesLoading,
     samplesDidFail,
     loadSamples,
+    invalidate,
     resetForSession,
   };
 });

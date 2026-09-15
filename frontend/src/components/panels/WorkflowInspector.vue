@@ -155,13 +155,15 @@
             }}</span
           >
         </div>
-        <!-- Empty is a state, and it says only what is true. A recipe whose
-               asset rows were deleted keeps its graph and loses the ability to
-               say which models it used — but nothing in the payload separates
-               that from a graph that names no model, so neither is claimed. -->
-        <p v-else class="wfins-quiet wfins-note">
-          This workflow's model names are not recorded. The graph still says a
-          model goes here, and no longer says which.
+        <!-- Empty is a state, and it says only what is true. `forgotten_models`
+               is what separates forgotten names from a graph that names no
+               model, so only a row that carries it says they were forgotten. -->
+        <p v-if="row.forgotten_models" class="wfins-quiet wfins-note">
+          {{ forgottenNote }} The graph still says a model goes there, and no
+          longer says which.
+        </p>
+        <p v-else-if="!models.length" class="wfins-quiet wfins-note">
+          This workflow's model names are not recorded.
         </p>
       </div>
 
@@ -399,6 +401,15 @@ const samplesPending = computed(() => {
  * holds. Until then the section offers to read them, which is the same request
  * the row's own disclosure makes.
  */
+/** What the Models section says when a variant's names were forgotten. */
+const forgottenNote = computed(() => {
+  const n = Number(row.value?.forgotten_models) || 0;
+  if (models.value.length) return "Some of its model names were forgotten.";
+  return n === 1
+    ? "1 model's name was forgotten."
+    : `${n} models' names were forgotten.`;
+});
+
 const variantBars = computed(() => {
   const list = row.value ? store.variants[row.value.topology_hash] : null;
   if (!Array.isArray(list) || !list.length) return [];
@@ -407,7 +418,9 @@ const variantBars = computed(() => {
     .sort((a, b) => (Number(b.pictures) || 0) - (Number(a.pictures) || 0))
     .map((variant) => ({
       key: variant.structural_hash,
-      label: modelSummary(variant.assets, 2) || "not named",
+      label:
+        modelSummary(variant.assets, 2, variant.forgotten_models) ||
+        "not named",
       value: Number(variant.pictures) || 0,
       width: `${Math.round(((Number(variant.pictures) || 0) / top) * 100)}%`,
     }));

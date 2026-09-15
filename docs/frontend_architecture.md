@@ -4250,10 +4250,31 @@ a picture, so the server keeps its own. The selection pill, the overlay's
 ComfyUI menu and Remix's templates leave out a workflow whose
 `has_selection_input` is false.
 
-**Nothing in the graph list writes.** Naming a workflow, running one and
-forgetting its ghosts are later steps (implementation plan §F5, §F10); the row
-menu offers only what can be read today, and F11's ghosts filter is drawn beside
-Group / Sort / Show, so the toolbar leaves that room rather than filling it.
+**Nothing in the graph list writes.** Naming a workflow and running one are later
+steps (implementation plan §F5), and forgetting ghosts is the two counted
+purges in Settings › Privacy (`PrivacySection`, beside the Off / Covered only /
+On retention control); the row menu offers only what can be read today.
+**Ghosts** is a toggle beside Group / Sort / Show rather than a fourth Show
+position, because a workflow still in use can hold ghosts too and the two axes
+combine. It keeps rows where `hasGhosts` (a picture ghost in this library or a
+model name no longer on the shelf), persists as `view.ghosts`, and its badge
+counts across the whole list so it says there is something to find before it is
+on. A row whose model names were forgotten reads "3 models, names forgotten"
+from `forgotten_models` rather than going blank, and so does the inspector.
+
+**A purge elsewhere invalidates this view.** `PrivacySection` calls
+`useWorkflowShelfStore().invalidate()` after a successful purge: the variants are
+otherwise kept for the whole session and would go on showing names that were
+just forgotten, so they are dropped with the open rows and the list is re-read.
+**`state` is read from the whole list, not the filtered one**, so filters that
+match nothing (the Ghosts toggle after a purge, most often) draw "No workflows
+match" with a "Show every workflow" button instead of the library's
+no-workflows state.
+
+**The retention control is never disabled while it saves.** A natively disabled
+radio drops keyboard focus on the first arrow press; a pick made mid-save is
+queued and only the newest is sent, and a failed save puts back the last
+position the server confirmed.
 
 **The right rail is the same inspector, in its fourth use** (§F2), and both are
 `AppInspector`. On this route

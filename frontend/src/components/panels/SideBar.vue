@@ -79,6 +79,7 @@ import {
   toggleEntityProjectPatch,
   withEntityProjectIds,
 } from "../../utils/projectMembership.js";
+import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import {
   SET_COLORS,
   SET_ICON_CATEGORIES,
@@ -464,12 +465,26 @@ function _moveMenuPos(rect) {
   return { top: rect.bottom + 4 + "px", left };
 }
 
+// These menus are teleported divs, not a `v-menu`, so nothing moves focus into
+// them the way VMenu's activator does. Without this the menu declares
+// `role="menu"` and then answers no key at all - worse for a screen reader than
+// the unrolled divs it used to be, which at least read in browse mode.
+async function _focusMoveMenu() {
+  await nextTick();
+  document.querySelector(".sidebar-move-menu")?.focus();
+}
+
 function openCharacterMoveMenu(event) {
   const el = event?.currentTarget ?? event?.target;
   if (el) {
     characterMenuPos.value = _moveMenuPos(el.getBoundingClientRect());
   }
+  // One move menu at a time: both are `.sidebar-move-menu`, and the outside
+  // click handler spares the other trigger, so both could stay open and focus
+  // would land in whichever teleported first.
+  setMoveMenuOpen.value = false;
   characterMoveMenuOpen.value = !characterMoveMenuOpen.value;
+  if (characterMoveMenuOpen.value) _focusMoveMenu();
 }
 
 function openSetMoveMenu(event) {
@@ -477,7 +492,9 @@ function openSetMoveMenu(event) {
   if (el) {
     setMenuPos.value = _moveMenuPos(el.getBoundingClientRect());
   }
+  characterMoveMenuOpen.value = false;
   setMoveMenuOpen.value = !setMoveMenuOpen.value;
+  if (setMoveMenuOpen.value) _focusMoveMenu();
 }
 
 // --- Character Editor State ---
@@ -7246,9 +7263,12 @@ defineExpose({
                               "
                               class="ctx-menu sidebar-move-menu"
                               role="menu"
+                              tabindex="-1"
                               :style="characterMenuPos"
+                              @keydown="onMenuKeydown"
                             >
-                              <div
+                              <button
+                                type="button"
                                 class="ctx-item"
                                 role="menuitem"
                                 @click.stop="
@@ -7259,18 +7279,26 @@ defineExpose({
                                 <v-icon class="ctx-icon"
                                   >mdi-plus-circle-outline</v-icon
                                 >Create new
-                              </div>
+                              </button>
                               <div class="ctx-sep" role="separator"></div>
                               <template
                                 v-for="group in projectMenuCharacterGroups"
                                 :key="group.label"
                               >
-                                <div class="section-label ctx-label" role="presentation">
+                                <div
+                                  class="section-label ctx-label"
+                                  :class="{
+                                    'ctx-label--current':
+                                      group.projectId === selectedProjectId,
+                                  }"
+                                  role="presentation"
+                                >
                                   {{ group.label }}
                                 </div>
-                                <div
+                                <button
                                   v-for="char in group.items"
                                   :key="char.id"
+                                  type="button"
                                   class="ctx-item"
                                   role="menuitemcheckbox"
                                   :aria-checked="
@@ -7298,7 +7326,7 @@ defineExpose({
                                     class="ctx-check"
                                     >mdi-check</v-icon
                                   >
-                                </div>
+                                </button>
                               </template>
                             </div>
                           </Teleport>
@@ -7481,9 +7509,12 @@ defineExpose({
                               "
                               class="ctx-menu sidebar-move-menu"
                               role="menu"
+                              tabindex="-1"
                               :style="setMenuPos"
+                              @keydown="onMenuKeydown"
                             >
-                              <div
+                              <button
+                                type="button"
                                 class="ctx-item"
                                 role="menuitem"
                                 @click.stop="
@@ -7494,18 +7525,26 @@ defineExpose({
                                 <v-icon class="ctx-icon"
                                   >mdi-plus-circle-outline</v-icon
                                 >Create new
-                              </div>
+                              </button>
                               <div class="ctx-sep" role="separator"></div>
                               <template
                                 v-for="group in projectMenuSetGroups"
                                 :key="group.label"
                               >
-                                <div class="section-label ctx-label" role="presentation">
+                                <div
+                                  class="section-label ctx-label"
+                                  :class="{
+                                    'ctx-label--current':
+                                      group.projectId === selectedProjectId,
+                                  }"
+                                  role="presentation"
+                                >
                                   {{ group.label }}
                                 </div>
-                                <div
+                                <button
                                   v-for="pset in group.items"
                                   :key="pset.id"
+                                  type="button"
                                   class="ctx-item"
                                   role="menuitemcheckbox"
                                   :aria-checked="
@@ -7533,7 +7572,7 @@ defineExpose({
                                     class="ctx-check"
                                     >mdi-check</v-icon
                                   >
-                                </div>
+                                </button>
                               </template>
                             </div>
                           </Teleport>

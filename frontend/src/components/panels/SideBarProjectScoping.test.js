@@ -261,3 +261,22 @@ describe("the sidebar's project reads", () => {
     wrapper.unmount();
   });
 });
+
+describe("a project's move menus", () => {
+  it("open one at a time, so focus goes to the one just opened", () => {
+    // Both are `.sidebar-move-menu`; left open together, `_focusMoveMenu`
+    // focuses whichever teleported first rather than the one just opened.
+    const wrapper = mountSidebar();
+
+    wrapper.vm.openCharacterMoveMenu({});
+    wrapper.vm.openSetMoveMenu({});
+    expect(wrapper.vm.characterMoveMenuOpen).toBe(false);
+    expect(wrapper.vm.setMoveMenuOpen).toBe(true);
+
+    wrapper.vm.openCharacterMoveMenu({});
+    expect(wrapper.vm.setMoveMenuOpen).toBe(false);
+    expect(wrapper.vm.characterMoveMenuOpen).toBe(true);
+
+    wrapper.unmount();
+  });
+});

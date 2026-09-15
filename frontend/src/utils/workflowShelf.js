@@ -111,23 +111,46 @@ export function namedAdapterCount(assets) {
  * Two names and then a count, because the column is a glance rather than an
  * inventory and the inspector carries the full list.
  *
- * **An empty answer is a state, and it says which one it is not.** A recipe
- * whose asset rows were deleted to forget a model's name keeps its graph and
- * loses only the ability to say what it used, so the cell says there are no
- * names rather than drawing a blank — but it does NOT claim they were
- * forgotten, because nothing in the payload distinguishes that from a graph
+ * **A forgotten name is counted, not dropped.** Forgetting a model's name
+ * deletes its asset row and leaves the graph and its hash alone, so the row
+ * still groups; `forgotten` (the payload's `forgotten_models`) is how many
+ * models it still loads without a name, and the cell says so — "3 models, names
+ * forgotten" — rather than going blank. An empty answer is left for a graph
  * that names no model at all.
  *
  * @param {Array<Object>} assets
  * @param {number} [max=2]
+ * @param {number} [forgotten=0]
  * @returns {string}
  */
-export function modelSummary(assets, max = 2) {
+export function modelSummary(assets, max = 2, forgotten = 0) {
   const models = modelAssets(assets);
-  if (!models.length) return "";
+  const lost = Number(forgotten) || 0;
+  if (!models.length) {
+    if (!lost) return "";
+    return lost === 1
+      ? "1 model, name forgotten"
+      : `${lost} models, names forgotten`;
+  }
   const shown = models.slice(0, max).map((asset) => modelStem(asset.name));
   const rest = models.length - shown.length;
-  return rest > 0 ? `${shown.join(", ")}, +${rest}` : shown.join(", ");
+  const named = rest > 0 ? `${shown.join(", ")}, +${rest}` : shown.join(", ");
+  // No number beside names: on a workflow row the names are the union across
+  // variants and the count is one variant's, so "a, b, 3 forgotten" would add
+  // two different kinds of figure into one sum.
+  return lost ? `${named}, names forgotten` : named;
+}
+
+/**
+ * Whether a workflow keeps something of what was deleted: a picture ghost in
+ * this library, or the name of a model no longer on the shelf. What the
+ * toolbar's Ghosts filter keeps.
+ *
+ * @param {Object} row - a `/workflows` row.
+ * @returns {boolean}
+ */
+export function hasGhosts(row) {
+  return (Number(row?.ghosts) || 0) + (Number(row?.model_ghosts) || 0) > 0;
 }
 
 /**
