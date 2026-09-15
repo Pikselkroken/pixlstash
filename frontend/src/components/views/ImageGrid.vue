@@ -1175,6 +1175,7 @@ import {
   useOperationStore,
 } from "../../stores/useOperationStore";
 import { useNoticeStore, DEFAULT_TIMEOUTS } from "../../stores/useNoticeStore";
+import { confirmRetag } from "../../composables/confirmRetag";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
 import {
   useAnchorHeight,
@@ -1777,6 +1778,7 @@ async function handleAutoTag({ model } = {}) {
     .map((id) => Number(id))
     .filter((id) => Number.isFinite(id) && id > 0);
   if (!ids.length || !props.backendUrl) return;
+  if (!(await confirmRetag(ids.length))) return;
   try {
     // One request marks the whole selection. No grid reload: the backend's
     // origin-stamped tags_changed event already refreshes a tag-filtered grid,

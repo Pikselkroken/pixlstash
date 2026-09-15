@@ -1,6 +1,6 @@
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { VIcon } from "vuetify/components";
+import { VCheckbox, VIcon } from "vuetify/components";
 
 import {
   activeConfirm,
@@ -12,12 +12,14 @@ import AppButton from "./AppButton.vue";
 import AppDialog from "./AppDialog.vue";
 
 const primaryButton = ref(null);
+const dontShowAgain = ref(false);
 let returnFocusTarget = null;
 
 watch(
   () => activeConfirm.value?.id,
   async (id) => {
     if (!id) return;
+    dontShowAgain.value = false;
     returnFocusTarget =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -31,7 +33,7 @@ async function settle(result) {
   if (!activeConfirm.value) return;
   const target = returnFocusTarget;
   returnFocusTarget = null;
-  resolveConfirm(result);
+  resolveConfirm(result, dontShowAgain.value);
   await nextTick();
   target?.focus?.();
 }
@@ -56,6 +58,14 @@ onBeforeUnmount(unregisterConfirmHost);
     </p>
 
     <template #footer>
+      <v-checkbox
+        v-if="activeConfirm?.options.onDontShowAgain"
+        v-model="dontShowAgain"
+        label="Don't show this again"
+        density="compact"
+        hide-details
+        class="confirm-dialog__dont-show"
+      />
       <AppButton
         variant="secondary"
         key-hint="esc"
@@ -95,5 +105,14 @@ onBeforeUnmount(unregisterConfirmHost);
   background: rgba(var(--v-theme-warning), 0.1);
   font-size: var(--text-sm);
   line-height: var(--leading-body);
+}
+
+/* Same footer shape as SnapshotsWithDeletedDialog: checkbox left, actions right. */
+.confirm-dialog__dont-show {
+  margin-right: auto;
+}
+
+.confirm-dialog__dont-show :deep(.v-label) {
+  font-size: var(--text-sm);
 }
 </style>

@@ -357,6 +357,7 @@ import {
   rejectTagPrediction,
 } from "../../api/tags";
 import { resetPicturesTags } from "../../api/pictures";
+import { confirmRetag } from "../../composables/confirmRetag";
 import { listTaggers } from "../../api/taggers";
 import { getUserConfig } from "../../api/config";
 import { isSentinelTag, formatSentinelTag } from "../../utils/tags.js";
@@ -778,6 +779,7 @@ async function generateTagsForAll(model = null) {
     .map((id) => Number(id))
     .filter((id) => Number.isFinite(id) && id > 0);
   if (!ids.length || generateTagsLoading.value) return;
+  if (!(await confirmRetag(ids.length))) return;
   generateTagsLoading.value = true;
   generateTagsError.value = "";
   generateTagsSuccess.value = "";

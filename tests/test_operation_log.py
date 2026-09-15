@@ -48,8 +48,9 @@ from pixlstash.db_models import (
     is_tag_sentinel,
 )
 from pixlstash.server import Server
-from pixlstash.services import operation_log_service
+from pixlstash.services import operation_log_service, tag_prediction_service
 from pixlstash.tasks import TaskType
+from pixlstash.tasks.tag_task import TagTask
 from tests.utils import upload_pictures_and_wait
 
 API = "/api/v1"
@@ -59,9 +60,8 @@ API = "/api/v1"
 # They are taken out of the planner for the lifetime of the module server (see
 # ``_disable_conflicting_backfill``).
 _CONFLICTING_FINDERS = (
-    # TagTask runs `delete(Tag).where(Tag.picture_id.in_(...))` before writing
-    # its own labels, so it removes a seeded Tag outright and puts real ones in
-    # its place; it also rewrites tag_prediction and anomaly_tag_uncertainty and
+    # TagTask clears the pending sentinel and adds its own labels beside any
+    # seeded Tag; it also rewrites tag_prediction and anomaly_tag_uncertainty and
     # invalidates smart_score. Every `_tags()` assertion here reads that table.
     TaskType.TAGGER,
     # TagPredictionBackfillTask rewrites tag_prediction, which the review
@@ -83,7 +83,7 @@ def _disable_conflicting_backfill(server):
     These tests write ``Tag`` and ``TagPrediction`` rows straight into the vault
     and then assert on the exact tag list and the exact prediction/ledger state
     that an undo leaves behind. The tagging sweep owns those same rows: it
-    deletes the seeded tag, writes real labels over it, and recomputes the two
+    adds real labels beside the seeded tag, and recomputes the two
     derived score columns beside them.
 
     The per-test servers this module used to build hid the race. A vault that
@@ -1985,6 +1985,80 @@ def test_undo_of_a_reject_leaves_a_later_tagger_prediction_alone(client, server)
     survivor = _prediction(server, picture_id, "noise")
     assert survivor is not None
     assert survivor["confidence"] == 0.42
+
+
+# ---------------------------------------------------------------------------
+# The tagger's write never deletes a tag it did not write (#1357)
+# ---------------------------------------------------------------------------
+
+# Outside the anomaly vocabulary, so no human-ledger row protects it.
+CONTENT_TAG = "character_x"
+
+
+def _tagger_write(server, picture_id, model_tags):
+    """Land a tag pass's write for *picture_id*, as the queued TagTask would."""
+    server.vault.db.run_task(
+        TagTask._add_tags_bulk, [{"pic_id": picture_id, "tags": model_tags}]
+    )
+
+
+def _raw_tags(server, picture_id):
+    """Every Tag row on the picture, sentinels included."""
+    return sorted(
+        server.vault.db.run_task(
+            lambda session: session.exec(
+                select(Tag.tag).where(Tag.picture_id == picture_id)
+            ).all()
+        )
+    )
+
+
+def test_a_manual_tag_added_while_tagging_is_pending_survives_the_write(client, server):
+    """The reported race: the task captured the picture, the owner tagged it,
+    and the task's write then deleted the tag the owner had just added."""
+    picture_id = _upload(client)
+    assert _raw_tags(server, picture_id) == ["__tag"]
+
+    # The task has its batch; the owner adds a tag before the write lands.
+    resp = client.post(f"{API}/pictures/{picture_id}/tags", json={"tag": CONTENT_TAG})
+    assert resp.status_code == 200, resp.text
+    assert _prediction(server, picture_id, CONTENT_TAG) is None
+
+    _tagger_write(server, picture_id, ["woman"])
+
+    assert _raw_tags(server, picture_id) == sorted([CONTENT_TAG, "woman"])
+
+
+def test_a_retag_replaces_model_tags_and_keeps_tags_other_writers_added(client, server):
+    """A legitimate retag still updates the model's tags (the reset clears
+    them) but keeps what arrived while it was pending - through the tag route,
+    which drops the sentinel, and through a writer that leaves it in place."""
+    via_route, beside_sentinel = _upload(client), _upload(client)
+    for picture_id in (via_route, beside_sentinel):
+        _tagger_write(server, picture_id, ["old-model-tag"])
+        assert _raw_tags(server, picture_id) == ["old-model-tag"]
+    tag_prediction_service.reset_pictures_tags(
+        server.vault, [via_route, beside_sentinel], engine_name="some_plugin"
+    )
+
+    client.post(f"{API}/pictures/{via_route}/tags", json={"tag": CONTENT_TAG})
+
+    def _add_beside_sentinel(session):
+        session.add(Tag(picture_id=beside_sentinel, tag=CONTENT_TAG))
+        session.commit()
+
+    server.vault.db.run_task(_add_beside_sentinel)
+    assert _raw_tags(server, beside_sentinel) == sorted(
+        ["__tag:some_plugin", CONTENT_TAG]
+    )
+
+    for picture_id in (via_route, beside_sentinel):
+        _tagger_write(server, picture_id, ["new-model-tag"])
+    expected = sorted([CONTENT_TAG, "new-model-tag"])
+    assert {
+        "via_route": _raw_tags(server, via_route),
+        "beside_sentinel": _raw_tags(server, beside_sentinel),
+    } == {"via_route": expected, "beside_sentinel": expected}
 
 
 # ---------------------------------------------------------------------------

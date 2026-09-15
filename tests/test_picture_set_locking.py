@@ -1019,9 +1019,10 @@ def test_tagger_preserves_locked_confirmed_tags():
         free_tags = {
             t["tag"] for t in client.get(f"/pictures/{free_pic}/tags").json()["tags"]
         }
-        # Locked picture's confirmed tags are untouched; the free one is rewritten.
+        # Locked picture's confirmed tags are untouched; the free one is written
+        # (beside "original": the tagger never deletes a tag it did not write).
         assert locked_tags == {"original"}, locked_tags
-        assert free_tags == {"tagger-new"}, free_tags
+        assert free_tags == {"original", "tagger-new"}, free_tags
     finally:
         server.close()
         temp_dir.cleanup()
