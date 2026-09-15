@@ -12,6 +12,7 @@ import websockets
 from fastapi import APIRouter, Body, HTTPException, Request, WebSocket
 from fastapi.websockets import WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict
+from send2trash import TrashPermissionError, send2trash
 from sqlmodel import select
 
 from typing import Optional
@@ -39,7 +40,7 @@ from pixlstash.services.comfyui_recipe_service import (
     unchecked_preflight,
 )
 from pixlstash.hub.workflows import record_api_graph, record_ui_graph
-from pixlstash.services import workflow_bindings
+from pixlstash.services import workflow_bindings, workflow_inbox
 from pixlstash.services.workflow_hash import WorkflowGraphError
 from pixlstash.services.workflow_io import detect_workflow_io
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -144,6 +145,153 @@ def _load_workflow_json(path: str) -> dict:
 def _save_workflow_json(path: str, payload: dict) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, ensure_ascii=True)
+
+
+def _store_workflow(
+    hub, name: str, workflow: dict, *, overwrite: bool = False, keep_both: bool = False
+) -> dict:
+    """Store *workflow* as *name* in the user folder, or match a stored copy.
+
+    Shared by the import route and the watched inbox, so a dropped file and a
+    file put in the folder are stored the same way.
+
+    Raises:
+        FileExistsError: *name* holds a different workflow and neither
+            *overwrite* nor *keep_both* is set.
+        RecursionError: The document nests too deeply to compare.
+        ValueError: *name* escapes the user folder.
+    """
+    # A file exported while workflows carried placeholder tokens is stored
+    # the way the start-up migration left its siblings, so it can run and
+    # so a copy of a migrated workflow matches it.
+    workflow, _migrated = workflow_bindings.migrate_placeholders(workflow)
+    wanted = workflow_bindings.canonical(workflow)
+
+    workflow_dir = workflow_user_dir()
+    os.makedirs(workflow_dir, exist_ok=True)
+    path = resolve_path_within(workflow_dir, name)
+
+    # A copy is the same workflow whatever it is called, so it matches
+    # before the name is looked at, and keep_both has nothing to keep.
+    existing = _find_stored_copy(wanted)
+    if existing is not None:
+        return {
+            "status": "success",
+            "name": existing,
+            "workflow_dir": workflow_dir,
+            "matched": True,
+            "topology_hash": _file_in_hub(hub, workflow),
+        }
+    if os.path.exists(path) and not overwrite:
+        if not keep_both:
+            raise FileExistsError(path)
+        stem = os.path.splitext(name)[0]
+        counter = 2
+        while os.path.exists(path):
+            name = f"{stem} ({counter}).json"
+            path = resolve_path_within(workflow_dir, name)
+            counter += 1
+
+    _save_workflow_json(path, workflow)
+    return {
+        "status": "success",
+        "name": name,
+        "workflow_dir": workflow_dir,
+        "matched": False,
+        "topology_hash": _file_in_hub(hub, workflow),
+    }
+
+
+def _trash_stored_workflow(path: str, name: str) -> None:
+    """Move a stored workflow to the system trash by way of the inbox.
+
+    The trash copy comes first and the stored file goes only once it is there,
+    so a failed trash never loses the workflow.
+    """
+    try:
+        workflow = _load_workflow_json(path)
+        if not isinstance(workflow, dict):
+            raise ValueError("not a JSON object")
+    except (ValueError, RecursionError) as exc:
+        # Nothing to write back that the inbox could import; the file itself
+        # is what goes to the trash.
+        logger.warning(
+            "Workflow %s is not a readable workflow, trashing the file as it is: %s",
+            name,
+            exc,
+        )
+        send2trash(path)
+        return
+    workflow_inbox.trash_workflow(workflow_inbox.workflow_inbox_dir(), name, workflow)
+    os.remove(path)
+
+
+def _find_stored_copy(wanted: str) -> str | None:
+    """The name of a stored workflow whose canonical content is *wanted*."""
+    for source, folder in _workflow_dirs():
+        if not os.path.isdir(folder):
+            continue
+        for entry in sorted(os.listdir(folder)):
+            if not entry.lower().endswith(".json"):
+                continue
+            path = os.path.join(folder, entry)
+            try:
+                stored = _load_workflow_json(path)
+                if (
+                    isinstance(stored, dict)
+                    and workflow_bindings.canonical(stored) == wanted
+                ):
+                    return entry
+            except (OSError, ValueError, RecursionError) as exc:
+                logger.warning(
+                    "Could not read %s workflow %s to compare an import: %s",
+                    source,
+                    path,
+                    exc,
+                )
+    return None
+
+
+def _file_in_hub(hub, workflow: dict) -> str | None:
+    """File the workflow in the library, returning its topology hash.
+
+    Content-addressed and idempotent, so a workflow the library already has
+    from its pictures lands on that same row. Not being filed does not stop
+    the import: the file is what runs.
+    """
+    if hub is None:
+        return None
+    try:
+        if isinstance(workflow.get("nodes"), list):
+            return record_ui_graph(hub, workflow)
+        graph = workflow.get("prompt")
+        if not isinstance(graph, dict):
+            graph = workflow
+        return record_api_graph(hub, graph).topology_hash
+    except WorkflowGraphError as exc:
+        logger.info(
+            "Imported workflow is not filed in the library, its graph "
+            "cannot be keyed: %s",
+            exc,
+        )
+    except sqlite3.Error as exc:
+        logger.error(
+            "Could not file an imported workflow in the library; it is "
+            "stored and runs, but the Workflows view will not list it: %s",
+            exc,
+        )
+    except Exception as exc:
+        # The graph reducers index into whatever the file holds, and a
+        # malformed file (a non-dict `definitions`, say) raises something
+        # other than WorkflowGraphError. Filing is secondary to storing, so
+        # it is logged with its type and the import still succeeds.
+        logger.error(
+            "Imported workflow is not filed in the library, reading its "
+            "graph failed with %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+    return None
 
 
 MAX_SEED = 2**32 - 1
@@ -780,10 +928,15 @@ def create_router(server) -> APIRouter:
         "/comfyui/workflows/{workflow_name}",
         include_in_schema=False,
         summary="Delete user workflow",
-        description="Deletes a workflow JSON from the user workflow directory.",
+        description=(
+            "Writes the workflow back to the watched workflows folder, moves "
+            "that file to the system trash, then deletes it from the user "
+            "workflow directory."
+        ),
         response_model=ComfyUIWorkflowDeleteResponse,
     )
-    async def delete_comfyui_workflow(workflow_name: str):
+    def delete_comfyui_workflow(workflow_name: str):
+        # Sync on purpose: the trash is file I/O, so this runs on the thread pool.
         normalized = _normalize_workflow_name(workflow_name)
         if not normalized:
             raise HTTPException(status_code=400, detail="workflow_name is required")
@@ -795,8 +948,9 @@ def create_router(server) -> APIRouter:
         if not os.path.isfile(path):
             raise HTTPException(status_code=404, detail="Workflow not found in user")
         try:
-            os.remove(path)
-        except OSError as exc:
+            with workflow_inbox.INBOX_LOCK:
+                _trash_stored_workflow(path, normalized)
+        except (TrashPermissionError, OSError, RecursionError) as exc:
             logger.warning("Failed to delete workflow %s: %s", normalized, exc)
             raise HTTPException(status_code=500, detail="Failed to delete workflow")
         # The placeholder migration's backup goes with the workflow it copied.
@@ -1119,123 +1273,27 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400, detail="workflow must be a JSON object"
             )
-        overwrite = bool(payload.get("overwrite"))
-        keep_both = bool(payload.get("keep_both"))
-        # A file exported while workflows carried placeholder tokens is stored
-        # the way the start-up migration left its siblings, so it can run and
-        # so a copy of a migrated workflow matches it.
         try:
-            workflow, _migrated = workflow_bindings.migrate_placeholders(workflow)
-            wanted = workflow_bindings.canonical(workflow)
+            resolve_path_within(workflow_user_dir(), name)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid workflow name")
+        try:
+            return _store_workflow(
+                getattr(server, "hub", None),
+                name,
+                workflow,
+                overwrite=bool(payload.get("overwrite")),
+                keep_both=bool(payload.get("keep_both")),
+            )
         except RecursionError as exc:
             logger.warning("Refused a workflow import that nests too deeply: %s", exc)
             raise HTTPException(
                 status_code=400, detail="Workflow JSON nests too deeply"
             ) from exc
-
-        workflow_dir = workflow_user_dir()
-        os.makedirs(workflow_dir, exist_ok=True)
-        try:
-            path = resolve_path_within(workflow_dir, name)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid workflow name")
-
-        # A copy is the same workflow whatever it is called, so it matches
-        # before the name is looked at, and keep_both has nothing to keep.
-        existing = _find_stored_copy(wanted)
-        if existing is not None:
-            return {
-                "status": "success",
-                "name": existing,
-                "workflow_dir": workflow_dir,
-                "matched": True,
-                "topology_hash": _file_in_hub(workflow),
-            }
-        if os.path.exists(path) and not overwrite:
-            if not keep_both:
-                raise HTTPException(status_code=409, detail="Workflow already exists")
-            stem = os.path.splitext(name)[0]
-            counter = 2
-            while os.path.exists(path):
-                name = f"{stem} ({counter}).json"
-                path = resolve_path_within(workflow_dir, name)
-                counter += 1
-
-        _save_workflow_json(path, workflow)
-        return {
-            "status": "success",
-            "name": name,
-            "workflow_dir": workflow_dir,
-            "matched": False,
-            "topology_hash": _file_in_hub(workflow),
-        }
-
-    def _find_stored_copy(wanted: str) -> str | None:
-        """The name of a stored workflow whose canonical content is *wanted*."""
-        for source, folder in _workflow_dirs():
-            if not os.path.isdir(folder):
-                continue
-            for entry in sorted(os.listdir(folder)):
-                if not entry.lower().endswith(".json"):
-                    continue
-                path = os.path.join(folder, entry)
-                try:
-                    stored = _load_workflow_json(path)
-                    if (
-                        isinstance(stored, dict)
-                        and workflow_bindings.canonical(stored) == wanted
-                    ):
-                        return entry
-                except (OSError, ValueError, RecursionError) as exc:
-                    logger.warning(
-                        "Could not read %s workflow %s to compare an import: %s",
-                        source,
-                        path,
-                        exc,
-                    )
-        return None
-
-    def _file_in_hub(workflow: dict) -> str | None:
-        """File the workflow in the library, returning its topology hash.
-
-        Content-addressed and idempotent, so a workflow the library already has
-        from its pictures lands on that same row. Not being filed does not stop
-        the import: the file is what runs.
-        """
-        hub = getattr(server, "hub", None)
-        if hub is None:
-            return None
-        try:
-            if isinstance(workflow.get("nodes"), list):
-                return record_ui_graph(hub, workflow)
-            graph = workflow.get("prompt")
-            if not isinstance(graph, dict):
-                graph = workflow
-            return record_api_graph(hub, graph).topology_hash
-        except WorkflowGraphError as exc:
-            logger.info(
-                "Imported workflow is not filed in the library, its graph "
-                "cannot be keyed: %s",
-                exc,
-            )
-        except sqlite3.Error as exc:
-            logger.error(
-                "Could not file an imported workflow in the library; it is "
-                "stored and runs, but the Workflows view will not list it: %s",
-                exc,
-            )
-        except Exception as exc:
-            # The graph reducers index into whatever the file holds, and a
-            # malformed file (a non-dict `definitions`, say) raises something
-            # other than WorkflowGraphError. Filing is secondary to storing, so
-            # it is logged with its type and the import still succeeds.
-            logger.error(
-                "Imported workflow is not filed in the library, reading its "
-                "graph failed with %s: %s",
-                type(exc).__name__,
-                exc,
-            )
-        return None
+        except FileExistsError as exc:
+            raise HTTPException(
+                status_code=409, detail="Workflow already exists"
+            ) from exc
 
     @router.get(
         "/comfyui/pictures/{picture_id}/workflow",
