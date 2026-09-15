@@ -4231,9 +4231,36 @@ explore. `useWorkflowShelfStore` fetches the list whole and shapes it in
 `utils/workflowShelf.js`, so Group, Sort and Show are re-reads of an array
 already in hand and cost no request.
 
-**Dropping a file is the one write.** Each `.json` in a drag carrying `Files`
+**The saved workflow files sit in their own band above the graphs** (§F3,
+#1305). They are what runs, and a file is not a topology until a picture made
+with it has been read, so they are buttons in a list of their own rather than
+rows of the treegrid, though on the same keyboard model: one tab stop, `role="listbox"`
+with `aria-selected` options, Up / Down / Home / End to walk and Enter or Space
+to pick. The column strip is sticky inside the scroll so it heads the graphs and
+not the files. `useWorkflowShelfStore` holds them (`files`,
+`selectedFile`) from `GET /comfyui/workflows`, and a file and a graph share one
+selection: choosing either clears the other.
+
+Selecting a file puts **Pictures in** in the inspector: one entry per picture
+input, the graph's title with its node id beside it (two inputs are often both
+"Load Image"), and a `Segmented` Selection / Picker / Fixed. The setup is read
+on every selection, because a file can be replaced under its name. Choosing
+Selection moves it off whichever input held it, in the same write. Choosing
+Fixed opens `PicturePicker` and writes nothing until a picture is chosen, unless
+the input still holds the picture it had before it left Fixed; the picker stays
+open when the write fails. **The control is never disabled during a write**,
+which would drop keyboard focus: a change shows at once, one made while a write
+is out is queued and only the newest is sent, and a failed write puts back the
+last setup the server confirmed. An unchanged Fixed input is sent without
+a picture, so the server keeps its own. The selection pill, the overlay's
+ComfyUI menu and Remix's templates leave out a workflow whose
+`has_selection_input` is false; an absent field reads as offered, the backend's
+own default, and the pill also refuses to run a chosen workflow that has left
+its list.
+
+**Dropping a file adds a saved workflow.** Each `.json` in a drag carrying `Files`
 is posted to `POST /comfyui/workflows/import` unchanged, with `keep_both`; the
-list is refetched and the row named by the response's `topology_hash` selected,
+list and the saved-workflow band are refetched, and the row named by the response's `topology_hash` selected,
 so a copy of a workflow the library already has lands on that row rather than
 adding one. A new workflow has no pictures, so when Show or Ghosts would hide
 that row the view widens to every workflow rather than select something
@@ -4243,7 +4270,7 @@ the capture phase and stands aside only for a drop of JSON files alone onto
 `.wfshelf`, so pictures dropped here still import and are not reported twice.
 Settings › Workflows imports through the same route; a name taken by different
 content opens a Replace / Keep both / Cancel dialog, and Cancel writes nothing. Naming a workflow
-and running one are later steps (implementation plan §F3, §F5), and forgetting
+and running one are later steps (implementation plan §F5), and forgetting
 ghosts is the two counted purges in Settings › Privacy (`PrivacySection`, beside
 the Off / Covered only / On retention control); the row menu offers only what
 can be read today.

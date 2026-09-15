@@ -50,6 +50,8 @@ class WorkflowIO:
 
     save_nodes: tuple[str, ...] = ()
     picture_inputs: tuple[str, ...] = ()
+    # The class of each picture input, in the same order.
+    picture_input_classes: tuple[str, ...] = ()
     positive_prompts: tuple[str, ...] = ()
     negative_prompts: tuple[str, ...] = ()
     ambiguities: tuple[str, ...] = ()
@@ -142,6 +144,7 @@ def detect_workflow_io(document: dict) -> WorkflowIO:
     return WorkflowIO(
         save_nodes=tuple(save_nodes),
         picture_inputs=tuple(picture_inputs),
+        picture_input_classes=tuple(nodes[key].class_type for key in picture_inputs),
         positive_prompts=positive,
         negative_prompts=negative,
         ambiguities=tuple(ambiguities),

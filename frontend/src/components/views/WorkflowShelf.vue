@@ -16,7 +16,9 @@
     @drop="onFileDrop"
   >
     <p id="wf-help" class="visually-hidden">
-      Every workflow PixlStash has found in the pictures it has read. One row is
+      Saved workflows come first: they are the files that run, and selecting one
+      shows in the inspector how each picture it takes is filled. Below them is
+      every workflow PixlStash has found in the pictures it has read. One row is
       one graph, however many models it was bound to; the variants under a row
       are the same graph with different models, and Right and Left open and
       close them. Group, Sort and Show choose the order, the bands and which
@@ -31,6 +33,7 @@
          buttons' own names change, but a reader who is not on them hears
          nothing. -->
     <p class="visually-hidden" role="status">{{ announcement }}</p>
+    <p class="visually-hidden" role="status">{{ fileAnnouncement }}</p>
 
     <div class="wfshelf-toolbar shelfbar toolbar">
       <span class="wfshelf-title">Workflows</span>
@@ -176,15 +179,6 @@
       <span class="wfshelf-spacer"></span>
     </div>
 
-    <div class="wfshelf-head" aria-hidden="true">
-      <span class="wfshelf-head-ident"></span>
-      <span class="wfshelf-head-cell wfshelf-col--name">Name</span>
-      <span class="wfshelf-head-cell wfshelf-col--num">Pictures</span>
-      <span class="wfshelf-head-cell wfshelf-col--num">Variants</span>
-      <span class="wfshelf-head-cell wfshelf-col--models">Models</span>
-      <span class="wfshelf-head-cell wfshelf-col--date">Last used</span>
-    </div>
-
     <div class="wfshelf-scroll">
       <div
         v-if="store.error"
@@ -192,6 +186,71 @@
         role="alert"
       >
         {{ store.error }}
+      </div>
+
+      <div v-if="store.filesError" class="wfshelf-note wfshelf-note--error">
+        {{ store.filesError }}
+      </div>
+
+      <!-- The saved workflow files, which are what runs (§F3). Their own band
+           above the graphs, not rows among them: a file has no pictures,
+           variants or last use until something made with it has been read. -->
+      <section
+        v-if="store.files.length"
+        class="wfshelf-files"
+        aria-labelledby="wf-files-label"
+      >
+        <h3 id="wf-files-label" class="wfshelf-group wfshelf-files-head">
+          <span class="wfshelf-group-label">Saved workflows</span>
+          <span class="wfshelf-spacer"></span>
+          <span class="wfshelf-group-count num">{{
+            workflowCount(store.files.length)
+          }}</span>
+        </h3>
+        <!-- A single-select list with one tab stop, on the graph list's own
+             keyboard model: Up and Down walk it, Enter or Space selects. -->
+        <ul
+          class="wfshelf-list"
+          role="listbox"
+          aria-labelledby="wf-files-label"
+        >
+          <li
+            v-for="file in store.files"
+            :key="file.name"
+            class="wfshelf-row wfshelf-file"
+            :class="{
+              'wfshelf-row--selected': store.selectedFile === file.name,
+            }"
+            role="option"
+            :aria-selected="store.selectedFile === file.name"
+            :tabindex="file.name === fileRovingKey ? 0 : -1"
+            :data-file-key="file.name"
+            @click="pickFile(file)"
+            @keydown="onFileKeydown(file, $event)"
+            @focus="fileRovingKey = file.name"
+          >
+            <span class="wfshelf-row-ident">
+              <v-icon size="16">mdi-file-cog-outline</v-icon>
+            </span>
+            <span class="wfshelf-col--name">
+              <span class="wfshelf-file-name">{{
+                file.display_name || file.name
+              }}</span>
+              <span class="wfshelf-row-sub">{{ fileLine(file) }}</span>
+            </span>
+          </li>
+        </ul>
+      </section>
+
+      <!-- Sticky inside the scroll rather than above it, so it heads the graphs
+           and not the saved workflows above them, which have no such columns. -->
+      <div class="wfshelf-head" aria-hidden="true">
+        <span class="wfshelf-head-ident"></span>
+        <span class="wfshelf-head-cell wfshelf-col--name">Name</span>
+        <span class="wfshelf-head-cell wfshelf-col--num">Pictures</span>
+        <span class="wfshelf-head-cell wfshelf-col--num">Variants</span>
+        <span class="wfshelf-head-cell wfshelf-col--models">Models</span>
+        <span class="wfshelf-head-cell wfshelf-col--date">Last used</span>
       </div>
 
       <!-- The four states of an empty list. Three of them are the first thing a
@@ -507,10 +566,12 @@
 // is opened and not before, and why the expansion is drawn as rows rather than
 // as a nested widget with a scroll of its own.
 //
-// **Dropping a workflow file is the only write.** Naming a workflow and running
-// one are later steps, and forgetting ghosts is a purge in Settings › Privacy;
-// the row menu offers only what can be read today. The Ghosts toggle beside
-// Group / Sort / Show narrows the list to what those purges would reach.
+// **Writes are the setup and the drop.** The saved workflows above the list are
+// set up in the inspector (§F3: how each picture input is filled), and dropping
+// a workflow file adds one. Naming a workflow and running one are later steps,
+// and forgetting ghosts is a purge in Settings › Privacy; the row menu offers
+// only what can be read today. The Ghosts toggle beside Group / Sort / Show
+// narrows the list to what those purges would reach.
 
 import { computed, onMounted, ref, watch } from "vue";
 
@@ -695,6 +756,63 @@ async function resolveExportHash() {
   if (known?.length) return known[0].structural_hash;
   const fetched = await listWorkflowVariants(row.topology_hash);
   return fetched.length ? fetched[0].structural_hash : null;
+}
+
+/** The saved workflow holding the band's one tab stop. */
+const fileRovingKey = ref(null);
+const fileAnnouncement = ref("");
+
+function pickFile(file) {
+  store.selectFile(file.name);
+  fileRovingKey.value = file.name;
+  fileAnnouncement.value = `${file.display_name || file.name} selected. Its picture inputs are in the inspector.`;
+}
+
+function onFileKeydown(file, event) {
+  const names = store.files.map((f) => f.name);
+  const index = names.indexOf(file.name);
+  let target = null;
+  if (event.key === "ArrowDown") target = names[index + 1];
+  else if (event.key === "ArrowUp") target = names[index - 1];
+  else if (event.key === "Home") target = names[0];
+  else if (event.key === "End") target = names[names.length - 1];
+  else if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    pickFile(file);
+    return;
+  } else if (event.key === "Escape") {
+    store.clearSelection();
+    return;
+  } else {
+    return;
+  }
+  event.preventDefault();
+  if (!target) return;
+  fileRovingKey.value = target;
+  // Matched by dataset rather than a selector: a file name can hold a quote,
+  // and `CSS.escape` is absent in the test environment.
+  [...(rootEl.value?.querySelectorAll("[data-file-key]") || [])]
+    .find((el) => el.dataset.fileKey === target)
+    ?.focus();
+}
+
+watch(
+  () => store.files,
+  (files) => {
+    if (!files.some((f) => f.name === fileRovingKey.value)) {
+      fileRovingKey.value = files[0]?.name ?? null;
+    }
+  },
+  { immediate: true },
+);
+
+/** A saved workflow's second line: what it takes, and where it is offered. */
+function fileLine(file) {
+  if (!file.valid) return "cannot run: no save node";
+  if (file.workflow_type !== "i2i") return "text to image";
+  return file.has_selection_input !== false
+    ? "image to image"
+    : "image to image · not offered on a selection";
 }
 
 function workflowCount(n) {
@@ -997,7 +1115,8 @@ async function onFileDrop(event) {
     }
   }
   if (!added) return;
-  await store.fetchRows();
+  // A dropped file is a saved workflow too, so the band above gains it.
+  await Promise.all([store.fetchRows(), store.fetchFiles()]);
   if (!landed) return;
   // A new workflow has no pictures, so Show "In use" or Ghosts would hide the
   // very row the notice just announced. Widen the list rather than select a
@@ -1008,7 +1127,10 @@ async function onFileDrop(event) {
   store.select(landed);
 }
 
-onMounted(() => store.fetchRows());
+onMounted(() => {
+  store.fetchRows();
+  store.fetchFiles();
+});
 </script>
 
 <style scoped>
@@ -1075,6 +1197,10 @@ onMounted(() => store.fetchRows());
    grouped list is one grid per band, and a visible heading row per band is
    exactly what this strip exists to avoid. */
 .wfshelf-head {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: rgb(var(--v-theme-background));
   display: flex;
   align-items: center;
   gap: var(--space-4);
@@ -1166,6 +1292,22 @@ onMounted(() => store.fetchRows());
    the same ink outline is drawn inside the row instead. */
 .wfshelf-row:focus-visible {
   outline-offset: calc(var(--focus-width) * -1);
+}
+
+
+.wfshelf-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wfshelf-files-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: rgb(var(--v-theme-toolbar));
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
 }
 
 .wfshelf-row--selected {

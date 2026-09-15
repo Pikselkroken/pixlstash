@@ -809,6 +809,46 @@ def test_reopening_a_hub_is_a_no_op(tmp_path):
         second.close()
 
 
+def test_the_stricter_picture_input_check_is_rebuilt_with_its_rows(tmp_path):
+    """An unreleased branch forbade a kept picture on a non-Fixed input; a hub
+    that created that shape must accept one after its next open, rows intact."""
+    path = str(tmp_path / "hub.db")
+    HubDatabase(path).close()
+    conn = sqlite3.connect(path)
+    conn.execute("DROP TABLE workflow_picture_input")
+    conn.execute(
+        "CREATE TABLE workflow_picture_input (library_uuid TEXT NOT NULL, "
+        "workflow_name TEXT NOT NULL, node_id TEXT NOT NULL, mode TEXT NOT NULL "
+        "CHECK (mode IN ('selection', 'picker', 'fixed')), pixel_sha TEXT, "
+        "CHECK ((mode = 'fixed') = (pixel_sha IS NOT NULL)), "
+        "PRIMARY KEY (library_uuid, workflow_name, node_id))"
+    )
+    conn.execute(
+        "INSERT INTO workflow_picture_input VALUES ('lib', 'edit.json', '2', "
+        "'fixed', 'sha')"
+    )
+    conn.commit()
+    conn.close()
+
+    reopened = HubDatabase(path)
+    try:
+        with reopened.transaction() as tx:
+            tx.execute(
+                "INSERT INTO workflow_picture_input VALUES ('lib', 'edit.json', "
+                "'1', 'picker', 'kept')"
+            )
+        rows = reopened.fetchall(
+            "SELECT node_id, mode, pixel_sha FROM workflow_picture_input "
+            "ORDER BY node_id"
+        )
+        assert [tuple(row) for row in rows] == [
+            ("1", "picker", "kept"),
+            ("2", "fixed", "sha"),
+        ]
+    finally:
+        reopened.close()
+
+
 def test_recording_the_same_graph_twice_writes_one_row(hub):
     """Idempotent, so the backfill can be re-run without a reconciliation pass.
 

@@ -68,6 +68,11 @@ def _node_id(document: dict, path: list) -> str | None:
     return None
 
 
+def target_node(document: dict, path: list) -> str | None:
+    """The graph node a run target's JSON path sits inside, if it names one."""
+    return _node_id(document, path) if isinstance(path, list) else None
+
+
 def migrate_placeholders(document: dict) -> tuple[dict, bool]:
     """Turn stored placeholder tokens into bindings.
 

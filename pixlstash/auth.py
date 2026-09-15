@@ -259,6 +259,9 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
 # templated owner-class GET that no prefix covers.
 READ_BLOCKED_GET_PREFIXES: tuple[str, ...] = (
     "/api/v1/adapters/",
+    # The workflow list itself (no trailing slash) stays ANY_TOKEN; what sits
+    # under it is a file's setup, which names pictures by id.
+    "/api/v1/comfyui/workflows/",
     "/api/v1/dedup/",
     "/api/v1/model-folders/",
     "/api/v1/model-icons/",

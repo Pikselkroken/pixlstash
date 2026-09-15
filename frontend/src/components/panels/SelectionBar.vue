@@ -147,7 +147,8 @@
                   </div>
                 </template>
                 <div v-else class="plugin-menu-note">
-                  No valid workflows found.
+                  No workflow can run on a selection. It needs a save node
+                  and a picture input set to Selection in Workflows.
                 </div>
                 <div v-if="comfyuiRunError" class="plugin-menu-error">
                   {{ comfyuiRunError }}
@@ -587,9 +588,13 @@ watch(showComfyuiControls, (shown) => {
 
 const validComfyWorkflows = computed(() => {
   if (!Array.isArray(comfyuiWorkflows.value)) return [];
-  // What run_i2i accepts, not workflow_type, until runs use detection (#1307).
+  // What run_i2i accepts, not workflow_type, until runs use detection (#1307),
+  // and only a workflow with an input the selection fills. Absent reads as
+  // offered, which is the backend's own default for an unconfigured workflow.
   return comfyuiWorkflows.value.filter(
-    (workflow) => !workflow?.missing_placeholders?.includes("{{image_path}}"),
+    (workflow) =>
+      workflow?.has_selection_input !== false &&
+      !workflow?.missing_placeholders?.includes("{{image_path}}"),
   );
 });
 
@@ -617,7 +622,18 @@ const canRunComfyWorkflow = computed(() => {
   ) {
     return false;
   }
-  return !!comfyuiSelectedWorkflow.value;
+  // The chosen workflow must still be one the menu offers: setting its inputs
+  // up elsewhere can take it off the selection path while it stays chosen.
+  return validComfyWorkflows.value.some(
+    (workflow) => workflow?.name === comfyuiSelectedWorkflow.value,
+  );
+});
+
+watch(validComfyWorkflows, (workflows) => {
+  if (workflows.some((w) => w?.name === comfyuiSelectedWorkflow.value)) return;
+  comfyuiSelectedWorkflow.value = workflows.length
+    ? String(workflows[0].name)
+    : "";
 });
 
 watch(comfyuiMenuOpen, async (isOpen) => {

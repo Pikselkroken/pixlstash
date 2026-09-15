@@ -22,6 +22,13 @@ from pixlstash.db_models import (
     Picture,
     User,
 )
+from pixlstash.hub.workflows import (
+    forget_input_modes,
+    input_modes_by_workflow,
+    record_api_graph,
+    record_ui_graph,
+    replace_input_modes,
+)
 from pixlstash.utils.comfyui_utilities import (
     collect_seed_inputs,
     extract_comfy_workflow_info,
@@ -39,7 +46,12 @@ from pixlstash.services.comfyui_recipe_service import (
     sanitize_prompt_graph,
     unchecked_preflight,
 )
-from pixlstash.hub.workflows import record_api_graph, record_ui_graph
+from pixlstash.services.workflow_inputs import (
+    FIXED,
+    SELECTION,
+    resolve_input_modes,
+    validate_requested_modes,
+)
 from pixlstash.services import workflow_bindings, workflow_inbox
 from pixlstash.services.workflow_hash import WorkflowGraphError
 from pixlstash.services.workflow_io import detect_workflow_io
@@ -423,8 +435,77 @@ def _describe_workflow(path: str, source: str, mtime_ns: int, size: int) -> dict
         "valid": detected.valid,
         "missing_placeholders": _missing_placeholders(payload, detected),
         "workflow_type": detected.workflow_type,
+        "picture_inputs": _picture_input_classes(detected),
         "flagged": workflow_bindings.is_flagged(payload),
     }
+
+
+def _on_disk_name(path: str) -> str:
+    """The file's own spelling of its name, which keys its stored modes.
+
+    A client's spelling can differ in case, and on a case-insensitive
+    filesystem it still opens the file; keying on it would split one file's
+    setup between two names.
+    """
+    folder, base = os.path.split(path)
+    try:
+        entries = os.listdir(folder)
+    except OSError as exc:
+        logger.warning("Could not list %s to spell workflow %s: %s", folder, base, exc)
+        return base
+    if base in entries:
+        return base
+    return next((entry for entry in entries if entry.lower() == base.lower()), base)
+
+
+def _picture_input_classes(detected) -> dict[str, str]:
+    """Detected picture inputs as ``node_id -> class_type``, in detection order."""
+    return dict(zip(detected.picture_inputs, detected.picture_input_classes))
+
+
+def _stored_input_modes(server, workflow_name: str | None = None):
+    """This library's stored picture-input modes, all of them or one file's.
+
+    Empty without a hub or an attached library, or when the hub cannot be read,
+    so every input takes its default and a listing still answers.
+    """
+    hub = getattr(server, "hub", None)
+    library_uuid = getattr(server.vault, "library_uuid", None)
+    if hub is None or not library_uuid:
+        return {} if workflow_name is None else []
+    try:
+        stored = input_modes_by_workflow(hub, library_uuid)
+    except Exception as exc:
+        logger.warning(
+            "Could not read the picture-input modes of library %s, using the "
+            "defaults for workflow %s: %s",
+            library_uuid,
+            workflow_name or "(all)",
+            exc,
+        )
+        stored = {}
+    return stored if workflow_name is None else stored.get(workflow_name, [])
+
+
+def _offered_on_selection(picture_inputs: dict, stored, missing: list) -> bool:
+    """Whether the selection path may offer this workflow.
+
+    It needs a Selection input, and until runs fill inputs by mode (#1307) a
+    picture target ``run_i2i`` fills (a binding, or the one detected picture
+    input; ``missing`` names ``{{image_path}}`` when there is none). A workflow
+    whose binding sits on a loader detection does not recognise has no detected
+    input, and keeps being offered the way it was before modes existed.
+    """
+    if PLACEHOLDER_IMAGE in missing:
+        return False
+    if not picture_inputs:
+        return True
+    # No document: it only decides WHICH input defaults to Selection, never
+    # whether one does, and that is all this asks.
+    return any(
+        item.mode == SELECTION
+        for item in resolve_input_modes({}, picture_inputs, stored)
+    )
 
 
 def _resolve_picture_file(server, pic_id: int) -> str:
@@ -604,8 +685,33 @@ class ComfyUIWorkflowItemResponse(BaseModel):
     missing_placeholders: list[str] = []
     source: Optional[str] = None
     workflow_type: Optional[str] = None
+    # False when no picture input is filled by the selection, so the selection
+    # pill leaves it out and only the toolbar offers it.
+    has_selection_input: bool = False
     # A placeholder migration could not restore a value a token replaced.
     flagged: bool = False
+
+
+class ComfyUIPictureInputResponse(BaseModel):
+    """One picture input of a workflow and how it is filled.
+
+    ``picture_id`` is the Fixed picture in this library, or for another mode the
+    picture it would return to. ``picture_missing`` is a Fixed input whose
+    picture is no longer in it.
+    """
+
+    node_id: str
+    title: str
+    mode: str
+    picture_id: Optional[int] = None
+    picture_missing: bool = False
+
+
+class ComfyUIWorkflowInputsResponse(BaseModel):
+    """A workflow file's picture inputs, for its setup."""
+
+    workflow: str
+    inputs: list[ComfyUIPictureInputResponse] = []
 
 
 class ComfyUIWorkflowListResponse(BaseModel):
@@ -893,6 +999,7 @@ def create_router(server) -> APIRouter:
     def list_comfyui_workflows():
         workflows = []
         seen = set()
+        stored = _stored_input_modes(server)
         for source, folder in _workflow_dirs():
             if not os.path.isdir(folder):
                 continue
@@ -910,15 +1017,22 @@ def create_router(server) -> APIRouter:
                         "Failed to stat %s workflow %s: %s", source, path, exc
                     )
                     continue
-                described = _describe_workflow(
-                    path, source, stat.st_mtime_ns, stat.st_size
+                # Copied, because the description is the cache's own dict.
+                described = dict(
+                    _describe_workflow(path, source, stat.st_mtime_ns, stat.st_size)
                 )
+                picture_inputs = described.pop("picture_inputs", {})
                 workflows.append(
                     {
                         "name": entry,
                         "display_name": os.path.splitext(entry)[0],
                         "source": source,
                         **described,
+                        "has_selection_input": _offered_on_selection(
+                            picture_inputs,
+                            stored.get(entry, []),
+                            described["missing_placeholders"],
+                        ),
                     }
                 )
         workflows.sort(key=lambda item: item.get("name", ""))
@@ -948,6 +1062,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid workflow name")
         if not os.path.isfile(path):
             raise HTTPException(status_code=404, detail="Workflow not found in user")
+        stored_name = _on_disk_name(path)
         try:
             with workflow_inbox.INBOX_LOCK:
                 _trash_stored_workflow(path, normalized)
@@ -966,7 +1081,157 @@ def create_router(server) -> APIRouter:
                     backup,
                     exc,
                 )
+        hub = getattr(server, "hub", None)
+        if hub is not None:
+            try:
+                forget_input_modes(hub, stored_name)
+            except Exception as exc:
+                # The file is already gone, so its rows describe nothing; they
+                # would only come back into force if a file of the same name
+                # is imported later.
+                logger.warning(
+                    "Deleted workflow %s but could not forget its picture-input "
+                    "modes: %s",
+                    normalized,
+                    exc,
+                )
         return {"status": "success", "name": normalized}
+
+    def _read_picture_inputs(workflow_name: str) -> tuple[str, dict, dict[str, str]]:
+        """Load a workflow file and detect its picture inputs, or raise 4xx."""
+        name = _normalize_workflow_name(workflow_name)
+        if not name:
+            raise HTTPException(status_code=400, detail="workflow_name is required")
+        path, _source = _resolve_workflow_path(name)
+        if not path:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        name = _on_disk_name(path)
+        try:
+            document = _load_workflow_json(path)
+            detected = detect_workflow_io(document)
+        except Exception as exc:
+            logger.warning("Failed to read the inputs of workflow %s: %s", path, exc)
+            raise HTTPException(
+                status_code=422, detail="This workflow's graph could not be read."
+            ) from exc
+        return name, document, _picture_input_classes(detected)
+
+    def _describe_picture_inputs(name: str, document: dict, picture_inputs) -> dict:
+        resolved = resolve_input_modes(
+            document, picture_inputs, _stored_input_modes(server, name)
+        )
+        shas = {item.pixel_sha for item in resolved if item.pixel_sha}
+
+        def picture_ids_by_sha(session):
+            rows = session.exec(
+                select(Picture.pixel_sha, Picture.id)
+                .where(Picture.pixel_sha.in_(shas), Picture.deleted.is_(False))
+                .order_by(Picture.id.desc())
+            ).all()
+            # Descending, so a duplicate picture resolves to its oldest copy.
+            return {pixel_sha: pic_id for pixel_sha, pic_id in rows}
+
+        ids = (
+            server.vault.db.run_immediate_read_task(picture_ids_by_sha) if shas else {}
+        )
+        return {
+            "workflow": name,
+            "inputs": [
+                {
+                    "node_id": item.node_id,
+                    "title": item.title,
+                    "mode": item.mode,
+                    # A non-Fixed input may still hold the picture it had, so
+                    # choosing Fixed again needs no new pick.
+                    "picture_id": ids.get(item.pixel_sha),
+                    "picture_missing": item.mode == FIXED and item.pixel_sha not in ids,
+                }
+                for item in resolved
+            ],
+        }
+
+    @router.get(
+        "/comfyui/workflows/{workflow_name}/inputs",
+        summary="A workflow's picture inputs",
+        description=(
+            "Each picture input of a saved workflow and how it is filled: by the "
+            "selection, by a picker at run time, or by a fixed picture."
+        ),
+        response_model=ComfyUIWorkflowInputsResponse,
+    )
+    def get_comfyui_workflow_inputs(workflow_name: str):
+        name, document, picture_inputs = _read_picture_inputs(workflow_name)
+        return _describe_picture_inputs(name, document, picture_inputs)
+
+    @router.put(
+        "/comfyui/workflows/{workflow_name}/inputs",
+        summary="Set how a workflow's picture inputs are filled",
+        description=(
+            "Replaces the setup of every picture input. At most one input is "
+            "filled by the selection; a fixed input names a picture in this "
+            "library. Stored beside the workflow, never written into it."
+        ),
+        response_model=ComfyUIWorkflowInputsResponse,
+    )
+    def put_comfyui_workflow_inputs(workflow_name: str, payload: dict = Body(...)):
+        name, document, picture_inputs = _read_picture_inputs(workflow_name)
+        hub = getattr(server, "hub", None)
+        library_uuid = getattr(server.vault, "library_uuid", None)
+        if hub is None or not library_uuid:
+            raise HTTPException(
+                status_code=503,
+                detail="No hub or library is attached, so the setup cannot be kept.",
+            )
+        try:
+            requested = validate_requested_modes(picture_inputs, payload.get("inputs"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        picture_ids = {pid for _, _, pid in requested if pid is not None}
+        # Every stored picture, whatever the input's mode now: leaving Fixed
+        # keeps it, so stepping back to Fixed does not lose it.
+        kept = {
+            row["node_id"]: row["pixel_sha"]
+            for row in _stored_input_modes(server, name)
+            if row["pixel_sha"]
+        }
+
+        def shas_by_id(session):
+            rows = session.exec(
+                select(Picture.id, Picture.pixel_sha).where(
+                    Picture.id.in_(picture_ids), Picture.deleted.is_(False)
+                )
+            ).all()
+            return {pic_id: pixel_sha for pic_id, pixel_sha in rows}
+
+        shas = (
+            server.vault.db.run_immediate_read_task(shas_by_id) if picture_ids else {}
+        )
+        modes = []
+        for node_id, mode, picture_id in requested:
+            pixel_sha = kept.get(node_id)
+            if mode == FIXED and picture_id is None:
+                # Unchanged, so it keeps its picture, even one that has since
+                # left the library: changing another input must not drop it.
+                if pixel_sha is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"fixed input {node_id} needs a picture_id",
+                    )
+            elif picture_id is not None:
+                if picture_id not in shas:
+                    raise HTTPException(status_code=404, detail="Picture not found")
+                pixel_sha = shas[picture_id]
+                if not pixel_sha:
+                    # Named by content so a reused id cannot swap the picture;
+                    # one not hashed yet has nothing to name it by.
+                    raise HTTPException(
+                        status_code=409,
+                        detail="That picture is still being read. Try again shortly.",
+                    )
+            modes.append((node_id, mode, pixel_sha))
+        replace_input_modes(hub, library_uuid, name, modes)
+        return _describe_picture_inputs(name, document, picture_inputs)
 
     @router.post(
         "/comfyui/abort",
@@ -1039,6 +1304,29 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400,
                 detail="Workflow has no picture input to fill.",
+            )
+        try:
+            picture_inputs = _picture_input_classes(
+                detect_workflow_io(workflow_payload)
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to detect inputs of workflow %s, running it on its "
+                "binding alone: %s",
+                workflow_path,
+                exc,
+            )
+            picture_inputs = {}
+        # The list leaves this out of the selection pill; a stale client or a
+        # hand-made request must not run it on a selection anyway.
+        if not _offered_on_selection(
+            picture_inputs,
+            _stored_input_modes(server, _on_disk_name(workflow_path)),
+            missing,
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="No picture input of this workflow is filled by the selection.",
             )
         output_node_ids = _extract_output_node_ids(workflow_payload, payload)
 
