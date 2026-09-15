@@ -1901,3 +1901,46 @@ def test_a_batch_that_fails_partway_returns_the_runs_it_started(
     assert body["status"] == "partial"
     assert [p["prompt_id"] for p in body["prompts"]] == ["prompt-1"]
     assert "ComfyUI prompt failed" in body["error"]
+
+
+def test_a_run_names_the_missing_pictures_and_caps_the_batch(
+    workflow_env, edit_workflow, fake_comfyui, monkeypatch
+):
+    owner = workflow_env.owner
+    ids = _picture_ids(workflow_env.server)
+    one, two, three = ids["busy_one.png"], ids["busy_two.png"], ids["busy_three.png"]
+    picker = [{"node_id": "1", "picture_id": two}]
+    r = _run(owner, "edit.json", picture_ids=[one, 987654], pictures=picker)
+    assert r.status_code == 404 and "987654" in r.json()["detail"], r.text
+
+    monkeypatch.setattr(comfyui_module, "MAX_RUNS_PER_REQUEST", 1)
+    r = _run(owner, "edit.json", picture_ids=[one, three], pictures=picker)
+    assert r.status_code == 400 and "at most 1" in r.json()["detail"], r.text
+    assert fake_comfyui.submitted == []
+    r = _run(owner, "edit.json", picture_ids=[one], pictures=picker, stack=False)
+    assert r.status_code == 200, r.text
+
+
+def test_setup_and_run_resolve_a_duplicated_fixed_picture_to_the_same_copy(
+    workflow_env, edit_workflow, fake_comfyui
+):
+    server, owner = workflow_env.server, workflow_env.owner
+    older = _picture_with_sha(server, "busy_two.png", "sha-run-duplicate")
+    newer = _picture_with_sha(server, "busy_three.png", "sha-run-duplicate")
+    r = owner.put(
+        edit_workflow,
+        json={
+            "inputs": [
+                {"node_id": "1", "mode": "fixed", "picture_id": newer},
+                {"node_id": "2", "mode": "selection"},
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert _by_node(r.json())["1"]["picture_id"] == older
+    selected = _picture_ids(server)["busy_one.png"]
+    r = _run(owner, "edit.json", picture_ids=[selected], stack=False)
+    assert r.status_code == 200, r.text
+    assert fake_comfyui.submitted[0]["1"]["inputs"]["image"] == (
+        f"pixlstash-{older}-sha-run-duplicate.png"
+    )

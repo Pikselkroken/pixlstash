@@ -246,3 +246,59 @@ describe("a batch ComfyUI stopped partway", () => {
     );
   });
 });
+
+describe("requests that race", () => {
+  const SELECTION_ONLY = {
+    inputs: [
+      { node_id: "2", title: "Subject", mode: "selection", picture_id: null },
+    ],
+  };
+
+  it("sends one run for a double click", async () => {
+    getWorkflowInputs.mockResolvedValue(SELECTION_ONLY);
+    let finish;
+    runWorkflow.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const { wrapper, store } = await mountFrom(FROM_SELECTION);
+    store.selectionIds = [7];
+    await flush(wrapper);
+    const button = runButton(wrapper);
+    await button.trigger("click");
+    await button.trigger("click");
+    await flush(wrapper);
+    expect(runWorkflow).toHaveBeenCalledTimes(1);
+    finish({ prompts: [{ picture_id: 7, prompt_id: "a" }] });
+    await flush(wrapper);
+  });
+
+  it("keeps the inputs of the workflow now chosen when an older read lands last", async () => {
+    listWorkflows.mockResolvedValue({
+      workflows: [
+        WORKFLOWS[0],
+        { ...WORKFLOWS[0], name: "other.json", display_name: "other" },
+      ],
+    });
+    let finishFirst;
+    getWorkflowInputs.mockImplementation((name) =>
+      name === "edit.json"
+        ? new Promise((resolve) => {
+            finishFirst = resolve;
+          })
+        : Promise.resolve(SELECTION_ONLY),
+    );
+    const { wrapper } = await mountFrom(FROM_SELECTION);
+    await wrapper.find("select").setValue("other.json");
+    await flush(wrapper);
+    finishFirst({
+      inputs: [
+        { node_id: "9", title: "Stale", mode: "picker", picture_id: null },
+      ],
+    });
+    await flush(wrapper);
+    expect(wrapper.text()).toContain("Subject");
+    expect(wrapper.text()).not.toContain("Stale");
+  });
+});

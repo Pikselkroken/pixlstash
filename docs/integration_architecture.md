@@ -545,7 +545,9 @@ picture has left the library. `values` are checked against the untyped
 options are ComfyUI's to refuse);
 `seed_mode` is `random` (the default, every sampler re-rolled), `fixed` with a
 `seed`, or `keep`, which leaves the seeds as the file and `values` have them.
-Every refusal comes before anything is uploaded or submitted. A ComfyUI failure
+At most 200 selected pictures per request (400 above it), and a picture id that
+is not a kept picture is a 404 naming the ids. Every refusal comes before
+anything is uploaded or submitted. A ComfyUI failure
 partway through a batch answers 200 with `status: "partial"`, the `prompts` that
 did start and an `error`: those runs are queued and importing, so the client
 follows them and says the rest did not start. Each picture is

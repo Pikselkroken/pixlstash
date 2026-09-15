@@ -315,6 +315,10 @@ def _file_in_hub(hub, workflow: dict) -> str | None:
 
 MAX_SEED = 2**32 - 1
 
+# ponytail: one request submits its runs one after another, uploads included;
+# a queue of its own (and a higher cap) if large batches become routine.
+MAX_RUNS_PER_REQUEST = 200
+
 
 def _resolve_fixed_seed(payload: dict, max_seed: int = MAX_SEED) -> int | None:
     """Return the validated fixed seed, or ``None`` when seeds should randomize.
@@ -390,6 +394,23 @@ def _int_list(raw, field: str) -> list[int]:
     ):
         raise HTTPException(status_code=400, detail=f"{field} must be a list of ids")
     return list(dict.fromkeys(raw))
+
+
+def _oldest_kept_by_sha(session, shas) -> dict:
+    """Kept pictures by content, a duplicate resolving to its oldest copy.
+
+    The one lookup behind a Fixed input, shared by its setup and its run so the
+    two can never name different copies of the same picture.
+    """
+    if not shas:
+        return {}
+    rows = session.exec(
+        select(Picture)
+        .where(Picture.pixel_sha.in_(shas), Picture.deleted.is_(False))
+        .order_by(Picture.id.desc())
+    ).all()
+    # Descending, so the oldest copy is written last and wins.
+    return {pic.pixel_sha: pic for pic in rows}
 
 
 def _missing_placeholders(payload: dict, detected=None) -> list[str]:
@@ -1249,18 +1270,12 @@ def create_router(server) -> APIRouter:
         )
         shas = {item.pixel_sha for item in resolved if item.pixel_sha}
 
-        def picture_ids_by_sha(session):
-            rows = session.exec(
-                select(Picture.pixel_sha, Picture.id)
-                .where(Picture.pixel_sha.in_(shas), Picture.deleted.is_(False))
-                .order_by(Picture.id.desc())
-            ).all()
-            # Descending, so a duplicate picture resolves to its oldest copy.
-            return {pixel_sha: pic_id for pixel_sha, pic_id in rows}
-
-        ids = (
-            server.vault.db.run_immediate_read_task(picture_ids_by_sha) if shas else {}
-        )
+        ids = {
+            pixel_sha: pic.id
+            for pixel_sha, pic in server.vault.db.run_immediate_read_task(
+                lambda session: _oldest_kept_by_sha(session, shas)
+            ).items()
+        }
         return {
             "workflow": name,
             "inputs": [
@@ -1648,6 +1663,14 @@ def create_router(server) -> APIRouter:
                 status_code=400,
                 detail="This workflow runs once for each selected picture; select one.",
             )
+        if len(selection_ids) > MAX_RUNS_PER_REQUEST:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{len(selection_ids)} runs is more than one request starts; "
+                    f"select at most {MAX_RUNS_PER_REQUEST} pictures."
+                ),
+            )
         if not takes_selection and selection_ids:
             # Its outputs would be stacked onto pictures the run never read.
             raise HTTPException(
@@ -1695,19 +1718,7 @@ def create_router(server) -> APIRouter:
                     )
                 ).all()
             }
-            # Descending, so a duplicate resolves to its oldest copy, as the
-            # setup does.
-            by_sha = {
-                pic.pixel_sha: pic
-                for pic in session.exec(
-                    select(Picture)
-                    .where(
-                        Picture.pixel_sha.in_(wanted_shas), Picture.deleted.is_(False)
-                    )
-                    .order_by(Picture.id.desc())
-                ).all()
-            }
-            return by_id, by_sha
+            return by_id, _oldest_kept_by_sha(session, wanted_shas)
 
         by_id, by_sha = server.vault.db.run_immediate_read_task(kept_pictures)
 
@@ -1721,7 +1732,11 @@ def create_router(server) -> APIRouter:
 
         missing_ids = sorted(wanted_ids - set(by_id))
         if missing_ids:
-            raise HTTPException(status_code=404, detail="Picture not found")
+            # Named, so the caller can tell which pictures left the library.
+            raise HTTPException(
+                status_code=404,
+                detail="Pictures not found: " + ", ".join(map(str, missing_ids)),
+            )
         shared: dict[str, object] = {
             node_id: by_id[picture_id] for node_id, picture_id in picked.items()
         }
