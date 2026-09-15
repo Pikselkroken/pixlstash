@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+from pixlstash.services import workflow_bindings
 from pixlstash.services import workflow_parameters as wp
 
 
@@ -268,3 +269,64 @@ def test_a_bound_input_cannot_be_set_as_a_value():
         wp.apply_values(
             graph, parameters, [{"node_id": "6", "name": "text", "value": "x"}]
         )
+
+
+def test_only_credential_names_are_hidden_not_settings_that_contain_the_word():
+    graph = {
+        "1": {
+            "class_type": "Custom",
+            "inputs": {
+                "api_key": "dummy-key",
+                "auth_token": "dummy-token",
+                "password": "dummy-password",
+                "token_normalization": "mean",
+                "max_tokens": 256,
+                "author": "someone",
+            },
+        }
+    }
+    names = {p.name for p in wp.describe_parameters(graph)}
+    assert names == {"token_normalization", "max_tokens", "author"}
+
+
+def test_a_numeric_combo_keeps_its_options_and_takes_one_of_them():
+    graph = {"1": {"class_type": "Batcher", "inputs": {"batch": 2, "mode": "a"}}}
+    info = {
+        "Batcher": {
+            "input": {
+                "required": {
+                    "batch": [[1, 2, 4, 8], {}],
+                    "mode": ["COMBO", {"options": ["a", "b"], "remote": {"x": 1}}],
+                }
+            }
+        }
+    }
+    parameters = wp.describe_parameters(graph, info)
+    found = _by_key(parameters)
+    assert found[("1", "batch")].options == (1, 2, 4, 8)
+    # A remote combo's list is filled later, so it is not offered as the truth.
+    assert found[("1", "mode")].options is None
+    updated = wp.apply_values(
+        graph, parameters, [{"node_id": "1", "name": "batch", "value": 8}]
+    )
+    assert updated["1"]["inputs"]["batch"] == 8
+    with pytest.raises(ValueError, match="options"):
+        wp.apply_values(
+            graph, parameters, [{"node_id": "1", "name": "batch", "value": 3}]
+        )
+
+
+def test_a_bound_template_prompt_is_not_a_parameter():
+    graph, _changed = workflow_bindings.migrate_placeholders(
+        {
+            "1": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": "photo of {{caption}}, sharp"},
+            },
+            "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "blurry"}},
+            "3": {"class_type": "SaveImage", "inputs": {"filename_prefix": "x"}},
+        }
+    )
+    keys = {p.key for p in wp.describe_parameters(graph)}
+    assert ("1", "text") not in keys
+    assert {("2", "text"), ("3", "filename_prefix")} <= keys

@@ -168,7 +168,7 @@ def find_input_spec(node_spec: Any, field: str) -> tuple[Any, dict] | None:
     return None
 
 
-def combo_options(node_spec: Any, field: str) -> list[str] | None:
+def _combo_options(node_spec: Any, field: str) -> list[str] | None:
     """Return the enumerated string options for *field*, or ``None``.
 
     ComfyUI serialises a combo widget in **two** shapes, and both are live in a
@@ -336,7 +336,7 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
                 value = inputs.get(field)
                 if not isinstance(value, str) or not value:
                     continue
-                options = combo_options(object_info.get(class_type), field)
+                options = _combo_options(object_info.get(class_type), field)
                 if options is None:
                     unchecked_fields += 1
                     continue
@@ -356,7 +356,7 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
             if not isinstance(value, str) or not value:
                 # Missing, or wired from another node - not a literal filename.
                 continue
-            options = combo_options(object_info.get(class_type), field)
+            options = _combo_options(object_info.get(class_type), field)
             if options is None:
                 unchecked_fields += 1
                 continue

@@ -1294,7 +1294,10 @@ _SAMPLER_INFO = {
     "KSampler": {
         "input": {
             "required": {
-                "seed": ["INT", {"min": 0, "max": 99, "control_after_generate": True}],
+                "seed": [
+                    "INT",
+                    {"min": 0, "max": 2**64 - 1, "control_after_generate": True},
+                ],
                 "steps": ["INT", {"min": 1, "max": 150}],
                 "sampler_name": [["euler", "dpmpp_2m"], {}],
             }
@@ -1314,7 +1317,7 @@ def sampler_workflow(tmp_path, monkeypatch):
         "1": {
             "class_type": "KSampler",
             "inputs": {
-                "seed": 7,
+                "seed": 2**64 - 2,
                 "steps": 20,
                 "sampler_name": "euler",
                 "positive": ["2", 0],
@@ -1448,22 +1451,40 @@ def test_pins_are_kept_in_order_and_null_restores_the_defaults(
     workflow_env, sampler_workflow
 ):
     owner = workflow_env.owner
-    r = owner.put(
-        sampler_workflow.pins, json={"pins": [{"node_id": "1", "name": "steps"}]}
-    )
+    order = [
+        {"node_id": "1", "name": "sampler_name"},
+        {"node_id": "1", "name": "steps"},
+    ]
+    r = owner.put(sampler_workflow.pins, json={"pins": order})
     assert r.status_code == 200, r.text
-    # Saving does not wait on ComfyUI, so it answers untyped.
-    assert (r.json()["typed"], r.json()["pins_saved"]) == (False, True)
+    assert r.json() == {"workflow": "sampler.json", "pins_saved": True, "pins": order}
+    # Saving does not wait on ComfyUI.
     assert sampler_workflow.asked == 0
     body = owner.get(sampler_workflow.parameters).json()
-    assert (body["pins_saved"], _pinned(body)) == (True, [("1", "steps")])
+    assert (body["pins_saved"], body["pins"]) == (True, order)
+    assert _pinned(body) == [("1", "steps"), ("1", "sampler_name")]
 
     r = owner.put(sampler_workflow.pins, json={"pins": []})
-    assert _pinned(r.json()) == [] and r.json()["pins_saved"] is True
+    assert r.json()["pins"] == [] and r.json()["pins_saved"] is True
+    body = owner.get(sampler_workflow.parameters).json()
+    assert (body["pins"], _pinned(body)) == ([], [])
 
     r = owner.put(sampler_workflow.pins, json={"pins": None})
-    assert r.json()["pins_saved"] is False
-    assert len(_pinned(r.json())) == 3
+    assert (r.json()["pins_saved"], r.json()["pins"]) == (False, None)
+    body = owner.get(sampler_workflow.parameters).json()
+    assert [(p["node_id"], p["name"]) for p in body["pins"]] == [
+        ("1", "seed"),
+        ("1", "steps"),
+        ("1", "sampler_name"),
+    ]
+
+
+def test_a_seed_beyond_float_precision_is_returned_exactly(
+    workflow_env, sampler_workflow
+):
+    body = workflow_env.owner.get(sampler_workflow.parameters).json()
+    seed = _parameter(body, "1", "seed")
+    assert (seed["value"], seed["max"]) == (2**64 - 2, 2**64 - 1)
 
 
 def test_a_bad_pin_writes_nothing(workflow_env, sampler_workflow):

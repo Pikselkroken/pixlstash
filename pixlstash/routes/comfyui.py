@@ -733,13 +733,22 @@ class ComfyUIWorkflowParameterResponse(BaseModel):
     class_type: str
     name: str
     kind: str
+    # Kept as sent: a seed can exceed 2**53, which a float (or a JavaScript
+    # number) cannot hold exactly.
     value: Any = None
-    min: Optional[float] = None
-    max: Optional[float] = None
-    step: Optional[float] = None
-    options: Optional[list[str]] = None
+    min: Optional[int | float] = None
+    max: Optional[int | float] = None
+    step: Optional[int | float] = None
+    options: Optional[list[Any]] = None
     multiline: bool = False
     pinned: bool = False
+
+
+class ComfyUIParameterKey(BaseModel):
+    """A parameter's name within its workflow."""
+
+    node_id: str
+    name: str
 
 
 class ComfyUIWorkflowParametersResponse(BaseModel):
@@ -748,6 +757,7 @@ class ComfyUIWorkflowParametersResponse(BaseModel):
     ``typed`` is False when ComfyUI could not be reached, and ``comfyui_error``
     says why: the values are the file's own, with no ranges. ``readable`` is
     False for a UI-format file, whose widget values carry no names.
+    ``pins`` is the pinned parameters in the order they are shown, and
     ``pins_saved`` is False while the default pins apply.
     """
 
@@ -756,7 +766,16 @@ class ComfyUIWorkflowParametersResponse(BaseModel):
     typed: bool
     comfyui_error: Optional[str] = None
     pins_saved: bool = False
+    pins: list[ComfyUIParameterKey] = []
     parameters: list[ComfyUIWorkflowParameterResponse] = []
+
+
+class ComfyUIWorkflowPinsResponse(BaseModel):
+    """A workflow file's stored pins, in order; ``None`` when none are stored."""
+
+    workflow: str
+    pins_saved: bool
+    pins: Optional[list[ComfyUIParameterKey]] = None
 
 
 class ComfyUIWorkflowListResponse(BaseModel):
@@ -1128,19 +1147,25 @@ def create_router(server) -> APIRouter:
                 )
         hub = getattr(server, "hub", None)
         if hub is not None:
-            try:
-                forget_input_modes(hub, stored_name)
-                replace_parameter_pins(hub, stored_name, None)
-            except Exception as exc:
-                # The file is already gone, so its rows describe nothing; they
-                # would only come back into force if a file of the same name
-                # is imported later.
-                logger.warning(
-                    "Deleted workflow %s but could not forget its picture-input "
-                    "modes and parameter pins: %s",
-                    normalized,
-                    exc,
-                )
+            # The file is already gone, so its rows describe nothing; they would
+            # only come back into force if a file of the same name is imported
+            # later. Each is forgotten on its own, so one failing keeps the other.
+            for what, forget in (
+                ("picture-input modes", lambda: forget_input_modes(hub, stored_name)),
+                (
+                    "parameter pins",
+                    lambda: replace_parameter_pins(hub, stored_name, None),
+                ),
+            ):
+                try:
+                    forget()
+                except Exception as exc:
+                    logger.warning(
+                        "Deleted workflow %s but could not forget its %s: %s",
+                        normalized,
+                        what,
+                        exc,
+                    )
         return {"status": "success", "name": normalized}
 
     def _read_picture_inputs(workflow_name: str) -> tuple[str, dict, dict[str, str]]:
@@ -1343,17 +1368,22 @@ def create_router(server) -> APIRouter:
         comfyui_error: Optional[str],
     ) -> dict:
         stored = _stored_pins(name)
-        pins = (
-            {tuple(pin) for pin in stored}
+        known = {p.key for p in parameters}
+        # A stored pin naming a node the file has lost is skipped, not pruned,
+        # so a replaced file that keeps the node keeps the pin.
+        ordered = (
+            [tuple(pin) for pin in stored if tuple(pin) in known]
             if stored is not None
-            else set(workflow_parameters.default_pins(parameters))
+            else workflow_parameters.default_pins(parameters)
         )
+        pins = set(ordered)
         return {
             "workflow": name,
             "readable": workflow_parameters.api_graph(document) is not None,
             "typed": typed,
             "comfyui_error": comfyui_error,
             "pins_saved": stored is not None,
+            "pins": [{"node_id": n, "name": k} for n, k in ordered],
             "parameters": [
                 {
                     "node_id": p.node_id,
@@ -1394,17 +1424,15 @@ def create_router(server) -> APIRouter:
             "Replaces the pinned parameters of a saved workflow, as "
             "{pins: [{node_id, name}]}. pins: null forgets them, so the "
             "defaults apply again. Stored beside the workflow, never in it. "
-            "Answers with the parameters untyped, without asking ComfyUI."
+            "Answers with the stored pins only, without asking ComfyUI."
         ),
-        response_model=ComfyUIWorkflowParametersResponse,
+        response_model=ComfyUIWorkflowPinsResponse,
     )
-    def put_comfyui_workflow_pins(
-        request: Request, workflow_name: str, payload: dict = Body(...)
-    ):
+    def put_comfyui_workflow_pins(workflow_name: str, payload: dict = Body(...)):
         # Untyped: which parameters exist does not depend on ComfyUI, so saving
         # pins neither waits for it nor fails without it.
-        name, _document, _inputs = _read_picture_inputs(workflow_name)
-        parameters = _parameters_of(name, _document)
+        name, document, _inputs = _read_picture_inputs(workflow_name)
+        parameters = _parameters_of(name, document)
         hub = getattr(server, "hub", None)
         if hub is None:
             raise HTTPException(
@@ -1421,7 +1449,13 @@ def create_router(server) -> APIRouter:
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         replace_parameter_pins(hub, name, pins)
-        return _read_parameters(request, name, typed=False)
+        return {
+            "workflow": name,
+            "pins_saved": pins is not None,
+            "pins": (
+                None if pins is None else [{"node_id": n, "name": k} for n, k in pins]
+            ),
+        }
 
     @router.post(
         "/comfyui/abort",

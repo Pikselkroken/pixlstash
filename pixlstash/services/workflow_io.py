@@ -103,7 +103,8 @@ def detect_workflow_io(document: dict) -> WorkflowIO:
             key for key, node in nodes.items() if node.class_type in SAVE_NODE_CLASSES
         )
     # ponytail: name rule plus a known-class list; a loader named otherwise is
-    # not found until object_info types it (#1306).
+    # not found, and its image field shows as a parameter (#1306) rather than
+    # an input. Typing loaders from object_info would find it.
     picture_inputs = sorted(
         key
         for key, node in nodes.items()

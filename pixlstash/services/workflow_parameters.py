@@ -6,7 +6,7 @@ Every widget value in the graph is a parameter, except:
   from a primitive is set on the primitive, which is a parameter of its own);
 - a **bound** input, which a run fills: the picture inputs and the prompt that
   :func:`pixlstash.services.workflow_bindings.run_targets` names;
-- a credential-named field, which the workflow library never keeps either;
+- a credential-named field (``api_key``, ``auth_token``, ``password``...);
 - a value that is not a number, a string or a boolean (a list or an object),
   which no form control edits.
 
@@ -24,6 +24,7 @@ only submit API format anyway.
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -33,16 +34,16 @@ from pixlstash.services.comfyui_recipe_service import (
     INPUT_IMAGE_FIELDS,
     MODEL_FILENAME_FIELDS,
     SEED_PASSTHROUGH_CLASSES,
-    combo_options,
     find_input_spec,
 )
-from pixlstash.services.workflow_hash import (
-    MODEL_EXTENSIONS,
-    SECRET_FIELD_RE,
-    SEED_FIELD_RE,
-)
+from pixlstash.services.workflow_hash import MODEL_EXTENSIONS, SEED_FIELD_RE
 from pixlstash.services.workflow_inputs import node_title
 from pixlstash.services.workflow_io import detect_workflow_io
+
+# Anchored on the last word, unlike the library's SECRET_FIELD_RE: that one
+# scrubs stored documents and may over-match, but here an over-match hides a real
+# setting (``token_normalization``, ``max_tokens``, ``author``).
+_CREDENTIAL_RE = re.compile(r"(^|_)(api_?key|token|password|secret)$", re.I)
 
 INT = "int"
 FLOAT = "float"
@@ -82,10 +83,10 @@ class Parameter:
     name: str
     kind: str
     value: Any
-    minimum: Optional[float] = None
-    maximum: Optional[float] = None
-    step: Optional[float] = None
-    options: Optional[tuple[str, ...]] = None
+    minimum: Optional[int | float] = None
+    maximum: Optional[int | float] = None
+    step: Optional[int | float] = None
+    options: Optional[tuple[Any, ...]] = None
     multiline: bool = False
 
     @property
@@ -140,7 +141,7 @@ def describe_parameters(
         for name, value in node["inputs"].items():
             if _is_link(value) or (str(node_id), name) in bound:
                 continue
-            if SECRET_FIELD_RE.search(name):
+            if _CREDENTIAL_RE.search(name):
                 continue
             if not isinstance(value, (bool, int, float, str)):
                 continue
@@ -284,11 +285,26 @@ def _typed(
         )
 
     type_field, opts = found
-    options = combo_options(spec, name)
     if isinstance(type_field, (list, tuple)) or type_field == "COMBO":
+        raw = (
+            type_field if isinstance(type_field, (list, tuple)) else opts.get("options")
+        )
+        # A remote combo's list is filled at run time, so what is here proves
+        # nothing; an empty one is lazily filled too. Numbers are kept: a custom
+        # node can offer [1, 2, 4, 8].
+        options = None
+        if isinstance(raw, (list, tuple)) and not opts.get("remote"):
+            options = (
+                tuple(
+                    o
+                    for o in raw
+                    if isinstance(o, (str, int, float)) and not isinstance(o, bool)
+                )
+                or None
+            )
         return Parameter(
             kind=MODEL if is_model_field else CHOICE,
-            options=tuple(options) if options else None,
+            options=options,
             **base,
         )
     if type_field in ("INT", "FLOAT"):
@@ -327,7 +343,7 @@ def _kind_of_value(
     return STRING
 
 
-def _number(value: Any) -> Optional[float]:
+def _number(value: Any) -> Optional[int | float]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return value
@@ -354,11 +370,13 @@ def _check_value(parameter: Parameter, value: Any) -> None:
     elif kind == BOOLEAN:
         if not isinstance(value, bool):
             raise ValueError(f"{label} must be true or false")
+    elif parameter.options is not None:
+        if isinstance(value, bool) or value not in parameter.options:
+            raise ValueError(f"{label} is not one of the options ComfyUI offers")
+        return
     elif not isinstance(value, str):
         raise ValueError(f"{label} must be text")
     if parameter.minimum is not None and value < parameter.minimum:
         raise ValueError(f"{label} must be at least {parameter.minimum}")
     if parameter.maximum is not None and value > parameter.maximum:
         raise ValueError(f"{label} must be at most {parameter.maximum}")
-    if parameter.options is not None and value not in parameter.options:
-        raise ValueError(f"{label} is not one of the options ComfyUI offers")
