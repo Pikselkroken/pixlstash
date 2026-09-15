@@ -142,7 +142,7 @@ def fetch_object_info(base_url: str) -> dict:
     return payload
 
 
-def _find_input_spec(node_spec: Any, field: str) -> tuple[Any, dict] | None:
+def find_input_spec(node_spec: Any, field: str) -> tuple[Any, dict] | None:
     """Return ``(type_field, opts)`` for *field* in an ``object_info`` node spec.
 
     ``object_info[class]["input"]` splits into ``required`` / ``optional`` /
@@ -168,7 +168,7 @@ def _find_input_spec(node_spec: Any, field: str) -> tuple[Any, dict] | None:
     return None
 
 
-def _combo_options(node_spec: Any, field: str) -> list[str] | None:
+def combo_options(node_spec: Any, field: str) -> list[str] | None:
     """Return the enumerated string options for *field*, or ``None``.
 
     ComfyUI serialises a combo widget in **two** shapes, and both are live in a
@@ -191,7 +191,7 @@ def _combo_options(node_spec: Any, field: str) -> list[str] | None:
       lists it populates lazily. Treating that as "everything is missing" would
       flag a whole graph on a healthy server.
     """
-    found = _find_input_spec(node_spec, field)
+    found = find_input_spec(node_spec, field)
     if found is None:
         return None
     type_field, opts = found
@@ -336,7 +336,7 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
                 value = inputs.get(field)
                 if not isinstance(value, str) or not value:
                     continue
-                options = _combo_options(object_info.get(class_type), field)
+                options = combo_options(object_info.get(class_type), field)
                 if options is None:
                     unchecked_fields += 1
                     continue
@@ -356,7 +356,7 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
             if not isinstance(value, str) or not value:
                 # Missing, or wired from another node - not a literal filename.
                 continue
-            options = _combo_options(object_info.get(class_type), field)
+            options = combo_options(object_info.get(class_type), field)
             if options is None:
                 unchecked_fields += 1
                 continue
@@ -423,7 +423,7 @@ def detect_seed_targets(prompt_graph: dict, object_info: dict) -> list[dict]:
         if not isinstance(inputs, dict) or not isinstance(spec, dict):
             return
         for field, value in inputs.items():
-            found = _find_input_spec(spec, field)
+            found = find_input_spec(spec, field)
             if found is None:
                 continue
             type_field, opts = found

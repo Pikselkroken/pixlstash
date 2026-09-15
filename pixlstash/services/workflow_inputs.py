@@ -59,7 +59,7 @@ def _raw_node(document: dict, node_id: str) -> dict:
     return node if isinstance(node, dict) else {}
 
 
-def _title(document: dict, node_id: str, class_type: str) -> str:
+def node_title(document: dict, node_id: str, class_type: str) -> str:
     node = _raw_node(document, node_id)
     meta = node.get("_meta")
     title = node.get("title") or (meta.get("title") if isinstance(meta, dict) else None)
@@ -118,7 +118,7 @@ def resolve_input_modes(
         resolved.append(
             PictureInput(
                 node_id=node_id,
-                title=_title(document, node_id, class_type),
+                title=node_title(document, node_id, class_type),
                 mode=mode,
                 pixel_sha=pixel_sha,
             )
