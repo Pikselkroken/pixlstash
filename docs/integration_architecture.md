@@ -524,8 +524,34 @@ with no parameters. `pins` is what shows before "All N parameters", in order;
 plain JavaScript number rounds. Both are `OWNER_ONLY`: the read makes the server ask the
 owner's ComfyUI.
 
-`GET /api/v1/comfyui/workflows` carries `has_selection_input`, and the selection
-path offers only a workflow where it is true.
+**Running a saved workflow (#1307)** is one route beside those two:
+
+| Route | Purpose | Response |
+|---|---|---|
+| `POST /api/v1/comfyui/workflows/{workflow_name}/run` | Fill each picture input by its mode and submit | `{status, workflow, prompts: [{picture_id, prompt_id}]}` |
+
+The body is `{picture_ids?, pictures?: [{node_id, picture_id}], caption?,
+values?: [{node_id, name, value}], seed_mode?, seed?, stack?, client_id?,
+set_id?, project_id?, character_id?}`. `picture_ids` is the selection: a workflow
+with a Selection input needs at least one and submits **one run per picture**,
+stacking each output with the picture it read (`picture_id` in `prompts`); one
+without refuses a selection and runs once (`picture_id: null`), filing its output
+into the view context instead. Every Picker input must be named once in
+`pictures`; a Fixed input is read from the stored setup and is 409 when its
+picture has left the library. `values` are checked against the untyped
+`/parameters` description (400 on a mismatch; ranges are ComfyUI's to refuse);
+`seed_mode` is `random` (the default, every sampler re-rolled), `fixed` with a
+`seed`, or `keep`, which leaves the seeds as the file and `values` have them.
+Every refusal comes before anything is uploaded or submitted. Each picture is
+uploaded to ComfyUI once per request, named by its content, and outputs are
+collected from the detected save nodes and arrive as `picture_imported` (§8),
+with the `prompts` handed to `ComfyUiRunner` for progress. A UI-format file is a
+400. `OWNER_ONLY`, because a Fixed picture comes from the setup rather than the
+body.
+
+`GET /api/v1/comfyui/workflows` carries `has_selection_input` and `runnable`
+(a save node, in API format). The selection path offers a runnable workflow
+where `has_selection_input` is true, and the toolbar one where it is false.
 
 ---
 

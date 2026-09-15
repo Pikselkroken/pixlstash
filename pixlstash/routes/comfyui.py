@@ -50,6 +50,7 @@ from pixlstash.services.comfyui_recipe_service import (
 )
 from pixlstash.services.workflow_inputs import (
     FIXED,
+    PICKER,
     SELECTION,
     resolve_input_modes,
     validate_requested_modes,
@@ -359,6 +360,38 @@ def _resolve_fixed_seed(payload: dict, max_seed: int = MAX_SEED) -> int | None:
     return seed_int
 
 
+def _view_context(payload: dict) -> dict | None:
+    """The set, project and character a run with no source picture files into.
+
+    An id that is not an integer is ignored, and logged.
+    """
+    context = {}
+    for key in ("set_id", "project_id", "character_id"):
+        raw = payload.get(key)
+        if raw is None:
+            continue
+        try:
+            context[key] = int(raw)
+        except (TypeError, ValueError):
+            logger.debug("Ignoring invalid %s value in a ComfyUI run: %r", key, raw)
+    return context or None
+
+
+def _int_list(raw, field: str) -> list[int]:
+    """A list of integer ids from a request body, in order and without repeats.
+
+    Raises:
+        HTTPException: 400 when it is not a list of integers.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or any(
+        isinstance(item, bool) or not isinstance(item, int) for item in raw
+    ):
+        raise HTTPException(status_code=400, detail=f"{field} must be a list of ids")
+    return list(dict.fromkeys(raw))
+
+
 def _missing_placeholders(payload: dict, detected=None) -> list[str]:
     """What a run of *payload* cannot fill, under the names the menus know.
 
@@ -443,6 +476,10 @@ def _describe_workflow(path: str, source: str, mtime_ns: int, size: int) -> dict
         "workflow_type": detected.workflow_type,
         "picture_inputs": _picture_input_classes(detected),
         "flagged": workflow_bindings.is_flagged(payload),
+        # The run route submits API format only; a UI-format file lists but
+        # cannot run.
+        "runnable": detected.valid
+        and workflow_parameters.api_graph(payload) is not None,
     }
 
 
@@ -496,16 +533,14 @@ def _stored_input_modes(server, workflow_name: str | None = None):
 def _offered_on_selection(picture_inputs: dict, stored, missing: list) -> bool:
     """Whether the selection path may offer this workflow.
 
-    It needs a Selection input, and until runs fill inputs by mode (#1307) a
-    picture target ``run_i2i`` fills (a binding, or the one detected picture
-    input; ``missing`` names ``{{image_path}}`` when there is none). A workflow
-    whose binding sits on a loader detection does not recognise has no detected
-    input, and keeps being offered the way it was before modes existed.
+    It needs a Selection input, which the run route fills by mode (#1307). A
+    workflow whose binding sits on a loader detection does not recognise has no
+    detected input, and is offered while that binding gives the selection
+    somewhere to go (``missing`` names ``{{image_path}}`` when it does not).
+    ``run_i2i`` still fills only that one target, and checks it itself.
     """
-    if PLACEHOLDER_IMAGE in missing:
-        return False
     if not picture_inputs:
-        return True
+        return PLACEHOLDER_IMAGE not in missing
     # No document: it only decides WHICH input defaults to Selection, never
     # whether one does, and that is all this asks.
     return any(
@@ -696,6 +731,8 @@ class ComfyUIWorkflowItemResponse(BaseModel):
     has_selection_input: bool = False
     # A placeholder migration could not restore a value a token replaced.
     flagged: bool = False
+    # The run route can submit it: a save node, in API format.
+    runnable: bool = False
 
 
 class ComfyUIPictureInputResponse(BaseModel):
@@ -1457,6 +1494,324 @@ def create_router(server) -> APIRouter:
             ),
         }
 
+    def _stack_outputs_with(workflow_instance: dict, pic_id: int) -> int | None:
+        """Join *pic_id*'s stack and tag the save node so its outputs land in it.
+
+        Returns the stack id, or ``None`` when there is none to join.
+        """
+        stack_id = server.vault.db.run_task(get_or_create_stack_for_picture, pic_id)
+        if not stack_id:
+            return None
+        prefix_seed = ""
+        for node in workflow_instance.values():
+            if isinstance(node, dict) and node.get("class_type") == "SaveImage":
+                prefix_seed = str(
+                    (node.get("inputs") or {}).get("filename_prefix") or ""
+                )
+                break
+        prefix_value = build_stack_filename_prefix(prefix_seed, stack_id, pic_id)
+        if not _apply_filename_prefix(
+            workflow_instance, prefix_value
+        ) and not graph_has_pixlstash_saver(workflow_instance):
+            logger.warning(
+                "ComfyUI workflow has no SaveImage node to tag for stack %s",
+                stack_id,
+            )
+        return stack_id
+
+    def _start_output_import(
+        request: Request,
+        comfyui_url: str,
+        prompt_id,
+        output_node_ids: list[str],
+        stack_id: int | None,
+        source_picture_id: int | None,
+        view_context: dict | None = None,
+    ) -> None:
+        """Collect a submitted prompt's outputs in the background."""
+        origin_lease = request.state.library_lease
+        threading.Thread(
+            target=_process_comfyui_outputs,
+            args=(
+                server,
+                comfyui_url,
+                str(prompt_id),
+                output_node_ids,
+                stack_id,
+                source_picture_id,
+            ),
+            kwargs={
+                "view_context": view_context,
+                "origin_generation": origin_lease.generation,
+                "origin_library_uuid": origin_lease.library_uuid,
+            },
+            daemon=True,
+        ).start()
+
+    @router.post(
+        "/comfyui/workflows/{workflow_name}/run",
+        summary="Run a saved workflow",
+        description=(
+            "Runs a saved API-format workflow, filling each picture input by its "
+            "mode: the selection (picture_ids), a picker (pictures: [{node_id, "
+            "picture_id}]) or its fixed picture. A workflow with a Selection "
+            "input runs once per selected picture and stacks each output with "
+            "it; one without runs once and takes no selection. Optional: "
+            "caption, values ([{node_id, name, value}], see /parameters), "
+            "seed_mode ('random', 'fixed' with seed, or 'keep'), stack, "
+            "client_id, and set_id/project_id/character_id for a run with no "
+            "selection. Outputs are collected from the detected save nodes."
+        ),
+        response_model=ComfyUIRunResponse,
+    )
+    def run_comfyui_workflow(
+        request: Request, workflow_name: str, payload: dict = Body(...)
+    ):
+        name, document, picture_inputs = _read_picture_inputs(workflow_name)
+        graph = workflow_parameters.api_graph(document)
+        if graph is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This workflow is saved in ComfyUI's UI format, which cannot "
+                    "be submitted. Export it from ComfyUI in API format."
+                ),
+            )
+        pixlstash_keys = {
+            key: value
+            for key, value in document.items()
+            if str(key).startswith("pixlstash_")
+        }
+        output_node_ids = _extract_output_node_ids({**graph, **pixlstash_keys}, {})
+        if not output_node_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="This workflow has no save node, so a run would import nothing.",
+            )
+
+        selection_ids = _int_list(payload.get("picture_ids"), "picture_ids")
+        modes = resolve_input_modes(
+            document, picture_inputs, _stored_input_modes(server, name)
+        )
+        targets = {}
+        for item in modes:
+            target = workflow_bindings.picture_target(
+                document, item.node_id, picture_inputs[item.node_id]
+            )
+            if target is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"PixlStash cannot fill picture input {item.title} "
+                        f"({item.node_id}): {picture_inputs[item.node_id]} has "
+                        "no image field it knows."
+                    ),
+                )
+            targets[item.node_id] = target
+        selection_node = next((m.node_id for m in modes if m.mode == SELECTION), None)
+        # A binding on a loader detection does not recognise: the selection
+        # fills it the way run_i2i always has.
+        legacy_targets = (
+            []
+            if picture_inputs
+            else workflow_bindings.run_targets(document)[workflow_bindings.IMAGE]
+        )
+        takes_selection = selection_node is not None or bool(legacy_targets)
+        if takes_selection and not selection_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="This workflow runs once for each selected picture; select one.",
+            )
+        if not takes_selection and selection_ids:
+            # Its outputs would be stacked onto pictures the run never read.
+            raise HTTPException(
+                status_code=400,
+                detail="No picture input of this workflow is filled by the selection.",
+            )
+
+        pickers = {m.node_id for m in modes if m.mode == PICKER}
+        picked: dict[str, int] = {}
+        raw_pictures = payload.get("pictures") or []
+        if not isinstance(raw_pictures, list):
+            raise HTTPException(status_code=400, detail="pictures must be a list")
+        for entry in raw_pictures:
+            node_id = entry.get("node_id") if isinstance(entry, dict) else None
+            picture_id = entry.get("picture_id") if isinstance(entry, dict) else None
+            if node_id not in pickers or node_id in picked:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"pictures names {node_id!r}, which is not a picker input "
+                    "of this workflow, or names it twice",
+                )
+            if isinstance(picture_id, bool) or not isinstance(picture_id, int):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"the picture for input {node_id} must be an integer id",
+                )
+            picked[node_id] = picture_id
+        unpicked = sorted(pickers - set(picked))
+        if unpicked:
+            raise HTTPException(
+                status_code=400,
+                detail="Choose a picture for input " + ", ".join(unpicked) + ".",
+            )
+
+        fixed = {m.node_id: m for m in modes if m.mode == FIXED}
+        wanted_ids = set(selection_ids) | set(picked.values())
+        wanted_shas = {m.pixel_sha for m in fixed.values() if m.pixel_sha}
+
+        def kept_pictures(session):
+            by_id = {
+                pic.id: pic
+                for pic in session.exec(
+                    select(Picture).where(
+                        Picture.id.in_(wanted_ids), Picture.deleted.is_(False)
+                    )
+                ).all()
+            }
+            # Descending, so a duplicate resolves to its oldest copy, as the
+            # setup does.
+            by_sha = {
+                pic.pixel_sha: pic
+                for pic in session.exec(
+                    select(Picture)
+                    .where(
+                        Picture.pixel_sha.in_(wanted_shas), Picture.deleted.is_(False)
+                    )
+                    .order_by(Picture.id.desc())
+                ).all()
+            }
+            return by_id, by_sha
+
+        by_id, by_sha = server.vault.db.run_immediate_read_task(kept_pictures)
+
+        def file_of(pic) -> str:
+            path = ImageUtils.resolve_picture_path(
+                server.vault.image_root, pic.file_path
+            )
+            if not path or not os.path.isfile(path):
+                raise HTTPException(status_code=404, detail="Picture file missing")
+            return path
+
+        missing_ids = sorted(wanted_ids - set(by_id))
+        if missing_ids:
+            raise HTTPException(status_code=404, detail="Picture not found")
+        shared: dict[str, object] = {
+            node_id: by_id[picture_id] for node_id, picture_id in picked.items()
+        }
+        for node_id, item in fixed.items():
+            pic = by_sha.get(item.pixel_sha)
+            if pic is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"The fixed picture of input {item.title} ({node_id}) is no "
+                        "longer in this library. Choose another in Workflows."
+                    ),
+                )
+            shared[node_id] = pic
+        files = {pic.id: file_of(pic) for pic in [*shared.values(), *by_id.values()]}
+
+        if payload.get("values"):
+            try:
+                parameters = workflow_parameters.describe_parameters(document)
+                document = workflow_parameters.apply_values(
+                    document, parameters, payload["values"]
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        seed_mode = payload.get("seed_mode", "random")
+        fixed_seed = _resolve_fixed_seed(payload)
+        caption = payload.get("caption") or ""
+        if not isinstance(caption, str):
+            caption = str(caption)
+        client_id = payload.get("client_id") or payload.get("clientId") or None
+        if client_id is not None:
+            client_id = str(client_id)
+        should_stack = bool(payload.get("stack", True))
+        view_context = None if takes_selection else _view_context(payload)
+
+        user = server.auth.get_user_for_request(request)
+        comfyui_url = getattr(user, "comfyui_url", None) if user else None
+        comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
+
+        def upload(pic) -> str:
+            # Named by content, not by the file's own name: two pictures called
+            # image.png would otherwise overwrite each other in ComfyUI's input
+            # folder before the queue reaches the first run.
+            ext = os.path.splitext(files[pic.id])[1]
+            return _upload_image_to_comfyui(
+                comfyui_url,
+                files[pic.id],
+                upload_name=f"pixlstash-{pic.pixel_sha or pic.id}{ext}",
+            )
+
+        shared_names = {node_id: upload(pic) for node_id, pic in shared.items()}
+        caption_targets = {
+            workflow_bindings.CAPTION: workflow_bindings.run_targets(document)[
+                workflow_bindings.CAPTION
+            ]
+        }
+        prompts = []
+        for pic_id in selection_ids if takes_selection else [None]:
+            instance = deepcopy(document)
+            names = dict(shared_names)
+            if pic_id is not None and selection_node is not None:
+                names[selection_node] = upload(by_id[pic_id])
+            try:
+                for node_id, uploaded in names.items():
+                    workflow_bindings.fill(
+                        instance,
+                        {workflow_bindings.IMAGE: [targets[node_id]]},
+                        {workflow_bindings.IMAGE: uploaded},
+                    )
+                if pic_id is not None and legacy_targets:
+                    workflow_bindings.fill(
+                        instance,
+                        {workflow_bindings.IMAGE: legacy_targets},
+                        {workflow_bindings.IMAGE: upload(by_id[pic_id])},
+                    )
+                workflow_bindings.fill(
+                    instance,
+                    caption_targets,
+                    {workflow_bindings.CAPTION: caption or None},
+                )
+            except workflow_bindings.BindingError as exc:
+                logger.warning("Workflow %s binding does not resolve: %s", name, exc)
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Workflow input binding no longer matches the graph: {exc}",
+                ) from exc
+            workflow_instance = {
+                **workflow_parameters.api_graph(instance),
+                **pixlstash_keys,
+            }
+            if fixed_seed is not None:
+                _apply_fixed_seed(workflow_instance, fixed_seed)
+            elif seed_mode != "keep":
+                _randomize_seeds(workflow_instance)
+            stack_id = (
+                _stack_outputs_with(workflow_instance, pic_id)
+                if pic_id is not None and should_stack
+                else None
+            )
+            response_payload = _submit_comfyui_prompt(
+                comfyui_url, workflow_instance, client_id
+            )
+            prompt_id = response_payload.get("prompt_id") or response_payload.get("id")
+            if prompt_id:
+                _start_output_import(
+                    request,
+                    comfyui_url,
+                    prompt_id,
+                    output_node_ids,
+                    stack_id,
+                    pic_id,
+                    view_context,
+                )
+            prompts.append({"picture_id": pic_id, "prompt_id": prompt_id})
+        return {"status": "success", "workflow": name, "prompts": prompts}
+
     @router.post(
         "/comfyui/abort",
         include_in_schema=False,
@@ -1587,32 +1942,9 @@ def create_router(server) -> APIRouter:
             # stacking is requested. When disabled, stack_id stays None so the
             # worker places nothing in a stack; set/project associations and the
             # source_picture_id marker are propagated either way.
-            stack_id: int | None = None
-            if should_stack:
-                stack_id = server.vault.db.run_task(
-                    get_or_create_stack_for_picture,
-                    pic_id,
-                )
-                prefix_seed = ""
-                for node in workflow_instance.values():
-                    if not isinstance(node, dict):
-                        continue
-                    if node.get("class_type") != "SaveImage":
-                        continue
-                    inputs = node.get("inputs") or {}
-                    prefix_seed = str(inputs.get("filename_prefix") or "")
-                    break
-                if stack_id:
-                    prefix_value = build_stack_filename_prefix(
-                        prefix_seed, stack_id, pic_id
-                    )
-                    if not _apply_filename_prefix(
-                        workflow_instance, prefix_value
-                    ) and not graph_has_pixlstash_saver(workflow_instance):
-                        logger.warning(
-                            "ComfyUI workflow has no SaveImage node to tag for stack %s",
-                            stack_id,
-                        )
+            stack_id = (
+                _stack_outputs_with(workflow_instance, pic_id) if should_stack else None
+            )
             response_payload = _submit_comfyui_prompt(
                 comfyui_url,
                 workflow_instance,
@@ -1669,39 +2001,7 @@ def create_router(server) -> APIRouter:
         source_picture_id: int | None = (
             int(raw_source_id) if raw_source_id is not None else None
         )
-        raw_set_id = payload.get("set_id")
-        raw_project_id = payload.get("project_id")
-        raw_character_id = payload.get("character_id")
-        view_context: dict | None = None
-        ctx: dict = {}
-        if raw_set_id is not None:
-            try:
-                ctx["set_id"] = int(raw_set_id)
-            except (TypeError, ValueError):
-                # Ignore invalid set_id values but log for debugging.
-                logger.debug(
-                    "Ignoring invalid set_id value in run_comfyui_t2i: %r", raw_set_id
-                )
-        if raw_project_id is not None:
-            try:
-                ctx["project_id"] = int(raw_project_id)
-            except (TypeError, ValueError):
-                # Ignore invalid project_id values but log for debugging.
-                logger.debug(
-                    "Ignoring invalid project_id value in run_comfyui_t2i: %r",
-                    raw_project_id,
-                )
-        if raw_character_id is not None:
-            try:
-                ctx["character_id"] = int(raw_character_id)
-            except (TypeError, ValueError):
-                # Ignore invalid character_id values but log for debugging.
-                logger.debug(
-                    "Ignoring invalid character_id value in run_comfyui_t2i: %r",
-                    raw_character_id,
-                )
-        if ctx:
-            view_context = ctx
+        view_context = _view_context(payload)
 
         workflow_path, _ = _resolve_workflow_path(workflow_name)
         if not workflow_path:

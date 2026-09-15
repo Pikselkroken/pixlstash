@@ -379,6 +379,26 @@ def run_targets(document: dict, detected=None) -> dict[str, list[dict]]:
     return targets
 
 
+def picture_target(document: dict, node_id: str, class_type: str) -> dict | None:
+    """Where a run puts the picture for one detected picture input (#1307).
+
+    A binding on that node wins, so a file the old dialog wrote keeps its spot;
+    otherwise the loader's own image field. ``None`` when the node has neither,
+    which is a loader PixlStash cannot hand an uploaded file to.
+    """
+    for target in run_targets(document)[IMAGE]:
+        if target_node(document, target.get("path")) == node_id:
+            return target
+    prefix, graph = [], document
+    if isinstance(document.get("prompt"), dict):
+        prefix, graph = ["prompt"], document["prompt"]
+    inputs = (graph.get(node_id) or {}).get("inputs") or {}
+    for field in INPUT_IMAGE_FIELDS.get(class_type, ("image",)):
+        if isinstance(inputs.get(field), str):
+            return {"path": prefix + [node_id, "inputs", field], "template": None}
+    return None
+
+
 def _text_path(graph: dict, node_id: str, hops: int = 1) -> list | None:
     inputs = (graph.get(node_id) or {}).get("inputs") or {}
     for field in _PROMPT_FIELDS:
