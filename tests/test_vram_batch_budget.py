@@ -9,6 +9,7 @@ from pixlstash.inference.vram_budget import (
 )
 from pixlstash.inference.workflows.tagging import TaggingWorkflow
 from pixlstash.tasks.missing_tag_finder import MissingTagFinder
+from pixlstash.utils.tag_reset_registry import TagResetRegistry
 
 
 class _FakeWD14Service:
@@ -131,6 +132,7 @@ def test_missing_tags_finder_uses_suggested_task_size():
         def __init__(self):
             self.image_root = "/tmp"
             self.unprocessable_images = FakeRegistry()
+            self.tag_resets = TagResetRegistry()
 
         def run_immediate_read_task(self, callback):
             class FakeTag:

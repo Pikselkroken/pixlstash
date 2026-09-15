@@ -794,6 +794,7 @@ def register_routes(router, server):
                             .where(Picture.deleted.is_(False))
                         ).all()
                         changed_ids = []
+                        replaced_ids = []
                         for pic in pics:
                             tag_values = mapping.get(pic.id) or set()
                             if not tag_values:
@@ -815,6 +816,7 @@ def register_routes(router, server):
                                 )
                                 for tag_value in sorted(tag_values):
                                     session.add(Tag(tag=tag_value, picture_id=pic.id))
+                                replaced_ids.append(pic.id)
                                 changed = True
                             else:
                                 if any(is_tag_sentinel(v) for v in existing_values):
@@ -836,6 +838,7 @@ def register_routes(router, server):
                             if changed:
                                 changed_ids.append(pic.id)
                         session.commit()
+                        vault.db.tag_resets.mark_reset(replaced_ids)
                         return changed_ids
 
                     tagged_ids = vault.db.run_task(

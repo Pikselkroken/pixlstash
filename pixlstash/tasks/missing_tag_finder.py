@@ -77,6 +77,9 @@ class MissingTagFinder(BaseTaskFinder):
         # starving library-wide on a handful of bad files, the same shape
         # `MissingFaceExtractionFinder` documents on its own query.
         suppressed_ids = self._db.unprocessable_images.active_suppressed_ids()
+        # Before the read: a reset landing between the two must make the task
+        # older than the reset, never newer (#1361).
+        reset_generation = self._db.tag_resets.current()
         pictures = self._db.run_immediate_read_task(
             lambda session: self._fetch_missing_tags(
                 session, batch_limit * (max_inflight + 1), suppressed_ids
@@ -106,6 +109,7 @@ class MissingTagFinder(BaseTaskFinder):
             tagging_workflow=engine.tagging_workflow,
             pictures=selected,
             engine_override=first_engine,
+            reset_generation=reset_generation,
         )
 
     @staticmethod
