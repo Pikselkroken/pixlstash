@@ -84,6 +84,14 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     tables = set(sa.inspect(op.get_bind()).get_table_names())
+    # Re-stamp what upgrade cleared: an older build's re-read nulls the keys of
+    # a file it cannot read.
+    if "picture" in tables:
+        op.execute(
+            "UPDATE picture SET workflow_hash_version = 'v1' "
+            "WHERE workflow_hash_version IS NULL "
+            "AND workflow_instance_hash IS NOT NULL"
+        )
     for table in ("generation_input", "generation"):
         if table in tables:
             op.drop_table(table)

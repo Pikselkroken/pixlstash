@@ -557,9 +557,12 @@ def instance_document_from_reduction(nodes: dict[str, ReducedNode]) -> dict:
 
     Same shape and node ids as :func:`document_from_reduction`, with each nulled
     parameter carrying its value instead. Seeds and output paths stay null (they
-    are the generation's), and **an asset stays a reference**: the instance
-    widgets hold raw filenames, and keeping one here would put a model's name
-    somewhere forgetting it does not reach.
+    are the generation's), and **a model or image filename is a reference**,
+    including one nested inside a structured value (rgthree's Power Lora Loader
+    keeps ``{"lora": "name.safetensors", ...}``). The instance widgets hold raw
+    values, and keeping a filename here would put a model's name somewhere
+    forgetting it does not reach. A name with no model or image extension is
+    not recognised as one here or anywhere else.
     """
     document = document_from_reduction(nodes)
     for node_id, node in nodes.items():
@@ -567,8 +570,21 @@ def instance_document_from_reduction(nodes: dict[str, ReducedNode]) -> dict:
         inputs = document[node_id]["inputs"]
         for name, value in node.instance_widgets:
             if assets.get(name) is None:
-                inputs[name] = value
+                inputs[name] = _nested_assets_as_references(name, value)
     return document
+
+
+def _nested_assets_as_references(name: str, value: Any) -> Any:
+    """``value`` with every filename-shaped string in it swapped for a reference."""
+    if isinstance(value, dict):
+        return {
+            key: _nested_assets_as_references(str(key), item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_nested_assets_as_references(name, item) for item in value]
+    asset = structural_widget_value(name, value)
+    return asset_reference(asset) if asset is not None else value
 
 
 def structural_document(api_graph: dict) -> dict:

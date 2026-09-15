@@ -601,13 +601,13 @@ CREATE TABLE IF NOT EXISTS workflow_recipe_asset (
 # **Keyed by library, for the ghost table's reason, and unlike the recipe.** A
 # recipe is prompt-free and safe to share; an instance is the prompt. What may be
 # kept of it is the retention setting's call, made per library against that
-# library's own pictures, so a row lives exactly while a surviving picture or a
-# ghost IN THAT LIBRARY carries its hash, and the covered-ghost cascade destroys
-# it when neither does. A hub-global row could not be judged by any one vault.
+# library's own pictures, so a row lives while a picture (Scrapheap included) or
+# a ghost IN THAT LIBRARY carries its hash, and the covered-ghost cascade
+# destroys it when neither does. A hub-global row could not be judged by any one vault.
 #
 # ``document`` is the instance as a graph: the recipe's document with each
-# parameter's value where the recipe has a null. Assets stay references, so
-# forgetting a model's name still forgets it here. ``structural_hash`` is a
+# parameter's value where the recipe has a null. Model and image filenames are
+# references, nested ones included, so no readable model name is kept here. ``structural_hash`` is a
 # plain column, not a foreign key, so deleting a workflow is never blocked by
 # the instances that ran it.
 _V2_WORKFLOW_RECIPE_INSTANCE = """

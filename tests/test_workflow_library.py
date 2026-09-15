@@ -59,7 +59,10 @@ from pixlstash.services.workflow_hash import (
     ui_topology_hash,
 )
 from pixlstash.services.model_shelf_service import fetch_picture_counts
-from pixlstash.services.workflow_library_service import topology_activity
+from pixlstash.services.workflow_library_service import (
+    scan_progress,
+    topology_activity,
+)
 from pixlstash.services.scrapheap_service import purge_scrapheap_pictures
 from pixlstash.services.workflow_ghost_service import (
     DEFAULT_GHOST_RETENTION,
@@ -1126,6 +1129,31 @@ def test_an_instance_keeps_the_parameters_and_never_a_model_name(hub):
     )
 
 
+def test_a_nested_model_name_is_a_reference_in_the_instance_too(hub):
+    """rgthree's Power Lora Loader keeps its LoRA inside a dict, which the
+    recipe tier nulls whole and so never names, and forgetting never reaches."""
+    graph = api_graph(
+        TXT2IMG
+        + [
+            (
+                8,
+                "Power Lora Loader (rgthree)",
+                [("model", 1, 0)],
+                {"lora_1": {"on": True, "lora": "example-subject.safetensors"}},
+            )
+        ]
+    )
+    keys = record_api_graph(hub, graph, LIBRARY)
+
+    row = instance_row(hub, LIBRARY, keys.instance_hash)
+    assert "example-subject" not in row["document"]
+    lora = json.loads(row["document"])["8"]["inputs"]["lora_1"]
+    assert lora == {
+        "on": True,
+        "lora": asset_reference("example-subject.safetensors"),
+    }
+
+
 def test_an_instance_row_needs_a_library_to_belong_to(hub):
     """A row that names no library could never be cascaded when its pictures go."""
     record_api_graph(hub, api_graph(TXT2IMG))
@@ -1570,6 +1598,59 @@ def test_the_backfill_records_a_picture_filed_before_the_tables(store):
     assert new_finder(store).find_task() is None
 
 
+def test_the_finder_hands_its_library_to_the_scan(store):
+    """The production path: without it the scan files no instance at all."""
+    name = write_png(Path(store.image_root), "via-finder.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+    finder = MissingComfyUIExtractionFinder(
+        database=store.vault,
+        image_root=store.image_root,
+        hub=store.hub,
+        library_uuid=LIBRARY,
+    )
+    finder.find_task()._run_task()
+
+    instance = read_picture(store, picture_id).workflow_instance_hash
+    assert instance_row(store.hub, LIBRARY, instance) is not None
+
+
+def test_scan_progress_does_not_fall_back_during_the_backfill(store):
+    """Clearing the marker to record how a picture was made is not un-reading it."""
+    name = write_png(Path(store.image_root), "progress.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+    run_extraction(store, [picture_id])
+    mark_unscanned(store, picture_id)
+
+    progress = store.vault.run_immediate_read_task(scan_progress)
+    assert (progress.pictures, progress.scanned) == (1, 1)
+
+
+def test_a_scrapheaped_picture_keeps_its_instance_row(store):
+    """It can be restored, and it is never re-read, so its row must not go."""
+    names = [
+        write_png(
+            Path(store.image_root),
+            f"binned-{seed}.png",
+            api=api_graph(edited(TXT2IMG, 5, seed=seed)),
+        )
+        for seed in (1, 2)
+    ]
+    ids = [add_picture(store, name) for name in names]
+    run_extraction(store, ids)
+    instance = read_picture(store, ids[0]).workflow_instance_hash
+    store.vault.run_task(
+        lambda session: (
+            setattr(session.get(Picture, ids[0]), "deleted", True),
+            session.delete(session.get(Picture, ids[1])),
+            session.commit(),
+        )
+    )
+
+    cascade(store, GHOST_RETENTION_COVERED)
+
+    assert instance_row(store.hub, LIBRARY, instance) is not None
+
+
 def test_the_backfill_keeps_the_keys_of_a_file_it_cannot_read(store):
     """An unplugged drive during the backfill must cost nothing it already had.
 
@@ -1629,21 +1710,27 @@ def test_a_picture_destroyed_mid_read_queues_its_instance_again(store, monkeypat
     picture_id = add_picture(store, name)
     real = comfyui_extraction_task.record_api_graph
 
-    def delete_then_record(*args, **kwargs):
+    def delete_drain_then_record(*args, **kwargs):
         store.vault.run_task(
             lambda session: (
                 session.delete(session.get(Picture, picture_id)),
                 session.commit(),
             )
         )
+        # The drain that runs in between, with no instance row to find yet.
+        cascade(store, GHOST_RETENTION_COVERED)
+        assert pending_hashes(store) == []
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(comfyui_extraction_task, "record_api_graph", delete_then_record)
+    monkeypatch.setattr(
+        comfyui_extraction_task, "record_api_graph", delete_drain_then_record
+    )
     run_extraction(store, [picture_id])
 
     instance = instance_hash(api_graph(TXT2IMG))
+    assert instance_row(store.hub, LIBRARY, instance) is not None
     assert pending_hashes(store) == [instance]
-    assert cascade(store, GHOST_RETENTION_COVERED) == 0
+    cascade(store, GHOST_RETENTION_COVERED)
     assert instance_row(store.hub, LIBRARY, instance) is None
 
 

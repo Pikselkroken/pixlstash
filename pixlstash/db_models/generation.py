@@ -28,8 +28,9 @@ from sqlmodel import Field, SQLModel
 class Generation(SQLModel, table=True):
     """One picture's run: the seed its instance was sampled at.
 
-    Written for every picture whose embedded graph was filed, so a row exists
-    exactly when ``picture.workflow_instance_hash`` does.
+    Written by the workflow scan for every picture whose embedded graph it
+    filed. A picture scanned without a hub, or sitting in the Scrapheap when the
+    backfill ran, has an instance hash and no row yet.
 
     Attributes:
         picture_id: The picture, and the key. One picture is one output.

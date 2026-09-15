@@ -70,7 +70,10 @@ library's prompts and parameters, one row per instance hash, and a row is kept
 exactly while a surviving picture or a ghost in that library carries its hash.
 So every drain destroys the rows its queued hashes no longer justify, at every
 retention position: at ``on`` the ghost is what keeps a row, not the setting.
-One order is narrowed rather than closed: a drain that runs between a purge's
+A scrapheaped picture keeps its row (it can be restored, and is never re-read).
+Two orders are narrowed rather than closed. A drain that read its cover just
+before a new picture with the same hash was saved destroys a row that picture
+needed, and it then has none. And a drain that runs between a purge's
 ``DELETE`` and its ghost write sees neither cover nor ghost, and the instance
 row goes before the ghost that would have kept it arrives. That ghost keeps its
 thumbnail, prompt and seed without the rest of the parameters, which fails
@@ -277,6 +280,26 @@ def surviving_instance_hashes_in_session(
     return surviving
 
 
+def held_instance_hashes_in_session(
+    session: Session, instance_hashes: list[str]
+) -> set[str]:
+    """Which of these instance hashes ANY picture row still carries, Scrapheap too.
+
+    The instance row's cover, which is deliberately wider than a ghost's. A
+    scrapheaped picture can be restored, and its scanned marker is set, so an
+    instance row destroyed under it would never be written again.
+    """
+    held: set[str] = set()
+    for batch in chunked(instance_hashes):
+        rows = session.exec(
+            select(Picture.workflow_instance_hash)
+            .where(Picture.workflow_instance_hash.in_(batch))
+            .distinct()
+        ).all()
+        held.update(value for value in rows if value)
+    return held
+
+
 def _thumbnail_bytes(image_root: str, file_path: Optional[str]) -> Optional[bytes]:
     """The picture's thumbnail, read before the purge removes it from disk.
 
@@ -410,9 +433,10 @@ def drain_ghost_cascade(
         ).all()
         hashes = [row.instance_hash for row in rows]
         surviving = surviving_instance_hashes_in_session(session, hashes)
-        return hashes, surviving, (rows[-1].seq if rows else None)
+        held = held_instance_hashes_in_session(session, hashes)
+        return hashes, surviving, held, (rows[-1].seq if rows else None)
 
-    hashes, surviving, last_seq = vault_db.run_immediate_read_task(read)
+    hashes, surviving, held, last_seq = vault_db.run_immediate_read_task(read)
     if last_seq is None:
         return 0, 0
     destroyed = cascade_uncovered_ghosts(
@@ -421,7 +445,7 @@ def drain_ghost_cascade(
     # After the ghosts, so one the cascade just destroyed no longer keeps its
     # instance row alive.
     if hub is not None and library_uuid:
-        destroy_uncovered_instances(hub, library_uuid, sorted(set(hashes) - surviving))
+        destroy_uncovered_instances(hub, library_uuid, sorted(set(hashes) - held))
 
     def dequeue(session: Session):
         session.execute(
@@ -466,7 +490,20 @@ def erase_library_ghosts(vault_db, hub, library_uuid: str) -> int:
     ghosts were erased.
     """
     erased = erase_picture_ghosts(hub, library_uuid)
-    requeue_library_ghosts(vault_db, hub, library_uuid)
+    try:
+        requeue_library_ghosts(vault_db, hub, library_uuid)
+    except Exception as exc:
+        # The erase has happened and cannot be un-happened, so it is reported as
+        # done. What is lost is only the re-check of instance rows the erased
+        # ghosts were keeping; a restart's first purge or delete queues again.
+        logger.error(
+            "Erased %d ghost(s) of library %s, but could not queue the instance "
+            "re-check afterwards; instance rows only those ghosts kept stay "
+            "until their hashes are next queued: %s",
+            erased,
+            library_uuid,
+            exc,
+        )
     return erased
 
 

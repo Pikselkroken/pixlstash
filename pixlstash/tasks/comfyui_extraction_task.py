@@ -242,6 +242,9 @@ class ComfyUIExtractionTask(BaseTask):
                     topology, structural, instance, seed = scanned_workflows[pid]
                     # Never replaced by NULL: nothing found this time is a fact
                     # about the read, and the keys came from a read that worked.
+                    # Written for 0118's same-version revisit. A HASH_VERSION
+                    # bump must not rely on it: it would stamp old-rule keys
+                    # with the new version.
                     if structural is not None or db_pic.workflow_instance_hash is None:
                         db_pic.workflow_topology_hash = topology
                         db_pic.workflow_structural_hash = structural

@@ -2789,11 +2789,16 @@ different node ids and so different document *text* at the same identity.
 **The instance tier is `workflow_recipe_instance` (v1.12, #1311), and it is keyed
 by library.** A row is one instance hash with its `document`: the recipe's
 document with each parameter's value filled in, seeds and output paths still
-null, assets still references (so forgetting a model name reaches it). Unlike the
-recipe, an instance *is* the prompt, so it follows the ghost table's rule rather
-than the recipe's: `(library_uuid, instance_hash)`, kept exactly while a surviving
-picture or a ghost in that library carries the hash, and destroyed by the
-covered-ghost cascade when neither does (*Picture ghosts* below). This narrows the
+null, and every model or image filename in it (nested ones too) a reference, so
+no readable model name is kept there. Unlike the recipe, an instance *is* the
+prompt, so it follows the ghost table's rule rather than the recipe's:
+`(library_uuid, instance_hash)`, kept while a picture (Scrapheap included, since
+it can be restored) or a ghost in that library carries the hash, and destroyed by
+the covered-ghost cascade when neither does (*Picture ghosts* below). **It holds
+the prompt of every kept picture, not only of destroyed ones**, which is the
+2026-08-20 ruling: the prompt is already readable in the library the picture is
+in. Detaching a library keeps its rows, exactly as it keeps its ghosts;
+forgetting the registration deletes both. This narrows the
 2026-08-20 "hub-side with the recipe" ruling rather than reversing it: still hub,
 but a hub-global row could not be judged by any one vault's pictures.
 
@@ -3117,8 +3122,8 @@ on `picture`: a row deleted, or updated away from its `workflow_instance_hash`
 only) runs `drain_ghost_cascade`, which reads a batch and its surviving cover,
 calls `cascade_uncovered_ghosts` (`off` destroys every ghost for the hash,
 `covered` the uncovered ones, `on` none), then `destroy_uncovered_instances`
-(every uncovered `workflow_recipe_instance` row no remaining ghost leans on, at
-every position) and only then dequeues by `seq`, so a
+(every `workflow_recipe_instance` row whose hash no picture row, Scrapheap
+included, and no remaining ghost carries, at every position) and only then dequeues by `seq`, so a
 crash repeats the batch and a hash re-queued mid-drain is not swallowed. Two
 cases no trigger sees queue explicitly: a purge that kept ghosts re-queues their
 hashes after writing them (a drain may have settled the hash before the ghost
