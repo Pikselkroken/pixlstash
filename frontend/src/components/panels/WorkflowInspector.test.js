@@ -298,7 +298,7 @@ describe("a saved workflow's pictures in", () => {
       { node_id: "81", mode: "fixed", picture_id: 42 },
     ]);
     expect(wrapper.find(".picker-stub").exists()).toBe(false);
-    expect(textOf(wrapper)).toContain("not offered on a selection");
+    expect(textOf(wrapper)).toContain("not on a selection");
   });
 
   it("goes back to a kept picture without asking for one again", async () => {

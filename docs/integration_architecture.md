@@ -426,7 +426,7 @@ preview, the run and the ghosting. Five points where the wiring is load-bearing:
 ### 2.3 The `/workflows` contract (v1.11)
 
 The Workflows view's read side (implementation plan §F1/§F2). Four GETs, no
-mutators: naming a workflow and running one are later steps. Forgetting ghosts
+mutators: naming a workflow is a later step, and running one is the run route further down this section. Forgetting ghosts
 is not here either: it is two purges beside the retention setting,
 `DELETE /server-config/ghost-retention/ghosts` and
 `.../model-ghosts?expected=N`, whose counts `GET /server-config/ghost-retention`
@@ -526,8 +526,40 @@ error, for a file with nothing to set, which is never sent to ComfyUI.
 plain JavaScript number rounds. Both are `OWNER_ONLY`: the read makes the server ask the
 owner's ComfyUI.
 
-`GET /api/v1/comfyui/workflows` carries `has_selection_input`, and the selection
-path offers only a workflow where it is true.
+**Running a saved workflow (#1307)** is one route beside those two:
+
+| Route | Purpose | Response |
+|---|---|---|
+| `POST /api/v1/comfyui/workflows/{workflow_name}/run` | Fill each picture input by its mode and submit | `{status, workflow, prompts: [{picture_id, prompt_id}]}` |
+
+The body is `{picture_ids?, pictures?: [{node_id, picture_id}], caption?,
+values?: [{node_id, name, value}], seed_mode?, seed?, stack?, client_id?,
+set_id?, project_id?, character_id?}`. `picture_ids` is the selection: a workflow
+with a Selection input needs at least one and submits **one run per picture**,
+stacking each output with the picture it read (`picture_id` in `prompts`); one
+without refuses a selection and runs once (`picture_id: null`), filing its output
+into the view context instead. Every Picker input must be named once in
+`pictures`; a Fixed input is read from the stored setup and is 409 when its
+picture has left the library. `values` are checked against the untyped
+`/parameters` description, by broad type only (400 on a mismatch; ranges and
+options are ComfyUI's to refuse);
+`seed_mode` is `random` (the default, every sampler re-rolled), `fixed` with a
+`seed`, or `keep`, which leaves the seeds as the file and `values` have them.
+At most 200 selected pictures per request (400 above it), and a picture id that
+is not a kept picture is a 404 naming the ids. Every refusal comes before
+anything is uploaded or submitted. A ComfyUI failure
+partway through a batch answers 200 with `status: "partial"`, the `prompts` that
+did start and an `error`: those runs are queued and importing, so the client
+follows them and says the rest did not start. Each picture is
+uploaded to ComfyUI once per request, named by its id and content, and outputs are
+collected from the detected save nodes and arrive as `picture_imported` (§8),
+with the `prompts` handed to `ComfyUiRunner` for progress. A UI-format file is a
+400. `OWNER_ONLY`, because a Fixed picture comes from the setup rather than the
+body.
+
+`GET /api/v1/comfyui/workflows` carries `has_selection_input` and `runnable`
+(a save node, in API format). The selection path offers a runnable workflow
+where `has_selection_input` is true, and the toolbar one where it is false.
 
 ---
 
