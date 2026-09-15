@@ -20,6 +20,11 @@ from pixlstash.db_models import (
     Picture,
     User,
 )
+from pixlstash.hub.workflows import (
+    forget_input_modes,
+    input_modes_by_workflow,
+    replace_input_modes,
+)
 from pixlstash.utils.comfyui_utilities import (
     collect_seed_inputs,
     extract_comfy_workflow_info,
@@ -36,11 +41,6 @@ from pixlstash.services.comfyui_recipe_service import (
     preflight_prompt,
     sanitize_prompt_graph,
     unchecked_preflight,
-)
-from pixlstash.hub.workflows import (
-    forget_input_modes,
-    input_modes_by_workflow,
-    replace_input_modes,
 )
 from pixlstash.services.workflow_inputs import (
     FIXED,
@@ -250,6 +250,24 @@ def _describe_workflow(path: str, source: str, mtime_ns: int, size: int) -> dict
     }
 
 
+def _on_disk_name(path: str) -> str:
+    """The file's own spelling of its name, which keys its stored modes.
+
+    A client's spelling can differ in case, and on a case-insensitive
+    filesystem it still opens the file; keying on it would split one file's
+    setup between two names.
+    """
+    folder, base = os.path.split(path)
+    try:
+        entries = os.listdir(folder)
+    except OSError as exc:
+        logger.warning("Could not list %s to spell workflow %s: %s", folder, base, exc)
+        return base
+    if base in entries:
+        return base
+    return next((entry for entry in entries if entry.lower() == base.lower()), base)
+
+
 def _picture_input_classes(detected) -> dict[str, str]:
     """Detected picture inputs as ``node_id -> class_type``, in detection order."""
     return dict(zip(detected.picture_inputs, detected.picture_input_classes))
@@ -291,6 +309,8 @@ def _offered_on_selection(picture_inputs: dict, stored, missing: list) -> bool:
         return False
     if not picture_inputs:
         return True
+    # No document: it only decides WHICH input defaults to Selection, never
+    # whether one does, and that is all this asks.
     return any(
         item.mode == SELECTION
         for item in resolve_input_modes({}, picture_inputs, stored)
@@ -482,8 +502,9 @@ class ComfyUIWorkflowItemResponse(BaseModel):
 class ComfyUIPictureInputResponse(BaseModel):
     """One picture input of a workflow and how it is filled.
 
-    ``picture_id`` is the Fixed picture in this library. ``picture_missing`` is
-    a Fixed input whose picture is no longer in it.
+    ``picture_id`` is the Fixed picture in this library, or for another mode the
+    picture it would return to. ``picture_missing`` is a Fixed input whose
+    picture is no longer in it.
     """
 
     node_id: str
@@ -838,6 +859,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid workflow name")
         if not os.path.isfile(path):
             raise HTTPException(status_code=404, detail="Workflow not found in user")
+        stored_name = _on_disk_name(path)
         try:
             os.remove(path)
         except OSError as exc:
@@ -846,7 +868,7 @@ def create_router(server) -> APIRouter:
         hub = getattr(server, "hub", None)
         if hub is not None:
             try:
-                forget_input_modes(hub, normalized)
+                forget_input_modes(hub, stored_name)
             except Exception as exc:
                 # The file is already gone, so its rows describe nothing; they
                 # would only come back into force if a file of the same name
@@ -867,6 +889,7 @@ def create_router(server) -> APIRouter:
         path, _source = _resolve_workflow_path(name)
         if not path:
             raise HTTPException(status_code=404, detail="Workflow not found")
+        name = _on_disk_name(path)
         try:
             document = _load_workflow_json(path)
             detected = detect_workflow_io(document)
@@ -902,6 +925,8 @@ def create_router(server) -> APIRouter:
                     "node_id": item.node_id,
                     "title": item.title,
                     "mode": item.mode,
+                    # A non-Fixed input may still hold the picture it had, so
+                    # choosing Fixed again needs no new pick.
                     "picture_id": ids.get(item.pixel_sha),
                     "picture_missing": item.mode == FIXED and item.pixel_sha not in ids,
                 }
@@ -947,10 +972,12 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         picture_ids = {pid for _, _, pid in requested if pid is not None}
+        # Every stored picture, whatever the input's mode now: leaving Fixed
+        # keeps it, so stepping back to Fixed does not lose it.
         kept = {
             row["node_id"]: row["pixel_sha"]
             for row in _stored_input_modes(server, name)
-            if row["mode"] == FIXED
+            if row["pixel_sha"]
         }
 
         def shas_by_id(session):
@@ -966,11 +993,10 @@ def create_router(server) -> APIRouter:
         )
         modes = []
         for node_id, mode, picture_id in requested:
-            pixel_sha = None
+            pixel_sha = kept.get(node_id)
             if mode == FIXED and picture_id is None:
                 # Unchanged, so it keeps its picture, even one that has since
                 # left the library: changing another input must not drop it.
-                pixel_sha = kept.get(node_id)
                 if pixel_sha is None:
                     raise HTTPException(
                         status_code=400,
@@ -1078,7 +1104,9 @@ def create_router(server) -> APIRouter:
         # The list leaves this out of the selection pill; a stale client or a
         # hand-made request must not run it on a selection anyway.
         if not _offered_on_selection(
-            picture_inputs, _stored_input_modes(server, workflow_name), missing
+            picture_inputs,
+            _stored_input_modes(server, _on_disk_name(workflow_path)),
+            missing,
         ):
             raise HTTPException(
                 status_code=400,

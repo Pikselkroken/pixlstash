@@ -116,6 +116,13 @@ describe("the saved workflows", () => {
           has_selection_input: false,
         },
         {
+          // No field at all reads as offered, the backend's own default.
+          name: "old.json",
+          display_name: "old",
+          valid: true,
+          workflow_type: "i2i",
+        },
+        {
           name: "t2i.json",
           display_name: "t2i",
           valid: true,
@@ -126,29 +133,60 @@ describe("the saved workflows", () => {
     });
     const wrapper = await mountShelf();
     const rows = wrapper
-      .findAll("button.wfshelf-file")
-      .map((b) => [
-        b.find(".wfshelf-file-name").text(),
-        b.find(".wfshelf-row-sub").text(),
+      .findAll("li.wfshelf-file")
+      .map((row) => [
+        row.find(".wfshelf-file-name").text(),
+        row.find(".wfshelf-row-sub").text(),
       ]);
     expect(rows).toEqual([
       ["edit", "image to image · not offered on a selection"],
+      ["old", "image to image"],
       ["t2i", "text to image"],
     ]);
   });
 
-  it("shares one selection with the graphs below", async () => {
+  it("marks the picked file selected and shares one selection with the graphs", async () => {
     listWorkflowFiles.mockResolvedValue({
       workflows: [{ name: "edit.json", valid: true, workflow_type: "i2i" }],
     });
     const wrapper = await mountShelf();
     const store = useWorkflowShelfStore();
     store.select("a".repeat(64));
-    await wrapper.find("button.wfshelf-file").trigger("click");
-    expect(store.selectedFile).toBe("edit.json");
+    const row = wrapper.find("li.wfshelf-file");
+    expect(row.attributes("aria-selected")).toBe("false");
+
+    await row.trigger("click");
     expect(store.selectedHash).toBe(null);
+    expect(row.attributes("aria-selected")).toBe("true");
+    expect(row.classes()).toContain("wfshelf-row--selected");
+
     store.select("a".repeat(64));
-    expect(store.selectedFile).toBe(null);
+    await wrapper.vm.$nextTick();
+    expect(row.attributes("aria-selected")).toBe("false");
+  });
+
+  it("is one tab stop, walked with the arrows and picked with Enter", async () => {
+    listWorkflowFiles.mockResolvedValue({
+      workflows: [
+        { name: "a.json", valid: true, workflow_type: "i2i" },
+        { name: "b.json", valid: true, workflow_type: "i2i" },
+      ],
+    });
+    const wrapper = await mountShelf();
+    const store = useWorkflowShelfStore();
+    const tabStops = () =>
+      wrapper
+        .findAll("li.wfshelf-file")
+        .map((row) => row.attributes("tabindex"));
+    expect(tabStops()).toEqual(["0", "-1"]);
+
+    const [first] = wrapper.findAll("li.wfshelf-file");
+    await first.trigger("keydown", { key: "ArrowDown" });
+    expect(tabStops()).toEqual(["-1", "0"]);
+    await wrapper.findAll("li.wfshelf-file")[1].trigger("keydown", {
+      key: "Enter",
+    });
+    expect(store.selectedFile).toBe("b.json");
   });
 });
 

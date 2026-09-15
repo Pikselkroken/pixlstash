@@ -68,7 +68,7 @@
                 v-if="input.picture_id"
                 class="wfins-fixed-thumb"
                 :src="thumbUrl(input.picture_id)"
-                alt=""
+                :alt="`The picture fixed for ${input.title} #${input.node_id}`"
               />
               <span v-else class="wfins-fixed-thumb wfins-fixed-thumb--missing">
                 <v-icon size="18">mdi-image-off-outline</v-icon>
@@ -76,11 +76,11 @@
               <span class="wfins-note wfins-fixed-text">{{
                 input.picture_missing
                   ? "Its picture is no longer in this library."
-                  : `Picture ${input.picture_id}`
+                  : "Used for every run."
               }}</span>
               <AppButton
                 size="sm"
-                :disabled="store.inputsSaving"
+                :aria-label="`Change the picture for ${input.title} #${input.node_id}`"
                 @click="pickerFor = input"
               >
                 Change
@@ -431,10 +431,10 @@ const variantBars = computed(() => {
  * picker and changes nothing until one is chosen.
  */
 async function chooseMode(input, mode) {
-  // Not disabled while a write is out, which would drop keyboard focus on
-  // every arrow step; a step taken meanwhile is simply not stored.
-  if (store.inputsSaving) return;
-  if (mode === "fixed") {
+  // Never disabled while a write is out, which would drop keyboard focus on
+  // every arrow step; the store queues the step instead. Fixed asks for a
+  // picture only when the input has none to go back to.
+  if (mode === "fixed" && !input.picture_id) {
     pickerFor.value = input;
     return;
   }

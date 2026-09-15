@@ -32,7 +32,8 @@ _IMAGE_PLACEHOLDER = "{{image_path}}"
 class PictureInput:
     """One picture input and how it is filled.
 
-    ``pixel_sha`` names the Fixed picture and is ``None`` for the other modes.
+    ``pixel_sha`` names the Fixed picture, or for another mode the one the input
+    had before it left Fixed, if any.
     """
 
     node_id: str

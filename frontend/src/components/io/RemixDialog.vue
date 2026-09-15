@@ -107,7 +107,8 @@
           </div>
         </label>
         <p v-if="!templatesLoading && !templates.length" class="remix-note">
-          No image-to-image templates found. Add one in Settings → Workflows.
+          No image-to-image templates found. Add one in Settings → Workflows,
+          with a picture input set to Selection in Workflows.
         </p>
 
         <div v-if="templateTakesPrompt" class="remix-field">
@@ -860,7 +861,7 @@ async function loadTemplates(generation, imageId, backendUrl) {
     templates.value = all.filter(
       (w) =>
         w?.valid &&
-        w?.has_selection_input &&
+        w?.has_selection_input !== false &&
         !w?.missing_placeholders?.includes("{{image_path}}"),
     );
     if (!templates.value.some((w) => w.name === selectedWorkflow.value)) {

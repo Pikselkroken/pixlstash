@@ -4234,8 +4234,10 @@ already in hand and cost no request.
 **The saved workflow files sit in their own band above the graphs** (§F3,
 #1305). They are what runs, and a file is not a topology until a picture made
 with it has been read, so they are buttons in a list of their own rather than
-rows of the treegrid; the column strip is sticky inside the scroll so it heads
-the graphs and not the files. `useWorkflowShelfStore` holds them (`files`,
+rows of the treegrid, though on the same keyboard model: one tab stop, `role="listbox"`
+with `aria-selected` options, Up / Down / Home / End to walk and Enter or Space
+to pick. The column strip is sticky inside the scroll so it heads the graphs and
+not the files. `useWorkflowShelfStore` holds them (`files`,
 `selectedFile`) from `GET /comfyui/workflows`, and a file and a graph share one
 selection: choosing either clears the other.
 
@@ -4244,11 +4246,17 @@ input, the graph's title with its node id beside it (two inputs are often both
 "Load Image"), and a `Segmented` Selection / Picker / Fixed. The setup is read
 on every selection, because a file can be replaced under its name. Choosing
 Selection moves it off whichever input held it, in the same write. Choosing
-Fixed opens `PicturePicker` and writes nothing until a picture is chosen; the
-picker stays open when the write fails. An unchanged Fixed input is sent without
+Fixed opens `PicturePicker` and writes nothing until a picture is chosen, unless
+the input still holds the picture it had before it left Fixed; the picker stays
+open when the write fails. **The control is never disabled during a write**,
+which would drop keyboard focus: a change shows at once, one made while a write
+is out is queued and only the newest is sent, and a failed write puts back the
+last setup the server confirmed. An unchanged Fixed input is sent without
 a picture, so the server keeps its own. The selection pill, the overlay's
 ComfyUI menu and Remix's templates leave out a workflow whose
-`has_selection_input` is false.
+`has_selection_input` is false; an absent field reads as offered, the backend's
+own default, and the pill also refuses to run a chosen workflow that has left
+its list.
 
 **Nothing in the graph list writes.** Naming a workflow and running one are later
 steps (implementation plan §F5), and forgetting ghosts is the two counted

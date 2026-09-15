@@ -27,6 +27,7 @@
          buttons' own names change, but a reader who is not on them hears
          nothing. -->
     <p class="visually-hidden" role="status">{{ announcement }}</p>
+    <p class="visually-hidden" role="status">{{ fileAnnouncement }}</p>
 
     <div class="wfshelf-toolbar shelfbar toolbar">
       <span class="wfshelf-title">Workflows</span>
@@ -200,28 +201,37 @@
             workflowCount(store.files.length)
           }}</span>
         </h3>
-        <ul class="wfshelf-list">
-          <li v-for="file in store.files" :key="file.name">
-            <button
-              type="button"
-              class="wfshelf-row wfshelf-file"
-              :class="{
-                'wfshelf-row--selected': store.selectedFile === file.name,
-              }"
-              :aria-pressed="store.selectedFile === file.name"
-              @click="store.selectFile(file.name)"
-              @keydown.escape="store.clearSelection()"
-            >
-              <span class="wfshelf-row-ident">
-                <v-icon size="16">mdi-file-cog-outline</v-icon>
-              </span>
-              <span class="wfshelf-col--name">
-                <span class="wfshelf-file-name">{{
-                  file.display_name || file.name
-                }}</span>
-                <span class="wfshelf-row-sub">{{ fileLine(file) }}</span>
-              </span>
-            </button>
+        <!-- A single-select list with one tab stop, on the graph list's own
+             keyboard model: Up and Down walk it, Enter or Space selects. -->
+        <ul
+          class="wfshelf-list"
+          role="listbox"
+          aria-labelledby="wf-files-label"
+        >
+          <li
+            v-for="file in store.files"
+            :key="file.name"
+            class="wfshelf-row wfshelf-file"
+            :class="{
+              'wfshelf-row--selected': store.selectedFile === file.name,
+            }"
+            role="option"
+            :aria-selected="store.selectedFile === file.name"
+            :tabindex="file.name === fileRovingKey ? 0 : -1"
+            :data-file-key="file.name"
+            @click="pickFile(file)"
+            @keydown="onFileKeydown(file, $event)"
+            @focus="fileRovingKey = file.name"
+          >
+            <span class="wfshelf-row-ident">
+              <v-icon size="16">mdi-file-cog-outline</v-icon>
+            </span>
+            <span class="wfshelf-col--name">
+              <span class="wfshelf-file-name">{{
+                file.display_name || file.name
+              }}</span>
+              <span class="wfshelf-row-sub">{{ fileLine(file) }}</span>
+            </span>
           </li>
         </ul>
       </section>
@@ -739,11 +749,59 @@ async function resolveExportHash() {
   return fetched.length ? fetched[0].structural_hash : null;
 }
 
+/** The saved workflow holding the band's one tab stop. */
+const fileRovingKey = ref(null);
+const fileAnnouncement = ref("");
+
+function pickFile(file) {
+  store.selectFile(file.name);
+  fileRovingKey.value = file.name;
+  fileAnnouncement.value = `${file.display_name || file.name} selected. Its picture inputs are in the inspector.`;
+}
+
+function onFileKeydown(file, event) {
+  const names = store.files.map((f) => f.name);
+  const index = names.indexOf(file.name);
+  let target = null;
+  if (event.key === "ArrowDown") target = names[index + 1];
+  else if (event.key === "ArrowUp") target = names[index - 1];
+  else if (event.key === "Home") target = names[0];
+  else if (event.key === "End") target = names[names.length - 1];
+  else if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    pickFile(file);
+    return;
+  } else if (event.key === "Escape") {
+    store.clearSelection();
+    return;
+  } else {
+    return;
+  }
+  event.preventDefault();
+  if (!target) return;
+  fileRovingKey.value = target;
+  // Matched by dataset rather than a selector: a file name can hold a quote,
+  // and `CSS.escape` is absent in the test environment.
+  [...(rootEl.value?.querySelectorAll("[data-file-key]") || [])]
+    .find((el) => el.dataset.fileKey === target)
+    ?.focus();
+}
+
+watch(
+  () => store.files,
+  (files) => {
+    if (!files.some((f) => f.name === fileRovingKey.value)) {
+      fileRovingKey.value = files[0]?.name ?? null;
+    }
+  },
+  { immediate: true },
+);
+
 /** A saved workflow's second line: what it takes, and where it is offered. */
 function fileLine(file) {
   if (!file.valid) return "cannot run: no save node";
   if (file.workflow_type !== "i2i") return "text to image";
-  return file.has_selection_input
+  return file.has_selection_input !== false
     ? "image to image"
     : "image to image · not offered on a selection";
 }
@@ -1109,15 +1167,6 @@ onMounted(() => {
   outline-offset: calc(var(--focus-width) * -1);
 }
 
-.wfshelf-file {
-  width: 100%;
-  border-top: 0;
-  border-right: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-}
 
 .wfshelf-file-name {
   overflow: hidden;

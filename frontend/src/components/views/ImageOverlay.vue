@@ -180,7 +180,8 @@
                     class="overlay-comfy-warning"
                   >
                     No valid workflows found. Workflows need a
-                    {{ imagePlaceholderLabel }} placeholder and a save node.
+                    {{ imagePlaceholderLabel }} placeholder, a save node, and a
+                    picture input set to Selection in Workflows.
                   </div>
                   <label class="overlay-comfy-field-label">Workflow</label>
                   <select
@@ -1492,18 +1493,22 @@ function persistComfyuiPromptToSession() {
 }
 
 // What run_i2i accepts, not workflow_type, until runs use detection (#1307),
-// and only a workflow with an input the selection fills.
-const offeredOnSelection = (workflow) =>
-  workflow?.has_selection_input &&
+// and only a workflow with an input the selection fills. Absent reads as
+// offered, which is the backend's own default for an unconfigured workflow.
+const takesImagePlaceholder = (workflow) =>
   !workflow?.missing_placeholders?.includes(imagePlaceholderLabel);
+const offeredOnSelection = (workflow) =>
+  workflow?.has_selection_input !== false && takesImagePlaceholder(workflow);
 const validComfyWorkflows = computed(() =>
   (comfyuiWorkflows.value || []).filter(
     (workflow) => workflow?.valid && offeredOnSelection(workflow),
   ),
 );
+// Counted on the placeholder alone: a workflow missing its save node is
+// reported here whatever its inputs are set to.
 const invalidComfyWorkflows = computed(() =>
   (comfyuiWorkflows.value || []).filter(
-    (workflow) => !workflow?.valid && offeredOnSelection(workflow),
+    (workflow) => !workflow?.valid && takesImagePlaceholder(workflow),
   ),
 );
 const selectedComfyWorkflow = computed(() =>

@@ -441,6 +441,12 @@ def test_a_bad_setup_is_refused(requested, message):
         validate_requested_modes(_inputs(_two_input_graph()), requested)
 
 
+def test_modes_are_keyed_on_the_files_own_spelling(tmp_path):
+    (tmp_path / "Edit.json").write_text("{}", encoding="utf-8")
+    assert comfyui_module._on_disk_name(str(tmp_path / "edit.json")) == "Edit.json"
+    assert comfyui_module._on_disk_name(str(tmp_path / "Edit.json")) == "Edit.json"
+
+
 def _list_endpoint():
     router = comfyui_module.create_router(MagicMock())
     return next(

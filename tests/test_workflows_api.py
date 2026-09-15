@@ -1040,8 +1040,9 @@ def test_no_scoped_token_can_read_or_set_a_workflows_inputs(
 ):
     """The setup names Fixed pictures by id, so a share token gets neither half.
 
-    The belts are emptied so the GET is refused by the gate's declaration, not
-    by the middleware in front of it.
+    The belts are emptied, and the token's scope is let through the non-GET
+    refusal, so both halves are refused by the gate's declaration rather than
+    by the middleware in front of it: "Owner-level" is the gate's own string.
     """
     server = workflow_env.server
     token = _mint(
@@ -1066,7 +1067,10 @@ def test_no_scoped_token_can_read_or_set_a_workflows_inputs(
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
             patch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
+            patch.setattr(auth, "WRITE_ENABLED_SCOPES", frozenset({"READ", "WRITE"}))
             r = client.get(edit_workflow)
+            assert r.status_code == 403 and "Owner-level" in r.text, r.text
+            r = client.put(edit_workflow, json=body)
             assert r.status_code == 403 and "Owner-level" in r.text, r.text
         assert client.put(edit_workflow, json=body).status_code == 403
         # The refusal wrote nothing: the owner still reads the defaults.
@@ -1155,6 +1159,63 @@ def test_a_fixed_picture_is_kept_by_content_and_leaves_the_selection_pill(
         )["pixel_sha"]
         == "sha-fixed-reference"
     )
+
+
+def test_leaving_fixed_keeps_the_picture_for_coming_back(workflow_env, edit_workflow):
+    """One arrow key steps an input off Fixed; it must not cost the picture."""
+    server, owner = workflow_env.server, workflow_env.owner
+    picture_id = _picture_with_sha(server, "busy_two.png", "sha-kept-reference")
+
+    def put(mode_2, **extra):
+        r = owner.put(
+            edit_workflow,
+            json={
+                "inputs": [
+                    {"node_id": "1", "mode": "selection"},
+                    {"node_id": "2", "mode": mode_2, **extra},
+                ]
+            },
+        )
+        assert r.status_code == 200, r.text
+        return _by_node(r.json())["2"]
+
+    put("fixed", picture_id=picture_id)
+    stepped_off = put("picker")
+    assert (stepped_off["mode"], stepped_off["picture_id"]) == ("picker", picture_id)
+    back = put("fixed")
+    assert (back["mode"], back["picture_id"], back["picture_missing"]) == (
+        "fixed",
+        picture_id,
+        False,
+    )
+
+
+def test_an_unhashed_picture_is_a_409_and_a_duplicate_resolves_to_its_oldest_copy(
+    workflow_env, edit_workflow
+):
+    server, owner = workflow_env.server, workflow_env.owner
+
+    def ids_by_path(session):
+        return {p.file_path: p.id for p in session.exec(select(Picture)).all()}
+
+    ids = server.vault.db.run_immediate_read_task(ids_by_path)
+    body = {
+        "inputs": [
+            {"node_id": "1", "mode": "selection"},
+            {"node_id": "2", "mode": "fixed", "picture_id": ids["busy_one.png"]},
+        ]
+    }
+    # Seeded pictures carry no pixel_sha: there is nothing to name one by.
+    r = owner.put(edit_workflow, json=body)
+    assert r.status_code == 409, r.text
+
+    older = _picture_with_sha(server, "busy_one.png", "sha-duplicate")
+    newer = _picture_with_sha(server, "busy_three.png", "sha-duplicate")
+    assert older < newer
+    body["inputs"][1]["picture_id"] = newer
+    r = owner.put(edit_workflow, json=body)
+    assert r.status_code == 200, r.text
+    assert _by_node(r.json())["2"]["picture_id"] == older
 
 
 def test_a_bad_setup_writes_nothing(workflow_env, edit_workflow):

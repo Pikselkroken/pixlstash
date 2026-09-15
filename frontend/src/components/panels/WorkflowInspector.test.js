@@ -301,6 +301,98 @@ describe("a saved workflow's pictures in", () => {
     expect(textOf(wrapper)).toContain("not offered on a selection");
   });
 
+  it("goes back to a kept picture without asking for one again", async () => {
+    const { wrapper } = await mountFile([
+      input("76", "picker", { picture_id: 7 }),
+      input("81", "selection"),
+    ]);
+    setWorkflowInputs.mockResolvedValue({
+      workflow: "edit.json",
+      inputs: [input("76", "fixed", { picture_id: 7 }), input("81", "selection")],
+    });
+    await segment(wrapper, 0, "Fixed").trigger("click");
+    await flush(wrapper);
+    expect(wrapper.find(".picker-stub").exists()).toBe(false);
+    expect(setWorkflowInputs).toHaveBeenCalledWith("edit.json", [
+      { node_id: "76", mode: "fixed" },
+      { node_id: "81", mode: "selection" },
+    ]);
+  });
+
+  it("moves at once while a write is out, and sends only the newest step after it", async () => {
+    const { wrapper } = await mountFile([
+      input("76", "picker"),
+      input("81", "selection"),
+    ]);
+    let land;
+    setWorkflowInputs.mockImplementationOnce(
+      (_name, inputs) =>
+        new Promise((resolve) => {
+          land = () => resolve({ workflow: "edit.json", inputs });
+        }),
+    );
+    setWorkflowInputs.mockImplementation(async (_name, inputs) => ({
+      workflow: "edit.json",
+      inputs: inputs.map((i) => input(i.node_id, i.mode)),
+    }));
+
+    await segment(wrapper, 1, "Picker").trigger("click");
+    await segment(wrapper, 0, "Selection").trigger("click");
+    await segment(wrapper, 0, "Picker").trigger("click");
+    await wrapper.vm.$nextTick();
+    // The control already shows the last step, before anything has landed.
+    expect(segment(wrapper, 0, "Picker").attributes("aria-checked")).toBe(
+      "true",
+    );
+    expect(setWorkflowInputs).toHaveBeenCalledTimes(1);
+
+    land();
+    await flush(wrapper);
+    await flush(wrapper);
+    expect(setWorkflowInputs).toHaveBeenCalledTimes(2);
+    expect(setWorkflowInputs.mock.calls[1][1]).toEqual([
+      { node_id: "76", mode: "picker" },
+      { node_id: "81", mode: "picker" },
+    ]);
+  });
+
+  it("puts back the stored setup and says why when a write fails", async () => {
+    const { wrapper } = await mountFile([
+      input("76", "picker"),
+      input("81", "selection"),
+    ]);
+    setWorkflowInputs.mockRejectedValue(new Error("network"));
+    await segment(wrapper, 0, "Selection").trigger("click");
+    await flush(wrapper);
+    expect(segment(wrapper, 1, "Selection").attributes("aria-checked")).toBe(
+      "true",
+    );
+    expect(segment(wrapper, 0, "Picker").attributes("aria-checked")).toBe(
+      "true",
+    );
+  });
+
+  it("offers a retry when the inputs could not be read", async () => {
+    getWorkflowInputs.mockRejectedValueOnce(new Error("network"));
+    const store = useWorkflowShelfStore();
+    store.files = [{ name: "edit.json", source: "user", valid: true }];
+    store.selectFile("edit.json");
+    const wrapper = mount(WorkflowInspector, globalOpts);
+    await flush(wrapper);
+    expect(textOf(wrapper)).toContain("Could not read this workflow's inputs");
+
+    getWorkflowInputs.mockResolvedValue({
+      workflow: "edit.json",
+      inputs: [input("81", "selection")],
+    });
+    const retry = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Try again"));
+    await retry.trigger("click");
+    await flush(wrapper);
+    expect(wrapper.findAll(".wfins-input")).toHaveLength(1);
+  });
+
   it("says a Fixed picture has left the library rather than drawing a blank", async () => {
     const { wrapper } = await mountFile([
       input("76", "fixed", { picture_missing: true }),

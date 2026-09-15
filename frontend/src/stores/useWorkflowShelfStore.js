@@ -129,6 +129,10 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
   const inputs = reactive({});
   const inputsFailed = ref(new Set());
   const inputsSaving = ref(false);
+  /** The last setup the server confirmed per file, put back on a failed write. */
+  const confirmedInputs = {};
+  /** The newest change made while a write was out. */
+  let pendingWrite = null;
 
   /** `topology_hash -> variant rows`, filled the first time a row is opened. */
   const variants = reactive({});
@@ -285,7 +289,10 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
     inputsFailed.value = failed;
     try {
       const body = await getWorkflowInputs(name);
-      if (mine === epoch) inputs[name] = body;
+      if (mine === epoch) {
+        inputs[name] = body;
+        confirmedInputs[name] = body;
+      }
     } catch (err) {
       console.warn("[workflows] could not read a workflow's inputs", err);
       if (mine === epoch) {
@@ -306,29 +313,59 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
    * At most one input is filled by the selection, so choosing Selection moves
    * whichever input held it to Picker, in the same write.
    *
-   * @returns {Promise<string>} empty when stored, else what went wrong.
+   * **Shown at once, written one at a time.** The change lands in `inputs`
+   * before the request, so the control moves under the keyboard and the next
+   * arrow step starts from it. A change made while a write is out is queued,
+   * and only the newest queued state is sent once it lands. A failed write puts
+   * back the last setup the server confirmed.
+   *
+   * @returns {Promise<string>} empty when stored (or superseded by a newer
+   *   change), else what went wrong.
    */
-  async function setInputMode(name, nodeId, mode, pictureId = null) {
+  function setInputMode(name, nodeId, mode, pictureId = null) {
     const current = inputs[name]?.inputs;
-    if (!current) return "This workflow's inputs have not been read yet.";
-    if (inputsSaving.value) return "The last change is still being stored.";
-    // A Fixed input left alone is sent without a picture and keeps the one
-    // stored for it, even one that has since left the library.
-    const next = current.map((input) => {
-      if (input.node_id === nodeId) {
-        return pictureId == null
-          ? { node_id: nodeId, mode }
-          : { node_id: nodeId, mode, picture_id: pictureId };
-      }
-      const moved = mode === "selection" && input.mode === "selection";
-      return { node_id: input.node_id, mode: moved ? "picker" : input.mode };
-    });
+    if (!current) {
+      return Promise.resolve("This workflow's inputs have not been read yet.");
+    }
+    inputs[name] = {
+      ...inputs[name],
+      inputs: current.map((input) => {
+        if (input.node_id === nodeId) {
+          return {
+            ...input,
+            mode,
+            picture_id: pictureId ?? input.picture_id,
+            picture_missing: mode === "fixed" && input.picture_missing,
+          };
+        }
+        const moved = mode === "selection" && input.mode === "selection";
+        return moved ? { ...input, mode: "picker" } : input;
+      }),
+    };
+    if (inputsSaving.value) {
+      return new Promise((resolve) => {
+        pendingWrite?.resolve("");
+        pendingWrite = { name, nodeId, pictureId, resolve };
+      });
+    }
+    return writeInputs(name, nodeId, pictureId);
+  }
+
+  async function writeInputs(name, nodeId, pictureId) {
     const mine = epoch;
     inputsSaving.value = true;
+    // A Fixed input is sent without a picture unless one was just chosen for
+    // it, so the server keeps its own, even one that has left the library.
+    const payload = inputs[name].inputs.map((input) =>
+      input.node_id === nodeId && pictureId != null
+        ? { node_id: input.node_id, mode: input.mode, picture_id: pictureId }
+        : { node_id: input.node_id, mode: input.mode },
+    );
     try {
-      const body = await setWorkflowInputs(name, next);
+      const body = await setWorkflowInputs(name, payload);
       if (mine !== epoch) return "";
-      inputs[name] = body;
+      confirmedInputs[name] = body;
+      if (!pendingWrite) inputs[name] = body;
       const file = files.value.find((f) => f.name === name);
       if (file) {
         file.has_selection_input = body.inputs.some(
@@ -338,9 +375,17 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
       return "";
     } catch (err) {
       console.warn("[workflows] could not store a workflow's setup", err);
+      if (mine === epoch && !pendingWrite && confirmedInputs[name]) {
+        inputs[name] = confirmedInputs[name];
+      }
       return errorDetail(err) || "Could not store the workflow's setup.";
     } finally {
-      if (mine === epoch) inputsSaving.value = false;
+      if (mine === epoch) {
+        inputsSaving.value = false;
+        const next = pendingWrite;
+        pendingWrite = null;
+        if (next) next.resolve(writeInputs(next.name, next.nodeId, next.pictureId));
+      }
     }
   }
 
@@ -465,7 +510,10 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
   function invalidate() {
     openHashes.value = new Set();
     for (const key of Object.keys(variants)) delete variants[key];
-    if (loaded.value) fetchRows();
+    if (loaded.value) {
+      fetchRows();
+      fetchFiles();
+    }
   }
 
   function resetForSession() {
@@ -481,7 +529,10 @@ export const useWorkflowShelfStore = defineStore("workflowShelf", () => {
     selectedFile.value = null;
     inputsFailed.value = new Set();
     inputsSaving.value = false;
+    pendingWrite?.resolve("");
+    pendingWrite = null;
     for (const key of Object.keys(inputs)) delete inputs[key];
+    for (const key of Object.keys(confirmedInputs)) delete confirmedInputs[key];
     openHashes.value = new Set();
     variantsLoading.value = new Set();
     samplesLoading.value = new Set();
