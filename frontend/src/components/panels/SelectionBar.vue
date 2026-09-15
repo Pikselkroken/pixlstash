@@ -125,7 +125,7 @@
                       v-model="comfyuiCaption"
                       class="plugin-menu-textarea"
                       rows="6"
-                      placeholder="Optional caption for {{caption}}"
+                      placeholder="Optional caption"
                       @keydown.stop
                     ></textarea>
                   </template>
@@ -147,9 +147,8 @@
                   </div>
                 </template>
                 <div v-else class="plugin-menu-note">
-                  No workflow can run on a selection. It needs an
-                  <span v-pre>{{image_path}}</span> placeholder, a save node, and a picture
-                  input set to Selection in Workflows.
+                  No workflow can run on a selection. It needs a save node
+                  and a picture input set to Selection in Workflows.
                 </div>
                 <div v-if="comfyuiRunError" class="plugin-menu-error">
                   {{ comfyuiRunError }}

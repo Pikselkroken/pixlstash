@@ -14,18 +14,15 @@ in the hub (``workflow_picture_input``), never written into it.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Optional
+
+from pixlstash.services import workflow_bindings
 
 SELECTION = "selection"
 PICKER = "picker"
 FIXED = "fixed"
 MODES = (SELECTION, PICKER, FIXED)
-
-# The token the import dialog bakes into the input it bound. Until #1303 stops
-# writing it, the bound input is the obvious default Selection.
-_IMAGE_PLACEHOLDER = "{{image_path}}"
 
 
 @dataclass(frozen=True)
@@ -76,8 +73,9 @@ def resolve_input_modes(
 ) -> list[PictureInput]:
     """Each detected picture input with its stored mode, or its default.
 
-    Defaults apply to inputs nothing stored names: the input carrying the image
-    placeholder, or else the first detected (lowest node id), is Selection and
+    Defaults apply to inputs nothing stored names: the input a run already fills
+    with the picture (its migrated binding, or the one detected picture input),
+    or else the first detected (lowest node id), is Selection and
     the rest are Picker. Once a setup is stored a new input is Picker, so it
     never adds a second Selection, unless the stored Selection named a node the
     file has lost: then the default Selection goes to an input with no stored
@@ -97,13 +95,18 @@ def resolve_input_modes(
     unstored = [node_id for node_id in picture_inputs if node_id not in known]
     default = None
     if unstored and (not known or lost_selection):
+        # Only with a document: without one, which input defaults does not
+        # matter, only whether one does.
+        filled = set()
+        if document:
+            filled = {
+                workflow_bindings.target_node(document, target.get("path"))
+                for target in workflow_bindings.run_targets(document)[
+                    workflow_bindings.IMAGE
+                ]
+            }
         default = next(
-            (
-                node_id
-                for node_id in unstored
-                if _IMAGE_PLACEHOLDER in json.dumps(_raw_node(document, node_id))
-            ),
-            unstored[0],
+            (node_id for node_id in unstored if node_id in filled), unstored[0]
         )
     resolved = []
     for node_id, class_type in picture_inputs.items():

@@ -14,7 +14,7 @@
   },
   "76": {
     "inputs": {
-      "value": "{{caption}}"
+      "value": ""
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {

@@ -46,6 +46,7 @@ from pixlstash.db_models import Picture, ReferenceFolder
 from pixlstash.hub.workflows import PictureGhost, record_picture_ghosts
 from pixlstash.services.workflow_hash import asset_reference
 import pixlstash.routes.comfyui as comfyui_module
+from pixlstash.services import workflow_bindings
 from pixlstash.server import Server
 from pixlstash.tasks.ghost_cascade_task import GhostCascadeTask
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
@@ -997,18 +998,23 @@ def edit_workflow(tmp_path, monkeypatch):
     The real user folder is shared by every checkout on the machine, so the
     routes are pointed at a temporary one rather than written into it.
     """
-    graph = {
-        "1": {"class_type": "LoadImage", "inputs": {"image": "{{image_path}}"}},
-        "2": {
-            "class_type": "LoadImage",
-            "inputs": {"image": "Logo.png"},
-            "_meta": {"title": "Reference"},
-        },
-        "3": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
-    }
+    # Stored the way the placeholder migration leaves a dialog-bound file: the
+    # old token sat on the SECOND input, so a default that just took the lowest
+    # node id would show here.
+    graph, _changed = workflow_bindings.migrate_placeholders(
+        {
+            "1": {"class_type": "LoadImage", "inputs": {"image": "Logo.png"}},
+            "2": {
+                "class_type": "LoadImage",
+                "inputs": {"image": "{{image_path}}"},
+                "_meta": {"title": "Reference"},
+            },
+            "3": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+        }
+    )
     (tmp_path / "edit.json").write_text(json.dumps(graph), encoding="utf-8")
     monkeypatch.setattr(comfyui_module, "_workflow_dirs", lambda: [("user", tmp_path)])
-    monkeypatch.setattr(comfyui_module, "_workflow_user_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(comfyui_module, "workflow_user_dir", lambda: str(tmp_path))
     comfyui_module._describe_workflow.cache_clear()
     return f"{API}/comfyui/workflows/edit.json/inputs"
 
@@ -1075,7 +1081,7 @@ def test_no_scoped_token_can_read_or_set_a_workflows_inputs(
         assert client.put(edit_workflow, json=body).status_code == 403
         # The refusal wrote nothing: the owner still reads the defaults.
         owner_view = _by_node(workflow_env.owner.get(edit_workflow).json())
-        assert owner_view["1"]["mode"] == "selection"
+        assert owner_view["2"]["mode"] == "selection"
     finally:
         server.authz._enforcing = previously_enforcing
 
@@ -1089,14 +1095,14 @@ def test_an_unconfigured_workflow_reads_its_defaults_with_titles(
         {
             "node_id": "1",
             "title": "LoadImage",
-            "mode": "selection",
+            "mode": "picker",
             "picture_id": None,
             "picture_missing": False,
         },
         {
             "node_id": "2",
             "title": "Reference",
-            "mode": "picker",
+            "mode": "selection",
             "picture_id": None,
             "picture_missing": False,
         },

@@ -1,7 +1,8 @@
-"""Detection of a workflow's save node, picture inputs and prompts (#1302)."""
+"""Detection of a workflow's inputs and outputs (#1302), and import as-is (#1303)."""
 
 import asyncio
 import json
+import os
 import pathlib
 from unittest.mock import MagicMock
 
@@ -9,6 +10,10 @@ import pytest
 from fastapi import HTTPException
 
 import pixlstash.routes.comfyui as comfyui_module
+import pixlstash.server as server_module
+from pixlstash.hub.db import HubDatabase
+from pixlstash.hub.workflows import topology_exists
+from pixlstash.services import workflow_bindings
 from pixlstash.services.workflow_inputs import (
     FIXED,
     PICKER,
@@ -16,6 +21,7 @@ from pixlstash.services.workflow_inputs import (
     resolve_input_modes,
     validate_requested_modes,
 )
+from pixlstash.services.workflow_hash import topology_hash
 from pixlstash.services.workflow_io import detect_workflow_io
 
 BUILT_IN = (
@@ -262,8 +268,11 @@ def test_list_route_classifies_by_detection(tmp_path, monkeypatch, caplog):
         item["name"]: (item["valid"], item["workflow_type"]) for item in workflows
     }
     missing = {item["name"]: item["missing_placeholders"] for item in workflows}
-    assert missing["nograph.json"] == []
+    # A token is no longer a target: only a binding or detection is.
+    assert len(missing["nograph.json"]) == 2
     assert len(missing["broken.json"]) == 2
+    assert missing["i2i.json"] == []
+    assert missing["t2i.json"] == ["{{image_path}}"]
     # None of these carry a placeholder, so placeholder detection would have
     # called every one of them an invalid t2i.
     assert listed == {
@@ -282,29 +291,445 @@ def test_list_route_classifies_by_detection(tmp_path, monkeypatch, caplog):
     assert relisted["broken.json"] is True
 
 
-def test_run_i2i_refuses_a_workflow_without_the_image_placeholder(
+def _route(router, path, method="POST"):
+    return next(
+        route.endpoint
+        for route in router.routes
+        if getattr(route, "path", None) == path and method in route.methods
+    )
+
+
+def test_run_i2i_refuses_a_migrated_workflow_without_an_image_binding(
     tmp_path, monkeypatch
 ):
-    # A fixed LoadImage now lists this as i2i; without {{image_path}} the
-    # selected picture would never reach the graph.
+    # The #1350 case, kept by its bindings: a caption-only workflow with a fixed
+    # reference LoadImage. Detection would fill that LoadImage; the migrated
+    # bindings say the selected picture never had a place in this graph.
     graph = _t2i_graph()
     graph["2"]["inputs"]["text"] = "{{caption}}"
     graph["7"] = _node("LoadImage", image="pose.png")
-    (tmp_path / "fixed.json").write_text(json.dumps(graph), encoding="utf-8")
+    migrated, changed = workflow_bindings.migrate_placeholders(graph)
+    assert changed
+    (tmp_path / "fixed.json").write_text(json.dumps(migrated), encoding="utf-8")
     monkeypatch.setattr(comfyui_module, "_workflow_dirs", lambda: [("user", tmp_path)])
 
-    router = comfyui_module.create_router(MagicMock())
-    endpoint = next(
-        route.endpoint
-        for route in router.routes
-        if getattr(route, "path", None) == "/comfyui/run_i2i"
-    )
+    endpoint = _route(comfyui_module.create_router(MagicMock()), "/comfyui/run_i2i")
     with pytest.raises(HTTPException) as refused:
         asyncio.run(
             endpoint(MagicMock(), {"workflow_name": "fixed", "picture_ids": [1]})
         )
     assert refused.value.status_code == 400
-    assert "{{image_path}}" in refused.value.detail
+    assert "no picture input" in refused.value.detail
+
+
+def test_migration_binds_tokens_and_restores_neutral_values():
+    graph = _t2i_graph()
+    graph["2"]["inputs"]["text"] = "{{caption}}"
+    graph["3"]["inputs"]["text"] = "photo of {{caption}}, sharp"
+    graph["7"] = _node("LoadImage", image="{{image_path}}")
+    # A title is not an input, whatever it says.
+    graph["7"]["_meta"] = {"title": "{{image_path}} loader"}
+    original = json.dumps(graph, sort_keys=True)
+
+    migrated, changed = workflow_bindings.migrate_placeholders(graph)
+
+    assert changed
+    assert json.dumps(graph, sort_keys=True) == original
+    assert migrated["7"]["_meta"] == {"title": "{{image_path}} loader"}
+    del migrated["7"]["_meta"]
+    body = {k: v for k, v in migrated.items() if k != workflow_bindings.BINDINGS_KEY}
+    assert "{{" not in json.dumps(body)
+    migrated["7"]["_meta"] = {"title": "{{image_path}} loader"}
+    assert migrated["2"]["inputs"]["text"] == ""
+    assert migrated["7"]["inputs"]["image"] == "example.png"
+    assert migrated["3"]["inputs"]["text"] == "photo of , sharp"
+    bindings = {
+        (b["role"], b["node"], tuple(b["path"]), b["recovered"])
+        for b in migrated[workflow_bindings.BINDINGS_KEY]
+    }
+    assert bindings == {
+        ("caption", "2", ("2", "inputs", "text"), True),
+        ("caption", "3", ("3", "inputs", "text"), False),
+        ("image", "7", ("7", "inputs", "image"), True),
+    }
+    # The embedded token keeps its string as a template, and a run fills it
+    # the way the old substitution did.
+    (template,) = [
+        b for b in migrated[workflow_bindings.BINDINGS_KEY] if not b["recovered"]
+    ]
+    assert template["template"] == "photo of {{caption}}, sharp"
+    filled = comfyui_module._fill_run_inputs(migrated, "up.png", "a cat")
+    assert filled["3"]["inputs"]["text"] == "photo of a cat, sharp"
+    assert filled["2"]["inputs"]["text"] == "a cat"
+    assert filled["7"]["inputs"]["image"] == "up.png"
+    # What the string said before it became a template is gone: flagged.
+    assert workflow_bindings.is_flagged(migrated)
+    # Nothing left to migrate.
+    assert workflow_bindings.migrate_placeholders(migrated) == (migrated, False)
+
+
+def test_migration_names_the_node_in_ui_and_envelope_formats():
+    ui = {
+        "nodes": [
+            {"id": 12, "type": "LoadImage", "widgets_values": ["{{image_path}}"]}
+        ],
+        "links": [],
+    }
+    migrated, _ = workflow_bindings.migrate_placeholders(ui)
+    (binding,) = migrated[workflow_bindings.BINDINGS_KEY]
+    assert (binding["node"], binding["path"]) == (
+        "12",
+        ["nodes", 0, "widgets_values", 0],
+    )
+    assert not workflow_bindings.is_flagged(migrated)
+
+    envelope = {"prompt": {"5": _node("CLIPTextEncode", text="{{caption}}")}}
+    migrated, _ = workflow_bindings.migrate_placeholders(envelope)
+    (binding,) = migrated[workflow_bindings.BINDINGS_KEY]
+    assert binding["node"] == "5"
+    assert migrated["prompt"]["5"]["inputs"]["text"] == ""
+
+
+def test_folder_migration_runs_once_backs_up_and_skips_unreadable_files(
+    tmp_path, caplog
+):
+    graph = _t2i_graph()
+    graph["7"] = _node("LoadImage", image="{{image_path}}")
+    (tmp_path / "tokened.json").write_text(json.dumps(graph), encoding="utf-8")
+    # The old dialog's "None (text-to-image)" with a fixed reference loader:
+    # no token, and detection would otherwise start filling that loader.
+    legacy = _t2i_graph()
+    legacy["7"] = _node("LoadImage", image="pose.png")
+    (tmp_path / "legacy.json").write_text(json.dumps(legacy), encoding="utf-8")
+    (tmp_path / "broken.json").write_text("{", encoding="utf-8")
+    (tmp_path / "deep.json").write_text("[" * 100000 + "]" * 100000, encoding="utf-8")
+
+    assert workflow_bindings.migrate_workflow_folder(str(tmp_path)) == 2
+    assert "broken.json" in caplog.text and "deep.json" in caplog.text
+    stored = _load(tmp_path / "tokened.json")
+    assert stored[workflow_bindings.BINDINGS_KEY][0]["path"] == ["7", "inputs", "image"]
+    assert _load(tmp_path / "tokened.json.pre-bindings") == graph
+    assert _load(tmp_path / "legacy.json")[workflow_bindings.BINDINGS_KEY] == []
+    assert comfyui_module._missing_placeholders(_load(tmp_path / "legacy.json")) == [
+        "{{image_path}}",
+        "{{caption}}",
+    ]
+    # A broken file cannot run either way, so it is not queued for a retry.
+    assert _load(tmp_path / workflow_bindings.MIGRATION_MARKER) == {"retry": []}
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".migrating")]
+
+    # A workflow imported as-is after the pass keeps detection.
+    (tmp_path / "later.json").write_text(json.dumps(legacy), encoding="utf-8")
+    assert workflow_bindings.migrate_workflow_folder(str(tmp_path)) == 0
+    assert workflow_bindings.BINDINGS_KEY not in _load(tmp_path / "later.json")
+
+
+def test_a_fresh_install_takes_the_marker_so_an_as_is_import_keeps_detection(
+    tmp_path, monkeypatch
+):
+    # Start-up on a machine with no workflow folder yet, then an as-is import,
+    # then a restart: the import must not be given empty bindings.
+    user_dir = tmp_path / "user"
+    assert workflow_bindings.migrate_workflow_folder(str(user_dir)) == 0
+    assert (user_dir / workflow_bindings.MIGRATION_MARKER).exists()
+
+    monkeypatch.setattr(comfyui_module, "workflow_user_dir", lambda: str(user_dir))
+    monkeypatch.setattr(
+        comfyui_module, "_workflow_dirs", lambda: [("user", str(user_dir))]
+    )
+    endpoint = _route(
+        comfyui_module.create_router(MagicMock(hub=None)), "/comfyui/workflows/import"
+    )
+    graph = _t2i_graph()
+    graph["7"] = _node("LoadImage", image="a.png")
+    endpoint({"name": "mine", "workflow": graph})
+
+    assert workflow_bindings.migrate_workflow_folder(str(user_dir)) == 0
+    stored = _load(user_dir / "mine.json")
+    assert stored == graph
+    assert comfyui_module._missing_placeholders(stored) == []
+
+
+def test_a_file_that_could_not_be_written_is_retried_and_nothing_else(
+    tmp_path, monkeypatch
+):
+    graph = _t2i_graph()
+    graph["2"]["inputs"]["text"] = "{{caption}}"
+    (tmp_path / "locked.json").write_text(json.dumps(graph), encoding="utf-8")
+    (tmp_path / "fine.json").write_text(json.dumps(graph), encoding="utf-8")
+    real_replace = workflow_bindings.os.replace
+
+    def locked_replace(src, dst):
+        if dst.endswith("locked.json"):
+            raise PermissionError("held by another program")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(workflow_bindings.os, "replace", locked_replace)
+    assert workflow_bindings.migrate_workflow_folder(str(tmp_path)) == 1
+    assert _load(tmp_path / workflow_bindings.MIGRATION_MARKER) == {
+        "retry": ["locked.json"]
+    }
+    assert "{{caption}}" in (tmp_path / "locked.json").read_text(encoding="utf-8")
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".migrating")]
+
+    # Next start: only the stranded file is tried, and an as-is import made in
+    # between is left alone.
+    monkeypatch.setattr(workflow_bindings.os, "replace", real_replace)
+    (tmp_path / "new.json").write_text(json.dumps(_t2i_graph()), encoding="utf-8")
+    assert workflow_bindings.migrate_workflow_folder(str(tmp_path)) == 1
+    assert workflow_bindings.BINDINGS_KEY in _load(tmp_path / "locked.json")
+    assert workflow_bindings.BINDINGS_KEY not in _load(tmp_path / "new.json")
+    assert _load(tmp_path / workflow_bindings.MIGRATION_MARKER) == {"retry": []}
+
+
+def test_server_start_up_runs_the_migration_on_the_user_folder(tmp_path, monkeypatch):
+    # The suite turns the migration off (conftest) because the real folder is
+    # machine-global. Here it is a tmp folder, so the wiring itself is checked.
+    user_dir = tmp_path / "workflows"
+    user_dir.mkdir()
+    graph = _t2i_graph()
+    graph["2"]["inputs"]["text"] = "{{caption}}"
+    (user_dir / "old.json").write_text(json.dumps(graph), encoding="utf-8")
+    monkeypatch.setattr(server_module, "workflow_user_dir", lambda: str(user_dir))
+    monkeypatch.setattr(server_module.Server, "DEFAULT_MIGRATE_WORKFLOW_TOKENS", True)
+    config_path = tmp_path / "config" / "server-config.json"
+    config_path.parent.mkdir()
+    config_path.write_text(json.dumps({"port": 8000}), encoding="utf-8")
+
+    server = server_module.Server(str(config_path))
+    try:
+        assert workflow_bindings.BINDINGS_KEY in _load(user_dir / "old.json")
+        assert (user_dir / workflow_bindings.MIGRATION_MARKER).exists()
+    finally:
+        server.__exit__(None, None, None)
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="needs a user that a mode-000 folder refuses",
+)
+def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
+    folder = tmp_path / "user"
+    folder.mkdir()
+    folder.chmod(0o300)  # writable, so the marker can be taken; not listable
+    try:
+        assert workflow_bindings.migrate_workflow_folder(str(folder)) == 0
+    finally:
+        folder.chmod(0o700)
+    assert "could not list" in caplog.text.lower()
+    # Released, so the next start tries the pass again.
+    assert not (folder / workflow_bindings.MIGRATION_MARKER).exists()
+
+
+@pytest.mark.parametrize(
+    "name, image, caption",
+    [
+        # Exactly where the shipped files carried their tokens.
+        (
+            "Flux2-Klein-Image-Edit.json",
+            [["76", "inputs", "image"]],
+            [["75:74", "inputs", "text"]],
+        ),
+        # The encoder's text is wired from a primitive; the run fills that.
+        ("Flux2-Klein-t2i.json", [], [["76", "inputs", "value"]]),
+        ("Upscale-2x-RealESRGAN.json", [["3", "inputs", "image"]], []),
+    ],
+)
+def test_built_ins_carry_no_token_and_are_filled_by_detection(name, image, caption):
+    document = _load(BUILT_IN / name)
+    assert "{{" not in json.dumps(document)
+    assert workflow_bindings.BINDINGS_KEY not in document
+    targets = workflow_bindings.run_targets(document)
+    paths = {role: [t["path"] for t in found] for role, found in targets.items()}
+    assert paths == {"image": image, "caption": caption}
+
+
+def test_two_picture_inputs_fill_nothing_and_ui_files_are_not_filled():
+    graph = _t2i_graph()
+    graph["7"] = _node("LoadImage", image="a.png")
+    graph["8"] = _node("LoadImage", image="b.png")
+    assert workflow_bindings.run_targets(graph)["image"] == []
+    ui = _load(UI_FIXTURES / "image_z_image.json")
+    assert workflow_bindings.run_targets(ui) == {"image": [], "caption": []}
+
+
+def test_run_fill_keeps_the_prompt_when_no_caption_is_given():
+    graph = _t2i_graph()
+    graph["7"] = _node("LoadImage", image="a.png")
+    filled = comfyui_module._fill_run_inputs(graph, "upload.png", "")
+    assert filled["7"]["inputs"]["image"] == "upload.png"
+    assert filled["2"]["inputs"]["text"] == "a cat"
+    assert graph["7"]["inputs"]["image"] == "a.png"
+    filled = comfyui_module._fill_run_inputs(graph, None, "a dog")
+    assert filled["2"]["inputs"]["text"] == "a dog"
+    assert filled["3"]["inputs"]["text"] == "blurry"
+
+
+def test_a_binding_that_no_longer_resolves_is_refused():
+    graph = _t2i_graph()
+    graph[workflow_bindings.BINDINGS_KEY] = [
+        {"role": "image", "node": "9", "path": ["9", "inputs", "image"]}
+    ]
+    with pytest.raises(HTTPException) as refused:
+        comfyui_module._fill_run_inputs(graph, "upload.png", "")
+    assert refused.value.status_code == 400
+    # A path that is not a list must not index the document as a key.
+    targets = {"image": [{"path": "1", "template": None}], "caption": []}
+    with pytest.raises(workflow_bindings.BindingError):
+        workflow_bindings.fill(graph, targets, {"image": "upload.png"})
+    assert graph["1"]["class_type"] == "CheckpointLoaderSimple"
+
+
+def test_two_positive_prompts_fill_neither():
+    # A fixed style prompt combined with the subject prompt: which one is "the"
+    # prompt is ambiguous, and overwriting both destroys the style.
+    graph = _t2i_graph()
+    graph["8"] = _node("CLIPTextEncode", text="oil painting", clip=["1", 1])
+    graph["9"] = _node(
+        "ConditioningCombine", conditioning_1=["2", 0], conditioning_2=["8", 0]
+    )
+    graph["4"]["inputs"]["positive"] = ["9", 0]
+    assert detect_workflow_io(graph).positive_prompts == ("2", "8")
+    assert workflow_bindings.run_targets(graph)["caption"] == []
+    filled = comfyui_module._fill_run_inputs(graph, None, "a dog")
+    assert filled["8"]["inputs"]["text"] == "oil painting"
+
+
+def test_a_string_holding_both_tokens_gets_both_values():
+    graph = _t2i_graph()
+    graph["2"]["inputs"]["text"] = "file {{image_path}} of {{caption}}"
+    migrated, _ = workflow_bindings.migrate_placeholders(graph)
+    filled = comfyui_module._fill_run_inputs(migrated, "up.png", "a cat")
+    assert filled["2"]["inputs"]["text"] == "file up.png of a cat"
+    filled = comfyui_module._fill_run_inputs(migrated, "up.png", "")
+    assert filled["2"]["inputs"]["text"] == "file up.png of "
+
+
+@pytest.fixture
+def import_route(tmp_path, monkeypatch):
+    user_dir = tmp_path / "user"
+    built_in = tmp_path / "built-in"
+    built_in.mkdir()
+    monkeypatch.setattr(comfyui_module, "workflow_user_dir", lambda: str(user_dir))
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(user_dir)), ("built-in", str(built_in))],
+    )
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    server = MagicMock()
+    server.hub = hub
+    endpoint = _route(comfyui_module.create_router(server), "/comfyui/workflows/import")
+
+    def call(**payload):
+        return endpoint(payload)
+
+    try:
+        yield call, user_dir, built_in, hub
+    finally:
+        hub.close()
+
+
+def test_import_stores_the_file_unchanged_and_files_it_in_the_library(import_route):
+    call, user_dir, _built_in, hub = import_route
+    graph = _t2i_graph()
+    graph["7"] = _node("LoadImage", image="a.png")
+
+    body = call(name="flow", workflow=graph)
+
+    assert (body["name"], body["matched"]) == ("flow.json", False)
+    assert _load(user_dir / "flow.json") == graph
+    assert body["topology_hash"] == topology_hash(graph)
+    assert topology_exists(hub, body["topology_hash"])
+
+    ui = _load(UI_FIXTURES / "image_z_image.json")
+    body = call(name="ui", workflow=ui)
+    assert _load(user_dir / "ui.json") == ui
+    assert topology_exists(hub, body["topology_hash"])
+
+
+def test_a_dropped_copy_matches_the_stored_workflow(import_route):
+    call, user_dir, built_in, _hub = import_route
+    graph = _t2i_graph()
+    call(name="flow", workflow=graph)
+    copy = json.loads(json.dumps(graph, indent=4))
+
+    body = call(name="renamed copy", workflow=copy, keep_both=True)
+    assert (body["name"], body["matched"]) == ("flow.json", True)
+    assert sorted(p.name for p in user_dir.iterdir()) == ["flow.json"]
+
+    # PixlStash's own keys are not part of the workflow ComfyUI sees.
+    stored = _t2i_graph()
+    stored["pixlstash_output_nodes"] = ["6"]
+    stored["2"]["inputs"]["text"] = "a fox"
+    (user_dir / "chosen.json").write_text(json.dumps(stored), encoding="utf-8")
+    plain = _t2i_graph()
+    plain["2"]["inputs"]["text"] = "a fox"
+    assert call(name="plain", workflow=plain)["name"] == "chosen.json"
+
+    shipped = {"1": _node("SaveImage")}
+    (built_in / "Shipped.json").write_text(json.dumps(shipped), encoding="utf-8")
+    body = call(name="shipped", workflow=shipped)
+    assert (body["name"], body["matched"]) == ("Shipped.json", True)
+
+
+def test_a_taken_name_is_refused_or_kept_beside(import_route):
+    call, user_dir, _built_in, _hub = import_route
+    call(name="flow", workflow=_t2i_graph())
+    other = _t2i_graph()
+    other["2"]["inputs"]["text"] = "a dog"
+
+    with pytest.raises(HTTPException) as refused:
+        call(name="flow", workflow=other)
+    assert refused.value.status_code == 409
+
+    assert call(name="flow", workflow=other, keep_both=True)["name"] == "flow (2).json"
+    assert _load(user_dir / "flow (2).json") == other
+    assert _load(user_dir / "flow.json") == _t2i_graph()
+
+
+def test_an_unfileable_or_too_deep_import_is_handled(import_route):
+    call, user_dir, _built_in, _hub = import_route
+    # Reducing this raises AttributeError, not WorkflowGraphError: the file is
+    # still stored, just not filed.
+    odd = {"nodes": [{"id": 1, "type": "SaveImage"}], "definitions": ["x"]}
+    body = call(name="odd", workflow=odd)
+    assert body["topology_hash"] is None
+    assert _load(user_dir / "odd.json") == odd
+
+    deep = current = {}
+    for _ in range(5000):
+        current["n"] = {}
+        current = current["n"]
+    with pytest.raises(HTTPException) as refused:
+        call(name="deep", workflow=deep)
+    assert refused.value.status_code == 400
+    assert not (user_dir / "deep.json").exists()
+
+
+def test_deleting_a_workflow_removes_its_migration_backup(import_route, monkeypatch):
+    _call, user_dir, _built_in, _hub = import_route
+    user_dir.mkdir()
+    (user_dir / "old.json").write_text("{}", encoding="utf-8")
+    (user_dir / "old.json.pre-bindings").write_text("{}", encoding="utf-8")
+    endpoint = _route(
+        comfyui_module.create_router(MagicMock()),
+        "/comfyui/workflows/{workflow_name}",
+        "DELETE",
+    )
+    asyncio.run(endpoint("old"))
+    assert sorted(p.name for p in user_dir.iterdir()) == []
+
+
+def test_an_imported_tokened_file_is_stored_migrated(import_route):
+    call, user_dir, _built_in, _hub = import_route
+    graph = _t2i_graph()
+    graph["2"]["inputs"]["text"] = "{{caption}}"
+    call(name="old", workflow=graph)
+    stored = _load(user_dir / "old.json")
+    assert stored[workflow_bindings.BINDINGS_KEY][0]["path"] == ["2", "inputs", "text"]
+    # Re-dropping the same old export is a copy of what was stored.
+    assert call(name="again", workflow=graph)["matched"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -313,13 +738,20 @@ def test_run_i2i_refuses_a_workflow_without_the_image_placeholder(
 
 
 def _two_input_graph(bound: str | None = "81") -> dict:
-    """Flux2BasicEdit's shape: two inputs, both titled Load Image."""
+    """Flux2BasicEdit's shape: two inputs, both titled Load Image.
+
+    *bound* is the input the old import dialog put its token on, stored the way
+    the migration leaves it: a binding, and a neutral value in its place.
+    """
     graph = _t2i_graph()
     for node_id in ("76", "81"):
-        graph[node_id] = _node(
-            "LoadImage", image="{{image_path}}" if node_id == bound else "Logo.png"
-        )
+        graph[node_id] = _node("LoadImage", image="Logo.png")
         graph[node_id]["_meta"] = {"title": "Load Image"}
+    if bound:
+        graph = workflow_bindings.migrate_placeholders(
+            {**graph, bound: _node("LoadImage", image="{{image_path}}")}
+        )[0]
+        graph[bound]["_meta"] = {"title": "Load Image"}
     return graph
 
 
@@ -332,14 +764,14 @@ def _modes(resolved) -> dict[str, tuple]:
     return {item.node_id: (item.mode, item.pixel_sha) for item in resolved}
 
 
-def test_the_placeholder_input_defaults_to_selection_and_the_rest_to_picker():
+def test_the_bound_input_defaults_to_selection_and_the_rest_to_picker():
     graph = _two_input_graph(bound="81")
     resolved = resolve_input_modes(graph, _inputs(graph), [])
     assert _modes(resolved) == {"76": (PICKER, None), "81": (SELECTION, None)}
     assert [item.title for item in resolved] == ["Load Image", "Load Image"]
 
 
-def test_without_a_placeholder_the_first_input_is_selection():
+def test_with_nothing_filled_by_a_run_the_first_input_is_selection():
     graph = _two_input_graph(bound=None)
     del graph["81"]["_meta"]
     resolved = resolve_input_modes(graph, _inputs(graph), [])
@@ -461,9 +893,10 @@ def test_the_list_says_which_workflows_the_selection_pill_may_offer(
     tmp_path, monkeypatch
 ):
     graph = _two_input_graph()
-    graph["2"]["inputs"]["text"] = "{{caption}}"
-    unrecognised = _t2i_graph()
-    unrecognised["7"] = _node("MyPictureSource", image="{{image_path}}")
+    # A loader detection does not recognise, bound by the old dialog.
+    unrecognised = workflow_bindings.migrate_placeholders(
+        {**_t2i_graph(), "7": _node("MyPictureSource", image="{{image_path}}")}
+    )[0]
     unbound = _two_input_graph(bound=None)
     for name, document in (
         ("edit.json", graph),
@@ -490,10 +923,10 @@ def test_the_list_says_which_workflows_the_selection_pill_may_offer(
     assert listed == {
         "edit.json": False,
         "unset.json": True,
-        # run_i2i has no placeholder to fill until runs use the modes (#1307).
+        # Two inputs and no binding: a run fills neither until #1307.
         "unbound.json": False,
         "t2i.json": False,
-        # A loader detection misses keeps its placeholder binding.
+        # A loader detection misses keeps its binding.
         "custom.json": True,
     }
 

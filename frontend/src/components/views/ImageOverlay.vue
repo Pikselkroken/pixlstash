@@ -179,8 +179,7 @@
                     v-if="!validComfyWorkflows.length"
                     class="overlay-comfy-warning"
                   >
-                    No valid workflows found. Workflows need a
-                    {{ imagePlaceholderLabel }} placeholder, a save node, and a
+                    No valid workflows found. A workflow needs a save node and a
                     picture input set to Selection in Workflows.
                   </div>
                   <label class="overlay-comfy-field-label">Workflow</label>

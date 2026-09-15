@@ -159,22 +159,6 @@ def _extract_history_status_and_error(
     return status_str, (error_text or None)
 
 
-def _replace_placeholders(value, replacements: dict[str, str]):
-    if isinstance(value, str):
-        updated = value
-        for key, replacement in replacements.items():
-            if key in updated:
-                updated = updated.replace(key, replacement)
-        return updated
-    if isinstance(value, list):
-        return [_replace_placeholders(item, replacements) for item in value]
-    if isinstance(value, dict):
-        return {
-            key: _replace_placeholders(val, replacements) for key, val in value.items()
-        }
-    return value
-
-
 def _randomize_seeds(workflow: dict) -> None:
     """Replace seed values in sampler/noise nodes with a fresh random integer.
 
