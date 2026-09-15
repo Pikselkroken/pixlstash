@@ -8,9 +8,11 @@ token, so a refusal cannot pass because the credential was dead or the picture
 missing.
 """
 
+import http.server
 import io
 import json
 import tempfile
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -116,6 +118,11 @@ def test_protocol_handshake_and_tool_list():
                 {"jsonrpc": "2.0", "method": "notifications/initialized"},
                 {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
                 {"jsonrpc": "2.0", "id": 3, "method": "resources/list"},
+                {"jsonrpc": "2.0", "id": 4, "method": "initialize", "params": [1]},
+                {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": [1]},
+                [{"jsonrpc": "2.0", "id": 6, "method": "ping"}],
+                {"jsonrpc": "2.0", "id": 7, "result": {}},
+                {"jsonrpc": "2.0", "id": 8, "method": "ping"},
             ]
         )
         + "\nnot json\n"
@@ -126,8 +133,9 @@ def test_protocol_handshake_and_tool_list():
     )
     replies = [json.loads(line) for line in stdout.getvalue().splitlines()]
 
-    # The notification is not answered; the garbage line is.
-    assert [r["id"] for r in replies] == [1, 2, 3, None]
+    # Notifications and client responses are not answered; everything else
+    # is, and a malformed message does not end the session.
+    assert [r["id"] for r in replies] == [1, 2, 3, 4, 5, None, 8, None]
     assert replies[0]["result"]["protocolVersion"] == "2025-03-26"
     assert replies[0]["result"]["capabilities"] == {"tools": {}}
     tools = replies[1]["result"]["tools"]
@@ -141,7 +149,40 @@ def test_protocol_handshake_and_tool_list():
     }
     assert all(t["annotations"]["readOnlyHint"] is True for t in tools)
     assert replies[2]["error"]["code"] == -32601
-    assert replies[3]["error"]["code"] == -32700
+    assert replies[3]["error"]["code"] == -32602
+    assert replies[4]["error"]["code"] == -32602
+    assert replies[5]["error"]["code"] == -32600
+    assert replies[6]["result"] == {}
+    assert replies[7]["error"]["code"] == -32700
+
+
+def test_a_redirect_is_refused_rather_than_followed():
+    hits = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append((self.path, self.headers.get("Authorization")))
+            self.send_response(302)
+            self.send_header("Location", "/elsewhere")
+            self.end_headers()
+
+        def log_message(self, *args):
+            return None
+
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        fetch = mcp_server.http_fetch(
+            f"http://127.0.0.1:{httpd.server_address[1]}", "example-token"
+        )
+        result = _call(fetch, "list_tags")
+    finally:
+        httpd.shutdown()
+    assert result["isError"] is True
+    assert "answered 302" in result["content"][0]["text"]
+    # Positive control that the server was reached, and only once.
+    assert hits == [("/api/v1/tags", "Bearer example-token")]
 
 
 def test_a_picture_id_cannot_reshape_the_request_path():
@@ -188,7 +229,7 @@ def test_every_tool_request_is_a_get_through_http_fetch(monkeypatch):
         seen.append((request.get_method(), request.full_url, request.headers))
         return Response()
 
-    monkeypatch.setattr(mcp_server.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(mcp_server._opener, "open", urlopen)
     fetch = mcp_server.http_fetch("http://127.0.0.1:9537/", "example-token")
     _call(fetch, "list_pictures", tags=["cat", "dog"], limit=5000)
     method, url, headers = seen[0]

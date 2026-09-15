@@ -122,7 +122,22 @@ TOOLS = [
     },
 ]
 for _tool in TOOLS:
-    _tool["annotations"] = {"readOnlyHint": True, "openWorldHint": False}
+    # get_recipe pre-flights the recipe against the owner's ComfyUI, so it
+    # reaches past the library even though it changes nothing.
+    _tool["annotations"] = {
+        "readOnlyHint": True,
+        "openWorldHint": _tool["name"] == "get_recipe",
+    }
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects: urllib would copy the Bearer header to any host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
 
 
 class ToolError(Exception):
@@ -140,13 +155,14 @@ def http_fetch(base_url: str, token: str) -> Fetch:
             url, headers={"Authorization": f"Bearer {token}"}, method="GET"
         )
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with _opener.open(request, timeout=60) as response:
                 return (
                     response.status,
                     response.headers.get("Content-Type", ""),
                     response.read(),
                 )
         except urllib.error.HTTPError as exc:
+            logger.warning("[mcp] %s answered %s", path, exc.code)
             return exc.code, exc.headers.get("Content-Type", ""), exc.read()
         except urllib.error.URLError as exc:
             logger.warning("[mcp] Could not reach %s%s: %s", base, path, exc)
@@ -162,16 +178,16 @@ def _picture_id(arguments: dict) -> int:
         raise ToolError("picture_id must be an integer")
     try:
         return int(value)
-    except ValueError:
-        raise ToolError("picture_id must be an integer")
+    except ValueError as exc:
+        raise ToolError("picture_id must be an integer") from exc
 
 
 def _paging(arguments: dict) -> dict:
     try:
         limit = int(arguments.get("limit") or DEFAULT_LIMIT)
         offset = int(arguments.get("offset") or 0)
-    except (TypeError, ValueError):
-        raise ToolError("limit and offset must be integers")
+    except (TypeError, ValueError) as exc:
+        raise ToolError("limit and offset must be integers") from exc
     params = {"limit": max(1, min(limit, MAX_LIMIT)), "offset": max(0, offset)}
     tags = arguments.get("tags") or []
     if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
@@ -232,9 +248,12 @@ def handle_message(fetch: Fetch, message: dict) -> dict | None:
     """Answer one JSON-RPC message; ``None`` for a notification."""
     method = message.get("method")
     msg_id = message.get("id")
-    if msg_id is None:
+    if msg_id is None or method is None:
+        # A notification, or the client answering a request we never make.
         return None
     params = message.get("params") or {}
+    if not isinstance(params, dict):
+        return _error(msg_id, -32602, "params must be an object")
     if method == "initialize":
         requested = params.get("protocolVersion")
         result = {
@@ -250,9 +269,10 @@ def handle_message(fetch: Fetch, message: dict) -> dict | None:
         result = {"tools": TOOLS}
     elif method == "tools/call":
         try:
-            content = call_tool(
-                fetch, params.get("name"), params.get("arguments") or {}
-            )
+            arguments = params.get("arguments") or {}
+            if not isinstance(arguments, dict):
+                raise ToolError("arguments must be an object")
+            content = call_tool(fetch, params.get("name"), arguments)
             result = {"content": content, "isError": False}
         except ToolError as exc:
             result = {"content": [{"type": "text", "text": str(exc)}], "isError": True}
@@ -265,12 +285,12 @@ def handle_message(fetch: Fetch, message: dict) -> dict | None:
                 "isError": True,
             }
     else:
-        return {
-            "jsonrpc": "2.0",
-            "id": msg_id,
-            "error": {"code": -32601, "message": f"Method not found: {method}"},
-        }
+        return _error(msg_id, -32601, f"Method not found: {method}")
     return {"jsonrpc": "2.0", "id": msg_id, "result": result}
+
+
+def _error(msg_id, code: int, message: str) -> dict:
+    return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}}
 
 
 def serve(fetch: Fetch, stdin=None, stdout=None) -> None:
@@ -290,8 +310,11 @@ def serve(fetch: Fetch, stdin=None, stdout=None) -> None:
                 "error": {"code": -32700, "message": "Parse error"},
             }
         else:
+            # ponytail: batches (2025-03-26 only) are refused, not unpacked.
             reply = (
-                handle_message(fetch, message) if isinstance(message, dict) else None
+                handle_message(fetch, message)
+                if isinstance(message, dict)
+                else _error(None, -32600, "Invalid Request: expected one object")
             )
         if reply is not None:
             stdout.write(json.dumps(reply) + "\n")

@@ -747,10 +747,13 @@ GPL-only backend internals, different obligations may apply.
 
 `pixlstash-mcp` is a read-only [MCP](https://modelcontextprotocol.io) server:
 an agent can search the library and read pictures, tags and ComfyUI recipes,
-and cannot change anything. It talks to a running PixlStash server with an API
-token and sees exactly what that token sees, so mint a **Read-only share**
-token under **API Tokens** in your account settings, restricted to a set,
-character or project if the agent should see only that.
+and it has no tools that change anything. It talks to a running PixlStash
+server with an API token and sees exactly what that token sees. Give it a
+**Read-only share** token from **API Tokens** in your account settings,
+restricted to a set, character or project if the agent should see only that:
+a full-access token works too, but then the agent can read the whole library.
+`get_recipe` also asks your ComfyUI whether a recipe's nodes and models are
+installed.
 
 ```json
 {
