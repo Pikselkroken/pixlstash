@@ -5,6 +5,8 @@ finder selects, the matching count, and that the task writes correct prediction
 rows while never touching the Tag table.
 """
 
+from types import SimpleNamespace
+
 from sqlalchemy import event
 from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel, Session, create_engine, select
@@ -15,6 +17,7 @@ from pixlstash.db_models.tag import Tag
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.tasks.missing_tag_prediction_finder import MissingTagPredictionFinder
 from pixlstash.tasks.tag_prediction_backfill_task import TagPredictionBackfillTask
+from pixlstash.utils.tag_reset_registry import TagResetRegistry
 from pixlstash.vault import Vault
 
 
@@ -188,3 +191,53 @@ def test_backfill_pins_to_the_pixlstash_tagger_even_when_a_plugin_is_active(tmp_
         # Every call pinned the built-in tagger, never the configured plugin.
         assert workflow.overrides == ["pixlstash_tagger"] * 3
         assert workflow.active_model_version("pixlstash_tagger") == "v7"
+
+
+def test_backfill_drops_pictures_retagged_since_it_read_them(tmp_path):
+    """A retag mid-backfill must not get built-in rows from the old tags (#1367)."""
+    engine = _make_engine(tmp_path)
+    with Session(engine) as session:
+        retagged = _add_picture(session, "a.jpg", tags=["dog"])
+        untouched = _add_picture(session, "b.jpg", tags=["cat"])
+        pictures = [session.get(Picture, retagged), session.get(Picture, untouched)]
+
+        class _Db(_FakeDB):
+            tag_resets = TagResetRegistry()
+
+            def run_task(self, func, *args, priority=None, **kwargs):
+                return func(session, *args)
+
+        db = _Db()
+        task = TagPredictionBackfillTask(db, _RecordingWorkflow(None), pictures)
+        db.tag_resets.mark_reset([retagged])
+        # The stand-in workflow scores nothing, so both take the unscored path.
+        task._run_task()
+
+        rows = session.exec(select(TagPrediction.picture_id)).all()
+        assert untouched in rows
+        assert retagged not in rows
+
+
+def test_finder_captures_the_reset_generation_before_reading():
+    """A retag landing during the finder's read still makes the task stale."""
+    registry = TagResetRegistry()
+    picture = SimpleNamespace(id=1, file_path="a.jpg")
+
+    class _Db:
+        tag_resets = registry
+
+        def run_immediate_read_task(self, fn, *args):
+            registry.mark_reset([picture.id])
+            return [picture]
+
+    workflow = SimpleNamespace(
+        is_pixlstash_tagger_enabled=True, suggested_task_size=lambda: 8
+    )
+    engine = SimpleNamespace(
+        tagger_settings={"active_tag_plugin": "pixlstash_tagger"},
+        tagging_workflow=workflow,
+    )
+    finder = MissingTagPredictionFinder(_Db(), engine_getter=lambda: engine)
+    task = finder.find_task()
+
+    assert task._tag_resets.reset_since([picture.id], task._reset_generation) == {1}

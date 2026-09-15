@@ -83,7 +83,14 @@ class MissingTagPredictionFinder(SimpleMissingFinder):
             database=self._db,
             tagging_workflow=engine.tagging_workflow,
             pictures=pictures,
+            reset_generation=self._reset_generation,
         )
+
+    def find_task(self):
+        # Before the read: a retag landing between the two must make the task
+        # older than the reset, never newer (#1367).
+        self._reset_generation = self._db.tag_resets.current()
+        return super().find_task()
 
     def _fetch_candidates(self, session: Session, limit: int) -> list:
         return self._fetch_missing_predictions(session, limit)
