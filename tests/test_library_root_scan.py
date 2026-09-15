@@ -404,10 +404,10 @@ def test_a_gif_in_the_root_is_indexed_and_kept(server):
     assert [(p.id, p.file_path) for p in _managed(server, "anim/")] == first
 
 
-def test_a_row_whose_file_type_the_scan_does_not_list_is_kept(server):
+def test_unsupported_file_row_is_kept_until_file_is_deleted(server):
     root = server.vault.image_root
-    _make_image(os.path.join(root, "odd", "keep.png"), (31, 32, 33))
-    _make_image(os.path.join(root, "odd", "photo.mpo"), (34, 35, 36))
+    keeper = _make_image(os.path.join(root, "odd", "keep.png"), (31, 32, 33))
+    legacy_path = _make_image(os.path.join(root, "odd", "photo.mpo"), (34, 35, 36))
     picture_id = _insert_managed(
         server, "odd/photo.mpo", pixel_sha="odd-mpo", size_bytes=1
     )
@@ -415,6 +415,15 @@ def test_a_row_whose_file_type_the_scan_does_not_list_is_kept(server):
     _run_root_scan(server)
 
     assert [p.id for p in _managed(server, "odd/photo.mpo")] == [picture_id]
+
+    # Unsupported files are not discovered by the walk, but their row is only
+    # protected while the file is actually still present. Keep another supported
+    # file so the empty-library safeguard is not what preserves the stale row.
+    os.remove(legacy_path)
+    _run_root_scan(server)
+
+    assert _managed(server, "odd/photo.mpo") == []
+    assert os.path.isfile(keeper)
 
 
 def test_a_move_pixlstash_recorded_is_repointed_not_deleted(server):

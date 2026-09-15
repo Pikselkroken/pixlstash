@@ -481,7 +481,12 @@ class ReferenceFolderScanTask(BaseTask):
         # Same again for a file this walk would never list: an import path that
         # accepts more formats than the scan (GIF and TIFF did, until #1349)
         # leaves rows whose files are on disk but absent from disk_paths.
-        unlisted_kept = {p for p in removed_paths if not _is_supported_file(p)}
+        # An unsupported extension is only evidence that this walk would not
+        # list the file.  It does not mean the file still exists: retain a
+        # legacy row only after confirming its path is still on disk.
+        unlisted_kept = {
+            p for p in removed_paths if not _is_supported_file(p) and os.path.exists(p)
+        }
         if unlisted_kept:
             logger.info(
                 "Reference folder %s: %d indexed pictures have a file type this "
