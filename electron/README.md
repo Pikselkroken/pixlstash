@@ -45,6 +45,12 @@ npm run dev
 the repo's `../.venv` interpreter (override with `PIXLSTASH_DEV_BACKEND=/path/to/python`)
 and skips the bundled runtime entirely.
 
+From a git worktree (no `.venv`, no `node_modules`, nothing built), use
+`scripts/desktop-dev.sh build` then `scripts/desktop-dev.sh run` from the repo
+root. It finds a `.venv` in the worktree, the main checkout, or beside it, and
+puts the worktree first on `PYTHONPATH` so the backend runs the worktree's code
+even when the venv has another checkout installed editable.
+
 To exercise the **bundled** path locally (what `npm start` / installers use), first
 build the runtime into `electron/resources/` once, then run/package as usual:
 
