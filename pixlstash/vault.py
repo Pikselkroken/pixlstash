@@ -913,6 +913,7 @@ class Vault:
         def _fetch_pic(session: Session):
             return session.get(Picture, picture_id)
 
+        reset_generation = self.db.tag_resets.current()
         pic = self.db.run_immediate_read_task(_fetch_pic)
         if pic is not None:
             task = TagTask(
@@ -921,6 +922,7 @@ class Vault:
                 pictures=[pic],
                 interactive=True,
                 engine_override=engine_name,
+                reset_generation=reset_generation,
             )
             self.submit_task(task)
 

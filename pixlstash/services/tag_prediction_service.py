@@ -362,6 +362,9 @@ def reset_pictures_tags(
                     session.add(Tag(tag=sentinel, picture_id=pic_id))
             reset_ids.extend(present)
         session.commit()
+        # After the commit, so a task that read the old tags is never judged
+        # newer than the reset (see TagResetRegistry).
+        vault.db.tag_resets.mark_reset(reset_ids)
         return reset_ids
 
     return vault.db.run_task(_reset)
