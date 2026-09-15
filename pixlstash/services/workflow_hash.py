@@ -484,10 +484,9 @@ def topology_hash(api_graph: dict) -> str:
 def instance_hash(api_graph: dict) -> str:
     """The instance key: the recipe plus one set of parameters, seed excluded.
 
-    **This is a PICTURE column, not a hub table.** Two pictures share an
-    instance exactly when they share this value, which is all "Covered only"
-    needs; storing instances hub-side is AI-toolkit Phase 2 and belongs to
-    v1.12. Nothing in v1.11 writes an instance row anywhere.
+    Two pictures share an instance exactly when they share this value, which is
+    what "Covered only" asks. The parameters themselves are kept, per library,
+    as :func:`instance_document_from_reduction` in ``workflow_recipe_instance``.
     """
     return graph_key(promote_instance_widgets(reduce_api_graph(api_graph)))
 
@@ -551,6 +550,55 @@ def document_from_reduction(nodes: dict[str, ReducedNode]) -> dict:
         inputs.update({name: [source, slot] for name, source, slot in node.inputs})
         document[node_id] = {"class_type": node.class_type, "inputs": inputs}
     return document
+
+
+def instance_document_from_reduction(nodes: dict[str, ReducedNode]) -> dict:
+    """Render the instance tier as a document: the recipe's, parameters filled in.
+
+    Same shape and node ids as :func:`document_from_reduction`, with each nulled
+    parameter carrying its value instead. Seeds and output paths stay null (they
+    are the generation's), and **a model or image filename is a reference**,
+    including one nested inside a structured value (rgthree's Power Lora Loader
+    keeps ``{"lora": "name.safetensors", ...}``). The instance widgets hold raw
+    values, and keeping a filename here would put a model's name somewhere
+    forgetting it does not reach. A name with no model or image extension is
+    not recognised as one here or anywhere else.
+    """
+    document = document_from_reduction(nodes)
+    for node_id, node in nodes.items():
+        assets = dict(node.widgets)
+        inputs = document[node_id]["inputs"]
+        for name, value in node.instance_widgets:
+            if assets.get(name) is None:
+                inputs[name] = _nested_assets_as_references(name, value)
+    return document
+
+
+def _nested_assets_as_references(name: str, value: Any) -> Any:
+    """``value`` with every filename-shaped string in it swapped for a reference.
+
+    A nested value gets the rules :func:`reduce_api_graph` applies to a node's
+    own inputs, because this is the first place a nested value is STORED rather
+    than only hashed: a credential-named key is dropped, and a seed or output
+    path is nulled like its top-level counterpart. The instance hash is keyed
+    on the raw widgets and does not change.
+    """
+    if isinstance(value, dict):
+        return {
+            key: (
+                None
+                if _SEED_RE.search(str(key))
+                or str(key) == "filename_prefix"
+                or _OUTPUT_PATH_RE.match(str(key))
+                else _nested_assets_as_references(str(key), item)
+            )
+            for key, item in value.items()
+            if not SECRET_FIELD_RE.search(str(key))
+        }
+    if isinstance(value, list):
+        return [_nested_assets_as_references(name, item) for item in value]
+    asset = structural_widget_value(name, value)
+    return asset_reference(asset) if asset is not None else value
 
 
 def structural_document(api_graph: dict) -> dict:

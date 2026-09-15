@@ -51,6 +51,7 @@ import pixlstash.routes.comfyui as comfyui_module
 from pixlstash.services import workflow_bindings, workflow_inbox
 from pixlstash.server import Server
 from pixlstash.tasks.ghost_cascade_task import GhostCascadeTask
+from pixlstash.tasks.task_type import TaskType
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
@@ -324,6 +325,9 @@ def workflow_env():
         assert r.status_code in {200, 201}, r.text
         character_id = r.json().get("id") or r.json()["character"]["id"]
 
+        extraction_finder = server.vault._planner_work_finders[
+            TaskType.COMFYUI_EXTRACTION
+        ]
         detached = _quiesce_background_work(server)
 
         yield SimpleNamespace(
@@ -331,6 +335,7 @@ def workflow_env():
             owner=owner,
             character_id=character_id,
             detached=detached,
+            extraction_finder=extraction_finder,
         )
     finally:
         server.__exit__(None, None, None)
@@ -386,6 +391,13 @@ def _bearer(server, token: str) -> TestClient:
 # ===========================================================================
 # Declarations — the registry entry is the route's only authorization
 # ===========================================================================
+
+
+def test_the_workflow_scan_records_instances_for_the_open_library(workflow_env):
+    """Without the library, the scan files recipes and silently no instance."""
+    library_uuid = workflow_env.server.vault.library_uuid
+    assert library_uuid
+    assert workflow_env.extraction_finder._library_uuid == library_uuid
 
 
 def test_every_workflow_route_is_declared_owner_only():
