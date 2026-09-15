@@ -12,6 +12,12 @@ logger = get_logger(__name__)
 #: Devices that are a GPU of some kind, i.e. everything except plain CPU.
 ACCELERATORS = frozenset({"cuda", "mps"})
 
+#: The ``default_device`` values a server may be given, in ``server-config.json``
+#: or through ``PIXLSTASH_DEFAULT_DEVICE``. Start-up checks the one and the
+#: server the other against this set, so neither can accept a value the other
+#: refuses.
+VALID_DEVICE_SETTINGS = frozenset({"cpu", "cuda", "gpu", "auto"})
+
 #: What to tell an owner whose inference ran on the CPU. ``auto`` is the one
 #: value that reaches both CUDA and Metal: start-up rejects ``mps``, and
 #: ``cuda`` refuses to start on a Mac.

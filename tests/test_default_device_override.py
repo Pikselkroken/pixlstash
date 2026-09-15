@@ -69,10 +69,10 @@ class TestDefaultDeviceOverride:
 
         Asking for Metal is what `auto` is for: it is identical to `auto` on a
         Mac, meaningless on CUDA, and the desktop app maps its own Metal choice
-        to `auto` rather than writing this. The override validates against its
-        own set, separate from the one ``StartupChecks._check_config_sanity``
-        uses, so this is the second of the two places that has to agree - and
-        the one a sweep of the first would miss.
+        to `auto` rather than writing this. The override and
+        ``StartupChecks._check_config_sanity`` both read
+        ``device_utils.VALID_DEVICE_SETTINGS``, so the two cannot drift apart;
+        this is the override's own half of that agreement.
         """
         path = tmp_path / "server-config.json"
         _write_config(path, default_device="auto")

@@ -24,6 +24,7 @@ import pytest
 from PIL import Image
 
 import pixlstash.inference.model_lifecycle as model_lifecycle_module
+import pixlstash.server as server_module
 import pixlstash.startup_checks as sc
 import pixlstash.task_runner as task_runner_module
 from pixlstash.database import VaultDatabase
@@ -65,6 +66,7 @@ from pixlstash.utils.device_utils import (
     ACCELERATORS,
     HF_ASYNC_LOAD_ENV,
     USE_GPU_ADVICE,
+    VALID_DEVICE_SETTINGS,
     configure_metal_model_loading,
     detect_device,
     empty_device_cache,
@@ -715,6 +717,51 @@ def test_mps_is_not_a_configurable_device():
     assert not any("mps" in f for f in outcome.hard_failures), (
         "the message lists the devices that work, so it must not offer mps"
     )
+
+
+def _configured_device_failures(value):
+    checks = StartupChecks(
+        {"default_device": value}, "/tmp/server_config.json", logging.getLogger("test")
+    )
+    outcome = StartupCheckOutcome()
+    checks._check_config_sanity(outcome)
+    return [f for f in outcome.hard_failures if "default_device" in f]
+
+
+def _overridden_device(tmp_path, monkeypatch, value):
+    path = tmp_path / "server-config.json"
+    path.write_text(
+        json.dumps({"image_root": str(tmp_path / "images"), "default_device": "cpu"})
+    )
+    monkeypatch.setenv("PIXLSTASH_DEFAULT_DEVICE", value)
+    return server_module.Server.init_server_config(str(path))["default_device"]
+
+
+def test_start_up_and_the_device_override_read_the_one_set(tmp_path, monkeypatch):
+    """``server-config.json`` and ``PIXLSTASH_DEFAULT_DEVICE`` are both checked
+    against ``VALID_DEVICE_SETTINGS`` when they are read, so a value added to
+    the set is accepted by both, and neither keeps a copy that could drift."""
+    monkeypatch.setattr(
+        device_utils, "VALID_DEVICE_SETTINGS", VALID_DEVICE_SETTINGS | {"xpu"}
+    )
+
+    assert _configured_device_failures("xpu") == []
+    assert _overridden_device(tmp_path, monkeypatch, "xpu") == "xpu"
+
+
+@pytest.mark.parametrize("value", sorted(VALID_DEVICE_SETTINGS))
+def test_every_valid_device_is_accepted_by_both(tmp_path, monkeypatch, value):
+    assert _configured_device_failures(value) == []
+    assert _overridden_device(tmp_path, monkeypatch, value) == value
+
+
+def test_a_device_outside_the_set_is_refused_by_both(tmp_path, monkeypatch):
+    # Start-up refuses to boot on it; the override is ignored and the file's
+    # own value kept.
+    failures = _configured_device_failures("xpu")
+    listed = ", ".join(sorted(VALID_DEVICE_SETTINGS))
+    assert failures == [f"default_device must be one of: {listed}."]
+    assert _overridden_device(tmp_path, monkeypatch, "xpu") == "cpu"
 
 
 # --------------------------------------------------------------------------- #

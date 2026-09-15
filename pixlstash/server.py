@@ -154,6 +154,7 @@ from pixlstash.routes.test_hooks import create_router as create_test_hooks_route
 from pixlstash.routes.workflows import create_router as create_workflows_router
 from pixlstash.server_config_io import DEVICE_ON_DISK_KEY, persist_server_config
 from pixlstash.utils.atomic_write import write_json_atomic
+from pixlstash.utils import device_utils
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
 from pixlstash.utils.request_origin import OriginClientMiddleware
@@ -1367,13 +1368,12 @@ class Server(
             os.environ.get("PIXLSTASH_DEFAULT_DEVICE", "").strip().lower()
         )
         if _device_override:
-            # Validate against the known device values (the same set
-            # StartupChecks accepts). An invalid value is rejected with a
-            # warning and ignored, leaving the config's own default_device in
-            # place, rather than being written straight through and silently
-            # falling back to CPU with no explanation.
-            _valid_devices = {"cpu", "cuda", "gpu", "auto"}
-            if _device_override in _valid_devices:
+            # Validate against VALID_DEVICE_SETTINGS, the set StartupChecks
+            # checks default_device against too. An invalid value is rejected
+            # with a warning and ignored, leaving the config's own
+            # default_device in place, rather than being written straight
+            # through and silently falling back to CPU with no explanation.
+            if _device_override in device_utils.VALID_DEVICE_SETTINGS:
                 # Remember what the owner configured: persist_server_config
                 # writes that back, never the runtime's answer.
                 server_config[DEVICE_ON_DISK_KEY] = server_config.get("default_device")
@@ -1383,7 +1383,7 @@ class Server(
                     "Ignoring invalid PIXLSTASH_DEFAULT_DEVICE=%r; expected one "
                     "of %s. Keeping configured default_device=%r.",
                     _device_override,
-                    sorted(_valid_devices),
+                    sorted(device_utils.VALID_DEVICE_SETTINGS),
                     server_config.get("default_device"),
                 )
 

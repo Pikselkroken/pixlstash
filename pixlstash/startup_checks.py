@@ -11,6 +11,7 @@ from typing import Any
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.startup_permissions import mkdir_private
+from pixlstash.utils import device_utils
 
 # For the module-level probes below; StartupChecks methods log through the
 # logger they are constructed with.
@@ -162,9 +163,10 @@ class StartupChecks:
             outcome.hard_failures.append("Port must be an integer between 1 and 65535.")
 
         default_device = str(self._server_config.get("default_device", "cpu")).lower()
-        if default_device not in {"cpu", "cuda", "gpu", "auto"}:
+        if default_device not in device_utils.VALID_DEVICE_SETTINGS:
             outcome.hard_failures.append(
-                "default_device must be one of: cpu, cuda, gpu, auto."
+                "default_device must be one of: "
+                f"{', '.join(sorted(device_utils.VALID_DEVICE_SETTINGS))}."
             )
 
         samesite = str(self._server_config.get("cookie_samesite", "Lax"))
