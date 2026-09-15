@@ -154,7 +154,10 @@
               <v-icon size="16" class="selbar-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
-          <div class="ctx-menu shelf-menu" role="menu">
+          <div class="ctx-menu shelf-menu" role="menu"
+            tabindex="-1"
+            @keydown="onMenuKeydown"
+          >
             <button
               class="ctx-item"
               type="button"
@@ -245,7 +248,10 @@
               <v-icon size="16" class="selbar-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
-          <div class="ctx-menu shelf-menu" role="menu">
+          <div class="ctx-menu shelf-menu" role="menu"
+            tabindex="-1"
+            @keydown="onMenuKeydown"
+          >
             <button
               v-for="folder in destinations"
               :key="folder.id"
@@ -339,6 +345,7 @@ import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorDetail } from "../../utils/apiError";
 import { formatModelSize } from "../../utils/modelShelf";
+import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 
 const emit = defineEmits(["set-folder", "count"]);
 

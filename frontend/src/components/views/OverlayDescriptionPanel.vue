@@ -56,7 +56,9 @@
           <div
             class="ctx-menu ctx-menu--on-dark"
             role="menu"
+            tabindex="-1"
             style="min-width: 160px"
+            @keydown="onMenuKeydown"
           >
             <button
               v-if="descPluginsLoading"
@@ -186,6 +188,7 @@ import { listTaggers } from "../../api/taggers";
 import { copyText } from "../../utils/clipboard";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorDetail } from "../../utils/apiError";
+import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import Tooltip from "../widgets/Tooltip.vue";
 import {
   isDescriptionSentinel,

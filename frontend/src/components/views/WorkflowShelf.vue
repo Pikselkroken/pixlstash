@@ -407,7 +407,10 @@
       origin="top start"
       :offset="2"
     >
-      <div class="ctx-menu" role="menu">
+      <div class="ctx-menu" role="menu"
+        tabindex="-1"
+        @keydown="onMenuKeydown"
+      >
         <button
           v-if="menuRow && menuRow.variants > 1"
           class="ctx-item"
@@ -486,6 +489,7 @@ import {
   modelSummary,
   workflowDescriptor,
 } from "../../utils/workflowShelf";
+import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 
 const store = useWorkflowShelfStore();
 const notices = useNoticeStore();
