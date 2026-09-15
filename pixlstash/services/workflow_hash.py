@@ -587,7 +587,7 @@ def _nested_assets_as_references(name: str, value: Any) -> Any:
         return {
             key: (
                 None
-                if _SEED_RE.search(str(key))
+                if SEED_FIELD_RE.search(str(key))
                 or str(key) == "filename_prefix"
                 or _OUTPUT_PATH_RE.match(str(key))
                 else _nested_assets_as_references(str(key), item)
