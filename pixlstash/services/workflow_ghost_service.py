@@ -62,8 +62,19 @@ paths remove rows whose files are gone or were never the library's to keep, so
 they never write a ghost; they only give up cover, which the queue handles.
 
 **Erasing is its own request.** ``DELETE /server-config/ghost-retention/ghosts``
-destroys the active library's ghosts (:func:`pixlstash.hub.workflows.erase_picture_ghosts`),
-and forgetting a library registration destroys that library's.
+destroys the active library's ghosts (:func:`erase_library_ghosts`), and
+forgetting a library registration destroys that library's.
+
+**Instance rows ride the same cascade.** ``workflow_recipe_instance`` holds a
+library's prompts and parameters, one row per instance hash, and a row is kept
+exactly while a surviving picture or a ghost in that library carries its hash.
+So every drain destroys the rows its queued hashes no longer justify, at every
+retention position: at ``on`` the ghost is what keeps a row, not the setting.
+One order is narrowed rather than closed: a drain that runs between a purge's
+``DELETE`` and its ghost write sees neither cover nor ghost, and the instance
+row goes before the ghost that would have kept it arrives. That ghost keeps its
+thumbnail, prompt and seed without the rest of the parameters, which fails
+toward retaining less.
 
 **Forgetting reaches every derived copy, and here it does so structurally.** A
 prompt lives in ``picture.comfyui_positive_prompt`` *and*, in vector form, in
@@ -91,8 +102,10 @@ from pixlstash.db_models import Picture
 from pixlstash.hub.workflows import (
     PictureGhost,
     destroy_ghosts_for_instances,
-    ghost_instance_hashes,
+    destroy_uncovered_instances,
+    erase_picture_ghosts,
     record_picture_ghosts,
+    retained_instance_hashes,
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
@@ -405,6 +418,10 @@ def drain_ghost_cascade(
     destroyed = cascade_uncovered_ghosts(
         hub, library_uuid, retention, set(hashes), surviving
     )
+    # After the ghosts, so one the cascade just destroyed no longer keeps its
+    # instance row alive.
+    if hub is not None and library_uuid:
+        destroy_uncovered_instances(hub, library_uuid, sorted(set(hashes) - surviving))
 
     def dequeue(session: Session):
         session.execute(
@@ -426,18 +443,31 @@ def drain_ghost_cascade(
 
 
 def requeue_library_ghosts(vault_db, hub, library_uuid: Optional[str]) -> int:
-    """Queue every ghost this library holds for re-evaluation. Returns how many.
+    """Queue every ghost and instance row this library holds for re-evaluation.
 
-    A full restore swaps the vault file, so the pictures it drops were never
-    deleted and no trigger fired for them. Re-evaluating every ghost is bounded
-    by the ghosts, not by the library, and restores are rare.
+    Returns how many hashes were queued. A full restore swaps the vault file, so
+    the pictures it drops were never deleted and no trigger fired for them.
+    Bounded by what the hub retains, not by the library, and restores are rare.
     """
     if hub is None or not library_uuid:
         return 0
-    hashes = ghost_instance_hashes(hub, library_uuid)
+    hashes = retained_instance_hashes(hub, library_uuid)
     if hashes:
         vault_db.run_task(enqueue_ghost_cascade_in_session, hashes)
     return len(hashes)
+
+
+def erase_library_ghosts(vault_db, hub, library_uuid: str) -> int:
+    """Erase every ghost one library holds, and re-judge what they were keeping.
+
+    An instance row a ghost alone was keeping has lost its reason with the
+    ghost, and no picture delete will ever queue its hash, so the erase queues
+    the library's retained hashes for the cascade itself. Returns how many
+    ghosts were erased.
+    """
+    erased = erase_picture_ghosts(hub, library_uuid)
+    requeue_library_ghosts(vault_db, hub, library_uuid)
+    return erased
 
 
 def apply_purge_to_hub(

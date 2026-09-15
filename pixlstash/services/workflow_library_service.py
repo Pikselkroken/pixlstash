@@ -114,6 +114,20 @@ def recipe_activity(
     }
 
 
+def recipe_picture_counts(session: Session) -> dict[str, int]:
+    """How many kept pictures each recipe made, **vault-wide**.
+
+    Unscoped, like :func:`topology_activity`, and served only to owner routes
+    for the same reason.
+    """
+    return {
+        key: activity.pictures
+        for key, activity in _activity(
+            session, Picture.workflow_structural_hash
+        ).items()
+    }
+
+
 def scan_progress(session: Session) -> ScanProgress:
     """How many kept pictures exist, and how many have been read for a workflow."""
     pictures, scanned = session.exec(

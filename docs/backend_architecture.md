@@ -2786,16 +2786,29 @@ thing on a later step, belongs beside the workflow file, and the name
 on the structural hash, because the same workflow rebuilt from scratch has
 different node ids and so different document *text* at the same identity.
 
-The **instance** tier has no table here, and that is deliberate now that ingest
-computes an instance hash. The hash is a value on a picture
-(`picture.workflow_instance_hash`): two pictures share an instance exactly when
-they share it, which is the whole of what v1.11 asks of the tier — "Covered
-only" needs an equivalence, not a row. A hub-side `recipe_instance` table is
-AI-toolkit Phase 2 and moved to v1.12 with the rest of it, so **nothing in this
-release stores an instance row anywhere**, and
-`test_no_hub_table_stores_an_instance` guards that rather than leaving it
-remembered. Its location is not in question when it does arrive, since §4 puts
-the whole family here.
+**The instance tier is `workflow_recipe_instance` (v1.12, #1311), and it is keyed
+by library.** A row is one instance hash with its `document`: the recipe's
+document with each parameter's value filled in, seeds and output paths still
+null, assets still references (so forgetting a model name reaches it). Unlike the
+recipe, an instance *is* the prompt, so it follows the ghost table's rule rather
+than the recipe's: `(library_uuid, instance_hash)`, kept exactly while a surviving
+picture or a ghost in that library carries the hash, and destroyed by the
+covered-ghost cascade when neither does (*Picture ghosts* below). This narrows the
+2026-08-20 "hub-side with the recipe" ruling rather than reversing it: still hub,
+but a hub-global row could not be judged by any one vault's pictures.
+
+The picture-level half is in the vault (`db_models/generation.py`, migration
+`0118`): `generation` (one row per picture with a workflow, holding its seed as
+**text**, because ComfyUI seeds reach 2**64 - 1 and SQLite's INTEGER stops at
+2**63 - 1) and `generation_input` (the resolution lock: which picture each input
+of a run loaded, by `pixel_sha`). **Both cascade with their picture**: what
+outlives a destroyed picture is the ghost, under the retention the owner chose,
+and a second survivor here would bypass that setting. The instance is reached
+through `picture.workflow_instance_hash`, not copied onto `generation`, because
+that is the column the cascade triggers watch. **The issue's `recipe_asset` is
+`workflow_recipe_asset`**, unextended: the models companion plan asks the two to
+merge, and the resolution to a shelf model is computed at read time (below), so
+it heals when a model is added and nothing goes stale when one is removed.
 
 The counts, the tier collapse and the cross-library figure are in
 `pixlstash-workflow-extraction-measurement.md` and the library plan, which asks
@@ -2858,6 +2871,23 @@ nothing behind it. `vault.py` re-registers the finder with the hub when there is
 one, which is where `CHECKPOINT_HASH` and `GFS_SNAPSHOT` are registered and for
 the same reason.
 
+**The same read records how the picture was made** (#1311): the instance row in
+the hub and a `generation` row with the seed in the vault. Migration `0118`
+fills them for pictures filed before the tables existed by clearing
+`workflow_hash_version` on every picture that carries an instance hash, so they
+come back through this task once. That **revisit** changes two rules. It never
+replaces a key with NULL: a file it cannot read now (an unplugged drive, a
+stripped copy) keeps its hashes and gets a generation with no seed, where nulling
+them would drop the picture out of its workflow and out of covering its ghosts.
+And it files a recipe's asset names only when the recipe itself is new to the hub,
+because a name missing under a recipe the hub already holds was forgotten on
+purpose. No `generation_input` rows are backfilled: a `LoadImage` names a file in
+ComfyUI's input folder and a Picture Loader names vault ids from whichever library
+it was built in, so neither identifies a picture and the lock would be invented.
+A picture destroyed while its file was being read has its hash queued for the
+cascade again, since its delete may have been drained before its instance row was
+written.
+
 **The rule the marker turns on: a property of the picture marks it scanned, a
 failure of our own machinery does not.** No graph, an unreadable file, a video
 and a graph the hash layer *refuses* are all facts about the picture that a
@@ -2878,8 +2908,9 @@ feature.** Every user-facing deletion — the Scrapheap, `purge_scrapheap_pictur
 away, and neither can reach `workflow_topology`, `workflow_recipe` or
 `workflow_recipe_graph`: they are in a different database and the reference runs
 the other way, as a content address rather than a foreign key. **`workflow_picture_ghost`
-is the one hub table that does NOT survive a purge**, because it is the one that
-holds identifying content rather than identity — see the next subsection. Without that,
+and `workflow_recipe_instance` are the hub tables that do NOT survive a purge**,
+because they hold identifying content rather than identity — see the next
+subsection. Without that,
 dehydrating a stack would destroy the graph its own rehydrate promise depends
 on. `tests/test_workflow_library.py::test_hub_rows_outlive_the_pictures_they_came_from`
 is the assertion, and it takes a picture through both steps — soft delete, then
@@ -2889,6 +2920,15 @@ the row destroyed — rather than only the second.
 `services/workflow_library_service.py` is the one place that query lives, for
 that reason: a workflow whose every picture sits in the Scrapheap has to read as
 "none kept", and counting the scrapheap in would make it read as live.
+
+**The model shelf counts pictures per model from the same keys**
+(`model_shelf_service.fetch_picture_counts`, `pictures_verified` and
+`pictures_by_filename` on every shelf row). Kept pictures per recipe from the
+vault, joined in Python to `workflow_recipe_asset`: a loader `*_sha256` equal to
+`model.sha256` is **verified**, a filename equal to `model.filename` or a copy's
+basename is **by filename**, and a picture counted in the first is not counted in
+the second. Because it reads keys every scanned picture already has, it covers
+pictures imported before #1311 without waiting for the backfill.
 
 **The read side is `routes/workflows.py`, and it joins nothing.** The Workflows
 view (implementation plan §F1/§F2) asks the hub which workflows exist and the
@@ -3076,7 +3116,9 @@ on `picture`: a row deleted, or updated away from its `workflow_instance_hash`
 `pending_ghost_cascade`. `GhostCascadeFinder` (every 10 s, hub-attached vaults
 only) runs `drain_ghost_cascade`, which reads a batch and its surviving cover,
 calls `cascade_uncovered_ghosts` (`off` destroys every ghost for the hash,
-`covered` the uncovered ones, `on` none) and only then dequeues by `seq`, so a
+`covered` the uncovered ones, `on` none), then `destroy_uncovered_instances`
+(every uncovered `workflow_recipe_instance` row no remaining ghost leans on, at
+every position) and only then dequeues by `seq`, so a
 crash repeats the batch and a hash re-queued mid-drain is not swallowed. Two
 cases no trigger sees queue explicitly: a purge that kept ghosts re-queues their
 hashes after writing them (a drain may have settled the hash before the ghost
@@ -3088,9 +3130,11 @@ until it is opened through a hub.
 up, not the whole hub; the restore requeue is bounded by the ghosts.
 
 **Erasing is its own request.** `DELETE /server-config/ghost-retention/ghosts`
-destroys the active library's ghosts (`hub/workflows.erase_picture_ghosts`), and
-`LibraryRegistry.forget` (a discarded first import) destroys that library's in
-the same transaction as its row. Detaching a library does not: detach keeps the
+destroys the active library's ghosts (`workflow_ghost_service.erase_library_ghosts`)
+and re-queues the library's retained hashes, so an instance row only a ghost was
+keeping goes on the next drain. `LibraryRegistry.forget` (a discarded first
+import) destroys that library's ghosts and instance rows in the same transaction
+as its row. Detaching a library does not: detach keeps the
 registration so the same folder comes back with its uuid, and its vault still
 holds the pictures that cover those ghosts; attaching it again and erasing is
 the way to clear them. Only one library's ghosts are ever erased per request,
@@ -3126,7 +3170,8 @@ no non-`engine` shelf model is still waiting for its hash: an unhashed
 checkpoint's loader digest matches nothing until `MissingCheckpointHashFinder`
 reads it, and forgetting it then would forget a model on disk. Re-filing a
 recipe (a new import naming the same model) writes its names back; only a
-picture that still names the model can do that. Only what the shelf can hold is judged: the scanner
+picture that still names the model can do that, and the recipe backfill's
+revisit of a picture already filed does not. Only what the shelf can hold is judged: the scanner
 lists `.safetensors` alone, so a `.ckpt` or `.gguf` would always read as a ghost
 and its purge would forget the name of a model still on disk. A tombstoned model
 still counts as on the shelf, since the shelf still lists it; a model never

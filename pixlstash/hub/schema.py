@@ -510,19 +510,9 @@ _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 #
 # ``workflow_recipe_graph`` holds the graph itself, in exactly that nulled form.
 #
-# The instance tier is deliberately absent HERE, and that is not an oversight
-# now that ingest computes an instance hash. The hash is a value on a picture
-# (``picture.workflow_instance_hash``): two pictures share an instance exactly
-# when they share it, which is the whole of what v1.11 asks of the tier. A
-# hub-side ``recipe_instance`` table is AI-toolkit Phase 2 and moved to v1.12
-# with the rest of it, so nothing in this release stores an instance ROW
-# anywhere. Its location is not in question - §4 puts the whole family here.
-#
-# ``workflow_picture_ghost`` below is not that table and must not grow into it.
-# It carries an instance HASH plus the two things a destroyed picture leaves
-# behind — a thumbnail and a prompt — because those are what the retention
-# setting is about. The parameters an instance is made of stay out of it until
-# v1.12 models them properly.
+# ``workflow_recipe_instance`` is the third tier, and the first that holds what a
+# person wrote. The vault half of a picture's recipe, its seed and its inputs, is
+# ``generation`` / ``generation_input`` (``db_models/generation.py``).
 
 _V2_WORKFLOW_TOPOLOGY = """
 CREATE TABLE IF NOT EXISTS workflow_topology (
@@ -602,6 +592,33 @@ CREATE TABLE IF NOT EXISTS workflow_recipe_asset (
     widget_name         TEXT NOT NULL,
     normalized_filename TEXT NOT NULL,
     PRIMARY KEY (structural_hash, widget_name, normalized_filename)
+)
+"""
+
+# A recipe with one set of parameters: the prompt, the steps, the strengths,
+# everything but the seed (``services/workflow_hash.py``, the instance tier).
+#
+# **Keyed by library, for the ghost table's reason, and unlike the recipe.** A
+# recipe is prompt-free and safe to share; an instance is the prompt. What may be
+# kept of it is the retention setting's call, made per library against that
+# library's own pictures, so a row lives exactly while a surviving picture or a
+# ghost IN THAT LIBRARY carries its hash, and the covered-ghost cascade destroys
+# it when neither does. A hub-global row could not be judged by any one vault.
+#
+# ``document`` is the instance as a graph: the recipe's document with each
+# parameter's value where the recipe has a null. Assets stay references, so
+# forgetting a model's name still forgets it here. ``structural_hash`` is a
+# plain column, not a foreign key, so deleting a workflow is never blocked by
+# the instances that ran it.
+_V2_WORKFLOW_RECIPE_INSTANCE = """
+CREATE TABLE IF NOT EXISTS workflow_recipe_instance (
+    library_uuid     TEXT NOT NULL,
+    instance_hash    TEXT NOT NULL,
+    structural_hash  TEXT NOT NULL,
+    hash_version     TEXT NOT NULL,
+    document         TEXT NOT NULL,
+    first_seen_at    TEXT NOT NULL,
+    PRIMARY KEY (library_uuid, instance_hash)
 )
 """
 
@@ -731,6 +748,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_RECIPE,
     _V2_WORKFLOW_RECIPE_GRAPH,
     _V2_WORKFLOW_RECIPE_ASSET,
+    _V2_WORKFLOW_RECIPE_INSTANCE,
     _V2_WORKFLOW_PICTURE_GHOST,
     _V2_WORKFLOW_PICTURE_INPUT,
     *_V2_WORKFLOW_INDEXES,

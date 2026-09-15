@@ -484,10 +484,9 @@ def topology_hash(api_graph: dict) -> str:
 def instance_hash(api_graph: dict) -> str:
     """The instance key: the recipe plus one set of parameters, seed excluded.
 
-    **This is a PICTURE column, not a hub table.** Two pictures share an
-    instance exactly when they share this value, which is all "Covered only"
-    needs; storing instances hub-side is AI-toolkit Phase 2 and belongs to
-    v1.12. Nothing in v1.11 writes an instance row anywhere.
+    Two pictures share an instance exactly when they share this value, which is
+    what "Covered only" asks. The parameters themselves are kept, per library,
+    as :func:`instance_document_from_reduction` in ``workflow_recipe_instance``.
     """
     return graph_key(promote_instance_widgets(reduce_api_graph(api_graph)))
 
@@ -550,6 +549,25 @@ def document_from_reduction(nodes: dict[str, ReducedNode]) -> dict:
         }
         inputs.update({name: [source, slot] for name, source, slot in node.inputs})
         document[node_id] = {"class_type": node.class_type, "inputs": inputs}
+    return document
+
+
+def instance_document_from_reduction(nodes: dict[str, ReducedNode]) -> dict:
+    """Render the instance tier as a document: the recipe's, parameters filled in.
+
+    Same shape and node ids as :func:`document_from_reduction`, with each nulled
+    parameter carrying its value instead. Seeds and output paths stay null (they
+    are the generation's), and **an asset stays a reference**: the instance
+    widgets hold raw filenames, and keeping one here would put a model's name
+    somewhere forgetting it does not reach.
+    """
+    document = document_from_reduction(nodes)
+    for node_id, node in nodes.items():
+        assets = dict(node.widgets)
+        inputs = document[node_id]["inputs"]
+        for name, value in node.instance_widgets:
+            if assets.get(name) is None:
+                inputs[name] = value
     return document
 
 
