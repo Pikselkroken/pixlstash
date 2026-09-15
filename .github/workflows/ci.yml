@@ -529,6 +529,7 @@ jobs:
           tests/test_likeness_worker.py
           tests/test_managed_model_store.py
           tests/test_many_to_many_face_data.py
+          tests/test_mcp_server.py
           tests/test_metadata_hash.py
           tests/test_metadata_hash_batching.py
           tests/test_migrations.py
