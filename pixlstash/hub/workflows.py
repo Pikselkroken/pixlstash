@@ -414,6 +414,56 @@ def forgotten_asset_counts(
     return counts
 
 
+def filed_instance_hashes(
+    hub: HubDatabase, library_uuid: str, instance_hashes: list[str]
+) -> set[str]:
+    """Which of these instance hashes this library has an instance row for.
+
+    The row holds the parameters a remake needs, and its recipe is filed in the
+    same transaction, so a hash without one cannot be made again from the hub.
+    """
+    filed: set[str] = set()
+    for batch in chunked(sorted(set(instance_hashes))):
+        placeholders = ",".join("?" for _ in batch)
+        filed.update(
+            row["instance_hash"]
+            for row in hub.fetchall(
+                "SELECT instance_hash FROM workflow_recipe_instance "
+                f"WHERE library_uuid = ? AND instance_hash IN ({placeholders})",
+                (library_uuid, *batch),
+            )
+        )
+    return filed
+
+
+def recipes_missing_a_model(hub: HubDatabase, structural_hashes: list[str]) -> set[str]:
+    """Which of these recipes name a model the shelf does not hold.
+
+    A model ghost (:func:`model_ghost_names`) or a name that was forgotten
+    (:func:`forgotten_asset_counts`) both mean the recipe cannot load what it
+    needs, so neither can be made again as it is.
+    """
+    wanted = set(structural_hashes)
+    if not wanted:
+        return set()
+    ghosts = model_ghost_names(hub)
+    missing: set[str] = set()
+    for batch in chunked(sorted(wanted)):
+        placeholders = ",".join("?" for _ in batch)
+        missing.update(
+            row["structural_hash"]
+            for row in hub.fetchall(
+                "SELECT structural_hash, normalized_filename FROM workflow_recipe_asset "
+                f"WHERE structural_hash IN ({placeholders})",
+                tuple(batch),
+            )
+            if row["normalized_filename"] in ghosts
+        )
+    for per_recipe in forgotten_asset_counts(hub).values():
+        missing.update(wanted.intersection(per_recipe))
+    return missing
+
+
 def recipes_for_topology(hub: HubDatabase, topology_hash: str) -> list[sqlite3.Row]:
     """Every recipe filed under one topology - the library view's expand."""
     return hub.fetchall(

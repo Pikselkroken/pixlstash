@@ -8,7 +8,11 @@ from sqlalchemy import case
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, PictureStack, SortMechanism
-from pixlstash.services import keep_cover_only_service, operation_log_service
+from pixlstash.services import (
+    keep_cover_only_service,
+    operation_log_service,
+    workflow_ghost_service,
+)
 from pixlstash.services.keep_cover_only_service import KeepCoverOnlyError
 from pixlstash.services.set_lock_service import (
     enforce_stack_detach_not_locked,
@@ -105,6 +109,24 @@ class KeepCoverOnlyRequest(BaseModel):
         ),
         examples=["cli-8f2c1a90"],
     )
+    keep_recipes: bool = Field(
+        default=False,
+        description=(
+            "**Keep recipes only.** A copy moves only when it could be made again "
+            "after the Scrapheap is emptied: the hub holds its recipe instance, "
+            "every model it loads is on the shelf, it has a thumbnail, and the "
+            "ghost retention setting will keep its ghost. Every other copy stays "
+            "live in its stack and is counted in `pictures_staying_*`."
+        ),
+    )
+    keep_every_ghost: bool = Field(
+        default=False,
+        description=(
+            "With `keep_recipes`: plan as if ghost retention were `on`, and on "
+            "the real call set it to `on` once something has moved. Ignored "
+            "without `keep_recipes`."
+        ),
+    )
 
 
 class KeepCoverOnlyStackRow(BaseModel):
@@ -185,8 +207,10 @@ class KeepCoverOnlyStackRow(BaseModel):
             "the **whole** stack is refused, never one member), "
             "`character_only_on_copy` (a character link exists only on a "
             "member that would leave, and the union will not guess across "
-            "several characters), or `single_member` (fewer than two live "
-            "members, so there is nothing to collapse). Example: `set_locked`."
+            "several characters), `single_member` (fewer than two live "
+            "members, so there is nothing to collapse), or, under "
+            "`keep_recipes`, `nothing_reproducible` (no copy could be made "
+            "again). Example: `set_locked`."
         ),
         examples=["set_locked"],
     )
@@ -209,6 +233,16 @@ class KeepCoverOnlyStackRow(BaseModel):
             'Example: `[{"id": 7, "name": "Ada", "picture_ids": [103]}]`.'
         ),
         examples=[[{"id": 7, "name": "Ada", "picture_ids": [103]}]],
+    )
+    staying_picture_ids: dict[str, list[int]] = Field(
+        default_factory=dict,
+        description=(
+            "Under `keep_recipes`: `{reason: [picture ids]}` for copies that "
+            "stay live, each under one of `no_recipe`, `model_missing`, "
+            "`no_thumbnail` or `ghost_not_kept`. Example: "
+            '`{"model_missing": [105]}`.'
+        ),
+        examples=[{"model_missing": [105]}],
     )
 
 
@@ -360,6 +394,56 @@ class KeepCoverOnlyPreviewResponse(BaseModel):
             "by stack id."
         ),
     )
+    keep_recipes: bool = Field(
+        default=False,
+        description="Whether this previews Keep recipes only. Example: `true`.",
+        examples=[True],
+    )
+    stacks_skipped_nothing_reproducible: int = Field(
+        default=0,
+        description=(
+            "Under `keep_recipes`: stacks with no copy that could be made again. "
+            "A fifth bucket in the `stacks_selected` sum; always `0` otherwise. "
+            "Example: `4`."
+        ),
+        examples=[4],
+    )
+    ghost_retention: Optional[str] = Field(
+        default=None,
+        description=(
+            "Under `keep_recipes`: the ghost retention position the plan was "
+            "made under, `on` when `keep_every_ghost` was sent. `null` "
+            "otherwise. Example: `covered`."
+        ),
+        examples=["covered"],
+    )
+    pictures_staying_no_recipe: int = Field(
+        default=0,
+        description="Copies that stay: no recipe instance in the hub. Example: `9`.",
+        examples=[9],
+    )
+    pictures_staying_model_missing: int = Field(
+        default=0,
+        description=(
+            "Copies that stay: the recipe loads a model not on the shelf, or one "
+            "whose name was forgotten. Example: `18`."
+        ),
+        examples=[18],
+    )
+    pictures_staying_no_thumbnail: int = Field(
+        default=0,
+        description="Copies that stay: no thumbnail yet, so no ghost. Example: `0`.",
+        examples=[0],
+    )
+    pictures_staying_ghost_not_kept: int = Field(
+        default=0,
+        description=(
+            "Copies that stay: the retention setting would not keep their ghost "
+            "(under `covered`, no picture that stays shares their instance). "
+            "`keep_every_ghost` moves them. Example: `13`."
+        ),
+        examples=[13],
+    )
 
 
 class KeepCoverOnlyResponse(BaseModel):
@@ -456,6 +540,37 @@ class KeepCoverOnlyResponse(BaseModel):
         default_factory=list,
         description="Named `stack_ids` that resolve to no live stack. Example: `[999]`.",
         examples=[[999]],
+    )
+    keep_recipes: bool = Field(
+        default=False, description="Whether this was Keep recipes only."
+    )
+    pictures_staying: int = Field(
+        default=0,
+        description=(
+            "Under `keep_recipes`: copies left live because they could not be made "
+            "again, counted over the same stacks as the preview's "
+            "`pictures_staying_*`. Example: `7`."
+        ),
+        examples=[7],
+    )
+    stacks_skipped_nothing_reproducible: list[dict] = Field(
+        default_factory=list,
+        description="Under `keep_recipes`: stack rows with no copy to move.",
+    )
+    ghost_retention: Optional[str] = Field(
+        default=None,
+        description=(
+            "Under `keep_recipes`: the ghost retention in force after the call. "
+            "Example: `on`."
+        ),
+        examples=["on"],
+    )
+    ghost_retention_saved: Optional[bool] = Field(
+        default=None,
+        description=(
+            "`false` only when `keep_every_ghost` turned retention on but it could "
+            "not be saved, so it reverts on restart."
+        ),
     )
     batch_id: Optional[str] = Field(
         default=None,
@@ -1307,6 +1422,14 @@ def create_router(server) -> APIRouter:
             )
         return stack_ids, picture_ids
 
+    def _recipe_check(payload: Optional[KeepCoverOnlyRequest]):
+        """The Keep recipes only planning context, or ``None`` for Keep cover only."""
+        if payload is None or not payload.keep_recipes:
+            return None
+        return keep_cover_only_service.recipe_check(
+            server.vault, keep_every_ghost=payload.keep_every_ghost
+        )
+
     @router.post(
         "/stacks/keep-cover-only/preview",
         summary="Preview collapsing stacks to their covers",
@@ -1369,6 +1492,7 @@ def create_router(server) -> APIRouter:
                 stack_ids,
                 picture_ids,
                 keep_cover_only_service.read_retention_days(server),
+                _recipe_check(payload),
             )
         except KeepCoverOnlyError as exc:
             logger.error("[keep-cover-only] preview refused: %s", exc)
@@ -1450,12 +1574,47 @@ def create_router(server) -> APIRouter:
         body_batch_id = require_client_batch_id(
             (payload.batch_id if payload else None) or None
         )
-        return keep_cover_only_service.keep_cover_only(
+        recipes = _recipe_check(payload)
+        result = keep_cover_only_service.keep_cover_only(
             server.vault,
             stack_ids,
             picture_ids,
             body_batch_id or header_batch_id,
+            recipes=recipes,
             **context,
         )
+        if (
+            recipes is not None
+            and payload.keep_every_ghost
+            and result.get("pictures_moved")
+            and server.vault.ghost_retention
+            != workflow_ghost_service.GHOST_RETENTION_ON
+        ):
+            # The consent the dialog asked for, applied only once something moved
+            # under it. Not part of the undo: it is a privacy setting for every
+            # library, turned back down in Settings > Privacy. The pictures have
+            # already moved, so a failed save is reported rather than a 500 that
+            # would read as "nothing happened".
+            try:
+                workflow_ghost_service.apply_ghost_retention(
+                    server, workflow_ghost_service.GHOST_RETENTION_ON
+                )
+                logger.info(
+                    "[keep-recipes-only] ghost retention set to 'on' as consented "
+                    "in the dialog, after moving %d picture(s)",
+                    result.get("pictures_moved"),
+                )
+            except Exception as exc:
+                logger.error(
+                    "[keep-recipes-only] moved %d picture(s) and set ghost "
+                    "retention to 'on' for this run of the server, but could not "
+                    "save it to server-config; it reverts on restart: %s",
+                    result.get("pictures_moved"),
+                    exc,
+                )
+                result["ghost_retention_saved"] = False
+        if recipes is not None:
+            result["ghost_retention"] = server.vault.ghost_retention
+        return result
 
     return router

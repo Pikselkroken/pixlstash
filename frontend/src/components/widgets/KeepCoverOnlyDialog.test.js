@@ -329,3 +329,67 @@ describe("KeepCoverOnlyDialog: the confirmation", () => {
     expect(lede).toContain("loose pictures are left alone");
   });
 });
+
+describe("KeepCoverOnlyDialog: Keep recipes only", () => {
+  const RECIPES = {
+    ...PREVIEW,
+    keep_recipes: true,
+    ghost_retention: "covered",
+    stacks_skipped_nothing_reproducible: 0,
+    pictures_staying_no_recipe: 2,
+    pictures_staying_model_missing: 1,
+    pictures_staying_no_thumbnail: 0,
+    pictures_staying_ghost_not_kept: 4,
+  };
+  const mountRecipes = (props = {}) =>
+    mountDialog({ keepRecipes: true, preview: RECIPES, ...props });
+  const everyGhost = (wrapper) => wrapper.find("[data-testid='keep-every-ghost']");
+
+  it("titles what it keeps and names why the rest stay", () => {
+    const wrapper = mountRecipes();
+    expect(wrapper.find(".dlg-title").text()).toBe("Keep recipes only in 17 stacks");
+    expect(wrapper.text()).toContain("7 pictures stay in their stacks");
+    expect(wrapper.text()).toContain("2 have no workflow PixlStash recorded.");
+    expect(wrapper.text()).toContain("1 uses a model that is not on your shelf.");
+    expect(wrapper.text()).not.toContain("no thumbnail");
+  });
+
+  it("offers every ghost only when some copies stay for want of one", () => {
+    expect(everyGhost(mountRecipes()).exists()).toBe(true);
+    expect(
+      everyGhost(
+        mountRecipes({ preview: { ...RECIPES, pictures_staying_ghost_not_kept: 0 } }),
+      ).exists(),
+    ).toBe(false);
+    expect(
+      everyGhost(mountRecipes({ preview: { ...RECIPES, ghost_retention: "on" } })).exists(),
+    ).toBe(false);
+    expect(everyGhost(mountDialog()).exists()).toBe(false);
+  });
+
+  it("keeps the box on screen while ticked, so it can be unticked", () => {
+    const wrapper = mountRecipes({
+      keepEveryGhost: true,
+      loading: true,
+      preview: null,
+    });
+    expect(everyGhost(wrapper).exists()).toBe(true);
+  });
+
+  it("hands the box to the parent rather than keeping it", async () => {
+    const CheckboxStub = {
+      props: ["modelValue"],
+      emits: ["update:modelValue"],
+      template:
+        '<input type="checkbox" :checked="modelValue" @change="$emit(\'update:modelValue\', $event.target.checked)" />',
+    };
+    const wrapper = mount(KeepCoverOnlyDialog, {
+      global: {
+        stubs: { "v-icon": true, AppDialog: AppDialogStub, "v-checkbox": CheckboxStub },
+      },
+      props: { open: true, preview: RECIPES, keepRecipes: true },
+    });
+    await everyGhost(wrapper).setValue(true);
+    expect(wrapper.emitted("update:keepEveryGhost")).toEqual([[true]]);
+  });
+});

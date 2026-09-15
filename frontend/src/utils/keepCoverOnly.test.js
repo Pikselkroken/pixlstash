@@ -16,6 +16,8 @@ import {
   keepCoverOnlySkipReasons,
   keepCoverOnlySkippedCount,
   keepCoverOnlyTitle,
+  keepRecipesOnlyStayingCount,
+  keepRecipesOnlyStayingReasons,
 } from "./keepCoverOnly";
 
 /** A collapsed stack leader tile: one row standing for `count` pictures. */
@@ -288,5 +290,71 @@ describe("keepCoverOnlySkipNote", () => {
       }),
     ).toBe("");
     expect(keepCoverOnlySkipNote(null)).toBe("");
+  });
+});
+
+describe("Keep recipes only copy", () => {
+  it("titles by what it keeps, without a number until one is known", () => {
+    expect(keepCoverOnlyTitle(null, true)).toBe("Keep recipes only");
+    expect(keepCoverOnlyTitle(1, true)).toBe("Keep recipes only in 1 stack");
+    expect(keepCoverOnlyTitle(3, true)).toBe("Keep recipes only in 3 stacks");
+  });
+
+  it("counts a stack with nothing reproducible as one that won't change", () => {
+    const preview = {
+      stacks_skipped_locked: 1,
+      stacks_skipped_nothing_reproducible: 2,
+    };
+    expect(keepCoverOnlySkippedCount(preview)).toBe(3);
+    expect(keepCoverOnlySkipReasons(preview).map((r) => r.key)).toEqual([
+      "nothing_reproducible",
+      "locked",
+    ]);
+  });
+
+  it("names each staying reason once and sums them", () => {
+    const preview = {
+      pictures_staying_no_recipe: 1,
+      pictures_staying_model_missing: 0,
+      pictures_staying_no_thumbnail: 3,
+      pictures_staying_ghost_not_kept: 2,
+    };
+    expect(keepRecipesOnlyStayingReasons(preview).map((r) => r.key)).toEqual([
+      "no_recipe",
+      "no_thumbnail",
+      "ghost_not_kept",
+    ]);
+    expect(keepRecipesOnlyStayingCount(preview)).toBe(6);
+    expect(keepRecipesOnlyStayingReasons(null)).toEqual([]);
+  });
+
+  it("does not describe Covered only when the ghost setting is Off", () => {
+    const [row] = keepRecipesOnlyStayingReasons({
+      ghost_retention: "off",
+      pictures_staying_ghost_not_kept: 2,
+    });
+    expect(row.text).toBe("2 would keep nothing, because your ghost setting is Off.");
+  });
+
+  it("names unchanged stacks on the receipt", () => {
+    expect(
+      keepCoverOnlySkipNote({
+        stacks_skipped_nothing_reproducible: [{}, {}],
+        pictures_staying: 3,
+      }),
+    ).toBe(
+      "2 stacks unchanged: nothing in them could be made again. 3 pictures stay: they could not be made again.",
+    );
+  });
+
+  it("puts the pictures that stayed on the receipt", () => {
+    expect(keepCoverOnlySkipNote({ pictures_staying: 2 })).toBe(
+      "2 pictures stay: they could not be made again.",
+    );
+    expect(
+      keepCoverOnlySkipNote({ stacks_skipped_locked: [{}], pictures_staying: 1 }),
+    ).toBe(
+      "1 stack skipped: held by a locked picture set. 1 picture stays: it could not be made again.",
+    );
   });
 });

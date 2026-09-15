@@ -690,6 +690,22 @@
         {{ keepCoverOnlyLabel }}
       </button>
       <button
+        v-if="showKeepCoverOnly"
+        class="ctx-item ctx-item--danger"
+        :disabled="isReadOnly || !!keepCoverOnlyLockReason"
+        @click="onAction('keep-cover-only', { keepRecipes: true })"
+      >
+        <Tooltip
+          :text="
+            keepCoverOnlyLockReason ||
+            'Keep each selected stack\'s cover and move the other pictures that could be made again to the Scrapheap'
+          "
+          activator="parent"
+        />
+        <v-icon class="ctx-icon">{{ KEEP_COVER_ONLY_ICON }}</v-icon>
+        {{ keepRecipesOnlyLabel }}
+      </button>
+      <button
         v-if="showRemoveButton"
         class="ctx-item ctx-item--danger"
         :disabled="!selectedImageIds.length || isReadOnly"
@@ -730,6 +746,7 @@ import { faceBoxColor } from "../../utils/utils.js";
 import { isApplePlatform } from "../../utils/shortcutHints.js";
 import {
   KEEP_COVER_ONLY_ICON,
+  KEEP_RECIPES_ONLY_LABEL,
   keepCoverOnlyMenuLabel,
 } from "../../utils/keepCoverOnly";
 import { ROTATE_CCW, ROTATE_CW, rotateMenuLabel } from "../../utils/rotate";
@@ -1240,6 +1257,14 @@ const showGroupStackButton = computed(
 // same way.
 const showKeepCoverOnly = computed(
   () => !isScrapheapView.value && props.keepCoverOnlyStackCount > 0,
+);
+
+const keepRecipesOnlyLabel = computed(() =>
+  keepCoverOnlyMenuLabel({
+    stackCount: props.keepCoverOnlyStackCount,
+    selectedCount: selectedCount.value,
+    label: KEEP_RECIPES_ONLY_LABEL,
+  }),
 );
 
 const keepCoverOnlyLabel = computed(() =>

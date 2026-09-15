@@ -383,6 +383,25 @@
       {{ keepCoverOnlyLabel }}
     </button>
     <button
+      v-if="showKeepCoverOnly"
+      class="ctx-item ctx-item--danger"
+      :disabled="isReadOnly || !!keepCoverOnlyLockReason"
+      @click="
+        $emit('keep-cover-only', { keepRecipes: true });
+        $emit('close');
+      "
+    >
+      <Tooltip
+        :text="
+          keepCoverOnlyLockReason ||
+          'Keep each selected stack\'s cover and move the other pictures that could be made again to the Scrapheap'
+        "
+        activator="parent"
+      />
+      <v-icon class="ctx-icon">{{ KEEP_COVER_ONLY_ICON }}</v-icon>
+      {{ keepRecipesOnlyLabel }}
+    </button>
+    <button
       v-if="showRemoveButton"
       class="ctx-item ctx-item--danger"
       :disabled="selectedCount === 0 || isReadOnly"
@@ -417,6 +436,7 @@ import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import {
   KEEP_COVER_ONLY_ICON,
+  KEEP_RECIPES_ONLY_LABEL,
   keepCoverOnlyMenuLabel,
 } from "../../utils/keepCoverOnly";
 import { ROTATE_CCW, ROTATE_CW, rotateMenuLabel } from "../../utils/rotate";
@@ -533,6 +553,14 @@ const showAnyStackAction = computed(() => {
 // stack actions above use, and the reason ignoring loose pictures is honest.
 const showKeepCoverOnly = computed(
   () => !props.isScrapheapView && props.keepCoverOnlyStackCount > 0,
+);
+
+const keepRecipesOnlyLabel = computed(() =>
+  keepCoverOnlyMenuLabel({
+    stackCount: props.keepCoverOnlyStackCount,
+    selectedCount: props.selectedCount,
+    label: KEEP_RECIPES_ONLY_LABEL,
+  }),
 );
 
 const keepCoverOnlyLabel = computed(() =>

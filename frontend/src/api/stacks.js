@@ -107,9 +107,18 @@ export async function removeStackMembers(id, pictureIds) {
  * @param {Object} [selection]
  * @param {Array<number|string>} [selection.stackIds]
  * @param {Array<number|string>} [selection.pictureIds]
+ * @param {boolean} [selection.keepRecipes] - Keep recipes only: move just the
+ *   copies that could be made again from their recipe.
+ * @param {boolean} [selection.keepEveryGhost] - with `keepRecipes`, plan with
+ *   ghost retention `on`; the real call then turns it on.
  * @returns {Object} the request body.
  */
-function keepCoverOnlyBody({ stackIds, pictureIds } = {}) {
+function keepCoverOnlyBody({
+  stackIds,
+  pictureIds,
+  keepRecipes,
+  keepEveryGhost,
+} = {}) {
   const body = {};
   const stacks = (Array.isArray(stackIds) ? stackIds : [])
     .map(Number)
@@ -119,6 +128,10 @@ function keepCoverOnlyBody({ stackIds, pictureIds } = {}) {
     .filter((id) => Number.isFinite(id));
   if (stacks.length) body.stack_ids = stacks;
   if (pictures.length) body.picture_ids = pictures;
+  if (keepRecipes) {
+    body.keep_recipes = true;
+    if (keepEveryGhost) body.keep_every_ghost = true;
+  }
   return body;
 }
 
@@ -148,10 +161,12 @@ function keepCoverOnlyBody({ stackIds, pictureIds } = {}) {
 export async function previewKeepCoverOnly({
   stackIds,
   pictureIds,
+  keepRecipes,
+  keepEveryGhost,
 } = {}) {
   return unwrap(apiClient.post(
     stacksUrl("/keep-cover-only/preview"),
-    keepCoverOnlyBody({ stackIds, pictureIds }),
+    keepCoverOnlyBody({ stackIds, pictureIds, keepRecipes, keepEveryGhost }),
   ));
 }
 
@@ -182,8 +197,15 @@ export async function keepCoverOnly({
   stackIds,
   pictureIds,
   batchId,
+  keepRecipes,
+  keepEveryGhost,
 } = {}) {
-  const body = keepCoverOnlyBody({ stackIds, pictureIds });
+  const body = keepCoverOnlyBody({
+    stackIds,
+    pictureIds,
+    keepRecipes,
+    keepEveryGhost,
+  });
   if (batchId) body.batch_id = batchId;
   return unwrap(apiClient.post(stacksUrl("/keep-cover-only"), body));
 }

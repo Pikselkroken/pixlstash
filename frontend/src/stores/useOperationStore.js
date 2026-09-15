@@ -120,6 +120,7 @@ const OP_ICONS = {
   // the same glyph the menu item and the confirm button carry, so the operation
   // is named identically at all three moments.
   "stack.keep_cover_only": "mdi-layers-minus",
+  "stack.keep_recipes_only": "mdi-layers-minus",
 };
 
 /** Substring rules applied when `OP_ICONS` has no exact entry. Order matters. */
@@ -153,6 +154,7 @@ const DESTRUCTIVE_RULES = [
   // caught by /scrapheap/ because the op type describes what the user asked
   // for, not where the pictures went.
   /keep_cover_only/,
+  /keep_recipes_only/,
 ];
 
 /**

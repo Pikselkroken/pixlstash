@@ -244,7 +244,7 @@
             @rotate-left="$emit('rotate-left')"
             @rotate-right="$emit('rotate-right')"
             @remove-from-group="$emit('remove-from-group')"
-            @keep-cover-only="$emit('keep-cover-only')"
+            @keep-cover-only="$emit('keep-cover-only', $event)"
             @delete-selected="$emit('delete-selected')"
           />
         </v-menu>

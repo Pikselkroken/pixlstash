@@ -177,6 +177,44 @@ describe.each(MENUS)("%s: the Keep cover only item", (_name, mountMenu, event) =
 
 });
 
+// Keep recipes only (#1315) rides the same event with a payload, so the grid
+// opens the same dialog in its narrower mode. Same gating as its sibling.
+describe.each(MENUS)("%s: the Keep recipes only item", (_name, mountMenu, event) => {
+  const recipesItem = (wrapper) =>
+    wrapper
+      .findAll("button.ctx-item")
+      .find((b) => b.text().startsWith("Keep recipes only"));
+
+  it("counts stacks and sits between Keep cover only and Delete", () => {
+    const danger = mountMenu()
+      .findAll("button.ctx-item--danger")
+      .map((b) => b.text());
+    const cover = danger.findIndex((t) => t.startsWith("Keep cover only"));
+    const recipes = danger.findIndex((t) => t.startsWith("Keep recipes only"));
+    const del = danger.findIndex((t) => t.includes("Delete"));
+    expect(danger[recipes]).toContain("Keep recipes only (3 stacks)");
+    expect(recipes).toBe(cover + 1);
+    expect(del).toBeGreaterThan(recipes);
+  });
+
+  it("emits keep-cover-only asking for recipes", async () => {
+    const wrapper = mountMenu();
+    await recipesItem(wrapper).trigger("click");
+    expect(wrapper.emitted(event)).toEqual([[{ keepRecipes: true }]]);
+  });
+
+  it("is not offered when the selection names no stack", () => {
+    expect(recipesItem(mountMenu({ keepCoverOnlyStackCount: 0 }))).toBeUndefined();
+  });
+
+  it("is disabled with the lock reason when every named stack is locked", () => {
+    const reason = "Locked: every selected stack is held by the locked set 'X'.";
+    const item = recipesItem(mountMenu({ keepCoverOnlyLockReason: reason }));
+    expect(item.attributes("disabled")).toBeDefined();
+    expect(tip(item)).toBe(reason);
+  });
+});
+
 // Read-only is read from two different places by the two menus (the grid menu
 // takes the session ref straight from apiClient; the pill's menu is handed a
 // prop by SelectionBar), so it is asserted once per menu rather than shared.

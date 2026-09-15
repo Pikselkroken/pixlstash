@@ -164,6 +164,9 @@ OP_SCRAPHEAP_RESTORE = "pictures.scrapheap.restore"
 # `squash`: in git that word means "merge without losing content", so a
 # git-literate reader grepping it would assume this action loses nothing.
 OP_STACK_KEEP_COVER_ONLY = "stack.keep_cover_only"
+# Keep recipes only (#1315): the same collapse, moving only the copies that could
+# be made again from their recipe.
+OP_STACK_KEEP_RECIPES_ONLY = "stack.keep_recipes_only"
 
 # The tag-review decisions (§21.2). Named for the same reason the scrapheap pair
 # is: the frontend keys its icon/receipt affordances off the string.
@@ -565,6 +568,15 @@ def keep_cover_only_summary(stack_count: int, moved_count: int) -> str:
     """
     stacks = f"{stack_count} stack" if stack_count == 1 else f"{stack_count} stacks"
     return f"Kept the cover of {stacks} · {_pictures(moved_count)} to the Scrapheap"
+
+
+def keep_recipes_only_summary(stack_count: int, moved_count: int) -> str:
+    """Build ``Kept recipes only for 3 stacks · 7 pictures to the Scrapheap``.
+
+    Same construction and the same rules as :func:`keep_cover_only_summary`.
+    """
+    stacks = f"{stack_count} stack" if stack_count == 1 else f"{stack_count} stacks"
+    return f"Kept recipes only for {stacks} · {_pictures(moved_count)} to the Scrapheap"
 
 
 def request_context(request, *, fallback_batch_id: Optional[str] = None) -> dict:

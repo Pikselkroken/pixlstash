@@ -112,6 +112,7 @@ from pixlstash.hub.workflows import (
     retained_instance_hashes,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.server_config_io import persist_server_config
 from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.scope_table import scope_id_subquery
@@ -203,6 +204,21 @@ def read_ghost_retention(server_config: dict) -> str:
         GHOST_RETENTION_OFF,
     )
     return GHOST_RETENTION_OFF
+
+
+def apply_ghost_retention(server, retention: str) -> None:
+    """Set the retention position in memory and persist it to server-config.
+
+    The one write, shared by ``PATCH /server-config/ghost-retention`` and the
+    keep-every-ghost consent in Keep recipes only. The in-memory value is set
+    first, so a persist that raises still leaves the chosen position in force
+    for this process; the caller decides what a failed persist means.
+    """
+    server._server_config[GHOST_RETENTION_KEY] = retention
+    server.vault.set_ghost_retention(retention)
+    config_path = getattr(server, "_server_config_path", None)
+    if config_path:
+        persist_server_config(config_path, server._server_config)
 
 
 def collect_ghost_candidates_in_session(
