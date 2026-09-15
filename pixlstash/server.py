@@ -650,7 +650,17 @@ class Server(
             # After the migration, so a file the inbox matches against has
             # its bindings already.
             inbox = workflow_inbox_dir()
-            reconcile_workflow_inbox(inbox, self._store_inbox_workflow)
+            try:
+                reconcile_workflow_inbox(inbox, self._store_inbox_workflow)
+            except Exception as exc:
+                # A strange file must not stop start-up; the watcher retries.
+                logger.error(
+                    "Reconciling the workflow inbox %s failed with %s: %s",
+                    inbox,
+                    type(exc).__name__,
+                    exc,
+                    exc_info=True,
+                )
             try:
                 watcher = WorkflowInboxWatcher(inbox, self._store_inbox_workflow)
                 watcher.start()

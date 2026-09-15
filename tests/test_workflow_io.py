@@ -811,6 +811,8 @@ def test_deleting_a_workflow_trashes_it_by_way_of_the_inbox(import_route):
     # the next start would import the deleted workflow again.
     call.inbox.mkdir()
     (call.inbox / f"copy.{digest}.json").write_text(json.dumps(graph), encoding="utf-8")
+    # And one the watcher has not renamed yet.
+    (call.inbox / "fresh.json").write_text(json.dumps(graph), encoding="utf-8")
 
     assert call.delete("flow") == {"status": "success", "name": "flow.json"}
     assert not (user_dir / "flow.json").exists()
@@ -818,6 +820,7 @@ def test_deleting_a_workflow_trashes_it_by_way_of_the_inbox(import_route):
     assert sorted(p.name for p in call.trash.iterdir()) == [
         f"copy.{digest}.json",
         f"flow.{digest}.json",
+        "fresh.json",
     ]
     assert _load(call.trash / f"flow.{digest}.json") == graph
 
@@ -859,8 +862,10 @@ def test_the_watcher_imports_a_file_put_in_the_inbox(import_route, monkeypatch):
         (call.inbox / "dropped.json").write_text(
             json.dumps(_t2i_graph()), encoding="utf-8"
         )
+        digest = workflow_inbox.content_hash(_t2i_graph())
         deadline = time.monotonic() + 10
-        while not (user_dir / "dropped.json").exists():
+        # The rename is the last thing a reconcile does.
+        while not (call.inbox / f"dropped.{digest}.json").exists():
             assert time.monotonic() < deadline, "the watcher never imported the file"
             time.sleep(0.05)
     finally:

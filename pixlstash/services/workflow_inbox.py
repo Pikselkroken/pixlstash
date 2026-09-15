@@ -111,9 +111,11 @@ def reconcile(folder: str, store: Callable[[str, dict], dict]) -> int:
                 digest = content_hash(workflow)
                 result = store(f"{stem}.json", workflow)
                 imported += 0 if result.get("matched") else 1
-                wanted = f"{stem}.{digest}.json"
-                if entry != wanted:
-                    os.replace(path, os.path.join(folder, wanted))
+                wanted = os.path.join(folder, f"{stem}.{digest}.json")
+                # Never over another file: the hash ignores pixlstash_* keys,
+                # so a same-named file can still hold different bytes.
+                if path != wanted and not os.path.exists(wanted):
+                    os.replace(path, wanted)
             except (OSError, ValueError, RecursionError) as exc:
                 # Left where it is: fixing the file and saving it again is an
                 # event, and the next start tries it too.
@@ -126,9 +128,9 @@ def reconcile(folder: str, store: Callable[[str, dict], dict]) -> int:
 def trash_workflow(folder: str, name: str, workflow: dict) -> None:
     """Write *workflow* back to the inbox and move it to the system trash.
 
-    Every inbox file carrying the workflow's hash goes, not just the one written
-    here, or a copy dropped under another name would import it again at the
-    next start. Call it holding :data:`INBOX_LOCK`, and remove the stored
+    Every inbox file holding the workflow goes, not just the one written here,
+    renamed or not yet, or a copy dropped under another name would import it
+    again at the next reconcile. Call it holding :data:`INBOX_LOCK`, and remove the stored
     workflow before releasing it.
 
     Raises:
@@ -141,9 +143,26 @@ def trash_workflow(folder: str, name: str, workflow: dict) -> None:
     with open(os.path.join(folder, written), "w", encoding="utf-8") as handle:
         json.dump(workflow, handle, indent=2, ensure_ascii=True)
     for entry in _entries(folder):
-        if _split(entry)[1] != digest:
-            continue
-        send2trash(os.path.join(folder, entry))
+        if _file_hash(os.path.join(folder, entry), entry) == digest:
+            send2trash(os.path.join(folder, entry))
+
+
+def _file_hash(path: str, entry: str) -> str | None:
+    """The hash an inbox file is named by, or read from it when not renamed yet."""
+    named = _split(entry)[1]
+    if named is not None:
+        return named
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            workflow = json.load(handle)
+        return content_hash(workflow) if isinstance(workflow, dict) else None
+    except (OSError, ValueError, RecursionError) as exc:
+        logger.warning(
+            "Could not read inbox file %s to compare it with a deleted workflow: %s",
+            path,
+            exc,
+        )
+        return None
 
 
 class _Handler(FileSystemEventHandler):
@@ -180,13 +199,15 @@ class WorkflowInboxWatcher:
         self._observer.start()
 
     def stop(self) -> None:
-        """Stop watching and drop a pending reconcile."""
-        with self._lock:
-            if self._timer is not None:
-                self._timer.cancel()
-                self._timer = None
+        """Stop watching, drop a pending reconcile and wait out a running one."""
+        # Observer first, so no event schedules a timer after the cancel.
         self._observer.stop()
         self._observer.join()
+        with self._lock:
+            timer, self._timer = self._timer, None
+        if timer is not None:
+            timer.cancel()
+            timer.join()
 
     def _schedule(self) -> None:
         with self._lock:
@@ -207,4 +228,5 @@ class WorkflowInboxWatcher:
                 self._folder,
                 type(exc).__name__,
                 exc,
+                exc_info=True,
             )

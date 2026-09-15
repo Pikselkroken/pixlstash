@@ -930,8 +930,9 @@ def create_router(server) -> APIRouter:
         summary="Delete user workflow",
         description=(
             "Writes the workflow back to the watched workflows folder, moves "
-            "that file to the system trash, then deletes it from the user "
-            "workflow directory."
+            "every inbox file holding it to the system trash, then deletes it "
+            "from the user workflow directory. A stored file that is not a "
+            "readable workflow is moved to the trash as it is."
         ),
         response_model=ComfyUIWorkflowDeleteResponse,
     )
@@ -1278,13 +1279,14 @@ def create_router(server) -> APIRouter:
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid workflow name")
         try:
-            return _store_workflow(
-                getattr(server, "hub", None),
-                name,
-                workflow,
-                overwrite=bool(payload.get("overwrite")),
-                keep_both=bool(payload.get("keep_both")),
-            )
+            with workflow_inbox.INBOX_LOCK:
+                return _store_workflow(
+                    getattr(server, "hub", None),
+                    name,
+                    workflow,
+                    overwrite=bool(payload.get("overwrite")),
+                    keep_both=bool(payload.get("keep_both")),
+                )
         except RecursionError as exc:
             logger.warning("Refused a workflow import that nests too deeply: %s", exc)
             raise HTTPException(
