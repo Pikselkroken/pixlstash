@@ -497,6 +497,13 @@ class TestForget:
                     (library.uuid,),
                 )
                 conn.execute(
+                    "INSERT INTO workflow_recipe_instance (library_uuid, "
+                    "instance_hash, structural_hash, hash_version, document, "
+                    "first_seen_at) VALUES (?, 'instance', 'recipe', 'v1', '{}', "
+                    "'2026-09-15')",
+                    (library.uuid,),
+                )
+                conn.execute(
                     "INSERT INTO workflow_picture_input (library_uuid, "
                     "workflow_name, node_id, mode, pixel_sha) "
                     "VALUES (?, 'edit.json', '1', 'fixed', 'sha')",
@@ -505,7 +512,11 @@ class TestForget:
 
         registry.forget(gone.id)
 
-        for table in ("workflow_picture_ghost", "workflow_picture_input"):
+        for table in (
+            "workflow_picture_ghost",
+            "workflow_recipe_instance",
+            "workflow_picture_input",
+        ):
             rows = hub.connection.execute(
                 f"SELECT library_uuid FROM {table}"
             ).fetchall()

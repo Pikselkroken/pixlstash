@@ -989,6 +989,55 @@ def test_0093_rebuilds_guest_tables_onto_token_public_id_and_clears_rows():
                 assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone() == (0,)
 
 
+def test_0118_hands_back_only_the_pictures_that_carry_a_workflow():
+    """The recipe backfill re-reads what has a workflow and nothing else.
+
+    A library upgraded from 1.11 has no ``generation`` table and every picture
+    stamped scanned. Clearing the stamp on a picture with no workflow would
+    re-read a third of the library for nothing.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            conn.execute("DROP TABLE generation_input")
+            conn.execute("DROP TABLE generation")
+            _insert_minimal_row(
+                conn,
+                "picture",
+                file_path="made.png",
+                workflow_instance_hash="an-instance",
+                workflow_hash_version="v1",
+            )
+            _insert_minimal_row(
+                conn, "picture", file_path="plain.png", workflow_hash_version="v1"
+            )
+            conn.execute(
+                "UPDATE alembic_version SET version_num = "
+                "'0117_add_pending_ghost_cascade'"
+            )
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            stamps = dict(
+                conn.execute("SELECT file_path, workflow_hash_version FROM picture")
+            )
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+        assert stamps == {"made.png": None, "plain.png": "v1"}
+        assert {"generation", "generation_input"} <= tables
+
+
 def test_the_migration_chain_has_exactly_one_head():
     """The v1.8.1 merge left two 0086 revisions; only one may be a head.
 

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import tempfile
 import time
 from datetime import datetime
@@ -44,11 +45,13 @@ from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, ReferenceFolder
 from pixlstash.hub.workflows import PictureGhost, record_picture_ghosts
-from pixlstash.services.workflow_hash import asset_reference
+from pixlstash.services.workflow_hash import WorkflowGraphError, asset_reference
+from pixlstash.services.workflow_io import detect_workflow_io
 import pixlstash.routes.comfyui as comfyui_module
-from pixlstash.services import workflow_bindings
+from pixlstash.services import workflow_bindings, workflow_inbox
 from pixlstash.server import Server
 from pixlstash.tasks.ghost_cascade_task import GhostCascadeTask
+from pixlstash.tasks.task_type import TaskType
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
@@ -193,6 +196,7 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_topology")
         conn.execute("DELETE FROM workflow_picture_ghost")
         conn.execute("DELETE FROM workflow_picture_input")
+        conn.execute("DELETE FROM workflow_parameter_pins")
         conn.execute(
             "DELETE FROM model WHERE filename IN (?, ?)",
             (_SHELF_FILENAME, "add_detail.safetensors"),
@@ -321,6 +325,9 @@ def workflow_env():
         assert r.status_code in {200, 201}, r.text
         character_id = r.json().get("id") or r.json()["character"]["id"]
 
+        extraction_finder = server.vault._planner_work_finders[
+            TaskType.COMFYUI_EXTRACTION
+        ]
         detached = _quiesce_background_work(server)
 
         yield SimpleNamespace(
@@ -328,6 +335,7 @@ def workflow_env():
             owner=owner,
             character_id=character_id,
             detached=detached,
+            extraction_finder=extraction_finder,
         )
     finally:
         server.__exit__(None, None, None)
@@ -383,6 +391,13 @@ def _bearer(server, token: str) -> TestClient:
 # ===========================================================================
 # Declarations — the registry entry is the route's only authorization
 # ===========================================================================
+
+
+def test_the_workflow_scan_records_instances_for_the_open_library(workflow_env):
+    """Without the library, the scan files recipes and silently no instance."""
+    library_uuid = workflow_env.server.vault.library_uuid
+    assert library_uuid
+    assert workflow_env.extraction_finder._library_uuid == library_uuid
 
 
 def test_every_workflow_route_is_declared_owner_only():
@@ -991,6 +1006,27 @@ _INPUT_ROUTES = (
 )
 
 
+def _isolate_workflow_folders(tmp_path, monkeypatch) -> None:
+    """Point every workflow folder a route touches at *tmp_path*, and fake the trash.
+
+    Deleting a workflow writes it back to the inbox and sends it to the system
+    trash. Both are shared by every checkout on the machine, and a PixlStash
+    running against the same data folder would import what lands in the inbox.
+    """
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+
+    def fake_trash(path):
+        os.remove(path)
+
+    monkeypatch.setattr(comfyui_module, "_workflow_dirs", lambda: [("user", tmp_path)])
+    monkeypatch.setattr(comfyui_module, "workflow_user_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(workflow_inbox, "workflow_inbox_dir", lambda: str(inbox))
+    monkeypatch.setattr(workflow_inbox, "send2trash", fake_trash)
+    monkeypatch.setattr(comfyui_module, "send2trash", fake_trash)
+    comfyui_module._describe_workflow.cache_clear()
+
+
 @pytest.fixture
 def edit_workflow(tmp_path, monkeypatch):
     """One two-input workflow file in a user folder of its own.
@@ -1013,9 +1049,7 @@ def edit_workflow(tmp_path, monkeypatch):
         }
     )
     (tmp_path / "edit.json").write_text(json.dumps(graph), encoding="utf-8")
-    monkeypatch.setattr(comfyui_module, "_workflow_dirs", lambda: [("user", tmp_path)])
-    monkeypatch.setattr(comfyui_module, "workflow_user_dir", lambda: str(tmp_path))
-    comfyui_module._describe_workflow.cache_clear()
+    _isolate_workflow_folders(tmp_path, monkeypatch)
     return f"{API}/comfyui/workflows/edit.json/inputs"
 
 
@@ -1275,6 +1309,277 @@ def test_deleting_a_workflow_forgets_its_setup(workflow_env, edit_workflow):
     assert (
         workflow_env.server.hub.fetchone(
             "SELECT COUNT(*) AS n FROM workflow_picture_input"
+        )["n"]
+        == 0
+    )
+
+
+# ===========================================================================
+# A workflow's parameters and pins (#1306)
+# ===========================================================================
+
+_PARAMETER_ROUTES = (
+    ("GET", "/api/v1/comfyui/workflows/{workflow_name}/parameters"),
+    ("PUT", "/api/v1/comfyui/workflows/{workflow_name}/pins"),
+)
+
+_SAMPLER_INFO = {
+    "KSampler": {
+        "input": {
+            "required": {
+                "seed": [
+                    "INT",
+                    {"min": 0, "max": 2**64 - 1, "control_after_generate": True},
+                ],
+                "steps": ["INT", {"min": 1, "max": 150}],
+                "sampler_name": [["euler", "dpmpp_2m"], {}],
+            }
+        }
+    },
+}
+
+
+@pytest.fixture
+def sampler_workflow(tmp_path, monkeypatch):
+    """One API-format workflow with a prompt a run fills, in its own user folder.
+
+    ComfyUI is replaced by ``object_info``: set ``.info`` to a map, or to an
+    exception for an unreachable ComfyUI.
+    """
+    graph = {
+        "1": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": 2**64 - 2,
+                "steps": 20,
+                "sampler_name": "euler",
+                "positive": ["2", 0],
+            },
+        },
+        "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "a cat"}},
+        "3": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+    }
+    (tmp_path / "sampler.json").write_text(json.dumps(graph), encoding="utf-8")
+    (tmp_path / "canvas.json").write_text(
+        json.dumps({"nodes": [{"id": 1, "type": "KSampler"}], "links": []}),
+        encoding="utf-8",
+    )
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    comfy = SimpleNamespace(info=_SAMPLER_INFO, asked=0)
+
+    def fake_object_info(_url):
+        comfy.asked += 1
+        if isinstance(comfy.info, Exception):
+            raise comfy.info
+        return comfy.info
+
+    monkeypatch.setattr(comfyui_module, "fetch_object_info", fake_object_info)
+    comfy.parameters = f"{API}/comfyui/workflows/sampler.json/parameters"
+    comfy.pins = f"{API}/comfyui/workflows/sampler.json/pins"
+    return comfy
+
+
+def _parameter(body, node_id: str, name: str) -> dict:
+    return next(
+        p for p in body["parameters"] if (p["node_id"], p["name"]) == (node_id, name)
+    )
+
+
+def _pinned(body) -> list:
+    return [(p["node_id"], p["name"]) for p in body["parameters"] if p["pinned"]]
+
+
+def test_the_parameter_routes_are_declared_owner_only():
+    for key in _PARAMETER_ROUTES:
+        assert ROUTE_POLICIES[key].policy is AccessPolicy.OWNER_ONLY, key
+
+
+def test_no_scoped_token_can_read_parameters_or_set_pins(
+    workflow_env, sampler_workflow
+):
+    """Refused by the gate's declaration, not the middleware in front of it."""
+    server = workflow_env.server
+    token = _mint(
+        workflow_env.owner,
+        "parameters scope probe",
+        resource_type="character",
+        resource_id=workflow_env.character_id,
+    )
+    client = _bearer(server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, "the token is dead"
+    assert_real_route(server.api, "GET", sampler_workflow.parameters)
+    assert_real_route(server.api, "PUT", sampler_workflow.pins)
+    body = {"pins": [{"node_id": "1", "name": "steps"}]}
+    previously_enforcing = server.authz._enforcing
+    server.authz._enforcing = True
+    try:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+            patch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
+            patch.setattr(auth, "WRITE_ENABLED_SCOPES", frozenset({"READ", "WRITE"}))
+            r = client.get(sampler_workflow.parameters)
+            assert r.status_code == 403 and "Owner-level" in r.text, r.text
+            r = client.put(sampler_workflow.pins, json=body)
+            assert r.status_code == 403 and "Owner-level" in r.text, r.text
+        # Refused before ComfyUI was asked, and nothing was stored.
+        assert sampler_workflow.asked == 0
+        owner_view = workflow_env.owner.get(sampler_workflow.parameters).json()
+        assert owner_view["pins_saved"] is False
+    finally:
+        server.authz._enforcing = previously_enforcing
+
+
+def test_parameters_are_typed_from_comfyui_and_leave_the_prompt_out(
+    workflow_env, sampler_workflow
+):
+    r = workflow_env.owner.get(sampler_workflow.parameters)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["readable"], body["typed"], body["comfyui_error"]) == (
+        True,
+        True,
+        None,
+    )
+    steps = _parameter(body, "1", "steps")
+    assert (steps["kind"], steps["value"], steps["min"], steps["max"]) == (
+        "int",
+        20,
+        1,
+        150,
+    )
+    assert _parameter(body, "1", "sampler_name")["options"] == ["euler", "dpmpp_2m"]
+    assert _parameter(body, "1", "seed")["kind"] == "seed"
+    names = {(p["node_id"], p["name"]) for p in body["parameters"]}
+    assert ("2", "text") not in names and ("1", "positive") not in names
+    assert body["pins_saved"] is False
+    assert _pinned(body) == [("1", "seed"), ("1", "steps"), ("1", "sampler_name")]
+
+
+def test_an_unreachable_comfyui_still_shows_the_recorded_values(
+    workflow_env, sampler_workflow
+):
+    sampler_workflow.info = RuntimeError("Could not reach ComfyUI at the test URL")
+    r = workflow_env.owner.get(sampler_workflow.parameters)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["typed"] is False
+    assert body["comfyui_error"] == "Could not reach ComfyUI at the test URL"
+    steps = _parameter(body, "1", "steps")
+    assert (steps["value"], steps["min"], steps["max"]) == (20, None, None)
+    assert _parameter(body, "1", "sampler_name")["options"] is None
+
+
+def test_a_ui_format_file_is_unreadable_without_asking_comfyui(
+    workflow_env, sampler_workflow
+):
+    r = workflow_env.owner.get(f"{API}/comfyui/workflows/canvas.json/parameters")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["readable"], body["parameters"]) == (False, [])
+    # Nothing was asked, so nothing is reported offline.
+    assert (body["typed"], body["comfyui_error"]) == (False, None)
+    assert sampler_workflow.asked == 0
+
+
+def test_a_ui_file_the_reduction_refuses_is_still_just_unreadable(
+    workflow_env, sampler_workflow, tmp_path
+):
+    """A subgraph instance with no definition makes detection raise; the form
+    does not need detection for a file it cannot read anyway."""
+    canvas = {
+        "nodes": [{"id": 1, "type": "0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b"}],
+        "links": [],
+        "definitions": {"subgraphs": []},
+    }
+    with pytest.raises(WorkflowGraphError):
+        detect_workflow_io(canvas)
+    (tmp_path / "orphan.json").write_text(json.dumps(canvas), encoding="utf-8")
+    r = workflow_env.owner.get(f"{API}/comfyui/workflows/orphan.json/parameters")
+    assert r.status_code == 200, r.text
+    assert r.json()["readable"] is False
+
+
+def test_a_workflow_with_nothing_to_set_does_not_ask_comfyui(
+    workflow_env, sampler_workflow, tmp_path
+):
+    graph = {"1": {"class_type": "SaveImage", "inputs": {"images": ["2", 0]}}}
+    (tmp_path / "bare.json").write_text(json.dumps(graph), encoding="utf-8")
+    r = workflow_env.owner.get(f"{API}/comfyui/workflows/bare.json/parameters")
+    assert r.status_code == 200, r.text
+    assert (r.json()["parameters"], r.json()["typed"]) == ([], False)
+    assert sampler_workflow.asked == 0
+
+
+def test_pins_are_kept_in_order_and_null_restores_the_defaults(
+    workflow_env, sampler_workflow
+):
+    owner = workflow_env.owner
+    order = [
+        {"node_id": "1", "name": "sampler_name"},
+        {"node_id": "1", "name": "steps"},
+    ]
+    r = owner.put(sampler_workflow.pins, json={"pins": order})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"workflow": "sampler.json", "pins_saved": True, "pins": order}
+    # Saving does not wait on ComfyUI.
+    assert sampler_workflow.asked == 0
+    body = owner.get(sampler_workflow.parameters).json()
+    assert (body["pins_saved"], body["pins"]) == (True, order)
+    assert _pinned(body) == [("1", "steps"), ("1", "sampler_name")]
+
+    r = owner.put(sampler_workflow.pins, json={"pins": []})
+    assert r.json()["pins"] == [] and r.json()["pins_saved"] is True
+    body = owner.get(sampler_workflow.parameters).json()
+    assert (body["pins"], _pinned(body)) == ([], [])
+
+    r = owner.put(sampler_workflow.pins, json={"pins": None})
+    assert (r.json()["pins_saved"], r.json()["pins"]) == (False, None)
+    body = owner.get(sampler_workflow.parameters).json()
+    assert [(p["node_id"], p["name"]) for p in body["pins"]] == [
+        ("1", "seed"),
+        ("1", "steps"),
+        ("1", "sampler_name"),
+    ]
+
+
+def test_a_seed_beyond_float_precision_is_returned_exactly(
+    workflow_env, sampler_workflow
+):
+    body = workflow_env.owner.get(sampler_workflow.parameters).json()
+    seed = _parameter(body, "1", "seed")
+    assert (seed["value"], seed["max"]) == (2**64 - 2, 2**64 - 1)
+
+
+def test_a_bad_pin_writes_nothing(workflow_env, sampler_workflow):
+    owner = workflow_env.owner
+    for body in (
+        {"pins": [{"node_id": "2", "name": "text"}]},
+        {"pins": [{"node_id": "1"}]},
+        {"pins": "steps"},
+        {},
+    ):
+        assert owner.put(sampler_workflow.pins, json=body).status_code == 400, body
+    assert (
+        workflow_env.server.hub.fetchone(
+            "SELECT COUNT(*) AS n FROM workflow_parameter_pins"
+        )["n"]
+        == 0
+    )
+    missing = f"{API}/comfyui/workflows/nosuch.json/parameters"
+    assert owner.get(missing).status_code == 404
+
+
+def test_deleting_a_workflow_forgets_its_pins(workflow_env, sampler_workflow):
+    owner = workflow_env.owner
+    r = owner.put(
+        sampler_workflow.pins, json={"pins": [{"node_id": "1", "name": "steps"}]}
+    )
+    assert r.status_code == 200, r.text
+    r = owner.delete(f"{API}/comfyui/workflows/sampler.json")
+    assert r.status_code == 200, r.text
+    assert (
+        workflow_env.server.hub.fetchone(
+            "SELECT COUNT(*) AS n FROM workflow_parameter_pins"
         )["n"]
         == 0
     )

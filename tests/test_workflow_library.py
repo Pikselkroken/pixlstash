@@ -33,7 +33,7 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.exc import OperationalError
 from sqlmodel import delete as sqlmodel_delete, select
 
-from pixlstash.db_models import DeletedFileLog, Picture
+from pixlstash.db_models import DeletedFileLog, Generation, Picture
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflows import (
     PictureGhost,
@@ -58,7 +58,11 @@ from pixlstash.services.workflow_hash import (
     topology_hash,
     ui_topology_hash,
 )
-from pixlstash.services.workflow_library_service import topology_activity
+from pixlstash.services.model_shelf_service import fetch_picture_counts
+from pixlstash.services.workflow_library_service import (
+    scan_progress,
+    topology_activity,
+)
 from pixlstash.services.scrapheap_service import purge_scrapheap_pictures
 from pixlstash.services.workflow_ghost_service import (
     DEFAULT_GHOST_RETENTION,
@@ -71,6 +75,7 @@ from pixlstash.services.workflow_ghost_service import (
     collect_ghost_candidates_in_session,
     drain_ghost_cascade,
     enqueue_ghost_cascade_in_session,
+    erase_library_ghosts,
     read_ghost_retention,
     requeue_library_ghosts,
     surviving_instance_hashes_in_session,
@@ -81,6 +86,9 @@ from pixlstash.tasks.missing_comfyui_extraction_finder import (
     MissingComfyUIExtractionFinder,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+
+LIBRARY = "11111111-2222-4333-8444-555555555555"
+OTHER_LIBRARY = "99999999-8888-4777-8666-555555555555"
 
 # One ordinary txt2img graph, held once in a format-neutral shape so the API
 # and UI builders below cannot drift apart. Nodes 2 and 3 are the twin
@@ -765,6 +773,7 @@ WORKFLOW_TABLES = ("workflow_topology", "workflow_recipe", "workflow_recipe_grap
 # ghost is not a recipe row at all.
 WORKFLOW_WIPE_ORDER = (
     "workflow_recipe_asset",
+    "workflow_recipe_instance",
     "workflow_recipe_graph",
     "workflow_recipe",
     "workflow_topology",
@@ -1095,19 +1104,95 @@ def test_a_credential_widget_reaches_no_tier_including_the_instance():
     assert instance_hash(dirty) == instance_hash(api_graph(TXT2IMG))
 
 
-def test_no_hub_table_stores_an_instance(hub):
-    """Phase 2 creep, guarded rather than remembered.
+def test_a_nested_credential_seed_or_output_path_is_never_stored(hub):
+    """The instance document is the first place a nested value is kept, so a
+    nested key gets the rules a node's own inputs already had."""
+    graph = api_graph(
+        TXT2IMG
+        + [
+            (
+                8,
+                "Power Lora Loader (rgthree)",
+                [("model", 1, 0)],
+                {
+                    "lora_1": {
+                        "lora": "example-subject.safetensors",
+                        "api_key": "test-nested-credential",
+                        "seed": 42,
+                        "output_path": "renders/example",
+                        "strength": 0.8,
+                    }
+                },
+            )
+        ]
+    )
+    keys = record_api_graph(hub, graph, LIBRARY)
 
-    "Add an instance hash" reads like an invitation to build `recipe_instance`,
-    and that table moved to v1.12 with the rest of the AI-toolkit work. The
-    hash is a value on a picture; v1.11 stores no instance ROW anywhere.
-    """
-    record_api_graph(hub, api_graph(TXT2IMG))
-    tables = {
-        row[0]
-        for row in hub.fetchall("SELECT name FROM sqlite_master WHERE type = 'table'")
+    row = instance_row(hub, LIBRARY, keys.instance_hash)
+    assert "test-nested-credential" not in row["document"]
+    lora = json.loads(row["document"])["8"]["inputs"]["lora_1"]
+    assert lora == {
+        "lora": asset_reference("example-subject.safetensors"),
+        "seed": None,
+        "output_path": None,
+        "strength": 0.8,
     }
-    assert not [name for name in tables if "instance" in name.lower()]
+
+
+def instance_row(hub, library_uuid, instance):
+    return hub.fetchone(
+        "SELECT * FROM workflow_recipe_instance "
+        "WHERE library_uuid = ? AND instance_hash = ?",
+        (library_uuid, instance),
+    )
+
+
+def test_an_instance_keeps_the_parameters_and_never_a_model_name(hub):
+    """The document forgetting a model's name has to reach, and the seed does not
+    belong to (a generation is an instance plus a seed)."""
+    keys = record_api_graph(hub, api_graph(TXT2IMG), LIBRARY)
+
+    document = json.loads(instance_row(hub, LIBRARY, keys.instance_hash)["document"])
+    assert document["2"]["inputs"]["text"] == "a lighthouse at dusk"
+    assert document["5"]["inputs"]["steps"] == 20
+    assert document["5"]["inputs"]["seed"] is None
+    assert document["1"]["inputs"]["ckpt_name"] == asset_reference(
+        "sd_xl_base_1.0.safetensors"
+    )
+    assert (
+        "sd_xl_base" not in instance_row(hub, LIBRARY, keys.instance_hash)["document"]
+    )
+
+
+def test_a_nested_model_name_is_a_reference_in_the_instance_too(hub):
+    """rgthree's Power Lora Loader keeps its LoRA inside a dict, which the
+    recipe tier nulls whole and so never names, and forgetting never reaches."""
+    graph = api_graph(
+        TXT2IMG
+        + [
+            (
+                8,
+                "Power Lora Loader (rgthree)",
+                [("model", 1, 0)],
+                {"lora_1": {"on": True, "lora": "example-subject.safetensors"}},
+            )
+        ]
+    )
+    keys = record_api_graph(hub, graph, LIBRARY)
+
+    row = instance_row(hub, LIBRARY, keys.instance_hash)
+    assert "example-subject" not in row["document"]
+    lora = json.loads(row["document"])["8"]["inputs"]["lora_1"]
+    assert lora == {
+        "on": True,
+        "lora": asset_reference("example-subject.safetensors"),
+    }
+
+
+def test_an_instance_row_needs_a_library_to_belong_to(hub):
+    """A row that names no library could never be cascaded when its pictures go."""
+    record_api_graph(hub, api_graph(TXT2IMG))
+    assert hub.fetchone("SELECT COUNT(*) AS n FROM workflow_recipe_instance")["n"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1195,6 +1280,7 @@ def run_extraction(store, picture_ids, *, hub=True, on_hub_failure=None):
         pictures=[SimpleNamespace(id=pid) for pid in picture_ids],
         hub=store.hub if hub else None,
         on_hub_failure=on_hub_failure,
+        library_uuid=LIBRARY,
     )
     return task._run_task()
 
@@ -1486,6 +1572,253 @@ def test_counts_exclude_soft_deleted_pictures(store):
     )
 
 
+def generation(store, picture_id):
+    return store.vault.run_immediate_read_task(
+        lambda session: session.get(Generation, picture_id)
+    )
+
+
+def mark_unscanned(store, picture_id):
+    """What migration 0118 does to every picture that carries a workflow."""
+
+    def clear(session):
+        session.get(Picture, picture_id).workflow_hash_version = None
+        session.commit()
+
+    store.vault.run_task(clear)
+
+
+def test_ingest_records_how_the_picture_was_made(store):
+    """The seed in the vault, the parameters in the hub, from the one file read.
+
+    The seed is ComfyUI's largest, which does not fit a SQLite INTEGER.
+    """
+    graph = api_graph(edited(TXT2IMG, 5, seed=2**64 - 1))
+    picture_id = add_picture(
+        store, write_png(Path(store.image_root), "made.png", graph)
+    )
+
+    run_extraction(store, [picture_id])
+
+    picture = read_picture(store, picture_id)
+    assert generation(store, picture_id).seed == str(2**64 - 1)
+    row = instance_row(store.hub, LIBRARY, picture.workflow_instance_hash)
+    assert row["structural_hash"] == picture.workflow_structural_hash
+    assert (
+        instance_row(store.hub, OTHER_LIBRARY, picture.workflow_instance_hash) is None
+    )
+
+
+def test_the_backfill_records_a_picture_filed_before_the_tables(store):
+    """A library upgraded from 1.11: keys on the picture, nothing recorded."""
+    name = write_png(Path(store.image_root), "filed.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+    run_extraction(store, [picture_id])
+    instance = read_picture(store, picture_id).workflow_instance_hash
+    store.vault.run_task(
+        lambda session: (
+            session.delete(session.get(Generation, picture_id)),
+            session.commit(),
+        )
+    )
+    with store.hub.transaction() as conn:
+        conn.execute("DELETE FROM workflow_recipe_instance")
+
+    mark_unscanned(store, picture_id)
+    assert new_finder(store).find_task() is not None
+    run_extraction(store, [picture_id])
+
+    assert generation(store, picture_id).seed == "42"
+    assert instance_row(store.hub, LIBRARY, instance) is not None
+    assert new_finder(store).find_task() is None
+
+
+def test_the_finder_hands_its_library_to_the_scan(store):
+    """The production path: without it the scan files no instance at all."""
+    name = write_png(Path(store.image_root), "via-finder.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+    finder = MissingComfyUIExtractionFinder(
+        database=store.vault,
+        image_root=store.image_root,
+        hub=store.hub,
+        library_uuid=LIBRARY,
+    )
+    finder.find_task()._run_task()
+
+    instance = read_picture(store, picture_id).workflow_instance_hash
+    assert instance_row(store.hub, LIBRARY, instance) is not None
+
+
+def test_scan_progress_does_not_fall_back_during_the_backfill(store):
+    """Clearing the marker to record how a picture was made is not un-reading it."""
+    name = write_png(Path(store.image_root), "progress.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+    run_extraction(store, [picture_id])
+    mark_unscanned(store, picture_id)
+
+    progress = store.vault.run_immediate_read_task(scan_progress)
+    assert (progress.pictures, progress.scanned) == (1, 1)
+
+
+def test_a_scrapheaped_picture_keeps_its_instance_row(store):
+    """It can be restored, and it is never re-read, so its row must not go."""
+    names = [
+        write_png(
+            Path(store.image_root),
+            f"binned-{seed}.png",
+            api=api_graph(edited(TXT2IMG, 5, seed=seed)),
+        )
+        for seed in (1, 2)
+    ]
+    ids = [add_picture(store, name) for name in names]
+    run_extraction(store, ids)
+    instance = read_picture(store, ids[0]).workflow_instance_hash
+    store.vault.run_task(
+        lambda session: (
+            setattr(session.get(Picture, ids[0]), "deleted", True),
+            session.delete(session.get(Picture, ids[1])),
+            session.commit(),
+        )
+    )
+
+    cascade(store, GHOST_RETENTION_COVERED)
+
+    assert instance_row(store.hub, LIBRARY, instance) is not None
+
+
+def test_the_backfill_keeps_the_keys_of_a_file_it_cannot_read(store):
+    """An unplugged drive during the backfill must cost nothing it already had.
+
+    Nulling the keys would drop the picture out of its workflow and, through the
+    re-hash trigger's view of it, stop it covering its ghosts.
+    """
+    name = write_png(Path(store.image_root), "unplugged.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+    run_extraction(store, [picture_id])
+    before = read_picture(store, picture_id)
+    store.vault.run_task(
+        lambda session: (
+            session.delete(session.get(Generation, picture_id)),
+            session.commit(),
+        )
+    )
+    os.remove(Path(store.image_root) / name)
+
+    mark_unscanned(store, picture_id)
+    run_extraction(store, [picture_id])
+
+    after = read_picture(store, picture_id)
+    assert after.workflow_hash_version == HASH_VERSION
+    assert (
+        after.workflow_topology_hash,
+        after.workflow_structural_hash,
+        after.workflow_instance_hash,
+    ) == (
+        before.workflow_topology_hash,
+        before.workflow_structural_hash,
+        before.workflow_instance_hash,
+    )
+    # Recorded, with the seed honestly unknown, so it is not handed back again.
+    assert generation(store, picture_id).seed is None
+
+
+def test_the_backfill_never_brings_back_a_forgotten_model_name(store):
+    """Re-reading the library files every recipe again; a forget must survive it."""
+    name = write_png(Path(store.image_root), "forgot.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+    run_extraction(store, [picture_id])
+    structural = read_picture(store, picture_id).workflow_structural_hash
+    assert forget_asset_names(store.hub, "sd_xl_base_1.0.safetensors") == 1
+
+    mark_unscanned(store, picture_id)
+    run_extraction(store, [picture_id])
+
+    assert assets_for_recipe(store.hub, structural) == []
+
+
+def test_a_picture_destroyed_mid_read_queues_its_instance_again(store, monkeypatch):
+    """Its delete queued the cascade before the instance row existed, so a drain
+    in between found nothing to destroy and the row would be left behind."""
+    from pixlstash.tasks import comfyui_extraction_task
+
+    name = write_png(Path(store.image_root), "vanish.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+    real = comfyui_extraction_task.record_api_graph
+
+    def delete_drain_then_record(*args, **kwargs):
+        store.vault.run_task(
+            lambda session: (
+                session.delete(session.get(Picture, picture_id)),
+                session.commit(),
+            )
+        )
+        # The drain that runs in between, with no instance row to find yet.
+        cascade(store, GHOST_RETENTION_COVERED)
+        assert pending_hashes(store) == []
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(
+        comfyui_extraction_task, "record_api_graph", delete_drain_then_record
+    )
+    run_extraction(store, [picture_id])
+
+    instance = instance_hash(api_graph(TXT2IMG))
+    assert instance_row(store.hub, LIBRARY, instance) is not None
+    assert pending_hashes(store) == [instance]
+    cascade(store, GHOST_RETENTION_COVERED)
+    assert instance_row(store.hub, LIBRARY, instance) is None
+
+
+def shelf_model(store, filename, sha256):
+    with store.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, kind, sha256, filename, provenance) "
+            "VALUES ('adapter', 'lora', ?, ?, 'external')",
+            (sha256, filename),
+        )
+        return conn.execute(
+            "SELECT id FROM model WHERE sha256 = ?", (sha256,)
+        ).fetchone()[0]
+
+
+def test_the_shelf_counts_pictures_per_model_in_two_tiers(store):
+    """By digest is that file; by filename is a file called that. Never summed."""
+    digest = "ab" * 32
+    by_name = [
+        (1, "CheckpointLoaderSimple", [], {"ckpt_name": "sd_xl_base_1.0.safetensors"}),
+        (
+            2,
+            "LoraLoader",
+            [("model", 1, 0)],
+            {"lora_name": "example-subject.safetensors"},
+        ),
+    ]
+    by_digest = by_name + [
+        (3, "PixlStashAdapterLoader", [("model", 2, 0)], {"adapter_sha256": digest}),
+    ]
+    names = [
+        write_png(Path(store.image_root), "tier-name-a.png", api=api_graph(by_name)),
+        write_png(Path(store.image_root), "tier-name-b.png", api=api_graph(by_name)),
+        write_png(Path(store.image_root), "tier-digest.png", api=api_graph(by_digest)),
+        write_png(Path(store.image_root), "tier-binned.png", api=api_graph(by_digest)),
+    ]
+    ids = [add_picture(store, name) for name in names]
+    run_extraction(store, ids)
+    store.vault.run_task(
+        lambda session: (
+            setattr(session.get(Picture, ids[3]), "deleted", True),
+            session.commit(),
+        )
+    )
+    model_id = shelf_model(store, "Example-Subject.safetensors", digest)
+    other_id = shelf_model(store, "unused.safetensors", "cd" * 32)
+
+    counts = fetch_picture_counts(store.hub, SimpleNamespace(db=store.vault))
+
+    assert counts[model_id] == {"verified": 1, "by_filename": 2}
+    assert other_id not in counts
+
+
 # ---------------------------------------------------------------------------
 # B4 — purge reaches the hub, and the covered-ghost cascade
 # ---------------------------------------------------------------------------
@@ -1519,10 +1852,6 @@ def scrapheap(store, picture_id, *, pixel_sha, thumbnail=b"thumbnail-bytes"):
         session.commit()
 
     store.vault.run_task(mark)
-
-
-LIBRARY = "11111111-2222-4333-8444-555555555555"
-OTHER_LIBRARY = "99999999-8888-4777-8666-555555555555"
 
 
 def cascade(store, retention, library_uuid=LIBRARY):
@@ -2463,3 +2792,71 @@ def test_a_purge_that_kept_ghosts_queues_their_hashes_again(store, monkeypatch):
     assert purge(store, [member_id], retention=GHOST_RETENTION_COVERED).ghosts_kept == 1
 
     assert pending_hashes(store) == [instance]
+
+
+def test_an_instance_row_goes_with_the_last_picture_carrying_it(store):
+    """The prompt is kept while the library still holds a picture of it."""
+    names = [
+        write_png(
+            Path(store.image_root),
+            f"instance-{seed}.png",
+            api=api_graph(edited(TXT2IMG, 5, seed=seed)),
+        )
+        for seed in (1, 2)
+    ]
+    ids = [add_picture(store, name) for name in names]
+    run_extraction(store, ids)
+    instance = read_picture(store, ids[0]).workflow_instance_hash
+    with store.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_recipe_instance (library_uuid, instance_hash, "
+            "structural_hash, hash_version, document, first_seen_at) "
+            "SELECT ?, instance_hash, structural_hash, hash_version, document, "
+            "first_seen_at FROM workflow_recipe_instance WHERE library_uuid = ?",
+            (OTHER_LIBRARY, LIBRARY),
+        )
+
+    def delete(picture_id):
+        store.vault.run_task(
+            lambda session: (
+                session.delete(session.get(Picture, picture_id)),
+                session.commit(),
+            )
+        )
+
+    delete(ids[0])
+    cascade(store, GHOST_RETENTION_ON)
+    assert instance_row(store.hub, LIBRARY, instance) is not None
+    assert generation(store, ids[0]) is None, "a generation dies with its picture"
+
+    delete(ids[1])
+    cascade(store, GHOST_RETENTION_ON)
+    assert instance_row(store.hub, LIBRARY, instance) is None
+    # Another library's pictures are in a vault this drain cannot see.
+    assert instance_row(store.hub, OTHER_LIBRARY, instance) is not None
+
+
+def test_a_ghost_keeps_its_instance_row_until_it_is_erased(store):
+    """At every position the ghost, not the setting, is what keeps the row."""
+    name = write_png(Path(store.image_root), "ghosted.png", api=api_graph(TXT2IMG))
+    picture_id = add_picture(store, name)
+    run_extraction(store, [picture_id])
+    instance = read_picture(store, picture_id).workflow_instance_hash
+    scrapheap(store, picture_id, pixel_sha="sha-ghosted")
+    assert purge(store, [picture_id], retention=GHOST_RETENTION_ON).ghosts_kept == 1
+
+    cascade(store, GHOST_RETENTION_ON)
+    assert instance_row(store.hub, LIBRARY, instance) is not None
+
+    # Another instance whose cover the erase does not touch.
+    other = write_png(
+        Path(store.image_root),
+        "unghosted.png",
+        api=api_graph(edited(TXT2IMG, 2, text="a harbour at noon")),
+    )
+    run_extraction(store, [add_picture(store, other)])
+
+    assert erase_library_ghosts(store.vault, store.hub, LIBRARY) == 1
+    assert pending_hashes(store) == [instance], "only the erased ghosts' hashes"
+    cascade(store, GHOST_RETENTION_ON)
+    assert instance_row(store.hub, LIBRARY, instance) is None

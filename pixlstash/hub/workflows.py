@@ -35,6 +35,7 @@ from pixlstash.services.workflow_hash import (
     document_from_reduction,
     drop_widgets,
     graph_key,
+    instance_document_from_reduction,
     normalized_filename,
     promote_instance_widgets,
     reduce_api_graph,
@@ -64,13 +65,9 @@ class WorkflowKeys:
     recipes if that machine has them, and reports them as unknown if it does
     not.
 
-    ``instance_hash`` is the third tier and is **vault-only**. It is returned
-    from here because it falls out of the same reduction and re-walking the
-    graph to get it would be the one cost this module exists to avoid, but
-    nothing hub-side stores it: an instance carries the prompt and every
-    parameter, and a hub-side ``recipe_instance`` table is Phase 2 work that
-    moved to v1.12. Two pictures share an instance exactly when they share this
-    string, which is all v1.11 asks.
+    ``instance_hash`` is the third tier. It falls out of the same reduction, so
+    it is returned from here rather than re-walked for; its row is per library
+    (``workflow_recipe_instance``), because an instance is the prompt.
 
     The document's own digest is deliberately absent: it is an implementation
     detail of the store (the same workflow rebuilt from scratch has different
@@ -93,13 +90,27 @@ def _canonical_document(document: dict) -> str:
     return json.dumps(document, sort_keys=True, separators=(",", ":"))
 
 
-def record_api_graph(hub: HubDatabase, api_graph: dict) -> WorkflowKeys:
+def record_api_graph(
+    hub: HubDatabase,
+    api_graph: dict,
+    library_uuid: Optional[str] = None,
+    *,
+    revisit: bool = False,
+) -> WorkflowKeys:
     """File one API-format graph, returning the keys a vault should store.
 
-    All three tiers are computed from the same reduction, so the topology row
-    and the recipe row can never disagree about which graph they describe, and
-    the instance key the caller stores in the vault describes that same graph.
-    Only the first two are written here; see :class:`WorkflowKeys`.
+    All three tiers are computed from the same reduction, so the topology row,
+    the recipe row and the instance row can never disagree about which graph
+    they describe.
+
+    Args:
+        library_uuid: The library the picture is in. The instance row is written
+            only with one, because a row that cannot name its library can never
+            be cascaded when its pictures go.
+        revisit: The picture was filed before. Its recipe's asset names are then
+            written only if the recipe itself is new to this hub: a name missing
+            under a recipe the hub already holds was forgotten on purpose, and a
+            backfill re-reading the library must not bring it back.
 
     Raises:
         pixlstash.services.workflow_hash.WorkflowGraphError: The graph holds
@@ -108,6 +119,7 @@ def record_api_graph(hub: HubDatabase, api_graph: dict) -> WorkflowKeys:
     """
     nodes = reduce_api_graph(api_graph)
     document = _canonical_document(document_from_reduction(nodes))
+    instance_document = _canonical_document(instance_document_from_reduction(nodes))
     keys = WorkflowKeys(
         topology_hash=graph_key(drop_widgets(nodes)),
         structural_hash=graph_key(nodes),
@@ -126,7 +138,7 @@ def record_api_graph(hub: HubDatabase, api_graph: dict) -> WorkflowKeys:
             "VALUES (?, ?, ?, ?)",
             (keys.topology_hash, HASH_VERSION, keys.node_count, now),
         )
-        conn.execute(
+        new_recipe = conn.execute(
             "INSERT OR IGNORE INTO workflow_recipe "
             "(structural_hash, topology_hash, hash_version, node_count, first_seen_at) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -137,7 +149,7 @@ def record_api_graph(hub: HubDatabase, api_graph: dict) -> WorkflowKeys:
                 keys.node_count,
                 now,
             ),
-        )
+        ).rowcount
         conn.execute(
             "INSERT OR IGNORE INTO workflow_recipe_graph "
             "(structural_hash, document_sha256, document, created_at) "
@@ -153,15 +165,32 @@ def record_api_graph(hub: HubDatabase, api_graph: dict) -> WorkflowKeys:
         # NOT carry. INSERT OR IGNORE like the rest, so re-filing one graph is
         # a no-op -- and note that a row deleted to forget a model name is not
         # resurrected by re-filing a DIFFERENT recipe, only by re-filing this
-        # one, because the key includes the structural hash.
-        conn.executemany(
-            "INSERT OR IGNORE INTO workflow_recipe_asset "
-            "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
-            [
-                (keys.structural_hash, widget_name, filename)
-                for widget_name, filename in assets_from_reduction(nodes)
-            ],
-        )
+        # one, because the key includes the structural hash -- and never by a
+        # revisit (see ``revisit``).
+        if new_recipe or not revisit:
+            conn.executemany(
+                "INSERT OR IGNORE INTO workflow_recipe_asset "
+                "(structural_hash, widget_name, normalized_filename) "
+                "VALUES (?, ?, ?)",
+                [
+                    (keys.structural_hash, widget_name, filename)
+                    for widget_name, filename in assets_from_reduction(nodes)
+                ],
+            )
+        if library_uuid:
+            conn.execute(
+                "INSERT OR IGNORE INTO workflow_recipe_instance "
+                "(library_uuid, instance_hash, structural_hash, hash_version, "
+                " document, first_seen_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    library_uuid,
+                    keys.instance_hash,
+                    keys.structural_hash,
+                    HASH_VERSION,
+                    instance_document,
+                    now,
+                ),
+            )
     return keys
 
 
@@ -635,7 +664,7 @@ def destroy_ghosts_for_instances(
 
 
 def ghost_instance_hashes(hub: HubDatabase, library_uuid: str) -> list[str]:
-    """Every instance hash this library's ghosts lean on, for a full re-check."""
+    """Every instance hash this library's ghosts lean on."""
     return [
         row["instance_hash"]
         for row in hub.fetchall(
@@ -644,6 +673,60 @@ def ghost_instance_hashes(hub: HubDatabase, library_uuid: str) -> list[str]:
             (library_uuid,),
         )
     ]
+
+
+def retained_instance_hashes(hub: HubDatabase, library_uuid: str) -> list[str]:
+    """Every instance hash this library keeps a ghost or an instance row for.
+
+    For a full re-check, when the vault changed under the hub without a trigger
+    seeing it (a restore swapped the file) or a ghost that was covering an
+    instance row has just been erased.
+    """
+    return [
+        row["instance_hash"]
+        for row in hub.fetchall(
+            "SELECT instance_hash FROM workflow_picture_ghost WHERE library_uuid = ? "
+            "UNION SELECT instance_hash FROM workflow_recipe_instance "
+            "WHERE library_uuid = ? ORDER BY instance_hash",
+            (library_uuid, library_uuid),
+        )
+    ]
+
+
+def destroy_uncovered_instances(
+    hub: HubDatabase, library_uuid: str, instance_hashes: list[str]
+) -> int:
+    """Destroy this library's instance rows for hashes no surviving picture carries.
+
+    The caller has established that no surviving picture in THIS library holds
+    these hashes. A row a ghost still leans on stays, whatever the retention
+    position: the ghost is the consented survivor, and its instance is what
+    makes it worth keeping. Returns how many rows went.
+    """
+    if not library_uuid or not instance_hashes:
+        return 0
+    removed = 0
+    with hub.transaction() as conn:
+        for batch in chunked(instance_hashes):
+            placeholders = ",".join("?" for _ in batch)
+            removed += (
+                conn.execute(
+                    "DELETE FROM workflow_recipe_instance WHERE library_uuid = ? "
+                    f"AND instance_hash IN ({placeholders}) AND NOT EXISTS ("
+                    "  SELECT 1 FROM workflow_picture_ghost g "
+                    "  WHERE g.library_uuid = workflow_recipe_instance.library_uuid "
+                    "  AND g.instance_hash = workflow_recipe_instance.instance_hash)",
+                    (library_uuid, *batch),
+                ).rowcount
+                or 0
+            )
+    if removed:
+        logger.info(
+            "Destroyed %d workflow instance row(s) whose last picture and ghost "
+            "are gone.",
+            removed,
+        )
+    return removed
 
 
 def picture_ghost_count(hub: HubDatabase, library_uuid: str) -> int:
@@ -756,4 +839,58 @@ def forget_input_modes(hub: HubDatabase, workflow_name: str) -> int:
                 (workflow_name,),
             ).rowcount
             or 0
+        )
+
+
+# ---------------------------------------------------------------------------
+# Which parameters a workflow's form shows first (#1306)
+# ---------------------------------------------------------------------------
+
+
+def parameter_pins(hub: HubDatabase, workflow_name: str) -> Optional[list[list[str]]]:
+    """A workflow file's pins as ``[node_id, name]`` pairs, or ``None`` if unset.
+
+    A stored value that does not read as pairs is logged and treated as unset,
+    so the defaults apply rather than the form failing to open.
+    """
+    row = hub.fetchone(
+        "SELECT pins FROM workflow_parameter_pins WHERE workflow_name = ?",
+        (workflow_name,),
+    )
+    if row is None:
+        return None
+    try:
+        pins = json.loads(row["pins"])
+        if not all(
+            isinstance(pin, list)
+            and len(pin) == 2
+            and all(isinstance(p, str) for p in pin)
+            for pin in pins
+        ):
+            raise ValueError("not a list of [node_id, name] pairs")
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "Stored pins of workflow %s are unreadable, using the defaults: %s",
+            workflow_name,
+            exc,
+        )
+        return None
+    return pins
+
+
+def replace_parameter_pins(
+    hub: HubDatabase, workflow_name: str, pins: Optional[list[tuple[str, str]]]
+) -> None:
+    """Store a workflow file's pins whole, or forget them with ``None``."""
+    with hub.transaction() as conn:
+        if pins is None:
+            conn.execute(
+                "DELETE FROM workflow_parameter_pins WHERE workflow_name = ?",
+                (workflow_name,),
+            )
+            return
+        conn.execute(
+            "INSERT INTO workflow_parameter_pins (workflow_name, pins) VALUES (?, ?) "
+            "ON CONFLICT(workflow_name) DO UPDATE SET pins = excluded.pins",
+            (workflow_name, json.dumps([list(pin) for pin in pins])),
         )

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import case, func, or_
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture
@@ -114,12 +114,38 @@ def recipe_activity(
     }
 
 
+def recipe_picture_counts(session: Session) -> dict[str, int]:
+    """How many kept pictures each recipe made, **vault-wide**.
+
+    Unscoped, like :func:`topology_activity`, and served only to owner routes
+    for the same reason.
+    """
+    return {
+        key: activity.pictures
+        for key, activity in _activity(
+            session, Picture.workflow_structural_hash
+        ).items()
+    }
+
+
 def scan_progress(session: Session) -> ScanProgress:
     """How many kept pictures exist, and how many have been read for a workflow."""
     pictures, scanned = session.exec(
         select(
             func.count(Picture.id),
-            func.count(Picture.workflow_hash_version),
+            # A picture with keys has been read, even while migration 0118's
+            # backfill has cleared its marker to record how it was made.
+            func.count(
+                case(
+                    (
+                        or_(
+                            Picture.workflow_hash_version.is_not(None),
+                            Picture.workflow_instance_hash.is_not(None),
+                        ),
+                        1,
+                    )
+                )
+            ),
         ).where(Picture.deleted.is_(False))
     ).one()
     return ScanProgress(pictures=pictures or 0, scanned=scanned or 0)

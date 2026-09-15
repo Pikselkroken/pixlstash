@@ -49,6 +49,8 @@ from pixlstash.services.model_features import (
     FEATURE_TAGGER,
 )
 from pixlstash.services.stack_detector import repair_stacks
+from pixlstash.services.workflow_hash import SHA256_FIELD_RE, normalized_filename
+from pixlstash.services.workflow_library_service import recipe_picture_counts
 from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
     FILE_CHECKPOINT,
@@ -394,6 +396,72 @@ def fetch_attachments(vault, *, sha256: Optional[str] = None) -> dict[str, list[
             {"entity_type": row.entity_type, "entity_id": row.entity_id}
         )
     return grouped
+
+
+def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
+    """How many kept pictures in the active library used each model, by tier.
+
+    ``verified`` counts pictures whose recipe names the model by its digest (a
+    PixlStash loader's ``*_sha256``): that exact file. ``by_filename`` counts
+    the rest whose recipe names a file called what one of the model's copies is
+    called: a file of that name, which is all the graph says. The two are never
+    summed here, because a count that mixes them claims a certainty the data
+    does not have, and a picture counted in the first is not counted again in
+    the second.
+
+    Read from the recipe keys every scanned picture carries and the hub's recipe
+    asset names, so it covers pictures imported before the recipe tables existed
+    and heals by itself when a model is added to the shelf later. A name that
+    was forgotten matches nothing.
+
+    Returns:
+        ``{model_id: {"verified": n, "by_filename": n}}``, models no kept
+        picture used absent.
+    """
+    pictures = vault.db.run_task(recipe_picture_counts, priority=DBPriority.IMMEDIATE)
+    if not pictures:
+        return {}
+    by_name: dict[str, set[int]] = {}
+    for row in hub.fetchall(
+        "SELECT id, filename FROM model WHERE filename IS NOT NULL"
+    ):
+        by_name.setdefault(normalized_filename(row["filename"]), set()).add(row["id"])
+    for row in hub.fetchall("SELECT model_id, relpath FROM model_file"):
+        by_name.setdefault(normalized_filename(row["relpath"]), set()).add(
+            row["model_id"]
+        )
+    by_digest = {
+        row["sha256"].lower(): row["id"]
+        for row in hub.fetchall("SELECT id, sha256 FROM model WHERE sha256 IS NOT NULL")
+    }
+
+    verified: dict[int, set[str]] = {}
+    named: dict[int, set[str]] = {}
+    for row in hub.fetchall(
+        "SELECT structural_hash, widget_name, normalized_filename "
+        "FROM workflow_recipe_asset"
+    ):
+        recipe = row["structural_hash"]
+        if recipe not in pictures:
+            continue
+        if SHA256_FIELD_RE.search(row["widget_name"]):
+            model_id = by_digest.get(row["normalized_filename"])
+            if model_id is not None:
+                verified.setdefault(model_id, set()).add(recipe)
+        else:
+            for model_id in by_name.get(row["normalized_filename"], ()):
+                named.setdefault(model_id, set()).add(recipe)
+
+    return {
+        model_id: {
+            "verified": sum(pictures[r] for r in verified.get(model_id, ())),
+            "by_filename": sum(
+                pictures[r]
+                for r in named.get(model_id, set()) - verified.get(model_id, set())
+            ),
+        }
+        for model_id in verified.keys() | named.keys()
+    }
 
 
 def attached_hashes(vault, entity_type: str, entity_id: int) -> set[str]:

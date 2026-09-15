@@ -40,6 +40,31 @@ _PICTURE_INPUT_CLASSES = frozenset(INPUT_IMAGE_FIELDS) | {
 }
 
 
+# The input a picture loader reads its picture from, where it is not ``image``.
+PICTURE_INPUT_FIELDS: dict[str, tuple[str, ...]] = {
+    **INPUT_IMAGE_FIELDS,
+    "PixlStashPictureLoader": ("picture_ids",),
+    "Image Load": ("image_path",),
+}
+
+
+def picture_fields(class_type: str) -> tuple[str, ...]:
+    """The inputs of a picture loader that name its picture."""
+    return PICTURE_INPUT_FIELDS.get(class_type, ("image",))
+
+
+def api_graph(document: dict) -> dict | None:
+    """The API-format graph in *document*, or ``None`` for a UI-format file.
+
+    The import dialog stores an embedded prompt chunk as ``{"prompt": graph}``.
+    """
+    if not isinstance(document, dict) or isinstance(document.get("nodes"), list):
+        return None
+    if isinstance(document.get("prompt"), dict):
+        return document["prompt"]
+    return document
+
+
 @dataclass(frozen=True)
 class WorkflowIO:
     """The detected inputs and outputs of one workflow, as node ids.
@@ -80,13 +105,11 @@ def detect_workflow_io(document: dict) -> WorkflowIO:
     Raises:
         WorkflowGraphError: The document cannot be read as a graph.
     """
-    if isinstance(document, dict) and isinstance(document.get("nodes"), list):
+    graph = api_graph(document)
+    if graph is None and isinstance(document, dict):
         nodes = reduce_ui_graph(document)
-    elif isinstance(document, dict) and isinstance(document.get("prompt"), dict):
-        # The import dialog stores an embedded prompt chunk as this envelope.
-        nodes = reduce_api_graph(document["prompt"])
     else:
-        nodes = reduce_api_graph(document)
+        nodes = reduce_api_graph(graph)
 
     # Output collection (_extract_output_node_ids) takes an explicit choice
     # first, whatever its class, and falls back to the save classes.
@@ -103,7 +126,8 @@ def detect_workflow_io(document: dict) -> WorkflowIO:
             key for key, node in nodes.items() if node.class_type in SAVE_NODE_CLASSES
         )
     # ponytail: name rule plus a known-class list; a loader named otherwise is
-    # not found until object_info types it (#1306).
+    # not found, and its image field shows as a parameter (#1306) rather than
+    # an input. Typing loaders from object_info would find it.
     picture_inputs = sorted(
         key
         for key, node in nodes.items()
