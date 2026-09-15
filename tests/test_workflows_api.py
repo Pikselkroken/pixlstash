@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import tempfile
 import time
 from datetime import datetime
@@ -44,9 +45,10 @@ from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, ReferenceFolder
 from pixlstash.hub.workflows import PictureGhost, record_picture_ghosts
-from pixlstash.services.workflow_hash import asset_reference
+from pixlstash.services.workflow_hash import WorkflowGraphError, asset_reference
+from pixlstash.services.workflow_io import detect_workflow_io
 import pixlstash.routes.comfyui as comfyui_module
-from pixlstash.services import workflow_bindings
+from pixlstash.services import workflow_bindings, workflow_inbox
 from pixlstash.server import Server
 from pixlstash.tasks.ghost_cascade_task import GhostCascadeTask
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
@@ -992,6 +994,27 @@ _INPUT_ROUTES = (
 )
 
 
+def _isolate_workflow_folders(tmp_path, monkeypatch) -> None:
+    """Point every workflow folder a route touches at *tmp_path*, and fake the trash.
+
+    Deleting a workflow writes it back to the inbox and sends it to the system
+    trash. Both are shared by every checkout on the machine, and a PixlStash
+    running against the same data folder would import what lands in the inbox.
+    """
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+
+    def fake_trash(path):
+        os.remove(path)
+
+    monkeypatch.setattr(comfyui_module, "_workflow_dirs", lambda: [("user", tmp_path)])
+    monkeypatch.setattr(comfyui_module, "workflow_user_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(workflow_inbox, "workflow_inbox_dir", lambda: str(inbox))
+    monkeypatch.setattr(workflow_inbox, "send2trash", fake_trash)
+    monkeypatch.setattr(comfyui_module, "send2trash", fake_trash)
+    comfyui_module._describe_workflow.cache_clear()
+
+
 @pytest.fixture
 def edit_workflow(tmp_path, monkeypatch):
     """One two-input workflow file in a user folder of its own.
@@ -1014,9 +1037,7 @@ def edit_workflow(tmp_path, monkeypatch):
         }
     )
     (tmp_path / "edit.json").write_text(json.dumps(graph), encoding="utf-8")
-    monkeypatch.setattr(comfyui_module, "_workflow_dirs", lambda: [("user", tmp_path)])
-    monkeypatch.setattr(comfyui_module, "workflow_user_dir", lambda: str(tmp_path))
-    comfyui_module._describe_workflow.cache_clear()
+    _isolate_workflow_folders(tmp_path, monkeypatch)
     return f"{API}/comfyui/workflows/edit.json/inputs"
 
 
@@ -1331,9 +1352,7 @@ def sampler_workflow(tmp_path, monkeypatch):
         json.dumps({"nodes": [{"id": 1, "type": "KSampler"}], "links": []}),
         encoding="utf-8",
     )
-    monkeypatch.setattr(comfyui_module, "_workflow_dirs", lambda: [("user", tmp_path)])
-    monkeypatch.setattr(comfyui_module, "workflow_user_dir", lambda: str(tmp_path))
-    comfyui_module._describe_workflow.cache_clear()
+    _isolate_workflow_folders(tmp_path, monkeypatch)
     comfy = SimpleNamespace(info=_SAMPLER_INFO, asked=0)
 
     def fake_object_info(_url):
@@ -1443,7 +1462,39 @@ def test_a_ui_format_file_is_unreadable_without_asking_comfyui(
 ):
     r = workflow_env.owner.get(f"{API}/comfyui/workflows/canvas.json/parameters")
     assert r.status_code == 200, r.text
-    assert (r.json()["readable"], r.json()["parameters"]) == (False, [])
+    body = r.json()
+    assert (body["readable"], body["parameters"]) == (False, [])
+    # Nothing was asked, so nothing is reported offline.
+    assert (body["typed"], body["comfyui_error"]) == (False, None)
+    assert sampler_workflow.asked == 0
+
+
+def test_a_ui_file_the_reduction_refuses_is_still_just_unreadable(
+    workflow_env, sampler_workflow, tmp_path
+):
+    """A subgraph instance with no definition makes detection raise; the form
+    does not need detection for a file it cannot read anyway."""
+    canvas = {
+        "nodes": [{"id": 1, "type": "0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b"}],
+        "links": [],
+        "definitions": {"subgraphs": []},
+    }
+    with pytest.raises(WorkflowGraphError):
+        detect_workflow_io(canvas)
+    (tmp_path / "orphan.json").write_text(json.dumps(canvas), encoding="utf-8")
+    r = workflow_env.owner.get(f"{API}/comfyui/workflows/orphan.json/parameters")
+    assert r.status_code == 200, r.text
+    assert r.json()["readable"] is False
+
+
+def test_a_workflow_with_nothing_to_set_does_not_ask_comfyui(
+    workflow_env, sampler_workflow, tmp_path
+):
+    graph = {"1": {"class_type": "SaveImage", "inputs": {"images": ["2", 0]}}}
+    (tmp_path / "bare.json").write_text(json.dumps(graph), encoding="utf-8")
+    r = workflow_env.owner.get(f"{API}/comfyui/workflows/bare.json/parameters")
+    assert r.status_code == 200, r.text
+    assert (r.json()["parameters"], r.json()["typed"]) == ([], False)
     assert sampler_workflow.asked == 0
 
 

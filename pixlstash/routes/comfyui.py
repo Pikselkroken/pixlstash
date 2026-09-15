@@ -60,7 +60,7 @@ from pixlstash.services import (
     workflow_parameters,
 )
 from pixlstash.services.workflow_hash import WorkflowGraphError
-from pixlstash.services.workflow_io import detect_workflow_io
+from pixlstash.services.workflow_io import api_graph, detect_workflow_io
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.stacking import (
@@ -446,6 +446,12 @@ def _describe_workflow(path: str, source: str, mtime_ns: int, size: int) -> dict
     }
 
 
+def _comfyui_url(user) -> str:
+    """The ComfyUI base URL a user has set, without a trailing slash."""
+    url = getattr(user, "comfyui_url", None) if user else None
+    return (url or DEFAULT_COMFYUI_URL).rstrip("/")
+
+
 def _on_disk_name(path: str) -> str:
     """The file's own spelling of its name, which keys its stored modes.
 
@@ -736,6 +742,7 @@ class ComfyUIWorkflowParameterResponse(BaseModel):
     # Kept as sent: a seed can exceed 2**53, which a float (or a JavaScript
     # number) cannot hold exactly.
     value: Any = None
+    typed: bool = False
     min: Optional[int | float] = None
     max: Optional[int | float] = None
     step: Optional[int | float] = None
@@ -754,9 +761,12 @@ class ComfyUIParameterKey(BaseModel):
 class ComfyUIWorkflowParametersResponse(BaseModel):
     """A workflow file's parameters, and whether ComfyUI typed them.
 
-    ``typed`` is False when ComfyUI could not be reached, and ``comfyui_error``
-    says why: the values are the file's own, with no ranges. ``readable`` is
-    False for a UI-format file, whose widget values carry no names.
+    ``typed`` is True when ComfyUI's ``object_info`` was read for them.
+    ``comfyui_error`` is set only when ComfyUI could not be reached, and the
+    values are then the file's own, with no ranges; ``typed`` False with no
+    error means there was nothing to ask about. ``readable`` is False for a
+    UI-format file, whose widget values carry no names. Each parameter's own
+    ``typed`` says whether ComfyUI knew that input.
     ``pins`` is the pinned parameters in the order they are shown, and
     ``pins_saved`` is False while the default pins apply.
     """
@@ -972,8 +982,7 @@ def create_router(server) -> APIRouter:
                 priority=DBPriority.IMMEDIATE,
             )
 
-            comfyui_url = getattr(user, "comfyui_url", None) if user else None
-            comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
+            comfyui_url = _comfyui_url(user)
             client_id = (
                 websocket.query_params.get("clientId")
                 or websocket.query_params.get("client_id")
@@ -1168,17 +1177,27 @@ def create_router(server) -> APIRouter:
                     )
         return {"status": "success", "name": normalized}
 
-    def _read_picture_inputs(workflow_name: str) -> tuple[str, dict, dict[str, str]]:
-        """Load a workflow file and detect its picture inputs, or raise 4xx."""
+    def _load_stored_workflow(workflow_name: str) -> tuple[str, str, dict]:
+        """``(on-disk name, path, document)`` of a stored workflow, or raise 4xx."""
         name = _normalize_workflow_name(workflow_name)
         if not name:
             raise HTTPException(status_code=400, detail="workflow_name is required")
         path, _source = _resolve_workflow_path(name)
         if not path:
             raise HTTPException(status_code=404, detail="Workflow not found")
-        name = _on_disk_name(path)
         try:
             document = _load_workflow_json(path)
+        except Exception as exc:
+            logger.warning("Failed to read workflow %s: %s", path, exc)
+            raise HTTPException(
+                status_code=422, detail="This workflow's graph could not be read."
+            ) from exc
+        return _on_disk_name(path), path, document
+
+    def _read_picture_inputs(workflow_name: str) -> tuple[str, dict, dict[str, str]]:
+        """Load a workflow file and detect its picture inputs, or raise 4xx."""
+        name, path, document = _load_stored_workflow(workflow_name)
+        try:
             detected = detect_workflow_io(document)
         except Exception as exc:
             logger.warning("Failed to read the inputs of workflow %s: %s", path, exc)
@@ -1304,9 +1323,18 @@ def create_router(server) -> APIRouter:
         replace_input_modes(hub, library_uuid, name, modes)
         return _describe_picture_inputs(name, document, picture_inputs)
 
-    def _parameters_of(name: str, document: dict, object_info=None) -> list:
+    def _parameters_of(
+        name: str, document: dict, object_info=None, detected=None
+    ) -> list:
+        """The file's parameters, or 422 when an API-format graph cannot be read.
+
+        A UI-format file has none and is never reduced, so a graph the UI
+        reduction would refuse still answers ``readable: false``.
+        """
         try:
-            return workflow_parameters.describe_parameters(document, object_info)
+            return workflow_parameters.describe_parameters(
+                document, object_info, detected
+            )
         except WorkflowGraphError as exc:
             logger.warning(
                 "Failed to read the parameters of workflow %s: %s", name, exc
@@ -1314,36 +1342,6 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=422, detail="This workflow's graph could not be read."
             ) from exc
-
-    def _read_parameters(request: Request, workflow_name: str, *, typed: bool) -> dict:
-        """Load a workflow file and describe its parameters for the API, or raise 4xx.
-
-        With *typed* the parameters are typed from ComfyUI's ``object_info``;
-        when it cannot be reached they are still described, untyped, and
-        ``comfyui_error`` says why.
-        """
-        name, document, _inputs = _read_picture_inputs(workflow_name)
-        object_info, comfyui_error = None, None
-        if typed and workflow_parameters.api_graph(document) is not None:
-            user = server.auth.get_user_for_request(request)
-            comfyui_url = getattr(user, "comfyui_url", None) if user else None
-            comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
-            # ponytail: one object_info fetch per read; cache it if forms open slowly.
-            try:
-                object_info = fetch_object_info(comfyui_url)
-            except RuntimeError as exc:
-                logger.info(
-                    "[comfyui] Parameters of %s are untyped, ComfyUI not reachable "
-                    "at %s: %s",
-                    name,
-                    comfyui_url,
-                    exc,
-                )
-                comfyui_error = str(exc)
-        parameters = _parameters_of(name, document, object_info)
-        return _describe_parameters(
-            name, document, parameters, object_info is not None, comfyui_error
-        )
 
     def _stored_pins(name: str) -> Optional[list]:
         hub = getattr(server, "hub", None)
@@ -1360,13 +1358,53 @@ def create_router(server) -> APIRouter:
             )
             return None
 
-    def _describe_parameters(
-        name: str,
-        document: dict,
-        parameters: list,
-        typed: bool,
-        comfyui_error: Optional[str],
-    ) -> dict:
+    @router.get(
+        "/comfyui/workflows/{workflow_name}/parameters",
+        summary="A workflow's parameters",
+        description=(
+            "Every settable value of a saved workflow, typed from ComfyUI's "
+            "object_info with its real ranges and options. Connected inputs and "
+            "inputs a run fills are left out. When ComfyUI cannot be reached the "
+            "file's own values are returned with no ranges, and comfyui_error "
+            "says why."
+        ),
+        response_model=ComfyUIWorkflowParametersResponse,
+    )
+    def get_comfyui_workflow_parameters(request: Request, workflow_name: str):
+        name, _path, document = _load_stored_workflow(workflow_name)
+        # Described untyped first: a file with nothing to set (a UI-format one
+        # included) never waits on ComfyUI.
+        readable = api_graph(document) is not None
+        detected = None
+        if readable:
+            try:
+                detected = detect_workflow_io(document)
+            except WorkflowGraphError as exc:
+                logger.warning(
+                    "Failed to read the parameters of workflow %s: %s", name, exc
+                )
+                raise HTTPException(
+                    status_code=422, detail="This workflow's graph could not be read."
+                ) from exc
+        parameters = _parameters_of(name, document, None, detected)
+        typed, comfyui_error = False, None
+        if parameters:
+            comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
+            # ponytail: one object_info fetch per read; cache it if forms open slowly.
+            try:
+                object_info = fetch_object_info(comfyui_url)
+            except RuntimeError as exc:
+                logger.info(
+                    "[comfyui] Parameters of %s are untyped, ComfyUI not reachable "
+                    "at %s: %s",
+                    name,
+                    comfyui_url,
+                    exc,
+                )
+                comfyui_error = str(exc)
+            else:
+                parameters = _parameters_of(name, document, object_info, detected)
+                typed = True
         stored = _stored_pins(name)
         known = {p.key for p in parameters}
         # A stored pin naming a node the file has lost is skipped, not pruned,
@@ -1376,10 +1414,10 @@ def create_router(server) -> APIRouter:
             if stored is not None
             else workflow_parameters.default_pins(parameters)
         )
-        pins = set(ordered)
+        pinned = set(ordered)
         return {
             "workflow": name,
-            "readable": workflow_parameters.api_graph(document) is not None,
+            "readable": readable,
             "typed": typed,
             "comfyui_error": comfyui_error,
             "pins_saved": stored is not None,
@@ -1392,30 +1430,17 @@ def create_router(server) -> APIRouter:
                     "name": p.name,
                     "kind": p.kind,
                     "value": p.value,
+                    "typed": p.typed,
                     "min": p.minimum,
                     "max": p.maximum,
                     "step": p.step,
                     "options": list(p.options) if p.options is not None else None,
                     "multiline": p.multiline,
-                    "pinned": p.key in pins,
+                    "pinned": p.key in pinned,
                 }
                 for p in parameters
             ],
         }
-
-    @router.get(
-        "/comfyui/workflows/{workflow_name}/parameters",
-        summary="A workflow's parameters",
-        description=(
-            "Every settable value of a saved workflow, typed from ComfyUI's "
-            "object_info with its real ranges and options. Connected inputs and "
-            "inputs a run fills are left out. When ComfyUI cannot be reached the "
-            "file's own values are returned with no ranges and typed is false."
-        ),
-        response_model=ComfyUIWorkflowParametersResponse,
-    )
-    def get_comfyui_workflow_parameters(request: Request, workflow_name: str):
-        return _read_parameters(request, workflow_name, typed=True)
 
     @router.put(
         "/comfyui/workflows/{workflow_name}/pins",
@@ -1429,10 +1454,6 @@ def create_router(server) -> APIRouter:
         response_model=ComfyUIWorkflowPinsResponse,
     )
     def put_comfyui_workflow_pins(workflow_name: str, payload: dict = Body(...)):
-        # Untyped: which parameters exist does not depend on ComfyUI, so saving
-        # pins neither waits for it nor fails without it.
-        name, document, _inputs = _read_picture_inputs(workflow_name)
-        parameters = _parameters_of(name, document)
         hub = getattr(server, "hub", None)
         if hub is None:
             raise HTTPException(
@@ -1441,14 +1462,19 @@ def create_router(server) -> APIRouter:
             )
         if "pins" not in payload:
             raise HTTPException(status_code=400, detail="pins is required")
-        requested = payload["pins"]
-        pins = None
-        if requested is not None:
-            try:
-                pins = workflow_parameters.validate_pins(parameters, requested)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-        replace_parameter_pins(hub, name, pins)
+        # Under the lock delete takes, so the file cannot be trashed (and its
+        # pins forgotten) between reading it and writing a row for it.
+        with workflow_inbox.INBOX_LOCK:
+            name, _path, document = _load_stored_workflow(workflow_name)
+            pins = None
+            if payload["pins"] is not None:
+                try:
+                    pins = workflow_parameters.validate_pins(
+                        _parameters_of(name, document), payload["pins"]
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+            replace_parameter_pins(hub, name, pins)
         return {
             "workflow": name,
             "pins_saved": pins is not None,
@@ -1466,8 +1492,7 @@ def create_router(server) -> APIRouter:
     )
     async def abort_comfyui(request: Request):
         user = server.auth.get_user_for_request(request)
-        comfyui_url = getattr(user, "comfyui_url", None) if user else None
-        comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
+        comfyui_url = _comfyui_url(user)
         result = _comfyui_abort(comfyui_url)
         return {"status": "success", **result}
 
@@ -1555,8 +1580,7 @@ def create_router(server) -> APIRouter:
         output_node_ids = _extract_output_node_ids(workflow_payload, payload)
 
         user = server.auth.get_user_for_request(request)
-        comfyui_url = getattr(user, "comfyui_url", None) if user else None
-        comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
+        comfyui_url = _comfyui_url(user)
 
         def fetch_pictures(session, ids: list[int]):
             return session.exec(select(Picture).where(Picture.id.in_(ids))).all()
@@ -1717,8 +1741,7 @@ def create_router(server) -> APIRouter:
         output_node_ids = _extract_output_node_ids(workflow_payload, payload)
 
         user = server.auth.get_user_for_request(request)
-        comfyui_url = getattr(user, "comfyui_url", None) if user else None
-        comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
+        comfyui_url = _comfyui_url(user)
 
         fixed_seed = _resolve_fixed_seed(payload)
 
@@ -1887,8 +1910,7 @@ def create_router(server) -> APIRouter:
             return {"available": False, "reason": "no_prompt_chunk"}
 
         user = server.auth.get_user_for_request(request)
-        comfyui_url = getattr(user, "comfyui_url", None) if user else None
-        comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
+        comfyui_url = _comfyui_url(user)
 
         graph = sanitize_prompt_graph(prompt_graph)
         gen_info = extract_generation_info(graph)
@@ -2006,8 +2028,7 @@ def create_router(server) -> APIRouter:
             )
 
         user = server.auth.get_user_for_request(request)
-        comfyui_url = getattr(user, "comfyui_url", None) if user else None
-        comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
+        comfyui_url = _comfyui_url(user)
 
         preflight, seed_targets = _inspect_recipe(comfyui_url, workflow_instance)
         if not preflight.get("ok", True):

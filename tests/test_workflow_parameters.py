@@ -6,6 +6,10 @@ both combo serialisations ComfyUI emits.
 
 from __future__ import annotations
 
+import json
+import math
+import pathlib
+
 import pytest
 
 from pixlstash.services import workflow_bindings
@@ -187,6 +191,8 @@ def test_the_default_pins_are_models_seeds_and_sampler_settings():
         ("3", "denoise"),
         ("4", "ckpt_name"),
         ("5", "height"),
+        # The primitive that sets the width is the width control.
+        ("10", "value"),
     ]
 
 
@@ -271,22 +277,40 @@ def test_a_bound_input_cannot_be_set_as_a_value():
         )
 
 
-def test_only_credential_names_are_hidden_not_settings_that_contain_the_word():
+@pytest.mark.parametrize(
+    "name",
+    [
+        "api_key",
+        "auth_token",
+        "password",
+        "secret_key",
+        "access_key",
+        "private_key",
+        "auth",
+        "authorization",
+        "hfToken",
+        "authToken",
+    ],
+)
+def test_a_credential_name_is_never_a_parameter(name):
+    graph = {"1": {"class_type": "Custom", "inputs": {name: "dummy-value"}}}
+    assert wp.describe_parameters(graph) == []
+
+
+def test_settings_that_only_contain_a_credential_word_stay():
     graph = {
         "1": {
             "class_type": "Custom",
             "inputs": {
-                "api_key": "dummy-key",
-                "auth_token": "dummy-token",
-                "password": "dummy-password",
                 "token_normalization": "mean",
                 "max_tokens": 256,
-                "author": "someone",
+                "tokenizer": "clip",
+                "author_name": "someone",
             },
         }
     }
     names = {p.name for p in wp.describe_parameters(graph)}
-    assert names == {"token_normalization", "max_tokens", "author"}
+    assert names == {"token_normalization", "max_tokens", "tokenizer", "author_name"}
 
 
 def test_a_numeric_combo_keeps_its_options_and_takes_one_of_them():
@@ -330,3 +354,78 @@ def test_a_bound_template_prompt_is_not_a_parameter():
     keys = {p.key for p in wp.describe_parameters(graph)}
     assert ("1", "text") not in keys
     assert {("2", "text"), ("3", "filename_prefix")} <= keys
+
+
+def test_a_loaders_own_picture_field_is_bound_whatever_it_is_called():
+    graph = {
+        "1": {
+            "class_type": "PixlStashPictureLoader",
+            "inputs": {"picture_ids": "12,13"},
+        },
+        "2": {"class_type": "Image Load", "inputs": {"image_path": "/home/me/a.png"}},
+        "3": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+    }
+    keys = {p.key for p in wp.describe_parameters(graph)}
+    assert ("1", "picture_ids") not in keys and ("2", "image_path") not in keys
+
+
+def test_a_primitive_is_a_seed_when_its_consumer_rerolls_the_input():
+    """Decided as the run's seed detection decides it, not by the input's name."""
+    graph = {
+        "1": {"class_type": "PrimitiveInt", "inputs": {"value": 5}},
+        "2": {"class_type": "CustomSampler", "inputs": {"rng": ["1", 0], "steps": 4}},
+    }
+    info = {
+        "CustomSampler": {
+            "input": {"required": {"rng": ["INT", {"control_after_generate": True}]}}
+        },
+        "PrimitiveInt": {
+            "input": {"required": {"value": ["INT", {"control_after_generate": True}]}}
+        },
+    }
+    found = _by_key(wp.describe_parameters(graph, info))
+    assert found[("1", "value")].kind == wp.SEED
+    assert ("1", "value") in wp.default_pins(list(found.values()))
+
+
+def test_flux2_klein_pins_its_size_primitives_by_default():
+    path = (
+        pathlib.Path(__file__).parent.parent
+        / "pixlstash/data/comfyui-workflows/built-in/Flux2-Klein-t2i.json"
+    )
+    document = json.loads(path.read_text(encoding="utf-8"))
+    pins = wp.default_pins(wp.describe_parameters(document))
+    assert ("75:68", "value") in pins and ("75:69", "value") in pins
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_a_non_finite_number_is_refused_typed_or_not(value):
+    graph = _graph()
+    for info in (_OBJECT_INFO, None):
+        parameters = wp.describe_parameters(graph, info)
+        with pytest.raises(ValueError):
+            wp.apply_values(
+                graph, parameters, [{"node_id": "3", "name": "cfg", "value": value}]
+            )
+
+
+def test_an_untyped_number_takes_any_number_so_an_integer_cfg_takes_a_fraction():
+    graph = _graph()
+    graph["3"]["inputs"]["cfg"] = 1
+    parameters = wp.describe_parameters(graph)
+    updated = wp.apply_values(
+        graph, parameters, [{"node_id": "3", "name": "cfg", "value": 1.5}]
+    )
+    assert updated["3"]["inputs"]["cfg"] == 1.5
+    with pytest.raises(ValueError):
+        wp.apply_values(
+            graph, parameters, [{"node_id": "3", "name": "cfg", "value": "1.5"}]
+        )
+
+
+def test_a_node_id_that_only_looks_numeric_sorts_without_raising():
+    graph = {
+        "\u00b2": {"class_type": "A", "inputs": {"x": 1}},
+        "2": {"class_type": "A", "inputs": {"x": 1}},
+    }
+    assert [p.node_id for p in wp.describe_parameters(graph)] == ["2", "\u00b2"]
