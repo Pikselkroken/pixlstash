@@ -176,7 +176,7 @@ async function clearGuestSession() {
     <!-- Thumbnail layout + Sidebar Width share one row, side by side. The grid
          flows by column, so each setting's title, desc and control line up
          with its neighbour's. -->
-    <SettingsSection>
+    <SettingsSection class="pair-section">
       <div class="pair-set">
         <div class="pair-title">Thumbnail layout</div>
         <div class="pair-desc">How pictures sit in the grid.</div>
@@ -320,7 +320,11 @@ async function clearGuestSession() {
 
 /* Two settings in one row: three rows (title, desc, control) flowed by column,
    so the titles, descs and controls align across the pair. Title and desc
-   mirror SettingsSection's own. */
+   mirror SettingsSection's own. The section is the query container, so the
+   pair stacks on the width it actually gets, not the viewport's. */
+.pair-section {
+  container-type: inline-size;
+}
 .pair-set {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -330,13 +334,16 @@ async function clearGuestSession() {
   align-items: start;
 }
 .pair-title {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
   font-weight: var(--weight-semibold);
   font-size: var(--text-base);
   margin-bottom: var(--space-2);
 }
 .pair-desc {
   font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.65);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   line-height: var(--leading-snug);
   margin-bottom: var(--space-3);
 }
@@ -349,9 +356,9 @@ async function clearGuestSession() {
 .pair-seg {
   max-width: 320px;
 }
-/* Half a phone-width pane is narrower than two stacked segments; stack the
-   pair instead (same breakpoint as the dialog's own narrow layout). */
-@media (max-width: 480px) {
+/* A stacked segment can't shrink below its 64px diagram plus padding (~192px
+   per column), so under ~416px of section the diagrams would overlap. */
+@container (max-width: 416px) {
   .pair-set {
     grid-template-columns: 1fr;
     grid-template-rows: none;
@@ -438,11 +445,13 @@ async function clearGuestSession() {
   background: currentColor;
   flex-shrink: 0;
 }
+/* Whole pixels near the spec's 28% / 11% of the 61px inner box, so the rail
+   edge stays crisp. */
 .swi--full .swi-rail {
-  width: 28%;
+  width: 17px;
 }
 .swi--dock .swi-rail {
-  width: 11%;
+  width: 7px;
 }
 .swi-content {
   flex: 1;
