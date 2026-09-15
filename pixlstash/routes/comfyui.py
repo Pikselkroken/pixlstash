@@ -1721,6 +1721,11 @@ def create_router(server) -> APIRouter:
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         seed_mode = payload.get("seed_mode", "random")
+        if seed_mode not in ("random", "fixed", "keep"):
+            raise HTTPException(
+                status_code=400,
+                detail="seed_mode must be 'random', 'fixed' or 'keep'",
+            )
         fixed_seed = _resolve_fixed_seed(payload)
         caption = payload.get("caption") or ""
         if not isinstance(caption, str):
@@ -1728,52 +1733,55 @@ def create_router(server) -> APIRouter:
         client_id = payload.get("client_id") or payload.get("clientId") or None
         if client_id is not None:
             client_id = str(client_id)
-        should_stack = bool(payload.get("stack", True))
+        should_stack = payload.get("stack", True)
+        if not isinstance(should_stack, bool):
+            raise HTTPException(status_code=400, detail="stack must be true or false")
         view_context = None if takes_selection else _view_context(payload)
+        caption_targets = workflow_bindings.run_targets(document)[
+            workflow_bindings.CAPTION
+        ]
 
-        user = server.auth.get_user_for_request(request)
-        comfyui_url = getattr(user, "comfyui_url", None) if user else None
-        comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
+        def filled(names: dict[str, str], selected_name: str | None) -> dict:
+            """A copy of the document with every picture and the caption in place.
 
-        def upload(pic) -> str:
-            # Named by content, not by the file's own name: two pictures called
-            # image.png would otherwise overwrite each other in ComfyUI's input
-            # folder before the queue reaches the first run.
-            ext = os.path.splitext(files[pic.id])[1]
-            return _upload_image_to_comfyui(
-                comfyui_url,
-                files[pic.id],
-                upload_name=f"pixlstash-{pic.pixel_sha or pic.id}{ext}",
-            )
-
-        shared_names = {node_id: upload(pic) for node_id, pic in shared.items()}
-        caption_targets = {
-            workflow_bindings.CAPTION: workflow_bindings.run_targets(document)[
-                workflow_bindings.CAPTION
-            ]
-        }
-        prompts = []
-        for pic_id in selection_ids if takes_selection else [None]:
+            A templated binding can hold the picture and the caption at once, so
+            each picture target is filled together with any caption target on
+            the same spot: filled apart, the second pass rebuilds the string from
+            its template and drops the first value.
+            """
             instance = deepcopy(document)
-            names = dict(shared_names)
-            if pic_id is not None and selection_node is not None:
-                names[selection_node] = upload(by_id[pic_id])
+            image_fills = [(targets[node_id], name) for node_id, name in names.items()]
+            if selected_name is not None:
+                image_fills += [(target, selected_name) for target in legacy_targets]
+            image_paths = set()
             try:
-                for node_id, uploaded in names.items():
+                for target, uploaded in image_fills:
+                    key = json.dumps(target.get("path"))
+                    image_paths.add(key)
                     workflow_bindings.fill(
                         instance,
-                        {workflow_bindings.IMAGE: [targets[node_id]]},
-                        {workflow_bindings.IMAGE: uploaded},
-                    )
-                if pic_id is not None and legacy_targets:
-                    workflow_bindings.fill(
-                        instance,
-                        {workflow_bindings.IMAGE: legacy_targets},
-                        {workflow_bindings.IMAGE: upload(by_id[pic_id])},
+                        {
+                            workflow_bindings.IMAGE: [target],
+                            workflow_bindings.CAPTION: [
+                                t
+                                for t in caption_targets
+                                if json.dumps(t.get("path")) == key
+                            ],
+                        },
+                        {
+                            workflow_bindings.IMAGE: uploaded,
+                            workflow_bindings.CAPTION: caption or None,
+                        },
                     )
                 workflow_bindings.fill(
                     instance,
-                    caption_targets,
+                    {
+                        workflow_bindings.CAPTION: [
+                            t
+                            for t in caption_targets
+                            if json.dumps(t.get("path")) not in image_paths
+                        ]
+                    },
                     {workflow_bindings.CAPTION: caption or None},
                 )
             except workflow_bindings.BindingError as exc:
@@ -1782,34 +1790,85 @@ def create_router(server) -> APIRouter:
                     status_code=400,
                     detail=f"Workflow input binding no longer matches the graph: {exc}",
                 ) from exc
-            workflow_instance = {
-                **workflow_parameters.api_graph(instance),
-                **pixlstash_keys,
-            }
-            if fixed_seed is not None:
-                _apply_fixed_seed(workflow_instance, fixed_seed)
-            elif seed_mode != "keep":
-                _randomize_seeds(workflow_instance)
-            stack_id = (
-                _stack_outputs_with(workflow_instance, pic_id)
-                if pic_id is not None and should_stack
-                else None
+            return {**workflow_parameters.api_graph(instance), **pixlstash_keys}
+
+        # Filled once with stand-in names, so a binding that no longer matches
+        # the graph is refused before anything reaches ComfyUI.
+        filled(
+            {node_id: "example.png" for node_id in targets},
+            "example.png" if takes_selection else None,
+        )
+
+        user = server.auth.get_user_for_request(request)
+        comfyui_url = getattr(user, "comfyui_url", None) if user else None
+        comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
+
+        def upload(pic) -> str:
+            # Named by the picture, not by the file's own name: two pictures
+            # called image.png would otherwise overwrite each other in ComfyUI's
+            # input folder before the queue reaches the first run. The id tells
+            # apart two pictures whose pixels hash alike.
+            ext = os.path.splitext(files[pic.id])[1]
+            return _upload_image_to_comfyui(
+                comfyui_url,
+                files[pic.id],
+                upload_name=f"pixlstash-{pic.id}-{pic.pixel_sha or 'unhashed'}{ext}",
             )
-            response_payload = _submit_comfyui_prompt(
-                comfyui_url, workflow_instance, client_id
-            )
-            prompt_id = response_payload.get("prompt_id") or response_payload.get("id")
-            if prompt_id:
-                _start_output_import(
-                    request,
-                    comfyui_url,
-                    prompt_id,
-                    output_node_ids,
-                    stack_id,
-                    pic_id,
-                    view_context,
+
+        prompts = []
+        try:
+            shared_names = {node_id: upload(pic) for node_id, pic in shared.items()}
+            for pic_id in selection_ids if takes_selection else [None]:
+                names = dict(shared_names)
+                selected_name = None
+                if pic_id is not None:
+                    selected_name = upload(by_id[pic_id])
+                    if selection_node is not None:
+                        names[selection_node] = selected_name
+                workflow_instance = filled(names, selected_name)
+                if fixed_seed is not None:
+                    _apply_fixed_seed(workflow_instance, fixed_seed)
+                elif seed_mode != "keep":
+                    _randomize_seeds(workflow_instance)
+                stack_id = (
+                    _stack_outputs_with(workflow_instance, pic_id)
+                    if pic_id is not None and should_stack
+                    else None
                 )
-            prompts.append({"picture_id": pic_id, "prompt_id": prompt_id})
+                response_payload = _submit_comfyui_prompt(
+                    comfyui_url, workflow_instance, client_id
+                )
+                prompt_id = response_payload.get("prompt_id") or response_payload.get(
+                    "id"
+                )
+                if prompt_id:
+                    _start_output_import(
+                        request,
+                        comfyui_url,
+                        prompt_id,
+                        output_node_ids,
+                        stack_id,
+                        pic_id,
+                        view_context,
+                    )
+                prompts.append({"picture_id": pic_id, "prompt_id": prompt_id})
+        except HTTPException as exc:
+            if not prompts:
+                raise
+            # Earlier runs are already queued and importing, so they are
+            # returned for the client to follow rather than lost behind an error.
+            logger.warning(
+                "Workflow %s stopped after %d of its runs: %s",
+                name,
+                len(prompts),
+                exc.detail,
+            )
+            return {
+                "status": "partial",
+                "workflow": name,
+                "prompts": prompts,
+                "error": str(exc.detail),
+            }
         return {"status": "success", "workflow": name, "prompts": prompts}
 
     @router.post(

@@ -164,6 +164,9 @@ import {
   runWorkflow,
 } from "../../api/comfyui";
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { useSelectionStore } from "../../stores/useSelectionStore";
+import { SCRAPHEAP_PICTURES_ID } from "../../stores/useViewStore";
+import { isReadOnly } from "../../utils/apiClient";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import {
@@ -190,6 +193,7 @@ const MAX_SEED = 4294967295;
 const runStore = useWorkflowRunStore();
 const sidebarStore = useSidebarStore();
 const genStackPrefs = useGenStackPrefsStore();
+const selectionStore = useSelectionStore();
 
 const tab = ref("run");
 const workflows = ref([]);
@@ -275,11 +279,18 @@ const countLine = computed(() =>
 
 /** Why the run cannot start, or "" when it can. */
 const blocker = computed(() => {
+  if (isReadOnly.value) return "This session is read-only.";
   if (!chosen.value) return "Choose a workflow.";
   if (inputsError.value || inputs.value === null)
     return "Its inputs are not read yet.";
   if (fromSelection.value && !selectionCount.value)
     return "Select the pictures to run it on.";
+  if (
+    fromSelection.value &&
+    String(selectionStore.selectedCharacter).toUpperCase() ===
+      String(SCRAPHEAP_PICTURES_ID).toUpperCase()
+  )
+    return "Pictures in the Scrapheap cannot be run on.";
   const missing = inputs.value.find(
     (input) => input.mode === "fixed" && input.picture_missing,
   );
@@ -377,10 +388,14 @@ async function run() {
     const response = await runWorkflow(chosen.value.name, body);
     const prompts = Array.isArray(response?.prompts) ? response.prompts : [];
     runStore.started(prompts);
-    runDone.value =
+    const started =
       prompts.length === 1
         ? "Started 1 run in ComfyUI."
         : `Started ${prompts.length} runs in ComfyUI.`;
+    // A batch ComfyUI stopped partway: the runs it started still import.
+    if (response?.status === "partial")
+      runError.value = `${started} The rest did not start: ${response.error}`;
+    else runDone.value = started;
   } catch (err) {
     runError.value = errorDetail(err) || err?.message || String(err);
   } finally {

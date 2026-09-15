@@ -35,6 +35,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlmodel import delete, select
 
@@ -1636,11 +1637,11 @@ def test_a_selection_runs_once_per_picture_with_the_picker_in_every_run(
     assert [p["picture_id"] for p in r.json()["prompts"]] == selected
     # Node 2 holds the old binding, so it is the Selection input by default.
     assert [g["2"]["inputs"]["image"] for g in fake_comfyui.submitted] == [
-        f"pixlstash-{selected[0]}.png",
-        f"pixlstash-{selected[1]}.png",
+        f"pixlstash-{selected[0]}-unhashed.png",
+        f"pixlstash-{selected[1]}-unhashed.png",
     ]
     assert {g["1"]["inputs"]["image"] for g in fake_comfyui.submitted} == {
-        f"pixlstash-{picked}.png"
+        f"pixlstash-{picked}-unhashed.png"
     }
     # The picker's picture is uploaded once, not once per run.
     assert [name for name, _ in fake_comfyui.uploads].count("busy_two.png") == 1
@@ -1669,7 +1670,7 @@ def test_a_fixed_input_is_filled_from_the_setup_and_a_lost_one_runs_nothing(
     r = _run(owner, "edit.json", picture_ids=[selected], stack=False)
     assert r.status_code == 200, r.text
     assert fake_comfyui.submitted[0]["1"]["inputs"]["image"] == (
-        "pixlstash-sha-run-fixed.png"
+        f"pixlstash-{fixed}-sha-run-fixed.png"
     )
 
     def bin_it(session):
@@ -1711,10 +1712,23 @@ def test_a_run_that_cannot_be_filled_submits_nothing(
             },
         ),
         ("edit.json", {"picture_ids": ["1"], "pictures": picker}),
+        ("edit.json", {"picture_ids": [one], "pictures": picker, "seed_mode": "fixd"}),
+        ("edit.json", {"picture_ids": [one], "pictures": picker, "stack": "false"}),
     ):
         r = _run(owner, name, **body)
         assert r.status_code == 400, (body, r.text)
     r = _run(owner, "edit.json", picture_ids=[987654], pictures=picker)
+    assert r.status_code == 404, r.text
+
+    # A picture in the Scrapheap is not one a run may read.
+    def bin_it(session):
+        picture = session.get(Picture, one)
+        picture.deleted = True
+        session.add(picture)
+        session.commit()
+
+    workflow_env.server.vault.db.run_task(bin_it, priority=DBPriority.IMMEDIATE)
+    r = _run(owner, "edit.json", picture_ids=[one], pictures=picker)
     assert r.status_code == 404, r.text
     assert fake_comfyui.submitted == [] and fake_comfyui.uploads == []
 
@@ -1766,3 +1780,73 @@ def test_the_list_says_which_workflows_can_run(workflow_env, sampler_workflow):
     }
     assert listed["sampler.json"]["runnable"] is True
     assert listed["canvas.json"]["runnable"] is False
+
+
+def test_a_selection_run_stacks_each_output_with_its_picture(
+    workflow_env, edit_workflow, fake_comfyui
+):
+    ids = _picture_ids(workflow_env.server)
+    one, two = ids["busy_one.png"], ids["busy_two.png"]
+    r = _run(
+        workflow_env.owner,
+        "edit.json",
+        picture_ids=[one],
+        pictures=[{"node_id": "1", "picture_id": two}],
+    )
+    assert r.status_code == 200, r.text
+    _wait_for_collection(fake_comfyui, 1)
+    ((output_nodes, stack_id, source), _context) = fake_comfyui.collected[0]
+    assert (output_nodes, source) == (["3"], one)
+    assert stack_id is not None
+    assert str(stack_id) in fake_comfyui.submitted[0]["3"]["inputs"]["filename_prefix"]
+
+
+def test_a_template_holding_the_picture_and_the_caption_gets_both(
+    workflow_env, tmp_path, edit_workflow, fake_comfyui
+):
+    # A loader detection does not recognise, bound by the old dialog with both
+    # tokens in one string: filled a role at a time, one would wipe the other.
+    graph, _changed = workflow_bindings.migrate_placeholders(
+        {
+            "7": {
+                "class_type": "MyPictureSource",
+                "inputs": {"image": "{{image_path}} | {{caption}}"},
+            },
+            "3": {"class_type": "SaveImage", "inputs": {"images": ["7", 0]}},
+        }
+    )
+    (tmp_path / "joint.json").write_text(json.dumps(graph), encoding="utf-8")
+    comfyui_module._describe_workflow.cache_clear()
+    one = _picture_ids(workflow_env.server)["busy_one.png"]
+    r = _run(
+        workflow_env.owner, "joint.json", picture_ids=[one], caption="dog", stack=False
+    )
+    assert r.status_code == 200, r.text
+    assert fake_comfyui.submitted[0]["7"]["inputs"]["image"] == (
+        f"pixlstash-{one}-unhashed.png | dog"
+    )
+
+
+def test_a_batch_that_fails_partway_returns_the_runs_it_started(
+    workflow_env, edit_workflow, fake_comfyui, monkeypatch
+):
+    def submit_once(_url, workflow, _client_id=None):
+        if fake_comfyui.submitted:
+            raise HTTPException(status_code=502, detail="ComfyUI prompt failed")
+        fake_comfyui.submitted.append(workflow)
+        return {"prompt_id": "prompt-1"}
+
+    monkeypatch.setattr(comfyui_module, "_submit_comfyui_prompt", submit_once)
+    ids = _picture_ids(workflow_env.server)
+    r = _run(
+        workflow_env.owner,
+        "edit.json",
+        picture_ids=[ids["busy_one.png"], ids["busy_three.png"]],
+        pictures=[{"node_id": "1", "picture_id": ids["busy_two.png"]}],
+        stack=False,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "partial"
+    assert [p["prompt_id"] for p in body["prompts"]] == ["prompt-1"]
+    assert "ComfyUI prompt failed" in body["error"]

@@ -218,3 +218,31 @@ describe("a run from the toolbar", () => {
     expect(body.client_id).toBe("tab-1");
   });
 });
+
+describe("a batch ComfyUI stopped partway", () => {
+  it("follows the runs that started and says the rest did not", async () => {
+    getWorkflowInputs.mockResolvedValue({
+      inputs: [
+        { node_id: "2", title: "Subject", mode: "selection", picture_id: null },
+      ],
+    });
+    runWorkflow.mockResolvedValue({
+      status: "partial",
+      prompts: [{ picture_id: 7, prompt_id: "a" }],
+      error: "ComfyUI prompt failed",
+    });
+    const { wrapper, store } = await mountFrom(FROM_SELECTION);
+    const runner = vi.fn();
+    store.attachRunner(runner);
+    store.selectionIds = [7, 8];
+    await flush(wrapper);
+    await runButton(wrapper).trigger("click");
+    await flush(wrapper);
+    expect(runner).toHaveBeenCalledWith({
+      prompts: [{ picture_id: 7, prompt_id: "a" }],
+    });
+    expect(wrapper.text()).toContain(
+      "Started 1 run in ComfyUI. The rest did not start: ComfyUI prompt failed",
+    );
+  });
+});

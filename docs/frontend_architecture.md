@@ -4335,7 +4335,9 @@ on every open: the pill offers `runnable` workflows with `has_selection_input`,
 the toolbar those without, so neither offers one that would refuse. Pictures
 in shows each input by its mode: Selection as the count, Picker with a
 `PicturePicker` that must be answered before Run enables, Fixed read-only (and
-a blocker when its picture has left the library). The body goes to
+a blocker when its picture has left the library). Run is blocked, with the reason in place of the count, for a read-only session
+and for a selection in the Scrapheap. A `partial` answer hands its started
+prompts to the runner and says the rest did not start. The body goes to
 `POST /comfyui/workflows/{name}/run`; the view context is sent only from the
 toolbar, since selection runs stack on their pictures. The overlay's ComfyUI
 menu and Remix still run through `run_i2i` / `run_t2i`. The #1306 parameter form

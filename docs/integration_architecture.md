@@ -426,7 +426,7 @@ preview, the run and the ghosting. Five points where the wiring is load-bearing:
 ### 2.3 The `/workflows` contract (v1.11)
 
 The Workflows view's read side (implementation plan §F1/§F2). Four GETs, no
-mutators: naming a workflow is a later step, and running one is §2.3's run route below. Forgetting ghosts
+mutators: naming a workflow is a later step, and running one is the run route further down this section. Forgetting ghosts
 is not here either: it is two purges beside the retention setting,
 `DELETE /server-config/ghost-retention/ghosts` and
 `.../model-ghosts?expected=N`, whose counts `GET /server-config/ghost-retention`
@@ -542,8 +542,11 @@ picture has left the library. `values` are checked against the untyped
 `/parameters` description (400 on a mismatch; ranges are ComfyUI's to refuse);
 `seed_mode` is `random` (the default, every sampler re-rolled), `fixed` with a
 `seed`, or `keep`, which leaves the seeds as the file and `values` have them.
-Every refusal comes before anything is uploaded or submitted. Each picture is
-uploaded to ComfyUI once per request, named by its content, and outputs are
+Every refusal comes before anything is uploaded or submitted. A ComfyUI failure
+partway through a batch answers 200 with `status: "partial"`, the `prompts` that
+did start and an `error`: those runs are queued and importing, so the client
+follows them and says the rest did not start. Each picture is
+uploaded to ComfyUI once per request, named by its id and content, and outputs are
 collected from the detected save nodes and arrive as `picture_imported` (§8),
 with the `prompts` handed to `ComfyUiRunner` for progress. A UI-format file is a
 400. `OWNER_ONLY`, because a Fixed picture comes from the setup rather than the
