@@ -5,6 +5,7 @@ import os
 import torch
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.media_files import SUPPORTED_IMAGE_EXTS
 
 IMAGE_SIZE = 448
 
@@ -21,7 +22,7 @@ class ImageLoadingDatasetPrepper(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         img_path = str(self.images[idx])
         ext = os.path.splitext(img_path)[1].lower()
-        if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif", ".avif"]:
+        if ext in SUPPORTED_IMAGE_EXTS:
             try:
                 image = Image.open(img_path).convert("RGB")
                 image = self.preprocess_image(image)

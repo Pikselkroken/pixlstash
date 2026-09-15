@@ -560,9 +560,7 @@ def detect_folder_suffixes(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-_IMAGE_EXTS_FOR_DETECTION = frozenset(
-    {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif", ".avif", ".gif"}
-)
+_IMAGE_EXTS_FOR_DETECTION = SUPPORTED_IMAGE_EXTS
 _SIDECAR_EXTS_FOR_DETECTION = frozenset({".txt", ".caption"})
 
 
