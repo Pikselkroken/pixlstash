@@ -7,8 +7,9 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Generation, Picture
-from pixlstash.hub.workflows import record_api_graph
+from pixlstash.hub.workflows import record_api_graph, record_reduction
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.a1111_recipe import reduce_a1111
 from pixlstash.services.workflow_ghost_service import enqueue_ghost_cascade_in_session
 from pixlstash.services.workflow_hash import HASH_VERSION, WorkflowGraphError
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
@@ -279,7 +280,7 @@ class ComfyUIExtractionTask(BaseTask):
     def _record(
         self, workflow_updates: list, picture_id: int, embedded_metadata, revisit: bool
     ):
-        """File the picture's embedded API graph in the hub, if there is one.
+        """File the picture's embedded API graph, or A1111 data, in the hub.
 
         The rule the two outcomes turn on: **a property of the picture marks it
         scanned; a failure of our own machinery does not.** No graph, an
@@ -305,15 +306,21 @@ class ComfyUIExtractionTask(BaseTask):
             return
         try:
             api_graph = find_comfy_api_prompt(embedded_metadata)
-            if api_graph is None:
-                # No executable `prompt` chunk: an imported JPEG, an A1111 PNG,
-                # or a file whose metadata was stripped. Normal, not a failure,
-                # and roughly a third of a real library.
+            a1111 = None if api_graph else reduce_a1111(embedded_metadata)
+            if api_graph is None and a1111 is None:
+                # No executable `prompt` chunk and no A1111 generation data: an
+                # imported JPEG or a file whose metadata was stripped. Normal,
+                # not a failure, and roughly a third of a real library.
                 workflow_updates.append((picture_id, None, None, None, None))
                 return
-            keys = record_api_graph(
-                self._hub, api_graph, self._library_uuid, revisit=revisit
-            )
+            if a1111 is not None:
+                keys = record_reduction(
+                    self._hub, a1111.nodes, self._library_uuid, revisit=revisit
+                )
+            else:
+                keys = record_api_graph(
+                    self._hub, api_graph, self._library_uuid, revisit=revisit
+                )
         except WorkflowGraphError as exc:
             # A graph WAS embedded and the hash layer refused it -- malformed
             # `class_type`, non-mapping `inputs`, a cycle. That is permanent, so
@@ -332,16 +339,22 @@ class ComfyUIExtractionTask(BaseTask):
         except Exception as exc:
             self._stand_down(picture_id, exc)
             return
-        seed = extract_generation_info(api_graph).get("seed")
+        if a1111 is not None:
+            seed = a1111.seed
+        else:
+            seed = extract_generation_info(api_graph).get("seed")
+            seed = (
+                str(seed)
+                if isinstance(seed, int) and not isinstance(seed, bool)
+                else None
+            )
         workflow_updates.append(
             (
                 picture_id,
                 keys.topology_hash,
                 keys.structural_hash,
                 keys.instance_hash,
-                str(seed)
-                if isinstance(seed, int) and not isinstance(seed, bool)
-                else None,
+                seed,
             )
         )
 
