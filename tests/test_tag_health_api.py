@@ -47,8 +47,8 @@ def _disable_background_tagger(server):
     finders that would race the seed and the board rebuild:
 
     * ``MissingTagFinder`` claims any sentinel-carrying picture, runs the tagger,
-      then ``TagTask._add_tags_bulk`` *deletes every ``Tag`` row for that picture*
-      (sentinel and seeded tags alike) and rewrites them, plus writes
+      then ``TagTask._add_tags_bulk`` clears the sentinel and adds its own tags
+      beside the seeded ones, plus writes
       ``TagPrediction`` rows on the tagger's own ``model_version`` - moving
       ``_current_model_version`` off the seeded ``"v1"`` and dropping the seeded
       predictions out of the version-pinned ``est_wrong``/``est_missing`` signals.
