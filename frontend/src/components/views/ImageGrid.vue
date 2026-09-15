@@ -4033,6 +4033,12 @@ async function runKeepCoverOnly() {
       keepRecipes ? KEEP_RECIPES_ONLY_OP_TYPE : KEEP_COVER_ONLY_OP_TYPE,
       keepCoverOnlySkipNote(result),
     );
+    if (result?.ghost_retention_saved === false) {
+      noticeStore.error(
+        "Keeping every ghost is on until PixlStash restarts, but it could not be saved. Set it again in Settings › Privacy.",
+        { key: "keep-recipes-ghost-retention" },
+      );
+    }
     // Raises "Kept the cover of N stacks · M pictures to the Scrapheap · Undo".
     operationStore.refresh();
     emit("refresh-sidebar");

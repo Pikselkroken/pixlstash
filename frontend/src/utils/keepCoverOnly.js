@@ -403,8 +403,10 @@ export function keepRecipesOnlyStayingReasons(preview) {
     rows.push({
       key: "ghost_not_kept",
       text:
-        `${pictures(ghost)} a prompt no kept picture shares, and your ghost ` +
-        `setting only keeps recipes that one does.`,
+        preview.ghost_retention === "off"
+          ? `${ghost.toLocaleString()} would keep nothing, because your ghost setting is Off.`
+          : `${pictures(ghost)} a prompt no kept picture shares, and your ghost ` +
+            `setting only keeps recipes that one does.`,
     });
   }
   return rows;
@@ -446,13 +448,20 @@ export function keepCoverOnlySkipNote(result) {
   const character = Array.isArray(result.stacks_skipped_character_on_copy)
     ? result.stacks_skipped_character_on_copy.length
     : 0;
+  const nothing = Array.isArray(result.stacks_skipped_nothing_reproducible)
+    ? result.stacks_skipped_nothing_reproducible.length
+    : 0;
   const total = locked + character;
   const staying = Number(result.pictures_staying) || 0;
   const stayingNote =
     staying > 0
       ? `${staying.toLocaleString()} ${staying === 1 ? "picture stays" : "pictures stay"}: ${staying === 1 ? "it" : "they"} could not be made again.`
       : "";
-  if (total <= 0) return stayingNote;
+  const nothingNote =
+    nothing > 0
+      ? `${nothing} ${nothing === 1 ? "stack" : "stacks"} unchanged: nothing in ${nothing === 1 ? "it" : "them"} could be made again.`
+      : "";
+  if (total <= 0) return [nothingNote, stayingNote].filter(Boolean).join(" ");
   const noun = total === 1 ? "stack" : "stacks";
   let note;
   if (locked && character) {
@@ -462,5 +471,5 @@ export function keepCoverOnlySkipNote(result) {
   } else {
     note = `${character} ${noun} skipped: a person's only link sits on a copy.`;
   }
-  return stayingNote ? `${note} ${stayingNote}` : note;
+  return [note, nothingNote, stayingNote].filter(Boolean).join(" ");
 }

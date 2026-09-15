@@ -6138,19 +6138,24 @@ soft-deleted to the Scrapheap.
 retention) to `plan_in_session`, and a copy moves only when it could be made
 again after a purge. `_staying_reasons_in_session` gives every other copy the
 first reason it fails, in order: `no_recipe` (no `workflow_recipe_instance` row
-for this library: `hub/workflows.filed_instance_hashes`), `model_missing` (a
-model ghost or a forgotten name in its recipe:
-`recipes_missing_a_model`), `no_thumbnail` (`thumbnail_width` is NULL; a ghost
-is never written without one), `ghost_not_kept` (under `covered`, no live
+for this library: `hub/workflows.filed_instance_hashes`, or no `pixel_sha` to
+key a ghost), `model_missing` (a model ghost or a forgotten name in its recipe:
+`recipes_missing_a_model`; like model ghosts it judges `.safetensors` names and
+digests only, so a missing `.ckpt` is not caught), `no_thumbnail` (no thumbnail
+file, the same `find_thumbnail` the purge reads), `ghost_not_kept` (under `covered`, no live
 picture outside the moving set carries its instance hash; under `off`, always).
-Those copies stay live in their stack; character loss is judged over the copies
-that leave. A stack with none left to move is `nothing_reproducible`, a fifth
+Those copies stay live in their stack and **outside the metadata union**, which
+runs over the cover and the copies that leave: the union writes every tag and
+the best score onto every picture it is given, and a copy that stays is not the
+cover. Character loss is judged over the same set. A stack with none left to move is `nothing_reproducible`, a fifth
 disjoint bucket. It is still only a soft delete: the ghost is written by the
 purge under the setting in force then, so a later cover delete or setting change
 can still take it, which is the setting's documented contract.
 `keep_every_ghost` plans under `on` and, after a call that moved something, the
-route persists `workflow_ghost_retention: on` exactly as
-`PATCH /server-config/ghost-retention` does. The op type is
+route sets `workflow_ghost_retention: on` through the same
+`workflow_ghost_service.apply_ghost_retention` the PATCH uses. The pictures have
+already moved by then, so a failed save is logged and returned as
+`ghost_retention_saved: false` rather than a 500. The op type is
 `stack.keep_recipes_only`. Seeds are not required: a seedless graph is
 reproducible, and the purge re-reads the seed from the file.
 

@@ -106,6 +106,7 @@ from pixlstash.services.workflow_ghost_service import (
     GHOST_RETENTION_COVERED,
     GHOST_RETENTION_ON,
 )
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.stacking import normalize_stack_positions
 
@@ -208,11 +209,14 @@ class RecipeCheck:
         library_uuid: The active library, which keys instance rows and ghosts.
         ghost_retention: The position to plan under: the live setting, or
             ``on`` when the dialog's keep-every-ghost box is ticked.
+        image_root: Where thumbnails live; the purge reads the file, not a
+            column, so the planner does too.
     """
 
     hub: Any
     library_uuid: Optional[str]
     ghost_retention: str
+    image_root: Optional[str] = None
 
 
 # --- The plan ---------------------------------------------------------------
@@ -515,9 +519,7 @@ def _faces_by_picture(session: Session, picture_ids: list[int]) -> dict[int, set
 
 
 def _character_loss(
-    members: list[Picture],
-    faces_by_picture: dict[int, set[int]],
-    leaving_ids: Optional[set[int]] = None,
+    members: list[Picture], faces_by_picture: dict[int, set[int]]
 ) -> dict[int, list[int]]:
     """Characters this stack would lose, mapped to the copies that carry them.
 
@@ -532,9 +534,9 @@ def _character_loss(
     * With more than one character the union writes nothing, so every character
       the cover does not already hold walks out with its copy.
 
-    ``leaving_ids`` narrows who leaves (Keep recipes only moves some copies and
-    not others): a character a staying copy still carries is not lost. ``None``
-    means every copy leaves.
+    Keep recipes only passes the cover and the copies that leave, which is
+    also the set it unions over: a copy that stays keeps its own links and is
+    neither a carrier nor unioned.
 
     A copy's own ``pending_character_id`` is deliberately **not** treated as a
     link to preserve. It is an unconfirmed suggestion, and it is what the union
@@ -548,8 +550,6 @@ def _character_loss(
     if len(members) < MIN_STACK_MEMBERS:
         return {}
     cover = members[0]
-    if leaving_ids is None:
-        leaving_ids = {int(member.id) for member in members[1:]}
     stack_characters: set[int] = set()
     for member in members:
         stack_characters |= faces_by_picture.get(int(member.id), set())
@@ -568,9 +568,6 @@ def _character_loss(
         return {}
     carriers: dict[int, list[int]] = {}
     for member in members[1:]:
-        # A staying copy keeps its own link, so only a leaving carrier loses one.
-        if int(member.id) not in leaving_ids:
-            continue
         for character_id in faces_by_picture.get(int(member.id), set()) & lost:
             carriers.setdefault(character_id, []).append(int(member.id))
     return {cid: sorted(pids) for cid, pids in carriers.items()}
@@ -600,6 +597,9 @@ def _staying_reasons_in_session(
         library_uuid,
         [pic.workflow_instance_hash for pic in copies if pic.workflow_instance_hash],
     )
+    # ponytail: two hub reads (one a json_each pass over every recipe document)
+    # inside the vault read/write task; move them before the task if a large hub
+    # makes the preview or the collapse visibly slow.
     missing_model = recipes_missing_a_model(
         hub,
         [
@@ -610,11 +610,19 @@ def _staying_reasons_in_session(
     )
     passing: list[Picture] = []
     for pic in copies:
-        if not pic.workflow_instance_hash or pic.workflow_instance_hash not in filed:
+        # No pixel_sha is folded into no_recipe: a ghost is keyed by it, so
+        # without one the purge keeps nothing (``_prepare_ghosts``).
+        if (
+            not pic.workflow_instance_hash
+            or pic.workflow_instance_hash not in filed
+            or not pic.pixel_sha
+        ):
             reasons[int(pic.id)] = STAY_NO_RECIPE
         elif pic.workflow_structural_hash in missing_model:
             reasons[int(pic.id)] = STAY_MODEL_MISSING
-        elif pic.thumbnail_width is None:
+        elif pic.thumbnail_width is None or not ImageUtils.find_thumbnail(
+            recipes.image_root, pic.file_path
+        ):
             reasons[int(pic.id)] = STAY_NO_THUMBNAIL
         else:
             passing.append(pic)
@@ -716,11 +724,10 @@ def plan_in_session(
     # per-stack classification can never disagree about what would be lost.
     loss_by_stack = {
         stack_id: _character_loss(
-            members,
-            faces_by_picture,
-            None
+            members
             if staying is None
-            else {int(pic.id) for pic in members[1:] if int(pic.id) not in staying},
+            else [pic for pic in members if int(pic.id) not in staying],
+            faces_by_picture,
         )
         for stack_id, members in members_by_stack.items()
     }
@@ -793,11 +800,13 @@ def _plan_one_stack(
         copies = [pic for pic in copies if int(pic.id) not in staying]
     copy_ids = [int(pic.id) for pic in copies]
 
+    # Over what the union will touch: the cover and the copies that leave.
+    unioned = [cover, *copies]
     cover_tags = tags_by_picture.get(cover_id, set())
     union_tags: set[str] = set()
-    for member in members:
+    for member in unioned:
         union_tags |= tags_by_picture.get(int(member.id), set())
-    best_score = max((int(pic.score or 0) for pic in members), default=0)
+    best_score = max((int(pic.score or 0) for pic in unioned), default=0)
 
     common = {
         "stack_id": stack_id,
@@ -1022,8 +1031,11 @@ def keep_cover_only_in_session(
         "stacks_skipped_nothing_reproducible": [
             row.as_dict() for row in plan.skipped(SKIP_NOTHING_REPRODUCIBLE)
         ],
+        # Same stacks the preview counts, so the receipt cannot contradict it.
         "pictures_staying": sum(
-            len(ids) for row in eligible for ids in row.staying_copies.values()
+            len(ids)
+            for row in [*eligible, *plan.skipped(SKIP_NOTHING_REPRODUCIBLE)]
+            for ids in row.staying_copies.values()
         ),
         "batch_id": None,
         "event_picture_ids": [],
@@ -1031,11 +1043,13 @@ def keep_cover_only_in_session(
     if not eligible:
         logger.info(
             "[keep-cover-only] nothing to collapse: %d stack(s) selected, "
-            "%d locked, %d character-only-on-a-copy, %d single-member",
+            "%d locked, %d character-only-on-a-copy, %d single-member, "
+            "%d with nothing reproducible",
             len(plan.stacks),
             len(plan.skipped(SKIP_LOCKED)),
             len(plan.skipped(SKIP_CHARACTER_ON_COPY)),
             len(plan.skipped(SKIP_SINGLE_MEMBER)),
+            len(plan.skipped(SKIP_NOTHING_REPRODUCIBLE)),
         )
         return result
 
@@ -1073,7 +1087,12 @@ def keep_cover_only_in_session(
     for row in eligible:
         # UNCONDITIONAL, and before anything leaves. Stacks made by hand in the
         # grid have never been unioned; skipping this is silent metadata loss.
-        union = apply_metadata_union_in_session(session, row.member_ids, row.stack_id)
+        # Over the cover and the copies that leave, never a copy that stays:
+        # the union writes every tag and the best score onto every member it is
+        # given, and a copy Keep recipes only leaves live is not the cover.
+        union = apply_metadata_union_in_session(
+            session, [row.cover_picture_id, *row.copy_ids], row.stack_id
+        )
         tags_added += int(union.get("tags_added") or 0)
         scores_lifted += int(union.get("scores_lifted") or 0)
         if row.gains_tags or row.gains_score:
@@ -1279,6 +1298,7 @@ def recipe_check(vault: "Vault", keep_every_ghost: bool = False) -> RecipeCheck:
         ghost_retention=GHOST_RETENTION_ON
         if keep_every_ghost
         else vault.ghost_retention,
+        image_root=vault.image_root,
     )
 
 

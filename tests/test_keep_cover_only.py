@@ -44,6 +44,7 @@ from pixlstash.db_models import (
     Tag,
 )
 from pixlstash.server import Server
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services import keep_cover_only_service, operation_log_service
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 
@@ -1046,18 +1047,30 @@ def _file_recipe(server, graph: dict):
 
 
 def _set_keys(server, picture_id: int, keys, thumbnail: bool = True) -> None:
+    """Give a picture workflow keys, a pixel_sha and (optionally) a thumbnail file.
+
+    The file is what the purge reads, so the planner checks the file too.
+    """
+
     def write(session):
         picture = session.get(Picture, picture_id)
         if keys is not None:
             picture.workflow_topology_hash = keys.topology_hash
             picture.workflow_structural_hash = keys.structural_hash
             picture.workflow_instance_hash = keys.instance_hash
+        picture.pixel_sha = f"kro-pixels-{picture_id}"
         picture.thumbnail_width = 64 if thumbnail else None
         picture.thumbnail_height = 64 if thumbnail else None
         session.add(picture)
         session.commit()
+        return picture.file_path
 
-    _run(server, write)
+    file_path = _run(server, write)
+    if thumbnail:
+        thumb = ImageUtils.get_thumbnail_path(server.vault.image_root, file_path)
+        os.makedirs(os.path.dirname(thumb), exist_ok=True)
+        with open(thumb, "wb") as handle:
+            handle.write(b"thumb")
 
 
 def _recipes_env():
@@ -1208,5 +1221,110 @@ def test_a_character_on_a_copy_that_stays_is_not_lost():
         row = _rows_by_stack(preview)[stack_id]
         assert row["skip_reason"] == keep_cover_only_service.SKIP_CHARACTER_ON_COPY
         assert [c["name"] for c in row["lost_characters"]] == ["Linus"]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_copy_that_stays_is_left_out_of_the_metadata_union():
+    """The union writes every tag and the best score onto every picture it is
+    given; a copy Keep recipes only leaves live must not be one of them."""
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+
+        def seed(session):
+            cover = session.get(Picture, pics["cover"])
+            cover.score = 5
+            session.add(cover)
+            session.add(Tag(picture_id=pics["cover"], tag="kro_cover_tag"))
+            session.add(Tag(picture_id=pics["covered"], tag="kro_copy_tag"))
+            session.commit()
+
+        _run(server, seed)
+        body = client.post(
+            COLLAPSE_URL, json={"stack_ids": [stack_id], "keep_recipes": True}
+        ).json()
+        assert body["picture_ids_moved"] == [pics["covered"]]
+        assert "kro_copy_tag" in _tags_of(server, pics["cover"])
+        staying = _picture_rows(server, [pics["no_recipe"]])[pics["no_recipe"]]
+        assert staying[0] is False and staying[3] != 5
+        assert _tags_of(server, pics["no_recipe"]) == set()
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_retention_off_keeps_every_reproducible_copy_and_names_it():
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+        server.vault.set_ghost_retention("off")
+        preview = client.post(
+            PREVIEW_URL, json={"stack_ids": [stack_id], "keep_recipes": True}
+        ).json()
+        assert preview["ghost_retention"] == "off"
+        assert preview["pictures_moving"] == 0
+        assert preview["pictures_staying_ghost_not_kept"] == 2
+        assert preview["stacks_skipped_nothing_reproducible"] == 1
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_missing_thumbnail_file_or_pixel_sha_keeps_the_copy():
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+        cover_path = _run(
+            server, lambda session: session.get(Picture, pics["covered"]).file_path
+        )
+        os.remove(ImageUtils.get_thumbnail_path(server.vault.image_root, cover_path))
+        preview = client.post(
+            PREVIEW_URL, json={"stack_ids": [stack_id], "keep_recipes": True}
+        ).json()
+        row = _rows_by_stack(preview)[stack_id]
+        assert pics["covered"] in row["staying_picture_ids"]["no_thumbnail"]
+
+        _set_keys(server, pics["covered"], None)  # rewrites the thumbnail file
+
+        def drop_sha(session):
+            picture = session.get(Picture, pics["covered"])
+            picture.pixel_sha = None
+            session.add(picture)
+            session.commit()
+
+        _run(server, drop_sha)
+        preview = client.post(
+            PREVIEW_URL, json={"stack_ids": [stack_id], "keep_recipes": True}
+        ).json()
+        row = _rows_by_stack(preview)[stack_id]
+        assert pics["covered"] in row["staying_picture_ids"]["no_recipe"]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_every_ghost_is_saved_to_disk_and_untouched_when_nothing_moved():
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+        config_path = server._server_config_path
+        nothing, _ids = _make_stack(server, [{}, {}])
+        body = client.post(
+            COLLAPSE_URL,
+            json={
+                "stack_ids": [nothing],
+                "keep_recipes": True,
+                "keep_every_ghost": True,
+            },
+        ).json()
+        assert body["pictures_moved"] == 0
+        assert server.vault.ghost_retention == "covered"
+
+        body = client.post(
+            COLLAPSE_URL,
+            json={
+                "stack_ids": [stack_id],
+                "keep_recipes": True,
+                "keep_every_ghost": True,
+            },
+        ).json()
+        assert body["pictures_moved"] == 2
+        assert body["ghost_retention"] == "on"
+        with open(config_path) as handle:
+            assert json.load(handle)["workflow_ghost_retention"] == "on"
     finally:
         _teardown(temp_dir, server)

@@ -8,7 +8,6 @@ from sqlalchemy import case
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, PictureStack, SortMechanism
-from pixlstash.server_config_io import persist_server_config
 from pixlstash.services import (
     keep_cover_only_service,
     operation_log_service,
@@ -541,6 +540,37 @@ class KeepCoverOnlyResponse(BaseModel):
         default_factory=list,
         description="Named `stack_ids` that resolve to no live stack. Example: `[999]`.",
         examples=[[999]],
+    )
+    keep_recipes: bool = Field(
+        default=False, description="Whether this was Keep recipes only."
+    )
+    pictures_staying: int = Field(
+        default=0,
+        description=(
+            "Under `keep_recipes`: copies left live because they could not be made "
+            "again, counted over the same stacks as the preview's "
+            "`pictures_staying_*`. Example: `7`."
+        ),
+        examples=[7],
+    )
+    stacks_skipped_nothing_reproducible: list[dict] = Field(
+        default_factory=list,
+        description="Under `keep_recipes`: stack rows with no copy to move.",
+    )
+    ghost_retention: Optional[str] = Field(
+        default=None,
+        description=(
+            "Under `keep_recipes`: the ghost retention in force after the call. "
+            "Example: `on`."
+        ),
+        examples=["on"],
+    )
+    ghost_retention_saved: Optional[bool] = Field(
+        default=None,
+        description=(
+            "`false` only when `keep_every_ghost` turned retention on but it could "
+            "not be saved, so it reverts on restart."
+        ),
     )
     batch_id: Optional[str] = Field(
         default=None,
@@ -1561,21 +1591,30 @@ def create_router(server) -> APIRouter:
             != workflow_ghost_service.GHOST_RETENTION_ON
         ):
             # The consent the dialog asked for, applied only once something moved
-            # under it. Same write as PATCH /server-config/ghost-retention. Not
-            # part of the undo: it is a privacy setting, turned back down in
-            # Settings > Privacy.
-            server._server_config[workflow_ghost_service.GHOST_RETENTION_KEY] = (
-                workflow_ghost_service.GHOST_RETENTION_ON
-            )
-            server.vault.set_ghost_retention(workflow_ghost_service.GHOST_RETENTION_ON)
-            config_path = getattr(server, "_server_config_path", None)
-            if config_path:
-                persist_server_config(config_path, server._server_config)
-            logger.info(
-                "[keep-recipes-only] ghost retention set to 'on' as consented in "
-                "the dialog, after moving %d picture(s)",
-                result.get("pictures_moved"),
-            )
+            # under it. Not part of the undo: it is a privacy setting for every
+            # library, turned back down in Settings > Privacy. The pictures have
+            # already moved, so a failed save is reported rather than a 500 that
+            # would read as "nothing happened".
+            try:
+                workflow_ghost_service.apply_ghost_retention(
+                    server, workflow_ghost_service.GHOST_RETENTION_ON
+                )
+                logger.info(
+                    "[keep-recipes-only] ghost retention set to 'on' as consented "
+                    "in the dialog, after moving %d picture(s)",
+                    result.get("pictures_moved"),
+                )
+            except Exception as exc:
+                logger.error(
+                    "[keep-recipes-only] moved %d picture(s) and set ghost "
+                    "retention to 'on' for this run of the server, but could not "
+                    "save it to server-config; it reverts on restart: %s",
+                    result.get("pictures_moved"),
+                    exc,
+                )
+                result["ghost_retention_saved"] = False
+        if recipes is not None:
+            result["ghost_retention"] = server.vault.ghost_retention
         return result
 
     return router

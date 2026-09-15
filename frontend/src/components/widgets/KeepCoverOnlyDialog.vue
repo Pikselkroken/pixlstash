@@ -240,8 +240,9 @@ watch(
     <p v-if="keepRecipes" class="kco-lede">
       Each stack keeps its cover. Every other picture in it that could be made
       again from its recipe moves to the Scrapheap, where you can restore it.
-      When the Scrapheap is emptied, each keeps its thumbnail and recipe.
-      Loose pictures are left alone.
+      When the Scrapheap is emptied, each leaves its thumbnail and recipe behind
+      for as long as your ghost setting keeps them. Loose pictures are left
+      alone.
     </p>
     <p v-else class="kco-lede">
       Each stack keeps its cover. Every other picture in it moves to the
@@ -323,9 +324,9 @@ watch(
         @update:model-value="emit('update:keepEveryGhost', !!$event)"
       />
       <p v-if="showEveryGhost" class="kco-every-ghost-note">
-        Sets Keep picture ghosts to On in Settings › Privacy, so the thumbnail
-        and prompt of any picture you delete for good stay until you purge
-        them.
+        Sets Keep picture ghosts to On in Settings › Privacy, for every
+        library, so the thumbnail and prompt of any picture you delete for good
+        stay until you purge them.
       </p>
     </section>
 

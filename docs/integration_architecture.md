@@ -303,7 +303,10 @@ position the plan assumed. `keep_every_ghost: true` plans under `on`, and the
 real call sets the server's `workflow_ghost_retention` to `on` once something
 moved: the dialog re-previews when that box changes so the figure stays the
 button's. The op type is `stack.keep_recipes_only`; the setting change is not
-part of its undo. At least one id list must be non-empty (400 otherwise); they are
+part of its undo. A copy that stays is left out of the metadata union. The
+response carries `pictures_staying` (the same stacks the preview counts),
+`ghost_retention`, and `ghost_retention_saved: false` when the setting went on
+but could not be saved. At least one id list must be non-empty (400 otherwise); they are
 unioned, and **the unit is the stack**, any picture named pulls in its whole
 stack, so a partial selection inside a stack collapses the whole stack. Loose
 pictures name no stack and are ignored.

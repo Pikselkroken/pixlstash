@@ -328,6 +328,25 @@ describe("Keep recipes only copy", () => {
     expect(keepRecipesOnlyStayingReasons(null)).toEqual([]);
   });
 
+  it("does not describe Covered only when the ghost setting is Off", () => {
+    const [row] = keepRecipesOnlyStayingReasons({
+      ghost_retention: "off",
+      pictures_staying_ghost_not_kept: 2,
+    });
+    expect(row.text).toBe("2 would keep nothing, because your ghost setting is Off.");
+  });
+
+  it("names unchanged stacks on the receipt", () => {
+    expect(
+      keepCoverOnlySkipNote({
+        stacks_skipped_nothing_reproducible: [{}, {}],
+        pictures_staying: 3,
+      }),
+    ).toBe(
+      "2 stacks unchanged: nothing in them could be made again. 3 pictures stay: they could not be made again.",
+    );
+  });
+
   it("puts the pictures that stayed on the receipt", () => {
     expect(keepCoverOnlySkipNote({ pictures_staying: 2 })).toBe(
       "2 pictures stay: they could not be made again.",
