@@ -372,6 +372,20 @@ CREATE TABLE IF NOT EXISTS model (
     -- than as a blank.
     icon_sha256           TEXT,
     created_at            TEXT,
+    -- Three facts read off the safetensors header at scan
+    -- (pixlstash.utils.adapter_header), none of them a group and none
+    -- owner-editable. `family` is the architecture the tensors show for a
+    -- support file (vae_16ch, clip_l, t5_xxl); a row's base_model, when it
+    -- folds, is the family the shelf serves instead, computed on the way out
+    -- so a corrected base model is never contradicted by a stale column.
+    -- `quant` is the dtype holding most of the parameters, or 'mixed'.
+    -- `weights_id` hashes tensor names and shapes without dtypes: two clean
+    -- casts of one model share it, a repack that adds scale tensors does not.
+    -- NULL until a scan has read the header; the scanner re-reads it for rows
+    -- registered before these columns existed.
+    family                TEXT,
+    quant                 TEXT,
+    weights_id            TEXT,
     CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL),
     -- Same shape one column over: every producer already supplies an algorithm
     -- for an adapter ('unknown' is a first-class value, never NULL), so an
@@ -1006,6 +1020,10 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     }
     if "icon_sha256" not in model_columns:
         conn.execute("ALTER TABLE model ADD COLUMN icon_sha256 TEXT")
+    # The header facts (#1314), the same way and for the same reason.
+    for column in ("family", "quant", "weights_id"):
+        if column not in model_columns:
+            conn.execute(f"ALTER TABLE model ADD COLUMN {column} TEXT")
 
     # Rows from the earliest feature-lane v1 may predate the column entirely.
     # Backfill in Python so every library gets a distinct cryptographic value;

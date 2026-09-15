@@ -164,6 +164,9 @@ class _FileRecord(NamedTuple):
     trigger_words: Optional[str] = None
     training_step: Optional[int] = None
     param_count: Optional[int] = None
+    family: Optional[str] = None
+    quant: Optional[str] = None
+    weights_id: Optional[str] = None
 
 
 class _KnownFile(NamedTuple):
@@ -172,12 +175,17 @@ class _KnownFile(NamedTuple):
     ``file_kind`` comes off the joined ``model`` row and is only used to count
     the file into the right bucket: taking the fast path means nothing was
     parsed, so what the file is has to be read back rather than re-derived.
+
+    ``has_header_facts`` is false for a row registered before ``family``,
+    ``quant`` and ``weights_id`` existed. Those need the header and never the
+    bytes, so the fast path re-reads the header for it and still skips the hash.
     """
 
     model_id: int
     file_kind: str
     file_size: Optional[int]
     file_mtime: Optional[int]
+    has_header_facts: bool = True
 
 
 def sha256_file(path: str) -> str:
@@ -499,11 +507,23 @@ class ModelFolderScanner:
                 result.checkpoints += 1
             else:
                 result.adapters += 1
-            return _FileRecord(
+            record = _FileRecord(
                 relpath=relpath,
                 size=size,
                 mtime_ns=mtime_ns,
                 model_id=previous.model_id,
+            )
+            if previous.has_header_facts:
+                return record
+            # A header read, never a hash: this is how a shelf registered before
+            # the header facts existed gets them without re-reading its bytes.
+            # An unreadable header keeps the plain touch, and is retried next
+            # scan, which costs one small read.
+            info = describe_adapter(abs_path)
+            if info is None:
+                return record
+            return record._replace(
+                family=info.family, quant=info.quant, weights_id=info.weights_id
             )
 
         info = describe_adapter(abs_path)
@@ -533,6 +553,9 @@ class ModelFolderScanner:
             else None,
             training_step=info.training_step,
             param_count=info.param_count,
+            family=info.family,
+            quant=info.quant,
+            weights_id=info.weights_id,
         )
 
         # Hash now, or leave it for MissingCheckpointHashFinder.
@@ -590,7 +613,8 @@ class ModelFolderScanner:
         evidence that its digest still names what is on disk.
         """
         rows = self._hub.fetchall(
-            "SELECT mf.relpath, mf.model_id, mf.file_mtime, m.file_kind, m.file_size "
+            "SELECT mf.relpath, mf.model_id, mf.file_mtime, m.file_kind, m.file_size, "
+            "m.weights_id IS NOT NULL AS has_header_facts "
             "FROM model_file mf JOIN model m ON m.id = mf.model_id "
             "WHERE mf.model_folder_id = ? AND mf.state = ?",
             (folder_id, STATE_PRESENT),
@@ -601,6 +625,7 @@ class ModelFolderScanner:
                 file_kind=row["file_kind"],
                 file_size=row["file_size"],
                 file_mtime=row["file_mtime"],
+                has_header_facts=bool(row["has_header_facts"]),
             )
             for row in rows
         }
@@ -615,6 +640,15 @@ class ModelFolderScanner:
                 model_id = record.model_id
                 if model_id is None:
                     model_id = self._upsert_model(conn, folder_id, record, scanned_at)
+                elif record.weights_id is not None:
+                    # The fast path's header read. The bytes did not change, so
+                    # these can only fill a blank.
+                    conn.execute(
+                        "UPDATE model SET family = COALESCE(family, ?), "
+                        "quant = COALESCE(quant, ?), "
+                        "weights_id = COALESCE(weights_id, ?) WHERE id = ?",
+                        (record.family, record.quant, record.weights_id, model_id),
+                    )
                 self._upsert_model_file(conn, folder_id, model_id, record, scanned_at)
 
     @staticmethod
@@ -643,7 +677,8 @@ class ModelFolderScanner:
         conn.execute(
             "INSERT INTO model (file_kind, kind, sha256, display_name, filename, "
             "base_model, trigger_words, provenance, training_step, param_count, "
-            "file_size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "file_size, created_at, family, quant, weights_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(sha256) DO UPDATE SET "
             "kind = COALESCE(model.kind, excluded.kind), "
             "display_name = COALESCE(model.display_name, excluded.display_name), "
@@ -652,6 +687,9 @@ class ModelFolderScanner:
             "trigger_words = COALESCE(model.trigger_words, excluded.trigger_words), "
             "training_step = COALESCE(model.training_step, excluded.training_step), "
             "param_count = COALESCE(model.param_count, excluded.param_count), "
+            "family = COALESCE(excluded.family, model.family), "
+            "quant = COALESCE(excluded.quant, model.quant), "
+            "weights_id = COALESCE(excluded.weights_id, model.weights_id), "
             "file_size = excluded.file_size",
             (
                 record.file_kind,
@@ -666,6 +704,9 @@ class ModelFolderScanner:
                 record.param_count,
                 record.size,
                 scanned_at,
+                record.family,
+                record.quant,
+                record.weights_id,
             ),
         )
         return int(
@@ -735,8 +776,8 @@ class ModelFolderScanner:
                 conn.execute(
                     "INSERT INTO model (file_kind, kind, display_name, filename, "
                     "base_model, trigger_words, provenance, training_step, "
-                    "param_count, file_size, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "param_count, file_size, created_at, family, quant, "
+                    "weights_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         record.file_kind,
                         record.kind,
@@ -749,6 +790,9 @@ class ModelFolderScanner:
                         record.param_count,
                         record.size,
                         scanned_at,
+                        record.family,
+                        record.quant,
+                        record.weights_id,
                     ),
                 ).lastrowid
             )
@@ -756,12 +800,16 @@ class ModelFolderScanner:
         model_id = int(existing["model_id"])
         conn.execute(
             "UPDATE model SET sha256 = NULL, hashed_at = NULL, file_size = ?, "
+            "family = ?, quant = ?, weights_id = ?, "
             "filename = COALESCE(filename, ?), "
             "display_name = COALESCE(display_name, ?), "
             "base_model = COALESCE(base_model, ?), "
             "param_count = COALESCE(param_count, ?) WHERE id = ?",
             (
                 record.size,
+                record.family,
+                record.quant,
+                record.weights_id,
                 record.filename,
                 record.display_name,
                 record.base_model,

@@ -386,6 +386,15 @@ def fold(raw: Optional[str]) -> Optional[str]:
     return _ALIAS_INDEX.get(_norm(raw))
 
 
+def family_of(raw: Optional[str]) -> Optional[str]:
+    """Return the architecture family *raw* folds to, or ``None``.
+
+    Exact-normalised through :func:`fold`, so it is as safe to apply as a fold.
+    """
+    label = fold(raw)
+    return KNOWN_BASE_MODELS[label]["family"] if label else None
+
+
 def suggest(raw: Optional[str], limit: int = 5) -> list[str]:
     """Canonical labels *raw* might mean. **Offer these; never apply them.**
 

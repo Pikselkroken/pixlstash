@@ -570,6 +570,7 @@ Public guest scoring and shared-link endpoints.
 | DELETE | /api/v1/model-stacks/{stack_id}/members/{model_id}                            | model_shelf     | Take one model out of a stack                               |
 | PATCH  | /api/v1/models                                                                | model_shelf     | Correct what the shelf records about one or more models     |
 | GET    | /api/v1/models/base-models                                                    | model_shelf     | Completion targets for the base-model field                 |
+| POST   | /api/v1/models/companions                                                     | model_shelf     | What deleting models would leave behind                     |
 | POST   | /api/v1/models/forget                                                         | model_shelf     | Forget models whose files are gone                          |
 | POST   | /api/v1/models/icons/clear                                                    | model_shelf     | Clear the icon on one or more models                        |
 | POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                          |
@@ -2566,6 +2567,70 @@ longer wants was a file manager and then a rescan.
   is a list of hub `model.id` — so it is on that tier for the destruction
   alone, which is the unlink half of `POST /model-moves` without the copy that
   justifies it.
+
+#### What a delete leaves behind: companions (#1314)
+
+`POST /api/v1/models/companions` answers the question in front of Delete that
+the shelf could not: **which VAEs and text encoders can go with this
+checkpoint.** Support files are most of a real shelf's disk, some serve several
+models, and nothing on disk says which.
+
+- **The evidence is co-occurrence in a recipe.** One `workflow_recipe` is one
+  graph that ran with exactly the files its `workflow_recipe_asset` rows name,
+  so a VAE and a checkpoint in one recipe are proven to work together. That
+  table already captures every loader by file extension rather than by node
+  class, so VAEs, encoders and custom loaders are all in it; nothing is scanned
+  again. Names resolve to shelf rows exactly as `fetch_picture_counts` resolves
+  them (`_recipe_asset_index`): a `*_sha256` widget is that model, any other
+  name is every row whose filename or copy has that basename.
+- **Every recipe on the hub counts, from every library, kept pictures or not.**
+  Scoping evidence to the active library would only ever drop evidence;
+  widening it can only make a file read as still needed, never offer one. A recipe whose
+  pictures were all deleted still proves the files ran together.
+- **Consumers are base models.** For a support file sharing a recipe with a
+  model being deleted, its consumers are every `checkpoint` or `unknown` row
+  across *all* its recipes. Adapters are excluded (a LoRA needs a base model,
+  not that base model's VAE, so counting it would keep A's VAE "in use" by A's
+  LoRA after A is gone) and `unknown` is included, because it may be a base
+  model the classifier missed and keeping a file is the answer to not knowing.
+  Every recorded consumer being deleted is **orphaned**; any kept consumer is
+  **shared** and named. **Orphaned is not "nothing uses it"**: a kept base
+  model no recipe names (downloaded and never used, or used only in graphs
+  whose pictures were never filed) may need the file, and the answer carries
+  `unrecorded`, the count of those, so the prompt can say so.
+- **`unknown` is never orphaned.** A support file a recipe reached only by a
+  basename two shelf rows share could be either of them, so it is reported as
+  unknown. So is one beside a `*_sha256` widget that matches no row while any
+  non-engine row still waits for its hash, the rule
+  `hub/workflows._model_ghost_names` already applies: the pending checkpoint may
+  be the model the digest names. A model being deleted that no recipe names is `no_evidence`: the
+  absence of a recipe is not evidence that nothing needs it, and its companions
+  are simply not examined.
+- **It offers, it never deletes.** The shelf's confirmation lists the answer;
+  an orphaned file stays on disk until the owner selects and deletes it. Every
+  path still ends at a person choosing a file.
+- **Not yet read:** ComfyUI's own history and saved workflows. Models used only in graphs that never produced a picture
+  PixlStash filed are invisible here, which the `no_evidence` answer says out
+  loud rather than hiding.
+
+`model.family`, `model.quant` and `model.weights_id` are the header half,
+written by the scanner from the header it already
+reads (`adapter_header.family_from_header`, `quant_from_header`,
+`weights_id_from_header`). None of them is a group. `family` is the
+architecture the tensors show for a support file (`vae_4ch`, `vae_16ch`,
+`clip_l`, `clip_g`, `t5_xxl`, `umt5_xxl`), read only from top-level tensors so a
+full checkpoint's baked-in VAE never files the checkpoint as one; the shelf
+serves the family of `base_model` instead whenever that folds, so a corrected
+base model is never contradicted by the column. `quant` is the dtype holding
+most of the **parameters** (not tensors), or `mixed`. `weights_id` hashes tensor
+names and shapes without dtypes, so clean casts of one model share it and a
+repack with scale tensors does not. Rows registered before the columns get them
+on the next scan: the unchanged-file fast path re-reads the header, never the
+bytes, for a row whose `weights_id` is NULL. `CheckpointHashTask._merge`
+carries them to the surviving row like the other scan-derived columns. Nothing
+reads them to decide a delete yet: `family` speaks two vocabularies (base-model
+families and tensor layouts), and joining a checkpoint's `flux1` to a
+`vae_16ch` needs a compatibility table this change does not invent.
 
 #### The unlink is authorised by exactly one committed row (#1017)
 
