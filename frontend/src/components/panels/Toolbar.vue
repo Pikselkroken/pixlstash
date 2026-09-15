@@ -469,35 +469,20 @@
             "
           />
         </v-menu>
-        <!-- ── Toolbar: ComfyUI T2I ──────────────────────────────────── -->
-        <v-menu
+        <!-- ── Toolbar: run a workflow that takes no selection (#1307). The
+             run panel opens in the inspector rail, so the grid stays usable. -->
+        <AppBarButton
           v-if="filterStore.comfyuiConfigured"
-          v-model="tbComfyuiMenuOpen"
-          :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
-          :offset="8"
-          transition="scale-transition"
-        >
-          <template #activator="{ props: menuProps }">
-            <AppBarButton
-              v-bind="menuProps"
-              class="tb-fold-700"
-              icon="image-plus-outline"
-              :open="tbComfyuiMenuOpen"
-              :disabled="isReadOnly"
-              tooltip="Generate new image with ComfyUI from a text prompt"
-              aria-label="Generate new image with ComfyUI"
-            />
-          </template>
-          <TbComfyPanel
-            :open="tbComfyuiMenuOpen"
-            @run-grid="
-              emit('comfyui-run-grid', $event);
-              tbComfyuiMenuOpen = false;
-            "
-          />
-        </v-menu>
+          class="tb-fold-700"
+          icon="image-plus-outline"
+          :active="
+            workflowRunStore.open && workflowRunStore.origin === FROM_TOOLBAR
+          "
+          :disabled="isReadOnly"
+          tooltip="Generate new pictures with a ComfyUI workflow"
+          aria-label="Generate new pictures with a ComfyUI workflow"
+          @click="workflowRunStore.openFor(FROM_TOOLBAR)"
+        />
         <!-- ── The ⋯ overflow (amendment #2 in docs/design/
              toolbar-responsive-decisions.md): a burger may only collapse
              controls from its OWN visual group, and it stands where those
@@ -543,7 +528,7 @@
               :disabled="isReadOnly"
               @click="
                 close();
-                tbComfyuiMenuOpen = true;
+                workflowRunStore.openFor(FROM_TOOLBAR);
               "
             >
               <v-icon class="ctx-icon">mdi-image-plus-outline</v-icon>
@@ -612,13 +597,16 @@ import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import {
+  FROM_TOOLBAR,
+  useWorkflowRunStore,
+} from "../../stores/useWorkflowRunStore";
+import {
   MAX_THUMBNAIL_SIZE_LEVEL,
   DEFAULT_THUMBNAIL_SIZE_LEVEL,
   sizeLabelForLevel,
 } from "../../utils/thumbnailSizes";
 import GbFilterPanel from "./GbFilterPanel.vue";
 import TbGlobalActions from "./TbGlobalActions.vue";
-import TbComfyPanel from "./TbComfyPanel.vue";
 import TbExportPanel from "./TbExportPanel.vue";
 import TbImportPanel from "./TbImportPanel.vue";
 import TbOverflowMenu from "./TbOverflowMenu.vue";
@@ -638,7 +626,6 @@ const props = defineProps({
 });
 
 const emit = defineEmits([
-  "comfyui-run-grid",
   "expand-all-stacks",
   "collapse-all-stacks",
   "confirm-export-zip",
@@ -728,7 +715,7 @@ function exportActionLabel(idle) {
   return `Export ${count} picture${count === 1 ? "" : "s"} to zip`;
 }
 
-const tbComfyuiMenuOpen = ref(false);
+const workflowRunStore = useWorkflowRunStore();
 // ── Grid Bar: Sort ─────────────────────────────────────────────────────────────
 const SIMILARITY_SORT_KEY_GB = "CHARACTER_LIKENESS";
 const LIKENESS_GROUPS_SORT_KEY_GB = "LIKENESS_GROUPS";

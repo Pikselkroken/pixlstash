@@ -68,6 +68,26 @@ export async function setWorkflowInputs(name, inputs) {
 }
 
 /**
+ * Run a saved workflow, filling each picture input by its mode.
+ *
+ * A workflow with a Selection input runs once per id in `picture_ids`; one
+ * without takes no `picture_ids` and runs once.
+ *
+ * @param {string} name - the workflow's `name` as listed.
+ * @param {Object} body - `{picture_ids?, pictures?: [{node_id, picture_id}],
+ *   caption?, values?, seed_mode?, seed?, stack?, client_id?, set_id?,
+ *   project_id?, character_id?}`.
+ * @returns {Promise<{status: string, workflow: string,
+ *   prompts: Array<{picture_id: ?number, prompt_id: string}>}>}
+ */
+export async function runWorkflow(name, body) {
+  return unwrap(apiClient.post(
+    comfyUrl(`/workflows/${encodeURIComponent(name)}/run`),
+    body,
+  ));
+}
+
+/**
  * Import a workflow file as it is, UI or API format.
  *
  * A copy of a workflow already stored comes back `matched` under the stored

@@ -426,7 +426,7 @@ preview, the run and the ghosting. Five points where the wiring is load-bearing:
 ### 2.3 The `/workflows` contract (v1.11)
 
 The Workflows view's read side (implementation plan §F1/§F2). Four GETs, no
-mutators: naming a workflow and running one are later steps. Forgetting ghosts
+mutators: naming a workflow is a later step, and running one is §2.3's run route below. Forgetting ghosts
 is not here either: it is two purges beside the retention setting,
 `DELETE /server-config/ghost-retention/ghosts` and
 `.../model-ghosts?expected=N`, whose counts `GET /server-config/ghost-retention`
