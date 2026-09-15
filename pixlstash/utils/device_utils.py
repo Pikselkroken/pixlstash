@@ -47,10 +47,10 @@ _metal_thread: Optional[threading.Thread] = None
 
 
 def detect_device() -> str:
-    """Return the best inference device available: cuda or cpu.
+    """Return the best inference device available: cuda, mps, or cpu.
 
-    Never raises. torch is a hard dependency, and on a working install the
-    availability probe answers ``False`` rather than raising when there is no
+    Never raises. torch is a hard dependency, and on a working install both
+    availability probes answer ``False`` rather than raising when there is no
     such GPU, so a CPU-only host logs nothing here. A torch that cannot be
     imported, or a probe that raises, is a broken install that costs the owner
     the GPU, so each is logged at WARNING: the callers only see "cpu" and
@@ -72,6 +72,17 @@ def detect_device() -> str:
     except Exception as exc:
         logger.warning(
             "The CUDA availability probe raised (%s: %s); CUDA will not be used.",
+            type(exc).__name__,
+            exc,
+        )
+
+    try:
+        if torch.backends.mps.is_available():
+            return "mps"
+    except Exception as exc:
+        logger.warning(
+            "The Apple Metal (mps) availability probe raised (%s: %s); Metal "
+            "will not be used.",
             type(exc).__name__,
             exc,
         )

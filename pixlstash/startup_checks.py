@@ -454,6 +454,15 @@ class StartupChecks:
             gpu_available = False
             outcome.notes.append(f"GPU availability probe failed ({exc}).")
         if not gpu_available:
+            # Apple Metal does not answer to torch.cuda, so a Mac with a working
+            # GPU arrives here with gpu_available False and would otherwise be
+            # forced onto the CPU. Accept Metal before that fallback runs.
+            if is_auto_mode and _mps_available(torch):
+                outcome.notes.append(
+                    "Apple Metal (MPS) is available; using it for torch "
+                    "inference. " + self._metal_onnx_note()
+                )
+                return
             self._handle_gpu_check_failure(
                 outcome,
                 is_auto_mode,
@@ -581,6 +590,33 @@ class StartupChecks:
             return
         self._force_cpu_with_warning(
             outcome, fallback_warning, is_auto_mode=is_auto_mode
+        )
+
+    def _metal_onnx_note(self) -> str:
+        """Say where the ONNX models run once torch is on Metal.
+
+        The two do not travel together: torch reaches Metal through MPS and
+        the ONNX models through onnxruntime's CoreML provider, and a build
+        can carry either without the other, so the note reports what
+        onnxruntime offers rather than assuming either.
+        """
+        ort = _ort()
+        if ort is None:
+            # _check_config_sanity already refuses to start without it; the
+            # note names that cause rather than a missing CoreML provider.
+            return (
+                "onnxruntime could not be imported, so the ONNX models (WD14, "
+                "InsightFace) cannot run."
+            )
+
+        if "CoreMLExecutionProvider" in self._onnx_providers(ort):
+            return (
+                "The WD14 tagger runs on CoreML. InsightFace stays on CPU: "
+                "its detector fails on CoreML at the input size PixlStash uses."
+            )
+        return (
+            "ONNX models (WD14, InsightFace) run on CPU - onnxruntime offers no "
+            "CoreML provider."
         )
 
     def _detect_gpu_arch_note(self) -> str:

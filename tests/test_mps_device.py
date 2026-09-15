@@ -168,8 +168,30 @@ def no_metal_thread_from_elsewhere(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
+def test_detects_mps_when_no_cuda(fake_torch):
+    fake_torch(_fake_torch(cuda=False, mps=True))
+    assert detect_device() == "mps"
+
+
+def test_cuda_wins_over_mps(fake_torch):
+    # Never both in practice; the order is asserted so it stays deliberate.
+    fake_torch(_fake_torch(cuda=True, mps=True))
+    assert detect_device() == "cuda"
+
+
 def test_cpu_when_neither_available(fake_torch):
     fake_torch(_fake_torch(cuda=False, mps=False))
+    assert detect_device() == "cpu"
+
+
+def test_cuda_probe_failure_falls_through_to_mps(fake_torch):
+    # A broken CUDA install must degrade to the next device, not propagate.
+    fake_torch(_fake_torch(cuda_raises=RuntimeError("no CUDA driver"), mps=True))
+    assert detect_device() == "mps"
+
+
+def test_mps_probe_failure_falls_back_to_cpu(fake_torch):
+    fake_torch(_fake_torch(cuda=False, mps_raises=RuntimeError("Metal is broken")))
     assert detect_device() == "cpu"
 
 
@@ -210,8 +232,18 @@ def _device_warnings(caplog):
     "torch_mod,expected,named",
     [
         (None, "cpu", "torch could not be imported"),
+        (
+            _fake_torch(cuda_raises=RuntimeError("no CUDA driver"), mps=True),
+            "mps",
+            "CUDA",
+        ),
+        (
+            _fake_torch(cuda=False, mps_raises=RuntimeError("Metal is broken")),
+            "cpu",
+            "Metal",
+        ),
     ],
-    ids=["import"],
+    ids=["import", "cuda-probe", "mps-probe"],
 )
 def test_a_broken_torch_is_logged_at_warning(
     monkeypatch, caplog, torch_mod, expected, named
@@ -601,6 +633,98 @@ def patch_runtime(monkeypatch):
     return apply
 
 
+def test_auto_mode_accepts_mps_instead_of_forcing_cpu(patch_runtime):
+    # On Apple Silicon torch.cuda answers False, and auto mode must not read
+    # that as "no GPU" and force the CPU.
+    patch_runtime(_fake_torch(cuda=False, mps=True))
+    outcome = StartupCheckOutcome()
+    _checks("auto")._check_device_and_vram(outcome)
+
+    assert not outcome.forced_cpu
+    assert not outcome.hard_failures
+    assert "Metal" in " ".join(outcome.notes)
+
+
+def test_the_metal_note_says_wd14_runs_on_coreml(patch_runtime):
+    """The note has to keep up with the CoreML provider, not predate it.
+
+    torch reaching Metal and the ONNX models reaching CoreML are separate
+    facts, and a build can have one without the other - so the note reports
+    what onnxruntime actually offers rather than asserting CPU.
+    """
+    patch_runtime(
+        _fake_torch(cuda=False, mps=True),
+        types.SimpleNamespace(
+            get_available_providers=lambda: [
+                "CoreMLExecutionProvider",
+                "CPUExecutionProvider",
+            ]
+        ),
+    )
+    outcome = StartupCheckOutcome()
+    _checks("auto")._check_device_and_vram(outcome)
+
+    note = " ".join(outcome.notes)
+    assert "CoreML" in note
+    assert "WD14 tagger runs on CoreML" in note
+    # InsightFace really is held on the CPU, so the note must still say so.
+    assert "InsightFace" in note
+
+
+def test_the_metal_note_says_cpu_without_a_coreml_provider(patch_runtime):
+    patch_runtime(
+        _fake_torch(cuda=False, mps=True),
+        types.SimpleNamespace(get_available_providers=lambda: ["CPUExecutionProvider"]),
+    )
+    outcome = StartupCheckOutcome()
+    _checks("auto")._check_device_and_vram(outcome)
+
+    note = " ".join(outcome.notes)
+    assert "no CoreML provider" in note
+    assert "CPU" in note
+
+
+def test_the_metal_note_says_when_onnxruntime_cannot_be_imported(monkeypatch):
+    # Without onnxruntime there is no build to lack a CoreML provider, and the
+    # server refuses to start over it (_check_config_sanity).
+    monkeypatch.setattr(sc, "_torch_mod", _fake_torch(cuda=False, mps=True))
+    monkeypatch.setattr(sc, "_ort_mod", None)
+    outcome = StartupCheckOutcome()
+    _checks("auto")._check_device_and_vram(outcome)
+
+    note = " ".join(outcome.notes)
+    assert "onnxruntime could not be imported" in note
+    assert "CoreML provider" not in note
+
+
+def test_the_metal_note_survives_an_onnxruntime_that_cannot_list_providers(
+    patch_runtime, caplog
+):
+    """A broken onnxruntime is logged, and Metal is still accepted for torch."""
+
+    def _broken():
+        raise RuntimeError("provider registry is corrupt")
+
+    patch_runtime(
+        _fake_torch(cuda=False, mps=True),
+        types.SimpleNamespace(get_available_providers=_broken),
+    )
+    outcome = StartupCheckOutcome()
+    with caplog.at_level(logging.WARNING, logger="test"):
+        _checks("auto")._check_device_and_vram(outcome)
+
+    assert not outcome.hard_failures
+    assert not outcome.forced_cpu
+    note = " ".join(outcome.notes)
+    assert "Apple Metal (MPS) is available" in note
+    assert "run on CPU" in note
+    assert any(
+        record.levelno == logging.WARNING
+        and "provider registry is corrupt" in record.getMessage()
+        for record in caplog.records
+    ), caplog.text
+
+
 def test_explicit_cuda_without_torch_still_names_cuda(patch_runtime):
     # An unimportable torch is a reason to refuse a named device, not to
     # rewrite the config to cpu behind the owner's back.
@@ -627,6 +751,23 @@ def test_an_explicit_cuda_on_a_mac_with_metal_still_refuses(patch_runtime, confi
     )
     assert not outcome.forced_cpu
     assert "Metal" not in " ".join(outcome.notes)
+
+
+def test_a_metal_probe_that_raises_is_logged_at_warning(patch_runtime, caplog):
+    # A working torch answers False on a machine with no Metal; a raise is a
+    # broken install, and auto mode reports it only as "forcing CPU".
+    patch_runtime(_fake_torch(cuda=False, mps_raises=RuntimeError("Metal is broken")))
+    outcome = StartupCheckOutcome()
+    with caplog.at_level(logging.WARNING, logger="pixlstash.startup_checks"):
+        _checks("auto")._check_device_and_vram(outcome)
+
+    assert outcome.forced_cpu
+    assert any(
+        record.name == "pixlstash.startup_checks"
+        and record.levelno == logging.WARNING
+        and "Metal is broken" in record.getMessage()
+        for record in caplog.records
+    ), caplog.text
 
 
 def test_auto_without_torch_still_forces_cpu_without_refusing(patch_runtime):
@@ -762,6 +903,28 @@ def test_a_device_outside_the_set_is_refused_by_both(tmp_path, monkeypatch):
     listed = ", ".join(sorted(VALID_DEVICE_SETTINGS))
     assert failures == [f"default_device must be one of: {listed}."]
     assert _overridden_device(tmp_path, monkeypatch, "xpu") == "cpu"
+
+
+def test_the_use_gpu_advice_starts_a_mac_on_metal(patch_runtime):
+    """Following the slow-CPU advice has to start a Mac on Metal.
+
+    Start-up refuses ``mps``, and ``cuda`` refuses to start on a Mac, so either
+    in the advice would leave the owner with a server that does not boot.
+    """
+    device = re.search(r"default_device=(\w+)", USE_GPU_ADVICE).group(1)
+    patch_runtime(_fake_torch(cuda=False, mps=True))
+    checks = StartupChecks(
+        {"default_device": device, "host": "localhost", "port": 9537},
+        "/tmp/server_config.json",
+        logging.getLogger("test"),
+    )
+    outcome = StartupCheckOutcome()
+    checks._check_config_sanity(outcome)
+    checks._check_device_and_vram(outcome)
+
+    assert not outcome.hard_failures, outcome.hard_failures
+    assert not outcome.forced_cpu
+    assert "Metal" in " ".join(outcome.notes)
 
 
 # --------------------------------------------------------------------------- #

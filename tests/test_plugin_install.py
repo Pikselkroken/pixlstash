@@ -1224,7 +1224,7 @@ def test_image_loads_weights_on_one_thread_where_metal_exists(
 
     assert _check(source, "--image", str(image)) == cli.EXIT_OK
 
-    assert "tokens, cpu/async-load=1)" in capsys.readouterr().out
+    assert "tokens, mps/async-load=1)" in capsys.readouterr().out
 
 
 def test_a_result_not_keyed_by_the_paths_it_was_given_is_caught(tmp_path, capsys):
