@@ -73,8 +73,8 @@ const statsTitle = computed(() =>
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: rgb(var(--v-theme-primary));
-  box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.7);
+  background: rgb(var(--v-theme-accent));
+  box-shadow: 0 0 5px rgba(var(--v-theme-accent), 0.7);
   animation: tb-stats-pulse 1.4s ease-in-out infinite;
   pointer-events: none;
 }
