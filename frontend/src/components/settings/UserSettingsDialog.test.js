@@ -35,7 +35,10 @@ vi.mock("./ScrapheapSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SnapshotsSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SmartScoreSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ComfyuiHostSection.vue", () => ({
-  default: { template: '<div class="comfyui-host-stub" />' },
+  default: {
+    props: ["first"],
+    template: '<div class="comfyui-host-stub" :data-first="String(first)" />',
+  },
 }));
 
 import UserSettingsDialog from "./UserSettingsDialog.vue";
@@ -94,6 +97,8 @@ describe("UserSettingsDialog library navigation", () => {
       "settings-nav-scrapheap",
       "settings-nav-snapshots",
       "settings-nav-privacy",
+      // Labelled "ComfyUI" here: no desktop bridge, so the pane holds only the
+      // ComfyUI host. The id stays `compute`.
       "settings-nav-compute",
       "settings-nav-account",
     ]);
@@ -119,9 +124,43 @@ describe("UserSettingsDialog library navigation", () => {
     const wrapper = mountDialog();
     await nextTick();
 
+    expect(wrapper.find("#settings-nav-compute").text()).toContain("ComfyUI");
     const pane = wrapper.find("#settings-pane-compute");
-    expect(pane.find(".comfyui-host-stub").exists()).toBe(true);
+    // First in the pane, so it carries no divider above nothing.
+    expect(pane.find(".comfyui-host-stub").attributes("data-first")).toBe(
+      "true",
+    );
     expect(pane.find(".compute-stub").exists()).toBe(false);
+  });
+
+  it("gives the desktop both halves of Compute, the host below acceleration", async () => {
+    // `isDesktop` is read when the module is evaluated, so the bridge has to
+    // be in place before the import.
+    sessionContext.value = { scope: "ALL" };
+    window.pixlstashDesktop = {};
+    try {
+      vi.resetModules();
+      const { default: Desktop } = await import("./UserSettingsDialog.vue");
+      const wrapper = mount(Desktop, {
+        props: { open: true, initialTab: "compute" },
+        global: { stubs: { VIcon: true } },
+      });
+      await nextTick();
+
+      const pane = wrapper.find("#settings-pane-compute");
+      expect(pane.find(".compute-stub").exists()).toBe(true);
+      // Acceleration is above it, so the host section is not the pane's first.
+      expect(pane.find(".comfyui-host-stub").attributes("data-first")).toBe(
+        "false",
+      );
+      expect(wrapper.find("#settings-nav-compute").text()).toContain(
+        "Compute",
+      );
+      expect(wrapper.find("#settings-nav-backend").exists()).toBe(true);
+    } finally {
+      delete window.pixlstashDesktop;
+      vi.resetModules();
+    }
   });
 
   it("does not disclose the nav entry or pane in read-only/share mode", async () => {

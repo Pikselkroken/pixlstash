@@ -109,9 +109,13 @@ const navItems = computed(() =>
       show: !isReadOnly.value,
     },
     {
+      // Named for what the pane holds. On the desktop that is the acceleration
+      // runtime with the ComfyUI host under it; in a browser there is no
+      // runtime to manage and the ComfyUI host is the whole pane, so a rail
+      // item reading "Compute" would be the wrong word to hunt for.
       id: "compute",
-      icon: "expansion-card-variant",
-      label: "Compute",
+      icon: isDesktop ? "expansion-card-variant" : "sitemap-outline",
+      label: isDesktop ? "Compute" : "ComfyUI",
       show: !isReadOnly.value,
     },
     {

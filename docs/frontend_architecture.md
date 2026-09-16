@@ -768,7 +768,7 @@ Thin multi-tab settings shell. It now owns only the tab chrome and routing — e
 - **Scrapheap** → `<ScrapheapSection>` (`!isReadOnly`)
 - **Snapshots** → `<SnapshotsSection>` (`!isReadOnly`)
 - **Privacy** → `<PrivacySection>` (`!isReadOnly`)
-- **Compute** → `<ComputeSection view="compute">` (desktop only) then `<ComfyuiHostSection>` (`!isReadOnly`: the tab shows in a browser too, holding only the ComfyUI host)
+- **Compute** (`!isReadOnly`; id `compute`) → `<ComputeSection view="compute">`, rendered only under `isDesktop`, then `<ComfyuiHostSection>`, rendered always. The rail item itself is NOT desktop-gated (Backend still is), and it is **labelled for what the pane holds**: `Compute` / `expansion-card-variant` on the desktop, where the acceleration runtime sits above the host, and `ComfyUI` / `sitemap-outline` in a browser, where the ComfyUI host is the whole pane and `Compute` would be the wrong word to hunt for. The host section is `first` there, so it carries no divider above nothing.
 - **Backend** → `<ComputeSection>` (desktop only, `isDesktop && !isReadOnly`)
 - **Account Settings** → `<AccountSection>` (`!isReadOnly`)
 
@@ -4281,7 +4281,9 @@ invisible. A notice per file says whether it was added or already there.
 Anything else in the drop is not this view's: `useWindowFileImport` listens in
 the capture phase and stands aside only for a drop of JSON files alone onto
 `.wfshelf`, so pictures dropped here still import and are not reported twice.
-Naming a workflow
+There is no Replace here: a drop always keeps both, so replacing a
+workflow means deleting it (the inspector's **Delete workflow**) and dropping
+the new file. Naming a workflow
 is a later step, running one is the run panel below, and forgetting
 ghosts is the two counted purges in Settings › Privacy (`PrivacySection`, beside
 the Off / Covered only / On retention control); the row menu offers only what
