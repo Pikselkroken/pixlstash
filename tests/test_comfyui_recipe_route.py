@@ -513,7 +513,11 @@ class TestSwappingALoRAIntoAReplay:
         assert submitted == []
 
     def test_an_unchecked_replay_will_not_guess_a_name(self, env, monkeypatch):
-        """No object_info, no swap: the acknowledgement covers the graph, not the file list."""
+        """No object_info, no swap: the acknowledgement covers the graph, not the file list.
+
+        A 502 like every other run route, not a 400 saying the loader does not
+        list its files: ComfyUI was never asked.
+        """
         server, client, pic_id = env
         _comfyui_unreachable(monkeypatch)
         self._shelf_lora(server)
@@ -528,5 +532,23 @@ class TestSwappingALoRAIntoAReplay:
                 "adapter_sha256": self.SHA,
             },
         )
-        assert r.status_code == 400 and "will not guess" in r.text
+        assert r.status_code == 502 and "could not ask ComfyUI" in r.text
+        assert submitted == []
+
+    def test_a_missing_loader_node_is_named_not_mistaken_for_a_file_list(
+        self, env, monkeypatch
+    ):
+        """The swap is resolved before the pre-flight, so it must say what the pre-flight would."""
+        server, client, pic_id = env
+        _comfyui_reachable(monkeypatch)  # OBJECT_INFO has no LoraLoader at all
+        self._shelf_lora(server)
+        submitted = _capture_submissions(monkeypatch)
+        lora_pic = self._picture_with_a_lora(client)
+
+        r = client.post(
+            f"{API}/comfyui/run_recipe",
+            json={"picture_id": lora_pic, "adapter_sha256": self.SHA},
+        )
+        assert r.status_code == 400, r.text
+        assert "has no LoraLoader node" in r.json()["detail"]
         assert submitted == []

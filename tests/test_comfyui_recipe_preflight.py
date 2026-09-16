@@ -666,7 +666,15 @@ class TestApplyAdapter:
 
     def test_an_unenumerable_loader_is_refused_not_guessed_at(self):
         graph = {"1": self._graph()["1"]}
+        # The node is there; its file list is not enumerated.
+        info = {"LoraLoader": {"input": {"required": {"lora_name": ["STRING", {}]}}}}
         with pytest.raises(LookupError, match="will not guess"):
+            apply_adapter(graph, detect_lora_targets(graph), self.ADAPTER, info)
+
+    def test_a_loader_this_comfyui_lacks_is_named_as_a_missing_node(self):
+        """Not "does not say which files": the node pack itself is what is missing."""
+        graph = {"1": self._graph()["1"]}
+        with pytest.raises(LookupError, match="has no LoraLoader node"):
             apply_adapter(graph, detect_lora_targets(graph), self.ADAPTER, {})
 
     def test_a_digest_slot_needs_nothing_from_comfyui(self):

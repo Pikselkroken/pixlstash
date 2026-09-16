@@ -98,13 +98,17 @@
 
       <!-- Swapping only: the LoRA goes into a loader the workflow already has,
            and a workflow with none says so rather than offering a choice the
-           run would refuse (#1310). -->
-      <div class="inspector-section">
+           run would refuse (#1310). Shown only once the inputs are read:
+           before that "no LoRA loader" would be a guess, and after a failed
+           read a confident wrong one. -->
+      <div v-if="inputs !== null && !inputsError" class="inspector-section">
         <span class="section-label">LoRA</span>
-        <p v-if="!loraSlots.length" class="wfrun-note">
+        <!-- role=status on the note itself, not the section: a live region
+             around the selects would announce every option change. -->
+        <p v-if="!loraSlots.length" class="wfrun-note" role="status">
           This workflow has no LoRA loader, so there is nothing to swap.
         </p>
-        <p v-else-if="adaptersError" class="wfrun-note wfrun-error">
+        <p v-else-if="adaptersError" class="wfrun-note wfrun-error" role="alert">
           {{ adaptersError }}
         </p>
         <template v-else>
@@ -114,11 +118,11 @@
             hide-label
             :options="adapterOptions"
           />
-          <!-- Which loader, when the workflow chains more than one: swapping
-               them all would load the chosen LoRA twice and lose the other. -->
+          <!-- Which slot, when the workflow has more than one: swapping them
+               all would load the chosen LoRA twice and lose the others. -->
           <AppSelect
             v-if="loraSlots.length > 1"
-            v-model="loraNodeId"
+            v-model="chosenSlot"
             label="Into which loader"
             :options="slotOptions"
           />
@@ -192,8 +196,8 @@ import {
   listWorkflows,
   runWorkflow,
 } from "../../api/comfyui";
-import { listAdapters } from "../../api/modelShelf";
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { useLoraSwap } from "../../composables/useLoraSwap";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { SCRAPHEAP_PICTURES_ID } from "../../stores/useViewStore";
 import { isReadOnly } from "../../utils/apiClient";
@@ -239,12 +243,14 @@ const picks = reactive({});
 const pickerFor = ref(null);
 /** Every LoRA slot of the chosen workflow, as the inputs route reports them. */
 const loraSlots = ref([]);
-/** The shelf adapter to put in them, "" for the workflow's own. */
-const adapterSha = ref("");
-/** Which slot it goes into; the first one until the run panel is told. */
-const loraNodeId = ref("");
-const adapters = ref([]);
-const adaptersError = ref("");
+const {
+  adapterSha,
+  chosenSlot,
+  adaptersError,
+  adapterOptions,
+  slotOptions,
+  body: loraBody,
+} = useLoraSwap(loraSlots);
 const caption = ref("");
 const seedMode = ref("random");
 const seed = ref(0);
@@ -289,27 +295,6 @@ const chosen = computed(
 
 const takesPrompt = computed(
   () => !chosen.value?.missing_placeholders?.includes("{{caption}}"),
-);
-
-// A hash the shelf has not read yet cannot be asked for, so those rows are
-// left out rather than offered and refused.
-const adapterOptions = computed(() => [
-  { value: "", label: "Keep the workflow's own" },
-  ...adapters.value
-    .filter((a) => a?.sha256)
-    .map((a) => ({
-      value: a.sha256,
-      label: a.display_name || a.filename || a.sha256.slice(0, 12),
-    })),
-]);
-
-// Named by node and by what it loads now, because two loaders of one graph
-// are both called "Load LoRA" and the file is what tells them apart.
-const slotOptions = computed(() =>
-  loraSlots.value.map((slot) => ({
-    value: slot.node_id,
-    label: `#${slot.node_id} ${slot.value || slot.class_type || ""}`.trim(),
-  })),
 );
 
 const selectionCount = computed(() => runStore.selectionIds.length);
@@ -418,29 +403,9 @@ async function loadInputs(name) {
     if (request !== inputsRequest) return;
     inputs.value = body?.inputs || [];
     loraSlots.value = body?.lora_slots || [];
-    loraNodeId.value = loraSlots.value[0]?.node_id || "";
-    if (loraSlots.value.length) loadAdapters();
   } catch (err) {
     if (request === inputsRequest)
       inputsError.value = errorDetail(err) || err?.message || String(err);
-  }
-}
-
-// Read once per panel session, not per workflow: the shelf does not change
-// between two runs, and every workflow with a slot offers the same list.
-// ponytail: the whole shelf in one select; a search field if it grows unwieldy.
-let adaptersLoaded = false;
-async function loadAdapters() {
-  if (adaptersLoaded) return;
-  adaptersLoaded = true;
-  adaptersError.value = "";
-  try {
-    adapters.value = await listAdapters();
-  } catch (err) {
-    adaptersLoaded = false;
-    adaptersError.value = `Your LoRAs could not be read: ${
-      errorDetail(err) || err?.message || String(err)
-    }`;
   }
 }
 
@@ -456,14 +421,7 @@ async function run() {
       picture_id: picture.id,
     })),
     caption: caption.value || "",
-    // Only where there is a slot to put it in: a workflow without one refuses
-    // the whole run rather than ignoring the choice.
-    adapter_sha256:
-      loraSlots.value.length && adapterSha.value ? adapterSha.value : undefined,
-    lora_node_id:
-      loraSlots.value.length > 1 && adapterSha.value
-        ? loraNodeId.value
-        : undefined,
+    ...loraBody(),
     seed_mode: seedMode.value,
     seed: seedMode.value === "fixed" ? seed.value : undefined,
     client_id: client_id || undefined,

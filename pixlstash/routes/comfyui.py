@@ -471,45 +471,67 @@ def _shelf_adapter(hub, sha256) -> dict:
     }
 
 
+def _slot_name(target: dict) -> str:
+    """How a refusal names one slot: the node, and the field when it is not the only one."""
+    return f"{target['node_id']} {target['field']}"
+
+
 def _resolve_lora_swap(
     hub,
     payload: dict,
-    graph: dict,
+    graph: dict | None,
     label: str,
     comfyui_url: str,
     object_info: dict | None = None,
 ) -> dict | None:
     """What a run's ``adapter_sha256`` resolves to, or ``None`` when it asks for none.
 
-    Shared by the saved-workflow run and the recipe replay so the two refuse
-    the same things in the same words (#1310). Nothing is written here: the
-    caller applies the result to each instance it submits, and everything that
-    can be refused has been refused before it does.
+    Shared by every route that runs a workflow so they refuse the same things in
+    the same words (#1310). Nothing is written here: the caller applies the
+    result to each instance it submits, and everything that can be refused has
+    been refused before it does.
+
+    **A slot is a node and a field, not a node.** A stacker carries several LoRAs
+    on one node (``lora_name_1``, ``lora_name_2``), so naming the node alone
+    would swap every one of them - the overwrite this whole rule exists to
+    prevent. ``lora_node_id`` narrows by node and ``lora_field`` by field, and
+    whatever is left must be exactly one slot.
 
     Args:
         hub: The hub database, for the shelf lookup.
-        payload: The run body; ``adapter_sha256`` and optional ``lora_node_id``.
-        graph: The API-format graph the run will submit.
-        label: What to call this run in a log line ("workflow x", "picture 12").
+        payload: The run body: ``adapter_sha256``, and ``lora_node_id`` /
+            ``lora_field`` when the graph has more than one slot. An empty
+            string counts as not sent.
+        graph: The API-format graph the run will submit, or ``None`` for a
+            UI-format file.
+        label: What to call this run in a log line ("Workflow x", "Picture 12").
         comfyui_url: The ComfyUI this run goes to, asked for its file list when
             *object_info* is not given.
         object_info: A map already fetched for this run, or ``None`` to fetch
-            one when a filename slot needs resolving. An empty map is not the
-            same as ``None``: it means ComfyUI was asked and said nothing, which
-            makes a filename slot refuse rather than guess.
+            one when a filename slot needs resolving.
 
     Returns:
         ``{"adapter", "targets", "object_info"}`` for :func:`apply_adapter`, or
         ``None`` when the body names no LoRA.
 
     Raises:
-        HTTPException: 400 for a graph with no LoRA loader, an unnamed choice
-            between several, a node that is not one of them, or a LoRA this
+        HTTPException: 400 for a UI-format graph, a graph with no LoRA loader,
+            a choice that does not come down to one slot, or a LoRA this
             ComfyUI cannot be given; 404/400/503 from :func:`_shelf_adapter`;
             502 when ComfyUI cannot be asked at all.
     """
     if payload.get("adapter_sha256") is None:
         return None
+    if graph is None:
+        # Said as what it is: "no LoRA loader" would be false about a UI-format
+        # file that may well have one.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This workflow is saved in ComfyUI's UI format, so PixlStash "
+                "cannot put a LoRA into it. Export it in API format."
+            ),
+        )
     adapter = _shelf_adapter(hub, payload["adapter_sha256"])
     targets = detect_lora_targets(graph)
     if not targets:
@@ -521,20 +543,8 @@ def _resolve_lora_swap(
                 "LoRA into. Add one in ComfyUI and import it again."
             ),
         )
-    # One slot, not all of them: a workflow chaining a style LoRA and a
-    # character LoRA would otherwise come back loading the chosen file twice,
-    # with the other one gone and nothing said about it.
-    wanted_node = payload.get("lora_node_id")
-    if wanted_node is None and len(targets) > 1:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"This workflow has {len(targets)} LoRA loaders; name the one to "
-                "swap as lora_node_id (nodes "
-                + ", ".join(t["node_id"] for t in targets)
-                + ")."
-            ),
-        )
+    wanted_node = payload.get("lora_node_id") or None
+    wanted_field = payload.get("lora_field") or None
     if wanted_node is not None:
         targets = [t for t in targets if t["node_id"] == str(wanted_node)]
         if not targets:
@@ -542,20 +552,39 @@ def _resolve_lora_swap(
                 status_code=400,
                 detail=f"Node {wanted_node} is not a LoRA loader of this workflow.",
             )
-    if object_info is None:
-        object_info = {}
-        if any(t["by"] == "filename" for t in targets):
-            try:
-                object_info = fetch_object_info(comfyui_url)
-            except RuntimeError as exc:
-                logger.warning("Could not read object_info for %s: %s", label, exc)
-                raise HTTPException(
-                    status_code=502,
-                    detail=(
-                        "PixlStash could not ask ComfyUI which LoRA files it "
-                        f"has, so the swap would be a guess: {exc}"
-                    ),
-                ) from exc
+    if wanted_field is not None:
+        targets = [t for t in targets if t["field"] == str(wanted_field)]
+        if not targets:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{wanted_field} is not a LoRA slot of that loader.",
+            )
+    # One slot, not all of them: a workflow chaining a style LoRA and a
+    # character LoRA would otherwise come back loading the chosen file twice,
+    # with the other one gone and nothing said about it.
+    if len(targets) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"That leaves {len(targets)} LoRA slots; name the one to swap "
+                "with lora_node_id and lora_field ("
+                + ", ".join(_slot_name(t) for t in targets)
+                + ")."
+            ),
+        )
+    if object_info is None and targets[0]["by"] == "filename":
+        try:
+            object_info = fetch_object_info(comfyui_url)
+        except RuntimeError as exc:
+            logger.warning("Could not read object_info for %s: %s", label, exc)
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "PixlStash could not ask ComfyUI which LoRA files it "
+                    f"has, so the swap would be a guess: {exc}"
+                ),
+            ) from exc
+    object_info = object_info or {}
     # Applied once to a copy, the way a workflow's bindings are filled once: a
     # name this ComfyUI does not have is refused before a single picture is
     # uploaded, not between two runs of a batch.
@@ -570,18 +599,32 @@ def _resolve_lora_swap(
 def _apply_lora_swap(workflow_instance: dict, swap: dict, label: str) -> None:
     """Write a resolved swap into one instance about to be submitted.
 
-    Cannot raise - :func:`_resolve_lora_swap` applied the same target to a copy
-    of the same graph - but a zero write would mean this instance lost the node
-    between the two, and submitting the graph's own LoRA silently is the one
-    outcome worth a log.
+    Written through :func:`api_graph`, because a document the import dialog
+    stored as ``{"prompt": graph}`` keeps its nodes one level down, and that is
+    where detection found the slot.
+
+    Raises:
+        HTTPException: 500 when the slot is not in this instance after all.
+            :func:`_resolve_lora_swap` wrote the same target into a copy of the
+            same graph, so this means the two have diverged - and submitting
+            the graph's own LoRA while the caller asked for another is a run
+            that silently does something other than what was asked.
     """
+    graph = workflow_parameters.api_graph(workflow_instance)
     if not apply_adapter(
-        workflow_instance, swap["targets"], swap["adapter"], swap["object_info"]
+        graph or {}, swap["targets"], swap["adapter"], swap["object_info"]
     ):
         logger.error(
-            "LoRA %s reached no slot of %s; it runs with its own",
+            "LoRA %s reached no slot of %s; refusing rather than running its own",
             swap["adapter"]["sha256"],
             label,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "The LoRA could not be put into this run's workflow, so it was "
+                "not started. This is a PixlStash bug; the server log names it."
+            ),
         )
 
 
@@ -692,8 +735,15 @@ def _describe_workflow(path: str, source: str, mtime_ns: int, size: int) -> dict
         and workflow_parameters.api_graph(payload) is not None,
         # Every LoRA a run can swap (#1310), on the list because every menu
         # that runs a workflow reads this and would otherwise need its own
-        # request per workflow to know whether to offer the shelf.
-        "lora_slots": detect_lora_targets(workflow_parameters.api_graph(payload)),
+        # request per workflow to know whether to offer the shelf. WITHOUT the
+        # value each slot holds: this route is open to share-link tokens, and a
+        # slot's value is a LoRA's filename or digest - the owner's model
+        # inventory, which /models/ and /adapters/ keep from those tokens. The
+        # owner-only /inputs read carries the values.
+        "lora_slots": [
+            {key: slot[key] for key in ("node_id", "class_type", "field", "by")}
+            for slot in detect_lora_targets(workflow_parameters.api_graph(payload))
+        ],
     }
 
 
@@ -2261,7 +2311,7 @@ def create_router(server) -> APIRouter:
         swap = _resolve_lora_swap(
             getattr(server, "hub", None),
             payload,
-            workflow_parameters.api_graph(workflow_payload) or {},
+            workflow_parameters.api_graph(workflow_payload),
             f"Workflow {workflow_name}",
             comfyui_url,
         )
@@ -2676,7 +2726,7 @@ def create_router(server) -> APIRouter:
             workflow_instance,
             f"Picture {pic_id}'s recipe",
             comfyui_url,
-            object_info or {},
+            object_info,
         )
         if swap is not None:
             _apply_lora_swap(workflow_instance, swap, f"picture {pic_id}'s recipe")

@@ -775,6 +775,14 @@ describe("swapping a LoRA into a variant (#1310)", () => {
     by: "filename",
   };
 
+  async function generate(w) {
+    await w
+      .findAll("button")
+      .find((b) => b.text().trim() === "Generate")
+      .trigger("click");
+    await settle(w);
+  }
+
   function loraSelect(w) {
     return w.findAll("select.remix-select").find((s) =>
       s.attributes("aria-label") === "LoRA",
@@ -800,6 +808,57 @@ describe("swapping a LoRA into a variant (#1310)", () => {
     expect(runRecipe.mock.calls[0][0].adapter_sha256).toBe("a".repeat(64));
     // One slot, so the node is implied rather than named.
     expect(runRecipe.mock.calls[0][0].lora_node_id).toBeUndefined();
+  });
+
+  it("does not carry a LoRA to the next picture it is opened on", async () => {
+    getPictureRecipe.mockResolvedValue({
+      ...CLEAN_RECIPE,
+      lora_slots: [LORA_SLOT],
+    });
+    const w = await settle(mountDialog());
+    await loraSelect(w).setValue("a".repeat(64));
+
+    // Same workflow, same slot - so only the reopen can be what clears it.
+    await w.setProps({ open: false });
+    await w.setProps({ open: true, image: { ...IMAGE, id: 43 } });
+    await settle(w);
+    expect(loraSelect(w).element.value).toBe("");
+    await generate(w);
+    expect(runRecipe.mock.calls[0][0].picture_id).toBe(43);
+    expect(runRecipe.mock.calls[0][0].adapter_sha256).toBeUndefined();
+  });
+
+  it("swaps into a template too, and not with the recipe's choice", async () => {
+    getPictureRecipe.mockResolvedValue({
+      ...CLEAN_RECIPE,
+      lora_slots: [LORA_SLOT],
+    });
+    listWorkflows.mockResolvedValue({
+      workflows: [
+        {
+          name: "Edit.json",
+          display_name: "Edit",
+          valid: true,
+          workflow_type: "i2i",
+          missing_placeholders: [],
+          has_selection_input: true,
+          // The same node and field as the recipe's slot, on purpose.
+          lora_slots: [{ ...LORA_SLOT, value: undefined }],
+        },
+      ],
+    });
+    const w = await settle(mountDialog());
+    await loraSelect(w).setValue("a".repeat(64));
+
+    await rowFor(w, "Pick a template").trigger("click");
+    await settle(w);
+    expect(loraSelect(w).element.value).toBe("");
+
+    await loraSelect(w).setValue("a".repeat(64));
+    await generate(w);
+    expect(runImageToImage).toHaveBeenCalledTimes(1);
+    expect(runImageToImage.mock.calls[0][0].adapter_sha256).toBe("a".repeat(64));
+    expect(runRecipe).not.toHaveBeenCalled();
   });
 
   it("says so when the picture's recipe has no LoRA loader", async () => {

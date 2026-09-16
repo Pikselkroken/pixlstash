@@ -376,10 +376,107 @@ describe("a LoRA from the shelf (#1310)", () => {
     ]);
 
     await wrapper.findAll("select")[1].setValue("a".repeat(64));
-    await slots.setValue("4");
+    // Not touching the loader select sends its default, the first slot - never
+    // an empty node the backend would refuse.
     await runButton(wrapper).trigger("click");
     await flush(wrapper);
-    expect(runWorkflow.mock.calls[0][1].lora_node_id).toBe("4");
+    expect(runWorkflow.mock.calls[0][1]).toMatchObject({
+      lora_node_id: "3",
+      lora_field: "lora_name",
+    });
+
+    await slots.setValue("lora_name@4");
+    await runButton(wrapper).trigger("click");
+    await flush(wrapper);
+    expect(runWorkflow.mock.calls[1][1]).toMatchObject({
+      lora_node_id: "4",
+      lora_field: "lora_name",
+    });
+  });
+
+  it("tells a stacker's slots apart, since they share one node", async () => {
+    getWorkflowInputs.mockResolvedValue({
+      ...WITH_SLOTS,
+      lora_slots: [
+        { node_id: "7", class_type: "CR LoRA Stack", field: "lora_name_1", value: "style.st", by: "filename" },
+        { node_id: "7", class_type: "CR LoRA Stack", field: "lora_name_2", value: "character.st", by: "filename" },
+      ],
+    });
+    const { wrapper, store } = await mountFrom(FROM_SELECTION);
+    store.selectionIds = [7];
+    await flush(wrapper);
+    const slots = wrapper.findAll("select")[2];
+    expect(slots.findAll("option").map((o) => o.text())).toEqual([
+      "#7 style.st · lora_name_1",
+      "#7 character.st · lora_name_2",
+    ]);
+    await wrapper.findAll("select")[1].setValue("a".repeat(64));
+    await slots.setValue("lora_name_2@7");
+    expect(slots.element.value).toBe("lora_name_2@7");
+    await runButton(wrapper).trigger("click");
+    await flush(wrapper);
+    expect(runWorkflow.mock.calls[0][1]).toMatchObject({
+      lora_node_id: "7",
+      lora_field: "lora_name_2",
+    });
+  });
+
+  it("drops the LoRA choice when another workflow with slots is chosen", async () => {
+    listWorkflows.mockResolvedValue({
+      workflows: [
+        WORKFLOWS[0],
+        { ...WORKFLOWS[0], name: "other.json", display_name: "other" },
+      ],
+    });
+    getWorkflowInputs.mockImplementation((name) =>
+      Promise.resolve({
+        ...WITH_SLOTS,
+        lora_slots: [{ ...WITH_SLOTS.lora_slots[0], node_id: name === "edit.json" ? "3" : "12" }],
+      }),
+    );
+    const { wrapper, store } = await mountFrom(FROM_SELECTION);
+    store.selectionIds = [7];
+    await flush(wrapper);
+    await wrapper.findAll("select")[1].setValue("a".repeat(64));
+    await wrapper.find("select").setValue("other.json");
+    await flush(wrapper);
+    expect(wrapper.findAll("select")[1].element.value).toBe("");
+    await runButton(wrapper).trigger("click");
+    await flush(wrapper);
+    expect(runWorkflow.mock.calls[0][1].adapter_sha256).toBeUndefined();
+    // The shelf was read once, not once per workflow.
+    expect(listAdapters).toHaveBeenCalledTimes(1);
+  });
+
+  it("claims nothing about LoRA loaders while the inputs are unread or failed", async () => {
+    getWorkflowInputs.mockRejectedValue(new Error("gone"));
+    const { wrapper } = await mountFrom(FROM_SELECTION);
+    await flush(wrapper);
+    expect(wrapper.text()).toContain("gone");
+    expect(wrapper.text()).not.toContain("no LoRA loader");
+  });
+
+  it("reads the shelf again after a failed read", async () => {
+    listWorkflows.mockResolvedValue({
+      workflows: [
+        WORKFLOWS[0],
+        { ...WORKFLOWS[0], name: "other.json", display_name: "other" },
+      ],
+    });
+    getWorkflowInputs.mockImplementation((name) =>
+      Promise.resolve({
+        ...WITH_SLOTS,
+        lora_slots: [{ ...WITH_SLOTS.lora_slots[0], node_id: name === "edit.json" ? "3" : "12" }],
+      }),
+    );
+    listAdapters.mockRejectedValueOnce(new Error("shelf is closed"));
+    const { wrapper } = await mountFrom(FROM_SELECTION);
+    await flush(wrapper);
+    expect(wrapper.text()).toContain("Your LoRAs could not be read");
+    await wrapper.find("select").setValue("other.json");
+    await flush(wrapper);
+    expect(listAdapters).toHaveBeenCalledTimes(2);
+    expect(wrapper.text()).not.toContain("Your LoRAs could not be read");
   });
 
   it("names no loader when the workflow has only one", async () => {

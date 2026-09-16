@@ -72,7 +72,6 @@ INPUT_IMAGE_FIELDS: dict[str, tuple[str, ...]] = {
 # rule for detect_lora_targets - see its docstring for why this is a field
 # name and not a class list. The numbered form is how a stacker spells its
 # second and third slot (`lora_name_2`), and each of those is a slot of its own.
-LORA_FILENAME_FIELD = "lora_name"
 LORA_FILENAME_FIELD_RE = re.compile(r"^lora_name(_\d+)?$")
 LORA_DIGEST_FIELDS = ("adapter_sha256", "lora_sha256")
 
@@ -653,6 +652,14 @@ def apply_adapter(
             written += 1
             continue
         class_type = target.get("class_type")
+        if class_type not in object_info:
+            # Named as the missing node pack it is. The pre-flight would say
+            # the same, but the swap is resolved first, and "does not say which
+            # files it can load" sends the owner looking in the wrong place.
+            raise LookupError(
+                f"This ComfyUI has no {class_type} node, which node "
+                f"{target['node_id']} needs to load a LoRA."
+            )
         options = _combo_options(object_info.get(class_type), target["field"])
         if options is None:
             raise LookupError(

@@ -530,9 +530,11 @@ with a `picture_id` chooses that picture (404 if it is not a kept picture, 409 i
 it is not hashed yet); without one it keeps the picture already stored (400 if
 there is none). `picture_missing` is a Fixed input whose picture is no longer in
 this library. Both are `OWNER_ONLY`: the setup names pictures by id. `lora_slots`
-(#1310) is every LoRA a run can swap, `by` being `filename` for a core loader
-and `digest` for a ComfyUI-PixlStash one; empty means the graph has no LoRA
-loader, and the `PUT` answers with the same field.
+(#1310) is every LoRA slot a run can swap, `{node_id, class_type, field, value,
+by}`, `by` being `filename` for a core loader and `digest` for a
+ComfyUI-PixlStash one; a stacker's slots share a `node_id` and differ by `field`.
+Empty means the graph has no LoRA loader, and the `PUT` answers with the same
+field.
 
 **A saved workflow's parameters (#1306)** sit beside its inputs, for the same
 reason:
@@ -574,21 +576,31 @@ options are ComfyUI's to refuse);
 At most 200 selected pictures per request (400 above it), and a picture id that
 is not a kept picture is a 404 naming the ids. `adapter_sha256` (#1310) puts
 that shelf LoRA into **one** slot of `lora_slots`, named by `lora_node_id` and
+`lora_field` when there is more than one (an empty string counts as not sent), and
 written the way its own loader reads it - a filename this ComfyUI lists (matched
 by name, since `object_info` carries no digests), or the digest for a
 ComfyUI-PixlStash loader. It is applied after `values`, so it wins over a
 `lora_name` set there. One slot and not all of them, because a graph chaining two
-LoRAs would otherwise load the chosen one twice: more than one slot with no
-`lora_node_id`, and a `lora_node_id` that is not one of them, are both 400. No
+LoRAs would otherwise load the chosen one twice: whatever `lora_node_id` and
+`lora_field` leave must be exactly one slot, and a 400 lists the slots when it is
+not (`7 lora_name_1, 7 lora_name_2`) or names the node or field that matched
+nothing. No
 loader is inserted or substituted, so a workflow with no LoRA loader is a 400
 saying so (#1376 is the inserter); so are a name this ComfyUI does not have, one
 naming several of its files, and a loader that does not enumerate them. A
 ComfyUI that cannot be reached to ask is a 502. A hash the shelf does not have is
 a 404; a checkpoint, VAE, text encoder or engine is a 400 naming the kind (only
-an adapter and an unclassified file are loadable), and no hub attached is a 503. The
-same `adapter_sha256` / `lora_node_id` pair works on `POST /comfyui/run_i2i` and
-`POST /comfyui/run_recipe`, which carry their slots on `GET /comfyui/workflows`
-(per row) and `GET /comfyui/pictures/{id}/recipe` respectively. On a replay the
+an adapter and an unclassified file are loadable), and no hub attached is a 503. A
+UI-format file is refused as that before the shelf is asked, and a loader class
+this ComfyUI lacks is named as the missing node. A slot the submitted instance
+turns out not to have is a **500**, never a run with the graph's own LoRA. The
+same body works on `POST /comfyui/run_i2i` and `POST /comfyui/run_recipe`, which
+carry their slots on `GET /comfyui/workflows` (per row) and
+`GET /comfyui/pictures/{id}/recipe` respectively. **The list's slots carry no
+`value`**: that route is `ANY_TOKEN` and deliberately readable by share-link
+tokens, and a slot's value is a LoRA filename or digest - the owner's model
+inventory, which `/models/` and `/adapters/` keep from those tokens. The
+owner-only inputs read carries the values. On a replay the
 swap is applied **before** the pre-flight, so a recipe whose own LoRA has left
 this ComfyUI runs when another is put in its place - and is still refused
 without one. Every refusal comes before

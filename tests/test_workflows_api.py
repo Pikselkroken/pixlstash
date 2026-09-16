@@ -2119,8 +2119,8 @@ def test_a_workflow_with_two_loaders_will_not_guess_which_one(
 ):
     r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA)
     assert r.status_code == 400, r.text
-    assert "2 LoRA loaders" in r.json()["detail"]
-    assert "nodes 2, 3" in r.json()["detail"]
+    assert "2 LoRA slots" in r.json()["detail"]
+    assert "2 lora_name, 3 adapter_sha256" in r.json()["detail"]
 
     r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="4")
     assert r.status_code == 400 and "not a LoRA loader" in r.text
@@ -2173,7 +2173,16 @@ def test_a_lora_the_shelf_or_comfyui_does_not_have_stops_before_any_upload(
     r = _lora_run(workflow_env, adapter_sha256=_h("nothing"), lora_node_id="2")
     assert r.status_code == 404 and "not on this PixlStash's shelf" in r.text
 
-    # On the shelf, absent from the ComfyUI this would run on.
+    # On the shelf, absent from the ComfyUI this would run on: that ComfyUI
+    # lists LoRAs, just not this one under any name the shelf knows it by.
+    lora_workflow.info = {
+        "LoraLoader": {"input": {"required": {"lora_name": [["other.st"], {}]}}}
+    }
+    r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="2")
+    assert r.status_code == 400 and "not on the ComfyUI" in r.text
+
+    # A loader whose file list ComfyUI does not enumerate (an empty combo reads
+    # as "not listed", never as "nothing installed").
     lora_workflow.info = {
         "LoraLoader": {"input": {"required": {"lora_name": [[], {}]}}}
     }
@@ -2266,7 +2275,7 @@ def test_edit_with_comfyui_swaps_the_same_way_the_run_panel_does(
             "adapter_sha256": _SHELF_LORA_SHA,
         },
     )
-    assert r.status_code == 400 and "2 LoRA loaders" in r.text
+    assert r.status_code == 400 and "2 LoRA slots" in r.text
     assert fake_comfyui.submitted == [] and fake_comfyui.uploads == []
 
 
@@ -2279,3 +2288,156 @@ def test_the_workflow_list_says_which_files_have_a_lora_loader(
     slots = {w["name"]: w.get("lora_slots") for w in r.json()["workflows"]}
     assert [s["node_id"] for s in slots["lora.json"]] == ["2", "3"]
     assert slots["edit.json"] == []
+
+
+def test_a_stacker_swaps_the_slot_named_and_leaves_its_other_loras(
+    workflow_env, lora_workflow, fake_comfyui, tmp_path
+):
+    """A slot is a node AND a field: one stacker carries several LoRAs.
+
+    Naming the node alone used to keep every field on it and write the chosen
+    LoRA into all of them - the style and the character both gone, a disabled
+    slot switched on, one file loaded three times.
+    """
+    graph = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "{{image_path}}"}},
+        "7": {
+            "class_type": "CR LoRA Stack",
+            "inputs": {
+                "lora_name_1": "example-style.safetensors",
+                "lora_name_2": "example-character.safetensors",
+                "lora_name_3": "None",
+            },
+        },
+        "9": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+    }
+    bound, _changed = workflow_bindings.migrate_placeholders(graph)
+    (tmp_path / "stack.json").write_text(json.dumps(bound), encoding="utf-8")
+    lora_workflow.info = {
+        "CR LoRA Stack": {
+            "input": {
+                "required": {
+                    f"lora_name_{n}": [["None", _COMFY_LORA_NAME], {}]
+                    for n in (1, 2, 3)
+                }
+            }
+        }
+    }
+    ids = _picture_ids(workflow_env.server)
+
+    def run(**body):
+        return _run(
+            workflow_env.owner,
+            "stack.json",
+            picture_ids=[ids["busy_one.png"]],
+            stack=False,
+            adapter_sha256=_SHELF_LORA_SHA,
+            **body,
+        )
+
+    # The node alone is still three slots, and says which.
+    r = run(lora_node_id="7")
+    assert r.status_code == 400, r.text
+    assert "3 LoRA slots" in r.json()["detail"]
+    assert "7 lora_name_1, 7 lora_name_2, 7 lora_name_3" in r.json()["detail"]
+    assert fake_comfyui.submitted == []
+
+    r = run(lora_node_id="7", lora_field="lora_name_2")
+    assert r.status_code == 200, r.text
+    inputs = fake_comfyui.submitted[0]["7"]["inputs"]
+    assert inputs["lora_name_2"] == _COMFY_LORA_NAME
+    assert inputs["lora_name_1"] == "example-style.safetensors"
+    assert inputs["lora_name_3"] == "None"
+
+    r = run(lora_node_id="7", lora_field="lora_name_9")
+    assert r.status_code == 400 and "not a LoRA slot" in r.text
+
+
+def test_an_empty_slot_name_counts_as_not_sent(
+    workflow_env, lora_workflow, fake_comfyui
+):
+    """A client with nothing chosen yet sends "", which must not name node "".
+
+    Two slots and an empty name is still an unnamed choice between two - the
+    refusal that lists them, not "Node  is not a LoRA loader".
+    """
+    r = _lora_run(
+        workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="", lora_field=""
+    )
+    assert r.status_code == 400, r.text
+    assert "2 LoRA slots" in r.json()["detail"]
+    assert "is not a LoRA loader" not in r.json()["detail"]
+
+
+def test_a_share_link_sees_no_lora_filenames_on_the_workflow_list(
+    workflow_env, lora_workflow
+):
+    """The list is open to share tokens, and a slot's value is the owner's inventory.
+
+    /models/ and /adapters/ keep the model inventory from those tokens, so the
+    list must not hand the same filenames and digests out through its slots.
+    Both directions: the scoped token still reads the list (over-blocking is
+    its own regression) and the owner still gets the values from /inputs.
+    """
+    server = workflow_env.server
+    token = _mint(
+        workflow_env.owner,
+        "lora slot probe",
+        resource_type="character",
+        resource_id=workflow_env.character_id,
+    )
+    client = _bearer(server, token)
+    r = client.get(f"{API}/comfyui/workflows")
+    assert r.status_code == 200, r.text
+    row = next(w for w in r.json()["workflows"] if w["name"] == "lora.json")
+    assert [s["node_id"] for s in row["lora_slots"]] == ["2", "3"]
+    assert all("value" not in slot for slot in row["lora_slots"])
+    assert "whatever-is-there.safetensors" not in r.text
+    assert "0" * 64 not in r.text
+
+    # The owner's own read of the file's setup keeps them.
+    r = workflow_env.owner.get(f"{API}/comfyui/workflows/lora.json/inputs")
+    assert r.status_code == 200, r.text
+    assert "whatever-is-there.safetensors" in {
+        s["value"] for s in r.json()["lora_slots"]
+    }
+    # And the scoped token cannot reach that read at all.
+    r = client.get(f"{API}/comfyui/workflows/lora.json/inputs")
+    assert r.status_code == 403, r.text
+
+
+def test_a_swap_reaches_a_document_stored_with_its_graph_one_level_down():
+    """The import dialog stores {"prompt": graph}; detection reads inside it, so must the write."""
+    graph = {"5": {"class_type": "LoraLoader", "inputs": {"lora_name": "old.st"}}}
+    swap = {
+        "adapter": {"sha256": "b" * 64, "filenames": ["new.st"]},
+        "targets": [
+            {
+                "node_id": "5",
+                "class_type": "LoraLoader",
+                "field": "lora_name",
+                "by": "filename",
+            }
+        ],
+        "object_info": {
+            "LoraLoader": {"input": {"required": {"lora_name": [["new.st"], {}]}}}
+        },
+    }
+    wrapped = {"prompt": graph}
+    comfyui_module._apply_lora_swap(wrapped, swap, "test")
+    assert wrapped["prompt"]["5"]["inputs"]["lora_name"] == "new.st"
+
+    # A slot the instance does not have is refused, never run with its own LoRA.
+    with pytest.raises(HTTPException) as refused:
+        comfyui_module._apply_lora_swap({"prompt": {}}, swap, "test")
+    assert refused.value.status_code == 500
+
+
+def test_a_ui_format_file_is_refused_as_what_it_is_before_the_shelf_is_asked():
+    """No hub here at all: the refusal must come before the lookup, and name the format."""
+    with pytest.raises(HTTPException) as refused:
+        comfyui_module._resolve_lora_swap(
+            None, {"adapter_sha256": "b" * 64}, None, "test", "http://127.0.0.1:1"
+        )
+    assert refused.value.status_code == 400
+    assert "UI format" in refused.value.detail
