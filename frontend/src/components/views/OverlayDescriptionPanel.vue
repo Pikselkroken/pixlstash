@@ -10,8 +10,88 @@
         descriptionCollapsed && cancelEditDescription();
       "
     >
-      <span>Description</span>
-      <span class="section-meta-group">
+      <!-- Description and Text share this header as label tabs, one panel on
+           screen at a time. The Text tab only exists once the reader found
+           words (or is reading them): a picture without text keeps the plain
+           Description header, with no empty state. -->
+      <div
+        v-if="showTabs"
+        class="section-tabs"
+        role="tablist"
+        aria-label="Description or text in picture"
+      >
+        <button
+          :id="descTabId"
+          ref="descTabRef"
+          class="section-tab"
+          type="button"
+          role="tab"
+          :aria-selected="!isTextTab"
+          :aria-controls="descPanelId"
+          :tabindex="isTextTab ? -1 : 0"
+          @click.stop="pickTab(DESCRIPTION_TAB)"
+          @keydown="onTabKeydown"
+        >
+          Description
+        </button>
+        <button
+          :id="textTabId"
+          ref="textTabRef"
+          class="section-tab"
+          type="button"
+          role="tab"
+          :aria-selected="isTextTab"
+          :aria-controls="textPanelId"
+          :tabindex="isTextTab ? 0 : -1"
+          :disabled="textState !== 'read'"
+          @click.stop="pickTab(TEXT_TAB)"
+          @keydown="onTabKeydown"
+        >
+          Text
+          <template v-if="textState === 'pending'">
+            <v-icon size="12" class="mdi-spin" aria-hidden="true"
+              >mdi-loading</v-icon
+            >
+            <span class="visually-hidden">, reading</span>
+          </template>
+        </button>
+      </div>
+      <span v-else>Description</span>
+      <span v-if="isTextTab" class="section-meta-group">
+        <button
+          v-if="props.image && !readOnly"
+          class="section-meta-btn"
+          type="button"
+          aria-label="Read the text again"
+          :disabled="textReadBusy"
+          @click.stop="emit('read-text-again')"
+        >
+          <Tooltip
+            text="Read the text again"
+            activator="parent"
+            :describe="false"
+          />
+          <v-icon size="16" :class="{ 'mdi-spin': textReadBusy }">
+            {{ textReadBusy ? "mdi-loading" : "mdi-refresh" }}
+          </v-icon>
+        </button>
+        <button
+          class="section-meta-btn"
+          type="button"
+          aria-label="Copy text"
+          @click.stop="copyPictureText(fullText, 'text')"
+        >
+          <Tooltip text="Copy text" activator="parent" :describe="false" />
+          <v-icon size="16">
+            {{ textCopyState === "text" ? "mdi-check-bold" : "mdi-content-copy" }}
+          </v-icon>
+        </button>
+        <span class="section-meta">{{ fullText.length }}</span>
+        <v-icon size="16" style="opacity: 0.6">{{
+          descriptionCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
+        }}</v-icon>
+      </span>
+      <span v-else class="section-meta-group">
         <button
           v-if="props.image && !readOnly"
           class="section-meta-btn"
@@ -116,15 +196,74 @@
         }}</v-icon>
       </span>
     </div>
-    <template v-if="!descriptionCollapsed">
+    <template v-if="!descriptionCollapsed && isTextTab">
+      <!-- Read-only: the text is what the reader saw, with a box behind every
+           word, so a misread is fixed by reading again, not by typing. -->
+      <div
+        :id="textPanelId"
+        ref="textFieldRef"
+        class="picture-text"
+        role="tabpanel"
+        :aria-labelledby="textTabId"
+      >
+        <div
+          v-for="(line, lineIdx) in wordLines"
+          :key="lineIdx"
+          class="picture-text-line"
+        >
+          <button
+            v-for="word in line"
+            :key="word.index"
+            type="button"
+            class="picture-text-word"
+            :class="{
+              'picture-text-word--match': word.matched,
+              'picture-text-word--selected': selectedSet.has(word.index),
+            }"
+            :aria-pressed="selectedSet.has(word.index)"
+            :data-word="word.index"
+            @click.stop="emit('select-word', word.index, $event.shiftKey)"
+          >
+            {{ word.text }}
+          </button>
+        </div>
+      </div>
+      <div class="picture-text-selection" aria-live="polite">
+        <template v-if="selectedText">
+          <span class="picture-text-selection-words">{{ selectedText }}</span>
+          <button
+            class="picture-text-mini"
+            type="button"
+            @click.stop="copyPictureText(selectedText, 'selection')"
+          >
+            {{ textCopyState === "selection" ? "Copied" : "Copy" }}
+          </button>
+          <button
+            class="picture-text-mini"
+            type="button"
+            @click.stop="emit('clear-word-selection')"
+          >
+            Clear
+          </button>
+        </template>
+        <span v-else
+          >Click a word to find it in the picture. Shift-click to add
+          words.</span
+        >
+      </div>
+    </template>
+    <template v-else-if="!descriptionCollapsed">
       <div v-if="locked && lockNote" class="overlay-lock-note">
         <Tooltip :text="lockNote" activator="parent" />
         <v-icon size="12">mdi-lock-outline</v-icon>
         <span>Locked - read-only. Unlock the set to edit.</span>
       </div>
       <div
+        :id="showTabs ? descPanelId : undefined"
         class="description-editor"
         :class="{ 'description-editor--sentinel': isSentinelDescription }"
+        :role="showTabs ? 'tabpanel' : undefined"
+        :aria-labelledby="showTabs ? descTabId : undefined"
       >
         <textarea
           ref="descriptionEditorRef"
@@ -178,7 +317,7 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, watch } from "vue";
+import { ref, computed, nextTick, onUnmounted, useId, watch } from "vue";
 import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import {
   patchPicture,
@@ -194,6 +333,12 @@ import {
   isDescriptionSentinel,
   formatDescriptionSentinel,
 } from "../../utils/descriptions";
+import {
+  DESCRIPTION_TAB,
+  TEXT_TAB,
+  flattenWords,
+  joinPictureText,
+} from "../../composables/usePictureText";
 
 // Failures report through the notice surface instead of a blocking native
 // alert() (docs/design/notice-surface.md §1).
@@ -206,6 +351,13 @@ const props = defineProps({
   locked: { type: Boolean, default: false },
   // Lock-reason tooltip copy (single source from useLockedSetsStore).
   lockNote: { type: String, default: "" },
+  // The text found in the picture (usePictureText): "none" | "pending" | "read".
+  textState: { type: String, default: "none" },
+  textLines: { type: Array, default: () => [] },
+  // The tab on screen, already resolved: "text" only while there is text.
+  activeTab: { type: String, default: DESCRIPTION_TAB },
+  selectedWords: { type: Array, default: () => [] },
+  textReadBusy: { type: Boolean, default: false },
 });
 
 // Compose the app-wide read-only (token capability) with the data-state lock.
@@ -213,7 +365,95 @@ const props = defineProps({
 // read-only.
 const readOnly = computed(() => isReadOnly.value || props.locked);
 
-const emit = defineEmits(["update-description", "editing-finished"]);
+const emit = defineEmits([
+  "update-description",
+  "editing-finished",
+  "pick-tab",
+  "select-word",
+  "clear-word-selection",
+  "read-text-again",
+]);
+
+const descTabId = useId();
+const textTabId = useId();
+const descPanelId = useId();
+const textPanelId = useId();
+const descTabRef = ref(null);
+const textTabRef = ref(null);
+const textFieldRef = ref(null);
+
+const words = computed(() => flattenWords(props.textLines));
+const hasWords = computed(
+  () => props.textState === "read" && words.value.length > 0,
+);
+// No tab for a picture without text: today's Description header, exactly.
+const showTabs = computed(
+  () => props.textState === "pending" || hasWords.value,
+);
+const isTextTab = computed(
+  () => hasWords.value && props.activeTab === TEXT_TAB,
+);
+const wordLines = computed(() => {
+  const lines = [];
+  for (const word of words.value) (lines[word.line] ||= []).push(word);
+  return lines.filter(Boolean);
+});
+const fullText = computed(() => joinPictureText(props.textLines));
+const selectedSet = computed(() => new Set(props.selectedWords));
+const selectedText = computed(() =>
+  words.value
+    .filter((w) => selectedSet.value.has(w.index))
+    .map((w) => w.text)
+    .join(" "),
+);
+// Which copy button last succeeded ("text" | "selection"), for its check mark.
+const textCopyState = ref("");
+let textCopyTimer = null;
+
+function pickTab(tab) {
+  if (tab === TEXT_TAB && !hasWords.value) return;
+  if (tab === TEXT_TAB) cancelEditDescription();
+  descriptionCollapsed.value = false;
+  emit("pick-tab", tab);
+}
+
+/** Arrow keys move between the two tabs; a disabled Text tab is skipped. */
+function onTabKeydown(event) {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  event.stopPropagation();
+  const next = isTextTab.value ? DESCRIPTION_TAB : TEXT_TAB;
+  if (next === TEXT_TAB && !hasWords.value) return;
+  pickTab(next);
+  nextTick(() =>
+    (next === TEXT_TAB ? textTabRef : descTabRef).value?.focus?.(),
+  );
+}
+
+async function copyPictureText(value, which) {
+  if (!value) return;
+  if (await copyText(value)) {
+    textCopyState.value = which;
+    if (textCopyTimer) clearTimeout(textCopyTimer);
+    textCopyTimer = window.setTimeout(() => {
+      textCopyState.value = "";
+      textCopyTimer = null;
+    }, 2000);
+  } else {
+    noticeStore.error("Couldn't copy the text to the clipboard.", {
+      key: "picture-text-copy",
+    });
+  }
+}
+
+/** Scroll a word's button into view (a box on the picture was clicked). */
+function revealWord(index) {
+  nextTick(() => {
+    textFieldRef.value
+      ?.querySelector?.(`[data-word="${index}"]`)
+      ?.scrollIntoView?.({ block: "nearest" });
+  });
+}
 
 const descriptionCollapsed = ref(false);
 const isEditingDescription = ref(false);
@@ -381,11 +621,16 @@ function handleDescriptionEditorKey(event) {
   }
 }
 
+onUnmounted(() => {
+  if (textCopyTimer) clearTimeout(textCopyTimer);
+});
+
 defineExpose({
   isEditingDescription,
   cancelEditDescription,
   startEditDescription,
   resetCopyState,
+  revealWord,
 });
 </script>
 
@@ -514,6 +759,134 @@ defineExpose({
 }
 
 .overlay-icon-btn:hover {
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+}
+
+/* ── Description / Text tabs ─────────────────────────────────────────────
+   Label tabs in the section label's own type (inherited from `.section-label`
+   on the header): the selected one takes full ink and the olive bar. */
+.section-tabs {
+  display: flex;
+  align-self: stretch;
+  gap: var(--space-5);
+}
+
+.section-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  border-bottom: 2px solid transparent;
+  padding-top: var(--space-1);
+}
+
+.section-tab:hover:not(:disabled) {
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.section-tab[aria-selected="true"] {
+  color: rgb(var(--v-theme-on-dark-surface));
+  border-bottom-color: rgb(var(--v-theme-dark-surface-primary));
+}
+
+/* Pending is not "not allowed": the spinner carries the state, so the label
+   stays legible rather than taking the disabled fade (visual-language §11). */
+.section-tab:disabled {
+  cursor: default;
+}
+
+/* ── Text panel ── */
+.picture-text {
+  flex: 1;
+  min-height: 56px;
+  overflow: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
+  background: rgba(var(--v-theme-shadow), 0.35);
+  color: rgb(var(--v-theme-on-dark-surface));
+  padding: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
+}
+
+.picture-text:hover {
+  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.55) transparent;
+}
+
+.picture-text-line {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 0.6ch;
+  padding: var(--space-1) 0;
+}
+
+.picture-text-word {
+  font: inherit;
+  color: inherit;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  box-shadow: inset 0 0 0 1px transparent;
+}
+
+.picture-text-word:hover {
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+}
+
+/* Matched by the search: underlined. Selected: the olive wash and ring. The
+   two never share a mark, so a matched word can also be selected. */
+.picture-text-word--match {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1.5px;
+}
+
+.picture-text-word--selected {
+  background: rgba(var(--v-theme-dark-surface-primary), 0.28);
+  box-shadow: inset 0 0 0 1px rgb(var(--v-theme-dark-surface-primary));
+}
+
+.picture-text-selection {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 28px;
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  color: rgba(
+    var(--v-theme-on-dark-surface),
+    var(--opacity-text-secondary)
+  );
+}
+
+.picture-text-selection-words {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-weight: var(--weight-semibold);
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.picture-text-mini {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 24px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.picture-text-mini:hover {
   background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 

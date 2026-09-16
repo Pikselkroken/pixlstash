@@ -203,6 +203,10 @@ export function useUpdatesSocket({
     // so reloading the grid or raising the "view changed" pill would both be
     // wrong for what is really a repaint of one tile.
     if (field === "pixels") return false;
+    // Text read from a picture (OCR) is shown only in the lightbox's Text tab.
+    // A text search reads it, but the results are fetched once per query, so
+    // a re-read must not reload the grid or raise the "view changed" pill.
+    if (field === "ocr_text") return false;
     // Unknown field → assume it can affect the view, so refresh to be safe.
     return true;
   }
@@ -373,6 +377,11 @@ export function useUpdatesSocket({
           if (changedFields.includes("detections")) {
             const nextKey = (wsStore.wsDetectionUpdate?.key || 0) + 1;
             wsStore.wsDetectionUpdate = { key: nextKey, pictureIds };
+          }
+          // Same for the text read from a picture: the lightbox re-reads it.
+          if (changedFields.includes("ocr_text")) {
+            const nextKey = (wsStore.wsTextUpdate?.key || 0) + 1;
+            wsStore.wsTextUpdate = { key: nextKey, pictureIds };
           }
         }
         if (

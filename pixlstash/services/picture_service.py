@@ -35,3 +35,27 @@ def fetch_picture_file_path(db, picture_id: int) -> Optional[str]:
         ).first()
 
     return db.run_immediate_read_task(_fetch)
+
+
+def fetch_picture_text(db, picture_id: int):
+    """Return ``(ocr_text, ocr_words, text_score, deleted)`` for a picture, or ``None``.
+
+    Args:
+        db: The ``vault.db`` Database instance.
+        picture_id: The picture id to look up.
+
+    Returns:
+        The four columns, or ``None`` when no picture has that id.
+    """
+
+    def _fetch(session: Session):
+        return session.exec(
+            select(
+                Picture.ocr_text,
+                Picture.ocr_words,
+                Picture.text_score,
+                Picture.deleted,
+            ).where(Picture.id == picture_id)
+        ).first()
+
+    return db.run_immediate_read_task(_fetch)

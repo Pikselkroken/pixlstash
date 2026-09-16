@@ -523,6 +523,7 @@ const tmLabelMap = {
   planner_managed: "Planner task",
   checkpoints_hashed: "Checkpoint Hash",
   text_score: "Text score",
+  text_read: "Text in pictures",
   object_detection: "Object detection",
 };
 

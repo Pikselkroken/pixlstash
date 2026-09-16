@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlmodel import select
 from typing import Optional
 
+from pixlstash.database import OCR_TEXT_MATCH_WEIGHT
 from pixlstash.db_models import (
     Face,
     Picture,
@@ -48,6 +49,7 @@ class PictureMetadataResponse(BaseModel):
     format: Optional[str] = None
     score: Optional[int] = None
     likeness_score: Optional[float] = None
+    text_match: bool = False
 
 
 def register_routes(router, server):
@@ -388,6 +390,7 @@ def register_routes(router, server):
                 words,
                 text_to_embedding=server.vault.generate_text_embedding,
                 clip_text_to_embedding=server.vault.generate_clip_text_embedding,
+                text_match_weight=OCR_TEXT_MATCH_WEIGHT,
                 offset=semantic_offset,
                 limit=semantic_limit,
                 threshold=threshold,
@@ -460,6 +463,15 @@ def register_routes(router, server):
                     and getattr(result[0], "id", None) not in hidden_ids
                 ]
         rows = [Picture.serialize_with_likeness(r) for r in results]
+        # Per row, whether the picture's own text matched: the result pill counts
+        # and narrows on this without a second search (#1197).
+        text_matched_ids = (
+            server.vault.db.run_immediate_read_task(Picture.ids_matching_text, query)
+            if rows
+            else set()
+        )
+        for row in rows:
+            row["text_match"] = row.get("id") in text_matched_ids
         # Rows come from `metadata_fields()`, which carries the raw
         # `Picture.project_id`, and `PictureMetadataResponse` sets
         # `extra="allow"` so the response model filters nothing (issue #719,

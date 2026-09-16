@@ -84,6 +84,7 @@ export function useGridFetch(
     faceSearchThreshold,
     faceSearchMinRefs,
     faceSearchRanked,
+    textSearchResults,
   },
   props,
   {
@@ -220,6 +221,8 @@ export function useGridFetch(
       faceSearchMinRefs: faceSearchCharacter?.value
         ? (faceSearchMinRefs?.value ?? null)
         : null,
+      // Narrowing to text matches changes which pictures the grid shows.
+      textMatchesOnly: searchStore.textMatchesOnly === true,
     });
   }
 
@@ -742,9 +745,30 @@ export function useGridFetch(
         fetchMode = "text-search";
         // Use /pictures/search endpoint for text search
         const params = buildPictureIdsQueryParams();
-        images = await searchPictures(searchStore.searchQuery.trim(), {
-          query: params,
-        });
+        const searchText = searchStore.searchQuery.trim();
+        const cacheKey = `${searchText}\u0000${params}`;
+        // The "In text" switch narrows the response already on screen, so its
+        // re-cut reuses the rows instead of searching again. Only that re-cut
+        // does: any other fetch (a filter, an edit, a forced reload) re-searches.
+        const cached = textSearchResults?.value;
+        let rows =
+          options?.textMatchRecut === true && cached?.key === cacheKey
+            ? cached.rows
+            : null;
+        if (!rows) {
+          const body = await searchPictures(searchText, { query: params });
+          rows = Array.isArray(body) ? body : [];
+          if (
+            textSearchResults &&
+            fetchAllGridImages.lastRequestId === requestId
+          ) {
+            textSearchResults.value = { key: cacheKey, query: searchText, rows };
+          }
+        }
+        images =
+          searchStore.textMatchesOnly === true
+            ? rows.filter((row) => row?.text_match === true)
+            : rows;
       } else {
         fetchMode = "stream";
         // Overlay open: the streaming path rebuilds a placeholder grid and

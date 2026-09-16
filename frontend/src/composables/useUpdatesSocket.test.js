@@ -35,8 +35,14 @@ vi.mock("../stores/useDedupStore", () => ({
   useDedupStore: () => ({ applyPictureEvent }),
 }));
 
+/** The deps the socket handed the realtime sync, for its view classifier. */
+let realtimeDeps = null;
+
 vi.mock("./useGridRealtimeSync", () => ({
-  useGridRealtimeSync: () => ({ handleMessage, flushNow: vi.fn() }),
+  useGridRealtimeSync: (deps) => {
+    realtimeDeps = deps;
+    return { handleMessage, flushNow: vi.fn() };
+  },
 }));
 
 vi.mock("../utils/fullRestoreTransition", () => ({
@@ -558,5 +564,33 @@ describe("the view-changed pill while the tagger runs", () => {
     host.unmount();
     host = null;
     expect(wsStore.sortChangedExternalIds).toEqual([]);
+  });
+});
+
+describe("useUpdatesSocket: text read from a picture (#1197)", () => {
+  it("never counts as a change to the view", () => {
+    connect();
+    expect(realtimeDeps.pictureChangeAffectsView(["ocr_text"])).toBe(false);
+    // The control: an unknown field still does.
+    expect(realtimeDeps.pictureChangeAffectsView(["tags"])).toBe(true);
+  });
+
+  it("signals the lightbox with the pictures whose text changed", () => {
+    connect();
+    const wsStore = useWsStore();
+    receive({
+      type: "pictures_changed",
+      change_kind: "updated",
+      picture_ids: [7],
+      fields: ["ocr_text"],
+    });
+    expect(wsStore.wsTextUpdate).toEqual({ key: 1, pictureIds: [7] });
+    receive({
+      type: "pictures_changed",
+      change_kind: "updated",
+      picture_ids: [7],
+      fields: ["detections"],
+    });
+    expect(wsStore.wsTextUpdate.key).toBe(1);
   });
 });

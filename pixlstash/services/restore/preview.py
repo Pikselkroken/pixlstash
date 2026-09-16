@@ -989,6 +989,8 @@ class PreviewMixin:
             "aesthetic_score",
             "smart_score",
             "text_score",
+            "ocr_text",
+            "ocr_words",
             "metadata_hash",
         }
         changed: list[str] = []

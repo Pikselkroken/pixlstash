@@ -9,6 +9,7 @@
     :descriptionUpdate="wsStore.wsDescriptionUpdate"
     :smartScoreUpdate="wsStore.wsSmartScoreUpdate"
     :detectionUpdate="wsStore.wsDetectionUpdate"
+    :textUpdate="wsStore.wsTextUpdate"
     :hiddenTags="userPrefsStore.hiddenTags"
     :applyTagFilter="userPrefsStore.applyTagFilter"
     :dateFormat="userPrefsStore.dateFormat"
@@ -1067,6 +1068,9 @@
           :assign-from-selection="faceSearchAssignFromSelection"
           :assign-busy="faceSearchAssignBusy"
           :owns-escape="!showSelectionBar"
+          :text-match-count="textMatchCount"
+          :text-matches-only="searchStore.textMatchesOnly"
+          @update:text-matches-only="handleTextMatchesOnly"
           @update:min-refs="handleFaceSearchMinRefs"
           @update:threshold="handleFaceSearchThreshold"
           @assign="handleAssignFaceSearchResults"
@@ -1554,6 +1558,10 @@ const faceSearchRanked = ref(null);
 // and this is what keeps the arming click itself from counting as one.
 const faceSearchArmedView = ref(null);
 const faceSearchAssignBusy = ref(false);
+// The last text search's response, { key, query, rows }: each row carries
+// `text_match`, so the result pill's "In text" switch can narrow the grid
+// without searching again.
+const textSearchResults = ref(null);
 const sharedPictureIds = ref(new Set());
 const revokeSharesDialogOpen = ref(false);
 const revokeSharesPending = ref(null); // { pictureId }
@@ -4696,11 +4704,31 @@ const searchStatus = computed(() => {
     ? ""
     : ` in ${props.activeCategoryLabel}`;
   const forQuery = query ? ` for "${query}"` : "";
+  const noun = searchStore.textMatchesOnly ? "matches in text" : "matches";
   if (total === 0) {
-    return { count: null, label: `No matches${forQuery}${scope}` };
+    return { count: null, label: `No ${noun}${forQuery}${scope}` };
   }
-  return { count: total, label: `matches${forQuery}${scope}` };
+  return { count: total, label: `${noun}${forQuery}${scope}` };
 });
+
+/**
+ * How many of the current text search's results matched text in the picture.
+ * Zero outside a text search, which is what keeps the pill's switch away.
+ */
+const textMatchCount = computed(() => {
+  const query = (searchStore.searchQuery || "").trim();
+  const cached = textSearchResults.value;
+  if (!query || cached?.query !== query) return 0;
+  return cached.rows.filter((row) => row?.text_match === true).length;
+});
+
+/** The result pill's All / In text switch: re-cut the rows already fetched. */
+function handleTextMatchesOnly(value) {
+  searchStore.textMatchesOnly = value === true;
+  fetchAllGridImages({ textMatchRecut: true }).then(() =>
+    updateVisibleThumbnails(),
+  );
+}
 
 /**
  * Focus rescue. GridActionPill raises this when the half holding focus is about
@@ -5897,6 +5925,7 @@ const {
     faceSearchThreshold,
     faceSearchMinRefs,
     faceSearchRanked,
+    textSearchResults,
   },
   props,
   {
