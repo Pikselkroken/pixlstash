@@ -750,8 +750,14 @@ an agent can search the library and read pictures, tags and ComfyUI recipes,
 and it has no tools that change anything. It talks to a running PixlStash
 server with an API token and sees exactly what that token sees. Give it a
 **Read-only share** token from **API Tokens** in your account settings,
-restricted to a set, character or project if the agent should see only that:
-a full-access token works too, but then the agent can read the whole library.
+restricted to a set, character or project if the agent should see only that.
+
+A full-access token also works, and you should not give it one: any agent that
+can read its own config file then has full owner control of PixlStash - not
+just read access to your pictures - because that token authorises writes,
+deletes and the local-only filesystem endpoints, and nothing here limits what
+else the agent does with it.
+
 `get_recipe` also asks your ComfyUI whether a recipe's nodes and models are
 installed.
 

@@ -11,8 +11,10 @@ missing.
 import http.server
 import io
 import json
+import re
 import tempfile
 import threading
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +22,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from pixlstash import mcp_server
+from pixlstash.route_inventory import api_endpoint_set
 from pixlstash.server import Server
 from tests.utils import upload_pictures_and_wait
 
@@ -94,6 +97,7 @@ def env():
             # A client with no session cookie, so the token is the only credential.
             bare = TestClient(server.api, raise_server_exceptions=True)
             yield SimpleNamespace(
+                api=server.api,
                 pic_a=ids[0],
                 pic_b=ids[1],
                 scoped=_fetch(
@@ -113,7 +117,7 @@ def test_protocol_handshake_and_tool_list():
                     "jsonrpc": "2.0",
                     "id": 1,
                     "method": "initialize",
-                    "params": {"protocolVersion": "2025-03-26"},
+                    "params": {"protocolVersion": "2024-11-05"},
                 },
                 {"jsonrpc": "2.0", "method": "notifications/initialized"},
                 {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
@@ -135,8 +139,8 @@ def test_protocol_handshake_and_tool_list():
 
     # Notifications and client responses are not answered; everything else
     # is, and a malformed message does not end the session.
-    assert [r["id"] for r in replies] == [1, 2, 3, 4, 5, None, 8, None]
-    assert replies[0]["result"]["protocolVersion"] == "2025-03-26"
+    assert [r["id"] for r in replies] == [1, 2, 3, 4, 5, None, 7, 8, None]
+    assert replies[0]["result"]["protocolVersion"] == "2024-11-05"
     assert replies[0]["result"]["capabilities"] == {"tools": {}}
     tools = replies[1]["result"]["tools"]
     assert {t["name"] for t in tools} == {
@@ -151,20 +155,41 @@ def test_protocol_handshake_and_tool_list():
     assert replies[2]["error"]["code"] == -32601
     assert replies[3]["error"]["code"] == -32602
     assert replies[4]["error"]["code"] == -32602
+    # A batch, and an id with no method, are both invalid requests.
     assert replies[5]["error"]["code"] == -32600
-    assert replies[6]["result"] == {}
-    assert replies[7]["error"]["code"] == -32700
+    assert replies[6]["error"]["code"] == -32600
+    assert replies[7]["result"] == {}
+    assert replies[8]["error"]["code"] == -32700
 
 
-def test_a_redirect_is_refused_rather_than_followed():
+def test_an_unknown_protocol_version_gets_ours():
+    reply = mcp_server.handle_message(
+        None,
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "1999-01-01"},
+        },
+    )
+    assert reply["result"]["protocolVersion"] == mcp_server.PROTOCOL_VERSION
+
+
+@contextmanager
+def _recording_server(status: int = 200, body: bytes = b"[]"):
+    """A loopback HTTP server that records what actually reached it."""
     hits = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             hits.append((self.path, self.headers.get("Authorization")))
-            self.send_response(302)
-            self.send_header("Location", "/elsewhere")
+            self.send_response(status)
+            if status >= 300:
+                self.send_header("Location", "/elsewhere")
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
+            self.wfile.write(body)
 
         def log_message(self, *args):
             return None
@@ -173,15 +198,37 @@ def test_a_redirect_is_refused_rather_than_followed():
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
-        fetch = mcp_server.http_fetch(
-            f"http://127.0.0.1:{httpd.server_address[1]}", "example-token"
-        )
-        result = _call(fetch, "list_tags")
+        yield httpd.server_address[1], hits
     finally:
         httpd.shutdown()
+        thread.join(timeout=5)
+
+
+def test_a_redirect_is_refused_rather_than_followed():
+    with _recording_server(status=302) as (port, hits):
+        fetch = mcp_server.http_fetch(f"http://127.0.0.1:{port}", "example-token")
+        result = _call(fetch, "list_tags")
     assert result["isError"] is True
     assert "answered 302" in result["content"][0]["text"]
     # Positive control that the server was reached, and only once.
+    assert hits == [("/api/v1/tags", "Bearer example-token")]
+
+
+def test_a_proxy_in_the_environment_never_sees_the_token(monkeypatch):
+    """The token goes to the named URL, whatever the shell's proxy vars say.
+
+    urllib's default ProxyHandler reads these and does not bypass loopback, so
+    without the empty ProxyHandler this request would carry the Authorization
+    header to proxy.example.test instead.
+    """
+    for var in ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"):
+        monkeypatch.setenv(var, "http://proxy.example.test:3128")
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    with _recording_server() as (port, hits):
+        fetch = mcp_server.http_fetch(f"http://127.0.0.1:{port}", "example-token")
+        result = _call(fetch, "list_tags")
+    assert result["isError"] is False, result
     assert hits == [("/api/v1/tags", "Bearer example-token")]
 
 
@@ -229,7 +276,9 @@ def test_every_tool_request_is_a_get_through_http_fetch(monkeypatch):
         seen.append((request.get_method(), request.full_url, request.headers))
         return Response()
 
-    monkeypatch.setattr(mcp_server._opener, "open", urlopen)
+    monkeypatch.setattr(
+        mcp_server, "_build_opener", lambda: SimpleNamespace(open=urlopen)
+    )
     fetch = mcp_server.http_fetch("http://127.0.0.1:9537/", "example-token")
     _call(fetch, "list_pictures", tags=["cat", "dog"], limit=5000)
     method, url, headers = seen[0]
@@ -246,6 +295,49 @@ def test_every_tool_request_is_a_get_through_http_fetch(monkeypatch):
     assert method == "GET"
     assert url.startswith("http://127.0.0.1:9537/api/v1/pictures/search?")
     assert "query=red+square" in url and "tag=cat" in url
+
+
+def test_every_tool_path_resolves_to_a_mounted_route(env):
+    """A renamed route must break the tool, not pass a string comparison.
+
+    The READ-token middleware answers a nonexistent path with the same 403 a
+    real refusal gets, so the scope tests below cannot tell a dead path from an
+    enforced one. The paths here are the ones the tool code builds.
+    """
+    paths = []
+
+    def fetch(path, params):
+        paths.append(path)
+        return 200, "application/json", b"[]"
+
+    _call(fetch, "search_pictures", query="anything")
+    _call(fetch, "list_pictures")
+    for tool in PICTURE_TOOLS:
+        _call(fetch, tool, picture_id=env.pic_a)
+    _call(fetch, "list_tags")
+    assert len(paths) == len(mcp_server.TOOLS)
+
+    # Every GET path template the server mounts, via the same inventory the
+    # authz guardrails use (FastAPI's lazy routers hide them from app.routes).
+    templates = [path for method, path in api_endpoint_set(env.api) if method == "GET"]
+    # The SPA catch-all matches every string, so it is excluded or this
+    # assertion would pass on any typo.
+    patterns = [
+        # Literal parts escaped, or the `.` in `/pictures/{id}.{ext}` would
+        # make that template match almost any single-segment path.
+        re.compile(
+            "^"
+            + "[^/]+".join(re.escape(part) for part in re.split(r"\{[^}]+\}", template))
+            + "$"
+        )
+        for template in templates
+        if ":path" not in template
+    ]
+    assert patterns, "no GET routes found to match against"
+    for path in paths:
+        assert any(pattern.match(f"{API}{path}") for pattern in patterns), (
+            f"no mounted route matches {path}"
+        )
 
 
 def test_listing_sees_only_what_the_token_reaches(env):

@@ -40,7 +40,9 @@ SERVER_NAME = "pixlstash"
 # The newest protocol revision this server speaks. A client asking for a
 # revision we know is answered with it; anything else gets ours.
 PROTOCOL_VERSION = "2025-06-18"
-SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", "2025-03-26", PROTOCOL_VERSION}
+# 2025-03-26 is deliberately absent: it mandates JSON-RPC batching, which
+# ``serve`` refuses.
+SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", PROTOCOL_VERSION}
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 200
 
@@ -121,13 +123,14 @@ TOOLS = [
         },
     },
 ]
-for _tool in TOOLS:
+for _entry in TOOLS:
     # get_recipe pre-flights the recipe against the owner's ComfyUI, so it
     # reaches past the library even though it changes nothing.
-    _tool["annotations"] = {
+    _entry["annotations"] = {
         "readOnlyHint": True,
-        "openWorldHint": _tool["name"] == "get_recipe",
+        "openWorldHint": _entry["name"] == "get_recipe",
     }
+del _entry
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -137,7 +140,17 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_opener = urllib.request.build_opener(_NoRedirect)
+def _build_opener() -> urllib.request.OpenerDirector:
+    """An opener that reaches the named URL and nothing else.
+
+    The token goes to the URL the owner named and nowhere else, which takes two
+    handlers rather than one. Refusing redirects is the obvious half; the empty
+    ``ProxyHandler`` is the other, because urllib's default one reads
+    ``http_proxy`` from the environment and does not bypass loopback (it
+    consults ``no_proxy`` only), so a proxy set for the shell would receive the
+    Authorization header.
+    """
+    return urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
 
 
 class ToolError(Exception):
@@ -147,6 +160,7 @@ class ToolError(Exception):
 def http_fetch(base_url: str, token: str) -> Fetch:
     """Return a :data:`Fetch` that GETs *base_url* with *token* as Bearer."""
     base = base_url.rstrip("/")
+    opener = _build_opener()
 
     def fetch(path: str, params: dict) -> tuple[int, str, bytes]:
         query = urllib.parse.urlencode(params, doseq=True)
@@ -155,7 +169,7 @@ def http_fetch(base_url: str, token: str) -> Fetch:
             url, headers={"Authorization": f"Bearer {token}"}, method="GET"
         )
         try:
-            with _opener.open(request, timeout=60) as response:
+            with opener.open(request, timeout=60) as response:
                 return (
                     response.status,
                     response.headers.get("Content-Type", ""),
@@ -166,7 +180,9 @@ def http_fetch(base_url: str, token: str) -> Fetch:
             return exc.code, exc.headers.get("Content-Type", ""), exc.read()
         except urllib.error.URLError as exc:
             logger.warning("[mcp] Could not reach %s%s: %s", base, path, exc)
-            raise ToolError(f"Could not reach PixlStash at {base}: {exc.reason}")
+            raise ToolError(
+                f"Could not reach PixlStash at {base}: {exc.reason}"
+            ) from exc
 
     return fetch
 
@@ -248,9 +264,13 @@ def handle_message(fetch: Fetch, message: dict) -> dict | None:
     """Answer one JSON-RPC message; ``None`` for a notification."""
     method = message.get("method")
     msg_id = message.get("id")
-    if msg_id is None or method is None:
-        # A notification, or the client answering a request we never make.
-        return None
+    if msg_id is None:
+        return None  # A notification, or a reply to nothing.
+    if method is None:
+        # An id with no method is a client response to a request this server
+        # never makes, or an invalid request. Either way it needs an answer,
+        # or the client waits on that id until its own timeout.
+        return _error(msg_id, -32600, "Invalid Request: no method")
     params = message.get("params") or {}
     if not isinstance(params, dict):
         return _error(msg_id, -32602, "params must be an object")
@@ -348,6 +368,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # A client pipes UTF-8; without this Python decodes stdin with the locale
+    # encoding, which mangles a non-ASCII query on Windows (cp1252). Replies
+    # are ASCII by json.dumps default.
+    sys.stdin.reconfigure(encoding="utf-8")
     token = os.environ.get("PIXLSTASH_TOKEN", "").strip()
     if not token:
         print("PIXLSTASH_TOKEN is not set; mint an API token first.", file=sys.stderr)
