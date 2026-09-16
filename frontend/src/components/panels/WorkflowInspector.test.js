@@ -26,9 +26,12 @@ vi.mock("../../api/workflows", () => ({
 
 const getWorkflowInputs = vi.fn();
 const setWorkflowInputs = vi.fn();
+const deleteWorkflow = vi.fn();
+const listWorkflowFiles = vi.fn();
 
 vi.mock("../../api/comfyui", () => ({
-  listWorkflows: vi.fn().mockResolvedValue({ workflows: [] }),
+  listWorkflows: (...args) => listWorkflowFiles(...args),
+  deleteWorkflow: (...args) => deleteWorkflow(...args),
   getWorkflowInputs: (...args) => getWorkflowInputs(...args),
   setWorkflowInputs: (...args) => setWorkflowInputs(...args),
 }));
@@ -39,6 +42,7 @@ vi.mock("vue-router", () => ({
 
 import WorkflowInspector from "./WorkflowInspector.vue";
 import { useWorkflowShelfStore } from "../../stores/useWorkflowShelfStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const HASH = "a".repeat(64);
@@ -108,6 +112,8 @@ beforeEach(() => {
   listWorkflowPictures.mockReset().mockResolvedValue([]);
   getWorkflowInputs.mockReset();
   setWorkflowInputs.mockReset();
+  deleteWorkflow.mockReset();
+  listWorkflowFiles.mockReset().mockResolvedValue({ workflows: [] });
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -400,5 +406,93 @@ describe("a saved workflow's pictures in", () => {
     expect(textOf(wrapper)).toContain(
       "Its picture is no longer in this library.",
     );
+  });
+});
+
+describe("deleting a saved workflow", () => {
+  async function mountFile(source) {
+    getWorkflowInputs.mockResolvedValue({ workflow: "edit.json", inputs: [] });
+    const store = useWorkflowShelfStore();
+    store.files = [{ name: "edit.json", display_name: "edit", source, valid: true }];
+    store.selectFile("edit.json");
+    const wrapper = mount(WorkflowInspector, globalOpts);
+    await flush(wrapper);
+    return { wrapper, store };
+  }
+
+  function deleteButton(wrapper) {
+    return wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Delete workflow"));
+  }
+
+  it("deletes the file once confirmed and drops it from the list", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    deleteWorkflow.mockResolvedValue({});
+    const { wrapper, store } = await mountFile("user");
+
+    await deleteButton(wrapper).trigger("click");
+    await flush(wrapper);
+
+    expect(deleteWorkflow).toHaveBeenCalledWith("edit.json");
+    expect(store.files).toEqual([]);
+    expect(store.selectedFile).toBe(null);
+  });
+
+  it("keeps the workflow when the confirm is cancelled", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    const { wrapper, store } = await mountFile("user");
+
+    await deleteButton(wrapper).trigger("click");
+    await flush(wrapper);
+
+    expect(deleteWorkflow).not.toHaveBeenCalled();
+    // Cancelling changes nothing: the file is still listed, still selected,
+    // and the list was never re-read behind the cancel.
+    expect(store.files.map((f) => f.name)).toEqual(["edit.json"]);
+    expect(store.selectedFile).toBe("edit.json");
+    expect(listWorkflowFiles).not.toHaveBeenCalled();
+    expect(deleteButton(wrapper).attributes("disabled")).toBeUndefined();
+  });
+
+  it("re-reads the list when the delete fails, so a file already gone leaves", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    deleteWorkflow.mockRejectedValue({ response: { status: 404 } });
+    const { wrapper, store } = await mountFile("user");
+
+    await deleteButton(wrapper).trigger("click");
+    await flush(wrapper);
+
+    expect(store.files).toEqual([]);
+    expect(store.selectedFile).toBe(null);
+  });
+
+  it("says why a delete failed and leaves the workflow, and the button, there", async () => {
+    // The trash refusing is the failure the server is documented to return,
+    // and it keeps the workflow - so the panel must too.
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    listWorkflowFiles.mockResolvedValue({
+      workflows: [{ name: "edit.json", display_name: "edit", source: "user", valid: true }],
+    });
+    deleteWorkflow.mockRejectedValue({
+      response: { status: 500, data: { detail: "Failed to delete workflow" } },
+    });
+    const { wrapper, store } = await mountFile("user");
+
+    await deleteButton(wrapper).trigger("click");
+    await flush(wrapper);
+
+    expect(useNoticeStore().notices.at(-1)).toMatchObject({
+      level: "error",
+      text: "Failed to delete workflow",
+    });
+    expect(store.files.map((f) => f.name)).toEqual(["edit.json"]);
+    // Re-enabled: a failure that leaves the only control disabled is a dead end.
+    expect(deleteButton(wrapper).attributes("disabled")).toBeUndefined();
+  });
+
+  it("offers no delete for a built-in workflow", async () => {
+    const { wrapper } = await mountFile("built-in");
+    expect(deleteButton(wrapper)).toBeUndefined();
   });
 });

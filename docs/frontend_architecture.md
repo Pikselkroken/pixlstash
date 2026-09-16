@@ -764,12 +764,11 @@ Thin multi-tab settings shell. It now owns only the tab chrome and routing — e
 - **Appearance** → `<AppearanceSection>`
 - **Models** (id `behaviour`) → `<BehaviourSection>` (`!isReadOnly`)
 - **Smart Score & Filters** (id `smart-score`) → `<SmartScoreSection>` (`!isReadOnly`)
-- **Workflows** → `<WorkflowsSection>` (`!isReadOnly`)
 - **Libraries** → `<LibrariesSection>` (`!isReadOnly`)
 - **Scrapheap** → `<ScrapheapSection>` (`!isReadOnly`)
 - **Snapshots** → `<SnapshotsSection>` (`!isReadOnly`)
 - **Privacy** → `<PrivacySection>` (`!isReadOnly`)
-- **Compute** → `<ComputeSection view="compute">` (desktop only, `isDesktop && !isReadOnly`)
+- **Compute** (`!isReadOnly`; id `compute`) → `<ComputeSection view="compute">`, rendered only under `isDesktop`, then `<ComfyuiHostSection>`, rendered always. The rail item itself is NOT desktop-gated (Backend still is), and it is **labelled for what the pane holds**: `Compute` / `expansion-card-variant` on the desktop, where the acceleration runtime sits above the host, and `ComfyUI` / `sitemap-outline` in a browser, where the ComfyUI host is the whole pane and `Compute` would be the wrong word to hunt for. The host section is `first` there, so it carries no divider above nothing.
 - **Backend** → `<ComputeSection>` (desktop only, `isDesktop && !isReadOnly`)
 - **Account Settings** → `<AccountSection>` (`!isReadOnly`)
 
@@ -1060,8 +1059,8 @@ on the table. Plugin names therefore wrap (`PluginsTable`'s `.pt-plugin-name`),
 and the three fixed-width columns are padded at `--space-2` so the name column
 keeps enough of the ~280px to hold an ordinary name on one line.
 
-#### `WorkflowsSection.vue`
-Workflows tab content (extracted from inline markup): ComfyUI URL, workflow import/management.
+#### `ComfyuiHostSection.vue`
+The ComfyUI host and port (`comfyui_url` in the user config), on the Compute tab. Props: `open`, `first`. Emits `update:comfyui-configured`. There is no workflow import or list in Settings: a workflow is added by dropping it on the Workflows view or into the watched `workflows/` folder, and deleted from `WorkflowInspector`.
 
 #### `SnapshotsSection.vue`
 Snapshots tab content. Props: `open: Boolean`. Lists and manages snapshots (reuses `utils/snapshots.js` helpers).
@@ -4284,8 +4283,9 @@ invisible. A notice per file says whether it was added or already there.
 Anything else in the drop is not this view's: `useWindowFileImport` listens in
 the capture phase and stands aside only for a drop of JSON files alone onto
 `.wfshelf`, so pictures dropped here still import and are not reported twice.
-Settings › Workflows imports through the same route; a name taken by different
-content opens a Replace / Keep both / Cancel dialog, and Cancel writes nothing. Naming a workflow
+There is no Replace here: a drop always keeps both, so replacing a
+workflow means deleting it (the inspector's **Delete workflow**) and dropping
+the new file. Naming a workflow
 is a later step, running one is the run panel below, and forgetting
 ghosts is the two counted purges in Settings › Privacy (`PrivacySection`, beside
 the Off / Covered only / On retention control); the row menu offers only what
@@ -4320,7 +4320,11 @@ would keep asking for numbers nobody is looking at. The tab strip names the
 **subject** — `Workflow`, where `Model` and `Pictures` sit — and the second tab
 is always the way out to the pictures, which is what stops the rail being
 terminal. It dims rather than disappearing when a workflow has outlived
-everything it made, so the panel keeps its shape.
+everything it made, so the panel keeps its shape. A selected saved workflow that
+is not built in carries **Delete workflow**, which confirms and calls
+`DELETE /comfyui/workflows/{name}`: the server writes the file back to the
+watched folder and moves it to the system trash (the server machine's), and the
+file list is re-read whether or not the delete succeeded.
 
 **Its tiles have three states and the store records all three separately**, because
 two bugs have now lived in that one branch. A failed fetch used to be cached as
@@ -5139,9 +5143,9 @@ graph TD
     SettingsDlg --> AppSec["AppearanceSection.vue"]
     SettingsDlg --> BehSec["BehaviourSection.vue"]
     SettingsDlg --> SmartSec["SmartScoreSection.vue"]
-    SettingsDlg --> WfSec["WorkflowsSection.vue"]
     SettingsDlg --> SnapSec["SnapshotsSection.vue"]
     SettingsDlg --> CompSec["ComputeSection.vue (desktop)"]
+    SettingsDlg --> ComfySec["ComfyuiHostSection.vue"]
     SettingsDlg --> AccSec["AccountSection.vue"]
 
     FolderEd --> FolderBrowser["FolderBrowser.vue"]

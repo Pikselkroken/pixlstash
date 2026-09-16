@@ -479,7 +479,7 @@
       <LibraryEmptyState
         v-if="showLibraryEmptyState"
         @choose-folder="emit('choose-folder')"
-        @connect-comfyui="emit('open-settings', 'workflows')"
+        @connect-comfyui="emit('open-settings', 'compute')"
         @add-files="importChosenFiles"
       />
       <div v-else-if="showEmptyState" class="empty-state">

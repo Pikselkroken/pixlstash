@@ -107,8 +107,8 @@
           </div>
         </label>
         <p v-if="!templatesLoading && !templates.length" class="remix-note">
-          No image-to-image templates found. Add one in Settings → Workflows,
-          with a picture input set to Selection in Workflows.
+          No image-to-image templates found. Drop a workflow file on the
+          Workflows view, then set one of its picture inputs to Selection.
         </p>
 
         <div v-if="templateTakesPrompt" class="remix-field">

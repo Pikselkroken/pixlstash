@@ -7,18 +7,18 @@ import AccountSection from "./AccountSection.vue";
 import LibrariesSection from "./LibrariesSection.vue";
 import AppearanceSection from "./AppearanceSection.vue";
 import BehaviourSection from "./BehaviourSection.vue";
+import ComfyuiHostSection from "./ComfyuiHostSection.vue";
 import ComputeSection from "./ComputeSection.vue";
 import PrivacySection from "./PrivacySection.vue";
 import ScrapheapSection from "./ScrapheapSection.vue";
 import SnapshotsSection from "./SnapshotsSection.vue";
 import SmartScoreSection from "./SmartScoreSection.vue";
-import WorkflowsSection from "./WorkflowsSection.vue";
 import { VIcon } from "vuetify/components";
 
 const appVersion = __APP_VERSION__;
 
 // The desktop app injects this bridge (Electron preload); a plain browser does
-// not, so the Compute tab is desktop-only.
+// not, so the Backend tab and Compute's acceleration section are desktop-only.
 const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
 
 const props = defineProps({
@@ -81,12 +81,6 @@ const navItems = computed(() =>
       show: !isReadOnly.value,
     },
     {
-      id: "workflows",
-      icon: "sitemap-outline",
-      label: "Workflows",
-      show: !isReadOnly.value,
-    },
-    {
       // Ordered next to Scrapheap and Snapshots - the open library's bin and
       // its backups - so the container sits with the panes that describe it.
       // Adjacency is the only cue: the rail is one flat list, deliberately, so
@@ -115,10 +109,14 @@ const navItems = computed(() =>
       show: !isReadOnly.value,
     },
     {
+      // Named for what the pane holds. On the desktop that is the acceleration
+      // runtime with the ComfyUI host under it; in a browser there is no
+      // runtime to manage and the ComfyUI host is the whole pane, so a rail
+      // item reading "Compute" would be the wrong word to hunt for.
       id: "compute",
-      icon: "expansion-card-variant",
-      label: "Compute",
-      show: isDesktop && !isReadOnly.value,
+      icon: isDesktop ? "expansion-card-variant" : "sitemap-outline",
+      label: isDesktop ? "Compute" : "ComfyUI",
+      show: !isReadOnly.value,
     },
     {
       id: "backend",
@@ -248,19 +246,6 @@ watch(
       </div>
       <div
         v-if="!isReadOnly"
-        v-show="settingsTab === 'workflows'"
-        id="settings-pane-workflows"
-        class="settings-pane"
-        role="region"
-        aria-labelledby="settings-nav-workflows"
-      >
-        <WorkflowsSection
-          :open="dialogOpen"
-          @update:comfyui-configured="emit('update:comfyui-configured', $event)"
-        />
-      </div>
-      <div
-        v-if="!isReadOnly"
         v-show="settingsTab === 'libraries'"
         id="settings-pane-libraries"
         class="settings-pane"
@@ -300,14 +285,19 @@ watch(
         <PrivacySection :open="dialogOpen && settingsTab === 'privacy'" />
       </div>
       <div
-        v-if="isDesktop && !isReadOnly"
+        v-if="!isReadOnly"
         v-show="settingsTab === 'compute'"
         id="settings-pane-compute"
         class="settings-pane"
         role="region"
         aria-labelledby="settings-nav-compute"
       >
-        <ComputeSection :open="dialogOpen" view="compute" />
+        <ComputeSection v-if="isDesktop" :open="dialogOpen" view="compute" />
+        <ComfyuiHostSection
+          :open="dialogOpen"
+          :first="!isDesktop"
+          @update:comfyui-configured="emit('update:comfyui-configured', $event)"
+        />
       </div>
       <div
         v-if="isDesktop && !isReadOnly"
