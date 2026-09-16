@@ -34,6 +34,65 @@ export const UNKNOWN_FIGURE = "–";
 const KEEP_COVER_ONLY_LABEL = "Keep cover only";
 
 /**
+ * The sibling that moves only the copies that could be made again (#1315).
+ * Same family of name, so it reads as a narrower Keep cover only rather than a
+ * new kind of risk: the title says what you keep.
+ */
+export const KEEP_RECIPES_ONLY_LABEL = "Keep recipes only";
+
+/**
+ * Keep recipes only's own glyph, and deliberately NOT the layers family.
+ *
+ * A frame with a circular arrow states the property the eligibility test
+ * measures — this picture could be made again — without claiming the app will
+ * re-make anything, and without claiming a ghost survives, which is what the
+ * copy branches on. `mdi-layers-remove` was rejected: its cross reads as more
+ * severe than the sibling's minus, on the LESS destructive of the two items,
+ * which inverts the one signal the danger group is ordered by
+ * (`lead-designer`, 2026-09-16).
+ */
+export const KEEP_RECIPES_ONLY_ICON = "mdi-image-refresh";
+
+/** The same glyph without the `mdi-` prefix, which is what AppButton takes. */
+export const KEEP_RECIPES_ONLY_ICON_NAME = "image-refresh";
+
+/**
+ * The Keep recipes only lede, branching on the LIVE ghost setting.
+ *
+ * Under `covered` — the default — what takes a recipe away later is deleting
+ * the cover the stack just kept, because the ghost is retained only while a
+ * surviving picture carries the same instance hash. "Your ghost setting" does
+ * not let a reader derive that, so the sentence says it. Same rule as
+ * {@link keepCoverOnlyRetentionSentence}: read the live value, never assume one.
+ *
+ * `off` needs no variant: nothing is eligible at that position, so the dialog
+ * has no pictures to describe.
+ *
+ * @param {string|null|undefined} ghostRetention - the preview's `ghost_retention`.
+ * @returns {string}
+ */
+export function keepRecipesOnlyLede(ghostRetention) {
+  const tail =
+    ghostRetention === "covered"
+      ? "each leaves a thumbnail and recipe behind for as long as its cover stays — delete the cover for good and they go with it."
+      : "each leaves its thumbnail and recipe behind.";
+  return (
+    "Each stack keeps its cover. The other pictures in it that could be made " +
+    "again from their recipe move to the Scrapheap, where you can restore " +
+    `them. If you empty the Scrapheap later, ${tail} Loose pictures are left alone.`
+  );
+}
+
+/**
+ * The note under the keep-every-ghost box. Two facts a reader would otherwise
+ * assume wrongly: the setting is not per library, and undo does not reach it.
+ */
+export const KEEP_EVERY_GHOST_NOTE =
+  "Turns on Keep picture ghosts (Settings › Privacy) for every library, so " +
+  "the thumbnail and prompt of anything you delete for good stay until you " +
+  "purge them. Ctrl+Z does not turn it back off.";
+
+/**
  * The glyph, once: the inverse of the mdi-layers-plus the user pressed to build
  * these stacks. Not `mdi-delete`, which would over-claim; nothing leaves disk.
  * The same glyph rides the menu item, the confirm button and the receipt, so
@@ -167,17 +226,21 @@ export function keepCoverOnlyLockReason({
  * @param {number} options.selectedCount - pictures (tiles) selected.
  * @returns {string}
  */
-export function keepCoverOnlyMenuLabel({ stackCount, selectedCount } = {}) {
+export function keepCoverOnlyMenuLabel({
+  stackCount,
+  selectedCount,
+  label = KEEP_COVER_ONLY_LABEL,
+} = {}) {
   const stacks = Number(stackCount) || 0;
   const selected = Number(selectedCount) || 0;
-  if (stacks <= 0) return KEEP_COVER_ONLY_LABEL;
+  if (stacks <= 0) return label;
   // A selection whose every tile is a stack tile needs no "of": the two numbers
   // would be the same, and "3 of 3" reads as a warning about nothing.
   if (selected > stacks) {
-    return `${KEEP_COVER_ONLY_LABEL} (${stacks} of ${selected})`;
+    return `${label} (${stacks} of ${selected})`;
   }
   const noun = stacks === 1 ? "stack" : "stacks";
-  return `${KEEP_COVER_ONLY_LABEL} (${stacks} ${noun})`;
+  return `${label} (${stacks} ${noun})`;
 }
 
 /**
@@ -193,7 +256,14 @@ export function keepCoverOnlyMenuLabel({ stackCount, selectedCount } = {}) {
  *   `null` while the preview is in flight or has failed.
  * @returns {string}
  */
-export function keepCoverOnlyTitle(stacksEligible) {
+export function keepCoverOnlyTitle(stacksEligible, keepRecipes = false) {
+  if (keepRecipes) {
+    if (stacksEligible === null || stacksEligible === undefined) {
+      return KEEP_RECIPES_ONLY_LABEL;
+    }
+    const count = Number(stacksEligible) || 0;
+    return `${KEEP_RECIPES_ONLY_LABEL} in ${count.toLocaleString()} ${count === 1 ? "stack" : "stacks"}`;
+  }
   if (stacksEligible === null || stacksEligible === undefined) {
     return "Keep only the cover";
   }
@@ -292,6 +362,13 @@ export function keepCoverOnlySkipReasons(preview) {
   const locked = Number(preview.stacks_skipped_locked) || 0;
   const character = Number(preview.stacks_skipped_character_on_copy) || 0;
   const single = Number(preview.stacks_skipped_single_member) || 0;
+  const nothing = Number(preview.stacks_skipped_nothing_reproducible) || 0;
+  if (nothing > 0) {
+    rows.push({
+      key: "nothing_reproducible",
+      text: `${nothing} ${nothing === 1 ? "stack has" : "stacks have"} no picture besides the cover that could be made again.`,
+    });
+  }
   if (locked > 0) {
     rows.push({
       key: "locked",
@@ -332,7 +409,78 @@ export function keepCoverOnlySkippedCount(preview) {
   return (
     (Number(preview.stacks_skipped_locked) || 0) +
     (Number(preview.stacks_skipped_character_on_copy) || 0) +
-    (Number(preview.stacks_skipped_single_member) || 0)
+    (Number(preview.stacks_skipped_single_member) || 0) +
+    (Number(preview.stacks_skipped_nothing_reproducible) || 0)
+  );
+}
+
+/**
+ * Keep recipes only: why the copies that stay could not be made again, one row
+ * per reason. The server counts each copy under exactly one reason, so the
+ * rows are disjoint and `keepRecipesOnlyStayingCount` is their plain sum.
+ *
+ * `ghost_not_kept` is the one the dialog can change: its row is what the
+ * keep-every-ghost box answers.
+ *
+ * @param {Object|null} preview - the dry-run body.
+ * @returns {Array<{key: string, text: string}>}
+ */
+export function keepRecipesOnlyStayingReasons(preview) {
+  if (!preview) return [];
+  const pictures = (n) => `${n.toLocaleString()} ${n === 1 ? "has" : "have"}`;
+  const rows = [];
+  const noRecipe = Number(preview.pictures_staying_no_recipe) || 0;
+  const model = Number(preview.pictures_staying_model_missing) || 0;
+  const thumb = Number(preview.pictures_staying_no_thumbnail) || 0;
+  const ghost = Number(preview.pictures_staying_ghost_not_kept) || 0;
+  if (noRecipe > 0) {
+    rows.push({
+      key: "no_recipe",
+      text: `${pictures(noRecipe)} no workflow PixlStash recorded.`,
+    });
+  }
+  if (model > 0) {
+    rows.push({
+      key: "model_missing",
+      text: `${model.toLocaleString()} ${model === 1 ? "uses" : "use"} a model that is not on your shelf.`,
+    });
+  }
+  if (thumb > 0) {
+    rows.push({
+      key: "no_thumbnail",
+      text: `${pictures(thumb)} no thumbnail yet, and a recipe is only kept with one.`,
+    });
+  }
+  if (ghost > 0) {
+    rows.push({
+      key: "ghost_not_kept",
+      // Consequence first, mechanism second: the previous shape led with a
+      // double negative nobody parsed on the first read.
+      text:
+        preview.ghost_retention === "off"
+          ? `${ghost.toLocaleString()} would keep nothing, because your ghost setting is Off.`
+          : ghost === 1
+            ? "1 shares its prompt with no picture that stays, so your ghost setting would keep nothing of it."
+            : `${ghost.toLocaleString()} share their prompt with no picture that stays, so your ghost setting would keep nothing of them.`,
+    });
+  }
+  return rows;
+}
+
+/**
+ * Keep recipes only: how many copies stay live. A sum of the disjoint
+ * per-reason counts, never selected minus moving.
+ *
+ * @param {Object|null} preview
+ * @returns {number}
+ */
+export function keepRecipesOnlyStayingCount(preview) {
+  if (!preview) return 0;
+  return (
+    (Number(preview.pictures_staying_no_recipe) || 0) +
+    (Number(preview.pictures_staying_model_missing) || 0) +
+    (Number(preview.pictures_staying_no_thumbnail) || 0) +
+    (Number(preview.pictures_staying_ghost_not_kept) || 0)
   );
 }
 
@@ -355,14 +503,28 @@ export function keepCoverOnlySkipNote(result) {
   const character = Array.isArray(result.stacks_skipped_character_on_copy)
     ? result.stacks_skipped_character_on_copy.length
     : 0;
+  const nothing = Array.isArray(result.stacks_skipped_nothing_reproducible)
+    ? result.stacks_skipped_nothing_reproducible.length
+    : 0;
   const total = locked + character;
-  if (total <= 0) return "";
+  const staying = Number(result.pictures_staying) || 0;
+  const stayingNote =
+    staying > 0
+      ? `${staying.toLocaleString()} ${staying === 1 ? "picture stays" : "pictures stay"}: ${staying === 1 ? "it" : "they"} could not be made again.`
+      : "";
+  const nothingNote =
+    nothing > 0
+      ? `${nothing} ${nothing === 1 ? "stack" : "stacks"} unchanged: nothing in ${nothing === 1 ? "it" : "them"} could be made again.`
+      : "";
+  if (total <= 0) return [nothingNote, stayingNote].filter(Boolean).join(" ");
   const noun = total === 1 ? "stack" : "stacks";
+  let note;
   if (locked && character) {
-    return `${total} ${noun} skipped: ${locked} locked, ${character} holding a person's only link.`;
+    note = `${total} ${noun} skipped: ${locked} locked, ${character} holding a person's only link.`;
+  } else if (locked) {
+    note = `${locked} ${noun} skipped: held by a locked picture set.`;
+  } else {
+    note = `${character} ${noun} skipped: a person's only link sits on a copy.`;
   }
-  if (locked) {
-    return `${locked} ${noun} skipped: held by a locked picture set.`;
-  }
-  return `${character} ${noun} skipped: a person's only link sits on a copy.`;
+  return [note, nothingNote, stayingNote].filter(Boolean).join(" ");
 }

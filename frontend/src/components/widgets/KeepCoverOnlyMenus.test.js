@@ -177,6 +177,107 @@ describe.each(MENUS)("%s: the Keep cover only item", (_name, mountMenu, event) =
 
 });
 
+// Keep recipes only (#1315) rides the same event with a payload, so the grid
+// opens the same dialog in its narrower mode. Same gating as its sibling.
+describe.each(MENUS)("%s: the Keep recipes only item", (_name, mountMenu, event) => {
+  const recipesItem = (wrapper) =>
+    wrapper
+      .findAll("button.ctx-item")
+      .find((b) => b.text().startsWith("Keep recipes only"));
+
+  // It moves a strict subset of what Keep cover only moves, so escalating
+  // severity puts it first, and the cheapest slot in the group is the safer
+  // of the two (`lead-designer` / `ui-ux-expert`, 2026-09-16).
+  it("counts stacks and leads the danger group, before Keep cover only", () => {
+    const danger = mountMenu()
+      .findAll("button.ctx-item--danger")
+      .map((b) => b.text());
+    const cover = danger.findIndex((t) => t.startsWith("Keep cover only"));
+    const recipes = danger.findIndex((t) => t.startsWith("Keep recipes only"));
+    const del = danger.findIndex((t) => t.includes("Delete"));
+    expect(danger[recipes]).toContain("Keep recipes only (3 stacks)");
+    expect(cover).toBe(recipes + 1);
+    expect(del).toBeGreaterThan(cover);
+  });
+
+  it("emits keep-cover-only asking for recipes", async () => {
+    const wrapper = mountMenu();
+    await recipesItem(wrapper).trigger("click");
+    expect(wrapper.emitted(event)).toEqual([[{ keepRecipes: true }]]);
+  });
+
+  it("is not offered when the selection names no stack", () => {
+    expect(recipesItem(mountMenu({ keepCoverOnlyStackCount: 0 }))).toBeUndefined();
+  });
+
+  it("is disabled with the lock reason when every named stack is locked", () => {
+    const reason = "Locked: every selected stack is held by the locked set 'X'.";
+    const item = recipesItem(mountMenu({ keepCoverOnlyLockReason: reason }));
+    expect(item.attributes("disabled")).toBeDefined();
+    expect(tip(item)).toBe(reason);
+  });
+});
+
+// One word apart in a danger group is not a distinction, so the glyph carries
+// it. The shared stub swallows slot content, so these two mount with one that
+// renders it.
+describe("the two Keep items are told apart by their glyph", () => {
+  const GLYPH_STUBS = {
+    global: {
+      stubs: {
+        ...globalStubs.global.stubs,
+        "v-icon": { template: "<i class='glyph'><slot /></i>" },
+      },
+    },
+  };
+  const glyphOf = (wrapper, label) =>
+    wrapper
+      .findAll("button.ctx-item")
+      .find((b) => b.text().includes(label))
+      .find(".glyph")
+      .text();
+
+  it.each([
+    [
+      "ImageGridContextMenu",
+      () =>
+        mount(ImageGridContextMenu, {
+          props: {
+            allPicturesId: "ALL",
+            unassignedPicturesId: "UNASSIGNED",
+            scrapheapPicturesId: "SCRAPHEAP",
+            backendUrl: "http://x",
+            visible: true,
+            selectedCharacter: "ALL",
+            selectedImageIds: ["10", "11", "12"],
+            keepCoverOnlyStackCount: 3,
+          },
+          ...GLYPH_STUBS,
+        }),
+    ],
+    [
+      "SelectionMenu",
+      () =>
+        mount(SelectionMenu, {
+          props: {
+            open: true,
+            backendUrl: "http://x",
+            isReadOnly: false,
+            isScrapheapView: false,
+            selectedImageIds: ["10", "11", "12"],
+            selectedCount: 3,
+            keepCoverOnlyStackCount: 3,
+          },
+          ...GLYPH_STUBS,
+        }),
+    ],
+  ])("%s", (_name, mountMenu) => {
+    const wrapper = mountMenu();
+    expect(glyphOf(wrapper, "Keep recipes only")).toBe("mdi-image-refresh");
+    expect(glyphOf(wrapper, "Keep cover only")).toBe("mdi-layers-minus");
+  });
+});
+
 // Read-only is read from two different places by the two menus (the grid menu
 // takes the session ref straight from apiClient; the pill's menu is handed a
 // prop by SelectionBar), so it is asserted once per menu rather than shared.

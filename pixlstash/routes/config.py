@@ -1207,11 +1207,7 @@ def create_router(server) -> APIRouter:
                     f"{list(workflow_ghost_service.GHOST_RETENTION_CHOICES)}."
                 ),
             )
-        server._server_config[workflow_ghost_service.GHOST_RETENTION_KEY] = value
-        server.vault.set_ghost_retention(value)
-        config_path = getattr(server, "_server_config_path", None)
-        if config_path:
-            persist_server_config(config_path, server._server_config)
+        workflow_ghost_service.apply_ghost_retention(server, value)
         return _ghost_retention_payload()
 
     class GhostEraseResponse(BaseModel):

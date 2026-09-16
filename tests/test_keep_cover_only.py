@@ -44,7 +44,12 @@ from pixlstash.db_models import (
     Tag,
 )
 from pixlstash.server import Server
-from pixlstash.services import keep_cover_only_service, operation_log_service
+from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.services import (
+    keep_cover_only_service,
+    operation_log_service,
+    workflow_ghost_service,
+)
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
@@ -990,5 +995,429 @@ def test_the_selection_cap_bounds_the_request_not_the_deduplicated_set():
         )
         assert response.status_code == 200, response.text
         assert response.json()["stacks_collapsed"] == 1
+    finally:
+        _teardown(temp_dir, server)
+
+
+# ── Keep recipes only (#1315) ────────────────────────────────────────────────
+
+_ON_SHELF = "kro_on_shelf.safetensors"
+_OFF_SHELF = "kro_not_on_shelf.safetensors"
+
+
+def _txt2img(prompt: str, ckpt: str = _ON_SHELF) -> dict:
+    """A minimal API-format txt2img graph; the prompt and model vary the keys."""
+    return {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": ckpt},
+        },
+        "2": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"clip": ["1", 1], "text": prompt},
+        },
+        "3": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": 512, "height": 512, "batch_size": 1},
+        },
+        "4": {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": ["1", 0],
+                "positive": ["2", 0],
+                "negative": ["2", 0],
+                "latent_image": ["3", 0],
+                "seed": 7,
+                "steps": 20,
+                "cfg": 7.0,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "denoise": 1.0,
+            },
+        },
+        "5": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["4", 0], "vae": ["1", 2]},
+        },
+        "6": {"class_type": "SaveImage", "inputs": {"images": ["5", 0]}},
+    }
+
+
+def _file_recipe(server, graph: dict):
+    """File *graph* in the hub for the active library; returns its keys."""
+    from pixlstash.hub.workflows import record_api_graph
+
+    return record_api_graph(server.vault.hub, graph, server.vault.library_uuid)
+
+
+def _set_keys(server, picture_id: int, keys, thumbnail: bool = True) -> None:
+    """Give a picture workflow keys, a pixel_sha and (optionally) a thumbnail file.
+
+    The file is what the purge reads, so the planner checks the file too.
+    """
+
+    def write(session):
+        picture = session.get(Picture, picture_id)
+        if keys is not None:
+            picture.workflow_topology_hash = keys.topology_hash
+            picture.workflow_structural_hash = keys.structural_hash
+            picture.workflow_instance_hash = keys.instance_hash
+        picture.pixel_sha = f"kro-pixels-{picture_id}"
+        picture.thumbnail_width = 64 if thumbnail else None
+        picture.thumbnail_height = 64 if thumbnail else None
+        session.add(picture)
+        session.commit()
+        return picture.file_path
+
+    file_path = _run(server, write)
+    if thumbnail:
+        thumb = ImageUtils.get_thumbnail_path(server.vault.image_root, file_path)
+        os.makedirs(os.path.dirname(thumb), exist_ok=True)
+        with open(thumb, "wb") as handle:
+            handle.write(b"thumb")
+
+
+def _recipes_env():
+    """A server with the on-shelf model registered and a stack of six:
+
+    cover + ``covered`` (same instance as the cover) + ``no_recipe`` +
+    ``uncovered`` (its own prompt) + ``model_missing`` + ``no_thumbnail``.
+    """
+    temp_dir, client, server = _env()
+    assert server.vault.hub is not None and server.vault.library_uuid
+    with server.vault.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('checkpoint', ?, 'scanned')",
+            (_ON_SHELF,),
+        )
+    shared = _file_recipe(server, _txt2img("a lighthouse"))
+    own = _file_recipe(server, _txt2img("a harbour"))
+    off_shelf = _file_recipe(server, _txt2img("a pier", ckpt=_OFF_SHELF))
+    stack_id, ids = _make_stack(server, [{}, {}, {}, {}, {}, {}])
+    names = [
+        "cover",
+        "covered",
+        "no_recipe",
+        "uncovered",
+        "model_missing",
+        "no_thumbnail",
+    ]
+    pics = dict(zip(names, ids))
+    _set_keys(server, pics["cover"], shared)
+    _set_keys(server, pics["covered"], shared)
+    _set_keys(server, pics["no_recipe"], None)
+    _set_keys(server, pics["uncovered"], own)
+    _set_keys(server, pics["model_missing"], off_shelf)
+    _set_keys(server, pics["no_thumbnail"], shared, thumbnail=False)
+    return temp_dir, client, server, stack_id, pics
+
+
+def test_keep_recipes_only_moves_only_what_could_be_made_again():
+    """Each copy that stays is counted under exactly one reason, and only the
+    covered copy moves at the default retention."""
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+        assert server.vault.ghost_retention == "covered"
+        selection = {"stack_ids": [stack_id], "keep_recipes": True}
+        preview = client.post(PREVIEW_URL, json=selection).json()
+        assert preview["keep_recipes"] is True
+        assert preview["ghost_retention"] == "covered"
+        assert preview["picture_ids_moving"] == [pics["covered"]]
+        assert preview["pictures_staying_no_recipe"] == 1
+        assert preview["pictures_staying_model_missing"] == 1
+        assert preview["pictures_staying_no_thumbnail"] == 1
+        assert preview["pictures_staying_ghost_not_kept"] == 1
+        row = _rows_by_stack(preview)[stack_id]
+        assert row["staying_picture_ids"] == {
+            "no_recipe": [pics["no_recipe"]],
+            "ghost_not_kept": [pics["uncovered"]],
+            "model_missing": [pics["model_missing"]],
+            "no_thumbnail": [pics["no_thumbnail"]],
+        }
+
+        body = client.post(COLLAPSE_URL, json=selection).json()
+        assert body["picture_ids_moved"] == [pics["covered"]]
+        assert body["pictures_staying"] == 4
+        rows = _picture_rows(server, list(pics.values()))
+        assert {pid for pid, row in rows.items() if row[0]} == {pics["covered"]}
+        # Nothing asked for every ghost, so the setting is untouched.
+        assert server.vault.ghost_retention == "covered"
+
+        operations = client.get(f"{API}/operations", params={"limit": 10}).json()
+        rows = operations if isinstance(operations, list) else operations["operations"]
+        mine = [r for r in rows if r.get("batch_id") == body["batch_id"]]
+        assert len(mine) == 1
+        assert mine[0]["op_type"] == operation_log_service.OP_STACK_KEEP_RECIPES_ONLY
+        assert (
+            client.post(UNDO_URL, json={"batch_id": body["batch_id"]}).status_code
+            == 200
+        )
+        rows = _picture_rows(server, list(pics.values()))
+        assert not any(row[0] for row in rows.values())
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_keeping_every_ghost_moves_the_uncovered_copy_and_turns_the_setting_on():
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+        selection = {
+            "stack_ids": [stack_id],
+            "keep_recipes": True,
+            "keep_every_ghost": True,
+        }
+        preview = client.post(PREVIEW_URL, json=selection).json()
+        assert preview["ghost_retention"] == "on"
+        assert preview["picture_ids_moving"] == sorted(
+            [pics["covered"], pics["uncovered"]]
+        )
+        assert preview["pictures_staying_ghost_not_kept"] == 0
+        # A preview is read-only: the consent applies only on the real call.
+        assert server.vault.ghost_retention == "covered"
+
+        body = client.post(COLLAPSE_URL, json=selection).json()
+        assert body["picture_ids_moved"] == sorted([pics["covered"], pics["uncovered"]])
+        assert server.vault.ghost_retention == "on"
+        assert server._server_config["workflow_ghost_retention"] == "on"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_stack_with_nothing_reproducible_is_its_own_bucket():
+    temp_dir, client, server = _env()
+    try:
+        stack_id, _ids = _make_stack(server, [{}, {}])
+        other, other_ids = _make_stack(server, [{}, {}])
+        preview = client.post(
+            PREVIEW_URL, json={"stack_ids": [stack_id, other], "keep_recipes": True}
+        ).json()
+        assert preview["stacks_selected"] == 2
+        assert preview["stacks_skipped_nothing_reproducible"] == 2
+        assert preview["stacks_eligible"] == 0
+        assert preview["pictures_moving"] == 0
+        assert preview["pictures_staying_no_recipe"] == 2
+        body = client.post(
+            COLLAPSE_URL, json={"stack_ids": [stack_id], "keep_recipes": True}
+        ).json()
+        assert body["pictures_moved"] == 0
+        assert len(body["stacks_skipped_nothing_reproducible"]) == 1
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_character_on_a_copy_that_stays_is_not_lost():
+    """Keep recipes only judges character loss over the copies that leave."""
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+        _assign_character(server, pics["cover"], "Ada")
+        # Two characters, so the union will not propagate; the one on a staying
+        # copy is not lost, the one on the moving copy is.
+        _assign_character(server, pics["no_recipe"], "Grace")
+        selection = {"stack_ids": [stack_id], "keep_recipes": True}
+        preview = client.post(PREVIEW_URL, json=selection).json()
+        assert preview["stacks_eligible"] == 1
+
+        # A third character on the copy that moves is lost; Grace, on the copy
+        # that stays, still is not.
+        _assign_character(server, pics["covered"], "Linus")
+        preview = client.post(PREVIEW_URL, json=selection).json()
+        row = _rows_by_stack(preview)[stack_id]
+        assert row["skip_reason"] == keep_cover_only_service.SKIP_CHARACTER_ON_COPY
+        assert [c["name"] for c in row["lost_characters"]] == ["Linus"]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_copy_that_stays_is_left_out_of_the_metadata_union():
+    """The union writes every tag and the best score onto every picture it is
+    given; a copy Keep recipes only leaves live must not be one of them."""
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+
+        def seed(session):
+            cover = session.get(Picture, pics["cover"])
+            cover.score = 5
+            session.add(cover)
+            session.add(Tag(picture_id=pics["cover"], tag="kro_cover_tag"))
+            session.add(Tag(picture_id=pics["covered"], tag="kro_copy_tag"))
+            session.commit()
+
+        _run(server, seed)
+        body = client.post(
+            COLLAPSE_URL, json={"stack_ids": [stack_id], "keep_recipes": True}
+        ).json()
+        assert body["picture_ids_moved"] == [pics["covered"]]
+        assert "kro_copy_tag" in _tags_of(server, pics["cover"])
+        staying = _picture_rows(server, [pics["no_recipe"]])[pics["no_recipe"]]
+        assert staying[0] is False and staying[3] != 5
+        assert _tags_of(server, pics["no_recipe"]) == set()
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_retention_off_keeps_every_reproducible_copy_and_names_it():
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+        server.vault.set_ghost_retention("off")
+        preview = client.post(
+            PREVIEW_URL, json={"stack_ids": [stack_id], "keep_recipes": True}
+        ).json()
+        assert preview["ghost_retention"] == "off"
+        assert preview["pictures_moving"] == 0
+        assert preview["pictures_staying_ghost_not_kept"] == 2
+        assert preview["stacks_skipped_nothing_reproducible"] == 1
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_missing_thumbnail_file_or_pixel_sha_keeps_the_copy():
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+        cover_path = _run(
+            server, lambda session: session.get(Picture, pics["covered"]).file_path
+        )
+        os.remove(ImageUtils.get_thumbnail_path(server.vault.image_root, cover_path))
+        preview = client.post(
+            PREVIEW_URL, json={"stack_ids": [stack_id], "keep_recipes": True}
+        ).json()
+        row = _rows_by_stack(preview)[stack_id]
+        assert pics["covered"] in row["staying_picture_ids"]["no_thumbnail"]
+
+        _set_keys(server, pics["covered"], None)  # rewrites the thumbnail file
+
+        def drop_sha(session):
+            picture = session.get(Picture, pics["covered"])
+            picture.pixel_sha = None
+            session.add(picture)
+            session.commit()
+
+        _run(server, drop_sha)
+        preview = client.post(
+            PREVIEW_URL, json={"stack_ids": [stack_id], "keep_recipes": True}
+        ).json()
+        row = _rows_by_stack(preview)[stack_id]
+        assert pics["covered"] in row["staying_picture_ids"]["no_recipe"]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_every_ghost_is_saved_to_disk_and_untouched_when_nothing_moved():
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+        config_path = server._server_config_path
+        nothing, _ids = _make_stack(server, [{}, {}])
+        body = client.post(
+            COLLAPSE_URL,
+            json={
+                "stack_ids": [nothing],
+                "keep_recipes": True,
+                "keep_every_ghost": True,
+            },
+        ).json()
+        assert body["pictures_moved"] == 0
+        assert server.vault.ghost_retention == "covered"
+
+        body = client.post(
+            COLLAPSE_URL,
+            json={
+                "stack_ids": [stack_id],
+                "keep_recipes": True,
+                "keep_every_ghost": True,
+            },
+        ).json()
+        assert body["pictures_moved"] == 2
+        assert body["ghost_retention"] == "on"
+        with open(config_path) as handle:
+            assert json.load(handle)["workflow_ghost_retention"] == "on"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_model_the_shelf_cannot_judge_keeps_the_copy():
+    """The shelf scans .safetensors only, so a .ckpt is unjudgeable. On a
+    destructive action "we do not know" has to keep the picture."""
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+        ckpt = _file_recipe(server, _txt2img("a lighthouse", ckpt="kro_local.ckpt"))
+        _set_keys(server, pics["covered"], ckpt)
+        preview = client.post(
+            PREVIEW_URL, json={"stack_ids": [stack_id], "keep_recipes": True}
+        ).json()
+        row = _rows_by_stack(preview)[stack_id]
+        assert pics["covered"] in row["staying_picture_ids"]["model_missing"]
+        assert preview["pictures_moving"] == 0
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_plan_that_grew_since_the_preview_is_refused():
+    """Thumbnails land on a background timer, so the confirm must act on the
+    figure the button showed or refuse."""
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+        selection = {"stack_ids": [stack_id], "keep_recipes": True}
+        preview = client.post(PREVIEW_URL, json=selection).json()
+        confirmed = preview["picture_ids_moving"]
+        assert confirmed == [pics["covered"]]
+
+        # What a finder writing a thumbnail mid-dialog does to the plan.
+        _set_keys(server, pics["no_thumbnail"], None)
+
+        refused = client.post(
+            COLLAPSE_URL, json={**selection, "expected_picture_ids": confirmed}
+        )
+        assert refused.status_code == 409
+        rows = _picture_rows(server, list(pics.values()))
+        assert not any(row[0] for row in rows.values())
+
+        # A plan that shrank is within the consent and still runs.
+        body = client.post(
+            COLLAPSE_URL,
+            json={
+                **selection,
+                "expected_picture_ids": confirmed + [pics["no_thumbnail"]],
+            },
+        ).json()
+        assert sorted(body["picture_ids_moved"]) == sorted(
+            [pics["covered"], pics["no_thumbnail"]]
+        )
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_keeping_every_ghost_is_in_force_before_anything_moves():
+    """The plan is made under `on`, so a failure to apply it must leave the
+    library untouched rather than move pictures under the old position."""
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+        called = []
+        original = workflow_ghost_service.apply_ghost_retention
+
+        def explode(srv, retention):
+            # No DB read in here: this runs ON the vault's writer thread, so
+            # asking it for a row would wait on the queue it is draining.
+            called.append(retention)
+            original(srv, retention)
+            raise OSError("server-config is not writable")
+
+        workflow_ghost_service.apply_ghost_retention = explode
+        try:
+            with pytest.raises(OSError):
+                client.post(
+                    COLLAPSE_URL,
+                    json={
+                        "stack_ids": [stack_id],
+                        "keep_recipes": True,
+                        "keep_every_ghost": True,
+                    },
+                )
+        finally:
+            workflow_ghost_service.apply_ghost_retention = original
+        assert called == ["on"]
+        # Nothing moved, which is only true if the setting was attempted first:
+        # a write after the soft deletes would have left them behind.
+        rows = _picture_rows(server, list(pics.values()))
+        assert not any(row[0] for row in rows.values())
     finally:
         _teardown(temp_dir, server)

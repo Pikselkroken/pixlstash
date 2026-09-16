@@ -281,8 +281,11 @@
       :loading="keepCoverOnlyLoading"
       :preview-failed="keepCoverOnlyPreviewFailed"
       :busy="keepCoverOnlyBusy"
+      :keep-recipes="keepCoverOnlyRecipes"
+      :keep-every-ghost="keepEveryGhost"
       @close="closeKeepCoverOnly"
       @confirm="runKeepCoverOnly"
+      @update:keep-every-ghost="setKeepEveryGhost"
     />
     <div
       v-if="isMultiCharacterView || isSetOverlapView"
@@ -3884,6 +3887,7 @@ async function deleteSelected(idsOverride = null) {
 
 /** The dotted op type the backend records, so the receipt note can match it. */
 const KEEP_COVER_ONLY_OP_TYPE = "stack.keep_cover_only";
+const KEEP_RECIPES_ONLY_OP_TYPE = "stack.keep_recipes_only";
 
 const keepCoverOnlyOpen = ref(false);
 const keepCoverOnlyPreview = ref(null);
@@ -3899,24 +3903,43 @@ const keepCoverOnlyBusy = ref(false);
  * agreed to.
  */
 const keepCoverOnlyTargetStackIds = ref([]);
+/** Keep recipes only (#1315): the same dialog and routes, narrower moves. */
+const keepCoverOnlyRecipes = ref(false);
+/** The dialog's keep-every-ghost box; re-previews when it changes. */
+const keepEveryGhost = ref(false);
 // Guards a preview that lands after its dialog was closed or reopened.
 let keepCoverOnlyRunToken = 0;
 
-async function openKeepCoverOnly() {
+async function openKeepCoverOnly(options) {
   if (isReadOnly.value || keepCoverOnlyBusy.value) return;
   const stackIds = keepCoverOnlyStacks.value
     .map((stack) => Number(stack.id))
     .filter((id) => Number.isFinite(id));
   if (!stackIds.length) return;
   keepCoverOnlyTargetStackIds.value = stackIds;
+  keepCoverOnlyRecipes.value = !!options?.keepRecipes;
+  keepEveryGhost.value = false;
+  keepCoverOnlyOpen.value = true;
+  await loadKeepCoverOnlyPreview();
+}
+
+function setKeepEveryGhost(value) {
+  if (keepCoverOnlyBusy.value) return;
+  keepEveryGhost.value = !!value;
+  loadKeepCoverOnlyPreview();
+}
+
+async function loadKeepCoverOnlyPreview() {
+  const stackIds = keepCoverOnlyTargetStackIds.value;
   keepCoverOnlyPreview.value = null;
   keepCoverOnlyPreviewFailed.value = false;
   keepCoverOnlyLoading.value = true;
-  keepCoverOnlyOpen.value = true;
   const token = ++keepCoverOnlyRunToken;
   try {
     const report = await previewKeepCoverOnly({
       stackIds,
+      keepRecipes: keepCoverOnlyRecipes.value,
+      keepEveryGhost: keepEveryGhost.value,
     });
     if (token !== keepCoverOnlyRunToken) return;
     keepCoverOnlyPreview.value = report;
@@ -3944,15 +3967,27 @@ function closeKeepCoverOnly() {
   keepCoverOnlyLoading.value = false;
   keepCoverOnlyPreviewFailed.value = false;
   keepCoverOnlyTargetStackIds.value = [];
+  keepCoverOnlyRecipes.value = false;
+  keepEveryGhost.value = false;
 }
 
 async function runKeepCoverOnly() {
   const stackIds = keepCoverOnlyTargetStackIds.value;
   if (!stackIds.length || keepCoverOnlyBusy.value) return;
   keepCoverOnlyBusy.value = true;
+  const keepRecipes = keepCoverOnlyRecipes.value;
   try {
     const result = await keepCoverOnly({
       stackIds,
+      keepRecipes,
+      keepEveryGhost: keepEveryGhost.value,
+      // What the button's figure was computed from. Keep recipes only is the
+      // first mode whose inputs move while the dialog is open (a background
+      // finder writes a thumbnail, an import covers an instance hash), so the
+      // server refuses with a 409 rather than move more than was confirmed.
+      expectedPictureIds: keepRecipes
+        ? keepCoverOnlyPreview.value?.picture_ids_moving
+        : undefined,
     });
     const movedIds = Array.isArray(result?.picture_ids_moved)
       ? result.picture_ids_moved
@@ -3969,7 +4004,7 @@ async function runKeepCoverOnly() {
     // What the run deliberately left alone rides the SAME pill as what it did,
     // as a second sentence, rather than a notice competing with it.
     operationStore.noteNextReceipt(
-      KEEP_COVER_ONLY_OP_TYPE,
+      keepRecipes ? KEEP_RECIPES_ONLY_OP_TYPE : KEEP_COVER_ONLY_OP_TYPE,
       keepCoverOnlySkipNote(result),
     );
     // Raises "Kept the cover of N stacks · M pictures to the Scrapheap · Undo".
@@ -3987,7 +4022,23 @@ async function runKeepCoverOnly() {
     keepCoverOnlyOpen.value = false;
     keepCoverOnlyPreview.value = null;
     keepCoverOnlyTargetStackIds.value = [];
+    keepCoverOnlyRecipes.value = false;
+    keepEveryGhost.value = false;
   } catch (err) {
+    if (err?.response?.status === 409) {
+      // More pictures qualified while the dialog was open. Nothing was moved:
+      // re-run the preview so the user confirms the figure that is now true.
+      console.warn(
+        `Keep recipes only: the plan grew for stacks [${stackIds.join(", ")}]`,
+        err,
+      );
+      noticeStore.warning(
+        "More pictures can be made again than when this was opened, so nothing was moved. Check the new count and confirm again.",
+        { key: "keep-cover-only" },
+      );
+      await loadKeepCoverOnlyPreview();
+      return;
+    }
     console.error(
       `Keep cover only failed for stacks [${stackIds.join(", ")}]`,
       err,

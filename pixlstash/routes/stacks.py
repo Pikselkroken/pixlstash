@@ -8,7 +8,11 @@ from sqlalchemy import case
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, PictureStack, SortMechanism
-from pixlstash.services import keep_cover_only_service, operation_log_service
+from pixlstash.services import (
+    keep_cover_only_service,
+    operation_log_service,
+    workflow_ghost_service,
+)
 from pixlstash.services.keep_cover_only_service import KeepCoverOnlyError
 from pixlstash.services.set_lock_service import (
     enforce_stack_detach_not_locked,
@@ -105,6 +109,36 @@ class KeepCoverOnlyRequest(BaseModel):
         ),
         examples=["cli-8f2c1a90"],
     )
+    keep_recipes: bool = Field(
+        default=False,
+        description=(
+            "**Keep recipes only.** A copy moves only when it could be made again "
+            "after the Scrapheap is emptied: the hub holds its recipe instance, "
+            "every model it loads is on the shelf, it has a thumbnail, and the "
+            "ghost retention setting will keep its ghost. Every other copy stays "
+            "live in its stack and is counted in `pictures_staying_*`."
+        ),
+    )
+    keep_every_ghost: bool = Field(
+        default=False,
+        description=(
+            "With `keep_recipes`: plan as if ghost retention were `on`, and on "
+            "the real call set it to `on` before anything moves, once the plan "
+            "has something to move. Ignored without `keep_recipes`."
+        ),
+    )
+    expected_picture_ids: Optional[list[int]] = Field(
+        default=None,
+        description=(
+            "`picture_ids_moving` from the preview the user confirmed. The call "
+            "is a **409** if the plan has since grown to move a picture that is "
+            "not in this list, so the button's figure is the figure acted on. A "
+            "plan that shrank still runs. Keep recipes only needs this because "
+            "its inputs move on their own: thumbnails are written by a "
+            "background finder, an import can cover an instance hash, and a "
+            "model can reach the shelf while the dialog is open."
+        ),
+    )
 
 
 class KeepCoverOnlyStackRow(BaseModel):
@@ -185,8 +219,10 @@ class KeepCoverOnlyStackRow(BaseModel):
             "the **whole** stack is refused, never one member), "
             "`character_only_on_copy` (a character link exists only on a "
             "member that would leave, and the union will not guess across "
-            "several characters), or `single_member` (fewer than two live "
-            "members, so there is nothing to collapse). Example: `set_locked`."
+            "several characters), `single_member` (fewer than two live "
+            "members, so there is nothing to collapse), or, under "
+            "`keep_recipes`, `nothing_reproducible` (no copy could be made "
+            "again). Example: `set_locked`."
         ),
         examples=["set_locked"],
     )
@@ -209,6 +245,16 @@ class KeepCoverOnlyStackRow(BaseModel):
             'Example: `[{"id": 7, "name": "Ada", "picture_ids": [103]}]`.'
         ),
         examples=[[{"id": 7, "name": "Ada", "picture_ids": [103]}]],
+    )
+    staying_picture_ids: dict[str, list[int]] = Field(
+        default_factory=dict,
+        description=(
+            "Under `keep_recipes`: `{reason: [picture ids]}` for copies that "
+            "stay live, each under one of `no_recipe`, `model_missing`, "
+            "`no_thumbnail` or `ghost_not_kept`. Example: "
+            '`{"model_missing": [105]}`.'
+        ),
+        examples=[{"model_missing": [105]}],
     )
 
 
@@ -360,6 +406,56 @@ class KeepCoverOnlyPreviewResponse(BaseModel):
             "by stack id."
         ),
     )
+    keep_recipes: bool = Field(
+        default=False,
+        description="Whether this previews Keep recipes only. Example: `true`.",
+        examples=[True],
+    )
+    stacks_skipped_nothing_reproducible: int = Field(
+        default=0,
+        description=(
+            "Under `keep_recipes`: stacks with no copy that could be made again. "
+            "A fifth bucket in the `stacks_selected` sum; always `0` otherwise. "
+            "Example: `4`."
+        ),
+        examples=[4],
+    )
+    ghost_retention: Optional[str] = Field(
+        default=None,
+        description=(
+            "Under `keep_recipes`: the ghost retention position the plan was "
+            "made under, `on` when `keep_every_ghost` was sent. `null` "
+            "otherwise. Example: `covered`."
+        ),
+        examples=["covered"],
+    )
+    pictures_staying_no_recipe: int = Field(
+        default=0,
+        description="Copies that stay: no recipe instance in the hub. Example: `9`.",
+        examples=[9],
+    )
+    pictures_staying_model_missing: int = Field(
+        default=0,
+        description=(
+            "Copies that stay: the recipe loads a model not on the shelf, or one "
+            "whose name was forgotten. Example: `18`."
+        ),
+        examples=[18],
+    )
+    pictures_staying_no_thumbnail: int = Field(
+        default=0,
+        description="Copies that stay: no thumbnail yet, so no ghost. Example: `0`.",
+        examples=[0],
+    )
+    pictures_staying_ghost_not_kept: int = Field(
+        default=0,
+        description=(
+            "Copies that stay: the retention setting would not keep their ghost "
+            "(under `covered`, no picture that stays shares their instance). "
+            "`keep_every_ghost` moves them. Example: `13`."
+        ),
+        examples=[13],
+    )
 
 
 class KeepCoverOnlyResponse(BaseModel):
@@ -456,6 +552,30 @@ class KeepCoverOnlyResponse(BaseModel):
         default_factory=list,
         description="Named `stack_ids` that resolve to no live stack. Example: `[999]`.",
         examples=[[999]],
+    )
+    keep_recipes: bool = Field(
+        default=False, description="Whether this was Keep recipes only."
+    )
+    pictures_staying: int = Field(
+        default=0,
+        description=(
+            "Under `keep_recipes`: copies left live because they could not be made "
+            "again, counted over the same stacks as the preview's "
+            "`pictures_staying_*`. Example: `7`."
+        ),
+        examples=[7],
+    )
+    stacks_skipped_nothing_reproducible: list[dict] = Field(
+        default_factory=list,
+        description="Under `keep_recipes`: stack rows with no copy to move.",
+    )
+    ghost_retention: Optional[str] = Field(
+        default=None,
+        description=(
+            "Under `keep_recipes`: the ghost retention in force after the call. "
+            "Example: `on`."
+        ),
+        examples=["on"],
     )
     batch_id: Optional[str] = Field(
         default=None,
@@ -1307,6 +1427,14 @@ def create_router(server) -> APIRouter:
             )
         return stack_ids, picture_ids
 
+    def _recipe_check(payload: Optional[KeepCoverOnlyRequest]):
+        """The Keep recipes only planning context, or ``None`` for Keep cover only."""
+        if payload is None or not payload.keep_recipes:
+            return None
+        return keep_cover_only_service.recipe_check(
+            server.vault, keep_every_ghost=payload.keep_every_ghost
+        )
+
     @router.post(
         "/stacks/keep-cover-only/preview",
         summary="Preview collapsing stacks to their covers",
@@ -1369,6 +1497,7 @@ def create_router(server) -> APIRouter:
                 stack_ids,
                 picture_ids,
                 keep_cover_only_service.read_retention_days(server),
+                _recipe_check(payload),
             )
         except KeepCoverOnlyError as exc:
             logger.error("[keep-cover-only] preview refused: %s", exc)
@@ -1418,6 +1547,14 @@ def create_router(server) -> APIRouter:
                     "2000 ids across the two lists together."
                 )
             },
+            409: {
+                "description": (
+                    "`expected_picture_ids` was sent and the plan has since "
+                    "grown: pictures qualified between the preview and the "
+                    "confirm, so the call would move more than was confirmed. "
+                    "Nothing was written; preview again and re-confirm."
+                )
+            },
             423: {
                 "description": (
                     "A locked picture set was detected over a stack the planner "
@@ -1450,12 +1587,48 @@ def create_router(server) -> APIRouter:
         body_batch_id = require_client_batch_id(
             (payload.batch_id if payload else None) or None
         )
-        return keep_cover_only_service.keep_cover_only(
-            server.vault,
-            stack_ids,
-            picture_ids,
-            body_batch_id or header_batch_id,
-            **context,
-        )
+        recipes = _recipe_check(payload)
+        before_write = None
+        if (
+            recipes is not None
+            and payload.keep_every_ghost
+            and server.vault.ghost_retention
+            != workflow_ghost_service.GHOST_RETENTION_ON
+        ):
+            # The consent the dialog asked for, applied BEFORE the pixels move
+            # and only once the plan has something to move: the plan was made
+            # under `on`, so moving first would leave a window in which a purge
+            # judged the copies under the old position. A failure here raises
+            # out of the call with nothing moved, which is the recoverable
+            # order. Not part of the undo: it is a privacy setting for every
+            # library, turned back down in Settings > Privacy.
+            def before_write():  # noqa: F811 - the None above is the default
+                workflow_ghost_service.apply_ghost_retention(
+                    server, workflow_ghost_service.GHOST_RETENTION_ON
+                )
+                logger.info(
+                    "[keep-recipes-only] ghost retention set to 'on' as "
+                    "consented in the dialog, before anything moved"
+                )
+
+        try:
+            result = keep_cover_only_service.keep_cover_only(
+                server.vault,
+                stack_ids,
+                picture_ids,
+                body_batch_id or header_batch_id,
+                recipes=recipes,
+                expected_picture_ids=(
+                    payload.expected_picture_ids if payload is not None else None
+                ),
+                before_write=before_write,
+                **context,
+            )
+        except keep_cover_only_service.KeepCoverOnlyPlanGrew as exc:
+            logger.info("[keep-cover-only] refused: %s", exc)
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if recipes is not None:
+            result["ghost_retention"] = server.vault.ghost_retention
+        return result
 
     return router
