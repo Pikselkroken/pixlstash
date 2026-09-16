@@ -5,34 +5,26 @@ export const useFilterStore = defineStore("filter", () => {
   const mediaTypeFilter = ref("all"); // 'all' | 'images' | 'videos'
   const _minScore = ref(null);
   const _maxScore = ref(null);
-  // "Only pictures nobody has rated" (`unscored=1`, i.e. score IS NULL OR 0).
-  // It is the complement of a score range rather than a point on it, so the two
-  // are mutually exclusive - and that is enforced here, in the setters, so the
-  // filter panel and the stats histogram both inherit it without either one
-  // having to remember.
+  // Pictures nobody has rated (`unscored=1`, i.e. score IS NULL OR 0). Alone it
+  // is the unrated only; beside a score range it adds the unrated to that range
+  // (the filter menu's "Include unscored"), which the backend ORs.
   const _unscoredOnly = ref(false);
   const minScoreFilter = computed({
     get: () => _minScore.value,
     set: (v) => {
       _minScore.value = v ?? null;
-      if (_minScore.value != null) _unscoredOnly.value = false;
     },
   });
   const maxScoreFilter = computed({
     get: () => _maxScore.value,
     set: (v) => {
       _maxScore.value = v ?? null;
-      if (_maxScore.value != null) _unscoredOnly.value = false;
     },
   });
   const unscoredOnlyFilter = computed({
     get: () => _unscoredOnly.value,
     set: (v) => {
       _unscoredOnly.value = Boolean(v);
-      if (_unscoredOnly.value) {
-        _minScore.value = null;
-        _maxScore.value = null;
-      }
     },
   });
   const smartScoreBucketFilter = ref(null);

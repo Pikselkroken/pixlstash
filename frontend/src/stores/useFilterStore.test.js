@@ -3,35 +3,25 @@ import { setActivePinia, createPinia } from "pinia";
 
 import { useFilterStore } from "./useFilterStore";
 
-// "Unscored" is the complement of a score range, not a point on it, so the two
-// are mutually exclusive. That is enforced in the store's setters rather than in
-// either surface that writes them (the filter panel's star row and the stats
-// sidebar's score histogram), so both inherit it.
+// A score range and "unscored" combine: the filter menu's "Include unscored"
+// adds the unrated to the range. Neither setter may clear the other.
 
 beforeEach(() => {
   setActivePinia(createPinia());
 });
 
 describe("useFilterStore unscored filter", () => {
-  it("clears the score range when unscored goes on", () => {
+  it("keeps the score range when unscored goes on, and the reverse", () => {
     const s = useFilterStore();
     s.minScoreFilter = 2;
     s.maxScoreFilter = 4;
     s.unscoredOnlyFilter = true;
-    expect(s.minScoreFilter).toBe(null);
-    expect(s.maxScoreFilter).toBe(null);
+    expect(s.minScoreFilter).toBe(2);
+    expect(s.maxScoreFilter).toBe(4);
     expect(s.unscoredOnlyFilter).toBe(true);
-  });
 
-  it("clears unscored when either score bound is set", () => {
-    const s = useFilterStore();
-    s.unscoredOnlyFilter = true;
     s.minScoreFilter = 3;
-    expect(s.unscoredOnlyFilter).toBe(false);
-
-    s.unscoredOnlyFilter = true;
-    s.maxScoreFilter = 3;
-    expect(s.unscoredOnlyFilter).toBe(false);
+    expect(s.unscoredOnlyFilter).toBe(true);
   });
 
   it("leaves unscored alone when a bound is cleared", () => {

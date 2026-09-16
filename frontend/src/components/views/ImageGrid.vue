@@ -50,6 +50,7 @@
       :selectedSort="sortStore.selectedSort"
       :allPicturesId="String(ALL_PICTURES_ID)"
       :comfyui-configured="filterStore.comfyuiConfigured"
+      :filter-count-base-query="filterCountBaseQuery"
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
       @open-duplicates="emit('open-duplicates')"
@@ -58,6 +59,10 @@
       @local-import="emit('local-import', $event)"
       @confirm-export-zip="emit('confirm-export-zip')"
       @confirm-export-folder="emit('confirm-export-folder', $event)"
+    />
+    <FilterStrip
+      :count-base-query="filterCountBaseQuery"
+      :all-pictures-view="isAllPicturesFilterView"
     />
     <!-- ── Visible range pill ── -->
     <transition name="grid-range-fade">
@@ -1216,6 +1221,8 @@ import {
 import ImageImporter from "../io/ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
 import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
+import FilterStrip from "../panels/FilterStrip.vue";
+import { filterChips } from "../../utils/filterChips";
 import Toolbar from "../panels/Toolbar.vue";
 import SelectionBar from "../panels/SelectionBar.vue";
 import GridActionPill from "../panels/GridActionPill.vue";
@@ -4914,12 +4921,29 @@ const showScrapheapBar = computed(() => {
   return isScrapheapView.value;
 });
 const SCRAPHEAP_BAR_HEIGHT_PX = 30;
-const wrapperStyle = { position: "relative", height: "100%" };
+// The filter strip sits under the toolbar while any filter is on, and what
+// hangs off --selbar-height moves down by its height.
+const isAllPicturesFilterView = computed(
+  () => String(selectionStore.selectedCharacter) === String(ALL_PICTURES_ID),
+);
+const filterStripVisible = computed(
+  () =>
+    filterChips(filterStore, {
+      allPicturesView: isAllPicturesFilterView.value,
+    }).length > 0,
+);
+const wrapperStyle = computed(() => ({
+  position: "relative",
+  height: "100%",
+  "--filter-strip-h": filterStripVisible.value
+    ? "var(--toolbar-height)"
+    : "0px",
+}));
 const scrollWrapperStyle = computed(() => ({
   position: "absolute",
   top: showScrapheapBar.value
-    ? `calc(var(--selbar-height, 48px) + ${SCRAPHEAP_BAR_HEIGHT_PX}px)`
-    : "var(--selbar-height, 48px)",
+    ? `calc(var(--selbar-height, 48px) + var(--filter-strip-h, 0px) + ${SCRAPHEAP_BAR_HEIGHT_PX}px)`
+    : "calc(var(--selbar-height, 48px) + var(--filter-strip-h, 0px))",
   left: "0",
   right: "0",
   bottom: "0",
@@ -5887,6 +5911,7 @@ const {
   smartScoreLoadingVisible,
   buildGridFetchKey,
   buildPictureIdsQueryParams,
+  buildFilterCountBaseQuery,
   fetchAllGridImages,
   fetchAllPicturesCount,
   debouncedFetchAllGridImages,
@@ -5947,6 +5972,9 @@ const {
     onGridFetchDone,
   },
 );
+// The view with no filters: the filter menu counts against it, and the strip
+// shows its size as the "of N".
+const filterCountBaseQuery = computed(() => buildFilterCountBaseQuery());
 
 // ── Character membership undo/redo must reconcile a character grid ───
 // The history endpoint changes the face metadata and the operation store updates

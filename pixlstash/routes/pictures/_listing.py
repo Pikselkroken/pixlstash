@@ -279,7 +279,9 @@ class PictureListFilters:
         unscored: bool = Query(
             False,
             description=(
-                "Only pictures the user never rated: score IS NULL or score = 0."
+                "Pictures the user never rated: score IS NULL or score = 0. "
+                "With min_score/max_score, added to that range rather than "
+                "intersected with it."
             ),
         ),
         smart_score_bucket: str | None = Query(

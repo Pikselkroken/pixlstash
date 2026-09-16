@@ -226,7 +226,7 @@ export function useGridFetch(
     });
   }
 
-  function _appendSelectionParams(params) {
+  function _appendSelectionParams(params, { unassignedOnly = true } = {}) {
     if (hasSetSelection.value) {
       if (isSetOverlapView.value) {
         for (const setId of normalizedSelectedSetIds.value) {
@@ -310,6 +310,7 @@ export function useGridFetch(
       }
     } else if (
       selectionStore.selectedCharacter === ALL_PICTURES_ID &&
+      unassignedOnly &&
       filterStore.unassignedOnlyFilter
     ) {
       params.append("character_id", UNASSIGNED_PICTURES_ID);
@@ -449,6 +450,48 @@ export function useGridFetch(
       guestSessionId.value
     ) {
       params.append("guest_session_id", guestSessionId.value);
+    }
+    return params.toString();
+  }
+
+  /**
+   * The grid's view with none of the filter menu's filters: what the filter
+   * strip's "of N" counts, and what each menu row adds one filter to for its
+   * own count. Stack leaders only, like the grid stream, so the numbers agree
+   * with the tiles. "No character" is a filter here, so it is left out.
+   * `null` during a search: `/pictures/count` cannot count a search's hits, and
+   * no number is better than the view's number beside 40 search results.
+   */
+  function buildFilterCountBaseQuery() {
+    if (searchStore.searchQuery && searchStore.searchQuery.trim()) return null;
+    const params = new URLSearchParams();
+    _appendSelectionParams(params, { unassignedOnly: false });
+    params.append("stack_leaders_only", "true");
+    // Character likeness changes the row set, so the count needs the sort.
+    if (
+      sortStore.selectedSort === "CHARACTER_LIKENESS" &&
+      sortStore.selectedSimilarityCharacter
+    ) {
+      params.append("sort", "CHARACTER_LIKENESS");
+      params.append(
+        "reference_character_id",
+        sortStore.selectedSimilarityCharacter,
+      );
+    }
+    if (referenceFolderIdFilter.value != null) {
+      params.append(
+        "reference_folder_id",
+        String(referenceFolderIdFilter.value),
+      );
+    }
+    if (filePathPrefixFilter.value != null) {
+      params.append("file_path_prefix", filePathPrefixFilter.value);
+    }
+    if (importSourceFolderFilter.value != null) {
+      params.append("import_source_folder", importSourceFolderFilter.value);
+    }
+    if (userPrefsStore.applyTagFilter) {
+      params.append("apply_tag_filter", "true");
     }
     return params.toString();
   }
@@ -1592,6 +1635,7 @@ export function useGridFetch(
     smartScoreLoadingVisible,
     buildGridFetchKey,
     buildPictureIdsQueryParams,
+    buildFilterCountBaseQuery,
     buildLikenessGroupQueryParams,
     fetchAllGridImages,
     fetchAllPicturesCount,

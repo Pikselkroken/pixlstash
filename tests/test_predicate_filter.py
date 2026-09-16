@@ -218,6 +218,19 @@ def test_unscored_composes_with_another_predicate(session):
     _assert_matches_agrees(session, flt, {match.id})
 
 
+def test_unscored_with_a_range_adds_the_unrated_to_it(session):
+    """The filter menu's "Score 3-4, include unscored": range OR unrated."""
+    never = _add_picture(session, file_path="never.jpg", score=None)
+    cleared = _add_picture(session, file_path="cleared.jpg", score=0)
+    _add_picture(session, file_path="one.jpg", score=1)
+    three = _add_picture(session, file_path="three.jpg", score=3)
+    four = _add_picture(session, file_path="four.jpg", score=4)
+    _add_picture(session, file_path="five.jpg", score=5)
+
+    flt = PredicateFilter(min_score=3, max_score=4, unscored=True)
+    _assert_matches_agrees(session, flt, {never.id, cleared.id, three.id, four.id})
+
+
 def test_smart_score_bucket_unscored(session):
     unscored = _add_picture(session, file_path="a.jpg", smart_score=None)
     _add_picture(session, file_path="b.jpg", smart_score=2.5)

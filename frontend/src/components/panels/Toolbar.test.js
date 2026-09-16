@@ -74,7 +74,7 @@ const globalOpts = {
       "v-slider": true,
       "v-switch": true,
       VTooltip: true,
-      GbFilterPanel: true,
+      FilterMenu: true,
       TbExportPanel: true,
       TbImportPanel: true,
       TbTagPanel: true,

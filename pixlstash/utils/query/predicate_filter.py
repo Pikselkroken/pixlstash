@@ -33,7 +33,7 @@ from typing import List, Optional
 
 from fastapi import HTTPException
 from pydantic import BaseModel
-from sqlalchemy import exists, or_, text
+from sqlalchemy import and_, exists, or_, text
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import select
 
@@ -154,7 +154,8 @@ class PredicateFilter(BaseModel):
     # picture that was never touched keeps ``score IS NULL``, while clicking the
     # current star again writes a literal 0 (``POST /pictures/apply-scores``
     # accepts 0..5 and nothing normalises it back to NULL). To a user those are
-    # the same thing, so the predicate covers both.
+    # the same thing, so the predicate covers both. Given with a score range it
+    # widens the range to take the unrated in too.
     unscored: bool = False
     smart_score_bucket: Optional[str] = None
     resolution_bucket: Optional[str] = None
@@ -303,12 +304,18 @@ class PredicateFilter(BaseModel):
         if self.format:
             preds.append(Picture.format.in_(self.format))
 
+        score_range: list[ColumnElement] = []
         if self.min_score is not None:
-            preds.append(Picture.score >= self.min_score)
+            score_range.append(Picture.score >= self.min_score)
         if self.max_score is not None:
-            preds.append(Picture.score <= self.max_score)
+            score_range.append(Picture.score <= self.max_score)
         if self.unscored:
-            preds.append(or_(Picture.score.is_(None), Picture.score == 0))
+            # With a range, unscored is added to it ("3-4 plus the unrated"),
+            # alone it is the unrated only.
+            unrated = or_(Picture.score.is_(None), Picture.score == 0)
+            preds.append(or_(and_(*score_range), unrated) if score_range else unrated)
+        else:
+            preds.extend(score_range)
 
         preds.extend(self._smart_score_bucket_predicates())
         preds.extend(self._resolution_bucket_predicates())

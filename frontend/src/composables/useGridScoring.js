@@ -633,10 +633,20 @@ export function useGridScoring({
     // Drop it here rather than refetching: scoring straight through a backlog
     // is the workflow this filter exists for, and a refetch per keystroke would
     // be both janky and needless. A score of 0 is still unscored (the filter is
-    // `score IS NULL OR score = 0`), so only 1-5 leaves.
+    // `score IS NULL OR score = 0`), so only 1-5 leaves. With a score range
+    // beside it the filter is "range or unscored", so a score inside the range
+    // stays.
     if (filterStore.unscoredOnlyFilter && removeImagesById) {
+      const min = filterStore.minScoreFilter;
+      const max = filterStore.maxScoreFilter;
+      const hasRange = min != null || max != null;
       const scoredIds = entries
-        .filter(([, score]) => Number(score) > 0)
+        .filter(([, score]) => {
+          const n = Number(score);
+          if (n <= 0) return false;
+          if (!hasRange) return true;
+          return (min != null && n < min) || (max != null && n > max);
+        })
         .map(([id]) => id);
       if (scoredIds.length) removeImagesById(scoredIds);
     }
