@@ -5,6 +5,7 @@ import functools
 import hashlib
 import os
 import piexif
+import piexif.helper
 import tempfile
 import uuid
 
@@ -131,6 +132,9 @@ class ImageUtils:
                             exif_map[str(tag_name)] = ImageUtils._coerce_metadata_value(
                                 value
                             )
+                        comment = ImageUtils._user_comment(exif_data)
+                        if comment is not None:
+                            exif_map["UserComment"] = comment
                         if exif_map:
                             metadata["exif"] = exif_map
                 except Exception as exc:
@@ -138,6 +142,30 @@ class ImageUtils:
         except Exception as exc:
             logger.warning("Failed to extract embedded metadata: %s", exc)
         return metadata
+
+    @staticmethod
+    def _user_comment(exif_data) -> Optional[str]:
+        """The EXIF ``UserComment``, decoded, or ``None`` if there is none.
+
+        It lives in the Exif sub-IFD, which ``getexif()`` does not walk, and it
+        is where A1111 and its forks put a JPEG's or WebP's generation data
+        (``services/a1111_recipe.py``). The value carries its own 8-byte
+        encoding tag, so ``piexif`` decodes it rather than the bytes fallback in
+        :meth:`_coerce_metadata_value`, which would garble the UTF-16 one.
+        """
+        try:
+            raw = exif_data.get_ifd(ExifTags.IFD.Exif).get(ExifTags.Base.UserComment)
+        except Exception as exc:
+            logger.debug("Failed to read the EXIF sub-IFD: %s", exc)
+            return None
+        if isinstance(raw, str) or raw is None:
+            return raw
+        try:
+            return piexif.helper.UserComment.load(raw)
+        except Exception as exc:
+            # A comment with no encoding tag, or one piexif does not know.
+            logger.debug("Failed to decode the EXIF UserComment: %s", exc)
+            return None
 
     @staticmethod
     def resolve_picture_path(

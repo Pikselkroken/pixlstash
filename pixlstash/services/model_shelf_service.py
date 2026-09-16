@@ -49,7 +49,11 @@ from pixlstash.services.model_features import (
     FEATURE_TAGGER,
 )
 from pixlstash.services.stack_detector import repair_stacks
-from pixlstash.services.workflow_hash import SHA256_FIELD_RE, normalized_filename
+from pixlstash.services.workflow_hash import (
+    SHA256_FIELD_RE,
+    digests_with_prefix,
+    normalized_filename,
+)
 from pixlstash.services.workflow_library_service import recipe_picture_counts
 from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
@@ -405,7 +409,8 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
     """How many kept pictures in the active library used each model, by tier.
 
     ``verified`` counts pictures whose recipe names the model by its digest (a
-    PixlStash loader's ``*_sha256``): that exact file. ``by_filename`` counts
+    PixlStash loader's ``*_sha256``, or an A1111 short hash only this model's
+    digest starts with): that exact file. ``by_filename`` counts
     the rest whose recipe names a file called what one of the model's copies is
     called: a file of that name, which is all the graph says. The two are never
     summed here, because a count that mixes them claims a certainty the data
@@ -425,6 +430,7 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
     if not pictures:
         return {}
     by_name, by_digest = _recipe_asset_index(hub)
+    sorted_digests = sorted(by_digest)
 
     verified: dict[int, set[str]] = {}
     named: dict[int, set[str]] = {}
@@ -436,9 +442,13 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
         if recipe not in pictures:
             continue
         if SHA256_FIELD_RE.search(row["widget_name"]):
-            model_id = by_digest.get(row["normalized_filename"])
-            if model_id is not None:
-                verified.setdefault(model_id, set()).add(recipe)
+            # An A1111 short hash is verified only when it names one model;
+            # otherwise its picture is left to the filename tier.
+            matched = _models_for_digest(
+                row["normalized_filename"], by_digest, sorted_digests
+            )
+            if len(matched) == 1:
+                verified.setdefault(matched.pop(), set()).add(recipe)
         else:
             for model_id in by_name.get(row["normalized_filename"], ()):
                 named.setdefault(model_id, set()).add(recipe)
@@ -477,6 +487,21 @@ def _recipe_asset_index(hub) -> tuple[dict[str, set[int]], dict[str, int]]:
         for row in hub.fetchall("SELECT id, sha256 FROM model WHERE sha256 IS NOT NULL")
     }
     return by_name, by_digest
+
+
+def _models_for_digest(
+    value: str, by_digest: dict[str, int], sorted_digests: list[str]
+) -> set[int]:
+    """Every shelf model a ``*_sha256`` asset value could name.
+
+    One for a whole digest. An A1111 short hash (``services/a1111_recipe.py``)
+    names every model whose digest starts with it: one is that model, and
+    several is a name its recipe cannot pin down, which both callers treat the
+    way they treat an ambiguous filename. ``sorted_digests`` is sorted once per
+    call rather than per asset row, which is what keeps the prefix search a
+    bisect rather than a scan of the shelf.
+    """
+    return {by_digest[digest] for digest in digests_with_prefix(value, sorted_digests)}
 
 
 # What a generation graph loads BESIDE a model rather than as one: the files a
@@ -539,6 +564,7 @@ def fetch_companions(hub, ids: list[int]) -> dict:
         )
     }
     by_name, by_digest = _recipe_asset_index(hub)
+    sorted_digests = sorted(by_digest)
     # The ghost reader's rule (`hub/workflows._model_ghost_names`): a digest that
     # matches nothing proves nothing while a row still waits for its hash, since
     # that row may be the model the digest names.
@@ -556,10 +582,13 @@ def fetch_companions(hub, ids: list[int]) -> dict:
     ):
         recipe = row["structural_hash"]
         if SHA256_FIELD_RE.search(row["widget_name"]):
-            digest_match = by_digest.get(row["normalized_filename"])
-            matched = {digest_match} if digest_match is not None else set()
-            if digest_match is None and not digests_are_complete:
+            matched = _models_for_digest(
+                row["normalized_filename"], by_digest, sorted_digests
+            )
+            if not matched and not digests_are_complete:
                 unresolved.add(recipe)
+            if len(matched) > 1:
+                ambiguous.setdefault(recipe, set()).update(matched)
         else:
             matched = by_name.get(row["normalized_filename"], set())
             if len(matched) > 1:

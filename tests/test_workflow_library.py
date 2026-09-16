@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import piexif
+import piexif.helper
 import pytest
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
@@ -41,16 +43,23 @@ from pixlstash.hub.workflows import (
     assets_for_recipe,
     forget_asset_names,
     get_document,
+    model_ghost_names,
     record_api_graph,
     record_picture_ghosts,
     recipes_for_topology,
 )
+from pixlstash.services.a1111_recipe import parse_infotext, reduce_a1111
 from pixlstash.services.workflow_hash import (
     HASH_VERSION,
     MissingSubgraphDefinitionError,
     asset_reference,
     assets_from_reduction,
+    digests_with_prefix,
+    drop_widgets,
+    graph_key,
+    instance_document_from_reduction,
     instance_hash,
+    promote_instance_widgets,
     WorkflowGraphError,
     reduce_api_graph,
     reduce_ui_graph,
@@ -1251,11 +1260,16 @@ def _wipe_pictures(session):
     session.commit()
 
 
-def write_png(directory, name, api=None):
-    """A real PNG, carrying an API graph in its ``prompt`` chunk when given one."""
+def write_png(directory, name, api=None, parameters=None):
+    """A real PNG, carrying an API graph in its ``prompt`` chunk when given one.
+
+    ``parameters`` is A1111 generation data, in the chunk A1111 writes it to.
+    """
     info = PngInfo()
     if api is not None:
         info.add_text("prompt", json.dumps(api))
+    if parameters is not None:
+        info.add_text("parameters", parameters)
     path = directory / name
     Image.new("RGB", (4, 4), "black").save(path, pnginfo=info)
     return name
@@ -1821,6 +1835,104 @@ def test_the_shelf_counts_pictures_per_model_in_two_tiers(store):
 
     assert counts[model_id] == {"verified": 1, "by_filename": 2}
     assert other_id not in counts
+
+
+A1111_PARAMETERS = (
+    "a castle on a hill <lora:example-style:0.8>\n"
+    "Negative prompt: blurry\n"
+    "Steps: 20, Sampler: Euler a, CFG scale: 7, Seed: 18446744073709551615, "
+    "Size: 512x768, Model hash: 0123456789, Model: example-checkpoint, "
+    "Version: v1.10.1"
+)
+
+
+def test_a1111_generation_data_is_filed_as_a_recipe(store):
+    """Keys, assets, the instance row and the seed, as a ComfyUI picture gets."""
+    name = write_png(Path(store.image_root), "a1111.png", parameters=A1111_PARAMETERS)
+    picture_id = add_picture(store, name)
+
+    assert run_extraction(store, [picture_id])["found_workflow"] == 1
+
+    picture = read_picture(store, picture_id)
+    assert picture.workflow_hash_version == HASH_VERSION
+    assert get_document(store.hub, picture.workflow_structural_hash) is not None
+    assert {
+        (row["widget_name"], row["normalized_filename"])
+        for row in assets_for_recipe(store.hub, picture.workflow_structural_hash)
+    } == {
+        ("ckpt_name", "example-checkpoint.safetensors"),
+        ("ckpt_sha256", "0123456789"),
+        ("lora_name", "example-style.safetensors"),
+    }
+    row = instance_row(store.hub, LIBRARY, picture.workflow_instance_hash)
+    assert "castle on a hill" in row["document"]
+    assert "example-style" not in row["document"]
+    # Above 2**63 - 1, which is why the seed is text.
+    assert generation(store, picture_id).seed == "18446744073709551615"
+
+
+def write_exif_picture(directory, name, parameters):
+    """A JPEG or WebP carrying A1111 data where A1111 puts it, in EXIF."""
+    exif = piexif.dump(
+        {
+            "Exif": {
+                piexif.ExifIFD.UserComment: piexif.helper.UserComment.dump(
+                    parameters, encoding="unicode"
+                )
+            }
+        }
+    )
+    Image.new("RGB", (4, 4), "black").save(directory / name, exif=exif)
+    return name
+
+
+@pytest.mark.parametrize("name", ["a1111.jpg", "a1111.webp"])
+def test_a1111_data_is_read_from_exif_too(store, name):
+    """A JPEG and a WebP carry the same text in the Exif sub-IFD."""
+    written = write_exif_picture(Path(store.image_root), name, A1111_PARAMETERS)
+    picture_id = add_picture(store, written)
+
+    assert run_extraction(store, [picture_id])["found_workflow"] == 1
+
+    picture = read_picture(store, picture_id)
+    png = write_png(Path(store.image_root), "same.png", parameters=A1111_PARAMETERS)
+    twin = add_picture(store, png)
+    run_extraction(store, [twin])
+    # The same generation data is the same recipe whatever carried it.
+    assert (
+        picture.workflow_instance_hash
+        == read_picture(store, twin).workflow_instance_hash
+    )
+    assert generation(store, picture_id).seed == "18446744073709551615"
+
+
+def test_an_a1111_short_hash_is_verified_only_when_unambiguous(store):
+    """One digest starting with it is that model; two leave it a filename match."""
+    name = write_png(Path(store.image_root), "short.png", parameters=A1111_PARAMETERS)
+    run_extraction(store, [add_picture(store, name)])
+
+    def counts():
+        return fetch_picture_counts(store.hub, SimpleNamespace(db=store.vault))
+
+    # The hub is shared by the module and `model` is not in the wipe.
+    models = []
+    try:
+        models.append(
+            shelf_model(
+                store, "example-checkpoint.safetensors", "0123456789" + "a" * 54
+            )
+        )
+        assert counts()[models[0]] == {"verified": 1, "by_filename": 0}
+        assert "0123456789" not in model_ghost_names(store.hub)
+
+        models.append(shelf_model(store, "twin.safetensors", "0123456789" + "b" * 54))
+        assert counts()[models[0]] == {"verified": 0, "by_filename": 1}
+        assert models[1] not in counts()
+    finally:
+        with store.hub.transaction() as conn:
+            conn.executemany("DELETE FROM model WHERE id = ?", [(m,) for m in models])
+    # No shelf digest starts with it: it names a model this shelf does not hold.
+    assert "0123456789" in model_ghost_names(store.hub)
 
 
 # ---------------------------------------------------------------------------
@@ -3051,3 +3163,201 @@ def test_a_ghost_keeps_its_instance_row_until_it_is_erased(store):
     assert pending_hashes(store) == [instance], "only the erased ghosts' hashes"
     cascade(store, GHOST_RETENTION_ON)
     assert instance_row(store.hub, LIBRARY, instance) is None
+
+
+# ---------------------------------------------------------------------------
+# A1111 generation data, keyed as a recipe (#1312)
+# ---------------------------------------------------------------------------
+
+
+A1111_PROMPT = "a castle on a hill <lora:Example-Style:0.8> <lora:example-light:1>"
+A1111_NEGATIVE = "blurry"
+A1111_FIELDS = (
+    "Steps: 20, Sampler: DPM++ 2M, Schedule type: Karras, CFG scale: 7, "
+    "Seed: 1234567890, Size: 512x768, Model hash: 0123456789, "
+    "Model: sd_xl_base_1.0, VAE: sdxl_vae.safetensors, "
+    'Lora hashes: "Example-Style: aaaaaaaaaaaa, example-light: bbbbbbbbbbbb", '
+    "Version: v1.10.1"
+)
+
+
+def infotext(prompt=A1111_PROMPT, negative=A1111_NEGATIVE, fields=A1111_FIELDS):
+    return f"{prompt}\nNegative prompt: {negative}\n{fields}"
+
+
+def a1111_keys(text):
+    recipe = reduce_a1111({"png": {"parameters": text}})
+    nodes = recipe.nodes
+    return (
+        graph_key(drop_widgets(nodes)),
+        graph_key(nodes),
+        graph_key(promote_instance_widgets(nodes)),
+    )
+
+
+def test_a1111_text_is_detected_and_split():
+    prompt, negative, fields = parse_infotext(infotext())
+    assert prompt == A1111_PROMPT
+    assert negative == A1111_NEGATIVE
+    assert fields["Lora hashes"] == (
+        "Example-Style: aaaaaaaaaaaa, example-light: bbbbbbbbbbbb"
+    )
+    assert fields["Size"] == "512x768"
+
+
+def test_other_text_is_not_a1111():
+    assert parse_infotext("just a caption") is None
+    # Fooocus writes JSON into the same chunk.
+    assert parse_infotext(json.dumps({"Prompt": "x", "Steps: 1, a: 2": 3})) is None
+    assert reduce_a1111({"png": {"prompt": "{}"}}) is None
+    assert reduce_a1111(None) is None
+
+
+def test_a_seed_or_version_change_keeps_every_key():
+    other = A1111_FIELDS.replace("Seed: 1234567890", "Seed: 42").replace(
+        "v1.10.1", "f2.0.1"
+    )
+    assert a1111_keys(infotext()) == a1111_keys(infotext(fields=other))
+
+
+def test_the_seed_is_the_generations():
+    recipe = reduce_a1111({"png": {"parameters": infotext()}})
+    assert recipe.seed == "1234567890"
+
+
+def test_a_prompt_or_parameter_edit_forks_the_instance_only():
+    base = a1111_keys(infotext())
+    for edited in (
+        infotext(prompt=A1111_PROMPT.replace("castle", "harbour")),
+        infotext(fields=A1111_FIELDS.replace("Steps: 20", "Steps: 30")),
+        infotext(prompt=A1111_PROMPT.replace(":0.8>", ":0.5>")),
+        # A field nothing here knows is a parameter.
+        infotext(fields=A1111_FIELDS + ", Some extension: on"),
+    ):
+        other = a1111_keys(edited)
+        assert other[:2] == base[:2]
+        assert other[2] != base[2]
+
+
+def test_an_asset_swap_forks_the_recipe():
+    base = a1111_keys(infotext())
+    for edited in (
+        infotext(fields=A1111_FIELDS.replace("sd_xl_base_1.0", "other_model")),
+        infotext(fields=A1111_FIELDS.replace("0123456789", "9876543210")),
+        infotext(prompt=A1111_PROMPT.replace("example-light", "example-dark")),
+    ):
+        other = a1111_keys(edited)
+        assert other[0] == base[0]
+        assert other[1] != base[1]
+
+
+def test_lora_order_is_not_structure():
+    swapped = "a castle on a hill <lora:example-light:1> <lora:Example-Style:0.8>"
+    assert a1111_keys(infotext()) == a1111_keys(infotext(prompt=swapped))
+
+
+def test_structure_forks_the_topology():
+    base = a1111_keys(infotext())[0]
+    hires = A1111_FIELDS + ", Denoising strength: 0.4, Hires upscale: 2"
+    variants = [
+        infotext(prompt="a castle on a hill <lora:Example-Style:0.8>"),
+        infotext(fields=hires),
+        infotext(fields=A1111_FIELDS + ", Denoising strength: 0.4"),
+        infotext(fields=A1111_FIELDS + ", Refiner: sd_xl_refiner_1.0 [7440042bbd]"),
+    ]
+    topologies = [a1111_keys(edited)[0] for edited in variants]
+    assert len({base, *topologies}) == 5
+    # Hires fix as builds before 2023 wrote it is hires fix, not img2img.
+    old_hires = A1111_FIELDS + ", Denoising strength: 0.4, First pass size: 256x384"
+    assert a1111_keys(infotext(fields=old_hires))[0] == topologies[1]
+
+
+def test_assets_and_hashes_are_recorded_and_the_instance_names_neither():
+    fields = (
+        A1111_FIELDS + ", Denoising strength: 0.4, Hires upscale: 2, "
+        "Hires upscaler: 4x-Example, Hires checkpoint: example-hires [abcdef0123], "
+        'Hires prompt: "a castle, <lora:example-hires-lora:0.5>", '
+        'ADetailer model: face_yolov8n.pt, ADetailer prompt: "<lora:example-face:1>", '
+        "Example API key: test-not-a-real-key"
+    )
+    nodes = reduce_a1111({"png": {"parameters": infotext(fields=fields)}}).nodes
+    assert set(assets_from_reduction(nodes)) == {
+        ("ckpt_name", "sd_xl_base_1.0.safetensors"),
+        ("ckpt_sha256", "0123456789"),
+        ("vae_name", "sdxl_vae.safetensors"),
+        ("lora_name", "example-style.safetensors"),
+        ("lora_name", "example-light.safetensors"),
+        ("lora_name", "example-hires-lora.safetensors"),
+        ("lora_name", "example-face.safetensors"),
+        ("hires_upscaler", "4x-example"),
+        ("ckpt_name", "example-hires.safetensors"),
+        ("ckpt_sha256", "abcdef0123"),
+        ("adetailer_model", "face_yolov8n.pt"),
+    }
+
+    document = json.dumps(instance_document_from_reduction(nodes))
+    assert "castle on a hill" in document
+    assert asset_reference("example-style.safetensors") in document
+    for leaked in (
+        "example-",
+        "sd_xl_base",
+        "face_yolov8n",
+        "1234567890",
+        "test-not-a-real-key",
+        "aaaaaaaaaaaa",
+    ):
+        assert leaked not in document.lower()
+
+
+def test_a_shredded_compound_value_never_replaces_the_checkpoint():
+    """First occurrence wins: an unquoted ControlNet value holds a `Model:` too.
+
+    A1111 quotes a value holding a comma, so a repeat means another tool wrote
+    the text; taking the last would file a recipe naming one model's filename
+    with another model's digest.
+    """
+    fields = (
+        "Steps: 20, Sampler: Euler, CFG scale: 7, Seed: 1, Size: 512x512, "
+        "Model hash: aabbccddee, Model: my_real_checkpoint, ControlNet 0: "
+        "Module: canny, Model: control_v11p_sd15_canny.safetensors, Weight: 1, "
+        "Version: v1.10.1"
+    )
+    nodes = reduce_a1111({"png": {"parameters": infotext(fields=fields)}}).nodes
+    names = {
+        value for widget, value in assets_from_reduction(nodes) if widget == "ckpt_name"
+    }
+    assert names == {"my_real_checkpoint.safetensors"}
+
+
+def test_a_line_after_the_fields_line_does_not_lose_the_picture():
+    """The fields line is the last one that parses, not the last line."""
+    appended = infotext() + "\nTemplate: something else"
+    assert a1111_keys(appended) == a1111_keys(infotext())
+
+
+def test_a_hash_with_no_name_invents_no_asset():
+    """`Refiner: [abcdef0123]` must not file an asset called `.safetensors`."""
+    fields = A1111_FIELDS + ", Refiner: [abcdef0123]"
+    nodes = reduce_a1111({"png": {"parameters": infotext(fields=fields)}}).nodes
+    assets = assets_from_reduction(nodes)
+    assert ("ckpt_name", ".safetensors") not in assets
+    assert ("ckpt_sha256", "abcdef0123") in assets
+
+
+def test_a_legacy_8_digit_hash_is_not_kept():
+    old = A1111_FIELDS.replace("Model hash: 0123456789", "Model hash: 01234567")
+    nodes = reduce_a1111({"png": {"parameters": infotext(fields=old)}}).nodes
+    assert ("ckpt_sha256", "01234567") not in assets_from_reduction(nodes)
+
+
+def test_a_short_hash_names_a_digest_only_when_one_starts_with_it():
+    digests = sorted(["0123456789" + "a" * 54, "0123456789" + "b" * 54, "f" * 64])
+    assert digests_with_prefix("f" * 12, digests) == ["f" * 64]
+    # Only the lengths A1111 writes: a partial value elsewhere names nothing.
+    assert digests_with_prefix("f" * 11, digests) == []
+    assert len(digests_with_prefix("0123456789", digests)) == 2
+    assert digests_with_prefix("0123456789aa", digests) == [digests[0]]
+    assert digests_with_prefix("eeeeeeeeee", digests) == []
+    # Blank or too short names nothing, even on a one-model shelf.
+    assert digests_with_prefix("", ["f" * 64]) == []
+    assert digests_with_prefix("ffff", ["f" * 64]) == []
