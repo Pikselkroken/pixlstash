@@ -272,10 +272,13 @@ class _PredictionDb:
 
     def run_task(self, fn, *args, priority=None):
         name = getattr(fn, "__name__", "")
-        if name == "_add_tags_bulk":
+        if name in ("_add_tags_bulk", "_add_tags_unless_reset"):
             self.tag_payloads.extend(args[0])
             return list(self._picture_ids)
-        if name == "_write_predictions_from_tags":
+        if name in (
+            "_write_predictions_from_tags",
+            "_write_predictions_unless_reset",
+        ):
             self.prediction_calls.append(args)
         if name == "_clear_sentinels":
             self.cleared_sentinels.extend(args[0])

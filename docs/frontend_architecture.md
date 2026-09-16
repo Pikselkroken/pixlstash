@@ -128,7 +128,7 @@ frontend/src/
     ├── TitleBar.vue             # Shared library chrome plus Electron title bar: active-library entry point, breadcrumb, window controls, update alert
     ├── WordmarkLogo.vue         # "PixlStash" brand wordmark in the Tiny5 pixel font (two-tone via --wordmark-accent)
     ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, DuplicateQueue, ModelShelf, LibraryInsights, MovesReview, TrainingRuns, WorkflowShelf, LoginScreen
-    ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbTagPanel/TbComfyPanel/TbExportPanel/TbImportPanel/GbFilterPanel/UndoControl, SelectionBar, SelectionMenu, StatsSidebar, ProjectFiles, …
+    ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbTagPanel/TbExportPanel/TbImportPanel/GbFilterPanel/UndoControl, SelectionBar, SelectionMenu, StatsSidebar, ProjectFiles, …
     ├── reviews/     # Tag-review surfaces (see below)
     │   ├── ReviewSessionView.vue      # One open review session: header, rail, and card queue
     │   ├── ReviewRail.vue             # Rail of open review sessions
@@ -658,7 +658,7 @@ The tab/category switch is **stateless** (see Key Design Principles). Concretely
 
 #### `ImageOverlay.vue` (4413 lines)
 Full-screen image lightbox. Responsibilities:
-- **Frozen navigation backbone (overlay-open deferral, see §9.1).** prev/next and the filmstrip read membership from a snapshot of `allImages` (`frozenAllImages`, captured on open and cleared on close) via the `overlayImages` computed, not from the live `allImages` prop. This keeps left/right working for the overlay's whole lifetime even after the current picture stops matching the active filter (e.g. the user removes the tag the view is filtered on) or a background refetch reshuffles the grid. The currently displayed card stays fresh independently: it lives in `image.value` and is updated by local edits / `fetchOverlayMetadata`, not by the snapshot. Stack expansion still loads fresh members from `/stacks/{id}/pictures`; only the sequence/membership is frozen.
+- **Frozen navigation backbone (overlay-open deferral, see §9.1).** prev/next and the filmstrip read membership from a snapshot of `allImages` (`frozenAllImages`, captured on open and cleared on close) via the `overlayImages` computed, not from the live `allImages` prop. This keeps left/right working for the overlay's whole lifetime even after the current picture stops matching the active filter (e.g. the user removes the tag the view is filtered on) or a background refetch reshuffles the grid. The currently displayed card stays fresh independently: it lives in `image.value` and is updated by local edits / `fetchOverlayMetadata`, not by the snapshot. Stack expansion still loads fresh members from `/stacks/{id}/pictures`; only the sequence/membership is frozen. **One exception, and only one:** an explicit move to a picture the snapshot does not hold - `initialImageId` changing to an id created *after* the overlay opened, which is an in-app ComfyUI i2i/upscale stacking its output next to the picture on screen - re-captures the snapshot from the live `allImages` instead of refusing. The freeze is there to stop a background refetch dropping the current picture out of the navigation sequence, not to refuse a deliberate move; without the exception `setOverlayImageById` finds the id in neither map and returns having done nothing, and the overlay silently stays on the old picture (#1256). Covered both directions by `ImageOverlayMoveToNewPicture.test.js`.
 - **Image display with the zoom family's continuous wheel zoom** (rework 2026-07-30; the old fit/1.5×/2× ladder and its `zoom-hud` are retired). The overlay consumes `composables/useWheelZoom.js` with basis 1 = actual pixels: entry at fit, continuous cursor-anchored exponential wheel (the image point under the pointer stays stationary through every scale change — binding), ceiling `max(ZOOM_MAX_SCALE, fitScale)`. **The floor policy is `rest`**: wheeling out clamps hard at fit with no exit and no hysteresis — the overlay is a destination, not a layer; Escape/backdrop remain the exits (`ZOOM_EXIT_RESISTANCE` stays Compare-only). Fit and 100% are the snap stops: `Z` and the toolbar zoom button toggle them centre-anchored, a double-click toggles them anchored at the click point. Drag pans at any above-fit scale (pointer capture kept) and the pan is **clamped** — the image edge never crosses its viewport edge, and a zoom-out re-clamps so the image re-centres. The pan transport is the `translate(offset) scale(scale/fitScale)` transform on `.overlay-media` (`anchorZoomOffset`), which is **load-bearing** for the face-bbox overlays, the draw-mode rectangle (both render in layout space inside `.overlay-media-inner` and ride the transform; `getDrawPoint` divides the cursor through the CSS scale), and video. The toolbar zoom button carries the live readout: a whole-percent label of natural size beside the icon (`--space-2` gap, `--text-xs`, tabular numerals, `min-width: 5ch` reserved once so the toolbar never jumps); at fit it shows the computed fit percentage (e.g. "37%", follows resize), never the word "Fit"; its title/aria narrate the click semantics ("Zoom 37% (fit) — click for 100% (Z)" / "Zoom 240% — click to fit (Z)"). No `aria-live` on the button — a visually-hidden `role="status"` node announces on settle (500 ms after the last wheel change; snaps announce immediately), timer owned by the composable. Touch is unchanged (swipe/tap; no pinch yet) and the filmstrip's wheel-navigate is untouched.
 - Tag management: add, remove, autocomplete suggestions from `GET /tags/completions`.
 - Object-detection overlay: a `showDetections` toggle button (next to the face-bbox toggle) renders stored detection boxes fetched from `GET /pictures/{id}/detections` (`detectionBboxes` ref, same request-id race guard as faces), drawn with `getOverlayBoxStyle` and coloured per distinct label. Refetched whenever the displayed image id changes, like faces.
@@ -721,12 +721,11 @@ Responsibilities:
 - Top bar: search toggle, export menu, settings button, import button, sidebar/stats toggles.
 - Export menu: type (full/face), caption mode, resolution, tag format, character name inclusion, bounding-box sidecar (`exportBboxMode`: none / COCO JSON → `bbox_mode` query param).
 - Props: `selectedCount`, `selectedCharacter`, `selectedSort`, `allPicturesId`, `unassignedPicturesId`, `backendUrl`, `comfyuiConfigured`.
-- Key emits: `comfyui-run-grid`, `expand-all-stacks`, `collapse-all-stacks`, `confirm-export-zip`, `open-import`, `open-settings`.
+- Key emits: `expand-all-stacks`, `collapse-all-stacks`, `confirm-export-zip`, `open-import`, `open-settings`.
 
 #### Toolbar menu panels (`panels/`)
 The individual toolbar menu bodies, extracted from `Toolbar.vue` so each dropdown owns its own markup and state:
 - `TbTagPanel.vue` (1530 lines) — the tag filter / tag-management menu body.
-- `TbComfyPanel.vue` (234 lines) — the ComfyUI-run menu body.
 - `TbExportPanel.vue` (213 lines) — the export options menu body (type, caption, resolution, tag format, bbox sidecar).
 - `TbImportPanel.vue` (371 lines) — the import-source menu body.
 - `GbFilterPanel.vue` (1267 lines) — the global-filter panel (score / media-type / resolution / tag filter controls) shared by the grid bar.
@@ -3045,6 +3044,21 @@ rescan. The row half of a per-copy delete already exists —
 `purge_deleted_models` drops a `model` row only when no `model_file` survives —
 so the gap is `_plan_deletions`, whose every gate is deliberately per model.
 
+**The delete confirmation says what the delete leaves behind (#1314).**
+`confirmDelete` posts the exact ids it will delete to `POST /models/companions`
+before the prompt opens, and `companionsSentences` (`utils/modelShelf.js`)
+turns the answer into sentences appended to the prompt's `message`: support
+files that only ran with the models being deleted (never worded as "nothing
+uses it", and followed by how many kept base models have no workflow on
+record), ones other models still use, ones a same-named
+file makes unknowable, and models no workflow names. It is text in the existing
+prompt, not a new dialog and not a checkbox: an orphaned file is named, and the
+owner deletes it with a second selection. A failed read is said in the prompt
+("could not check") rather than left out, since silence would read as nothing
+being affected, and the delete is still offered. The read sits before the
+prompt opens, so `confirmDelete` ignores a second Delete press until the first
+prompt has settled.
+
 #### The three kinds of absence (#898, #926)
 
 `locationState()` reduces a row's copies to one word, and the shelf renders
@@ -4272,7 +4286,7 @@ the capture phase and stands aside only for a drop of JSON files alone onto
 `.wfshelf`, so pictures dropped here still import and are not reported twice.
 Settings › Workflows imports through the same route; a name taken by different
 content opens a Replace / Keep both / Cancel dialog, and Cancel writes nothing. Naming a workflow
-and running one are later steps (implementation plan §F5), and forgetting
+is a later step, running one is the run panel below, and forgetting
 ghosts is the two counted purges in Settings › Privacy (`PrivacySection`, beside
 the Off / Covered only / On retention control); the row menu offers only what
 can be read today.
@@ -4320,6 +4334,31 @@ its pictures…" for ever with the failure's own sentence unreachable. So:
 `WorkflowInspector.test.js` pins all three. A tile opens the picture
 through `?overlay=<id>` on the library route, which is the shipped way a
 reloaded lightbox restores itself rather than a second route into the viewer.
+
+**Running a workflow is the run panel in the rail** (#1307,
+`WorkflowRunPanel.vue`). The selection pill's ComfyUI entry (and the context
+menu's, and Remix's "use the batch panel") opens it for workflows with a
+Selection input; the toolbar's Generate button opens it for workflows with none.
+Both used to be menus that closed on run; the panel is the rail instead, so the
+grid stays browsable, and App.vue mounts it **in place of** `StatsSidebar` while
+`useWorkflowRunStore().open`, as it mounts `WorkflowInspector` on `/workflows`.
+The panel lives outside the grid while the selection and the ComfyUI progress
+runner are the grid's, so **ImageGrid feeds the store**: the live selection ids,
+the view context (`client_id`, set, project, character) and the runner, which it
+detaches, and closes the panel with, when it unmounts. The selection is read
+live, not captured at open, and the Run button says the count ("Run 12 times")
+before anything starts. The workflow list comes from `GET /comfyui/workflows`
+on every open: the pill offers `runnable` workflows with `has_selection_input`,
+the toolbar those without, so neither offers one that would refuse. Pictures
+in shows each input by its mode: Selection as the count, Picker with a
+`PicturePicker` that must be answered before Run enables, Fixed read-only (and
+a blocker when its picture has left the library). Run is blocked, with the reason in place of the count, for a read-only session
+and for a selection in the Scrapheap. A `partial` answer hands its started
+prompts to the runner and says the rest did not start. The body goes to
+`POST /comfyui/workflows/{name}/run`; the view context is sent only from the
+toolbar, since selection runs stack on their pictures. The overlay's ComfyUI
+menu and Remix still run through `run_i2i` / `run_t2i`. The #1306 parameter form
+belongs in this panel and is not in it yet.
 
 **A grid filtered to one workflow is deliberately not here.** "Show its
 pictures" as a *grid* would mean a new picture filter carried through

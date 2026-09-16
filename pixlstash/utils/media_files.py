@@ -10,7 +10,7 @@ import os
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import THUMBNAIL_EXTENSION
-from pixlstash.utils.image_processing.video_utils import VideoUtils
+from pixlstash.utils.image_processing.video_utils import VIDEO_EXTENSIONS
 
 logger = get_logger(__name__)
 
@@ -20,11 +20,19 @@ SUPPORTED_IMAGE_EXTS: frozenset[str] = frozenset(
         ".jpeg",
         ".png",
         ".webp",
+        ".gif",
         ".bmp",
+        ".tiff",
+        ".tif",
         ".heic",
         ".heif",
         ".avif",
     }
+)
+
+#: Everything a picture can be: what the importer accepts and every scan lists.
+SUPPORTED_MEDIA_EXTS: frozenset[str] = SUPPORTED_IMAGE_EXTS | frozenset(
+    VIDEO_EXTENSIONS
 )
 
 # How many directory entries a count is allowed to visit before it gives up and
@@ -104,10 +112,7 @@ def is_supported_media_file(name_or_path: str) -> bool:
     """
     if is_pixlstash_thumbnail(name_or_path):
         return False
-    ext = os.path.splitext(name_or_path)[1].lower()
-    if ext in SUPPORTED_IMAGE_EXTS:
-        return True
-    return VideoUtils.is_video_file(name_or_path)
+    return os.path.splitext(name_or_path)[1].lower() in SUPPORTED_MEDIA_EXTS
 
 
 def has_media_files(root: str, *, entry_cap: int = DEFAULT_ENTRY_CAP) -> bool:

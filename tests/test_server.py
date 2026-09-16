@@ -28,6 +28,7 @@ import shutil
 import tempfile
 import time
 import tomllib
+from types import SimpleNamespace
 import zipfile
 
 import gc
@@ -68,6 +69,7 @@ from pixlstash.db_models import (
 )
 import pixlstash.routes.pictures as pictures_routes
 from pixlstash.pixl_logging import get_logger
+from pixlstash.tasks.tag_task import TagTask
 from pixlstash.tasks.task_type import TaskType
 from pixlstash.server import Server
 from tests.utils import seed_likeness_stable, upload_pictures_and_wait, wait_for_faces
@@ -1618,7 +1620,7 @@ def test_import_zip_sidecar_txt_tags_for_matching_image(client):
     assert "smiling" in tags
 
 
-def test_duplicate_import_with_sidecar_replaces_existing_tags(client):
+def test_duplicate_import_with_sidecar_replaces_existing_tags(server, client):
     """Duplicate import with sidecar captions should replace existing tags atomically."""
     # First import creates a picture.
     first_files = [("file", ("replace_tags.png", random_images[2], "image/png"))]
@@ -1633,6 +1635,12 @@ def test_duplicate_import_with_sidecar_replaces_existing_tags(client):
         json={"tag": "legacy tag"},
     )
     assert add_resp.status_code == 200
+    # A tag task that read the picture before the sidecar replaced its tags.
+    stale = TagTask(
+        database=server.vault.db,
+        tagging_workflow=None,
+        pictures=[SimpleNamespace(id=picture_id)],
+    )
 
     dup_files = [
         ("file", ("replace_tags.png", random_images[2], "image/png")),
@@ -1661,6 +1669,14 @@ def test_duplicate_import_with_sidecar_replaces_existing_tags(client):
     assert "1girl" in tags
     assert "blue eyes" in tags
     assert "smiling" in tags
+    # #1361: the replacement is a reset, so the older task's write is dropped.
+    assert (
+        server.vault.db.run_task(
+            stale._add_tags_unless_reset,
+            [{"pic_id": picture_id, "tags": ["stale-model-tag"]}],
+        )
+        == []
+    )
 
 
 def test_characters_summary(server, client):

@@ -49,7 +49,6 @@
       :selectedSort="sortStore.selectedSort"
       :allPicturesId="String(ALL_PICTURES_ID)"
       :comfyui-configured="filterStore.comfyuiConfigured"
-      @comfyui-run-grid="runComfyuiOnGridImages"
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
       @open-duplicates="emit('open-duplicates')"
@@ -389,11 +388,7 @@
       :selectNewestStackMember="selectNewestStackMember"
       @refresh-grid="onComfyuiRefreshGrid"
       @refresh-sidebar="emit('refresh-sidebar')"
-      @update:overlayImageId="
-        (id) => {
-          overlayImageId.value = id;
-        }
-      "
+      @update:overlayImageId="moveOverlayTo"
     />
 
     <ProgressOverlay
@@ -1092,7 +1087,6 @@
           :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
           :selected-image-ids="selectedImageIds"
           :selected-media-support="selectedMediaSupport"
-          :comfyui-client-id="comfyuiClientId"
           :comfyui-configured="filterStore.comfyuiConfigured"
           :show-remove-from-stack="showRemoveFromStack"
           :selected-multiple-stack-ids="selectedMultipleStackIds"
@@ -1121,7 +1115,6 @@
           @dissolve-stacks="dissolveSelectedStacks"
           @create-stacks-from-groups="createStacksFromSelectedGroups"
           @run-plugin="handlePluginRunRequest"
-          @comfyui-run="handleComfyuiRun"
           @tags-applied="handleTagsApplied"
           @auto-tag="handleAutoTag"
           @generate-description="handleGenerateDescription"
@@ -1172,6 +1165,10 @@ import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
+import {
+  FROM_SELECTION,
+  useWorkflowRunStore,
+} from "../../stores/useWorkflowRunStore";
 import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionStore";
 import {
   GHOST_PENDING,
@@ -1305,7 +1302,6 @@ import {
 } from "../../api/pictureSets";
 import { getSharedPictureIds, revokeTokensByResource } from "../../api/users";
 import { listTaggers } from "../../api/taggers";
-import { runTextToImage } from "../../api/comfyui";
 import {
   faceBoxColor,
   formatUserDate,
@@ -1889,7 +1885,7 @@ async function runPluginWithParameters(
       if (newIds.length) {
         triggerNewImageHighlight(newIds);
         if (overlayOpen.value) {
-          overlayImageId.value = newIds[newIds.length - 1];
+          moveOverlayTo(newIds[newIds.length - 1]);
         }
       }
     }
@@ -2018,55 +2014,26 @@ function openRemixDialog(pictureId) {
   remixDialogOpen.value = true;
 }
 
-async function runComfyuiOnGridImages({
-  workflowName,
-  caption = "",
-  seedMode = "random",
-  seed = 0,
-} = {}) {
-  if (!workflowName || !props.backendUrl) return;
-  try {
-    // Build view context so the generated picture is assigned to the current
-    // set / project / character automatically.
-    const contextSetId = primarySelectedSetId.value ?? undefined;
-    const contextProjectId =
-      projectStore.selectedProjectId != null
-        ? projectStore.selectedProjectId
-        : undefined;
-    const rawChar = selectionStore.selectedCharacter;
-    const specialIds = [
-      ALL_PICTURES_ID,
-      UNASSIGNED_PICTURES_ID,
-      SCRAPHEAP_PICTURES_ID,
-    ].map((v) => String(v ?? "").toUpperCase());
-    const charNum =
-      rawChar != null && !specialIds.includes(String(rawChar).toUpperCase())
-        ? Number(rawChar)
-        : NaN;
-    const contextCharacterId =
-      Number.isFinite(charNum) && charNum > 0 ? charNum : undefined;
-
-    const payload = {
-      workflow_name: workflowName,
-      caption: caption || "",
-      client_id: comfyuiClientId.value || undefined,
-      seed_mode: seedMode,
-      seed: seedMode === "fixed" ? seed : undefined,
-      source_picture_id:
-        selectedImageIds.value.length === 1
-          ? selectedImageIds.value[0]
-          : undefined,
-      set_id: contextSetId,
-      project_id: contextProjectId,
-      character_id: contextCharacterId,
-    };
-    const body = await runTextToImage(payload);
-    const prompts = Array.isArray(body?.prompts) ? body.prompts : [];
-    handleComfyuiRun({ prompts });
-  } catch (err) {
-    console.error("ComfyUI T2I run failed:", err);
-  }
-}
+// What a run with no selection files its output into: the set, project and
+// character in view. Fed to the run panel, which lives in the rail (#1307).
+const runViewContext = computed(() => {
+  const rawChar = selectionStore.selectedCharacter;
+  const specialIds = [
+    ALL_PICTURES_ID,
+    UNASSIGNED_PICTURES_ID,
+    SCRAPHEAP_PICTURES_ID,
+  ].map((v) => String(v ?? "").toUpperCase());
+  const charNum =
+    rawChar != null && !specialIds.includes(String(rawChar).toUpperCase())
+      ? Number(rawChar)
+      : NaN;
+  return {
+    client_id: comfyuiClientId.value || undefined,
+    set_id: primarySelectedSetId.value ?? undefined,
+    project_id: projectStore.selectedProjectId ?? undefined,
+    character_id: Number.isFinite(charNum) && charNum > 0 ? charNum : undefined,
+  };
+});
 
 function onComfyuiRefreshGrid() {
   // The new grid card for an in-app ComfyUI result now arrives via the
@@ -5429,6 +5396,33 @@ const {
   clearSelection,
 } = useMultiSelect();
 
+// The run panel sits in App's rail, outside the grid: it reads the live
+// selection, the view context and the progress runner from here (#1307).
+const workflowRunStore = useWorkflowRunStore();
+watch(
+  selectedImageIds,
+  (ids) => {
+    workflowRunStore.selectionIds = (ids || [])
+      .map((id) => Number(getPictureId(id)))
+      .filter((id) => Number.isFinite(id) && id > 0);
+  },
+  { immediate: true, deep: true },
+);
+watch(
+  runViewContext,
+  (context) => {
+    workflowRunStore.context = context;
+  },
+  { immediate: true },
+);
+const detachWorkflowRunner = workflowRunStore.attachRunner(handleComfyuiRun);
+onUnmounted(() => {
+  detachWorkflowRunner();
+  // No grid, no selection to run on and no runner to follow the run.
+  workflowRunStore.close();
+  workflowRunStore.selectionIds = [];
+});
+
 // The locked-delete cards (`showLockedDeleteNotice`) are scoped to the context
 // they describe: the sentence is about THIS selection in THIS view, and it
 // carries an action, so it is sticky and nothing would otherwise take it down.
@@ -5595,6 +5589,16 @@ function _pushOverlayRoute(id) {
   _overlayRouter.replace({ query }).finally(() => {
     _overlayRoutePushPending = false;
   });
+}
+
+// Moving the open overlay is two writes, not one: the id the overlay renders
+// from AND the `?overlay=` query the lightbox is addressable by (§7). Three
+// call sites move it - opening one, a plugin run creating a picture, a ComfyUI
+// run stacking one - and the two that only wrote the id left the URL pointing
+// at the previous picture, so a reload or a shared link went back to it.
+function moveOverlayTo(id) {
+  overlayImageId.value = id;
+  _pushOverlayRoute(id);
 }
 
 function _removeOverlayRoute() {
@@ -6432,9 +6436,8 @@ async function openOverlay(img) {
   overlayInitialExpandedStackIds.value = Array.from(
     expandedStackIds.value || [],
   );
-  overlayImageId.value = img.id;
   overlayOpen.value = true;
-  _pushOverlayRoute(img.id);
+  moveOverlayTo(img.id);
   markEnd("pixlstash:interaction-open-picture");
 }
 
@@ -7559,7 +7562,7 @@ function handleContextMenuOpenPluginPanel() {
 }
 
 function handleContextMenuOpenComfyuiPanel() {
-  selectionBarRef.value?.openComfyuiPanel();
+  workflowRunStore.openFor(FROM_SELECTION);
 }
 
 function openSegmentDialog() {
@@ -7804,7 +7807,6 @@ defineExpose({
   isOverlayOpen: () => overlayOpen.value,
   markOverlayDeferredRefresh,
   clearFaceSelection,
-  runComfyuiOnGridImages,
   hasCursorFocus: computed(() => cursorIdx.value !== null),
   // Lets the sidebar's Scrapheap context menu reach the same consent-gated
   // empty-scrapheap flow the empty-state placeholder uses. The caller navigates

@@ -209,13 +209,19 @@ def _apply_filename_prefix(workflow: dict, prefix: str) -> bool:
     return updated
 
 
-def _upload_image_to_comfyui(base_url: str, file_path: str) -> str:
+def _upload_image_to_comfyui(
+    base_url: str, file_path: str, upload_name: str | None = None
+) -> str:
+    """Upload a picture to ComfyUI's input folder, returning the name to load it by.
+
+    ``upload_name`` names it there instead of the file's own name.
+    """
     mime_type, _ = mimetypes.guess_type(file_path)
     if not mime_type:
         mime_type = "application/octet-stream"
     with open(file_path, "rb") as handle:
         files = {
-            "image": (os.path.basename(file_path), handle, mime_type),
+            "image": (upload_name or os.path.basename(file_path), handle, mime_type),
         }
         data = {
             "type": "input",

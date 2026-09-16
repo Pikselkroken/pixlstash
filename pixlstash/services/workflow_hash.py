@@ -39,6 +39,7 @@ cleanly, whereas merging shattered ones requires guessing intent.
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 import re
@@ -134,6 +135,10 @@ _MAX_FILENAME_LENGTH = 255
 # cannot see them. Without this a LoRA swap on a PixlStash node would leave the
 # recipe unchanged, which is the one error the spec calls unrecoverable.
 SHA256_FIELD_RE = re.compile(r"(^|_)sha256$")
+# What such a value must look like to name a model: the whole digest, or the
+# 10- or 12-digit prefix A1111 writes for a checkpoint or an embedding. No other
+# length, so a partial value in some other node's widget names nothing.
+DIGEST_PREFIX_RE = re.compile(r"^(?:[0-9a-f]{10}|[0-9a-f]{12}|[0-9a-f]{64})$")
 
 # Defense in depth against a third-party node that puts a credential in a
 # widget. Nothing in the shipped ComfyUI-PixlStash suite does - its connection
@@ -288,6 +293,25 @@ def instance_widget_value(name: str, value: Any) -> Any:
     if _OUTPUT_PATH_RE.match(name):
         return None
     return value
+
+
+def digests_with_prefix(value: str, sorted_digests: list[str]) -> list[str]:
+    """The digests a ``*_sha256`` value names: itself, or those it prefixes.
+
+    A ComfyUI-PixlStash loader writes all 64 digits; A1111 writes 10 or 12
+    (``services/a1111_recipe.py``). The caller reads one match as that model
+    and several as a name it cannot pin down. At most two are returned, which
+    is enough to tell the two apart. A value :data:`DIGEST_PREFIX_RE` does not
+    match (a loader left blank) names nothing.
+
+    Args:
+        value: A lowercase hex digest or prefix.
+        sorted_digests: Every candidate digest, lowercase and sorted.
+    """
+    if not DIGEST_PREFIX_RE.match(value):
+        return []
+    index = bisect.bisect_left(sorted_digests, value)
+    return [d for d in sorted_digests[index : index + 2] if d.startswith(value)]
 
 
 def asset_reference(normalized_filename: str) -> str:
@@ -587,7 +611,7 @@ def _nested_assets_as_references(name: str, value: Any) -> Any:
         return {
             key: (
                 None
-                if _SEED_RE.search(str(key))
+                if SEED_FIELD_RE.search(str(key))
                 or str(key) == "filename_prefix"
                 or _OUTPUT_PATH_RE.match(str(key))
                 else _nested_assets_as_references(str(key), item)

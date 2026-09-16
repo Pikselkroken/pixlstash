@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -28,11 +27,14 @@ from pixlstash.services.model_folder_scanner import MODEL_SUFFIX as SHELF_MODEL_
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services.workflow_hash import (
+    DIGEST_PREFIX_RE,
     HASH_VERSION,
     MODEL_EXTENSIONS,
+    ReducedNode,
     SHA256_FIELD_RE,
     asset_reference,
     assets_from_reduction,
+    digests_with_prefix,
     document_from_reduction,
     drop_widgets,
     graph_key,
@@ -50,10 +52,6 @@ logger = get_logger(__name__)
 # retained thumbnail at once. Membership tests use ``sql_chunking.chunked``'s
 # own default, which is sized against SQLite's bound-parameter cap.
 _GHOST_WRITE_CHUNK = 100
-
-# What a loader's ``*_sha256`` value must look like to name a model at all.
-# ``structural_widget_value`` lowercases it, so lowercase hex is the whole form.
-_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -118,7 +116,23 @@ def record_api_graph(
             nothing keyable. Callers ingesting arbitrary images are expected to
             catch this and skip the picture rather than fail the batch.
     """
-    nodes = reduce_api_graph(api_graph)
+    return record_reduction(
+        hub, reduce_api_graph(api_graph), library_uuid, revisit=revisit
+    )
+
+
+def record_reduction(
+    hub: HubDatabase,
+    nodes: dict[str, ReducedNode],
+    library_uuid: Optional[str] = None,
+    *,
+    revisit: bool = False,
+) -> WorkflowKeys:
+    """File an already-reduced graph; :func:`record_api_graph` for the rest.
+
+    The entry for a recipe that was never a ComfyUI graph: A1111 generation
+    data is classified into a reduction directly (``services/a1111_recipe.py``).
+    """
     document = _canonical_document(document_from_reduction(nodes))
     instance_document = _canonical_document(instance_document_from_reduction(nodes))
     keys = WorkflowKeys(
@@ -284,9 +298,10 @@ def _model_ghost_names(fetchall: Callable[[str], list]) -> set[str]:
     waits for ``MissingCheckpointHashFinder`` with ``sha256`` NULL, and until it
     is read its loader digest matches nothing, so judging then would forget the
     digest of a model still on disk. ``engine`` rows never carry a digest and
-    are left out of that wait. A value that is not a 64-hex digest (an unset
-    loader, a download node's ``expected_sha256`` left blank) names no model
-    and is never a ghost.
+    are left out of that wait. A value that is not a digest or an A1111 short
+    hash of one (an unset loader, a download node's ``expected_sha256`` left
+    blank) names no model and is never a ghost; a short hash is a ghost when no
+    shelf digest starts with it.
     """
     shelf_names = {
         normalized_filename(row[0])
@@ -296,10 +311,10 @@ def _model_ghost_names(fetchall: Callable[[str], list]) -> set[str]:
         normalized_filename(row[0])
         for row in fetchall("SELECT relpath FROM model_file")
     )
-    shelf_digests = {
+    shelf_digests = sorted(
         row[0].lower()
         for row in fetchall("SELECT sha256 FROM model WHERE sha256 IS NOT NULL")
-    }
+    )
     judge_digests = not fetchall(
         "SELECT 1 FROM model WHERE sha256 IS NULL AND file_kind <> 'engine' LIMIT 1"
     )
@@ -308,7 +323,11 @@ def _model_ghost_names(fetchall: Callable[[str], list]) -> set[str]:
         "SELECT DISTINCT widget_name, normalized_filename FROM workflow_recipe_asset"
     ):
         if SHA256_FIELD_RE.search(widget):
-            if judge_digests and _DIGEST_RE.match(value) and value not in shelf_digests:
+            if (
+                judge_digests
+                and DIGEST_PREFIX_RE.match(value)
+                and not digests_with_prefix(value, shelf_digests)
+            ):
                 ghosts.add(value)
         elif value.endswith(SHELF_MODEL_SUFFIX) and value not in shelf_names:
             ghosts.add(value)
@@ -319,8 +338,9 @@ def model_ghost_names(hub: HubDatabase) -> set[str]:
     """What recipes keep that names a model the shelf does not hold.
 
     These are **model ghosts**: a ``.safetensors`` filename matching no model on
-    the shelf, or a loader's ``*_sha256`` value matching no model's digest (a
-    digest identifies a model on a public registry as surely as its name does).
+    the shelf, or a ``*_sha256`` value no model's digest equals or, for an A1111
+    short hash, starts with (a digest identifies a model on a public registry as
+    surely as its name does).
     Only what the shelf can hold is judged: it scans ``.safetensors`` alone, so
     a ``.ckpt`` or ``.gguf`` is never on it and calling one a ghost would forget
     the name of a model still on disk. A model that was never added to the shelf

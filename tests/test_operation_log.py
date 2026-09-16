@@ -31,6 +31,7 @@ import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -2059,6 +2060,39 @@ def test_a_retag_replaces_model_tags_and_keeps_tags_other_writers_added(client, 
         "via_route": _raw_tags(server, via_route),
         "beside_sentinel": _raw_tags(server, beside_sentinel),
     } == {"via_route": expected, "beside_sentinel": expected}
+
+
+def test_a_task_that_read_the_picture_before_a_retag_writes_nothing(client, server):
+    """#1361: an older task finishing after a retag must neither land its tags
+    nor its predictions, or the retag's own task keeps them as another
+    writer's and the picture ends up with both models' output."""
+    picture_id = _upload(client)
+    picture = [SimpleNamespace(id=picture_id)]
+    stale = TagTask(database=server.vault.db, tagging_workflow=None, pictures=picture)
+    tag_prediction_service.reset_pictures_tags(
+        server.vault, [picture_id], engine_name="fresh_plugin"
+    )
+    fresh = TagTask(database=server.vault.db, tagging_workflow=None, pictures=picture)
+
+    written = server.vault.db.run_task(
+        stale._add_tags_unless_reset,
+        [{"pic_id": picture_id, "tags": ["stale-model-tag"]}],
+    )
+    predicted = server.vault.db.run_task(
+        stale._write_predictions_unless_reset,
+        {picture_id: {"stale-model-tag": 0.9}},
+        {picture_id: {"stale-model-tag"}},
+        "stale-model",
+    )
+    assert (written, predicted) == ([], 0)
+    assert _raw_tags(server, picture_id) == ["__tag:fresh_plugin"]
+    assert _prediction(server, picture_id, "stale-model-tag") is None
+
+    server.vault.db.run_task(
+        fresh._add_tags_unless_reset,
+        [{"pic_id": picture_id, "tags": ["fresh-model-tag"]}],
+    )
+    assert _raw_tags(server, picture_id) == ["fresh-model-tag"]
 
 
 # ---------------------------------------------------------------------------

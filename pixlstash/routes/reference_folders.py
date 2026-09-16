@@ -1571,6 +1571,7 @@ def create_router(server) -> APIRouter:
             tags_count = 0
             descriptions_count = 0
             skipped_count = 0
+            retagged: list[int] = []
             # A sidecar import deletes+rewrites confirmed Tag rows and overwrites
             # the description on EXISTING pictures - frozen for anything in a
             # locked set. Skip those (counted as skipped) instead of overwriting.
@@ -1613,6 +1614,7 @@ def create_router(server) -> APIRouter:
                         pic.tags_file = tags_path
                         pic.tags_file_mtime = get_sidecar_mtime(tags_path)
                         tags_count += 1
+                        retagged.append(pic.id)
                         dirty = True
                 if SIDECAR_TYPE_DESCRIPTION in requested_types:
                     description_path = resolve_typed_sidecar(
@@ -1641,6 +1643,7 @@ def create_router(server) -> APIRouter:
                     status_code=409,
                     detail=f"Could not import metadata: {exc}",
                 )
+            server.vault.db.tag_resets.mark_reset(retagged)
             return scope, tags_count, descriptions_count, skipped_count
 
         scope, tags_count, descriptions_count, skipped_count = server.vault.db.run_task(

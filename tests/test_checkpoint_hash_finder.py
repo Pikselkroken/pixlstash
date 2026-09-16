@@ -228,6 +228,32 @@ class TestCollisionIsAMerge:
 
         assert rows(hub)[0]["base_model"] == "flux.1-dev"
 
+    def test_the_merge_keeps_the_header_facts_only_the_dropped_row_has(
+        self, hub, tmp_path
+    ):
+        first = write_model(tmp_path / "one" / "a.safetensors")
+        second = write_model(tmp_path / "two" / "b.safetensors")
+        first_id = register(hub, first)
+        second_id = register(hub, second)
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET family = 't5_xxl', quant = 'f16', "
+                "weights_id = 'w' WHERE id = ?",
+                (second_id,),
+            )
+
+        CheckpointHashTask(
+            hub, [(first_id, str(first)), (second_id, str(second))]
+        ).run()
+
+        (surviving,) = rows(hub)
+        assert surviving["id"] == first_id
+        assert (surviving["family"], surviving["quant"], surviving["weights_id"]) == (
+            "t5_xxl",
+            "f16",
+            "w",
+        )
+
     def test_the_merge_never_overwrites_what_the_survivor_already_knew(
         self, hub, tmp_path
     ):

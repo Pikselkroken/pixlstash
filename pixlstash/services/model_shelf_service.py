@@ -49,7 +49,11 @@ from pixlstash.services.model_features import (
     FEATURE_TAGGER,
 )
 from pixlstash.services.stack_detector import repair_stacks
-from pixlstash.services.workflow_hash import SHA256_FIELD_RE, normalized_filename
+from pixlstash.services.workflow_hash import (
+    SHA256_FIELD_RE,
+    digests_with_prefix,
+    normalized_filename,
+)
 from pixlstash.services.workflow_library_service import recipe_picture_counts
 from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
@@ -123,6 +127,9 @@ MODEL_COLUMNS = (
     "run_key",
     "icon_sha256",
     "created_at",
+    "family",
+    "quant",
+    "weights_id",
 )
 
 # Computed per row by the two aggregate joins below, never by a second query.
@@ -402,7 +409,8 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
     """How many kept pictures in the active library used each model, by tier.
 
     ``verified`` counts pictures whose recipe names the model by its digest (a
-    PixlStash loader's ``*_sha256``): that exact file. ``by_filename`` counts
+    PixlStash loader's ``*_sha256``, or an A1111 short hash only this model's
+    digest starts with): that exact file. ``by_filename`` counts
     the rest whose recipe names a file called what one of the model's copies is
     called: a file of that name, which is all the graph says. The two are never
     summed here, because a count that mixes them claims a certainty the data
@@ -421,19 +429,8 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
     pictures = vault.db.run_task(recipe_picture_counts, priority=DBPriority.IMMEDIATE)
     if not pictures:
         return {}
-    by_name: dict[str, set[int]] = {}
-    for row in hub.fetchall(
-        "SELECT id, filename FROM model WHERE filename IS NOT NULL"
-    ):
-        by_name.setdefault(normalized_filename(row["filename"]), set()).add(row["id"])
-    for row in hub.fetchall("SELECT model_id, relpath FROM model_file"):
-        by_name.setdefault(normalized_filename(row["relpath"]), set()).add(
-            row["model_id"]
-        )
-    by_digest = {
-        row["sha256"].lower(): row["id"]
-        for row in hub.fetchall("SELECT id, sha256 FROM model WHERE sha256 IS NOT NULL")
-    }
+    by_name, by_digest = _recipe_asset_index(hub)
+    sorted_digests = sorted(by_digest)
 
     verified: dict[int, set[str]] = {}
     named: dict[int, set[str]] = {}
@@ -445,9 +442,13 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
         if recipe not in pictures:
             continue
         if SHA256_FIELD_RE.search(row["widget_name"]):
-            model_id = by_digest.get(row["normalized_filename"])
-            if model_id is not None:
-                verified.setdefault(model_id, set()).add(recipe)
+            # An A1111 short hash is verified only when it names one model;
+            # otherwise its picture is left to the filename tier.
+            matched = _models_for_digest(
+                row["normalized_filename"], by_digest, sorted_digests
+            )
+            if len(matched) == 1:
+                verified.setdefault(matched.pop(), set()).add(recipe)
         else:
             for model_id in by_name.get(row["normalized_filename"], ()):
                 named.setdefault(model_id, set()).add(recipe)
@@ -462,6 +463,223 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
         }
         for model_id in verified.keys() | named.keys()
     }
+
+
+def _recipe_asset_index(hub) -> tuple[dict[str, set[int]], dict[str, int]]:
+    """How a recipe's asset names reach shelf models: ``(by_name, by_digest)``.
+
+    ``by_name`` maps a normalized basename to every model a file of that name
+    could be - the row's ``filename`` and each copy's basename - so a name two
+    rows share maps to both. ``by_digest`` maps a lowercase sha256 to its one
+    model.
+    """
+    by_name: dict[str, set[int]] = {}
+    for row in hub.fetchall(
+        "SELECT id, filename FROM model WHERE filename IS NOT NULL"
+    ):
+        by_name.setdefault(normalized_filename(row["filename"]), set()).add(row["id"])
+    for row in hub.fetchall("SELECT model_id, relpath FROM model_file"):
+        by_name.setdefault(normalized_filename(row["relpath"]), set()).add(
+            row["model_id"]
+        )
+    by_digest = {
+        row["sha256"].lower(): row["id"]
+        for row in hub.fetchall("SELECT id, sha256 FROM model WHERE sha256 IS NOT NULL")
+    }
+    return by_name, by_digest
+
+
+def _models_for_digest(
+    value: str, by_digest: dict[str, int], sorted_digests: list[str]
+) -> set[int]:
+    """Every shelf model a ``*_sha256`` asset value could name.
+
+    One for a whole digest. An A1111 short hash (``services/a1111_recipe.py``)
+    names every model whose digest starts with it: one is that model, and
+    several is a name its recipe cannot pin down, which both callers treat the
+    way they treat an ambiguous filename. ``sorted_digests`` is sorted once per
+    call rather than per asset row, which is what keeps the prefix search a
+    bisect rather than a scan of the shelf.
+    """
+    return {by_digest[digest] for digest in digests_with_prefix(value, sorted_digests)}
+
+
+# What a generation graph loads BESIDE a model rather than as one: the files a
+# delete can leave with nothing to serve.
+SUPPORT_FILE_KINDS = (FILE_VAE, FILE_TEXT_ENCODER)
+
+# Kinds that never make a support file needed. An adapter runs on a base model
+# and needs whatever that base needs, so counting it would keep a VAE "in use"
+# by a LoRA whose checkpoint is the thing being deleted. `unknown` is NOT here:
+# it may be a base model we failed to recognise, and keeping a file is the safe
+# answer to not knowing.
+_NOT_CONSUMERS = (*SUPPORT_FILE_KINDS, FILE_ADAPTER, FILE_ENGINE)
+
+
+def fetch_companions(hub, ids: list[int]) -> dict:
+    """What deleting *ids* would leave behind, from the recipes on this machine.
+
+    **The evidence is co-occurrence**: one ``workflow_recipe`` is one graph that
+    ran with exactly the files its ``workflow_recipe_asset`` rows name, so a VAE
+    and a checkpoint in one recipe are proven to work together. Every recipe the
+    hub holds counts, from every library and whether or not its pictures still
+    exist: evidence from more places can only keep more files, never offer one.
+
+    For each support file (``vae``, ``text_encoder``) that shares a recipe with
+    a model being deleted, its **consumers** are the base models across *all* of
+    its recipes (adapters and support files excluded, ``unknown`` included):
+
+    * **orphaned** - every consumer *a recipe records* is being deleted. That
+      is all it means: a kept base model no recipe names may need the file
+      too, which is why ``unrecorded`` counts those models beside it;
+    * **shared** - some consumer stays, and it is named;
+    * **unknown** - a recipe reached the file only by a basename another shelf
+      row also has, or named a model by a digest while some shelf row is still
+      waiting for its hash, so a consumer may be missing. Never reported as
+      orphaned.
+
+    **The absence of a recipe is not evidence.** A deleted model no recipe names
+    is listed under ``no_evidence``, so the caller can say it cannot tell, and
+    its support files are simply not examined.
+
+    ``in_use`` answers the other direction: a support file being deleted that a
+    model staying on the shelf has run with.
+
+    Args:
+        hub: The open hub database.
+        ids: ``model.id`` values about to be deleted.
+
+    Returns:
+        ``{"orphaned", "shared", "unknown", "in_use", "no_evidence",
+        "unrecorded"}``. The first four are lists of ``{"id", "name", ...}``,
+        ``shared`` and ``in_use`` entries also carrying ``used_with``;
+        ``no_evidence`` is a list of ids; ``unrecorded`` counts the base models
+        staying on the shelf that no recipe names.
+    """
+    deleting = set(ids)
+    models = {
+        int(row["id"]): row
+        for row in hub.fetchall(
+            "SELECT id, file_kind, display_name, filename, file_size FROM model"
+        )
+    }
+    by_name, by_digest = _recipe_asset_index(hub)
+    sorted_digests = sorted(by_digest)
+    # The ghost reader's rule (`hub/workflows._model_ghost_names`): a digest that
+    # matches nothing proves nothing while a row still waits for its hash, since
+    # that row may be the model the digest names.
+    digests_are_complete = not hub.fetchall(
+        "SELECT 1 FROM model WHERE sha256 IS NULL AND file_kind <> ? LIMIT 1",
+        (FILE_ENGINE,),
+    )
+
+    recipe_models: dict[str, set[int]] = {}
+    ambiguous: dict[str, set[int]] = {}
+    unresolved: set[str] = set()
+    for row in hub.fetchall(
+        "SELECT structural_hash, widget_name, normalized_filename "
+        "FROM workflow_recipe_asset"
+    ):
+        recipe = row["structural_hash"]
+        if SHA256_FIELD_RE.search(row["widget_name"]):
+            matched = _models_for_digest(
+                row["normalized_filename"], by_digest, sorted_digests
+            )
+            if not matched and not digests_are_complete:
+                unresolved.add(recipe)
+            if len(matched) > 1:
+                ambiguous.setdefault(recipe, set()).update(matched)
+        else:
+            matched = by_name.get(row["normalized_filename"], set())
+            if len(matched) > 1:
+                ambiguous.setdefault(recipe, set()).update(matched)
+        if matched:
+            recipe_models.setdefault(recipe, set()).update(matched)
+
+    recipes_of: dict[int, set[str]] = {}
+    for recipe, members in recipe_models.items():
+        for model_id in members:
+            recipes_of.setdefault(model_id, set()).add(recipe)
+
+    def kind(model_id: int) -> str:
+        return models[model_id]["file_kind"]
+
+    def entry(model_id: int) -> dict:
+        row = models[model_id]
+        return {
+            "id": model_id,
+            "name": row["display_name"] or row["filename"] or f"model {model_id}",
+            "file_size": row["file_size"],
+        }
+
+    def consumers(model_id: int) -> set[int]:
+        found: set[int] = set()
+        for recipe in recipes_of.get(model_id, ()):
+            found.update(
+                other
+                for other in recipe_models[recipe]
+                if other != model_id and kind(other) not in _NOT_CONSUMERS
+            )
+        return found
+
+    def used_with(members: set[int]) -> list[dict]:
+        return [
+            {"id": m, "name": entry(m)["name"]}
+            for m in sorted(members, key=lambda m: entry(m)["name"].lower())
+        ]
+
+    result: dict = {
+        "orphaned": [],
+        "shared": [],
+        "unknown": [],
+        "in_use": [],
+        "no_evidence": sorted(
+            model_id
+            for model_id in deleting
+            if model_id in models and model_id not in recipes_of
+        ),
+        "unrecorded": sum(
+            1
+            for model_id, row in models.items()
+            if model_id not in deleting
+            and model_id not in recipes_of
+            and row["file_kind"] not in _NOT_CONSUMERS
+        ),
+    }
+
+    candidates: set[int] = set()
+    for model_id in deleting & recipes_of.keys():
+        for recipe in recipes_of[model_id]:
+            candidates.update(
+                other
+                for other in recipe_models[recipe]
+                if other not in deleting and kind(other) in SUPPORT_FILE_KINDS
+            )
+        if kind(model_id) in SUPPORT_FILE_KINDS:
+            kept = consumers(model_id) - deleting
+            if kept:
+                result["in_use"].append(
+                    {**entry(model_id), "used_with": used_with(kept)}
+                )
+
+    for support_id in sorted(candidates, key=lambda m: entry(m)["name"].lower()):
+        users = consumers(support_id)
+        if not users & deleting:
+            # It shares a recipe with a deleted adapter or support file only;
+            # this delete does not change what it serves.
+            continue
+        if any(
+            support_id in ambiguous.get(r, ()) or r in unresolved
+            for r in recipes_of[support_id]
+        ):
+            result["unknown"].append(entry(support_id))
+        elif users - deleting:
+            result["shared"].append(
+                {**entry(support_id), "used_with": used_with(users - deleting)}
+            )
+        else:
+            result["orphaned"].append(entry(support_id))
+    return result
 
 
 def attached_hashes(vault, entity_type: str, entity_id: int) -> set[str]:

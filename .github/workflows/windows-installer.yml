@@ -22,7 +22,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # npm ci runs third-party dependency lifecycle scripts; this job needs
           # no git credentials once the tree is on disk.
@@ -129,7 +129,7 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -159,7 +159,7 @@ jobs:
           retention-days: 3
           if-no-files-found: ignore
       - name: Attach signed installer to release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
           files: signing/*.exe
@@ -188,7 +188,7 @@ jobs:
           ls signing/
           echo "::warning title=Unsigned Windows build::Certum code signing is not enabled (WINDOWS_SIGNING_ENABLED repo variable / windows-signing environment secrets). Attaching the Windows installer with an '-unsigned' suffix — SmartScreen will warn users. See docs/windows-signing-setup.md."
       - name: Attach unsigned installer to release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           # PAT, not GITHUB_TOKEN — see the comment on sign-windows-server.
           token: ${{ secrets.RELEASE_BOT_TOKEN }}

@@ -739,6 +739,36 @@ def test_an_unreachable_picture_is_held_out_of_the_window_not_retired(tmp_path):
         )
 
 
+def test_the_tag_finder_captures_the_reset_generation_before_its_read(
+    tmp_path, monkeypatch
+):
+    """#1361: a retag landing just after the finder's read must make the task
+    older than the reset. Captured after the read, the task would count as
+    newer and its output would overwrite the retag."""
+    with Vault(image_root=str(tmp_path)) as vault:
+        (pid,) = _seed_pending(vault, tmp_path, ["r.png"])
+
+        def add_face_row(session: Session):
+            session.add(Face(picture_id=pid, face_index=-1))
+            session.commit()
+
+        vault.db.run_task(add_face_row)
+        fetch = MissingTagFinder._fetch_missing_tags
+
+        def fetch_then_retag(session, *args):
+            pictures = fetch(session, *args)
+            vault.db.tag_resets.mark_reset([pid])
+            return pictures
+
+        monkeypatch.setattr(
+            MissingTagFinder, "_fetch_missing_tags", staticmethod(fetch_then_retag)
+        )
+        task = MissingTagFinder(vault.db, _TagEngine).find_task()
+
+        assert task is not None and task.params["picture_ids"] == [pid]
+        assert task._reset_since_capture([pid]) == {pid}
+
+
 def test_a_whole_batch_transient_failure_deletes_nothing(tmp_path):
     """The trigger that makes retiring an unresolved picture unsafe.
 

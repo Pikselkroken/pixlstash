@@ -28,6 +28,7 @@ metadata: it is the only signal present on every file regardless of provenance.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -141,6 +142,23 @@ _ROLE_FOLDERS: dict[str, str] = {
 # quantisation shrinks a checkpoint and a high rank inflates an adapter.
 _CHECKPOINT_MIN_PARAMS = 1_000_000_000
 
+# Share of the parameters one dtype must hold for `quant` to name it. Below
+# this the file is `mixed`, which is a real answer rather than a failure.
+_QUANT_MAJORITY = 0.5
+
+QUANT_MIXED = "mixed"
+
+# CLIP's tokenizer vocabulary, which is what tells a CLIP text encoder's token
+# table from any other embedding of the same width.
+_CLIP_VOCAB = 49408
+_CLIP_WIDTHS = {768: "clip_l", 1024: "clip_h", 1280: "clip_g"}
+
+# T5's and UMT5's vocabularies. Only the XXL width is named: it is the one
+# every current image and video model loads, and a smaller T5 is not a
+# support file anybody has on a shelf.
+_T5_VOCABS = {32128: "t5", 256384: "umt5"}
+_T5_XXL_WIDTH = 4096
+
 
 @dataclass(frozen=True)
 class AdapterInfo:
@@ -175,6 +193,12 @@ class AdapterInfo:
         trained_by: Producing software, e.g. ``"ai-toolkit 0.9.11"``.
         has_metadata: Whether the file carried a ``__metadata__`` block with
             anything beyond the mandatory ``format`` key.
+        family: The architecture the tensors show, for the support files
+            whose layout says it (see :func:`family_from_header`), else
+            ``None``.
+        quant: The dtype holding most of the parameters, or ``"mixed"``.
+        weights_id: Digest of the tensor names and shapes, dtype excluded, so
+            two clean casts of one model share it.
     """
 
     kind: str
@@ -189,6 +213,9 @@ class AdapterInfo:
     training_epoch: Optional[int] = None
     trained_by: Optional[str] = None
     has_metadata: bool = False
+    family: Optional[str] = None
+    quant: Optional[str] = None
+    weights_id: Optional[str] = None
 
 
 def read_safetensors_header(path: str) -> Optional[dict]:
@@ -323,21 +350,149 @@ def count_parameters(header: dict) -> int:
         Sum over tensors of the product of each shape, or 0 when nothing is
         measurable. A scalar tensor (empty shape) counts as one parameter.
     """
-    total = 0
+    return sum(_shape_size(entry) for _name, entry in _tensor_entries(header))
+
+
+def _tensor_entries(header: dict):
+    """Yield ``(name, entry)`` for every tensor in *header*, metadata skipped."""
     for key, entry in header.items():
-        if key == "__metadata__" or not isinstance(entry, dict):
-            continue
-        shape = entry.get("shape")
-        if not isinstance(shape, list):
-            continue
-        count = 1
-        for dim in shape:
-            if not isinstance(dim, int) or isinstance(dim, bool) or dim < 0:
-                count = 0
-                break
-            count *= dim
-        total += count
-    return total
+        if key != "__metadata__" and isinstance(entry, dict):
+            yield key, entry
+
+
+def _valid_shape(entry) -> Optional[list[int]]:
+    """Return the entry's shape when every dimension is a non-negative int.
+
+    *entry* comes from an untrusted header, so anything but a dict is ``None``.
+    """
+    if not isinstance(entry, dict):
+        return None
+    shape = entry.get("shape")
+    if not isinstance(shape, list):
+        return None
+    for dim in shape:
+        if not isinstance(dim, int) or isinstance(dim, bool) or dim < 0:
+            return None
+    return shape
+
+
+def _shape_size(entry: dict) -> int:
+    """Parameters in one tensor entry, 0 when its shape is unusable."""
+    shape = _valid_shape(entry)
+    if shape is None:
+        return 0
+    count = 1
+    for dim in shape:
+        count *= dim
+    return count
+
+
+def quant_from_header(header: dict) -> Optional[str]:
+    """Return the dtype most of the parameters are stored at.
+
+    **Weighted by parameter count, not by tensor count.** A model with 300 fp32
+    norm tensors and 200 fp8 weight tensors is fp8, and counting tensors gets
+    that backwards. When no dtype holds a majority the answer is ``"mixed"``.
+
+    The filename is never consulted: ``fp8_e4m3fn_scaled`` and ``nvfp4_awq``
+    are real names, and the column code reasons over must come from the header.
+    The limit is the header's: an AWQ-style pack stores its weights in ``I32``
+    or ``U8`` containers, and that container is what this reports.
+
+    Args:
+        header: Parsed safetensors header.
+
+    Returns:
+        The dtype lowercased (``f16``, ``bf16``, ``f8_e4m3``, ``i32`` …),
+        ``"mixed"``, or ``None`` when no tensor declares a usable dtype and
+        shape.
+    """
+    by_dtype: dict[str, int] = {}
+    for _name, entry in _tensor_entries(header):
+        dtype = entry.get("dtype")
+        if isinstance(dtype, str) and dtype:
+            key = dtype.lower()
+            by_dtype[key] = by_dtype.get(key, 0) + _shape_size(entry)
+    total = sum(by_dtype.values())
+    if not total:
+        return None
+    dtype, count = max(by_dtype.items(), key=lambda item: item[1])
+    return dtype if count > total * _QUANT_MAJORITY else QUANT_MIXED
+
+
+def weights_id_from_header(header: dict) -> Optional[str]:
+    """Return a digest that is the same for one model at any precision.
+
+    SHA-256 over the sorted ``(tensor name, shape)`` pairs, **dtype excluded**,
+    so two clean casts of one model share it where ``sha256`` differs by
+    construction. A repack does not: ``umt5_xxl_fp8_e4m3fn_scaled`` carries
+    scale tensors its bf16 twin lacks, so the two get different ids. That is
+    correct (they are not interchangeable), and it means this groups some quant
+    sets rather than all of them.
+
+    Args:
+        header: Parsed safetensors header.
+
+    Returns:
+        Lowercase hex, or ``None`` for a header with no tensors.
+    """
+    pairs = sorted(
+        (name, _valid_shape(entry) or []) for name, entry in _tensor_entries(header)
+    )
+    if not pairs:
+        return None
+    blob = json.dumps(pairs, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
+def family_from_header(header: dict) -> Optional[str]:
+    """Return the architecture a support file's tensors show, or ``None``.
+
+    For the files that carry no ``base_model`` - every downloaded VAE and text
+    encoder, which are the files the question "can I delete this" is about.
+    Each rule reads one tensor at the **top level** of the file, never under a
+    prefix: a full checkpoint bakes a VAE in as ``first_stage_model.decoder…``
+    and its encoders under ``conditioner.embedders…``, and matching those would
+    file a whole SDXL checkpoint as a VAE.
+
+    * ``decoder.conv_in.weight`` takes the latent channels in: ``vae_4ch`` is
+      the SD 1.5 / SDXL autoencoder, ``vae_16ch`` the FLUX / SD 3.5 one.
+    * A CLIP token table (49,408 rows) gives the width: ``clip_l`` (768),
+      ``clip_h`` (1024), ``clip_g`` (1280).
+    * A T5 or UMT5 token table at width 4096: ``t5_xxl`` / ``umt5_xxl``.
+
+    The vocabulary is architecture, not compatibility, and deliberately not the
+    base-model families of :mod:`pixlstash.utils.known_base_models`: a 4-channel
+    VAE serves SD 1.5 and SDXL alike, so naming it after either would be a
+    guess. Unrecognised layouts (Qwen and Gemma encoders, 3D video VAEs) return
+    ``None``, which says nothing rather than something wrong.
+
+    Args:
+        header: Parsed safetensors header.
+
+    Returns:
+        One of the tokens above, or ``None``.
+    """
+    conv_in = _valid_shape(header.get("decoder.conv_in.weight"))
+    if conv_in is not None and len(conv_in) == 4:
+        return f"vae_{conv_in[1]}ch"
+    for name in (
+        "text_model.embeddings.token_embedding.weight",
+        "token_embedding.weight",
+    ):
+        table = _valid_shape(header.get(name))
+        if table is not None and len(table) == 2 and table[0] == _CLIP_VOCAB:
+            return _CLIP_WIDTHS.get(table[1])
+    for name in ("shared.weight", "encoder.embed_tokens.weight"):
+        table = _valid_shape(header.get(name))
+        if (
+            table is not None
+            and len(table) == 2
+            and table[0] in _T5_VOCABS
+            and table[1] == _T5_XXL_WIDTH
+        ):
+            return f"{_T5_VOCABS[table[0]]}_xxl"
+    return None
 
 
 def _normalise_folder(name: str) -> str:
@@ -543,4 +698,7 @@ def describe_adapter(path: str) -> Optional[AdapterInfo]:
         training_epoch=_coerce_int(training.get("epoch")),
         trained_by=trained_by,
         has_metadata=bool(informative),
+        family=family_from_header(header),
+        quant=quant_from_header(header),
+        weights_id=weights_id_from_header(header),
     )

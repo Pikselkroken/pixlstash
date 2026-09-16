@@ -478,6 +478,24 @@ class ReferenceFolderScanTask(BaseTask):
                 len(hidden_kept),
             )
             removed_paths -= hidden_kept
+        # Same again for a file this walk would never list: an import path that
+        # accepts more formats than the scan (GIF and TIFF did, until #1349)
+        # leaves rows whose files are on disk but absent from disk_paths.
+        # An unsupported extension is only evidence that this walk would not
+        # list the file.  It does not mean the file still exists: retain a
+        # legacy row only after confirming its path is still on disk.
+        unlisted_kept = {
+            p for p in removed_paths if not _is_supported_file(p) and os.path.exists(p)
+        }
+        if unlisted_kept:
+            logger.info(
+                "Reference folder %s: %d indexed pictures have a file type this "
+                "scan does not list, so their records are kept rather than "
+                "removed.",
+                self._folder_path,
+                len(unlisted_kept),
+            )
+            removed_paths -= unlisted_kept
         if removed_paths and unscanned_roots:
             # A path under a subtree this walk did not enter was not looked
             # for, so its absence from disk_paths says nothing about whether
@@ -886,6 +904,7 @@ class ReferenceFolderScanTask(BaseTask):
                                 )
                     session.flush()
                 session.commit()
+                self._db.tag_resets.mark_reset(retagged)
 
             self._db.run_task(
                 apply_caption_updates, caption_updates, priority=DBPriority.LOW

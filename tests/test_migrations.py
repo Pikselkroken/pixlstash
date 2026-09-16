@@ -1021,7 +1021,10 @@ def test_0118_hands_back_only_the_pictures_that_carry_a_workflow():
             )
             conn.commit()
 
-        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        # To 0118 alone: 0119 hands unkeyed pictures back for a different reason.
+        up = _run_alembic(
+            ["upgrade", "0118_add_generation_tables"], db_url, _MIGRATIONS_DIR
+        )
         assert up.returncode == 0, up.stderr
 
         with contextlib.closing(sqlite3.connect(db_path)) as conn:
@@ -1036,6 +1039,59 @@ def test_0118_hands_back_only_the_pictures_that_carry_a_workflow():
             }
         assert stamps == {"made.png": None, "plain.png": "v1"}
         assert {"generation", "generation_input"} <= tables
+
+
+def test_0119_hands_back_only_pictures_that_carry_no_workflow():
+    """An A1111 picture was stamped scanned with no keys; it is read again.
+
+    A ComfyUI picture keeps its keys, and a format A1111 data cannot be read
+    from is not re-read at all.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            _insert_minimal_row(
+                conn,
+                "picture",
+                file_path="comfy.png",
+                workflow_instance_hash="an-instance",
+                workflow_hash_version="v1",
+            )
+            _insert_minimal_row(
+                conn, "picture", file_path="a1111.PNG", workflow_hash_version="v1"
+            )
+            _insert_minimal_row(
+                conn, "picture", file_path="photo.jpg", workflow_hash_version="v1"
+            )
+            _insert_minimal_row(
+                conn, "picture", file_path="shot.webp", workflow_hash_version="v1"
+            )
+            _insert_minimal_row(
+                conn, "picture", file_path="clip.mp4", workflow_hash_version="v1"
+            )
+            conn.execute(
+                "UPDATE alembic_version SET version_num = '0118_add_generation_tables'"
+            )
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            stamps = dict(
+                conn.execute("SELECT file_path, workflow_hash_version FROM picture")
+            )
+        assert stamps == {
+            "comfy.png": "v1",
+            "a1111.PNG": None,
+            "photo.jpg": None,
+            "shot.webp": None,
+            "clip.mp4": "v1",
+        }
 
 
 def test_the_migration_chain_has_exactly_one_head():

@@ -36,6 +36,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlmodel import delete, select
 
@@ -1582,4 +1583,376 @@ def test_deleting_a_workflow_forgets_its_pins(workflow_env, sampler_workflow):
             "SELECT COUNT(*) AS n FROM workflow_parameter_pins"
         )["n"]
         == 0
+    )
+
+
+# ===========================================================================
+# Running a workflow (#1307)
+# ===========================================================================
+
+_RUN_ROUTE = ("POST", "/api/v1/comfyui/workflows/{workflow_name}/run")
+
+
+@pytest.fixture
+def fake_comfyui(tmp_path, monkeypatch):
+    """ComfyUI replaced by recorders, and every picture given a file to upload.
+
+    ``uploads`` holds ``(file, upload_name)``, ``submitted`` each graph sent and
+    ``collected`` the arguments each output import started with.
+    """
+    comfy = SimpleNamespace(uploads=[], submitted=[], collected=[])
+    files = tmp_path / "pictures"
+    files.mkdir()
+
+    def resolve(_root, file_path):
+        path = files / file_path
+        path.write_bytes(b"not really a png")
+        return str(path)
+
+    def upload(_url, file_path, upload_name=None):
+        comfy.uploads.append((file_path.rsplit("/", 1)[-1], upload_name))
+        return upload_name
+
+    def submit(_url, workflow, _client_id=None):
+        comfy.submitted.append(json.loads(json.dumps(workflow)))
+        return {"prompt_id": f"prompt-{len(comfy.submitted)}"}
+
+    def collect(*args, **kwargs):
+        comfy.collected.append((args[3:], kwargs.get("view_context")))
+
+    monkeypatch.setattr(
+        comfyui_module.ImageUtils, "resolve_picture_path", staticmethod(resolve)
+    )
+    monkeypatch.setattr(comfyui_module, "_upload_image_to_comfyui", upload)
+    monkeypatch.setattr(comfyui_module, "_submit_comfyui_prompt", submit)
+    monkeypatch.setattr(comfyui_module, "_process_comfyui_outputs", collect)
+    return comfy
+
+
+def _picture_ids(server) -> dict:
+    def ids_by_path(session):
+        return {p.file_path: p.id for p in session.exec(select(Picture)).all()}
+
+    return server.vault.db.run_immediate_read_task(ids_by_path)
+
+
+def _run(owner, name: str, **body):
+    return owner.post(f"{API}/comfyui/workflows/{name}/run", json=body)
+
+
+def _wait_for_collection(comfy, count: int) -> None:
+    deadline = time.monotonic() + 5.0
+    while len(comfy.collected) < count and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert len(comfy.collected) == count, comfy.collected
+
+
+def test_the_run_route_is_declared_owner_only_and_refuses_a_scoped_token(
+    workflow_env, edit_workflow, fake_comfyui
+):
+    assert ROUTE_POLICIES[_RUN_ROUTE].policy is AccessPolicy.OWNER_ONLY
+    server = workflow_env.server
+    token = _mint(
+        workflow_env.owner,
+        "run scope probe",
+        resource_type="character",
+        resource_id=workflow_env.character_id,
+    )
+    client = _bearer(server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, "the token is dead"
+    url = f"{API}/comfyui/workflows/edit.json/run"
+    assert_real_route(server.api, "POST", url)
+    ids = _picture_ids(server)
+    body = {
+        "picture_ids": [ids["busy_one.png"]],
+        "pictures": [{"node_id": "1", "picture_id": ids["busy_two.png"]}],
+        "stack": False,
+    }
+    previously_enforcing = server.authz._enforcing
+    server.authz._enforcing = True
+    try:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(auth, "WRITE_ENABLED_SCOPES", frozenset({"READ", "WRITE"}))
+            r = client.post(url, json=body)
+            assert r.status_code == 403 and "Owner-level" in r.text, r.text
+        assert fake_comfyui.submitted == []
+        # The in-scope positive control: the owner runs the same body.
+        r = workflow_env.owner.post(url, json=body)
+        assert r.status_code == 200, r.text
+    finally:
+        server.authz._enforcing = previously_enforcing
+
+
+def test_a_selection_runs_once_per_picture_with_the_picker_in_every_run(
+    workflow_env, edit_workflow, fake_comfyui
+):
+    ids = _picture_ids(workflow_env.server)
+    selected = [ids["busy_one.png"], ids["busy_three.png"]]
+    picked = ids["busy_two.png"]
+    r = _run(
+        workflow_env.owner,
+        "edit.json",
+        picture_ids=selected,
+        pictures=[{"node_id": "1", "picture_id": picked}],
+        stack=False,
+    )
+    assert r.status_code == 200, r.text
+    assert [p["picture_id"] for p in r.json()["prompts"]] == selected
+    # Node 2 holds the old binding, so it is the Selection input by default.
+    assert [g["2"]["inputs"]["image"] for g in fake_comfyui.submitted] == [
+        f"pixlstash-{selected[0]}-unhashed.png",
+        f"pixlstash-{selected[1]}-unhashed.png",
+    ]
+    assert {g["1"]["inputs"]["image"] for g in fake_comfyui.submitted} == {
+        f"pixlstash-{picked}-unhashed.png"
+    }
+    # The picker's picture is uploaded once, not once per run.
+    assert [name for name, _ in fake_comfyui.uploads].count("busy_two.png") == 1
+    _wait_for_collection(fake_comfyui, 2)
+    assert sorted(args for args, _ in fake_comfyui.collected) == sorted(
+        (["3"], None, pic_id) for pic_id in selected
+    )
+
+
+def test_a_fixed_input_is_filled_from_the_setup_and_a_lost_one_runs_nothing(
+    workflow_env, edit_workflow, fake_comfyui
+):
+    server, owner = workflow_env.server, workflow_env.owner
+    fixed = _picture_with_sha(server, "busy_two.png", "sha-run-fixed")
+    r = owner.put(
+        edit_workflow,
+        json={
+            "inputs": [
+                {"node_id": "1", "mode": "fixed", "picture_id": fixed},
+                {"node_id": "2", "mode": "selection"},
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    selected = _picture_ids(server)["busy_one.png"]
+    r = _run(owner, "edit.json", picture_ids=[selected], stack=False)
+    assert r.status_code == 200, r.text
+    assert fake_comfyui.submitted[0]["1"]["inputs"]["image"] == (
+        f"pixlstash-{fixed}-sha-run-fixed.png"
+    )
+
+    def bin_it(session):
+        picture = session.get(Picture, fixed)
+        picture.deleted = True
+        session.add(picture)
+        session.commit()
+
+    server.vault.db.run_task(bin_it, priority=DBPriority.IMMEDIATE)
+    r = _run(owner, "edit.json", picture_ids=[selected], stack=False)
+    assert r.status_code == 409, r.text
+    assert len(fake_comfyui.submitted) == 1
+
+
+def test_a_run_that_cannot_be_filled_submits_nothing(
+    workflow_env, edit_workflow, fake_comfyui
+):
+    owner = workflow_env.owner
+    ids = _picture_ids(workflow_env.server)
+    one, two = ids["busy_one.png"], ids["busy_two.png"]
+    picker = [{"node_id": "1", "picture_id": two}]
+    for name, body in (
+        # The picker input was not chosen.
+        ("edit.json", {"picture_ids": [one]}),
+        # A Selection input with nothing selected.
+        ("edit.json", {"pictures": picker}),
+        # A node that is not a picker.
+        (
+            "edit.json",
+            {"picture_ids": [one], "pictures": [*picker, {"node_id": "2"}]},
+        ),
+        (
+            "edit.json",
+            {
+                "picture_ids": [one],
+                "pictures": picker,
+                "seed_mode": "fixed",
+                "seed": "x",
+            },
+        ),
+        ("edit.json", {"picture_ids": ["1"], "pictures": picker}),
+        ("edit.json", {"picture_ids": [one], "pictures": picker, "seed_mode": "fixd"}),
+        ("edit.json", {"picture_ids": [one], "pictures": picker, "stack": "false"}),
+    ):
+        r = _run(owner, name, **body)
+        assert r.status_code == 400, (body, r.text)
+    r = _run(owner, "edit.json", picture_ids=[987654], pictures=picker)
+    assert r.status_code == 404, r.text
+
+    # A picture in the Scrapheap is not one a run may read.
+    def bin_it(session):
+        picture = session.get(Picture, one)
+        picture.deleted = True
+        session.add(picture)
+        session.commit()
+
+    workflow_env.server.vault.db.run_task(bin_it, priority=DBPriority.IMMEDIATE)
+    r = _run(owner, "edit.json", picture_ids=[one], pictures=picker)
+    assert r.status_code == 404, r.text
+    assert fake_comfyui.submitted == [] and fake_comfyui.uploads == []
+
+
+def test_a_workflow_without_a_selection_input_runs_once_and_takes_no_selection(
+    workflow_env, sampler_workflow, fake_comfyui
+):
+    owner = workflow_env.owner
+    one = _picture_ids(workflow_env.server)["busy_one.png"]
+    r = _run(owner, "sampler.json", picture_ids=[one])
+    assert r.status_code == 400, r.text
+    r = _run(owner, "canvas.json")
+    assert r.status_code == 400 and "UI format" in r.text, r.text
+    assert fake_comfyui.submitted == []
+
+    r = _run(
+        owner,
+        "sampler.json",
+        caption="a dog",
+        values=[{"node_id": "1", "name": "steps", "value": 31}],
+        seed_mode="keep",
+        character_id=workflow_env.character_id,
+    )
+    assert r.status_code == 200, r.text
+    (prompt,) = r.json()["prompts"]
+    assert (prompt["picture_id"], prompt["prompt_id"]) == (None, "prompt-1")
+    (graph,) = fake_comfyui.submitted
+    assert graph["1"]["inputs"]["steps"] == 31
+    assert graph["1"]["inputs"]["seed"] == 2**64 - 2
+    assert graph["2"]["inputs"]["text"] == "a dog"
+    _wait_for_collection(fake_comfyui, 1)
+    assert fake_comfyui.collected == [
+        ((["3"], None, None), {"character_id": workflow_env.character_id})
+    ]
+
+    r = _run(owner, "sampler.json", values=[{"node_id": "2", "name": "text"}])
+    assert r.status_code == 400, r.text
+    r = _run(owner, "sampler.json")
+    assert r.status_code == 200, r.text
+    assert fake_comfyui.submitted[-1]["1"]["inputs"]["seed"] != 2**64 - 2
+
+
+def test_the_list_says_which_workflows_can_run(workflow_env, sampler_workflow):
+    listed = {
+        item["name"]: item
+        for item in workflow_env.owner.get(f"{API}/comfyui/workflows").json()[
+            "workflows"
+        ]
+    }
+    assert listed["sampler.json"]["runnable"] is True
+    assert listed["canvas.json"]["runnable"] is False
+
+
+def test_a_selection_run_stacks_each_output_with_its_picture(
+    workflow_env, edit_workflow, fake_comfyui
+):
+    ids = _picture_ids(workflow_env.server)
+    one, two = ids["busy_one.png"], ids["busy_two.png"]
+    r = _run(
+        workflow_env.owner,
+        "edit.json",
+        picture_ids=[one],
+        pictures=[{"node_id": "1", "picture_id": two}],
+    )
+    assert r.status_code == 200, r.text
+    _wait_for_collection(fake_comfyui, 1)
+    ((output_nodes, stack_id, source), _context) = fake_comfyui.collected[0]
+    assert (output_nodes, source) == (["3"], one)
+    assert stack_id is not None
+    assert str(stack_id) in fake_comfyui.submitted[0]["3"]["inputs"]["filename_prefix"]
+
+
+def test_a_template_holding_the_picture_and_the_caption_gets_both(
+    workflow_env, tmp_path, edit_workflow, fake_comfyui
+):
+    # A loader detection does not recognise, bound by the old dialog with both
+    # tokens in one string: filled a role at a time, one would wipe the other.
+    graph, _changed = workflow_bindings.migrate_placeholders(
+        {
+            "7": {
+                "class_type": "MyPictureSource",
+                "inputs": {"image": "{{image_path}} | {{caption}}"},
+            },
+            "3": {"class_type": "SaveImage", "inputs": {"images": ["7", 0]}},
+        }
+    )
+    (tmp_path / "joint.json").write_text(json.dumps(graph), encoding="utf-8")
+    comfyui_module._describe_workflow.cache_clear()
+    one = _picture_ids(workflow_env.server)["busy_one.png"]
+    r = _run(
+        workflow_env.owner, "joint.json", picture_ids=[one], caption="dog", stack=False
+    )
+    assert r.status_code == 200, r.text
+    assert fake_comfyui.submitted[0]["7"]["inputs"]["image"] == (
+        f"pixlstash-{one}-unhashed.png | dog"
+    )
+
+
+def test_a_batch_that_fails_partway_returns_the_runs_it_started(
+    workflow_env, edit_workflow, fake_comfyui, monkeypatch
+):
+    def submit_once(_url, workflow, _client_id=None):
+        if fake_comfyui.submitted:
+            raise HTTPException(status_code=502, detail="ComfyUI prompt failed")
+        fake_comfyui.submitted.append(workflow)
+        return {"prompt_id": "prompt-1"}
+
+    monkeypatch.setattr(comfyui_module, "_submit_comfyui_prompt", submit_once)
+    ids = _picture_ids(workflow_env.server)
+    r = _run(
+        workflow_env.owner,
+        "edit.json",
+        picture_ids=[ids["busy_one.png"], ids["busy_three.png"]],
+        pictures=[{"node_id": "1", "picture_id": ids["busy_two.png"]}],
+        stack=False,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "partial"
+    assert [p["prompt_id"] for p in body["prompts"]] == ["prompt-1"]
+    assert "ComfyUI prompt failed" in body["error"]
+
+
+def test_a_run_names_the_missing_pictures_and_caps_the_batch(
+    workflow_env, edit_workflow, fake_comfyui, monkeypatch
+):
+    owner = workflow_env.owner
+    ids = _picture_ids(workflow_env.server)
+    one, two, three = ids["busy_one.png"], ids["busy_two.png"], ids["busy_three.png"]
+    picker = [{"node_id": "1", "picture_id": two}]
+    r = _run(owner, "edit.json", picture_ids=[one, 987654], pictures=picker)
+    assert r.status_code == 404 and "987654" in r.json()["detail"], r.text
+
+    monkeypatch.setattr(comfyui_module, "MAX_RUNS_PER_REQUEST", 1)
+    r = _run(owner, "edit.json", picture_ids=[one, three], pictures=picker)
+    assert r.status_code == 400 and "at most 1" in r.json()["detail"], r.text
+    assert fake_comfyui.submitted == []
+    r = _run(owner, "edit.json", picture_ids=[one], pictures=picker, stack=False)
+    assert r.status_code == 200, r.text
+
+
+def test_setup_and_run_resolve_a_duplicated_fixed_picture_to_the_same_copy(
+    workflow_env, edit_workflow, fake_comfyui
+):
+    server, owner = workflow_env.server, workflow_env.owner
+    older = _picture_with_sha(server, "busy_two.png", "sha-run-duplicate")
+    newer = _picture_with_sha(server, "busy_three.png", "sha-run-duplicate")
+    r = owner.put(
+        edit_workflow,
+        json={
+            "inputs": [
+                {"node_id": "1", "mode": "fixed", "picture_id": newer},
+                {"node_id": "2", "mode": "selection"},
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert _by_node(r.json())["1"]["picture_id"] == older
+    selected = _picture_ids(server)["busy_one.png"]
+    r = _run(owner, "edit.json", picture_ids=[selected], stack=False)
+    assert r.status_code == 200, r.text
+    assert fake_comfyui.submitted[0]["1"]["inputs"]["image"] == (
+        f"pixlstash-{older}-sha-run-duplicate.png"
     )

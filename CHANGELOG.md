@@ -1,3 +1,7 @@
+# [1.11.3]
+- Fix issue where GIF and TIF files were dropped from the database during a library sync
+- Fix issue where the full-screen viewer stayed on the original picture after a ComfyUI run, instead of showing the new picture it made
+
 # [1.11.2]
 
 - Caption files beside your pictures are read when a library is imported in
