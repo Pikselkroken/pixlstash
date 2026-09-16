@@ -45,6 +45,7 @@ from pixlstash.db_models.character import Character
 from pixlstash.db_models.picture_set import PictureSet
 from pixlstash.db_models.project import Project
 from pixlstash.services.set_lock_service import locked_set_ids
+from pixlstash.utils.media_files import SUPPORTED_MEDIA_EXTS
 
 from ._helpers import (
     _create_picture_imports,
@@ -57,24 +58,7 @@ logger = get_logger(__name__)
 
 # Media extensions accepted by both the one-shot upload import and the async
 # streaming-staging import (#459). Kept module-level so both paths agree.
-STAGING_ALLOWED_MEDIA_EXTS = {
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".webp",
-    ".gif",
-    ".bmp",
-    ".tiff",
-    ".tif",
-    ".heic",
-    ".heif",
-    ".avif",
-    ".mp4",
-    ".webm",
-    ".mov",
-    ".avi",
-    ".mkv",
-}
+STAGING_ALLOWED_MEDIA_EXTS = SUPPORTED_MEDIA_EXTS
 
 # Caption sidecar extension (mirrors the one-shot import's allowed_caption_exts).
 STAGING_ALLOWED_CAPTION_EXTS = {".txt"}
@@ -354,24 +338,6 @@ def register_routes(router, server):
         uploaded_files = []
         uploaded_file_stems: list[str] = []
         sidecar_text_by_stem: dict[str, str] = {}
-        allowed_media_exts = {
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".webp",
-            ".gif",
-            ".bmp",
-            ".tiff",
-            ".tif",
-            ".heic",
-            ".heif",
-            ".avif",
-            ".mp4",
-            ".webm",
-            ".mov",
-            ".avi",
-            ".mkv",
-        }
         allowed_caption_exts = {".txt"}
         if file is not None:
             for upload in file:
@@ -417,7 +383,7 @@ def register_routes(router, server):
                             for info in entries:
                                 inner_ext = os.path.splitext(info.filename)[1].lower()
                                 if (
-                                    inner_ext not in allowed_media_exts
+                                    inner_ext not in STAGING_ALLOWED_MEDIA_EXTS
                                     and inner_ext not in allowed_caption_exts
                                 ):
                                     continue
@@ -467,7 +433,7 @@ def register_routes(router, server):
                             contents.decode("utf-8", errors="ignore"),
                         )
                         continue
-                    if ext not in allowed_media_exts:
+                    if ext not in STAGING_ALLOWED_MEDIA_EXTS:
                         logger.warning(
                             "Skipping file with unsupported extension: %s",
                             upload.filename,

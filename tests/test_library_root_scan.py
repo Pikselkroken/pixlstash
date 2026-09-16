@@ -386,6 +386,46 @@ def test_rows_under_a_folder_the_scan_never_entered_are_kept(server):
         assert [p.id for p in _managed(server, relative)] == [picture_id], relative
 
 
+def test_a_gif_in_the_root_is_indexed_and_kept(server):
+    """Import accepts GIF and TIFF; a scan that did not list them hard-deleted
+    every such row on boot (#1349)."""
+    root = server.vault.image_root
+    for name, fmt in (("a.gif", "GIF"), ("b.tiff", "TIFF")):
+        path = os.path.join(root, "anim", name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        Image.new("RGB", (8, 8), color=(40, 50, 60)).save(path, format=fmt)
+    _settle_root(root)
+
+    _run_root_scan(server)
+    first = [(p.id, p.file_path) for p in _managed(server, "anim/")]
+    _run_root_scan(server)
+
+    assert first == [(first[0][0], "anim/a.gif"), (first[1][0], "anim/b.tiff")]
+    assert [(p.id, p.file_path) for p in _managed(server, "anim/")] == first
+
+
+def test_unsupported_file_row_is_kept_until_file_is_deleted(server):
+    root = server.vault.image_root
+    keeper = _make_image(os.path.join(root, "odd", "keep.png"), (31, 32, 33))
+    legacy_path = _make_image(os.path.join(root, "odd", "photo.mpo"), (34, 35, 36))
+    picture_id = _insert_managed(
+        server, "odd/photo.mpo", pixel_sha="odd-mpo", size_bytes=1
+    )
+
+    _run_root_scan(server)
+
+    assert [p.id for p in _managed(server, "odd/photo.mpo")] == [picture_id]
+
+    # Unsupported files are not discovered by the walk, but their row is only
+    # protected while the file is actually still present. Keep another supported
+    # file so the empty-library safeguard is not what preserves the stale row.
+    os.remove(legacy_path)
+    _run_root_scan(server)
+
+    assert _managed(server, "odd/photo.mpo") == []
+    assert os.path.isfile(keeper)
+
+
 def test_a_move_pixlstash_recorded_is_repointed_not_deleted(server):
     """LayoutMoveTask journals the pair before it renames anything. A scan that
     lands inside that window sees a vanished path; with an identical file

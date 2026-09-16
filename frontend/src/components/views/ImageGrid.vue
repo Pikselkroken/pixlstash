@@ -385,11 +385,7 @@
       :selectNewestStackMember="selectNewestStackMember"
       @refresh-grid="onComfyuiRefreshGrid"
       @refresh-sidebar="emit('refresh-sidebar')"
-      @update:overlayImageId="
-        (id) => {
-          overlayImageId.value = id;
-        }
-      "
+      @update:overlayImageId="moveOverlayTo"
     />
 
     <ProgressOverlay
@@ -1886,7 +1882,7 @@ async function runPluginWithParameters(
       if (newIds.length) {
         triggerNewImageHighlight(newIds);
         if (overlayOpen.value) {
-          overlayImageId.value = newIds[newIds.length - 1];
+          moveOverlayTo(newIds[newIds.length - 1]);
         }
       }
     }
@@ -5544,6 +5540,16 @@ function _pushOverlayRoute(id) {
   });
 }
 
+// Moving the open overlay is two writes, not one: the id the overlay renders
+// from AND the `?overlay=` query the lightbox is addressable by (§7). Three
+// call sites move it - opening one, a plugin run creating a picture, a ComfyUI
+// run stacking one - and the two that only wrote the id left the URL pointing
+// at the previous picture, so a reload or a shared link went back to it.
+function moveOverlayTo(id) {
+  overlayImageId.value = id;
+  _pushOverlayRoute(id);
+}
+
 function _removeOverlayRoute() {
   _overlayRoutePushPending = true;
   const { overlay: _removed, ...rest } = _overlayRoute.query;
@@ -6379,9 +6385,8 @@ async function openOverlay(img) {
   overlayInitialExpandedStackIds.value = Array.from(
     expandedStackIds.value || [],
   );
-  overlayImageId.value = img.id;
   overlayOpen.value = true;
-  _pushOverlayRoute(img.id);
+  moveOverlayTo(img.id);
   markEnd("pixlstash:interaction-open-picture");
 }
 

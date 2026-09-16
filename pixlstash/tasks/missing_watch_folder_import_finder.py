@@ -8,6 +8,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models.import_folder import ImportFolder
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.video_utils import VideoUtils
+from pixlstash.utils.media_files import SUPPORTED_IMAGE_EXTS
 
 from .base_task_finder import BaseTaskFinder
 from .watch_folder_import_task import WatchFolderImportTask
@@ -48,16 +49,7 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
     # is imported.
     SETTLE_SECONDS = 2.0
 
-    _supported_image_exts = {
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".webp",
-        ".bmp",
-        ".heic",
-        ".heif",
-        ".avif",
-    }
+    _supported_image_exts = SUPPORTED_IMAGE_EXTS
 
     def __init__(self, database):
         super().__init__()

@@ -1210,9 +1210,27 @@ function setOverlayImageById(nextId) {
     currentId !== undefined &&
     String(currentId) === nextIdKey;
   const targetFromAll = allImageById.value.get(nextIdKey);
-  const target = targetFromAll
+  let target = targetFromAll
     ? targetFromAll
     : filmstripImageById.value.get(nextIdKey);
+  if (!target && open.value) {
+    // The picture did not exist when the overlay opened, so it is in the live
+    // grid list but not in the snapshot frozen on open - an in-app ComfyUI
+    // i2i/upscale stacking its output next to the picture being viewed is the
+    // case that reaches here (ImageGrid's `update:overlayImageId` handler). The
+    // freeze exists to stop a background refetch dropping the current picture
+    // out of the navigation sequence, not to refuse an explicit move to a new
+    // one, so re-capture it: the filmstrip and next/prev must agree with what
+    // is on screen. Without this the move is a silent no-op and the overlay
+    // stays on the old picture.
+    const live = (Array.isArray(allImages.value) ? allImages.value : []).find(
+      (item) => item?.id != null && String(item.id) === nextIdKey,
+    );
+    if (live) {
+      captureFrozenAllImages();
+      target = live;
+    }
+  }
   if (target) {
     const existingTags = getTagList(image.value?.tags);
     const targetTags = getTagList(target.tags);

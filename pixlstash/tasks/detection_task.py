@@ -13,6 +13,7 @@ from pixlstash.db_models import Detection
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.media_files import SUPPORTED_IMAGE_EXTS
 
 if TYPE_CHECKING:
     from pixlstash.inference.engine import InferenceEngine
@@ -22,7 +23,7 @@ logger = get_logger(__name__)
 
 # Still-image extensions Florence-2 detection supports. Videos are skipped in
 # the MVP (phase 2 may sample frames, mirroring FaceExtractionTask).
-_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif", ".avif"}
+_IMAGE_EXTS = SUPPORTED_IMAGE_EXTS
 
 
 class DetectionTask(BaseTask):
