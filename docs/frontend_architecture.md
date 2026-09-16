@@ -4364,6 +4364,47 @@ toolbar, since selection runs stack on their pictures. The overlay's ComfyUI
 menu and Remix still run through `run_i2i` / `run_t2i`. The #1306 parameter form
 belongs in this panel and is not in it yet.
 
+**A LoRA from the shelf swaps, it does not add** (#1310), and it is one
+implementation behind three surfaces: `composables/useLoraSwap.js`, used by the
+run panel, "Generate variants" (`RemixDialog.vue`, opened from the grid's context
+menu: the picture's own `lora_slots` in recipe mode, the chosen template's row in
+template mode) and "Edit with ComfyUI" (the overlay's ComfyUI menu, from the
+chosen workflow's row in `GET /comfyui/workflows`). It was three hand copies
+first, and a review found each of its bugs three times; the rules now live once,
+with their own spec:
+
+- **A slot is a node and a field.** A stacker carries several LoRAs on one node
+  (`lora_name_1`, `lora_name_2`), so the second select's values are
+  `field@node` and a run sends `lora_node_id` **and** `lora_field`. Keyed on the
+  node alone the choice could not tell them apart, and the run swapped all of
+  them. `@`, not `:`, because a subgraph node id carries a colon.
+- **The choice belongs to the graph it was made for.** Whenever the slots change
+  - another workflow, another picture, another mode - it goes back to "Keep the
+  workflow's own". The watch is on the slots' identity, not the array, so a
+  computed handing back a fresh `[]` cannot wipe a choice just made. Two places
+  reset explicitly because the slots do *not* change there: Remix switching mode
+  (a template can have the same node and field as the recipe), and the overlay
+  paging to another picture (the chosen workflow survives it). "Generate
+  variants" opens with focus on Generate, which is why a LoRA must never ride
+  from one picture into the next.
+- **Nothing is sent where there is no slot**, and a slot is named only where
+  there is more than one to choose from.
+- **"No LoRA loader" is only said once it is known**: the panel waits for the
+  inputs read (and says nothing after a failed one), Remix for the recipe to be
+  ready or a template to be chosen, the overlay for a chosen workflow. The note
+  carries `role="status"` - on the note, not the section, since a live region
+  around the selects would announce every option change - and a failed shelf
+  read `role="alert"`.
+
+The shelf list offers hashed adapters only (a row still waiting for its hash
+cannot be asked for), sorted by name with the base model beside it, since an
+SDXL LoRA put into a Flux graph is the easy mistake in a scanned select. It is
+read once per component lifetime and again after a failure; `unknown` files the
+backend would accept are not offered, since the shelf lists them apart. A slot
+label is the node and what it loads now - which only the owner-only reads carry;
+the workflow list is open to share-link tokens and omits it, so those menus fall
+back to the class. Inserting a loader into a graph that has none is #1376.
+
 **A grid filtered to one workflow is deliberately not here.** "Show its
 pictures" as a *grid* would mean a new picture filter carried through
 `useFilterStore`, `useGridFetch` and a visible chip so the user can clear it —

@@ -228,6 +228,54 @@
         </p>
       </template>
 
+      <!-- ── LoRA (both modes) ────────────────────────────────────────
+           Swapping only: the LoRA goes into a loader the graph already has,
+           and one with none says so rather than offering a choice the run
+           would refuse (#1310). Shown once the graph is known - the recipe
+           read, or a template chosen - since until then "no LoRA loader"
+           would be a guess. -->
+      <div v-if="loraGraphKnown" class="remix-field">
+        <span class="remix-label">LoRA</span>
+        <p v-if="!loraSlots.length" class="remix-note" role="status">
+          {{
+            selectedMode === "recipe"
+              ? "This picture's workflow has no LoRA loader, so there is nothing to swap."
+              : "This template has no LoRA loader, so there is nothing to swap."
+          }}
+        </p>
+        <p v-else-if="adaptersError" class="remix-error" role="alert">
+          {{ adaptersError }}
+        </p>
+        <template v-else>
+          <div class="remix-select-wrap">
+            <select v-model="adapterSha" class="remix-select" aria-label="LoRA">
+              <option v-for="opt in adapterOptions" :key="opt.value" :value="opt.value">
+                {{ opt.label }}
+              </option>
+            </select>
+            <v-icon size="18" class="remix-select-chevron">mdi-chevron-down</v-icon>
+          </div>
+          <!-- Which slot, when the graph has more than one: swapping them all
+               would load the chosen LoRA twice and lose the others. Labelled
+               where it can be seen, like the panel's. -->
+          <template v-if="loraSlots.length > 1">
+            <span class="remix-label">Into which loader</span>
+            <div class="remix-select-wrap">
+              <select
+                v-model="chosenSlot"
+                class="remix-select"
+                aria-label="Into which loader"
+              >
+                <option v-for="opt in slotOptions" :key="opt.value" :value="opt.value">
+                  {{ opt.label }}
+                </option>
+              </select>
+              <v-icon size="18" class="remix-select-chevron">mdi-chevron-down</v-icon>
+            </div>
+          </template>
+        </template>
+      </div>
+
       <!-- ── Seed (both modes) ───────────────────────────────────────── -->
       <div v-if="selectedMode" class="remix-field">
         <span class="remix-label">Seed</span>
@@ -339,6 +387,7 @@ import {
   runRecipe,
 } from "../../api/comfyui";
 import { getPictureMetadata } from "../../api/pictures";
+import { useLoraSwap } from "../../composables/useLoraSwap";
 import { errorDetail } from "../../utils/apiError";
 
 import { API_BASE_URL } from "../../utils/apiClient";
@@ -683,6 +732,39 @@ const activeTemplate = computed(() =>
 );
 
 /**
+ * The LoRA slots of whatever this mode would run: the picture's own recipe, or
+ * the chosen template. Empty means the graph has no LoRA loader, and the run
+ * would refuse a LoRA rather than ignore it.
+ */
+const loraSlots = computed(() => {
+  if (selectedMode.value === "recipe") return recipe.value?.lora_slots || [];
+  if (selectedMode.value === "template")
+    return activeTemplate.value?.lora_slots || [];
+  return [];
+});
+
+/** Whether this mode's graph is known yet, so "no LoRA loader" is a fact. */
+const loraGraphKnown = computed(() => {
+  if (selectedMode.value === "recipe") return recipeState.value === "ready";
+  if (selectedMode.value === "template") return Boolean(activeTemplate.value);
+  return false;
+});
+
+const {
+  adapterSha,
+  chosenSlot,
+  adaptersError,
+  adapterOptions,
+  slotOptions,
+  resetChoice: resetLoraChoice,
+  body: loraBody,
+} = useLoraSwap(loraSlots);
+
+// A LoRA picked for the recipe does not ride into a template, even one whose
+// slot happens to have the same node and field: they are different graphs.
+watch(selectedMode, () => resetLoraChoice());
+
+/**
  * Mirror the shipped SelectionBar rule: a workflow with no {{caption}}
  * placeholder ignores the prompt entirely, so showing the field would invite
  * the user to write carefully into a void.
@@ -759,6 +841,9 @@ async function onOpen() {
   promptTouched.value = false;
   recipe.value = null;
   recipeError.value = "";
+  // Clearing the recipe also clears the LoRA choice (useLoraSwap resets on
+  // every change of slots), which matters because the dialog stays mounted
+  // between pictures and opens with focus on Generate.
   description.value = normaliseDescription(props.image?.description);
   prompt.value = description.value;
   // Nothing is preselected until the check resolves: a mode that flips out
@@ -1030,6 +1115,7 @@ async function submit() {
                     : undefined,
               client_id: props.clientId || undefined,
               stack: props.stackOutputs,
+              ...loraBody(),
               // Deliberately no allow_unchecked: an uninspected graph cannot
               // be submitted from this surface at all, and the backend
               // refuses it independently.
@@ -1044,6 +1130,7 @@ async function submit() {
               seed: seedMode.value === "fixed" ? seed.value : undefined,
               client_id: props.clientId || undefined,
               stack: props.stackOutputs,
+              ...loraBody(),
             },
           );
     const prompts = Array.isArray(body?.prompts) ? body.prompts : [];

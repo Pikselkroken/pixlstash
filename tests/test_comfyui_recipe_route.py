@@ -397,3 +397,158 @@ class TestRunRecipeRefusesAnUncheckedPreflight:
         r = client.post(f"{API}/comfyui/run_recipe", json={"picture_id": pic_id})
         assert r.status_code == 200, r.text
         assert len(submitted) == 1
+
+
+class TestSwappingALoRAIntoAReplay:
+    """#1310: "Generate variants" puts a shelf LoRA into the picture's own graph.
+
+    The replay is where the LoRA a picture was made with is visible, so it is
+    where swapping one has to work. The same rules as the saved-workflow run:
+    one slot, resolved to a name this ComfyUI lists, and a graph with no LoRA
+    loader refused rather than run without it.
+    """
+
+    SHA = "cd" * 32
+    FILENAME = "example-subject-v2.safetensors"
+    COMFY_NAME = f"characters/{FILENAME}"
+
+    def _picture_with_a_lora(self, client) -> int:
+        graph = json.loads(json.dumps(RECIPE_GRAPH))
+        graph["5"] = {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": "whatever-is-there.safetensors", "model": ["4", 0]},
+        }
+        files = [
+            (
+                "file",
+                (
+                    "lora-recipe.png",
+                    _recipe_png_bytes(graph, (10, 20, 30)),
+                    "image/png",
+                ),
+            )
+        ]
+        st = upload_pictures_and_wait(client, files, timeout_s=60)
+        assert st["status"] == "completed", st
+        r = client.get(f"{API}/pictures")
+        assert r.status_code == 200, r.text
+        return max(p["id"] for p in r.json())
+
+    def _shelf_lora(self, server):
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
+                "VALUES ('adapter', 'lora', ?, ?, 'scanned')",
+                (self.FILENAME, self.SHA),
+            )
+
+    def _object_info_with_the_lora(self, monkeypatch):
+        info = dict(OBJECT_INFO)
+        info["LoraLoader"] = {
+            "input": {"required": {"lora_name": [[self.COMFY_NAME], {}]}}
+        }
+        monkeypatch.setattr(comfyui_module, "fetch_object_info", lambda url: dict(info))
+
+    def test_the_read_says_which_slots_a_replay_can_swap(self, env, monkeypatch):
+        server, client, pic_id = env
+        self._object_info_with_the_lora(monkeypatch)
+        lora_pic = self._picture_with_a_lora(client)
+
+        r = client.get(f"{API}/comfyui/pictures/{lora_pic}/recipe")
+        assert r.status_code == 200, r.text
+        assert [(s["node_id"], s["by"]) for s in r.json()["lora_slots"]] == [
+            ("5", "filename")
+        ]
+        # The control: the picture beside it carries no loader and says so with
+        # an empty list rather than by leaving the field out.
+        r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe")
+        assert r.status_code == 200 and r.json()["lora_slots"] == [], r.text
+
+    def test_a_replay_runs_with_the_chosen_lora(self, env, monkeypatch):
+        """And the swap is what makes it runnable at all.
+
+        The recipe names a LoRA this ComfyUI does not have, which the pre-flight
+        refuses - so the swap is applied *before* the graph is judged, and the
+        control below proves the same replay is refused without one. A picture
+        made with a LoRA that has since gone is exactly the one worth re-running
+        with another.
+        """
+        server, client, pic_id = env
+        self._object_info_with_the_lora(monkeypatch)
+        self._shelf_lora(server)
+        submitted = _capture_submissions(monkeypatch)
+        lora_pic = self._picture_with_a_lora(client)
+
+        r = client.post(
+            f"{API}/comfyui/run_recipe",
+            json={"picture_id": lora_pic, "adapter_sha256": self.SHA},
+        )
+        assert r.status_code == 200, r.text
+        assert submitted[0]["5"]["inputs"]["lora_name"] == self.COMFY_NAME
+        # Its seed was still re-rolled: the swap rides along with the replay,
+        # it does not replace it.
+        assert (
+            submitted[0]["3"]["inputs"]["seed"] != RECIPE_GRAPH["3"]["inputs"]["seed"]
+        )
+
+        # The control: the same replay without a swap is refused, because the
+        # LoRA the picture was made with is not on this ComfyUI.
+        r = client.post(f"{API}/comfyui/run_recipe", json={"picture_id": lora_pic})
+        assert r.status_code == 400, r.text
+        assert "whatever-is-there.safetensors" in r.json()["detail"]
+        assert len(submitted) == 1
+
+    def test_a_recipe_with_no_lora_loader_is_refused_by_name(self, env, monkeypatch):
+        server, client, pic_id = env
+        self._object_info_with_the_lora(monkeypatch)
+        self._shelf_lora(server)
+        submitted = _capture_submissions(monkeypatch)
+
+        r = client.post(
+            f"{API}/comfyui/run_recipe",
+            json={"picture_id": pic_id, "adapter_sha256": self.SHA},
+        )
+        assert r.status_code == 400, r.text
+        assert "no LoRA loader" in r.json()["detail"]
+        assert submitted == []
+
+    def test_an_unchecked_replay_will_not_guess_a_name(self, env, monkeypatch):
+        """No object_info, no swap: the acknowledgement covers the graph, not the file list.
+
+        A 502 like every other run route, not a 400 saying the loader does not
+        list its files: ComfyUI was never asked.
+        """
+        server, client, pic_id = env
+        _comfyui_unreachable(monkeypatch)
+        self._shelf_lora(server)
+        submitted = _capture_submissions(monkeypatch)
+        lora_pic = self._picture_with_a_lora(client)
+
+        r = client.post(
+            f"{API}/comfyui/run_recipe",
+            json={
+                "picture_id": lora_pic,
+                "allow_unchecked": True,
+                "adapter_sha256": self.SHA,
+            },
+        )
+        assert r.status_code == 502 and "could not ask ComfyUI" in r.text
+        assert submitted == []
+
+    def test_a_missing_loader_node_is_named_not_mistaken_for_a_file_list(
+        self, env, monkeypatch
+    ):
+        """The swap is resolved before the pre-flight, so it must say what the pre-flight would."""
+        server, client, pic_id = env
+        _comfyui_reachable(monkeypatch)  # OBJECT_INFO has no LoraLoader at all
+        self._shelf_lora(server)
+        submitted = _capture_submissions(monkeypatch)
+        lora_pic = self._picture_with_a_lora(client)
+
+        r = client.post(
+            f"{API}/comfyui/run_recipe",
+            json={"picture_id": lora_pic, "adapter_sha256": self.SHA},
+        )
+        assert r.status_code == 400, r.text
+        assert "has no LoraLoader node" in r.json()["detail"]
+        assert submitted == []

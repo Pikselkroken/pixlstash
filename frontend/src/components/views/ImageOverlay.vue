@@ -222,6 +222,73 @@
                       ></textarea>
                     </div>
                   </template>
+                  <!-- Swapping only: the LoRA goes into a loader the workflow
+                       already has, and one with none says so rather than
+                       offering a choice the run would refuse (#1310). Only
+                       once a workflow is chosen: with none there is nothing
+                       to say about its loaders. -->
+                  <template v-if="selectedComfyWorkflow">
+                    <label
+                      class="overlay-comfy-field-label"
+                      for="overlay-comfy-lora"
+                    >
+                      LoRA
+                    </label>
+                    <div
+                      v-if="!comfyLoraSlots.length"
+                      class="overlay-comfy-note"
+                      role="status"
+                    >
+                      This workflow has no LoRA loader, so there is nothing to
+                      swap.
+                    </div>
+                    <div
+                      v-else-if="adaptersError"
+                      class="overlay-comfy-error"
+                      role="alert"
+                    >
+                      {{ adaptersError }}
+                    </div>
+                    <template v-else>
+                      <select
+                        id="overlay-comfy-lora"
+                        v-model="comfyAdapterSha"
+                        class="overlay-comfy-select"
+                      >
+                        <option
+                          v-for="opt in comfyAdapterOptions"
+                          :key="opt.value"
+                          :value="opt.value"
+                        >
+                          {{ opt.label }}
+                        </option>
+                      </select>
+                      <!-- Which slot, when the workflow has more than one:
+                           swapping them all would load the chosen LoRA twice
+                           and lose the others. -->
+                      <template v-if="comfyLoraSlots.length > 1">
+                        <label
+                          class="overlay-comfy-field-label"
+                          for="overlay-comfy-lora-slot"
+                        >
+                          Into which loader
+                        </label>
+                        <select
+                          id="overlay-comfy-lora-slot"
+                          v-model="comfyLoraSlot"
+                          class="overlay-comfy-select"
+                        >
+                          <option
+                            v-for="opt in comfySlotOptions"
+                            :key="opt.value"
+                            :value="opt.value"
+                          >
+                            {{ opt.label }}
+                          </option>
+                        </select>
+                      </template>
+                    </template>
+                  </template>
                   <label class="overlay-comfy-checkbox-row">
                     <input v-model="stackI2IOutputs" type="checkbox" />
                     <span>Stack new images with the originals</span>
@@ -927,6 +994,7 @@ import {
   removeCharacterFacesByFaceId,
 } from "../../api/characters";
 import { listStackPictures } from "../../api/stacks";
+import { useLoraSwap } from "../../composables/useLoraSwap";
 import {
   listWorkflows,
   runImageToImage,
@@ -1533,6 +1601,21 @@ const selectedComfyWorkflow = computed(() =>
     (workflow) => workflow?.name === comfyuiSelectedWorkflow.value,
   ),
 );
+/** The chosen workflow's LoRA slots; empty means it has no LoRA loader. */
+const comfyLoraSlots = computed(
+  () => selectedComfyWorkflow.value?.lora_slots || [],
+);
+
+const {
+  adapterSha: comfyAdapterSha,
+  chosenSlot: comfyLoraSlot,
+  adaptersError,
+  adapterOptions: comfyAdapterOptions,
+  slotOptions: comfySlotOptions,
+  resetChoice: resetComfyLoraChoice,
+  body: comfyLoraBody,
+} = useLoraSwap(comfyLoraSlots);
+
 const selectedComfyUsesCaption = computed(() => {
   const missing = Array.isArray(
     selectedComfyWorkflow.value?.missing_placeholders,
@@ -1699,6 +1782,7 @@ async function runComfyWorkflow() {
       caption: comfyuiCaption.value || "",
       client_id: comfyuiClientId.value || undefined,
       stack: stackI2IOutputs.value,
+      ...comfyLoraBody(),
     };
     const body = await runImageToImage(payload, {
       baseUrl: backendUrl.value,
@@ -2195,6 +2279,9 @@ watch(image, (newImage, oldImage) => {
   if (newImage?.id === oldImage?.id) return;
   comfyuiCaptionTouched.value = false;
   comfyuiCaption.value = "";
+  // The chosen workflow survives paging to the next picture, so its slots do
+  // not change and nothing else would clear a LoRA picked for the last one.
+  resetComfyLoraChoice();
 });
 
 watch(open, (isOpen) => {
@@ -2212,6 +2299,7 @@ function resetComfyState() {
   comfyuiRunSuccess.value = "";
   comfyuiCaptionTouched.value = false;
   comfyuiCaption.value = "";
+  resetComfyLoraChoice();
 }
 
 function setScore(n) {

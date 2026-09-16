@@ -96,6 +96,39 @@
         />
       </div>
 
+      <!-- Swapping only: the LoRA goes into a loader the workflow already has,
+           and a workflow with none says so rather than offering a choice the
+           run would refuse (#1310). Shown only once the inputs are read:
+           before that "no LoRA loader" would be a guess, and after a failed
+           read a confident wrong one. -->
+      <div v-if="inputs !== null && !inputsError" class="inspector-section">
+        <span class="section-label">LoRA</span>
+        <!-- role=status on the note itself, not the section: a live region
+             around the selects would announce every option change. -->
+        <p v-if="!loraSlots.length" class="wfrun-note" role="status">
+          This workflow has no LoRA loader, so there is nothing to swap.
+        </p>
+        <p v-else-if="adaptersError" class="wfrun-note wfrun-error" role="alert">
+          {{ adaptersError }}
+        </p>
+        <template v-else>
+          <AppSelect
+            v-model="adapterSha"
+            label="LoRA"
+            hide-label
+            :options="adapterOptions"
+          />
+          <!-- Which slot, when the workflow has more than one: swapping them
+               all would load the chosen LoRA twice and lose the others. -->
+          <AppSelect
+            v-if="loraSlots.length > 1"
+            v-model="chosenSlot"
+            label="Into which loader"
+            :options="slotOptions"
+          />
+        </template>
+      </div>
+
       <div class="inspector-section">
         <span class="section-label">Seed</span>
         <Segmented
@@ -164,6 +197,7 @@ import {
   runWorkflow,
 } from "../../api/comfyui";
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { useLoraSwap } from "../../composables/useLoraSwap";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { SCRAPHEAP_PICTURES_ID } from "../../stores/useViewStore";
 import { isReadOnly } from "../../utils/apiClient";
@@ -207,6 +241,16 @@ const inputsError = ref("");
 /** Picker input node id -> the picture chosen for it. */
 const picks = reactive({});
 const pickerFor = ref(null);
+/** Every LoRA slot of the chosen workflow, as the inputs route reports them. */
+const loraSlots = ref([]);
+const {
+  adapterSha,
+  chosenSlot,
+  adaptersError,
+  adapterOptions,
+  slotOptions,
+  body: loraBody,
+} = useLoraSwap(loraSlots);
 const caption = ref("");
 const seedMode = ref("random");
 const seed = ref(0);
@@ -351,11 +395,14 @@ async function loadInputs(name) {
   const request = ++inputsRequest;
   inputs.value = null;
   inputsError.value = "";
+  loraSlots.value = [];
   for (const key of Object.keys(picks)) delete picks[key];
   if (!name) return;
   try {
     const body = await getWorkflowInputs(name);
-    if (request === inputsRequest) inputs.value = body?.inputs || [];
+    if (request !== inputsRequest) return;
+    inputs.value = body?.inputs || [];
+    loraSlots.value = body?.lora_slots || [];
   } catch (err) {
     if (request === inputsRequest)
       inputsError.value = errorDetail(err) || err?.message || String(err);
@@ -374,6 +421,7 @@ async function run() {
       picture_id: picture.id,
     })),
     caption: caption.value || "",
+    ...loraBody(),
     seed_mode: seedMode.value,
     seed: seedMode.value === "fixed" ? seed.value : undefined,
     client_id: client_id || undefined,
