@@ -157,7 +157,8 @@ class CheckpointHashTask(BaseTask):
         """
         columns = (
             "id, filename, display_name, base_model, trigger_words, "
-            "training_step, param_count, file_size, stack_id"
+            "training_step, param_count, file_size, stack_id, family, quant, "
+            "weights_id"
         )
         holder = conn.execute(
             f"SELECT {columns} FROM model WHERE sha256 = ?", (digest,)
@@ -223,7 +224,9 @@ class CheckpointHashTask(BaseTask):
             "base_model = COALESCE(base_model, ?), "
             "trigger_words = COALESCE(trigger_words, ?), "
             "training_step = COALESCE(training_step, ?), "
-            "param_count = COALESCE(param_count, ?) WHERE id = ?",
+            "param_count = COALESCE(param_count, ?), "
+            "family = COALESCE(family, ?), quant = COALESCE(quant, ?), "
+            "weights_id = COALESCE(weights_id, ?) WHERE id = ?",
             (
                 digest,
                 hashed_at,
@@ -234,6 +237,9 @@ class CheckpointHashTask(BaseTask):
                 doomed["trigger_words"],
                 doomed["training_step"],
                 doomed["param_count"],
+                doomed["family"],
+                doomed["quant"],
+                doomed["weights_id"],
                 survivor["id"],
             ),
         )

@@ -3042,6 +3042,21 @@ rescan. The row half of a per-copy delete already exists —
 `purge_deleted_models` drops a `model` row only when no `model_file` survives —
 so the gap is `_plan_deletions`, whose every gate is deliberately per model.
 
+**The delete confirmation says what the delete leaves behind (#1314).**
+`confirmDelete` posts the exact ids it will delete to `POST /models/companions`
+before the prompt opens, and `companionsSentences` (`utils/modelShelf.js`)
+turns the answer into sentences appended to the prompt's `message`: support
+files that only ran with the models being deleted (never worded as "nothing
+uses it", and followed by how many kept base models have no workflow on
+record), ones other models still use, ones a same-named
+file makes unknowable, and models no workflow names. It is text in the existing
+prompt, not a new dialog and not a checkbox: an orphaned file is named, and the
+owner deletes it with a second selection. A failed read is said in the prompt
+("could not check") rather than left out, since silence would read as nothing
+being affected, and the delete is still offered. The read sits before the
+prompt opens, so `confirmDelete` ignores a second Delete press until the first
+prompt has settled.
+
 #### The three kinds of absence (#898, #926)
 
 `locationState()` reduces a row's copies to one word, and the shelf renders
