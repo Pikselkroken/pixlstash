@@ -194,8 +194,8 @@ defineExpose({
   display: flex;
   justify-content: center;
   pointer-events: none;
-  /* `--sidebar-width` flips instantly (0 to 320px) while `.overlay-sidebar`
-     slides its width over 200ms. Without this the pill jumps mid-glide. */
+  /* `--sidebar-width` flips instantly (0 to the pane's width) while
+     `.overlay-sidebar` slides its width. Without this the pill jumps. */
   transition:
     left var(--dur-2) var(--ease-standard),
     right var(--dur-2) var(--ease-standard);

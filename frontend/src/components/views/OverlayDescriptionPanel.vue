@@ -690,10 +690,6 @@ defineExpose({
 </script>
 
 <style scoped>
-.sidebar-section {
-  margin-bottom: 6px;
-}
-
 .sidebar-section--description {
   flex: 1 1 114px;
   display: flex;

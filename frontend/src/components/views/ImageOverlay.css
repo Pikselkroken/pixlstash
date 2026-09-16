@@ -28,7 +28,7 @@
 }
 
 .overlay-shell.sidebar-open {
-  --sidebar-width: 320px;
+  --sidebar-width: var(--stats-panel-w);
 }
 
 .overlay-topbar {
@@ -588,36 +588,21 @@
   padding: 0 var(--space-2);
 }
 
-.overlay-sidebar {
+/* Width, collapse and surface come from AppInspector; this places it over the
+   canvas, under the top bar. Two classes, so it outranks the inspector's own
+   `height: 100%` whichever stylesheet loads last. */
+.overlay-main > .overlay-sidebar {
   position: absolute;
   top: var(--topbar-height);
   right: 0;
   bottom: 0;
-  width: var(--sidebar-width);
-  background: rgba(var(--v-theme-dark-surface), 0.6);
-  color: rgb(var(--v-theme-on-dark-surface));
-  transition: width 0.2s ease;
-  overflow: hidden;
-  padding: 0;
   height: calc(100% - var(--topbar-height));
   z-index: 4;
-}
-
-.overlay-sidebar.open {
-  width: 320px;
-  padding: 10px var(--space-4) 44px;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
 }
 
 .overlay-sidebar.hidden {
   opacity: 0;
   pointer-events: none;
-}
-
-.sidebar-section {
-  margin-bottom: 6px;
 }
 
 .sidebar-section--description {
@@ -975,16 +960,10 @@
     grid-template-columns: 1fr;
   }
 
-  .overlay-sidebar {
-    position: absolute;
-    top: var(--topbar-height);
-    right: 0;
-    height: calc(100% - var(--topbar-height));
-    width: 0;
-  }
-
-  .overlay-sidebar.open {
+  .overlay-main > .overlay-sidebar:not(.inspector--collapsed) {
     width: 78%;
+    min-width: 78%;
+    max-width: 78%;
   }
 
   .overlay-nav {
