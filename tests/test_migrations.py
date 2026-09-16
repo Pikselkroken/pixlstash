@@ -1021,7 +1021,7 @@ def test_0118_hands_back_only_the_pictures_that_carry_a_workflow():
             )
             conn.commit()
 
-        # To 0118 alone: 0119 hands plain PNGs back for a different reason.
+        # To 0118 alone: 0119 hands unkeyed pictures back for a different reason.
         up = _run_alembic(
             ["upgrade", "0118_add_generation_tables"], db_url, _MIGRATIONS_DIR
         )
@@ -1041,11 +1041,11 @@ def test_0118_hands_back_only_the_pictures_that_carry_a_workflow():
         assert {"generation", "generation_input"} <= tables
 
 
-def test_0119_hands_back_only_pngs_that_carry_no_workflow():
-    """An A1111 PNG was stamped scanned with no keys; it is read again.
+def test_0119_hands_back_only_pictures_that_carry_no_workflow():
+    """An A1111 picture was stamped scanned with no keys; it is read again.
 
-    A ComfyUI picture keeps its keys and a JPEG is not re-read, since A1111
-    data is read from PNGs alone.
+    A ComfyUI picture keeps its keys, and a format A1111 data cannot be read
+    from is not re-read at all.
     """
     with tempfile.TemporaryDirectory() as tmp:
         db_path = os.path.join(tmp, "vault.db")
@@ -1067,6 +1067,12 @@ def test_0119_hands_back_only_pngs_that_carry_no_workflow():
             _insert_minimal_row(
                 conn, "picture", file_path="photo.jpg", workflow_hash_version="v1"
             )
+            _insert_minimal_row(
+                conn, "picture", file_path="shot.webp", workflow_hash_version="v1"
+            )
+            _insert_minimal_row(
+                conn, "picture", file_path="clip.mp4", workflow_hash_version="v1"
+            )
             conn.execute(
                 "UPDATE alembic_version SET version_num = '0118_add_generation_tables'"
             )
@@ -1079,7 +1085,13 @@ def test_0119_hands_back_only_pngs_that_carry_no_workflow():
             stamps = dict(
                 conn.execute("SELECT file_path, workflow_hash_version FROM picture")
             )
-        assert stamps == {"comfy.png": "v1", "a1111.PNG": None, "photo.jpg": "v1"}
+        assert stamps == {
+            "comfy.png": "v1",
+            "a1111.PNG": None,
+            "photo.jpg": None,
+            "shot.webp": None,
+            "clip.mp4": "v1",
+        }
 
 
 def test_the_migration_chain_has_exactly_one_head():

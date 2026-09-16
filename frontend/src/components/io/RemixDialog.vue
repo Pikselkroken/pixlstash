@@ -856,7 +856,7 @@ async function loadTemplates(generation, imageId, backendUrl) {
     const data = await listWorkflows({ baseUrl: backendUrl });
     if (!isCurrentLoad(generation, imageId)) return;
     const all = Array.isArray(data?.workflows) ? data.workflows : [];
-    // What run_i2i accepts, not workflow_type, until runs use detection (#1307),
+    // What run_i2i accepts, not workflow_type: templates still run through it,
     // and only a workflow with an input the selection fills.
     templates.value = all.filter(
       (w) =>

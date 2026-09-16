@@ -12,6 +12,7 @@ and the end-to-end scan/export/write-back behaviour through a real Server:
 import os
 import shutil
 import tempfile
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -23,6 +24,7 @@ from pixlstash.db_models import Picture, ReferenceFolder, Tag
 from pixlstash.routes.reference_folders import _validate_sidecar_suffix
 from pixlstash.server import Server
 from pixlstash.tasks.reference_folder_scan_task import ReferenceFolderScanTask
+from pixlstash.tasks.tag_task import TagTask
 from pixlstash.utils.caption_file_utils import (
     SIDECAR_TYPE_TAGS,
     classify_sidecar,
@@ -381,6 +383,61 @@ def _make_read_token(client, *, resource_type=None, resource_id=None):
     )
     assert resp.status_code == 200, resp.text
     return resp.json()["token"]
+
+
+def _tag_task_reading(server, pic_id):
+    """A tag task that has read *pic_id* and has not written yet."""
+    return TagTask(
+        database=server.vault.db,
+        tagging_workflow=None,
+        pictures=[SimpleNamespace(id=pic_id)],
+    )
+
+
+def _late_tag_write(server, task, pic_id):
+    """Land *task*'s tag write now; answers the ids it wrote."""
+    return server.vault.db.run_task(
+        task._add_tags_unless_reset,
+        [{"pic_id": pic_id, "tags": ["stale-model-tag"]}],
+    )
+
+
+def test_scan_sidecar_sync_drops_a_tag_task_that_read_the_old_tags(server, tmp_path):
+    """#1361: a sidecar replacing an existing picture's tags is a reset, so a
+    task that read the picture before it must not add its tags beside them."""
+    folder_dir = str(tmp_path / "refs")
+    folder_id = _make_folder(server, folder_dir)
+    img = _make_image(folder_dir, "cat.png")
+    pic_id = _index_picture(server, folder_id, img, tags=["old"])
+    task = _tag_task_reading(server, pic_id)
+    _write(os.path.splitext(img)[0] + "_tags.txt", "sidecar tag")
+
+    _run_scan(server, folder_id, folder_dir)
+
+    assert _picture_tags(server, pic_id) == ["sidecar tag"]
+    assert _late_tag_write(server, task, pic_id) == []
+    assert _picture_tags(server, pic_id) == ["sidecar tag"]
+
+
+def test_metadata_import_drops_a_tag_task_that_read_the_old_tags(server, tmp_path):
+    """#1361, through the metadata import route."""
+    client = _login_client(server)
+    folder_dir = str(tmp_path / "refs")
+    folder_id = _make_folder(server, folder_dir)
+    img = _make_image(folder_dir, "cat.png")
+    pic_id = _index_picture(server, folder_id, img, tags=["old"])
+    task = _tag_task_reading(server, pic_id)
+    _write(os.path.splitext(img)[0] + "_tags.txt", "sidecar tag")
+
+    resp = client.post(
+        f"/reference-folders/{folder_id}/metadata/import",
+        json={"scope_path": folder_dir, "types": ["tags"]},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert _picture_tags(server, pic_id) == ["sidecar tag"]
+    assert _late_tag_write(server, task, pic_id) == []
+    assert _picture_tags(server, pic_id) == ["sidecar tag"]
 
 
 def test_scan_reads_separate_tags_and_description_sidecars(server, tmp_path):

@@ -58,6 +58,7 @@ import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
 import { useMovesStore } from "./useMovesStore";
 import { useWorkflowShelfStore } from "./useWorkflowShelfStore";
+import { useWorkflowRunStore } from "./useWorkflowRunStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
@@ -145,6 +146,19 @@ const STORES = [
       !s.loaded &&
       s.selectedHash === null &&
       Object.keys(s.samples).length === 0,
+  },
+  {
+    // The run panel holds the grid's selection, which names pictures of the
+    // library the old session could see, and is closed with it.
+    name: "useWorkflowRunStore",
+    use: useWorkflowRunStore,
+    seed: (s) => {
+      s.open = true;
+      s.selectionIds = [11, 12];
+      s.context = { character_id: 3 };
+    },
+    isEmpty: (s) =>
+      !s.open && s.selectionIds.length === 0 && !s.context.character_id,
   },
   {
     name: "useLockedSetsStore",

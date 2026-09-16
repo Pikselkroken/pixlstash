@@ -1243,6 +1243,81 @@ export function trashName(
   return /win/i.test(platform) ? "Recycle Bin" : "Trash";
 }
 
+/** At most three names, then a count: a delete prompt is not a file listing. */
+function nameList(items) {
+  const names = items.map((item) => item.name);
+  if (names.length <= 3) {
+    return names.length === 1
+      ? names[0]
+      : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  }
+  return `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`;
+}
+
+/**
+ * What a delete leaves behind, as the sentences its confirmation adds (#1314).
+ *
+ * Built from `POST /models/companions`. Every clause names files, because
+ * "some support files may be unused" is a sentence nobody can act on. None of
+ * them says a file is safe to delete: `orphaned` means every model a recipe
+ * ran it with is going, which is what the sentence says - never "nothing uses
+ * it" - and `unrecorded` then says how many kept base models no workflow names,
+ * any of which could. `unknown` and `no_evidence` are said out loud rather than
+ * left out, because silence would read as "nothing is affected".
+ *
+ * @param {Object|null} companions - the route's answer, or null when it could
+ *   not be read.
+ * @param {number} count - how many models the delete names.
+ * @returns {string} Zero or more sentences, space-joined.
+ */
+export function companionsSentences(companions, count) {
+  if (!companions) {
+    return "PixlStash could not check which VAEs and text encoders these models use.";
+  }
+  const said = [];
+  const { in_use = [], orphaned = [], shared = [], unknown = [] } = companions;
+  const plural = (items, one, many) => (items.length === 1 ? one : many);
+  if (in_use.length) {
+    said.push(
+      `${nameList(in_use)} ${plural(in_use, "is", "are")} still used by models you are keeping.`,
+    );
+  }
+  if (orphaned.length) {
+    said.push(
+      `In the workflows PixlStash has read, ${nameList(orphaned)} ran only with ` +
+        `models you are deleting; ${plural(orphaned, "it stays", "they stay")} on disk.`,
+    );
+    const unrecorded = companions.unrecorded ?? 0;
+    if (unrecorded) {
+      said.push(
+        `${unrecorded === 1 ? "1 other base model has" : `${unrecorded} other base models have`} ` +
+          `no workflow on record and may still need ${plural(orphaned, "it", "them")}.`,
+      );
+    }
+  }
+  if (shared.length) {
+    said.push(
+      `${nameList(shared)} ${plural(shared, "is", "are")} still used by other models.`,
+    );
+  }
+  if (unknown.length) {
+    said.push(
+      `Whether ${nameList(unknown)} ${plural(unknown, "is", "are")} still needed ` +
+        "is unknown: another file on the shelf has the same name.",
+    );
+  }
+  const unseen = companions.no_evidence?.length ?? 0;
+  if (unseen) {
+    const subject =
+      count === 1 ? "this model" : unseen === count ? "these models" : `${unseen} of these models`;
+    said.push(
+      `No workflow PixlStash has read uses ${subject}, so which support files ` +
+        `${unseen === 1 ? "it needs" : "they need"} is unknown.`,
+    );
+  }
+  return said.join(" ");
+}
+
 /**
  * The selected models a delete could actually act on.
  *

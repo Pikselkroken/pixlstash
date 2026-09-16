@@ -1,7 +1,8 @@
 """A1111 generation data as a recipe: the same three keys a ComfyUI graph gets.
 
 A picture from Stable Diffusion web UI (A1111) or one of its forks (Forge,
-reForge, SD.Next) carries a ``parameters`` text chunk, not a graph::
+reForge, SD.Next) carries a text, not a graph -- a PNG's ``parameters`` chunk,
+or a JPEG's or WebP's EXIF ``UserComment``::
 
     a castle on a hill <lora:example-style:0.8>
     Negative prompt: blurry
@@ -79,10 +80,12 @@ _MODEL_FIELD_RE = re.compile(
     re.IGNORECASE,
 )
 
-# The regex above is quadratic on a long line with no pairs in it. A1111's own
-# last line is a few thousand characters even with ADetailer prompts in it.
+# The regex above is quadratic on a long line with no pairs in it: measured,
+# 19,000 characters costs 0.82 s and 10,000 costs 0.22 s, against 0.02 s for a
+# realistic ADetailer-heavy 3,000. Migration 0119 re-opens every picture that
+# has no keys, so the ceiling is set where a real line never reaches it.
 # ponytail: a longer genuine line is read as no A1111 data; raise if one shows.
-_MAX_FIELDS_LINE = 20_000
+_MAX_FIELDS_LINE = 8_000
 
 _VOLATILE_FIELDS = frozenset(
     {
@@ -121,50 +124,76 @@ class A1111Recipe:
 
 
 def find_a1111_parameters(metadata: Optional[dict]) -> Optional[str]:
-    """The picture's A1111 ``parameters`` text, or ``None`` if it has none.
+    """The picture's A1111 generation text, or ``None`` if it has none.
 
-    PNG only: A1111 writes JPEG and WebP data into the EXIF ``UserComment``,
-    which lives in a sub-IFD ``extract_embedded_metadata`` does not read.
+    A PNG's ``parameters`` chunk, else a JPEG's or WebP's EXIF ``UserComment``,
+    which is where A1111 puts the same text when the format has no text chunk.
     """
-    value = ((metadata or {}).get("png") or {}).get("parameters")
-    return value if isinstance(value, str) else None
+    metadata = metadata or {}
+    for section, key in (("png", "parameters"), ("exif", "UserComment")):
+        value = (metadata.get(section) or {}).get(key)
+        if isinstance(value, str):
+            return value
+    return None
 
 
 def parse_infotext(text: str) -> Optional[tuple[str, str, dict[str, str]]]:
     """Split infotext into ``(prompt, negative_prompt, fields)``.
 
-    Returns ``None`` for text that is not A1111's: the last line must hold a
+    Returns ``None`` for text that is not A1111's: some line must hold a
     ``Steps`` field, which every A1111 generation writes. Fooocus also uses a
     ``parameters`` chunk, for JSON, and that is not matched.
+
+    **The fields line is the LAST one that parses**, not simply the last line.
+    A1111 escapes newlines so its own fields line always is the last, but a tool
+    that re-saves an image and appends a line of its own would otherwise cost
+    the picture its whole recipe -- and silently, since the scan marks it read.
     """
-    lines = text.strip().split("\n")
-    last = lines[-1]
-    if text.lstrip().startswith("{") or "Steps:" not in last:
+    if text.lstrip().startswith("{"):
         return None
-    if len(last) > _MAX_FIELDS_LINE:
+    lines = text.strip().split("\n")
+    for index in range(len(lines) - 1, -1, -1):
+        fields = _parse_fields(lines[index])
+        if fields is None:
+            continue
+        prompt: list[str] = []
+        negative: list[str] = []
+        target = prompt
+        for line in lines[:index]:
+            if line.startswith("Negative prompt:"):
+                target = negative
+                line = line[len("Negative prompt:") :]
+            target.append(line.strip())
+        return "\n".join(prompt).strip(), "\n".join(negative).strip(), fields
+    return None
+
+
+def _parse_fields(line: str) -> Optional[dict[str, str]]:
+    """One line as A1111's ``Key: value`` pairs, or ``None`` if it is not that.
+
+    **First occurrence wins.** A1111 quotes any value holding a comma, so a
+    repeated key means something else wrote the text and an unquoted compound
+    value (a ControlNet setup) has been shredded into pairs of its own. A1111
+    writes ``Model`` before anything an extension adds, so keeping the first is
+    what stops such a value replacing the checkpoint -- which would put a
+    filename and a digest belonging to two different models in one recipe.
+    """
+    if "Steps:" not in line:
+        return None
+    if len(line) > _MAX_FIELDS_LINE:
         logger.info(
-            "Skipped A1111 data whose fields line is %d characters long.", len(last)
+            "Skipped A1111 data whose fields line is %d characters long.", len(line)
         )
         return None
     fields: dict[str, str] = {}
-    for key, value in _PARAM_RE.findall(last):
+    for key, value in _PARAM_RE.findall(line):
         if len(value) > 1 and value[0] == '"' and value[-1] == '"':
             try:
                 value = json.loads(value)
             except json.JSONDecodeError as exc:
                 logger.debug("Kept A1111 field %r quoted: %s", key, exc)
-        fields[key] = value.strip() if isinstance(value, str) else str(value)
-    if "Steps" not in fields:
-        return None
-    prompt: list[str] = []
-    negative: list[str] = []
-    target = prompt
-    for line in lines[:-1]:
-        if line.startswith("Negative prompt:"):
-            target = negative
-            line = line[len("Negative prompt:") :]
-        target.append(line.strip())
-    return "\n".join(prompt).strip(), "\n".join(negative).strip(), fields
+        fields.setdefault(key, value.strip() if isinstance(value, str) else str(value))
+    return fields if "Steps" in fields else None
 
 
 def reduce_a1111(metadata: Optional[dict]) -> Optional[A1111Recipe]:
@@ -188,7 +217,10 @@ def reduce_a1111(metadata: Optional[dict]) -> Optional[A1111Recipe]:
     for field in [f for f in fields if SECRET_FIELD_RE.search(_widget_name(f))]:
         # The same defense in depth a ComfyUI widget gets: the instance document
         # is kept, so a credential-named field never reaches it. Debug, because
-        # A1111's own `Token merging ratio` matches on every such picture.
+        # A1111's own `Token merging ratio` matches on every such picture. It is
+        # then absent from the instance too, so two pictures that differ only in
+        # it share one -- the recoverable direction, and the same trade the
+        # ComfyUI rule makes.
         logger.debug(
             "Dropping A1111 field %r: it matches the credential pattern.", field
         )
@@ -200,7 +232,9 @@ def reduce_a1111(metadata: Optional[dict]) -> Optional[A1111Recipe]:
     strengths: dict[str, list[str]] = {}
     for value in [prompt, negative, *fields.values()]:
         for _, name, weight in _EXTRA_NETWORK_RE.findall(value):
-            strengths.setdefault(_asset_name(name), []).append(weight.lstrip(":"))
+            asset = _asset_name(name)
+            if asset:
+                strengths.setdefault(asset, []).append(weight.lstrip(":"))
     prompt = _EXTRA_NETWORK_RE.sub("", prompt).strip()
     negative = _EXTRA_NETWORK_RE.sub("", negative).strip()
     fields = {k: _EXTRA_NETWORK_RE.sub("", v).strip() for k, v in fields.items()}
@@ -321,7 +355,7 @@ def _node(
     )
 
 
-def _asset_name(name: str) -> str:
+def _asset_name(name: str) -> Optional[str]:
     """A model name as a filename the shelf would record.
 
     A1111 names a checkpoint and a LoRA without its extension. ``.safetensors``
@@ -333,6 +367,11 @@ def _asset_name(name: str) -> str:
     # a model ghost (the shelf cannot hold it anyway), and a shelf file of the
     # same stem counts it in the unverified by-filename tier.
     name = normalized_filename(name.strip())
+    if not name:
+        # `Refiner: [abcdef0123]`, a hash with no name. Appending the extension
+        # would invent an asset called `.safetensors`, which then reads as a
+        # model ghost and is offered for forgetting.
+        return None
     return name if name.endswith(MODEL_EXTENSIONS) else name + ".safetensors"
 
 
@@ -347,8 +386,9 @@ def _name_hash_list(value: Optional[str]) -> dict[str, str]:
     pairs: dict[str, str] = {}
     for entry in (value or "").split(","):
         name, _, digest = entry.rpartition(":")
-        if name.strip():
-            pairs[_asset_name(name)] = digest.strip()
+        asset = _asset_name(name) if name.strip() else None
+        if asset:
+            pairs[asset] = digest.strip()
     return pairs
 
 

@@ -89,8 +89,8 @@
             <p class="wfins-quiet wfins-note">{{ MODE_NOTES[input.mode] }}</p>
           </div>
           <p v-if="!takesSelection" class="wfins-note">
-            No input takes the selection, so this workflow is not offered on a
-            selection. The toolbar cannot run it yet either.
+            No input takes the selection, so this workflow is offered from the
+            toolbar's Generate button, not on a selection.
           </p>
         </template>
       </div>

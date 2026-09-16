@@ -30,6 +30,7 @@ import numpy as np
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.tag_reset_registry import TagResetRegistry
 from pixlstash.utils.unprocessable_image_registry import UnprocessableImageRegistry
 
 # These imports are necessary to register the models with SQLModel
@@ -979,6 +980,9 @@ class VaultDatabase:
         # decoded (issue #585). Shared by task threads (marking) and finder
         # threads (suppression); reachable from both via their ``self._db``.
         self.unprocessable_images = UnprocessableImageRegistry()
+        # When each picture's tags were last reset, so a tag task that read the
+        # picture before a retag does not write over it (#1361).
+        self.tag_resets = TagResetRegistry()
         db_exists = os.path.exists(self._db_path)
         logger.debug(f"Vault init, db_path={self._db_path}, db_exists={db_exists}")
 

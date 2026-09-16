@@ -71,96 +71,6 @@
           </div>
         </v-menu>
       </div>
-      <div
-        v-if="selectedCount > 0 && !isScrapheapView && !isReadOnly"
-        class="plugin-run-controls"
-        @keydown.esc="handleComfyuiMenuEsc"
-      >
-        <v-menu
-          v-if="props.comfyuiConfigured"
-          v-model="comfyuiMenuOpen"
-          :close-on-content-click="false"
-          location-strategy="connected"
-          location="bottom end"
-          origin="top end"
-          transition="scale-transition"
-        >
-          <template #activator="{ props: menuProps }">
-            <div
-              v-bind="menuProps"
-              class="hidden-panel-activator"
-              aria-hidden="true"
-            ></div>
-          </template>
-          <div class="plugin-menu-panel">
-            <div class="plugin-menu-header">
-              Edit selected images with ComfyUI
-            </div>
-            <div class="plugin-menu-body">
-              <div v-if="comfyuiWorkflowLoading" class="plugin-menu-note">
-                Loading workflows...
-              </div>
-              <div v-else>
-                <div v-if="comfyuiWorkflowError" class="plugin-menu-error">
-                  {{ comfyuiWorkflowError }}
-                </div>
-                <template v-if="validComfyWorkflows.length">
-                  <label class="plugin-menu-label">Workflow</label>
-                  <select
-                    v-model="comfyuiSelectedWorkflow"
-                    class="plugin-run-select"
-                  >
-                    <option
-                      v-for="workflow in validComfyWorkflows"
-                      :key="workflow.name"
-                      :value="workflow.name"
-                    >
-                      {{ workflow.display_name || workflow.name }}
-                    </option>
-                  </select>
-
-                  <template v-if="showComfyuiCaptionInput">
-                    <label class="plugin-menu-label">Caption</label>
-                    <textarea
-                      v-model="comfyuiCaption"
-                      class="plugin-menu-textarea"
-                      rows="6"
-                      placeholder="Optional caption"
-                      @keydown.stop
-                    ></textarea>
-                  </template>
-
-                  <label class="plugin-menu-checkbox-row">
-                    <input v-model="stackI2IOutputs" type="checkbox" />
-                    <span>Stack new images with the originals</span>
-                  </label>
-
-                  <div class="plugin-menu-actions">
-                    <AppButton
-                      variant="primary"
-                      icon-left="play"
-                      :disabled="!canRunComfyWorkflow"
-                      :loading="comfyuiRunLoading"
-                      @click="runSelectedComfyWorkflow"
-                      >Run</AppButton
-                    >
-                  </div>
-                </template>
-                <div v-else class="plugin-menu-note">
-                  No workflow can run on a selection. It needs a save node
-                  and a picture input set to Selection in Workflows.
-                </div>
-                <div v-if="comfyuiRunError" class="plugin-menu-error">
-                  {{ comfyuiRunError }}
-                </div>
-                <div v-if="comfyuiRunSuccess" class="plugin-menu-success">
-                  {{ comfyuiRunSuccess }}
-                </div>
-              </div>
-            </div>
-          </div>
-        </v-menu>
-      </div>
       <!--
         Selection ▾ dropdown - mirrors the right-click context menu for every
         selection-scoped action, so keyboard ("S") and toolbar users reach the
@@ -324,8 +234,11 @@
 import { withRef } from "../../utils/withRef.js";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
-import { listWorkflows, runImageToImage } from "../../api/comfyui";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
+import {
+  FROM_SELECTION,
+  useWorkflowRunStore,
+} from "../../stores/useWorkflowRunStore";
 import SelectionMenu from "./SelectionMenu.vue";
 import TbTagPanel from "./TbTagPanel.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
@@ -353,7 +266,6 @@ const props = defineProps({
     type: Object,
     default: () => ({ hasImages: false, hasVideos: false }),
   },
-  comfyuiClientId: { type: String, default: "" },
   comfyuiConfigured: { type: Boolean, default: false },
   showRemoveFromStack: { type: Boolean, default: false },
   selectedMultipleStackIds: { type: Array, default: () => [] },
@@ -388,7 +300,6 @@ const emit = defineEmits([
   "dissolve-stacks",
   "create-stacks-from-groups",
   "run-plugin",
-  "comfyui-run",
   "tags-applied",
   "auto-tag",
   "generate-description",
@@ -484,41 +395,19 @@ function handleSelectionMenuHotkey(event) {
 onMounted(() => window.addEventListener("keydown", handleSelectionMenuHotkey));
 onUnmounted(() => {
   window.removeEventListener("keydown", handleSelectionMenuHotkey);
-  clearComfyuiCloseTimer();
 });
 
 watch(selectionMenuOpen, (open) => emit("selection-menu-open", open));
 
 const pluginParameters = ref({});
-const comfyuiMenuOpen = ref(false);
-const comfyuiWorkflows = ref([]);
-const comfyuiWorkflowLoading = ref(false);
-const comfyuiWorkflowError = ref("");
-const comfyuiSelectedWorkflow = ref("");
-const comfyuiCaption = ref("");
-const comfyuiRunLoading = ref(false);
-const comfyuiRunError = ref("");
-const comfyuiRunSuccess = ref("");
 
 // Remembered "stack outputs with originals" prefs (persisted in localStorage).
 const genStackPrefs = useGenStackPrefsStore();
-const stackI2IOutputs = computed({
-  get: () => genStackPrefs.stackI2IOutputs,
-  set: (val) => genStackPrefs.setStackI2IOutputs(val),
-});
+const workflowRunStore = useWorkflowRunStore();
 const stackFilterOutputs = computed({
   get: () => genStackPrefs.stackFilterOutputs,
   set: (val) => genStackPrefs.setStackFilterOutputs(val),
 });
-
-// Auto-close timer for the I2I menu after a successful queue.
-let comfyuiCloseTimer = null;
-function clearComfyuiCloseTimer() {
-  if (comfyuiCloseTimer !== null) {
-    clearTimeout(comfyuiCloseTimer);
-    comfyuiCloseTimer = null;
-  }
-}
 
 const activePluginSchema = computed(() => {
   if (!selectedPluginName.value) return null;
@@ -562,11 +451,11 @@ watch(pluginMenuOpen, (isOpen) => {
   pluginParameters.value = {};
 });
 
-// The plugin-run-controls and comfyui-run-controls divs use v-if. If either
+// The plugin-run-controls div uses v-if. If the
 // menu is open when the v-if condition transitions to false (e.g. selection
 // cleared by ESC before Vuetify can emit update:modelValue), the VMenu
 // unmounts without resetting the ref, leaving it true. The watcher below
-// resets each ref whenever the hosting condition goes false so the panel
+// resets the ref whenever the hosting condition goes false so the panel
 // does not auto-reopen when the condition becomes true again.
 const showPluginControls = computed(
   () =>
@@ -578,135 +467,6 @@ const showPluginControls = computed(
 watch(showPluginControls, (shown) => {
   if (!shown) pluginMenuOpen.value = false;
 });
-
-const showComfyuiControls = computed(
-  () => props.selectedCount > 0 && !isScrapheapView.value && !isReadOnly.value,
-);
-watch(showComfyuiControls, (shown) => {
-  if (!shown) comfyuiMenuOpen.value = false;
-});
-
-const validComfyWorkflows = computed(() => {
-  if (!Array.isArray(comfyuiWorkflows.value)) return [];
-  // What run_i2i accepts, not workflow_type, until runs use detection (#1307),
-  // and only a workflow with an input the selection fills. Absent reads as
-  // offered, which is the backend's own default for an unconfigured workflow.
-  return comfyuiWorkflows.value.filter(
-    (workflow) =>
-      workflow?.has_selection_input !== false &&
-      !workflow?.missing_placeholders?.includes("{{image_path}}"),
-  );
-});
-
-const selectedComfyWorkflow = computed(() =>
-  (comfyuiWorkflows.value || []).find(
-    (workflow) => workflow?.name === comfyuiSelectedWorkflow.value,
-  ),
-);
-
-const showComfyuiCaptionInput = computed(() => {
-  const missing = Array.isArray(
-    selectedComfyWorkflow.value?.missing_placeholders,
-  )
-    ? selectedComfyWorkflow.value.missing_placeholders
-    : [];
-  return !missing.includes("{{caption}}");
-});
-
-const canRunComfyWorkflow = computed(() => {
-  if (comfyuiRunLoading.value) return false;
-  if (!props.backendUrl) return false;
-  if (
-    !Array.isArray(props.selectedImageIds) ||
-    !props.selectedImageIds.length
-  ) {
-    return false;
-  }
-  // The chosen workflow must still be one the menu offers: setting its inputs
-  // up elsewhere can take it off the selection path while it stays chosen.
-  return validComfyWorkflows.value.some(
-    (workflow) => workflow?.name === comfyuiSelectedWorkflow.value,
-  );
-});
-
-watch(validComfyWorkflows, (workflows) => {
-  if (workflows.some((w) => w?.name === comfyuiSelectedWorkflow.value)) return;
-  comfyuiSelectedWorkflow.value = workflows.length
-    ? String(workflows[0].name)
-    : "";
-});
-
-watch(comfyuiMenuOpen, async (isOpen) => {
-  if (!isOpen) return;
-  // A freshly-opened menu must never inherit a pending close from a prior run.
-  clearComfyuiCloseTimer();
-  comfyuiRunError.value = "";
-  comfyuiRunSuccess.value = "";
-  await fetchComfyWorkflows();
-  if (!comfyuiSelectedWorkflow.value && validComfyWorkflows.value.length) {
-    comfyuiSelectedWorkflow.value = String(validComfyWorkflows.value[0].name);
-  }
-});
-
-async function fetchComfyWorkflows() {
-  if (comfyuiWorkflowLoading.value) return;
-  comfyuiWorkflowLoading.value = true;
-  comfyuiWorkflowError.value = "";
-  try {
-    const body = await listWorkflows();
-    const workflows = body?.workflows;
-    comfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
-  } catch (err) {
-    comfyuiWorkflowError.value =
-      errorDetail(err) || err?.message || String(err);
-    comfyuiWorkflows.value = [];
-  } finally {
-    comfyuiWorkflowLoading.value = false;
-  }
-}
-
-async function runSelectedComfyWorkflow() {
-  if (!canRunComfyWorkflow.value) return;
-  comfyuiRunLoading.value = true;
-  comfyuiRunError.value = "";
-  comfyuiRunSuccess.value = "";
-  try {
-    const pictureIds = (
-      Array.isArray(props.selectedImageIds) ? props.selectedImageIds : []
-    )
-      .map((id) => Number(id))
-      .filter((id) => Number.isFinite(id) && id > 0);
-    if (!pictureIds.length) return;
-
-    const payload = {
-      picture_ids: pictureIds,
-      workflow_name: comfyuiSelectedWorkflow.value,
-      caption: comfyuiCaption.value || "",
-      client_id: props.comfyuiClientId || undefined,
-      stack: stackI2IOutputs.value,
-    };
-    const body = await runImageToImage(payload);
-    const prompts = Array.isArray(body?.prompts) ? body.prompts : [];
-    emit("comfyui-run", {
-      prompts,
-      pictureIds,
-      pictureId: pictureIds[0] ?? null,
-    });
-    comfyuiRunSuccess.value = prompts.length
-      ? `Queued ${prompts.length} run(s) in ComfyUI.`
-      : "Queued in ComfyUI.";
-    // Show the success message briefly, then close the menu.
-    clearComfyuiCloseTimer();
-    comfyuiCloseTimer = setTimeout(() => {
-      comfyuiCloseTimer = null;
-      comfyuiMenuOpen.value = false;
-    }, 1200);
-  } catch (err) {
-    comfyuiRunError.value = errorDetail(err) || err?.message || String(err);
-  } finally {
-    comfyuiRunLoading.value = false;
-  }
-}
 
 function runSelectedPlugin() {
   if (!selectedPluginName.value) return;
@@ -729,21 +489,11 @@ function handlePluginMenuEsc(event) {
   pluginMenuOpen.value = false;
 }
 
-function handleComfyuiMenuEsc(event) {
-  if (!comfyuiMenuOpen.value) return;
-  event.preventDefault();
-  event.stopPropagation();
-  if (typeof event.stopImmediatePropagation === "function") {
-    event.stopImmediatePropagation();
-  }
-  comfyuiMenuOpen.value = false;
-}
-
 // ── Bulk tag ──────────────────────────────────────────────────────────────────
 const tagMenuOpen = ref(false);
 const tagBtnRef = ref(null);
 
-// Same guard as the plugin/comfyui menus above. The whole half is unmounted by
+// Same guard as the plugin menu above. The whole half is unmounted by
 // GridActionPill the moment the selection empties. If ESC clears the selection
 // before Vuetify emits update:modelValue, the menu unmounts with tagMenuOpen
 // still true and auto-reopens on the next selection. Reset it when it hides.
@@ -775,11 +525,10 @@ function openPluginPanel() {
   });
 }
 
+// Running a workflow opens the run panel in the inspector rail (#1307), which
+// leaves the grid browsable while it is set up.
 function openComfyuiPanel() {
-  if (comfyuiMenuOpen.value) return;
-  nextTick(() => {
-    comfyuiMenuOpen.value = true;
-  });
+  workflowRunStore.openFor(FROM_SELECTION);
 }
 
 defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
@@ -883,34 +632,6 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   background: rgba(var(--v-theme-background), 0.7);
   color: rgb(var(--v-theme-on-background));
   padding: 0 8px;
-}
-
-.plugin-menu-textarea {
-  width: 100%;
-  border-radius: var(--radius-sm);
-  border: 1px solid rgba(var(--v-theme-primary), 0.4);
-  background: rgba(var(--v-theme-background), 0.7);
-  color: rgb(var(--v-theme-on-background));
-  padding: 8px;
-  resize: vertical;
-  min-height: 160px;
-}
-
-.plugin-menu-note {
-  font-size: var(--text-sm);
-  opacity: 0.85;
-}
-
-.plugin-menu-error {
-  margin-top: 8px;
-  color: rgb(var(--v-theme-error));
-  font-size: var(--text-sm);
-}
-
-.plugin-menu-success {
-  margin-top: 8px;
-  color: rgb(var(--v-theme-success));
-  font-size: var(--text-sm);
 }
 
 .bar-btn-apply-label {

@@ -18,6 +18,7 @@ because a rule shipped without them was found broken by measurement:
 """
 
 import copy
+import hashlib
 import json
 import os
 import sqlite3
@@ -26,6 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import piexif
+import piexif.helper
 import pytest
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
@@ -65,7 +68,10 @@ from pixlstash.services.workflow_hash import (
     topology_hash,
     ui_topology_hash,
 )
-from pixlstash.services.model_shelf_service import fetch_picture_counts
+from pixlstash.services.model_shelf_service import (
+    fetch_companions,
+    fetch_picture_counts,
+)
 from pixlstash.services.workflow_library_service import (
     scan_progress,
     topology_activity,
@@ -1865,6 +1871,41 @@ def test_a1111_generation_data_is_filed_as_a_recipe(store):
     assert generation(store, picture_id).seed == "18446744073709551615"
 
 
+def write_exif_picture(directory, name, parameters):
+    """A JPEG or WebP carrying A1111 data where A1111 puts it, in EXIF."""
+    exif = piexif.dump(
+        {
+            "Exif": {
+                piexif.ExifIFD.UserComment: piexif.helper.UserComment.dump(
+                    parameters, encoding="unicode"
+                )
+            }
+        }
+    )
+    Image.new("RGB", (4, 4), "black").save(directory / name, exif=exif)
+    return name
+
+
+@pytest.mark.parametrize("name", ["a1111.jpg", "a1111.webp"])
+def test_a1111_data_is_read_from_exif_too(store, name):
+    """A JPEG and a WebP carry the same text in the Exif sub-IFD."""
+    written = write_exif_picture(Path(store.image_root), name, A1111_PARAMETERS)
+    picture_id = add_picture(store, written)
+
+    assert run_extraction(store, [picture_id])["found_workflow"] == 1
+
+    picture = read_picture(store, picture_id)
+    png = write_png(Path(store.image_root), "same.png", parameters=A1111_PARAMETERS)
+    twin = add_picture(store, png)
+    run_extraction(store, [twin])
+    # The same generation data is the same recipe whatever carried it.
+    assert (
+        picture.workflow_instance_hash
+        == read_picture(store, twin).workflow_instance_hash
+    )
+    assert generation(store, picture_id).seed == "18446744073709551615"
+
+
 def test_an_a1111_short_hash_is_verified_only_when_unambiguous(store):
     """One digest starting with it is that model; two leave it a filename match."""
     name = write_png(Path(store.image_root), "short.png", parameters=A1111_PARAMETERS)
@@ -1892,6 +1933,193 @@ def test_an_a1111_short_hash_is_verified_only_when_unambiguous(store):
             conn.executemany("DELETE FROM model WHERE id = ?", [(m,) for m in models])
     # No shelf digest starts with it: it names a model this shelf does not hold.
     assert "0123456789" in model_ghost_names(store.hub)
+
+
+# ---------------------------------------------------------------------------
+# #1314 — what a delete leaves behind, from the recipes
+# ---------------------------------------------------------------------------
+
+
+def generation_graph(checkpoint, vae, clip, *, lora=None):
+    """A txt2img graph loading its VAE and text encoder from their own nodes."""
+    model_source = 1
+    spec = [
+        (1, "CheckpointLoaderSimple", [], {"ckpt_name": checkpoint}),
+        (8, "VAELoader", [], {"vae_name": vae}),
+        (9, "CLIPLoader", [], {"clip_name": clip, "type": "sdxl"}),
+    ]
+    if lora is not None:
+        spec.append((10, "LoraLoaderModelOnly", [("model", 1, 0)], {"lora_name": lora}))
+        model_source = 10
+    return api_graph(
+        spec
+        + [
+            (2, "CLIPTextEncode", [("clip", 9, 0)], {"text": "a lighthouse"}),
+            (3, "CLIPTextEncode", [("clip", 9, 0)], {"text": "blurry"}),
+            (4, "EmptyLatentImage", [], {"width": 64, "height": 64, "batch_size": 1}),
+            (
+                5,
+                "KSampler",
+                [
+                    ("model", model_source, 0),
+                    ("positive", 2, 0),
+                    ("negative", 3, 0),
+                    ("latent_image", 4, 0),
+                ],
+                {"seed": 1, "steps": 4, "cfg": 5.0},
+            ),
+            (6, "VAEDecode", [("samples", 5, 0), ("vae", 8, 0)], {}),
+            (7, "SaveImage", [("images", 6, 0)], {"filename_prefix": "c"}),
+        ]
+    )
+
+
+def shelf_file(hub, filename, file_kind):
+    with hub.transaction() as conn:
+        return conn.execute(
+            "INSERT INTO model (file_kind, kind, sha256, filename, provenance) "
+            "VALUES (?, ?, ?, ?, 'external')",
+            (
+                file_kind,
+                "lora" if file_kind == "adapter" else None,
+                hashlib.sha256(f"{file_kind}/{filename}".encode()).hexdigest()
+                if file_kind == "adapter"
+                else None,
+                filename,
+            ),
+        ).lastrowid
+
+
+@pytest.fixture
+def companions_shelf(hub):
+    """Two checkpoints sharing a text encoder, each with its own VAE.
+
+    A runs with a LoRA as well; B's VAE is named like a second file on the
+    shelf, so no recipe can say which of the two it loaded.
+    """
+    ids = {
+        name: shelf_file(hub, f"{name}.safetensors", kind)
+        for name, kind in (
+            ("ckpt_a", "checkpoint"),
+            ("ckpt_b", "checkpoint"),
+            ("vae_a", "vae"),
+            ("clip_shared", "text_encoder"),
+            ("lora_a", "adapter"),
+            ("lonely", "checkpoint"),
+        )
+    }
+    ids["twin_1"] = shelf_file(hub, "twin.safetensors", "vae")
+    ids["twin_2"] = shelf_file(hub, "twin.safetensors", "vae")
+    record_api_graph(
+        hub,
+        generation_graph(
+            "ckpt_a.safetensors",
+            "vae_a.safetensors",
+            "clip_shared.safetensors",
+            lora="lora_a.safetensors",
+        ),
+    )
+    record_api_graph(
+        hub,
+        generation_graph(
+            "ckpt_b.safetensors", "twin.safetensors", "clip_shared.safetensors"
+        ),
+    )
+    return SimpleNamespace(hub=hub, ids=ids)
+
+
+def companion_ids(result, bucket):
+    return [item["id"] for item in result[bucket]]
+
+
+def test_deleting_a_checkpoint_orphans_its_own_vae_and_names_who_shares_the_rest(
+    companions_shelf,
+):
+    """The LoRA that ran with A stays, and still does not keep A's VAE: an
+    adapter needs a base model, not the base model's support files."""
+    ids = companions_shelf.ids
+
+    result = fetch_companions(companions_shelf.hub, [ids["ckpt_a"]])
+
+    assert companion_ids(result, "orphaned") == [ids["vae_a"]]
+    assert companion_ids(result, "shared") == [ids["clip_shared"]]
+    assert result["shared"][0]["used_with"] == [
+        {"id": ids["ckpt_b"], "name": "ckpt_b.safetensors"}
+    ]
+    assert result["unknown"] == [] and result["in_use"] == []
+    assert result["no_evidence"] == []
+    # `lonely` stays and no recipe names it, so the orphan is not proof.
+    assert result["unrecorded"] == 1
+
+
+def test_a_support_file_a_basename_cannot_tell_apart_is_unknown_not_orphaned(
+    companions_shelf,
+):
+    ids = companions_shelf.ids
+
+    result = fetch_companions(companions_shelf.hub, [ids["ckpt_a"], ids["ckpt_b"]])
+
+    assert set(companion_ids(result, "orphaned")) == {ids["vae_a"], ids["clip_shared"]}
+    assert set(companion_ids(result, "unknown")) == {ids["twin_1"], ids["twin_2"]}
+    assert result["shared"] == []
+    assert result["unrecorded"] == 1  # `lonely`, the one kept base model
+
+
+def test_a_deleted_support_file_names_the_kept_models_that_use_it(companions_shelf):
+    """And a model no recipe names is reported as unknowable, not as unused."""
+    ids = companions_shelf.ids
+
+    result = fetch_companions(companions_shelf.hub, [ids["clip_shared"], ids["lonely"]])
+
+    assert companion_ids(result, "in_use") == [ids["clip_shared"]]
+    assert {m["id"] for m in result["in_use"][0]["used_with"]} == {
+        ids["ckpt_a"],
+        ids["ckpt_b"],
+    }
+    assert result["no_evidence"] == [ids["lonely"]]
+    assert result["orphaned"] == [] and result["unknown"] == []
+    assert result["shared"] == []
+
+
+def test_an_unknown_file_kind_still_keeps_a_support_file_in_use(hub):
+    """`unknown` may be a base model the classifier missed, so it counts."""
+    ckpt = shelf_file(hub, "base-x.safetensors", "checkpoint")
+    mystery = shelf_file(hub, "mystery-x.safetensors", "unknown")
+    vae = shelf_file(hub, "vae-x.safetensors", "vae")
+    for base in ("base-x.safetensors", "mystery-x.safetensors"):
+        record_api_graph(
+            hub, generation_graph(base, "vae-x.safetensors", "clip-x.safetensors")
+        )
+
+    result = fetch_companions(hub, [ckpt])
+
+    assert companion_ids(result, "shared") == [vae]
+    assert [m["id"] for m in result["shared"][0]["used_with"]] == [mystery]
+    assert result["orphaned"] == []
+
+
+def test_a_digest_the_shelf_cannot_match_yet_makes_its_companions_unknown(hub):
+    """While a checkpoint waits for its hash, a recipe naming a model by digest
+    may name that checkpoint, so nothing in that recipe is called orphaned."""
+    doomed = shelf_file(hub, "base-y.safetensors", "checkpoint")
+    vae = shelf_file(hub, "vae-y.safetensors", "vae")
+    graph = generation_graph(
+        "base-y.safetensors", "vae-y.safetensors", "clip-y.safetensors"
+    )
+    graph["11"] = {
+        "class_type": "PixlStashCheckpointLoader",
+        "inputs": {"ckpt_sha256": "ef" * 32},
+    }
+    record_api_graph(hub, graph)
+
+    assert companion_ids(fetch_companions(hub, [doomed]), "unknown") == [vae]
+
+    with hub.transaction() as conn:
+        # Every row hashed: an unmatched digest now names nothing on the shelf.
+        conn.execute(
+            "UPDATE model SET sha256 = printf('%064d', id) WHERE sha256 IS NULL"
+        )
+    assert companion_ids(fetch_companions(hub, [doomed]), "orphaned") == [vae]
 
 
 # ---------------------------------------------------------------------------
@@ -3079,6 +3307,41 @@ def test_assets_and_hashes_are_recorded_and_the_instance_names_neither():
         "aaaaaaaaaaaa",
     ):
         assert leaked not in document.lower()
+
+
+def test_a_shredded_compound_value_never_replaces_the_checkpoint():
+    """First occurrence wins: an unquoted ControlNet value holds a `Model:` too.
+
+    A1111 quotes a value holding a comma, so a repeat means another tool wrote
+    the text; taking the last would file a recipe naming one model's filename
+    with another model's digest.
+    """
+    fields = (
+        "Steps: 20, Sampler: Euler, CFG scale: 7, Seed: 1, Size: 512x512, "
+        "Model hash: aabbccddee, Model: my_real_checkpoint, ControlNet 0: "
+        "Module: canny, Model: control_v11p_sd15_canny.safetensors, Weight: 1, "
+        "Version: v1.10.1"
+    )
+    nodes = reduce_a1111({"png": {"parameters": infotext(fields=fields)}}).nodes
+    names = {
+        value for widget, value in assets_from_reduction(nodes) if widget == "ckpt_name"
+    }
+    assert names == {"my_real_checkpoint.safetensors"}
+
+
+def test_a_line_after_the_fields_line_does_not_lose_the_picture():
+    """The fields line is the last one that parses, not the last line."""
+    appended = infotext() + "\nTemplate: something else"
+    assert a1111_keys(appended) == a1111_keys(infotext())
+
+
+def test_a_hash_with_no_name_invents_no_asset():
+    """`Refiner: [abcdef0123]` must not file an asset called `.safetensors`."""
+    fields = A1111_FIELDS + ", Refiner: [abcdef0123]"
+    nodes = reduce_a1111({"png": {"parameters": infotext(fields=fields)}}).nodes
+    assets = assets_from_reduction(nodes)
+    assert ("ckpt_name", ".safetensors") not in assets
+    assert ("ckpt_sha256", "abcdef0123") in assets
 
 
 def test_a_legacy_8_digit_hash_is_not_kept():
