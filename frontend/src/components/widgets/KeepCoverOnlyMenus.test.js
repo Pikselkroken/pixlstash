@@ -185,7 +185,10 @@ describe.each(MENUS)("%s: the Keep recipes only item", (_name, mountMenu, event)
       .findAll("button.ctx-item")
       .find((b) => b.text().startsWith("Keep recipes only"));
 
-  it("counts stacks and sits between Keep cover only and Delete", () => {
+  // It moves a strict subset of what Keep cover only moves, so escalating
+  // severity puts it first, and the cheapest slot in the group is the safer
+  // of the two (`lead-designer` / `ui-ux-expert`, 2026-09-16).
+  it("counts stacks and leads the danger group, before Keep cover only", () => {
     const danger = mountMenu()
       .findAll("button.ctx-item--danger")
       .map((b) => b.text());
@@ -193,8 +196,8 @@ describe.each(MENUS)("%s: the Keep recipes only item", (_name, mountMenu, event)
     const recipes = danger.findIndex((t) => t.startsWith("Keep recipes only"));
     const del = danger.findIndex((t) => t.includes("Delete"));
     expect(danger[recipes]).toContain("Keep recipes only (3 stacks)");
-    expect(recipes).toBe(cover + 1);
-    expect(del).toBeGreaterThan(recipes);
+    expect(cover).toBe(recipes + 1);
+    expect(del).toBeGreaterThan(cover);
   });
 
   it("emits keep-cover-only asking for recipes", async () => {
@@ -212,6 +215,66 @@ describe.each(MENUS)("%s: the Keep recipes only item", (_name, mountMenu, event)
     const item = recipesItem(mountMenu({ keepCoverOnlyLockReason: reason }));
     expect(item.attributes("disabled")).toBeDefined();
     expect(tip(item)).toBe(reason);
+  });
+});
+
+// One word apart in a danger group is not a distinction, so the glyph carries
+// it. The shared stub swallows slot content, so these two mount with one that
+// renders it.
+describe("the two Keep items are told apart by their glyph", () => {
+  const GLYPH_STUBS = {
+    global: {
+      stubs: {
+        ...globalStubs.global.stubs,
+        "v-icon": { template: "<i class='glyph'><slot /></i>" },
+      },
+    },
+  };
+  const glyphOf = (wrapper, label) =>
+    wrapper
+      .findAll("button.ctx-item")
+      .find((b) => b.text().includes(label))
+      .find(".glyph")
+      .text();
+
+  it.each([
+    [
+      "ImageGridContextMenu",
+      () =>
+        mount(ImageGridContextMenu, {
+          props: {
+            allPicturesId: "ALL",
+            unassignedPicturesId: "UNASSIGNED",
+            scrapheapPicturesId: "SCRAPHEAP",
+            backendUrl: "http://x",
+            visible: true,
+            selectedCharacter: "ALL",
+            selectedImageIds: ["10", "11", "12"],
+            keepCoverOnlyStackCount: 3,
+          },
+          ...GLYPH_STUBS,
+        }),
+    ],
+    [
+      "SelectionMenu",
+      () =>
+        mount(SelectionMenu, {
+          props: {
+            open: true,
+            backendUrl: "http://x",
+            isReadOnly: false,
+            isScrapheapView: false,
+            selectedImageIds: ["10", "11", "12"],
+            selectedCount: 3,
+            keepCoverOnlyStackCount: 3,
+          },
+          ...GLYPH_STUBS,
+        }),
+    ],
+  ])("%s", (_name, mountMenu) => {
+    const wrapper = mountMenu();
+    expect(glyphOf(wrapper, "Keep recipes only")).toBe("mdi-image-refresh");
+    expect(glyphOf(wrapper, "Keep cover only")).toBe("mdi-layers-minus");
   });
 });
 

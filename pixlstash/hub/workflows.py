@@ -29,6 +29,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services.workflow_hash import (
     HASH_VERSION,
+    MODEL_EXTENSIONS,
     SHA256_FIELD_RE,
     asset_reference,
     assets_from_reduction,
@@ -437,16 +438,31 @@ def filed_instance_hashes(
 
 
 def recipes_missing_a_model(hub: HubDatabase, structural_hashes: list[str]) -> set[str]:
-    """Which of these recipes name a model the shelf does not hold.
+    """Which of these recipes name a model the shelf cannot vouch for.
 
     A model ghost (:func:`model_ghost_names`) or a name that was forgotten
     (:func:`forgotten_asset_counts`) both mean the recipe cannot load what it
     needs, so neither can be made again as it is.
+
+    **A model the shelf cannot judge counts as missing here, which is the
+    opposite of what the ghost screen does, deliberately.** The shelf scans
+    ``.safetensors`` alone, so :func:`model_ghost_names` will not call a
+    ``.ckpt``, ``.gguf`` or ``.pt`` a ghost: forgetting the name of a model
+    still on disk would be the damage there. The question here is whether to
+    *delete a picture*, and an unjudgeable name answers "we do not know", which
+    on a destructive action has to fail toward keeping the picture.
+
+    One blind spot stays, and it is the ghost screen's: ``_model_ghost_names``
+    suspends digest judgement entirely while any shelf model still has a NULL
+    ``sha256`` (``judge_digests``), so on a library whose checkpoint hashing has
+    not finished a recipe identified only by a digest is not flagged. It is a
+    window rather than a rule, and it closes itself when the hashing does.
     """
     wanted = set(structural_hashes)
     if not wanted:
         return set()
     ghosts = model_ghost_names(hub)
+    unjudgeable = tuple(ext for ext in MODEL_EXTENSIONS if ext != SHELF_MODEL_SUFFIX)
     missing: set[str] = set()
     for batch in chunked(sorted(wanted)):
         placeholders = ",".join("?" for _ in batch)
@@ -458,6 +474,7 @@ def recipes_missing_a_model(hub: HubDatabase, structural_hashes: list[str]) -> s
                 tuple(batch),
             )
             if row["normalized_filename"] in ghosts
+            or row["normalized_filename"].endswith(unjudgeable)
         )
     for per_recipe in forgotten_asset_counts(hub).values():
         missing.update(wanted.intersection(per_recipe))

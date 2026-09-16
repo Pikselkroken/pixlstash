@@ -4014,6 +4014,13 @@ async function runKeepCoverOnly() {
       stackIds,
       keepRecipes,
       keepEveryGhost: keepEveryGhost.value,
+      // What the button's figure was computed from. Keep recipes only is the
+      // first mode whose inputs move while the dialog is open (a background
+      // finder writes a thumbnail, an import covers an instance hash), so the
+      // server refuses with a 409 rather than move more than was confirmed.
+      expectedPictureIds: keepRecipes
+        ? keepCoverOnlyPreview.value?.picture_ids_moving
+        : undefined,
     });
     const movedIds = Array.isArray(result?.picture_ids_moved)
       ? result.picture_ids_moved
@@ -4033,12 +4040,6 @@ async function runKeepCoverOnly() {
       keepRecipes ? KEEP_RECIPES_ONLY_OP_TYPE : KEEP_COVER_ONLY_OP_TYPE,
       keepCoverOnlySkipNote(result),
     );
-    if (result?.ghost_retention_saved === false) {
-      noticeStore.error(
-        "Keeping every ghost is on until PixlStash restarts, but it could not be saved. Set it again in Settings › Privacy.",
-        { key: "keep-recipes-ghost-retention" },
-      );
-    }
     // Raises "Kept the cover of N stacks · M pictures to the Scrapheap · Undo".
     operationStore.refresh();
     emit("refresh-sidebar");
@@ -4057,6 +4058,20 @@ async function runKeepCoverOnly() {
     keepCoverOnlyRecipes.value = false;
     keepEveryGhost.value = false;
   } catch (err) {
+    if (err?.response?.status === 409) {
+      // More pictures qualified while the dialog was open. Nothing was moved:
+      // re-run the preview so the user confirms the figure that is now true.
+      console.warn(
+        `Keep recipes only: the plan grew for stacks [${stackIds.join(", ")}]`,
+        err,
+      );
+      noticeStore.warning(
+        "More pictures can be made again than when this was opened, so nothing was moved. Check the new count and confirm again.",
+        { key: "keep-cover-only" },
+      );
+      await loadKeepCoverOnlyPreview();
+      return;
+    }
     console.error(
       `Keep cover only failed for stacks [${stackIds.join(", ")}]`,
       err,

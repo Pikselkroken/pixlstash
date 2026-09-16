@@ -16,6 +16,7 @@ import {
   keepCoverOnlySkipReasons,
   keepCoverOnlySkippedCount,
   keepCoverOnlyTitle,
+  keepRecipesOnlyLede,
   keepRecipesOnlyStayingCount,
   keepRecipesOnlyStayingReasons,
 } from "./keepCoverOnly";
@@ -326,6 +327,21 @@ describe("Keep recipes only copy", () => {
     ]);
     expect(keepRecipesOnlyStayingCount(preview)).toBe(6);
     expect(keepRecipesOnlyStayingReasons(null)).toEqual([]);
+  });
+
+  // Under `covered` what takes the recipe away later is deleting the COVER,
+  // which no reader derives from "your ghost setting".
+  it("names the cover as what keeps a recipe alive, under Covered only", () => {
+    expect(keepRecipesOnlyLede("covered")).toContain(
+      "for as long as its cover stays",
+    );
+    expect(keepRecipesOnlyLede("on")).not.toContain("cover stays");
+    expect(keepRecipesOnlyLede("on")).toContain(
+      "each leaves its thumbnail and recipe behind",
+    );
+    // Unknown yet: never the covered promise, which would be the wrong half to
+    // guess at.
+    expect(keepRecipesOnlyLede(null)).not.toContain("cover stays");
   });
 
   it("does not describe Covered only when the ghost setting is Off", () => {

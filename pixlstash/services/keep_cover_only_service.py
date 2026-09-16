@@ -84,6 +84,7 @@ the figures describe what the button does.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Iterable, Optional
@@ -178,7 +179,7 @@ STAY_NO_RECIPE = "no_recipe"
 """A copy stays: the hub holds no instance of its recipe for this library."""
 
 STAY_MODEL_MISSING = "model_missing"
-"""A copy stays: its recipe loads a model the shelf does not hold."""
+"""A copy stays: its recipe loads a model the shelf does not hold, or cannot judge."""
 
 STAY_NO_THUMBNAIL = "no_thumbnail"
 """A copy stays: it has no thumbnail yet, and a ghost is never written without one."""
@@ -197,6 +198,20 @@ STAYING_REASONS = (
 
 class KeepCoverOnlyError(Exception):
     """Raised when a keep-cover-only request cannot be honoured as asked."""
+
+
+class KeepCoverOnlyPlanGrew(KeepCoverOnlyError):
+    """The plan now moves a picture the caller's preview did not report.
+
+    Keep recipes only is the first mode whose inputs move on their own while
+    the dialog is open: ``MissingThumbnailFinder`` writes thumbnails, an import
+    can cover a previously-uncovered instance hash, and a model can reach the
+    shelf. The button's figure has to be the figure acted on
+    (``docs/design/keep-cover-only.md``, acceptance criterion 1), so the call
+    is refused rather than quietly moving more than was agreed. A plan that
+    SHRANK is not an error: moving fewer pictures than consented to is within
+    the consent.
+    """
 
 
 @dataclass(frozen=True)
@@ -573,6 +588,25 @@ def _character_loss(
     return {cid: sorted(pids) for cid, pids in carriers.items()}
 
 
+def _has_thumbnail(image_root: Optional[str], file_path: Optional[str]) -> bool:
+    """Whether a thumbnail file exists, asking the way a dry run may.
+
+    The same places ``ImageUtils.find_thumbnail`` looks, which is what the purge
+    reads (``workflow_ghost_service._thumbnail_bytes``), but **without its side
+    effect**: that helper brings a pre-#1164 bitmap home with ``os.replace``,
+    and a preview is not allowed to write to disk. The column is not asked:
+    ``thumbnail_width`` says a thumbnail was once made, the file is what the
+    purge needs.
+    """
+    home = ImageUtils.get_thumbnail_path(image_root, file_path)
+    if home and os.path.isfile(home):
+        return True
+    return any(
+        os.path.isfile(path)
+        for path in ImageUtils.legacy_thumbnail_paths(image_root, file_path)
+    )
+
+
 def _staying_reasons_in_session(
     session: Session, copies: list[Picture], recipes: RecipeCheck
 ) -> dict[int, str]:
@@ -597,9 +631,13 @@ def _staying_reasons_in_session(
         library_uuid,
         [pic.workflow_instance_hash for pic in copies if pic.workflow_instance_hash],
     )
-    # ponytail: two hub reads (one a json_each pass over every recipe document)
-    # inside the vault read/write task; move them before the task if a large hub
-    # makes the preview or the collapse visibly slow.
+    # ponytail: both hub reads are whole-hub whatever the selection's size --
+    # `model_ghost_names` reads every `workflow_recipe_asset` row and four model
+    # queries, `forgotten_asset_counts` a `json_each` pass over every recipe
+    # document -- and they run INSIDE the serialised vault DB task, so a large
+    # hub holds the worker and queues every background finder behind it. The
+    # dialog re-runs the preview on each tick of the keep-every-ghost box. Move
+    # both reads in front of the task (they need no session) if that shows.
     missing_model = recipes_missing_a_model(
         hub,
         [
@@ -620,9 +658,7 @@ def _staying_reasons_in_session(
             reasons[int(pic.id)] = STAY_NO_RECIPE
         elif pic.workflow_structural_hash in missing_model:
             reasons[int(pic.id)] = STAY_MODEL_MISSING
-        elif pic.thumbnail_width is None or not ImageUtils.find_thumbnail(
-            recipes.image_root, pic.file_path
-        ):
+        elif not _has_thumbnail(recipes.image_root, pic.file_path):
             reasons[int(pic.id)] = STAY_NO_THUMBNAIL
         else:
             passing.append(pic)
@@ -947,10 +983,12 @@ def preview_in_session(
         "keep_recipes": recipes is not None,
         "stacks_skipped_nothing_reproducible": len(skipped_nothing),
         "ghost_retention": recipes.ghost_retention if recipes else None,
-        # Keep recipes only: the copies that stay live, per reason. Counted over
-        # the stacks that are eligible or have nothing reproducible, which are the
-        # only ones whose copies were judged one by one, so a copy of a locked
-        # stack is never in two places.
+        # Keep recipes only: the copies that stay live, per reason, over the
+        # stacks that are eligible or have nothing reproducible. A stack skipped
+        # for a locked set was never judged copy by copy; one skipped for a
+        # character link was, but it does not change at all, so its copies are
+        # named in its own row rather than in this total. The mutation scopes
+        # `pictures_staying` identically.
         **{
             f"pictures_staying_{reason}": sum(
                 len(row.staying_copies.get(reason, []))
@@ -973,6 +1011,8 @@ def keep_cover_only_in_session(
     source: str = "external",
     origin_client_id: Optional[str] = None,
     recipes: Optional[RecipeCheck] = None,
+    expected_picture_ids: Optional[Iterable[int]] = None,
+    before_write=None,
 ) -> dict[str, Any]:
     """Collapse every eligible stack in the selection to its cover.
 
@@ -998,6 +1038,13 @@ def keep_cover_only_in_session(
             request in the handler and passed down explicitly.
         recipes: Keep recipes only; see :func:`plan_in_session`. Copies that
             could not be made again stay live in their stack.
+        expected_picture_ids: What the caller's preview said would move. The
+            call is refused with :class:`KeepCoverOnlyPlanGrew` if the plan has
+            since grown; see that class.
+        before_write: Called once, after the plan and before the first write,
+            only when something will actually move. Raising from it rolls the
+            whole call back with nothing moved, which is what makes it the
+            place to apply a setting the plan was made under.
 
     Returns:
         The response body documented on ``POST /api/v1/stacks/keep-cover-only``,
@@ -1006,6 +1053,13 @@ def keep_cover_only_in_session(
     plan = plan_in_session(session, stack_ids, picture_ids, recipes)
     eligible = plan.eligible
     moving = plan.moving_picture_ids
+    if expected_picture_ids is not None:
+        unexpected = sorted(set(moving) - {int(pid) for pid in expected_picture_ids})
+        if unexpected:
+            raise KeepCoverOnlyPlanGrew(
+                f"{len(unexpected)} picture(s) qualified since the preview was "
+                "read, so this would move more than was confirmed; preview again"
+            )
 
     result: dict[str, Any] = {
         "status": "success",
@@ -1031,7 +1085,11 @@ def keep_cover_only_in_session(
         "stacks_skipped_nothing_reproducible": [
             row.as_dict() for row in plan.skipped(SKIP_NOTHING_REPRODUCIBLE)
         ],
-        # Same stacks the preview counts, so the receipt cannot contradict it.
+        # The stacks whose copies were judged one by one AND whose outcome the
+        # dialog describes. A stack skipped for a character link is judged too,
+        # but it does not change at all, so counting its copies as "staying"
+        # would put them in a sentence about a collapse that did not happen.
+        # The preview scopes this identically, so the two cannot disagree.
         "pictures_staying": sum(
             len(ids)
             for row in [*eligible, *plan.skipped(SKIP_NOTHING_REPRODUCIBLE)]
@@ -1066,6 +1124,12 @@ def keep_cover_only_in_session(
         [pid for row in eligible for pid in row.member_ids],
         "keep only the cover of a locked stack",
     )
+
+    if before_write is not None:
+        # Before the first write, so a setting the plan assumed is in force
+        # BEFORE the pixels move, and a failure to apply it leaves the library
+        # untouched rather than half-consented.
+        before_write()
 
     batch_id = batch_id or operation_log_service.new_batch_id()
     # Snapshot the stack-expanded set INCLUDING soft-deleted members: the union
@@ -1208,6 +1272,8 @@ def keep_cover_only(
     source: str = "external",
     origin_client_id: Optional[str] = None,
     recipes: Optional[RecipeCheck] = None,
+    expected_picture_ids: Optional[Iterable[int]] = None,
+    before_write=None,
 ) -> dict[str, Any]:
     """Write-path vault wrapper around :func:`keep_cover_only_in_session`."""
     result = vault.db.run_task(
@@ -1219,6 +1285,8 @@ def keep_cover_only(
         source,
         origin_client_id,
         recipes,
+        None if expected_picture_ids is None else list(expected_picture_ids),
+        before_write,
     )
     moved = result.get("picture_ids_moved") or []
     covers = result.get("cover_picture_ids") or []
@@ -1305,6 +1373,7 @@ def recipe_check(vault: "Vault", keep_every_ghost: bool = False) -> RecipeCheck:
 __all__ = [
     "KeepCoverOnlyError",
     "KeepCoverOnlyPlan",
+    "KeepCoverOnlyPlanGrew",
     "MAX_SELECTION_IDS",
     "MIN_STACK_MEMBERS",
     "OP_TYPE_KEEP_COVER_ONLY",

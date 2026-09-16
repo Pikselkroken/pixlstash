@@ -300,13 +300,20 @@ one reason each, in `pictures_staying_no_recipe`, `_model_missing`,
 stack with no such copy is a fifth stack bucket,
 `stacks_skipped_nothing_reproducible`, and `ghost_retention` says which retention
 position the plan assumed. `keep_every_ghost: true` plans under `on`, and the
-real call sets the server's `workflow_ghost_retention` to `on` once something
-moved: the dialog re-previews when that box changes so the figure stays the
+real call sets the server's `workflow_ghost_retention` to `on` before anything
+moves, once the plan has something to move (a failure to save it raises with
+nothing moved): the dialog re-previews when that box changes so the figure stays the
 button's. The op type is `stack.keep_recipes_only`; the setting change is not
 part of its undo. A copy that stays is left out of the metadata union. The
-response carries `pictures_staying` (the same stacks the preview counts),
-`ghost_retention`, and `ghost_retention_saved: false` when the setting went on
-but could not be saved. At least one id list must be non-empty (400 otherwise); they are
+response carries `pictures_staying` (the same stacks the preview counts) and
+`ghost_retention`.
+
+**Send `expected_picture_ids` on the real call**, the preview's
+`picture_ids_moving`. Keep recipes only is the first mode whose inputs move
+while the dialog is open (a background finder writes a thumbnail, an import
+covers an instance hash, a model reaches the shelf), so a plan that has **grown**
+is a **409** that moves nothing: preview again and re-confirm. A plan that
+shrank still runs. At least one id list must be non-empty (400 otherwise); they are
 unioned, and **the unit is the stack**, any picture named pulls in its whole
 stack, so a partial selection inside a stack collapses the whole stack. Loose
 pictures name no stack and are ignored.

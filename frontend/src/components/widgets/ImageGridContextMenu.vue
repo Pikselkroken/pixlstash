@@ -669,10 +669,28 @@
       </template>
 
       <!-- ── Remove / Delete ───────────────────────────────────────────
-           The trailing danger group, ordered by escalating severity:
-           Keep cover only → Move to the Scrapheap → Delete forever. Keep cover
-           only is recoverable and touches only stacks; Delete moves the whole
-           selection; the scrapheap view's Delete destroys files. -->
+           The trailing danger group, ordered by escalating severity: Keep
+           recipes only → Keep cover only → Move to the Scrapheap → Delete
+           forever. Keep recipes only moves a strict subset of what Keep cover
+           only moves, to the same place, under the same one undo; both are
+           recoverable and touch only stacks; Delete moves the whole selection;
+           the scrapheap view's Delete destroys files. -->
+      <button
+        v-if="showKeepCoverOnly"
+        class="ctx-item ctx-item--danger"
+        :disabled="isReadOnly || !!keepCoverOnlyLockReason"
+        @click="onAction('keep-cover-only', { keepRecipes: true })"
+      >
+        <Tooltip
+          :text="
+            keepCoverOnlyLockReason ||
+            'Keep each selected stack\'s cover and move the other pictures that could be made again to the Scrapheap'
+          "
+          activator="parent"
+        />
+        <v-icon class="ctx-icon">{{ KEEP_RECIPES_ONLY_ICON }}</v-icon>
+        {{ keepRecipesOnlyLabel }}
+      </button>
       <button
         v-if="showKeepCoverOnly"
         class="ctx-item ctx-item--danger"
@@ -688,22 +706,6 @@
         />
         <v-icon class="ctx-icon">{{ KEEP_COVER_ONLY_ICON }}</v-icon>
         {{ keepCoverOnlyLabel }}
-      </button>
-      <button
-        v-if="showKeepCoverOnly"
-        class="ctx-item ctx-item--danger"
-        :disabled="isReadOnly || !!keepCoverOnlyLockReason"
-        @click="onAction('keep-cover-only', { keepRecipes: true })"
-      >
-        <Tooltip
-          :text="
-            keepCoverOnlyLockReason ||
-            'Keep each selected stack\'s cover and move the other pictures that could be made again to the Scrapheap'
-          "
-          activator="parent"
-        />
-        <v-icon class="ctx-icon">{{ KEEP_COVER_ONLY_ICON }}</v-icon>
-        {{ keepRecipesOnlyLabel }}
       </button>
       <button
         v-if="showRemoveButton"
@@ -746,6 +748,7 @@ import { faceBoxColor } from "../../utils/utils.js";
 import { isApplePlatform } from "../../utils/shortcutHints.js";
 import {
   KEEP_COVER_ONLY_ICON,
+  KEEP_RECIPES_ONLY_ICON,
   KEEP_RECIPES_ONLY_LABEL,
   keepCoverOnlyMenuLabel,
 } from "../../utils/keepCoverOnly";

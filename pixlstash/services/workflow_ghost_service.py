@@ -213,7 +213,19 @@ def apply_ghost_retention(server, retention: str) -> None:
     keep-every-ghost consent in Keep recipes only. The in-memory value is set
     first, so a persist that raises still leaves the chosen position in force
     for this process; the caller decides what a failed persist means.
+
+    The position is validated here as well as at the PATCH that already
+    validates it: this is now a shared write chokepoint for a consent setting,
+    and one that is safe by construction beats two callers that happen to be.
+
+    Raises:
+        ValueError: *retention* is not one of :data:`GHOST_RETENTION_CHOICES`.
     """
+    if retention not in GHOST_RETENTION_CHOICES:
+        raise ValueError(
+            f"{GHOST_RETENTION_KEY} must be one of {list(GHOST_RETENTION_CHOICES)}, "
+            f"not {retention!r}"
+        )
     server._server_config[GHOST_RETENTION_KEY] = retention
     server.vault.set_ghost_retention(retention)
     config_path = getattr(server, "_server_config_path", None)

@@ -41,6 +41,58 @@ const KEEP_COVER_ONLY_LABEL = "Keep cover only";
 export const KEEP_RECIPES_ONLY_LABEL = "Keep recipes only";
 
 /**
+ * Keep recipes only's own glyph, and deliberately NOT the layers family.
+ *
+ * A frame with a circular arrow states the property the eligibility test
+ * measures — this picture could be made again — without claiming the app will
+ * re-make anything, and without claiming a ghost survives, which is what the
+ * copy branches on. `mdi-layers-remove` was rejected: its cross reads as more
+ * severe than the sibling's minus, on the LESS destructive of the two items,
+ * which inverts the one signal the danger group is ordered by
+ * (`lead-designer`, 2026-09-16).
+ */
+export const KEEP_RECIPES_ONLY_ICON = "mdi-image-refresh";
+
+/** The same glyph without the `mdi-` prefix, which is what AppButton takes. */
+export const KEEP_RECIPES_ONLY_ICON_NAME = "image-refresh";
+
+/**
+ * The Keep recipes only lede, branching on the LIVE ghost setting.
+ *
+ * Under `covered` — the default — what takes a recipe away later is deleting
+ * the cover the stack just kept, because the ghost is retained only while a
+ * surviving picture carries the same instance hash. "Your ghost setting" does
+ * not let a reader derive that, so the sentence says it. Same rule as
+ * {@link keepCoverOnlyRetentionSentence}: read the live value, never assume one.
+ *
+ * `off` needs no variant: nothing is eligible at that position, so the dialog
+ * has no pictures to describe.
+ *
+ * @param {string|null|undefined} ghostRetention - the preview's `ghost_retention`.
+ * @returns {string}
+ */
+export function keepRecipesOnlyLede(ghostRetention) {
+  const tail =
+    ghostRetention === "covered"
+      ? "each leaves a thumbnail and recipe behind for as long as its cover stays — delete the cover for good and they go with it."
+      : "each leaves its thumbnail and recipe behind.";
+  return (
+    "Each stack keeps its cover. The other pictures in it that could be made " +
+    "again from their recipe move to the Scrapheap, where you can restore " +
+    `them. If you empty the Scrapheap later, ${tail} Loose pictures are left alone.`
+  );
+}
+
+/**
+ * The note under the keep-every-ghost box. Two facts a reader would otherwise
+ * assume wrongly: the setting is not per library, and undo does not reach it.
+ */
+export const KEEP_EVERY_GHOST_NOTE =
+  "Turns on Keep picture ghosts (Settings › Privacy) for every library, so " +
+  "the thumbnail and prompt of anything you delete for good stay until you " +
+  "purge them. Ctrl+Z does not turn it back off.";
+
+/**
  * The glyph, once: the inverse of the mdi-layers-plus the user pressed to build
  * these stacks. Not `mdi-delete`, which would over-claim; nothing leaves disk.
  * The same glyph rides the menu item, the confirm button and the receipt, so
@@ -402,11 +454,14 @@ export function keepRecipesOnlyStayingReasons(preview) {
   if (ghost > 0) {
     rows.push({
       key: "ghost_not_kept",
+      // Consequence first, mechanism second: the previous shape led with a
+      // double negative nobody parsed on the first read.
       text:
         preview.ghost_retention === "off"
           ? `${ghost.toLocaleString()} would keep nothing, because your ghost setting is Off.`
-          : `${pictures(ghost)} a prompt no kept picture shares, and your ghost ` +
-            `setting only keeps recipes that one does.`,
+          : ghost === 1
+            ? "1 shares its prompt with no picture that stays, so your ghost setting would keep nothing of it."
+            : `${ghost.toLocaleString()} share their prompt with no picture that stays, so your ghost setting would keep nothing of them.`,
     });
   }
   return rows;

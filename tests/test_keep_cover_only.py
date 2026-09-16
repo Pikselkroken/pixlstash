@@ -45,7 +45,11 @@ from pixlstash.db_models import (
 )
 from pixlstash.server import Server
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.services import keep_cover_only_service, operation_log_service
+from pixlstash.services import (
+    keep_cover_only_service,
+    operation_log_service,
+    workflow_ghost_service,
+)
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
@@ -1326,5 +1330,94 @@ def test_every_ghost_is_saved_to_disk_and_untouched_when_nothing_moved():
         assert body["ghost_retention"] == "on"
         with open(config_path) as handle:
             assert json.load(handle)["workflow_ghost_retention"] == "on"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_model_the_shelf_cannot_judge_keeps_the_copy():
+    """The shelf scans .safetensors only, so a .ckpt is unjudgeable. On a
+    destructive action "we do not know" has to keep the picture."""
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+        ckpt = _file_recipe(server, _txt2img("a lighthouse", ckpt="kro_local.ckpt"))
+        _set_keys(server, pics["covered"], ckpt)
+        preview = client.post(
+            PREVIEW_URL, json={"stack_ids": [stack_id], "keep_recipes": True}
+        ).json()
+        row = _rows_by_stack(preview)[stack_id]
+        assert pics["covered"] in row["staying_picture_ids"]["model_missing"]
+        assert preview["pictures_moving"] == 0
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_plan_that_grew_since_the_preview_is_refused():
+    """Thumbnails land on a background timer, so the confirm must act on the
+    figure the button showed or refuse."""
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+        selection = {"stack_ids": [stack_id], "keep_recipes": True}
+        preview = client.post(PREVIEW_URL, json=selection).json()
+        confirmed = preview["picture_ids_moving"]
+        assert confirmed == [pics["covered"]]
+
+        # What a finder writing a thumbnail mid-dialog does to the plan.
+        _set_keys(server, pics["no_thumbnail"], None)
+
+        refused = client.post(
+            COLLAPSE_URL, json={**selection, "expected_picture_ids": confirmed}
+        )
+        assert refused.status_code == 409
+        rows = _picture_rows(server, list(pics.values()))
+        assert not any(row[0] for row in rows.values())
+
+        # A plan that shrank is within the consent and still runs.
+        body = client.post(
+            COLLAPSE_URL,
+            json={
+                **selection,
+                "expected_picture_ids": confirmed + [pics["no_thumbnail"]],
+            },
+        ).json()
+        assert sorted(body["picture_ids_moved"]) == sorted(
+            [pics["covered"], pics["no_thumbnail"]]
+        )
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_keeping_every_ghost_is_in_force_before_anything_moves():
+    """The plan is made under `on`, so a failure to apply it must leave the
+    library untouched rather than move pictures under the old position."""
+    temp_dir, client, server, stack_id, pics = _recipes_env()
+    try:
+        called = []
+        original = workflow_ghost_service.apply_ghost_retention
+
+        def explode(srv, retention):
+            # No DB read in here: this runs ON the vault's writer thread, so
+            # asking it for a row would wait on the queue it is draining.
+            called.append(retention)
+            original(srv, retention)
+            raise OSError("server-config is not writable")
+
+        workflow_ghost_service.apply_ghost_retention = explode
+        try:
+            with pytest.raises(OSError):
+                client.post(
+                    COLLAPSE_URL,
+                    json={
+                        "stack_ids": [stack_id],
+                        "keep_recipes": True,
+                        "keep_every_ghost": True,
+                    },
+                )
+        finally:
+            workflow_ghost_service.apply_ghost_retention = original
+        assert called == ["on"]
+        # Nothing moved, which is only true if the setting was attempted first:
+        # a write after the soft deletes would have left them behind.
+        rows = _picture_rows(server, list(pics.values()))
+        assert not any(row[0] for row in rows.values())
     finally:
         _teardown(temp_dir, server)

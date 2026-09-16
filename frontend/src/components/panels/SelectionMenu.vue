@@ -358,11 +358,31 @@
     </template>
 
     <!-- ── Remove / Delete (danger) ────────────────────────
-         Ordered by escalating severity: Keep cover only → Move to the
-         Scrapheap → Delete forever. There is deliberately NO top-level Keep
-         cover only button on the pill itself: a floating pill over a photo grid
+         Ordered by escalating severity: Keep recipes only → Keep cover only
+         → Move to the Scrapheap → Delete forever; Keep recipes only moves a
+         strict subset of what its sibling moves. There is deliberately NO
+         top-level Keep cover only button on the pill itself: a floating pill over a photo grid
          is the wrong place for an error-filled control, and this is periodic
          cleanup rather than a high-frequency verb. -->
+    <button
+      v-if="showKeepCoverOnly"
+      class="ctx-item ctx-item--danger"
+      :disabled="isReadOnly || !!keepCoverOnlyLockReason"
+      @click="
+        $emit('keep-cover-only', { keepRecipes: true });
+        $emit('close');
+      "
+    >
+      <Tooltip
+        :text="
+          keepCoverOnlyLockReason ||
+          'Keep each selected stack\'s cover and move the other pictures that could be made again to the Scrapheap'
+        "
+        activator="parent"
+      />
+      <v-icon class="ctx-icon">{{ KEEP_RECIPES_ONLY_ICON }}</v-icon>
+      {{ keepRecipesOnlyLabel }}
+    </button>
     <button
       v-if="showKeepCoverOnly"
       class="ctx-item ctx-item--danger"
@@ -381,25 +401,6 @@
       />
       <v-icon class="ctx-icon">{{ KEEP_COVER_ONLY_ICON }}</v-icon>
       {{ keepCoverOnlyLabel }}
-    </button>
-    <button
-      v-if="showKeepCoverOnly"
-      class="ctx-item ctx-item--danger"
-      :disabled="isReadOnly || !!keepCoverOnlyLockReason"
-      @click="
-        $emit('keep-cover-only', { keepRecipes: true });
-        $emit('close');
-      "
-    >
-      <Tooltip
-        :text="
-          keepCoverOnlyLockReason ||
-          'Keep each selected stack\'s cover and move the other pictures that could be made again to the Scrapheap'
-        "
-        activator="parent"
-      />
-      <v-icon class="ctx-icon">{{ KEEP_COVER_ONLY_ICON }}</v-icon>
-      {{ keepRecipesOnlyLabel }}
     </button>
     <button
       v-if="showRemoveButton"
@@ -436,6 +437,7 @@ import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import {
   KEEP_COVER_ONLY_ICON,
+  KEEP_RECIPES_ONLY_ICON,
   KEEP_RECIPES_ONLY_LABEL,
   keepCoverOnlyMenuLabel,
 } from "../../utils/keepCoverOnly";

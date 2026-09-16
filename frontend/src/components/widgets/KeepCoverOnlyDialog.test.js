@@ -376,6 +376,31 @@ describe("KeepCoverOnlyDialog: Keep recipes only", () => {
     expect(everyGhost(wrapper).exists()).toBe(true);
   });
 
+  // Unticking re-runs the preview, which nulls it. A control that vanishes
+  // under the cursor in a destructive confirm is the wrong kind of surprise.
+  it("stays mounted, disabled, while the re-run is in flight", async () => {
+    const wrapper = mountRecipes();
+    expect(everyGhost(wrapper).exists()).toBe(true);
+    await wrapper.setProps({ preview: null, loading: true });
+    expect(everyGhost(wrapper).exists()).toBe(true);
+    expect(everyGhost(wrapper).attributes("disabled")).toBeDefined();
+  });
+
+  it("reads the lede from the live ghost setting", () => {
+    expect(mountRecipes().find(".kco-lede").text()).toContain(
+      "for as long as its cover stays",
+    );
+    expect(
+      mountRecipes({ preview: { ...RECIPES, ghost_retention: "on" } })
+        .find(".kco-lede")
+        .text(),
+    ).not.toContain("cover stays");
+  });
+
+  it("says undo will not turn the ghost setting back off", () => {
+    expect(mountRecipes().text()).toContain("Ctrl+Z does not turn it back off");
+  });
+
   it("hands the box to the parent rather than keeping it", async () => {
     const CheckboxStub = {
       props: ["modelValue"],

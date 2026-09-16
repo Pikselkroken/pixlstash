@@ -123,8 +123,20 @@ class KeepCoverOnlyRequest(BaseModel):
         default=False,
         description=(
             "With `keep_recipes`: plan as if ghost retention were `on`, and on "
-            "the real call set it to `on` once something has moved. Ignored "
-            "without `keep_recipes`."
+            "the real call set it to `on` before anything moves, once the plan "
+            "has something to move. Ignored without `keep_recipes`."
+        ),
+    )
+    expected_picture_ids: Optional[list[int]] = Field(
+        default=None,
+        description=(
+            "`picture_ids_moving` from the preview the user confirmed. The call "
+            "is a **409** if the plan has since grown to move a picture that is "
+            "not in this list, so the button's figure is the figure acted on. A "
+            "plan that shrank still runs. Keep recipes only needs this because "
+            "its inputs move on their own: thumbnails are written by a "
+            "background finder, an import can cover an instance hash, and a "
+            "model can reach the shelf while the dialog is open."
         ),
     )
 
@@ -564,13 +576,6 @@ class KeepCoverOnlyResponse(BaseModel):
             "Example: `on`."
         ),
         examples=["on"],
-    )
-    ghost_retention_saved: Optional[bool] = Field(
-        default=None,
-        description=(
-            "`false` only when `keep_every_ghost` turned retention on but it could "
-            "not be saved, so it reverts on restart."
-        ),
     )
     batch_id: Optional[str] = Field(
         default=None,
@@ -1542,6 +1547,14 @@ def create_router(server) -> APIRouter:
                     "2000 ids across the two lists together."
                 )
             },
+            409: {
+                "description": (
+                    "`expected_picture_ids` was sent and the plan has since "
+                    "grown: pictures qualified between the preview and the "
+                    "confirm, so the call would move more than was confirmed. "
+                    "Nothing was written; preview again and re-confirm."
+                )
+            },
             423: {
                 "description": (
                     "A locked picture set was detected over a stack the planner "
@@ -1575,44 +1588,45 @@ def create_router(server) -> APIRouter:
             (payload.batch_id if payload else None) or None
         )
         recipes = _recipe_check(payload)
-        result = keep_cover_only_service.keep_cover_only(
-            server.vault,
-            stack_ids,
-            picture_ids,
-            body_batch_id or header_batch_id,
-            recipes=recipes,
-            **context,
-        )
+        before_write = None
         if (
             recipes is not None
             and payload.keep_every_ghost
-            and result.get("pictures_moved")
             and server.vault.ghost_retention
             != workflow_ghost_service.GHOST_RETENTION_ON
         ):
-            # The consent the dialog asked for, applied only once something moved
-            # under it. Not part of the undo: it is a privacy setting for every
-            # library, turned back down in Settings > Privacy. The pictures have
-            # already moved, so a failed save is reported rather than a 500 that
-            # would read as "nothing happened".
-            try:
+            # The consent the dialog asked for, applied BEFORE the pixels move
+            # and only once the plan has something to move: the plan was made
+            # under `on`, so moving first would leave a window in which a purge
+            # judged the copies under the old position. A failure here raises
+            # out of the call with nothing moved, which is the recoverable
+            # order. Not part of the undo: it is a privacy setting for every
+            # library, turned back down in Settings > Privacy.
+            def before_write():  # noqa: F811 - the None above is the default
                 workflow_ghost_service.apply_ghost_retention(
                     server, workflow_ghost_service.GHOST_RETENTION_ON
                 )
                 logger.info(
-                    "[keep-recipes-only] ghost retention set to 'on' as consented "
-                    "in the dialog, after moving %d picture(s)",
-                    result.get("pictures_moved"),
+                    "[keep-recipes-only] ghost retention set to 'on' as "
+                    "consented in the dialog, before anything moved"
                 )
-            except Exception as exc:
-                logger.error(
-                    "[keep-recipes-only] moved %d picture(s) and set ghost "
-                    "retention to 'on' for this run of the server, but could not "
-                    "save it to server-config; it reverts on restart: %s",
-                    result.get("pictures_moved"),
-                    exc,
-                )
-                result["ghost_retention_saved"] = False
+
+        try:
+            result = keep_cover_only_service.keep_cover_only(
+                server.vault,
+                stack_ids,
+                picture_ids,
+                body_batch_id or header_batch_id,
+                recipes=recipes,
+                expected_picture_ids=(
+                    payload.expected_picture_ids if payload is not None else None
+                ),
+                before_write=before_write,
+                **context,
+            )
+        except keep_cover_only_service.KeepCoverOnlyPlanGrew as exc:
+            logger.info("[keep-cover-only] refused: %s", exc)
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if recipes is not None:
             result["ghost_retention"] = server.vault.ghost_retention
         return result

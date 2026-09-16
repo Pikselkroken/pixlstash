@@ -42,6 +42,8 @@ import AppDialog from "./AppDialog.vue";
 import AppButton from "./AppButton.vue";
 import {
   KEEP_COVER_ONLY_ICON_NAME,
+  KEEP_EVERY_GHOST_NOTE,
+  KEEP_RECIPES_ONLY_ICON_NAME,
   UNKNOWN_FIGURE,
   keepCoverOnlyBytesSentence,
   keepCoverOnlyConfirmLabel,
@@ -49,6 +51,7 @@ import {
   keepCoverOnlySkipReasons,
   keepCoverOnlySkippedCount,
   keepCoverOnlyTitle,
+  keepRecipesOnlyLede,
   keepRecipesOnlyStayingCount,
   keepRecipesOnlyStayingReasons,
 } from "../../utils/keepCoverOnly";
@@ -137,17 +140,46 @@ const stayingSummary = computed(() => {
 });
 
 /**
+ * Whether this selection has ever had copies staying for want of a ghost.
+ *
+ * Latched rather than read live, because ticking or unticking the box nulls the
+ * preview for the re-run: reading the live value would unmount the control
+ * under the cursor and jump the layout mid-confirm. It is disabled instead
+ * while the new figures land, and reset when the dialog opens.
+ */
+const everGhostBlocked = ref(false);
+
+watch(
+  () => props.preview,
+  (preview) => {
+    if (!preview || props.previewFailed) return;
+    if (
+      preview.ghost_retention !== "on" &&
+      Number(preview.pictures_staying_ghost_not_kept) > 0
+    ) {
+      everGhostBlocked.value = true;
+    }
+  },
+  { immediate: true },
+);
+
+/**
  * Offered only where it changes something: while ticked (so it can be
- * unticked), or when some copies stay only because their ghost would not be
- * kept. Never when the setting is already `on`.
+ * unticked), or when copies of this selection stay because their ghost would
+ * not be kept. Never when the setting is already `on`.
  */
 const showEveryGhost = computed(
-  () =>
-    props.keepRecipes &&
-    (props.keepEveryGhost ||
-      (!figuresUnknown.value &&
-        props.preview.ghost_retention !== "on" &&
-        Number(props.preview.pictures_staying_ghost_not_kept) > 0)),
+  () => props.keepRecipes && (props.keepEveryGhost || everGhostBlocked.value),
+);
+
+/** The lede branches on the live setting; see `keepRecipesOnlyLede`. */
+const recipesLede = computed(() =>
+  keepRecipesOnlyLede(figuresUnknown.value ? null : props.preview.ghost_retention),
+);
+
+/** The glyph and the confirm label name one operation at all three moments. */
+const confirmIcon = computed(() =>
+  props.keepRecipes ? KEEP_RECIPES_ONLY_ICON_NAME : KEEP_COVER_ONLY_ICON_NAME,
 );
 const confirmLabel = computed(() =>
   keepCoverOnlyConfirmLabel(picturesMoving.value),
@@ -226,7 +258,10 @@ const cancelRef = ref(null);
 watch(
   () => props.open,
   (isOpen) => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      everGhostBlocked.value = false;
+      return;
+    }
     // After the dialog's own enter transition has mounted the footer.
     nextTick(() => {
       cancelRef.value?.focus?.();
@@ -237,13 +272,7 @@ watch(
 
 <template>
   <AppDialog :open="open" :title="title" @close="emit('close')">
-    <p v-if="keepRecipes" class="kco-lede">
-      Each stack keeps its cover. Every other picture in it that could be made
-      again from its recipe moves to the Scrapheap, where you can restore it.
-      When the Scrapheap is emptied, each leaves its thumbnail and recipe behind
-      for as long as your ghost setting keeps them. Loose pictures are left
-      alone.
-    </p>
+    <p v-if="keepRecipes" class="kco-lede">{{ recipesLede }}</p>
     <p v-else class="kco-lede">
       Each stack keeps its cover. Every other picture in it moves to the
       Scrapheap, where you can restore it. A stack collapses whole, even if you
@@ -293,27 +322,28 @@ watch(
       </ul>
     </section>
 
+    <!-- The live region holds the figures that change under the reader; the
+         checkbox is a control and sits outside it, or every preview re-run
+         re-announces it. -->
     <section
-      v-if="stayingReasons.length || showEveryGhost"
+      v-if="stayingReasons.length"
       class="kco-skips"
       role="status"
       aria-labelledby="keep-recipes-staying-title"
     >
-      <p
-        v-if="stayingReasons.length"
-        id="keep-recipes-staying-title"
-        class="kco-skips-title"
-      >
+      <p id="keep-recipes-staying-title" class="kco-skips-title">
         <v-icon size="16" class="kco-icon">mdi-image-multiple-outline</v-icon>
         {{ stayingSummary }}
       </p>
-      <ul v-if="stayingReasons.length">
+      <ul>
         <li v-for="reason in stayingReasons" :key="reason.key">
           {{ reason.text }}
         </li>
       </ul>
+    </section>
+
+    <div v-if="showEveryGhost" class="kco-skips kco-every-ghost-panel">
       <v-checkbox
-        v-if="showEveryGhost"
         :model-value="keepEveryGhost"
         :disabled="busy || loading"
         density="compact"
@@ -323,12 +353,8 @@ watch(
         label="Keep a ghost of every picture deleted from the Scrapheap"
         @update:model-value="emit('update:keepEveryGhost', !!$event)"
       />
-      <p v-if="showEveryGhost" class="kco-every-ghost-note">
-        Sets Keep picture ghosts to On in Settings › Privacy, for every
-        library, so the thumbnail and prompt of any picture you delete for good
-        stay until you purge them.
-      </p>
-    </section>
+      <p class="kco-every-ghost-note">{{ KEEP_EVERY_GHOST_NOTE }}</p>
+    </div>
 
     <!-- Info-tinted, not error-tinted: recovery is the reassuring half, and
          DeleteForeverDialog's lock note already made this call for the same
@@ -359,7 +385,7 @@ watch(
       </AppButton>
       <AppButton
         variant="danger"
-        :icon-left="KEEP_COVER_ONLY_ICON_NAME"
+        :icon-left="confirmIcon"
         :disabled="!canConfirm"
         :loading="busy"
         @click="emit('confirm')"
@@ -465,8 +491,10 @@ watch(
   gap: var(--space-2);
 }
 
-.kco-every-ghost {
-  margin-top: var(--space-2);
+.kco-every-ghost-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }
 
 .kco-every-ghost :deep(.v-label) {
