@@ -58,7 +58,7 @@ function mountPane(stubOverrides = {}) {
         SettingsSection: { template: "<section><slot /></section>" },
         SettingsTwoCol: { template: "<div><slot /></div>" },
         SettingsFieldBlock: { template: "<div><slot /></div>" },
-        PluginsTable: true,
+        PluginSelect: true,
         "v-tooltip": { template: "<div><slot /></div>" },
         ...stubOverrides,
       },
@@ -95,18 +95,18 @@ describe("BehaviourSection plugin installation help", () => {
   });
 });
 
-describe("BehaviourSection keeps the plugin tables in sync", () => {
+describe("BehaviourSection keeps the plugin pickers in sync", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  // Both tables bind `v-model:settings`. A hand-written handler here once did
+  // Both pickers bind `v-model:settings`. A hand-written handler here once did
   // `taggerSettings.value = s`, which in a <script setup> template sets a
   // property called "value" ON the settings object (refs are auto-unwrapped),
   // so the parent's copy never moved.
   //
-  // Asserted at the prop boundary rather than through a rendered radio:
-  // PluginsTable is stubbed in this suite, and what is under test is the
+  // Asserted at the prop boundary rather than through a rendered select:
+  // PluginSelect is stubbed in this suite, and what is under test is the
   // parent's binding, not the child's markup.
-  it("passes an updated settings object back down to the tables", async () => {
+  it("passes an updated settings object back down to the pickers", async () => {
     const { listTaggers } = await import("../../api/taggers");
     listTaggers.mockResolvedValue({
       plugins: [{ name: "wd14", display_name: "WD14", supports_tags: true }],
@@ -118,22 +118,22 @@ describe("BehaviourSection keeps the plugin tables in sync", () => {
     await nextTick();
     await nextTick();
 
-    const tables = wrapper.findAllComponents({ name: "PluginsTable" });
-    expect(tables.length).toBeGreaterThan(0);
-    expect(tables[0].props("settings")).toEqual({ active_tag_plugin: "wd14" });
+    const pickers = wrapper.findAllComponents({ name: "PluginSelect" });
+    expect(pickers.length).toBeGreaterThan(0);
+    expect(pickers[0].props("settings")).toEqual({ active_tag_plugin: "wd14" });
 
-    // What PluginsTable emits when the active plugin is deselected.
-    tables[0].vm.$emit("update:settings", { active_tag_plugin: null });
+    // What PluginSelect emits when the active plugin is deselected.
+    pickers[0].vm.$emit("update:settings", { active_tag_plugin: null });
     await nextTick();
 
-    const after = wrapper.findAllComponents({ name: "PluginsTable" })[0];
+    const after = wrapper.findAllComponents({ name: "PluginSelect" })[0];
     expect(after.props("settings")).toEqual({ active_tag_plugin: null });
   });
 
-  // The description table has its own binding, and the bug was once in both.
+  // The description picker has its own binding, and the bug was once in both.
   // Breaking only that one would leave the tag test green, so it needs its own
-  // assertion rather than riding on the tag table's.
-  it("does the same for the description table's handler", async () => {
+  // assertion rather than riding on the tag picker's.
+  it("does the same for the description picker's handler", async () => {
     const { listTaggers } = await import("../../api/taggers");
     listTaggers.mockResolvedValue({
       plugins: [
@@ -151,13 +151,13 @@ describe("BehaviourSection keeps the plugin tables in sync", () => {
     await nextTick();
     await nextTick();
 
-    const tables = wrapper.findAllComponents({ name: "PluginsTable" });
-    expect(tables.length).toBeGreaterThan(1);
+    const pickers = wrapper.findAllComponents({ name: "PluginSelect" });
+    expect(pickers.length).toBeGreaterThan(1);
 
-    tables[1].vm.$emit("update:settings", { active_description_plugin: null });
+    pickers[1].vm.$emit("update:settings", { active_description_plugin: null });
     await nextTick();
 
-    const after = wrapper.findAllComponents({ name: "PluginsTable" })[1];
+    const after = wrapper.findAllComponents({ name: "PluginSelect" })[1];
     expect(after.props("settings")).toEqual({ active_description_plugin: null });
   });
 });
@@ -180,14 +180,14 @@ describe("a plugin's saved parameters survive reopening its dialog", () => {
       plugins: [PLUGIN],
       settings: { active_tag_plugin: "wd14", plugins: { wd14: { params: { threshold: 0.35 } } } },
     });
-    const w = mountPane({ PluginsTable: false });
+    const w = mountPane({ PluginSelect: false });
     await flushPromises();
     await nextTick();
     return w;
   }
 
   const gear = (w) =>
-    w.findAll(".pt-col-actions button")[0];
+    w.get(".ps-row button");
   const form = (w) => w.findComponent({ name: "TaggerParametersUI" });
 
   it("shows the value you saved, not the one it opened with", async () => {

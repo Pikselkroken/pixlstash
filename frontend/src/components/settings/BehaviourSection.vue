@@ -4,7 +4,7 @@ import { getUserConfig, patchUserConfig } from "../../api/config";
 import { getWorkerProgress } from "../../api/workers";
 import { listTaggers, listTaggerPluginDiagnostics } from "../../api/taggers";
 import { VSlider, VSwitch } from "vuetify/components";
-import PluginsTable from "../widgets/PluginsTable.vue";
+import PluginSelect from "../widgets/PluginSelect.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import SettingsSection from "./SettingsSection.vue";
@@ -318,16 +318,15 @@ watch(
     </SettingsSection>
 
     <SettingsSection
-      class="tagger-section"
       title="Auto-tagging"
       desc="Plugins that generate tags and captions automatically. Hint: you can also pick taggers for selected pictures in the tag panel or context menu."
     >
-      <SettingsTwoCol class="tagger-cols">
+      <SettingsTwoCol>
         <SettingsFieldBlock class="tagger-col" title="Tag plugin" top>
           <div v-if="taggerLoading" class="settings-tagger-loading">
             Loading…
           </div>
-          <PluginsTable
+          <PluginSelect
             v-else
             kind="tag"
             :plugins="taggerPlugins"
@@ -338,7 +337,7 @@ watch(
           <div v-if="taggerLoading" class="settings-tagger-loading">
             Loading…
           </div>
-          <PluginsTable
+          <PluginSelect
             v-else
             kind="description"
             :plugins="taggerPlugins"
@@ -431,45 +430,11 @@ watch(
 </template>
 
 <style scoped>
-/* The plugin lists scroll, the pane does not: the pane is a column, the
-   Auto-tagging section takes the leftover height, and each column's plugin
-   table is the only thing that overflows. The scroll box wraps the whole
-   table, header included, so PluginsTable pins its header row (see the
-   `position: sticky` there). Without this the two tables push the whole
-   Settings pane past its fixed height and the dialog grows a scrollbar. */
-.behaviour-pane {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-.tagger-section {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-/* A floor, not 0: on a short window the pane is allowed to overflow and scroll
-   as it used to rather than crush the tables to nothing. */
-.tagger-cols {
-  flex: 1 1 auto;
-  min-height: 96px;
-}
-
-/* min-width as well as min-height: a grid item's automatic minimum is its
-   min-content, so a table that refuses to wrap widens its own 1fr track and
-   pushes the whole pane sideways. That is a horizontal scrollbar on the pane,
-   not on the table, and it is why PluginsTable lets a long plugin name wrap. */
+/* min-width: a grid item's automatic minimum is its min-content, and a
+   <select>'s is its widest option, so without this a long plugin name widens
+   its own 1fr track and pushes the whole pane sideways. */
 .tagger-col {
   min-width: 0;
-  min-height: 0;
-}
-
-.tagger-col :deep(.field-block__control) {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
 }
 
 .settings-tagger-loading {
@@ -572,8 +537,8 @@ watch(
 }
 
 /* A plugin's load error is exception text from third-party code and has no
-   length limit, so it is bounded and scrolled too - otherwise it is a second
-   unbounded thing in this section and squeezes the tables it sits under. */
+   length limit, so it is bounded and scrolled rather than allowed to push the
+   Settings pane past its fixed height. */
 .settings-tagger-plugin-errors {
   list-style: none;
   padding: 0;
@@ -581,7 +546,6 @@ watch(
   font-size: var(--text-xs);
   color: rgb(var(--v-theme-error));
   overflow-wrap: anywhere;
-  flex-shrink: 0;
   max-height: 72px;
   overflow-y: auto;
 }

@@ -1045,20 +1045,11 @@ Appearance tab content: sidebar thumbnail size, sidebar width (Full / Dock toggl
 
 #### `BehaviourSection.vue`
 Behaviour tab content (extracted from inline `UserSettingsDialog` markup): hidden tags, VRAM limits, tagger configuration.
-The pane is a flex column: Model Memory and VRAM Budget keep their natural
-height and Auto-tagging takes what is left. Two things inside it can grow
-without limit, and both are bounded and scrolled rather than allowed to push the
-pane: the plugin tables (one scroll region per column) and the plugin load-error
-list (capped, since the text is a third-party exception). `.tagger-cols` keeps a
-96px floor, so on a window too short to give the section a usable height the
-pane falls back to scrolling whole rather than crushing the tables to nothing.
-
-The columns also carry `min-width: 0`. A grid item's automatic minimum is its
-min-content, so a `PluginsTable` that refused to wrap widened its own `1fr`
-track and pushed the pane sideways — a horizontal scrollbar on the *pane*, not
-on the table. Plugin names therefore wrap (`PluginsTable`'s `.pt-plugin-name`),
-and the three fixed-width columns are padded at `--space-2` so the name column
-keeps enough of the ~280px to hold an ordinary name on one line.
+Auto-tagging holds two `PluginSelect` pickers side by side, one per capability.
+The plugin load-error list is capped and scrolled, since the text is a
+third-party exception. The columns carry `min-width: 0`: a grid item's automatic
+minimum is its min-content, and a `<select>`'s is its widest option, so a long
+plugin name would otherwise widen its own `1fr` track and push the pane sideways.
 
 #### `ComfyuiHostSection.vue`
 The ComfyUI host and port (`comfyui_url` in the user config), on the Compute tab. Props: `open`, `first`. Emits `update:comfyui-configured`. There is no workflow import or list in Settings: a workflow is added by dropping it on the Workflows view or into the watched `workflows/` folder, and deleted from `WorkflowInspector`.
@@ -1392,11 +1383,8 @@ Schema-driven form renderer for **tagger plugin** parameter schemas. Props: `sch
 #### `TaggerPluginSettingsDialog.vue`
 Per-plugin settings dialog. Props: `plugin` (plugin schema object), `params` (current param dict), `modelValue` (dialog open). Emits: `update:modelValue`, `saved`. Contains `TaggerParametersUI`, a "Reset to defaults" button, and a label-thresholds preview panel (PixlStash tagger only). Saves via `PATCH /users/me/config` (`tagger_settings.plugins.<name>.params`).
 
-#### `TagPluginsTable.vue`
-Table of tag-capable plugins (`supports_tags = true`). Columns: Active (radio — single selection), Plugin name + tooltip, Loaded indicator, Settings gear. Patches `tagger_settings.active_tag_plugin` via `PATCH /users/me/config` on change. Props: `plugins`, `settings`. Emits: `update:settings`.
-
-#### `DescriptionPluginsTable.vue`
-Table of description-capable plugins (`supports_descriptions = true`). Columns: Active (radio — single selection), Plugin name + tooltip, Loaded indicator, Settings gear. Patches `tagger_settings.active_description_plugin` via `PATCH /users/me/config` on change. Props: `plugins`, `settings`. Emits: `update:settings`.
+#### `PluginSelect.vue`
+Picks the active plugin for one capability (`kind`: `"tag"` or `"description"`, filtering on `supports_tags` / `supports_descriptions`). An `AppSelect` whose first option is an explicit None, then a secondary icon-only gear that opens `TaggerPluginSettingsDialog` for the chosen plugin (disabled while None is chosen), and under them one muted line: loaded or not, and the plugin's description. A saved plugin that is no longer installed shows as "(not installed)" rather than a blank field. Patches `tagger_settings.active_<kind>_plugin` via `PATCH /users/me/config` on change, writing `null` for None. Props: `plugins`, `settings`, `kind`. Emits: `update:settings`. Replaced the radio tables (issue #1344).
 
 #### `ComfyUiRunner.vue` (1097 lines)
 ComfyUI workflow executor embedded in `ImageGrid` and `ImageOverlay`. Connects to the ComfyUI WebSocket for real-time progress. Props: `workflowId`, `clientId`, `imageIds`, `backendUrl`. Emits progress and completion events.
