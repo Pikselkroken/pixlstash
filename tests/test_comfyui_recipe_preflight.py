@@ -10,8 +10,10 @@ import pytest
 from pixlstash.services.comfyui_recipe_service import (
     MAX_SEED_64,
     MODEL_FILENAME_FIELDS,
+    apply_adapter,
     apply_seeds,
     collect_node_classes,
+    detect_lora_targets,
     detect_seed_targets,
     format_prompt_rejection,
     preflight_prompt,
@@ -517,3 +519,163 @@ class TestApplySeeds:
         graph = {"3": {"class_type": "KSampler", "inputs": {"seed": 1}}}
         assert apply_seeds(graph, [{"node_id": "99", "field": "seed"}], 5) == 0
         assert apply_seeds(graph, None, 5) == 0
+
+
+class TestDetectLoraTargets:
+    """#1310: a slot is found by its field name, whatever class carries it."""
+
+    def test_every_core_lora_loader_spelling_is_a_slot(self):
+        graph = {
+            "1": {"class_type": "LoraLoader", "inputs": {"lora_name": "a.safetensors"}},
+            "2": {
+                "class_type": "LoraLoaderModelOnly",
+                "inputs": {"lora_name": "b.safetensors"},
+            },
+            # A pack this module has never been told about, which is the point.
+            "3": {
+                "class_type": "LoraLoader|somepack",
+                "inputs": {"lora_name": "c.safetensors"},
+            },
+        }
+        targets = detect_lora_targets(graph)
+        assert [t["node_id"] for t in targets] == ["1", "2", "3"]
+        assert {t["by"] for t in targets} == {"filename"}
+
+    def test_a_pixlstash_loader_is_a_digest_slot(self):
+        graph = {
+            "1": {
+                "class_type": "PixlStashAdapterLoader",
+                "inputs": {"adapter_sha256": "a" * 64, "strength_model": 0.8},
+            }
+        }
+        assert detect_lora_targets(graph) == [
+            {
+                "node_id": "1",
+                "class_type": "PixlStashAdapterLoader",
+                "field": "adapter_sha256",
+                "value": "a" * 64,
+                "by": "digest",
+            }
+        ]
+
+    def test_a_graph_with_no_lora_loader_has_no_slot(self):
+        # The control: the same reader does find the one GRAPH carries.
+        assert [t["node_id"] for t in detect_lora_targets(GRAPH)] == ["5"]
+        assert detect_lora_targets({"4": GRAPH["4"]}) == []
+        assert detect_lora_targets(None) == []
+
+    def test_a_stackers_numbered_slots_are_each_their_own(self):
+        graph = {
+            "1": {
+                "class_type": "CR LoRA Stack",
+                "inputs": {
+                    "lora_name_1": "a.safetensors",
+                    "lora_name_2": "b.safetensors",
+                },
+            }
+        }
+        assert [t["field"] for t in detect_lora_targets(graph)] == [
+            "lora_name_1",
+            "lora_name_2",
+        ]
+
+    def test_a_node_spelling_its_digest_twice_is_still_one_slot(self):
+        graph = {
+            "1": {
+                "class_type": "PixlStashAdapterLoader",
+                "inputs": {"adapter_sha256": "a" * 64, "lora_sha256": "a" * 64},
+            }
+        }
+        assert len(detect_lora_targets(graph)) == 1
+
+    def test_a_wired_slot_is_left_alone(self):
+        graph = {
+            "1": {"class_type": "LoraLoader", "inputs": {"lora_name": ["9", 0]}},
+        }
+        assert detect_lora_targets(graph) == []
+
+
+class TestApplyAdapter:
+    """#1310: each slot written the way its own loader reads it, or refused."""
+
+    INFO = {
+        "LoraLoader": {
+            "input": {
+                "required": {
+                    "lora_name": [["style/subject-v2.safetensors", "other.pt"], {}]
+                }
+            }
+        }
+    }
+    ADAPTER = {"sha256": "b" * 64, "filenames": ["subject-v2.safetensors"]}
+
+    def _graph(self):
+        return {
+            "1": {"class_type": "LoraLoader", "inputs": {"lora_name": "old.st"}},
+            "2": {
+                "class_type": "PixlStashAdapterLoader",
+                "inputs": {"adapter_sha256": "a" * 64},
+            },
+        }
+
+    def test_a_filename_slot_takes_the_name_this_comfyui_lists(self):
+        graph = self._graph()
+        targets = detect_lora_targets(graph)
+        assert apply_adapter(graph, targets, self.ADAPTER, self.INFO) == 2
+        # Matched on the basename: the shelf counts from its folder, ComfyUI
+        # from its own, and the file is the same file.
+        assert graph["1"]["inputs"]["lora_name"] == "style/subject-v2.safetensors"
+        assert graph["2"]["inputs"]["adapter_sha256"] == "b" * 64
+
+    def test_a_windows_listing_matches_a_posix_shelf_path(self):
+        graph = {"1": self._graph()["1"]}
+        info = {
+            "LoraLoader": {
+                "input": {
+                    "required": {"lora_name": [["style\\subject-v2.safetensors"], {}]}
+                }
+            }
+        }
+        adapter = {"sha256": "b" * 64, "filenames": ["style/subject-v2.safetensors"]}
+        assert apply_adapter(graph, detect_lora_targets(graph), adapter, info) == 1
+        assert graph["1"]["inputs"]["lora_name"] == "style\\subject-v2.safetensors"
+
+    def test_a_lora_this_comfyui_does_not_have_is_refused(self):
+        graph = {"1": self._graph()["1"]}
+        adapter = {"sha256": "b" * 64, "filenames": ["elsewhere.safetensors"]}
+        with pytest.raises(LookupError, match="not on the ComfyUI"):
+            apply_adapter(graph, detect_lora_targets(graph), adapter, self.INFO)
+        assert graph["1"]["inputs"]["lora_name"] == "old.st"
+
+    def test_two_files_of_that_name_are_refused_rather_than_picked_between(self):
+        graph = {"1": self._graph()["1"]}
+        info = {
+            "LoraLoader": {
+                "input": {
+                    "required": {
+                        "lora_name": [
+                            ["a/subject-v2.safetensors", "b/subject-v2.safetensors"],
+                            {},
+                        ]
+                    }
+                }
+            }
+        }
+        with pytest.raises(LookupError, match="2 different files"):
+            apply_adapter(graph, detect_lora_targets(graph), self.ADAPTER, info)
+
+    def test_an_unenumerable_loader_is_refused_not_guessed_at(self):
+        graph = {"1": self._graph()["1"]}
+        with pytest.raises(LookupError, match="will not guess"):
+            apply_adapter(graph, detect_lora_targets(graph), self.ADAPTER, {})
+
+    def test_a_digest_slot_needs_nothing_from_comfyui(self):
+        graph = {"2": self._graph()["2"]}
+        assert apply_adapter(graph, detect_lora_targets(graph), self.ADAPTER, {}) == 1
+        assert graph["2"]["inputs"]["adapter_sha256"] == "b" * 64
+
+    def test_a_stale_target_is_skipped_not_fatal(self):
+        graph = {"2": self._graph()["2"]}
+        stale = [{"node_id": "99", "field": "adapter_sha256", "by": "digest"}]
+        assert apply_adapter(graph, stale, self.ADAPTER, {}) == 0
+        assert apply_adapter(graph, None, self.ADAPTER, {}) == 0

@@ -14,10 +14,16 @@ const listWorkflows = vi.fn();
 const getWorkflowInputs = vi.fn();
 const runWorkflow = vi.fn();
 
+const listAdapters = vi.fn();
+
 vi.mock("../../api/comfyui", () => ({
   listWorkflows: (...args) => listWorkflows(...args),
   getWorkflowInputs: (...args) => getWorkflowInputs(...args),
   runWorkflow: (...args) => runWorkflow(...args),
+}));
+
+vi.mock("../../api/modelShelf", () => ({
+  listAdapters: (...args) => listAdapters(...args),
 }));
 
 import WorkflowRunPanel from "./WorkflowRunPanel.vue";
@@ -102,6 +108,11 @@ beforeEach(() => {
       { node_id: "2", title: "Subject", mode: "selection", picture_id: null },
     ],
   });
+  listAdapters.mockReset().mockResolvedValue([
+    { sha256: "a".repeat(64), display_name: "Subject v2", filename: "s.st" },
+    // No digest yet: it cannot be asked for, so it is not offered.
+    { sha256: null, display_name: "Still hashing", filename: "h.st" },
+  ]);
   runWorkflow.mockReset().mockResolvedValue({
     prompts: [
       { picture_id: 7, prompt_id: "a" },
@@ -300,5 +311,133 @@ describe("requests that race", () => {
     await flush(wrapper);
     expect(wrapper.text()).toContain("Subject");
     expect(wrapper.text()).not.toContain("Stale");
+  });
+});
+
+describe("a LoRA from the shelf (#1310)", () => {
+  const WITH_SLOTS = {
+    inputs: [
+      { node_id: "2", title: "Subject", mode: "selection", picture_id: null },
+    ],
+    lora_slots: [
+      {
+        node_id: "3",
+        class_type: "LoraLoader",
+        field: "lora_name",
+        value: "add-detail.safetensors",
+        by: "filename",
+      },
+    ],
+  };
+
+  it("offers the shelf's hashed LoRAs and sends the chosen one", async () => {
+    getWorkflowInputs.mockResolvedValue(WITH_SLOTS);
+    const { wrapper, store } = await mountFrom(FROM_SELECTION);
+    store.selectionIds = [7];
+    await flush(wrapper);
+    const select = wrapper.findAll("select")[1];
+    expect(select.findAll("option").map((o) => o.text())).toEqual([
+      "Keep the workflow's own",
+      "Subject v2",
+    ]);
+
+    // The default leaves the workflow's own LoRA where it is.
+    await runButton(wrapper).trigger("click");
+    await flush(wrapper);
+    expect(runWorkflow.mock.calls[0][1].adapter_sha256).toBeUndefined();
+
+    await select.setValue("a".repeat(64));
+    await runButton(wrapper).trigger("click");
+    await flush(wrapper);
+    expect(runWorkflow.mock.calls[1][1].adapter_sha256).toBe("a".repeat(64));
+  });
+
+  it("asks which loader when the workflow chains two, and sends it", async () => {
+    getWorkflowInputs.mockResolvedValue({
+      ...WITH_SLOTS,
+      lora_slots: [
+        ...WITH_SLOTS.lora_slots,
+        {
+          node_id: "4",
+          class_type: "LoraLoader",
+          field: "lora_name",
+          value: "watercolour.safetensors",
+          by: "filename",
+        },
+      ],
+    });
+    const { wrapper, store } = await mountFrom(FROM_SELECTION);
+    store.selectionIds = [7];
+    await flush(wrapper);
+    const slots = wrapper.findAll("select")[2];
+    expect(slots.findAll("option").map((o) => o.text())).toEqual([
+      "#3 add-detail.safetensors",
+      "#4 watercolour.safetensors",
+    ]);
+
+    await wrapper.findAll("select")[1].setValue("a".repeat(64));
+    await slots.setValue("4");
+    await runButton(wrapper).trigger("click");
+    await flush(wrapper);
+    expect(runWorkflow.mock.calls[0][1].lora_node_id).toBe("4");
+  });
+
+  it("names no loader when the workflow has only one", async () => {
+    getWorkflowInputs.mockResolvedValue(WITH_SLOTS);
+    const { wrapper, store } = await mountFrom(FROM_SELECTION);
+    store.selectionIds = [7];
+    await flush(wrapper);
+    expect(wrapper.findAll("select")).toHaveLength(2);
+    await wrapper.findAll("select")[1].setValue("a".repeat(64));
+    await runButton(wrapper).trigger("click");
+    await flush(wrapper);
+    expect(runWorkflow.mock.calls[0][1].lora_node_id).toBeUndefined();
+  });
+
+  it("says a workflow with no LoRA loader has nothing to swap", async () => {
+    getWorkflowInputs.mockResolvedValue({ ...WITH_SLOTS, lora_slots: [] });
+    const { wrapper, store } = await mountFrom(FROM_SELECTION);
+    store.selectionIds = [7];
+    await flush(wrapper);
+    expect(wrapper.text()).toContain("no LoRA loader");
+    expect(wrapper.findAll("select")).toHaveLength(1);
+    expect(listAdapters).not.toHaveBeenCalled();
+    await runButton(wrapper).trigger("click");
+    await flush(wrapper);
+    expect(runWorkflow.mock.calls[0][1].adapter_sha256).toBeUndefined();
+  });
+
+  it("does not send a LoRA to a workflow that has moved on to no slots", async () => {
+    listWorkflows.mockResolvedValue({
+      workflows: [
+        WORKFLOWS[0],
+        { ...WORKFLOWS[0], name: "other.json", display_name: "other" },
+      ],
+    });
+    getWorkflowInputs.mockImplementation((name) =>
+      Promise.resolve(
+        name === "edit.json"
+          ? WITH_SLOTS
+          : { ...WITH_SLOTS, lora_slots: [] },
+      ),
+    );
+    const { wrapper, store } = await mountFrom(FROM_SELECTION);
+    store.selectionIds = [7];
+    await flush(wrapper);
+    await wrapper.findAll("select")[1].setValue("a".repeat(64));
+    await wrapper.find("select").setValue("other.json");
+    await flush(wrapper);
+    await runButton(wrapper).trigger("click");
+    await flush(wrapper);
+    expect(runWorkflow.mock.calls[0][0]).toBe("other.json");
+    expect(runWorkflow.mock.calls[0][1].adapter_sha256).toBeUndefined();
+  });
+
+  it("says so when the shelf cannot be read", async () => {
+    getWorkflowInputs.mockResolvedValue(WITH_SLOTS);
+    listAdapters.mockRejectedValue(new Error("shelf is closed"));
+    const { wrapper } = await mountFrom(FROM_SELECTION);
+    await flush(wrapper);
+    expect(wrapper.text()).toContain("Your LoRAs could not be read");
   });
 });

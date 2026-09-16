@@ -4364,6 +4364,22 @@ toolbar, since selection runs stack on their pictures. The overlay's ComfyUI
 menu and Remix still run through `run_i2i` / `run_t2i`. The #1306 parameter form
 belongs in this panel and is not in it yet.
 
+**The LoRA row swaps, it does not add** (#1310). The section offers the shelf's
+hashed adapters (`listAdapters`, read once per panel session: the shelf does not
+change between two runs and every workflow with a slot offers the same list) and
+sends the chosen `adapter_sha256` with the run; the default, "Keep the workflow's
+own", sends nothing. A row without a `sha256` is left out rather than offered,
+since it cannot be asked for. Which workflows can take one comes from
+`lora_slots` on the inputs read: with none the section says the workflow has no
+LoRA loader instead of offering a choice, and the field is left out of the body
+even when a LoRA was chosen for the workflow before it, so switching workflows
+never turns a run into a 400. A workflow with **more than one** loader gets a
+second select naming each by node and by the file it loads now, since two
+loaders of one graph are both called "Load LoRA"; it defaults to the first and
+goes out as `lora_node_id`, because swapping every slot would load the chosen
+LoRA twice and lose the other. Inserting a loader into a graph that has none is
+#1376.
+
 **A grid filtered to one workflow is deliberately not here.** "Show its
 pictures" as a *grid* would mean a new picture filter carried through
 `useFilterStore`, `useGridFetch` and a visible chip so the user can clear it —

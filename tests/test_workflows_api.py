@@ -1015,7 +1015,9 @@ def _isolate_workflow_folders(tmp_path, monkeypatch) -> None:
     running against the same data folder would import what lands in the inbox.
     """
     inbox = tmp_path / "inbox"
-    inbox.mkdir()
+    # exist_ok: two workflow fixtures can share one test's tmp_path, which is
+    # how a test gets a workflow with a LoRA loader and one without at once.
+    inbox.mkdir(exist_ok=True)
 
     def fake_trash(path):
         os.remove(path)
@@ -1956,3 +1958,273 @@ def test_setup_and_run_resolve_a_duplicated_fixed_picture_to_the_same_copy(
     assert fake_comfyui.submitted[0]["1"]["inputs"]["image"] == (
         f"pixlstash-{older}-sha-run-duplicate.png"
     )
+
+
+# ===========================================================================
+# A LoRA from the shelf, put into the run (#1310)
+# ===========================================================================
+
+_SHELF_LORA_SHA = _h("shelf-lora-digest")
+_SHELF_LORA_FILENAME = "example-subject-v2.safetensors"
+# What the shelf calls the copy it scanned, and what ComfyUI calls the file it
+# has. They are deliberately different paths of the same basename, because that
+# is the ordinary case: the two sides count from different folders.
+_SHELF_LORA_RELPATH = f"sd15/{_SHELF_LORA_FILENAME}"
+_COMFY_LORA_NAME = f"characters/{_SHELF_LORA_FILENAME}"
+
+
+@pytest.fixture
+def lora_workflow(tmp_path, monkeypatch, workflow_env):
+    """One workflow carrying both kinds of LoRA slot, and one adapter on the shelf.
+
+    The shelf rows are written here and removed again, because the module's own
+    re-seed only knows about the two models it seeds itself; a leftover adapter
+    would be a second file for the next test's basename to match.
+
+    ``comfy.info`` is what ComfyUI answers for ``object_info``: set it to a map,
+    or to an exception for a ComfyUI that cannot be reached.
+    """
+    graph = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "{{image_path}}"}},
+        "2": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": "whatever-is-there.safetensors", "model": ["1", 0]},
+        },
+        "3": {
+            "class_type": "PixlStashAdapterLoader",
+            "inputs": {"adapter_sha256": "0" * 64, "model": ["2", 0]},
+        },
+        "4": {"class_type": "SaveImage", "inputs": {"images": ["3", 0]}},
+    }
+    bound, _changed = workflow_bindings.migrate_placeholders(graph)
+    (tmp_path / "lora.json").write_text(json.dumps(bound), encoding="utf-8")
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+
+    comfy = SimpleNamespace(
+        info={
+            "LoraLoader": {
+                "input": {"required": {"lora_name": [[_COMFY_LORA_NAME], {}]}}
+            }
+        }
+    )
+
+    def fake_object_info(_url):
+        if isinstance(comfy.info, Exception):
+            raise comfy.info
+        return comfy.info
+
+    monkeypatch.setattr(comfyui_module, "fetch_object_info", fake_object_info)
+
+    hub = workflow_env.server.hub
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
+            "VALUES ('adapter', 'lora', ?, ?, 'scanned')",
+            (_SHELF_LORA_FILENAME, _SHELF_LORA_SHA),
+        )
+        model_id = conn.execute(
+            "SELECT id FROM model WHERE sha256 = ?", (_SHELF_LORA_SHA,)
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO model_folder (path, kind, movable) "
+            "VALUES ('/home/me/loras', 'reference', 'fixed')"
+        )
+        folder_id = conn.execute(
+            "SELECT id FROM model_folder WHERE path = '/home/me/loras'"
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+            "VALUES (?, ?, ?, 'present')",
+            (model_id, folder_id, _SHELF_LORA_RELPATH),
+        )
+    comfy.model_id = model_id
+    try:
+        yield comfy
+    finally:
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM model_file WHERE model_id = ?", (model_id,))
+            conn.execute("DELETE FROM model_folder WHERE id = ?", (folder_id,))
+            conn.execute("DELETE FROM model WHERE id = ?", (model_id,))
+
+
+def _lora_run(workflow_env, **body):
+    ids = _picture_ids(workflow_env.server)
+    return _run(
+        workflow_env.owner,
+        "lora.json",
+        picture_ids=[ids["busy_one.png"]],
+        stack=False,
+        **body,
+    )
+
+
+def test_a_workflow_says_which_lora_slots_a_run_can_swap(
+    workflow_env, lora_workflow, edit_workflow
+):
+    owner = workflow_env.owner
+    r = owner.get(f"{API}/comfyui/workflows/lora.json/inputs")
+    assert r.status_code == 200, r.text
+    assert [(s["node_id"], s["by"], s["value"]) for s in r.json()["lora_slots"]] == [
+        ("2", "filename", "whatever-is-there.safetensors"),
+        ("3", "digest", "0" * 64),
+    ]
+    # The control: the workflow beside it has no loader and says so with an
+    # empty list rather than by leaving the field out.
+    r = owner.get(f"{API}/comfyui/workflows/edit.json/inputs")
+    assert r.status_code == 200 and r.json()["lora_slots"] == [], r.text
+
+
+def test_a_shelf_lora_goes_into_the_named_slot_and_no_other(
+    workflow_env, lora_workflow, fake_comfyui
+):
+    r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="2")
+    assert r.status_code == 200, r.text
+    submitted = fake_comfyui.submitted[0]
+    # The name this ComfyUI lists, matched on the basename the shelf knows.
+    assert submitted["2"]["inputs"]["lora_name"] == _COMFY_LORA_NAME
+    # The other loader keeps the LoRA the workflow chose: swapping both would
+    # load one file twice and lose the other.
+    assert submitted["3"]["inputs"]["adapter_sha256"] == "0" * 64
+
+
+def test_the_pixlstash_loader_takes_the_digest_without_asking_comfyui(
+    workflow_env, lora_workflow, fake_comfyui
+):
+    # Nothing to resolve, so an unreachable ComfyUI is no obstacle either.
+    lora_workflow.info = RuntimeError("Could not reach ComfyUI at http://127.0.0.1:1")
+    r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="3")
+    assert r.status_code == 200, r.text
+    submitted = fake_comfyui.submitted[0]
+    assert submitted["3"]["inputs"]["adapter_sha256"] == _SHELF_LORA_SHA
+    assert submitted["2"]["inputs"]["lora_name"] == "whatever-is-there.safetensors"
+
+
+def test_the_path_this_shelf_scanned_wins_over_another_file_of_that_name(
+    workflow_env, lora_workflow, fake_comfyui
+):
+    lora_workflow.info = {
+        "LoraLoader": {
+            "input": {
+                "required": {"lora_name": [[_COMFY_LORA_NAME, _SHELF_LORA_RELPATH], {}]}
+            }
+        }
+    }
+    r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="2")
+    assert r.status_code == 200, r.text
+    assert fake_comfyui.submitted[0]["2"]["inputs"]["lora_name"] == _SHELF_LORA_RELPATH
+
+
+def test_a_workflow_with_two_loaders_will_not_guess_which_one(
+    workflow_env, lora_workflow, fake_comfyui
+):
+    r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA)
+    assert r.status_code == 400, r.text
+    assert "2 LoRA loaders" in r.json()["detail"]
+    assert "nodes 2, 3" in r.json()["detail"]
+
+    r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="4")
+    assert r.status_code == 400 and "not a LoRA loader" in r.text
+    assert fake_comfyui.submitted == [] and fake_comfyui.uploads == []
+
+
+def test_the_chosen_lora_wins_over_one_set_in_the_parameter_form(
+    workflow_env, lora_workflow, fake_comfyui
+):
+    r = _lora_run(
+        workflow_env,
+        adapter_sha256=_SHELF_LORA_SHA,
+        lora_node_id="2",
+        values=[{"node_id": "2", "name": "lora_name", "value": "from-the-form.st"}],
+    )
+    assert r.status_code == 200, r.text
+    assert fake_comfyui.submitted[0]["2"]["inputs"]["lora_name"] == _COMFY_LORA_NAME
+
+
+def test_a_run_without_a_lora_leaves_the_workflows_own_choice(
+    workflow_env, lora_workflow, fake_comfyui
+):
+    r = _lora_run(workflow_env)
+    assert r.status_code == 200, r.text
+    submitted = fake_comfyui.submitted[0]
+    assert submitted["2"]["inputs"]["lora_name"] == "whatever-is-there.safetensors"
+    assert submitted["3"]["inputs"]["adapter_sha256"] == "0" * 64
+
+
+def test_a_workflow_with_no_lora_loader_is_refused_by_name(
+    workflow_env, lora_workflow, edit_workflow, fake_comfyui
+):
+    ids = _picture_ids(workflow_env.server)
+    r = _run(
+        workflow_env.owner,
+        "edit.json",
+        picture_ids=[ids["busy_one.png"]],
+        pictures=[{"node_id": "1", "picture_id": ids["busy_two.png"]}],
+        adapter_sha256=_SHELF_LORA_SHA,
+        stack=False,
+    )
+    assert r.status_code == 400, r.text
+    assert "no LoRA loader" in r.json()["detail"]
+    assert fake_comfyui.submitted == [] and fake_comfyui.uploads == []
+
+
+def test_a_lora_the_shelf_or_comfyui_does_not_have_stops_before_any_upload(
+    workflow_env, lora_workflow, fake_comfyui
+):
+    r = _lora_run(workflow_env, adapter_sha256=_h("nothing"), lora_node_id="2")
+    assert r.status_code == 404 and "not on this PixlStash's shelf" in r.text
+
+    # On the shelf, absent from the ComfyUI this would run on.
+    lora_workflow.info = {
+        "LoraLoader": {"input": {"required": {"lora_name": [[], {}]}}}
+    }
+    r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="2")
+    assert r.status_code == 400 and "will not guess" in r.text
+
+    # A ComfyUI that cannot be asked at all is a 502, not a guess.
+    lora_workflow.info = RuntimeError("Could not reach ComfyUI at http://127.0.0.1:1")
+    r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="2")
+    assert r.status_code == 502 and "could not ask ComfyUI" in r.text
+
+    # Nothing reached ComfyUI for any of the three.
+    assert fake_comfyui.submitted == [] and fake_comfyui.uploads == []
+
+
+def test_only_a_file_a_lora_loader_can_load_is_accepted(
+    workflow_env, lora_workflow, fake_comfyui
+):
+    """A checkpoint, a VAE or an engine is refused by name, an unknown is not.
+
+    ``file_kind`` is an allow-list here: the shelf holds five other kinds and
+    writing any of them into ``lora_name`` is a run that fails further in.
+    """
+    hub = workflow_env.server.hub
+    unknown_sha, vae_sha = _h("unclassified-file"), _h("a-vae")
+    with hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES (?, ?, ?, 'scanned')",
+            [
+                ("unknown", "mystery.safetensors", unknown_sha),
+                ("vae", "example-vae.safetensors", vae_sha),
+            ],
+        )
+    try:
+        r = _lora_run(
+            workflow_env, adapter_sha256=_h("realvisxl-digest"), lora_node_id="2"
+        )
+        assert r.status_code == 400 and "is a checkpoint" in r.text
+
+        r = _lora_run(workflow_env, adapter_sha256=vae_sha, lora_node_id="2")
+        assert r.status_code == 400 and "is a vae" in r.text
+
+        # Unclassified is first-class on this shelf and usually an adapter the
+        # header reader could not place, so it is offered, not refused: it gets
+        # as far as the name check.
+        r = _lora_run(workflow_env, adapter_sha256=unknown_sha, lora_node_id="2")
+        assert r.status_code == 400 and "not on the ComfyUI" in r.text
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM model WHERE sha256 IN (?, ?)", (unknown_sha, vae_sha)
+            )
+    assert fake_comfyui.submitted == [] and fake_comfyui.uploads == []

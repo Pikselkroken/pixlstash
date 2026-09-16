@@ -43,6 +43,10 @@ export async function deleteWorkflow(name) {
  * (asked at run time) or `fixed` (one picture, `picture_id`, chosen at setup).
  * `picture_missing` is a fixed input whose picture has left this library.
  *
+ * `lora_slots` is every LoRA a run can swap (`by` is `filename` for a core
+ * loader, `digest` for a ComfyUI-PixlStash one); empty means the graph has no
+ * LoRA loader, and a run naming one is refused.
+ *
  * @param {string} name - the workflow's `name` as listed.
  * @returns {Promise<{workflow: string, inputs: Array<Object>}>}
  */
@@ -76,7 +80,9 @@ export async function setWorkflowInputs(name, inputs) {
  * @param {string} name - the workflow's `name` as listed.
  * @param {Object} body - `{picture_ids?, pictures?: [{node_id, picture_id}],
  *   caption?, values?, seed_mode?, seed?, stack?, client_id?, set_id?,
- *   project_id?, character_id?}`.
+ *   project_id?, character_id?, adapter_sha256?}`. `adapter_sha256` puts that
+ *   shelf LoRA into every LoRA slot of the graph; a workflow with none refuses
+ *   the run.
  * @returns {Promise<{status: string, workflow: string,
  *   prompts: Array<{picture_id: ?number, prompt_id: string}>}>}
  */

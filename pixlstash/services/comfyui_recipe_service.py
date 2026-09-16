@@ -21,6 +21,7 @@ Two rules govern everything here:
 from __future__ import annotations
 
 import random
+import re
 from copy import deepcopy
 from typing import Any
 
@@ -65,6 +66,15 @@ INPUT_IMAGE_FIELDS: dict[str, tuple[str, ...]] = {
     "LoadImageMask": ("image",),
     "LoadImageOutput": ("image",),
 }
+
+# The input a core LoRA loader names its file in, and the ones a
+# ComfyUI-PixlStash loader names it by digest in. Together they are the whole
+# rule for detect_lora_targets - see its docstring for why this is a field
+# name and not a class list. The numbered form is how a stacker spells its
+# second and third slot (`lora_name_2`), and each of those is a slot of its own.
+LORA_FILENAME_FIELD = "lora_name"
+LORA_FILENAME_FIELD_RE = re.compile(r"^lora_name(_\d+)?$")
+LORA_DIGEST_FIELDS = ("adapter_sha256", "lora_sha256")
 
 # Loader input fields that hold a model FILE NAME, keyed by the node's own
 # `class_type`. Checks are filename-level only: we compare the graph's value
@@ -491,6 +501,172 @@ def apply_seeds(prompt_graph: dict, targets: list[dict], seed: int | None) -> in
         ceiling = int(target.get("max") or MAX_SEED_64)
         value = random.randint(0, min(ceiling, MAX_SEED_64)) if seed is None else seed
         inputs[target["field"]] = min(value, ceiling)
+        written += 1
+    return written
+
+
+def detect_lora_targets(prompt_graph: dict) -> list[dict]:
+    """Find every LoRA slot in *prompt_graph* a shelf adapter can be put into.
+
+    By **field name**, not by class: every pack that wraps ComfyUI's own LoRA
+    loader keeps its ``lora_name`` widget (``LoraLoaderModelOnly``,
+    ``LoraLoaderGGUF``, the ``LoRALoader`` spelling, and the third-party ones
+    that copy it), so a class allowlist would have to grow for each and would
+    quietly refuse the rest. The same reasoning as :func:`detect_seed_targets`,
+    one step cheaper: no ``object_info`` is needed, because the field's name is
+    the whole rule. A stacker's numbered widgets (``lora_name_1``,
+    ``lora_name_2``) count too, each as its own slot.
+
+    **The known reach is a stacker that does not name its slots that way**:
+    rgthree's Power Lora Loader holds them as dicts under ``lora_1``, so this
+    finds nothing there and the caller reports the workflow as having no LoRA
+    loader. Reading a widget whose shape is one pack's own is what #1376 has to
+    decide, along with inserting a loader where there is none.
+
+    Two kinds of slot, and a graph can hold both:
+
+    - ``by: "filename"`` - a core loader naming a file. What goes in is a name
+      the target ComfyUI lists, which :func:`apply_adapter` resolves.
+    - ``by: "digest"`` - a ComfyUI-PixlStash loader naming the file by its
+      SHA-256 (``adapter_sha256``). The shelf's digest goes in as it is; that
+      node resolves or fetches the file itself.
+
+    A slot wired from another node (``[node_id, slot]``) is skipped: it is
+    computed at run time and overwriting it would drop the link.
+
+    Args:
+        prompt_graph: The API-format graph.
+
+    Returns:
+        ``[{"node_id", "class_type", "field", "value", "by"}, …]``.
+    """
+    targets: list[dict] = []
+    for node_id, node in (prompt_graph or {}).items():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        fields = [f for f in inputs if LORA_FILENAME_FIELD_RE.match(str(f))]
+        # One digest slot per node, not one per spelling: the pack has called
+        # the widget both things, and a node carrying two names is still one
+        # adapter to load.
+        digest = next((f for f in LORA_DIGEST_FIELDS if f in inputs), None)
+        if digest is not None:
+            fields.append(digest)
+        for field in fields:
+            value = inputs.get(field)
+            if not isinstance(value, str):
+                continue
+            targets.append(
+                {
+                    "node_id": str(node_id),
+                    "class_type": node.get("class_type"),
+                    "field": field,
+                    "value": value,
+                    "by": "digest" if field == digest else "filename",
+                }
+            )
+    return targets
+
+
+def _shelf_name_in(filenames: list[str], options: list[str]) -> str | None:
+    """Return the option naming one of *filenames*, or ``None`` for no match.
+
+    ComfyUI lists a LoRA as its path relative to that install's ``loras``
+    folder; the shelf knows the file's own name and its path relative to the
+    folder PixlStash scanned. Those agree only when both sides use the same
+    tree, so the names are compared on the basename too, which is what actually
+    identifies the file. An exact match wins; a basename that names **several**
+    of ComfyUI's files is refused rather than guessed at, because picking one of
+    two ``style.safetensors`` is picking the wrong one half the time.
+
+    **This is a match by name, not by content**, and it cannot be anything else:
+    ``object_info`` lists names and no digests, so a file of that name on that
+    machine is all ComfyUI can be asked for. The digest slot of a
+    ComfyUI-PixlStash loader is the exact one, because that node asks PixlStash.
+
+    Raises:
+        LookupError: When the basename matches more than one of *options*.
+    """
+    by_path = {_normalize_filename(opt): opt for opt in options}
+    by_base: dict[str, set[str]] = {}
+    for normalized, option in by_path.items():
+        by_base.setdefault(normalized.rsplit("/", 1)[-1].lower(), set()).add(option)
+    candidates = [_normalize_filename(name) for name in filenames if name]
+    for name in candidates:
+        if name in by_path:
+            return by_path[name]
+    for name in candidates:
+        matched = by_base.get(name.rsplit("/", 1)[-1].lower())
+        if not matched:
+            continue
+        if len(matched) > 1:
+            raise LookupError(
+                f"{name.rsplit('/', 1)[-1]} names {len(matched)} different files "
+                "on this ComfyUI, so PixlStash cannot tell which one you mean."
+            )
+        return next(iter(matched))
+    return None
+
+
+def apply_adapter(
+    prompt_graph: dict, targets: list[dict], adapter: dict, object_info: dict
+) -> int:
+    """Put one shelf adapter into every LoRA slot of *prompt_graph*.
+
+    Each slot is written the way its own loader reads it (the decision on
+    #1310): a core loader gets a filename this ComfyUI lists, a
+    ComfyUI-PixlStash loader gets the digest. No node is substituted and none is
+    added, so this works on any ComfyUI and leaves a graph it cannot serve
+    alone - see the refusal below.
+
+    Args:
+        prompt_graph: The graph to mutate in place.
+        targets: The output of :func:`detect_lora_targets`.
+        adapter: ``{"sha256": str, "filenames": [str, …]}`` - the shelf model's
+            digest and the names it is known by (its own filename and each
+            copy's path relative to the folder holding it).
+        object_info: The map from :func:`fetch_object_info`, for resolving a
+            filename slot against what this ComfyUI actually has.
+
+    Returns:
+        How many slots were written.
+
+    Raises:
+        LookupError: When a filename slot cannot be resolved - the adapter's
+            file is not on that ComfyUI, its name is ambiguous there, or the
+            loader does not enumerate its files. Refusing is the point: a name
+            ComfyUI does not have comes back as an opaque 400 from ``/prompt``
+            after the run has been queued.
+    """
+    written = 0
+    for target in targets or []:
+        node = (prompt_graph or {}).get(target.get("node_id"))
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        if target.get("by") == "digest":
+            inputs[target["field"]] = adapter["sha256"]
+            written += 1
+            continue
+        class_type = target.get("class_type")
+        options = _combo_options(object_info.get(class_type), target["field"])
+        if options is None:
+            raise LookupError(
+                f"This ComfyUI does not say which LoRA files {class_type} "
+                f"(node {target['node_id']}) can load, so PixlStash will not "
+                "guess at a name for it."
+            )
+        name = _shelf_name_in(adapter.get("filenames") or [], options)
+        if name is None:
+            raise LookupError(
+                "That LoRA is on your shelf but not on the ComfyUI this would "
+                f"run on, under any name node {target['node_id']} lists."
+            )
+        inputs[target["field"]] = name
         written += 1
     return written
 
