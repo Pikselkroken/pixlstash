@@ -2228,3 +2228,54 @@ def test_only_a_file_a_lora_loader_can_load_is_accepted(
                 "DELETE FROM model WHERE sha256 IN (?, ?)", (unknown_sha, vae_sha)
             )
     assert fake_comfyui.submitted == [] and fake_comfyui.uploads == []
+
+
+def test_edit_with_comfyui_swaps_the_same_way_the_run_panel_does(
+    workflow_env, lora_workflow, fake_comfyui
+):
+    """run_i2i is the overlay's "Edit with ComfyUI", and it runs a saved file too.
+
+    Same body, same refusals: the swap belongs to every route that runs a
+    workflow, not only to the run panel's own (#1310).
+    """
+    ids = _picture_ids(workflow_env.server)
+    r = workflow_env.owner.post(
+        f"{API}/comfyui/run_i2i",
+        json={
+            "picture_ids": [ids["busy_one.png"]],
+            "workflow_name": "lora.json",
+            "stack": False,
+            "adapter_sha256": _SHELF_LORA_SHA,
+            "lora_node_id": "2",
+        },
+    )
+    assert r.status_code == 200, r.text
+    submitted = fake_comfyui.submitted[0]
+    assert submitted["2"]["inputs"]["lora_name"] == _COMFY_LORA_NAME
+    assert submitted["3"]["inputs"]["adapter_sha256"] == "0" * 64
+
+    # And the same refusal, before anything is uploaded for a second run.
+    fake_comfyui.submitted.clear()
+    fake_comfyui.uploads.clear()
+    r = workflow_env.owner.post(
+        f"{API}/comfyui/run_i2i",
+        json={
+            "picture_ids": [ids["busy_one.png"]],
+            "workflow_name": "lora.json",
+            "stack": False,
+            "adapter_sha256": _SHELF_LORA_SHA,
+        },
+    )
+    assert r.status_code == 400 and "2 LoRA loaders" in r.text
+    assert fake_comfyui.submitted == [] and fake_comfyui.uploads == []
+
+
+def test_the_workflow_list_says_which_files_have_a_lora_loader(
+    workflow_env, lora_workflow, edit_workflow
+):
+    """The menus that run a workflow read the list, not a request per file."""
+    r = workflow_env.owner.get(f"{API}/comfyui/workflows")
+    assert r.status_code == 200, r.text
+    slots = {w["name"]: w.get("lora_slots") for w in r.json()["workflows"]}
+    assert [s["node_id"] for s in slots["lora.json"]] == ["2", "3"]
+    assert slots["edit.json"] == []

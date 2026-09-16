@@ -4380,6 +4380,13 @@ goes out as `lora_node_id`, because swapping every slot would load the chosen
 LoRA twice and lose the other. Inserting a loader into a graph that has none is
 #1376.
 
+**The same control sits on both overlay runs** (#1310): "Generate variants"
+(`RemixDialog.vue`, from the picture's own `lora_slots` in recipe mode and the
+chosen template's in template mode) and "Edit with ComfyUI" (`ImageOverlay.vue`,
+from the chosen workflow's row in the list). All three surfaces read the same
+two facts - the shelf's adapters, once per session, and the slots of whatever
+this run would submit - and send the same `adapter_sha256` / `lora_node_id`.
+
 **A grid filtered to one workflow is deliberately not here.** "Show its
 pictures" as a *grid* would mean a new picture filter carried through
 `useFilterStore`, `useGridFetch` and a visible chip so the user can clear it —

@@ -18,6 +18,7 @@ const runImageToImage = vi.fn();
 const runRecipe = vi.fn();
 const getPictureMetadata = vi.fn();
 const getPictureWorkflow = vi.fn();
+const listAdapters = vi.fn();
 
 vi.mock("../../api/comfyui", () => ({
   listWorkflows: (...a) => listWorkflows(...a),
@@ -29,6 +30,10 @@ vi.mock("../../api/comfyui", () => ({
 
 vi.mock("../../api/pictures", () => ({
   getPictureMetadata: (...a) => getPictureMetadata(...a),
+}));
+
+vi.mock("../../api/modelShelf", () => ({
+  listAdapters: (...a) => listAdapters(...a),
 }));
 
 // The dialog and the App* widgets it embeds import Vuetify components
@@ -194,6 +199,9 @@ beforeEach(() => {
   runImageToImage.mockResolvedValue({ prompts: [{ prompt_id: "p1" }] });
   runRecipe.mockResolvedValue({ prompts: [{ prompt_id: "p2" }] });
   getPictureMetadata.mockResolvedValue({});
+  listAdapters.mockResolvedValue([
+    { sha256: "a".repeat(64), display_name: "Subject v2", filename: "s.st" },
+  ]);
 });
 
 describe("RemixDialog mode availability", () => {
@@ -755,5 +763,53 @@ describe("RemixDialog PixlStash-node workflows", () => {
     const w = await settle(mountDialog());
     const copy = w.findAll("button").find((b) => b.text().includes("Copy workflow"));
     expect(copy).toBeUndefined();
+  });
+});
+
+describe("swapping a LoRA into a variant (#1310)", () => {
+  const LORA_SLOT = {
+    node_id: "5",
+    class_type: "LoraLoader",
+    field: "lora_name",
+    value: "add-detail.safetensors",
+    by: "filename",
+  };
+
+  function loraSelect(w) {
+    return w.findAll("select.remix-select").find((s) =>
+      s.attributes("aria-label") === "LoRA",
+    );
+  }
+
+  it("offers the shelf where the picture's own recipe has a loader", async () => {
+    getPictureRecipe.mockResolvedValue({
+      ...CLEAN_RECIPE,
+      lora_slots: [LORA_SLOT],
+    });
+    const w = await settle(mountDialog());
+    const select = loraSelect(w);
+    expect(select.findAll("option").map((o) => o.text())).toEqual([
+      "Keep the workflow's own",
+      "Subject v2",
+    ]);
+
+    await select.setValue("a".repeat(64));
+    await w.findAll("button").find((b) => b.text().trim() === "Generate").trigger("click");
+    await settle(w);
+    expect(runRecipe).toHaveBeenCalledTimes(1);
+    expect(runRecipe.mock.calls[0][0].adapter_sha256).toBe("a".repeat(64));
+    // One slot, so the node is implied rather than named.
+    expect(runRecipe.mock.calls[0][0].lora_node_id).toBeUndefined();
+  });
+
+  it("says so when the picture's recipe has no LoRA loader", async () => {
+    getPictureRecipe.mockResolvedValue({ ...CLEAN_RECIPE, lora_slots: [] });
+    const w = await settle(mountDialog());
+    expect(w.text()).toContain("no LoRA loader");
+    expect(loraSelect(w)).toBeUndefined();
+    expect(listAdapters).not.toHaveBeenCalled();
+    await w.findAll("button").find((b) => b.text().trim() === "Generate").trigger("click");
+    await settle(w);
+    expect(runRecipe.mock.calls[0][0].adapter_sha256).toBeUndefined();
   });
 });

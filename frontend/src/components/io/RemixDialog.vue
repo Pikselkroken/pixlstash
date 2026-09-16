@@ -228,6 +228,46 @@
         </p>
       </template>
 
+      <!-- ── LoRA (both modes) ────────────────────────────────────────
+           Swapping only: the LoRA goes into a loader the graph already has,
+           and one with none says so rather than offering a choice the run
+           would refuse (#1310). -->
+      <div v-if="selectedMode" class="remix-field">
+        <span class="remix-label">LoRA</span>
+        <p v-if="!loraSlots.length" class="remix-note">
+          {{
+            selectedMode === "recipe"
+              ? "This picture's workflow has no LoRA loader, so there is nothing to swap."
+              : "This template has no LoRA loader, so there is nothing to swap."
+          }}
+        </p>
+        <p v-else-if="adaptersError" class="remix-error">{{ adaptersError }}</p>
+        <template v-else>
+          <div class="remix-select-wrap">
+            <select v-model="adapterSha" class="remix-select" aria-label="LoRA">
+              <option v-for="opt in adapterOptions" :key="opt.value" :value="opt.value">
+                {{ opt.label }}
+              </option>
+            </select>
+            <v-icon size="18" class="remix-select-chevron">mdi-chevron-down</v-icon>
+          </div>
+          <!-- Which loader, when the graph chains more than one: swapping them
+               all would load the chosen LoRA twice and lose the other. -->
+          <div v-if="loraSlots.length > 1" class="remix-select-wrap">
+            <select
+              v-model="loraNodeId"
+              class="remix-select"
+              aria-label="Into which loader"
+            >
+              <option v-for="opt in slotOptions" :key="opt.value" :value="opt.value">
+                {{ opt.label }}
+              </option>
+            </select>
+            <v-icon size="18" class="remix-select-chevron">mdi-chevron-down</v-icon>
+          </div>
+        </template>
+      </div>
+
       <!-- ── Seed (both modes) ───────────────────────────────────────── -->
       <div v-if="selectedMode" class="remix-field">
         <span class="remix-label">Seed</span>
@@ -338,6 +378,7 @@ import {
   runImageToImage,
   runRecipe,
 } from "../../api/comfyui";
+import { listAdapters } from "../../api/modelShelf";
 import { getPictureMetadata } from "../../api/pictures";
 import { errorDetail } from "../../utils/apiError";
 
@@ -383,6 +424,12 @@ const description = ref("");
 const promptTouched = ref(false);
 
 const recipe = ref(null);
+/** The shelf adapter to swap in, "" for the graph's own. */
+const adapterSha = ref("");
+/** Which slot it goes into; the first one until the dialog is told. */
+const loraNodeId = ref("");
+const adapters = ref([]);
+const adaptersError = ref("");
 const recipeLoading = ref(false);
 const recipeError = ref("");
 const nodeClassesExpanded = ref(false);
@@ -681,6 +728,67 @@ function describedByFor(mode) {
 const activeTemplate = computed(() =>
   templates.value.find((w) => w.name === selectedWorkflow.value),
 );
+
+/**
+ * The LoRA slots of whatever this mode would run: the picture's own recipe, or
+ * the chosen template. Empty means the graph has no LoRA loader, and the run
+ * would refuse a LoRA rather than ignore it.
+ */
+const loraSlots = computed(() => {
+  if (selectedMode.value === "recipe") return recipe.value?.lora_slots || [];
+  if (selectedMode.value === "template")
+    return activeTemplate.value?.lora_slots || [];
+  return [];
+});
+
+// A hash the shelf has not read yet cannot be asked for, so those rows are
+// left out rather than offered and refused.
+const adapterOptions = computed(() => [
+  { value: "", label: "Keep the workflow's own" },
+  ...adapters.value
+    .filter((a) => a?.sha256)
+    .map((a) => ({
+      value: a.sha256,
+      label: a.display_name || a.filename || a.sha256.slice(0, 12),
+    })),
+]);
+
+// Named by node and by what it loads now, because two loaders of one graph are
+// both called "Load LoRA" and the file is what tells them apart.
+const slotOptions = computed(() =>
+  loraSlots.value.map((slot) => ({
+    value: slot.node_id,
+    label: `#${slot.node_id} ${slot.value || slot.class_type || ""}`.trim(),
+  })),
+);
+
+// Read once per dialog session: the shelf does not change between two runs,
+// and both modes offer the same list.
+// ponytail: the whole shelf in one select; a search field if it grows unwieldy.
+let adaptersLoaded = false;
+async function loadAdapters() {
+  if (adaptersLoaded) return;
+  adaptersLoaded = true;
+  adaptersError.value = "";
+  try {
+    adapters.value = await listAdapters();
+  } catch (err) {
+    adaptersLoaded = false;
+    adaptersError.value = `Your LoRAs could not be read: ${
+      errorDetail(err) || err?.message || String(err)
+    }`;
+  }
+}
+
+watch(
+  loraSlots,
+  (slots) => {
+    if (!slots.some((slot) => slot.node_id === loraNodeId.value))
+      loraNodeId.value = slots[0]?.node_id || "";
+    if (slots.length) loadAdapters();
+  },
+  { immediate: true },
+)
 
 /**
  * Mirror the shipped SelectionBar rule: a workflow with no {{caption}}
@@ -1002,6 +1110,21 @@ function close() {
   });
 }
 
+/**
+ * The LoRA half of the run body, and nothing when no swap was asked for.
+ *
+ * Only where there is a slot to put it in: a graph without one refuses the
+ * whole run rather than ignoring the choice, so a LoRA chosen for one mode
+ * must not travel with the other.
+ */
+function loraBody() {
+  if (!loraSlots.value.length || !adapterSha.value) return {};
+  return {
+    adapter_sha256: adapterSha.value,
+    lora_node_id: loraSlots.value.length > 1 ? loraNodeId.value : undefined,
+  };
+}
+
 async function submit() {
   if (!canSubmit.value) {
     // Enter / Ctrl+Enter must not fail silently: name the blocker.
@@ -1030,6 +1153,7 @@ async function submit() {
                     : undefined,
               client_id: props.clientId || undefined,
               stack: props.stackOutputs,
+              ...loraBody(),
               // Deliberately no allow_unchecked: an uninspected graph cannot
               // be submitted from this surface at all, and the backend
               // refuses it independently.
@@ -1044,6 +1168,7 @@ async function submit() {
               seed: seedMode.value === "fixed" ? seed.value : undefined,
               client_id: props.clientId || undefined,
               stack: props.stackOutputs,
+              ...loraBody(),
             },
           );
     const prompts = Array.isArray(body?.prompts) ? body.prompts : [];

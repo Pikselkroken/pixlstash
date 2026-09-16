@@ -585,7 +585,13 @@ saying so (#1376 is the inserter); so are a name this ComfyUI does not have, one
 naming several of its files, and a loader that does not enumerate them. A
 ComfyUI that cannot be reached to ask is a 502. A hash the shelf does not have is
 a 404; a checkpoint, VAE, text encoder or engine is a 400 naming the kind (only
-an adapter and an unclassified file are loadable), and no hub attached is a 503. Every refusal comes before
+an adapter and an unclassified file are loadable), and no hub attached is a 503. The
+same `adapter_sha256` / `lora_node_id` pair works on `POST /comfyui/run_i2i` and
+`POST /comfyui/run_recipe`, which carry their slots on `GET /comfyui/workflows`
+(per row) and `GET /comfyui/pictures/{id}/recipe` respectively. On a replay the
+swap is applied **before** the pre-flight, so a recipe whose own LoRA has left
+this ComfyUI runs when another is put in its place - and is still refused
+without one. Every refusal comes before
 anything is uploaded or submitted. A ComfyUI failure
 partway through a batch answers 200 with `status: "partial"`, the `prompts` that
 did start and an `error`: those runs are queued and importing, so the client
