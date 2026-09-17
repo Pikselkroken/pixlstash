@@ -4236,9 +4236,15 @@ first the rail opened onto "Pick a workflow" while the run was in progress.
 Without the tail nothing on this screen opened Settings or the right
 rail, and the rail is where `WorkflowInspector`'s content is shown
 (`AppInspector` gates it on `sidebarStore.statsOpen`), so the inspector was
-unreachable (#1415). The pair sits in its own `--space-3` cluster, because the bar spaces its own
-controls wider and the whole point of every host mounting the same component is
-that the tail is identical in each. It passes `rail-name="inspector"`: the
+unreachable (#1415). The pair sits in its own `--space-3` cluster (`flex: 0 0 auto`, so the chrome
+is never what the edge eats), because the bar spaces its own controls wider and
+the whole point of every host mounting the same component is that the tail is
+identical in each; the separator is `TbGlobalActions`' own `separator` prop
+rather than a fourth hand-rolled copy. `.wfshelf-toolbar` now declares
+`container-type: inline-size; container-name: shelfbar toolbar` like the other
+hosts — the tokens were on the element with no container behind them — and the
+title gives first (`min-width: 0; flex-shrink: 6`) at the same size and ink as
+every other bar's identity pair, which `Toolbar.test.js` pins. It passes `rail-name="inspector"`: the
 toggle's tooltip is also its accessible name, and this rail is not the stats
 sidebar it is called in the views that have one. **Moves and Insights carried
 the same gap and were fixed with it** (#1415) — the population was three
