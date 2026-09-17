@@ -33,6 +33,7 @@ from PIL.PngImagePlugin import PngInfo
 
 import pixlstash.routes.comfyui as comfyui_module
 from pixlstash.db_models import Picture
+from pixlstash.db_models.generation import Generation, GenerationInput
 from pixlstash.server import Server
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 from tests.utils import upload_pictures_and_wait
@@ -671,3 +672,196 @@ class TestSwappingALoRAIntoAReplay:
         assert r.status_code == 400, r.text
         assert "has no LoraLoader node" in r.json()["detail"]
         assert submitted == []
+
+
+# ===========================================================================
+# The Recipe section's read (#1313)
+#
+# `GET /comfyui/pictures/{id}/workflow` carries what the lightbox's Recipe
+# section shows beside the graph it already served. Asserted here rather than in
+# a suite of its own because this module already imports a picture whose file
+# carries a real API `prompt` chunk, which is the expensive half; the graph
+# reading itself is unit-tested in `tests/test_picture_recipe.py`.
+# ===========================================================================
+
+
+SHELF_CHECKPOINT_SHA = "c" * 64
+
+
+def _shelf_checkpoint(server) -> None:
+    """Put the recipe's own checkpoint on the shelf, named but not hashed alike.
+
+    Named rather than digest-matched on purpose: the graph says
+    ``ckpt_name``, so the match is by name and the badge must stay off.
+    """
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('checkpoint', ?, ?, 'scanned')",
+            ("sd_xl_base_1.0.safetensors", SHELF_CHECKPOINT_SHA),
+        )
+
+
+def _shelf_model_id(server) -> int:
+    row = server.hub.fetchall(
+        "SELECT id FROM model WHERE filename = 'sd_xl_base_1.0.safetensors'"
+    )
+    assert row, "the shelf checkpoint was not written"
+    return row[0]["id"]
+
+
+def _topology_hash(server, pic_id: int) -> str:
+    def read(session):
+        return session.get(Picture, pic_id).workflow_topology_hash
+
+    value = server.vault.db.run_task(read)
+    assert value, "the workflow scan has not filed this picture yet"
+    return value
+
+
+def test_the_recipe_read_carries_the_models_settings_and_workflow(env):
+    server, client, pic_id = env
+    _shelf_checkpoint(server)
+
+    r = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow")
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    slots = {slot["name"]: slot for slot in body["model_slots"]}
+    assert set(slots) == {"sd_xl_base_1.0.safetensors"}
+    assert slots["sd_xl_base_1.0.safetensors"]["model_id"] == _shelf_model_id(server)
+    # Matched by name, so it is a file called that and nothing stronger.
+    assert slots["sd_xl_base_1.0.safetensors"]["verified"] is False
+
+    assert {row["label"]: row["value"] for row in body["settings"]} == {"steps": 20}
+    # The graph itself is still served, unchanged: Copy and Download read it.
+    assert body["workflow"]["4"]["class_type"] == "CheckpointLoaderSimple"
+    # And the key the "Open in Workflows" link navigates by, which the scan
+    # wrote when it filed this picture.
+    assert body["topology_hash"] == _topology_hash(server, pic_id)
+
+
+def test_a_picture_nobody_ran_here_has_an_empty_resolution_lock(env):
+    """An import is not lineage: no `generation_input` row, so no claim."""
+    _server, client, pic_id = env
+    r = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow")
+    assert r.status_code == 200 and r.json()["inputs"] == [], r.text
+
+
+def _second_picture(client) -> int:
+    """One more imported picture, to stand in as a run's input."""
+    files = [
+        (
+            "file",
+            (
+                "input-recipe.png",
+                _recipe_png_bytes(RECIPE_GRAPH, (30, 60, 90)),
+                "image/png",
+            ),
+        )
+    ]
+    st = upload_pictures_and_wait(client, files, timeout_s=60)
+    assert st["status"] == "completed", st
+    r = client.get(f"{API}/pictures")
+    assert r.status_code == 200, r.text
+    return max(p["id"] for p in r.json())
+
+
+def _lock_input(server, pic_id: int, input_id: int, pixel_sha: str):
+    """Record that *pic_id*'s run loaded *input_id* at node 7, position 0.
+
+    The ``generation`` row is merged rather than inserted: the workflow scan has
+    already written one for a picture whose file carries an API prompt graph,
+    which is every picture in this module.
+    """
+
+    def write(session):
+        session.merge(Generation(picture_id=pic_id, seed="12345"))
+        session.commit()
+        session.merge(
+            GenerationInput(
+                picture_id=pic_id,
+                node_ref="7",
+                position=0,
+                pixel_sha=pixel_sha,
+                input_picture_id=input_id,
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(write)
+
+
+def _bin(server, picture_id: int):
+    def write(session):
+        picture = session.get(Picture, picture_id)
+        picture.deleted = True
+        session.add(picture)
+        session.commit()
+
+    server.vault.db.run_task(write)
+
+
+def test_the_resolution_lock_names_the_picture_a_run_actually_loaded(env):
+    server, client, pic_id = env
+    input_id = _second_picture(client)
+    _lock_input(server, pic_id, input_id, "d" * 64)
+
+    r = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow")
+    assert r.status_code == 200, r.text
+    assert r.json()["inputs"] == [
+        {
+            "node_ref": "7",
+            "position": 0,
+            "pixel_sha": "d" * 64,
+            "input_picture_id": input_id,
+        }
+    ]
+
+
+def test_an_input_that_has_left_the_library_keeps_its_sha_and_loses_its_id(env):
+    """Deleting the source does not unmake what was made from it - but the grid
+    can no longer show it, so the id must not be offered as if it could."""
+    server, client, pic_id = env
+    input_id = _second_picture(client)
+    _lock_input(server, pic_id, input_id, "e" * 64)
+    _bin(server, input_id)
+
+    r = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow")
+    assert r.status_code == 200, r.text
+    row = r.json()["inputs"][0]
+    assert row["input_picture_id"] is None and row["pixel_sha"] == "e" * 64
+
+
+def test_a_scoped_token_is_served_the_graph_but_never_the_shelf_row(env):
+    """The filename and the strength are in the graph it is already being
+    served. Which row of the owner's shelf that file is, is not."""
+    server, client, pic_id = env
+    _shelf_checkpoint(server)
+
+    r = client.post(
+        f"{API}/users/me/token",
+        json={
+            "description": "recipe scope probe",
+            "scope": "READ",
+            "resource_type": "picture",
+            "resource_id": pic_id,
+        },
+    )
+    assert r.status_code == 200, r.text
+    scoped = TestClient(server.api)
+    scoped.headers.update({"Authorization": f"Bearer {r.json()['token']}"})
+
+    # The positive control: the credential is live and in scope for this route.
+    r = scoped.get(f"{API}/comfyui/pictures/{pic_id}/workflow")
+    assert r.status_code == 200, r.text
+    slot = r.json()["model_slots"][0]
+    assert slot["name"] == "sd_xl_base_1.0.safetensors"
+    assert slot["model_id"] is None and slot["verified"] is False
+
+    # And the owner, on the same picture, does get it - over-blocking would be
+    # its own regression.
+    owner_slot = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow").json()[
+        "model_slots"
+    ][0]
+    assert owner_slot["model_id"] == _shelf_model_id(server)

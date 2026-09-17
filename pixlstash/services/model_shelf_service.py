@@ -429,7 +429,7 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
     pictures = vault.db.run_task(recipe_picture_counts, priority=DBPriority.IMMEDIATE)
     if not pictures:
         return {}
-    by_name, by_digest = _recipe_asset_index(hub)
+    by_name, by_digest = recipe_asset_index(hub)
     sorted_digests = sorted(by_digest)
 
     verified: dict[int, set[str]] = {}
@@ -444,7 +444,7 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
         if SHA256_FIELD_RE.search(row["widget_name"]):
             # An A1111 short hash is verified only when it names one model;
             # otherwise its picture is left to the filename tier.
-            matched = _models_for_digest(
+            matched = models_for_digest(
                 row["normalized_filename"], by_digest, sorted_digests
             )
             if len(matched) == 1:
@@ -465,7 +465,7 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
     }
 
 
-def _recipe_asset_index(hub) -> tuple[dict[str, set[int]], dict[str, int]]:
+def recipe_asset_index(hub) -> tuple[dict[str, set[int]], dict[str, int]]:
     """How a recipe's asset names reach shelf models: ``(by_name, by_digest)``.
 
     ``by_name`` maps a normalized basename to every model a file of that name
@@ -489,7 +489,7 @@ def _recipe_asset_index(hub) -> tuple[dict[str, set[int]], dict[str, int]]:
     return by_name, by_digest
 
 
-def _models_for_digest(
+def models_for_digest(
     value: str, by_digest: dict[str, int], sorted_digests: list[str]
 ) -> set[int]:
     """Every shelf model a ``*_sha256`` asset value could name.
@@ -563,7 +563,7 @@ def fetch_companions(hub, ids: list[int]) -> dict:
             "SELECT id, file_kind, display_name, filename, file_size FROM model"
         )
     }
-    by_name, by_digest = _recipe_asset_index(hub)
+    by_name, by_digest = recipe_asset_index(hub)
     sorted_digests = sorted(by_digest)
     # The ghost reader's rule (`hub/workflows._model_ghost_names`): a digest that
     # matches nothing proves nothing while a row still waits for its hash, since
@@ -582,7 +582,7 @@ def fetch_companions(hub, ids: list[int]) -> dict:
     ):
         recipe = row["structural_hash"]
         if SHA256_FIELD_RE.search(row["widget_name"]):
-            matched = _models_for_digest(
+            matched = models_for_digest(
                 row["normalized_filename"], by_digest, sorted_digests
             )
             if not matched and not digests_are_complete:

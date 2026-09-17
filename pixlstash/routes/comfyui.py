@@ -59,6 +59,10 @@ from pixlstash.services.model_shelf_service import (
     fetch_locations,
     fetch_model_by_hash,
 )
+from pixlstash.services.picture_recipe_service import (
+    describe_recipe,
+    resolution_lock_in_session,
+)
 from pixlstash.services.workflow_inputs import (
     FIXED,
     PICKER,
@@ -1334,6 +1338,49 @@ class ComfyUIWorkflowImportResponse(BaseModel):
     topology_hash: Optional[str] = None
 
 
+class ComfyUIRecipeModelSlot(BaseModel):
+    """One model the graph loads, as the overlay's Recipe section shows it.
+
+    ``model_id`` and ``verified`` are absent for a scoped token: which shelf row
+    a file is, is a fact about the library rather than about this picture.
+    ``verified`` true means the graph named the file by its digest and exactly
+    one shelf model has it - the same tier the shelf's own picture counts use.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str
+    widget: str
+    strength: Optional[float] = None
+    model_id: Optional[int] = None
+    verified: bool = False
+
+
+class ComfyUIRecipeSetting(BaseModel):
+    """One sampler setting of the recipe: ``steps``, ``cfg``, ``width``…"""
+
+    model_config = ConfigDict(extra="allow")
+
+    label: str
+    value: Any = None
+    node: Optional[str] = None
+
+
+class ComfyUIRecipeInput(BaseModel):
+    """The resolution lock: which picture one input of the run loaded.
+
+    ``input_picture_id`` is null once that picture has left this library, which
+    does not unmake what was made from it - ``pixel_sha`` still identifies it.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    node_ref: str
+    position: int
+    pixel_sha: str
+    input_picture_id: Optional[int] = None
+
+
 class ComfyUIPictureWorkflowResponse(BaseModel):
     """ComfyUI workflow info extracted from a picture's embedded metadata."""
 
@@ -1346,6 +1393,12 @@ class ComfyUIPictureWorkflowResponse(BaseModel):
     loras: list[str] = []
     positive_prompt: Optional[str] = None
     seed: Optional[int] = None
+    # The Recipe section (#1313). `models` above stays the flat name list it has
+    # always been; these carry the strengths and the shelf rows beside it.
+    model_slots: list[ComfyUIRecipeModelSlot] = []
+    settings: list[ComfyUIRecipeSetting] = []
+    inputs: list[ComfyUIRecipeInput] = []
+    topology_hash: Optional[str] = None
 
 
 class ComfyUIPreflightResponse(BaseModel):
@@ -2721,7 +2774,14 @@ def create_router(server) -> APIRouter:
         summary="Get ComfyUI workflow for a picture",
         description=(
             "Extracts and returns the ComfyUI workflow embedded in a picture's "
-            "file metadata, if present."
+            "file metadata, if present, together with what the overlay's Recipe "
+            "section shows about it: the models with their strengths, the "
+            "sampler settings, and the resolution lock (which picture each "
+            "input of the run actually loaded). `models[].model_id` and "
+            "`models[].verified` name a row on the owner's model shelf and are "
+            "served to a fully-unscoped owner only - a scoped token gets the "
+            "filename and the strength, which it can already read out of the "
+            "`workflow` this route serves it anyway."
         ),
         response_model=ComfyUIPictureWorkflowResponse,
     )
@@ -2732,7 +2792,9 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
         pics = server.vault.db.run_immediate_read_task(
-            Picture.find, id=pic_id, select_fields=["id", "file_path"]
+            Picture.find,
+            id=pic_id,
+            select_fields=["id", "file_path", "workflow_topology_hash"],
         )
         if not pics:
             raise HTTPException(status_code=404, detail="Picture not found")
@@ -2765,7 +2827,23 @@ def create_router(server) -> APIRouter:
                 detail="No ComfyUI workflow found in picture metadata",
             )
 
-        return workflow_info
+        # The Recipe section (#1313), from the same file read. The API `prompt`
+        # chunk is the recipe; the UI `workflow` chunk names the same files but
+        # not the strengths they were loaded at, so a file that carries only the
+        # latter gets model names with no strength rather than nothing.
+        return {
+            **workflow_info,
+            **describe_recipe(
+                getattr(server, "hub", None),
+                find_comfy_api_prompt(embedded_metadata),
+                (workflow_info.get("models") or [], workflow_info.get("loras") or []),
+                server.vault.db.run_immediate_read_task(
+                    resolution_lock_in_session, picture_id=pic_id
+                ),
+                owner=server.auth.is_unscoped_owner_request(request),
+            ),
+            "topology_hash": pic.workflow_topology_hash,
+        }
 
     @router.get(
         "/comfyui/pictures/{picture_id}/recipe",

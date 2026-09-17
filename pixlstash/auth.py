@@ -1579,6 +1579,23 @@ class AuthService:
             return user_id
         raise HTTPException(status_code=401, detail=detail)
 
+    def is_unscoped_owner_request(self, request: Request) -> bool:
+        """Whether *request* carries a fully-unscoped owner credential.
+
+        The predicate behind :meth:`require_unscoped_owner`, for a route that
+        must **narrow** its answer rather than refuse it - a field that names
+        something outside the token's scope, on an otherwise in-scope resource.
+        It is the same spelling of the rule, so the two cannot drift.
+
+        It says nothing about whether the caller is authenticated at all:
+        ``require_user_id`` is what establishes that, and every data route is
+        already past it by the time a handler runs.
+        """
+        if getattr(request.state, "token_scope", None) is not None:
+            return False
+        matched_token = getattr(request.state, "matched_token", None)
+        return matched_token is None or matched_token.resource_type is None
+
     def require_unscoped_owner(
         self,
         request: Request,
@@ -1593,10 +1610,7 @@ class AuthService:
         outside the token's intended scope.
         """
         user_id = self.require_user_id(request)
-        if getattr(request.state, "token_scope", None) is not None:
-            raise HTTPException(status_code=403, detail=detail)
-        matched_token = getattr(request.state, "matched_token", None)
-        if matched_token is not None and matched_token.resource_type is not None:
+        if not self.is_unscoped_owner_request(request):
             raise HTTPException(status_code=403, detail=detail)
         return user_id
 

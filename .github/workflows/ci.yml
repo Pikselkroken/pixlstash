@@ -551,6 +551,7 @@ jobs:
           tests/test_picture_is_video.py
           tests/test_picture_mutation_scope.py
           tests/test_picture_plugins.py
+          tests/test_picture_recipe.py
           tests/test_picture_set_locking.py
           tests/test_picture_sets.py
           tests/test_picture_sets_query_cost.py
