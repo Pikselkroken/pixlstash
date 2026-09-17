@@ -432,16 +432,18 @@ def promote_instance_widgets(nodes: dict[str, ReducedNode]) -> dict[str, Reduced
     }
 
 
-def graph_key(nodes: dict[str, ReducedNode]) -> str:
-    """Return the order-invariant key for a reduced graph.
+def node_labels(
+    nodes: dict[str, ReducedNode], rounds: Optional[int] = REFINEMENT_ROUNDS
+) -> dict[str, str]:
+    """Each node's order-invariant label after Weisfeiler-Leman refinement.
 
-    Weisfeiler-Leman refinement over sorted neighbour lists, then a sorted
-    multiset of node descriptors. Nothing here reads a node id, so relabelling
-    every node - or nesting half of them in a subgraph - cannot change the
-    result.
+    The label depends on the node's class, its widgets and its neighbourhood
+    *rounds* hops out, never on its id, so it names "this node in this graph"
+    the same way however the file was serialised. The hashes use the default
+    and must keep it. A caller that needs nodes told apart as far as WL can
+    (the middle of a long chain) passes ``None``: refinement then stops once a
+    round splits no class, since a round can only split classes, never merge.
     """
-    if not nodes:
-        raise WorkflowGraphError("cannot key an empty graph")
     labels = {
         node_id: _digest([node.class_type, node.widgets])
         for node_id, node in nodes.items()
@@ -452,8 +454,8 @@ def graph_key(nodes: dict[str, ReducedNode]) -> str:
             if source in downstream:
                 downstream[source].append(node_id)
 
-    for _ in range(REFINEMENT_ROUNDS):
-        labels = {
+    for _ in range(len(nodes) if rounds is None else rounds):
+        refined = {
             node_id: _digest(
                 [
                     labels[node_id],
@@ -463,7 +465,23 @@ def graph_key(nodes: dict[str, ReducedNode]) -> str:
             )
             for node_id, node in nodes.items()
         }
+        if rounds is None and len(set(refined.values())) == len(set(labels.values())):
+            break
+        labels = refined
+    return labels
 
+
+def graph_key(nodes: dict[str, ReducedNode]) -> str:
+    """Return the order-invariant key for a reduced graph.
+
+    Weisfeiler-Leman refinement over sorted neighbour lists, then a sorted
+    multiset of node descriptors. Nothing here reads a node id, so relabelling
+    every node - or nesting half of them in a subgraph - cannot change the
+    result.
+    """
+    if not nodes:
+        raise WorkflowGraphError("cannot key an empty graph")
+    labels = node_labels(nodes)
     descriptors = sorted(
         json.dumps(
             [
