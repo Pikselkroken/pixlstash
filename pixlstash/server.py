@@ -112,6 +112,7 @@ from pixlstash.routes.tag_suggestions import (
     create_router as create_tag_suggestions_router,
 )
 from pixlstash.routes.operations import create_router as create_operations_router
+from pixlstash.routes.recipes import create_router as create_recipes_router
 from pixlstash.routes.reviews import create_router as create_reviews_router
 from pixlstash.routes.insights import create_router as create_insights_router
 from pixlstash.routes.moves import create_router as create_moves_router
@@ -1906,6 +1907,14 @@ class Server(
         # reaches OpenAPI and the generated route table.
         self.api.include_router(
             create_workflows_router(self),
+            prefix=API_V1_PREFIX,
+            dependencies=gate,
+        )
+        # Saved recipes (implementation plan §5.5, step B6). Vault rows, read
+        # against the hub's stacks; the module declares its own tag for the
+        # reason above.
+        self.api.include_router(
+            create_recipes_router(self),
             prefix=API_V1_PREFIX,
             dependencies=gate,
         )

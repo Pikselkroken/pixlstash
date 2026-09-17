@@ -388,3 +388,77 @@ def card_grouping(hub: HubDatabase) -> dict:
         # rule. Zero once the backfill has drained.
         "ungrouped": len(ungrouped - grouped),
     }
+
+
+def effective_stack_keys(hub: HubDatabase, key: str) -> list[str]:
+    """The cards one card shares a stack with, itself included.
+
+    Resolved in the order the plan sets (§5.4) and never written down: a manual
+    assignment first, then the owner having taken this card OUT of its automatic
+    group, and only then the automatic group itself - every card whose topology
+    shares this one's ``core_hash`` under the rule THIS build applies. Cards
+    that have left the group by either of the first two routes are excluded from
+    it, which is what makes an Unstack stick through a ``CORE_VERSION`` bump.
+
+    A card with no cache row yet, or one stamped with a superseded rule, is its
+    own stack rather than joining a NULL bucket that would read as one enormous
+    stack holding every unfiled card.
+
+    Returns:
+        The keys, ``key`` always among them even when the hub has never heard
+        of it - a saved recipe still runs on the workflow it was saved from.
+    """
+    member = hub.fetchone(
+        "SELECT stack_id FROM workflow_stack_member WHERE workflow_key = ?", (key,)
+    )
+    if member is not None:
+        rows = hub.fetchall(
+            "SELECT workflow_key FROM workflow_stack_member WHERE stack_id = ? "
+            "ORDER BY position, workflow_key",
+            (member["stack_id"],),
+        )
+        return [row["workflow_key"] for row in rows]
+
+    unstacked = hub.fetchone(
+        "SELECT 1 FROM workflow_unstacked WHERE workflow_key = ?", (key,)
+    )
+    if unstacked is not None:
+        return [key]
+
+    rows = hub.fetchall(
+        "SELECT DISTINCT v.workflow_key AS workflow_key "
+        "FROM workflow_variant v "
+        "JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
+        "AND c.core_version = ? "
+        "WHERE c.core_hash IN ("
+        "  SELECT c2.core_hash FROM workflow_variant v2 "
+        "  JOIN workflow_topology_core c2 ON c2.topology_hash = v2.topology_hash "
+        "  AND c2.core_version = ? "
+        "  WHERE v2.workflow_key = ?"
+        ") "
+        "AND v.workflow_key NOT IN (SELECT workflow_key FROM workflow_stack_member) "
+        "AND v.workflow_key NOT IN (SELECT workflow_key FROM workflow_unstacked) "
+        "ORDER BY v.workflow_key",
+        (CORE_RULE_VERSION, CORE_RULE_VERSION, key),
+    )
+    keys = [row["workflow_key"] for row in rows]
+    return keys if key in keys else [key, *keys]
+
+
+def variant_hashes_for_keys(hub: HubDatabase, keys: list[str]) -> list[str]:
+    """Every variant filed under these cards.
+
+    The structural hashes are what a vault read joins on: a picture carries one
+    (``picture.workflow_structural_hash``) and the hub says which card it is
+    part of, so "the pictures this stack made" is one ``IN`` over an indexed
+    column rather than a join across two databases.
+    """
+    if not keys:
+        return []
+    placeholders = ",".join("?" for _ in keys)
+    rows = hub.fetchall(
+        "SELECT structural_hash FROM workflow_variant "
+        f"WHERE workflow_key IN ({placeholders}) ORDER BY structural_hash",
+        tuple(keys),
+    )
+    return [row["structural_hash"] for row in rows]
