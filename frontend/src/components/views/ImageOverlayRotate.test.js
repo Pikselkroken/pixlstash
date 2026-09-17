@@ -45,12 +45,14 @@ const getMock = vi.fn(async (url) => {
     throw e;
   }
   if (path.includes("/metadata")) {
+    const id = Number(path.match(/\/pictures\/(\d+)\//)?.[1] ?? 7);
     return {
       data: {
-        id: 7,
+        id,
         format: "jpg",
         pixel_sha: metadataPixelSha,
-        orientation: metadataOrientation,
+        // Only picture 7 is ever turned; a neighbour stays upright.
+        orientation: id === 7 ? metadataOrientation : 1,
         width: 1600,
         height: 1200,
         tags: [],
@@ -108,12 +110,15 @@ const STUBS = {
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-async function openOverlay(image = { id: 7, format: "jpg", tags: [] }) {
+async function openOverlay(
+  image = { id: 7, format: "jpg", tags: [] },
+  allImages = [image],
+) {
   const wrapper = mount(ImageOverlay, {
     props: {
       open: false,
       initialImageId: image.id,
-      allImages: [image],
+      allImages,
       backendUrl: "http://test",
       tagUpdate: { key: 0, pictureIds: [] },
       descriptionUpdate: { key: 0, pictureIds: [] },
@@ -374,6 +379,32 @@ describe("ImageOverlay - the picture on screen after a rotate", () => {
     await flush();
     await flush();
 
+    expect(wrapper.find(".overlay-img").attributes("src")).toContain("?v=o6");
+  });
+
+  it("stays turned after moving to a neighbour and back", async () => {
+    // Coming back re-resolves the picture from the frozen snapshot too, and a
+    // row with no orientation there would pin the bare, unrotated URL.
+    const seven = { id: 7, format: "jpg", tags: [] };
+    const wrapper = await openOverlay(seven, [
+      seven,
+      { id: 8, format: "jpg", tags: [] },
+    ]);
+
+    metadataOrientation = 6;
+    press("]");
+    await flush();
+    await flush();
+    expect(wrapper.find(".overlay-img").attributes("src")).toContain("?v=o6");
+
+    await wrapper.setProps({ initialImageId: 8 });
+    await flush();
+    await flush();
+    await wrapper.setProps({ initialImageId: 7 });
+    // Right away, before the metadata read lands: no flash of the old file.
+    expect(wrapper.find(".overlay-img").attributes("src")).toContain("?v=o6");
+    await flush();
+    await flush();
     expect(wrapper.find(".overlay-img").attributes("src")).toContain("?v=o6");
   });
 
