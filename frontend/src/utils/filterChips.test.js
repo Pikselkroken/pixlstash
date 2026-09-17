@@ -36,8 +36,8 @@ describe("filterChips", () => {
       "Lacks tag blurry",
       "Missing tag hat 80%+",
       "Doubtful tag hat under 60%",
-      "Model flux1-dev",
-      "Model sdxl",
+      "Checkpoint flux1-dev",
+      "Checkpoint sdxl",
     ]);
   });
 

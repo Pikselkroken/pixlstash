@@ -9,20 +9,40 @@
 // Pick-one Picture kinds. "Any" is deliberately not a choice: removing the chip
 // is how you get back to any.
 export const MEDIA_OPTIONS = [
-  { id: "images", label: "Images", chip: "images" },
-  { id: "videos", label: "Video", chip: "video" },
+  { id: "images", label: "Images", chip: "images", icon: "mdi-image-outline" },
+  { id: "videos", label: "Video", chip: "video", icon: "mdi-video-outline" },
 ];
 
 export const FACE_OPTIONS = [
-  { id: "with_face", label: "Has face", chip: "has face" },
-  { id: "without_face", label: "No face", chip: "no face" },
+  {
+    id: "with_face",
+    label: "Has face",
+    chip: "has face",
+    icon: "mdi-face-recognition",
+  },
+  {
+    id: "without_face",
+    label: "No face",
+    chip: "no face",
+    icon: "mdi-account-off-outline",
+  },
 ];
 
 // 'unresolved' is honoured by the store and API but not offered: the duplicate
 // queue owns undecided groups.
 export const STACK_OPTIONS = [
-  { id: "stacked", label: "Stacked", chip: "stacked" },
-  { id: "unstacked", label: "Unstacked", chip: "unstacked" },
+  {
+    id: "stacked",
+    label: "Stacked",
+    chip: "stacked",
+    icon: "mdi-layers-outline",
+  },
+  {
+    id: "unstacked",
+    label: "Unstacked",
+    chip: "unstacked",
+    icon: "mdi-layers-off",
+  },
 ];
 
 // Only the combinations the backend actually detects. Each maps to one
@@ -219,7 +239,7 @@ export function filterChips(store, { allPicturesView = true } = {}) {
   }
 
   for (const name of store.comfyuiModelFilter || []) {
-    push(`model:${name}`, "Model", modelLabel(name), () => {
+    push(`model:${name}`, "Checkpoint", modelLabel(name), () => {
       store.comfyuiModelFilter = without(store.comfyuiModelFilter, name);
     });
   }

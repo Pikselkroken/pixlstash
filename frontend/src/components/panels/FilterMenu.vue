@@ -30,6 +30,7 @@
             @click="toggle(k.id)"
             @keydown.right.prevent="openKind(k.id)"
           >
+            <v-icon size="16" class="fm-row-lead">{{ k.icon }}</v-icon>
             <span class="fm-row-label">{{ k.label }}</span>
             <span class="fm-n">{{ rowValue(k.id) }}</span>
             <v-icon size="16" class="fm-row-trail">mdi-chevron-right</v-icon>
@@ -48,6 +49,7 @@
             @click="toggle(k.id)"
             @keydown.right.prevent="openKind(k.id)"
           >
+            <v-icon size="16" class="fm-row-lead">{{ k.icon }}</v-icon>
             <span class="fm-row-label">{{ k.label }}</span>
             <span class="fm-n">{{ rowValue(k.id) }}</span>
             <v-icon size="16" class="fm-row-trail">mdi-chevron-right</v-icon>
@@ -64,6 +66,7 @@
           @click="toggle('problems')"
           @keydown.right.prevent="openKind('problems')"
         >
+          <v-icon size="16" class="fm-row-lead">mdi-alert-outline</v-icon>
           <span class="fm-row-label">Problems</span>
           <span class="fm-n">{{ rowValue("problems") }}</span>
           <v-icon size="16" class="fm-row-trail">mdi-chevron-right</v-icon>
@@ -334,15 +337,15 @@
 
       <FilterChecklistMenu
         v-else-if="sub === 'model'"
-        title="ComfyUI model"
-        placeholder="Filter models…"
+        title="Checkpoint"
+        placeholder="Filter checkpoints…"
         :items="modelItems"
         :checked="store.comfyuiModelFilter"
         :count-for="
           (item) => count(filterParams([['comfyui_model', item.value]]))
         "
         :clearable="store.comfyuiModelFilter.length > 0"
-        empty-text="No pictures record a ComfyUI model."
+        empty-text="No pictures record a checkpoint."
         @toggle="(v, on) => toggleIn('comfyuiModelFilter', v, on)"
         @clear="store.comfyuiModelFilter = []"
       />
@@ -409,17 +412,18 @@ const store = useFilterStore();
 const gridStore = useGridStore();
 
 const PICTURE_KINDS = [
-  { id: "media", label: "Media" },
-  { id: "faces", label: "Faces" },
-  { id: "stacks", label: "Stacks" },
-  { id: "sharing", label: "Sharing" },
+  { id: "media", label: "Media", icon: "mdi-image-multiple-outline" },
+  { id: "faces", label: "Faces", icon: "mdi-face-recognition" },
+  { id: "stacks", label: "Stacks", icon: "mdi-layers-outline" },
+  { id: "sharing", label: "Sharing", icon: "mdi-share-variant-outline" },
 ];
 const CONTENT_KINDS = [
-  { id: "score", label: "Score" },
-  { id: "tags", label: "Tags" },
-  { id: "confidence", label: "Tag confidence" },
-  { id: "model", label: "ComfyUI model" },
-  { id: "lora", label: "LoRA" },
+  { id: "score", label: "Score", icon: "mdi-star-outline" },
+  { id: "tags", label: "Tags", icon: "mdi-tag-outline" },
+  { id: "confidence", label: "Tag confidence", icon: "mdi-tag-search-outline" },
+  // The checkpoint glyph is the model shelf's (CAPABILITY_ICONS).
+  { id: "model", label: "Checkpoint", icon: "mdi-package-variant-closed" },
+  { id: "lora", label: "LoRA", icon: "mdi-puzzle-outline" },
 ];
 
 const formatParams = (exts) =>
@@ -460,7 +464,14 @@ const PICK_ONE = {
     kind: "Sharing",
     field: "sharedOnlyFilter",
     off: false,
-    options: [{ id: true, label: "Shared", chip: "shared" }],
+    options: [
+      {
+        id: true,
+        label: "Shared",
+        chip: "shared",
+        icon: "mdi-share-variant-outline",
+      },
+    ],
     params: () => "shared_only=true",
   },
 };
@@ -504,7 +515,7 @@ const KIND_OF_CHIP = {
   "Lacks tag": "tags",
   "Missing tag": "confidence",
   "Doubtful tag": "confidence",
-  Model: "model",
+  Checkpoint: "model",
   LoRA: "lora",
   Problem: "problems",
 };
@@ -524,11 +535,18 @@ function rowValue(kind) {
 function openKind(kind) {
   sub.value = kind;
   const row = rowRefs[kind];
-  // Line the submenu's top up with the row that opened it.
-  subTop.value = row ? Math.max(0, row.offsetTop - 8) : 0;
-  // Into the body, never the header's Clear. The checklist and confidence
-  // menus focus their own search field once they mount.
+  const rowTop = row ? Math.max(0, row.offsetTop - 8) : 0;
+  subTop.value = rowTop;
   nextTick(() => {
+    // Line the submenu up with its row, but no lower than keeps its bottom
+    // level with the root menu's: a tall submenu (Score) hanging below the
+    // root made the whole cascade too tall and the menu jumped up over the
+    // toolbar to fit.
+    const rootHeight = rootRef.value?.offsetHeight ?? 0;
+    const subHeight = subRef.value?.offsetHeight ?? 0;
+    subTop.value = Math.max(0, Math.min(rowTop, rootHeight - subHeight));
+    // Into the body, never the header's Clear. The checklist and confidence
+    // menus focus their own search field once they mount.
     const body = subRef.value?.querySelector(".tbm-section");
     const target =
       body?.querySelector('[role="radio"][tabindex="0"]') ??

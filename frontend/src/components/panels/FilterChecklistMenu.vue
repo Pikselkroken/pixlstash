@@ -69,7 +69,7 @@
 
 <script setup>
 /**
- * A filter field over a checklist with counts: the Tags, ComfyUI model and
+ * A filter field over a checklist with counts: the Tags, Checkpoint and
  * LoRA menus. Ticking emits `toggle`; the parent owns what that means.
  */
 import { computed, nextTick, onMounted, ref, watch } from "vue";

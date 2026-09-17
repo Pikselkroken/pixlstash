@@ -982,7 +982,8 @@ kbd {
   align-items: center;
   gap: var(--space-3);
   width: calc(100% + var(--space-3) * 2);
-  height: var(--control-h);
+  /* The design system's menu row: 32px, a 16px leading glyph, a 16px chevron. */
+  height: var(--control-h-bar);
   margin-inline: calc(var(--space-3) * -1);
   padding: 0 var(--space-3);
   border-radius: var(--radius-sm);
@@ -1005,6 +1006,14 @@ kbd {
   opacity: var(--opacity-disabled);
   cursor: not-allowed;
   background: none;
+}
+.fm-row-lead {
+  flex-shrink: 0;
+  opacity: var(--opacity-text-secondary);
+}
+.fm-row:hover .fm-row-lead,
+.fm-row[aria-expanded="true"] .fm-row-lead {
+  opacity: 1;
 }
 .fm-row-label {
   flex: 1;
@@ -1029,7 +1038,7 @@ kbd {
 .fm-check {
   display: flex;
   width: calc(100% + var(--space-3) * 2);
-  min-height: var(--control-h);
+  min-height: var(--control-h-bar);
   margin-inline: calc(var(--space-3) * -1);
   padding: 0 var(--space-3);
   border-radius: var(--radius-sm);

@@ -307,3 +307,53 @@ def test_without_stack_collapse_only_the_matching_rows_come_back(session):
         {member.id, loose.id},
         comfyui_models_filter=["m1"],
     )
+
+
+# --------------------------------------------------------------------------- #
+# Filters stack: a checkpoint and a LoRA narrow each other, on every path.
+# --------------------------------------------------------------------------- #
+
+
+def _unassigned_ids(session, **kwargs) -> set[int]:
+    rows = Picture.find_unassigned(session, metadata_fields=["id"], **kwargs)
+    return {row["id"] if isinstance(row, dict) else row.id for row in rows}
+
+
+def test_a_checkpoint_and_a_lora_narrow_each_other(session):
+    both = _add_picture(session, models=["flux"], loras=["detail"])
+    _add_picture(session, models=["flux"], loras=["other"])
+    _add_picture(session, models=["sdxl"], loras=["detail"])
+
+    for leaders in (False, True):
+        _assert_found(
+            session,
+            {both.id},
+            comfyui_models_filter=["flux"],
+            comfyui_loras_filter=["detail"],
+            stack_leaders_only=leaders,
+        )
+
+
+def test_two_checkpoints_mean_either(session):
+    flux = _add_picture(session, models=["flux"])
+    sdxl = _add_picture(session, models=["sdxl"])
+    _add_picture(session, models=["pony"])
+
+    _assert_found(session, {flux.id, sdxl.id}, comfyui_models_filter=["flux", "sdxl"])
+
+
+def test_no_character_path_applies_the_checkpoint_and_lora_filters(session):
+    """ "No character" lists through `find_unassigned`, which used to ignore
+    both filters, so adding it to a checkpoint filter widened the grid."""
+    both = _add_picture(session, models=["flux"], loras=["detail"])
+    _add_picture(session, models=["flux"], loras=["other"])
+    _add_picture(session, models=["sdxl"])
+
+    for leaders in (False, True):
+        kwargs = dict(
+            comfyui_models_filter=["flux"],
+            comfyui_loras_filter=["detail"],
+            stack_leaders_only=leaders,
+        )
+        assert _unassigned_ids(session, **kwargs) == {both.id}
+        assert Picture.find_unassigned(session, count_only=True, **kwargs) == 1
