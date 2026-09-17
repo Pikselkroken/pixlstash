@@ -32,6 +32,11 @@ export interface RunningServer {
   sessionToken: string;
 }
 
+/** The checkout this dev build was built from: electron/dist/backend is three levels down. */
+export function devRepoRoot(): string {
+  return join(__dirname, '..', '..', '..');
+}
+
 /**
  * In dev (PIXLSTASH_DESKTOP_DEV=1) we run against a local interpreter - the
  * repo's .venv by default, or PIXLSTASH_DEV_BACKEND if set. This is the loop
@@ -39,11 +44,26 @@ export interface RunningServer {
  */
 export function devInterpreter(): string {
   if (process.env.PIXLSTASH_DEV_BACKEND) return process.env.PIXLSTASH_DEV_BACKEND;
-  // electron/dist/backend → repo root is three levels up.
-  const repoRoot = join(__dirname, '..', '..', '..');
+  const repoRoot = devRepoRoot();
   const unix = join(repoRoot, '.venv', 'bin', 'python');
   const win = join(repoRoot, '.venv', 'Scripts', 'python.exe');
   return process.platform === 'win32' ? win : unix;
+}
+
+/**
+ * PYTHONPATH for a dev backend or CLI: the checkout first, then whatever the
+ * shell already had. Without it `-m pixlstash...` imports whichever pixlstash
+ * the interpreter has installed, and a venv shared between checkouts has one
+ * installed from some other branch, so a dev launch silently ran that
+ * branch's code (and its migrations) instead of this one's.
+ */
+export function devPythonPath(
+  repoRoot: string,
+  existing: string | undefined,
+  separator: string = delimiter,
+): string {
+  const rest = (existing ?? '').split(separator).filter((entry) => entry && entry !== repoRoot);
+  return [repoRoot, ...rest].join(separator);
 }
 
 /** True if *port* can be bound on loopback right now. */
@@ -290,9 +310,11 @@ export class ServerProcess {
     this.logStream = createWriteStream(serverLogPath(), { flags: 'a' });
     this.logStream.write(`\n=== ${new Date().toISOString()} starting ${python}${overlayDir ? ` (overlay ${overlayDir})` : ''} ===\n`);
 
-    const pythonPath = overlayDir && !isDevBackend()
-      ? [overlayDir, process.env.PYTHONPATH].filter(Boolean).join(delimiter)
-      : process.env.PYTHONPATH;
+    const pythonPath = isDevBackend()
+      ? devPythonPath(devRepoRoot(), process.env.PYTHONPATH)
+      : overlayDir
+        ? [overlayDir, process.env.PYTHONPATH].filter(Boolean).join(delimiter)
+        : process.env.PYTHONPATH;
 
     const env = {
       ...process.env,

@@ -29,7 +29,13 @@ import {
   isBundledRendererPage,
   redactUrl,
 } from './urlPolicy';
-import { ServerProcess, StartupRecovery, devInterpreter } from './backend/ServerProcess';
+import {
+  ServerProcess,
+  StartupRecovery,
+  devInterpreter,
+  devPythonPath,
+  devRepoRoot,
+} from './backend/ServerProcess';
 import {
   isPermissionRepairRequired,
   mkdirPrivateIfMissing,
@@ -1806,8 +1812,11 @@ function runCli(args: string[]): void {
   // declare unconditionally but which does not exist off macOS.
   app.dock?.hide();
   const declared = declaredCliCommand();
-  // Same interpreter choice the backend makes, so a dev run drives the repo's
-  // .venv and the CLI branch is exercisable without building the bundled env.
+  // Same interpreter and import path the backend gets, so a dev run drives this
+  // checkout's code and the CLI branch is exercisable without the bundled env.
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (isDevBackend()) env.PYTHONPATH = devPythonPath(devRepoRoot(), process.env.PYTHONPATH);
+  if (declared) env.PIXLSTASH_CLI_COMMAND = declared;
   const child = spawn(
     isDevBackend() ? devInterpreter() : bundledInterpreter(),
     ['-m', 'pixlstash.cli', '--hub', hubPath(), ...args],
@@ -1817,7 +1826,7 @@ function runCli(args: string[]): void {
       // command the user actually typed instead of the `pixlstash-cli` console
       // script, which no desktop install puts on PATH. Undefined in a dev run,
       // where we have no runnable command to name (see declaredCliCommand).
-      env: declared ? { ...process.env, PIXLSTASH_CLI_COMMAND: declared } : process.env,
+      env,
     },
   );
   // 3 is the CLI's own "hub unavailable" code; a runtime we cannot even launch
