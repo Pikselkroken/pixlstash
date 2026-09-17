@@ -26,6 +26,8 @@ const CHECKPOINT = { widget: "ckpt_name", name: "realvisxlv40.safetensors" };
 const LORA = { widget: "lora_name", name: "add_detail_xl.safetensors" };
 const LORA_2 = { widget: "lora_name", name: "film_grain.safetensors" };
 const INPUT_PICTURE = { widget: "image", name: "reference.png" };
+// The PixlStash shelf loader names its checkpoint by shelf row id (#1416).
+const SHELF_CHECKPOINT = { widget: "checkpoint_id", name: "11" };
 
 function row(overrides = {}) {
   return {
@@ -41,6 +43,14 @@ function row(overrides = {}) {
 }
 
 describe("assetKind", () => {
+  it("counts the shelf loader's id widget as the base model", () => {
+    // The mirror of `_CHECKPOINT_WIDGETS` in `services/workflow_identity.py`.
+    // Reading it as "other" would leave a workflow that has a checkpoint
+    // reporting no base model at all.
+    expect(assetKind(SHELF_CHECKPOINT)).toBe("base");
+    expect(baseModelName([SHELF_CHECKPOINT, LORA])).toBe("11");
+  });
+
   it("reads the input a filename was given to, not the filename", () => {
     expect(assetKind(CHECKPOINT)).toBe("base");
     expect(assetKind(LORA)).toBe("lora");

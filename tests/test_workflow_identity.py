@@ -4,6 +4,7 @@ Every stacking case in the user plan §2 is a pair: two workflows, and whether
 they share a card (``workflow_key``) and a stack (``core_hash``).
 """
 
+import hashlib
 import json
 
 import pytest
@@ -11,6 +12,7 @@ import pytest
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
     structural_document,
+    structural_hash,
     topology_hash,
 )
 from pixlstash.services.workflow_identity import (
@@ -405,3 +407,178 @@ def test_the_pixlstash_picture_loader_and_a_noise_mask_are_picture_sources():
     assert workflow_type(_doc(graph)) == "img2img"
     graph["13"] = _node("SetLatentNoiseMask", samples=["12", 0])
     assert workflow_type(_doc(graph)) == "inpaint"
+
+
+# ── the PixlStash shelf loaders (#1416) ─────────────────────────────────────
+
+
+def _shelf_graph(checkpoint_id="11") -> dict:
+    """The same txt2img graph, loading its checkpoint off the model shelf.
+
+    ``PixlStashCheckpointLoader`` is shaped after ``CheckpointLoaderSimple`` --
+    the same three outputs in the same order -- so only node 1 changes. It
+    names its model by the shelf's row id rather than by digest, because a
+    checkpoint's ``sha256`` is NULL until the background hasher has read it.
+    """
+    graph = _graph()
+    graph["1"] = _node("PixlStashCheckpointLoader", checkpoint_id=checkpoint_id)
+    return graph
+
+
+def test_the_shelf_checkpoint_is_part_of_the_workflow():
+    a, b = _shelf_graph("11"), _shelf_graph("12")
+    assert structural_hash(a) != structural_hash(b)
+    assert _key(a) != _key(b)
+    assert differs_by(_doc(a), _doc(b)) == ["other checkpoint"]
+    # Same card rule as the house loader: a checkpoint swap stays one stack.
+    assert core_hash(_doc(a)) == core_hash(_doc(b))
+
+
+def test_the_shelf_checkpoint_is_the_graph_s_one_model_slot():
+    found = slots(_doc(_shelf_graph("11")))
+    assert [(s.class_type, s.widget, s.is_lora) for s in found] == [
+        ("PixlStashCheckpointLoader", "checkpoint_id", False)
+    ]
+    assert found[0].asset.startswith("asset:")
+
+
+def test_the_second_text_encoder_of_a_pair_is_a_model_not_a_parameter():
+    """``clip_sha256_2`` is the T5 or Llama beside a clip-l, on one node."""
+
+    def graph(second: str) -> dict:
+        return _graph(
+            extra={
+                "60": _node(
+                    "PixlStashCLIPLoader",
+                    clip_sha256="aa" * 32,
+                    type="flux",
+                    clip_sha256_2=second,
+                )
+            }
+        )
+
+    a, b = graph("bb" * 32), graph("cc" * 32)
+    assert structural_hash(a) != structural_hash(b)
+    assert _key(a) != _key(b)
+
+
+def test_a_graph_with_no_shelf_loader_keeps_the_keys_it_had():
+    """The keys of a graph on ComfyUI's own loader, measured before #1416.
+
+    A pin rather than a comparison: there is nothing to compare against once
+    the rule has changed. It guards the blast radius -- the new rules are two
+    widget NAMES, so this graph, which carries neither, must key exactly as it
+    did. It cannot fail for a change confined to those names, and is not
+    claimed to: the tests below are what hold the new rules up.
+    """
+    graph = _graph()
+    assert (
+        structural_hash(graph)
+        == "dcfda8d6286e65d97f4a71e15a7d2ec710c600e1f521b36db857c17ac70ed5a3"
+    )
+    assert (
+        topology_hash(graph)
+        == "04b6983e6e0e88e757920f45dbc2fe2f8bf09e140bcb06e8c9d341bbaf150edd"
+    )
+    assert (
+        _key(graph)
+        == "a66cc0095a961c3944ce59f0b8e656ae667c18d765ec7c0c74f87b5e40cab2cf"
+    )
+
+
+def test_an_unpicked_shelf_widget_names_no_model():
+    """Empty is the ordinary state, not the odd one.
+
+    A shelf widget is empty until Browse has been clicked, and the CLIP
+    loader's second encoder is empty on every SD and SDXL graph. Keeping it
+    would file a junk asset row and write the digest of the empty string into
+    the stored document as if a model had gone there.
+    """
+    empty = _shelf_graph("")
+    assert slots(_doc(empty)) == []
+    assert "asset:" not in json.dumps(_doc(empty))
+
+    # The blank second encoder of an SD/SDXL pair, likewise: one asset on that
+    # node, not two. (The node still HAS the widget, and a nulled widget keeps
+    # its name by design, so this is about the value and not the shape.)
+    def clip_loader(**widgets):
+        return _graph(
+            extra={"60": _node("PixlStashCLIPLoader", type="sdxl", **widgets)}
+        )
+
+    blank = clip_loader(clip_sha256="aa" * 32, clip_sha256_2="")
+    assert {s.widget for s in slots(_doc(blank))} == {"ckpt_name", "clip_sha256"}
+    # And a blank is not merely absent from the slots: it must not key the
+    # graph either, or two SD/SDXL workflows differing in nothing fork.
+    assert structural_hash(blank) != structural_hash(
+        clip_loader(clip_sha256="aa" * 32, clip_sha256_2="bb" * 32)
+    )
+    assert "asset:" + _digest_of_empty() not in json.dumps(_doc(blank))
+
+
+def _digest_of_empty() -> str:
+    """The reference a blank widget used to be filed as."""
+    return hashlib.sha256(b"").hexdigest()
+
+
+def test_a_checkpoint_id_written_as_a_number_names_the_same_model():
+    """A script-written prompt carries it as JSON number; the node runs it."""
+    as_text, as_number = _shelf_graph("11"), _shelf_graph(11)
+    assert structural_hash(as_text) == structural_hash(as_number)
+    assert _key(as_text) == _key(as_number)
+    # `True` is an `int` in Python and is not a shelf id.
+    assert slots(_doc(_shelf_graph(True))) == []
+
+
+def test_a_numbered_digest_slot_is_a_lora_slot_and_takes_a_mark():
+    """`SHA256_FIELD_RE` keys it, so `_is_lora_widget` has to claim it.
+
+    Missed, it is a non-LoRA slot and reaches the card key unconditionally, so
+    swapping a character LoRA in a stacker's second slot forks the workflow
+    into a new card -- what marks exist to prevent.
+    """
+
+    def stacker(second: str) -> dict:
+        return _graph(
+            extra={
+                "60": _node(
+                    "PixlStashLoraStacker",
+                    lora_sha256="aa" * 32,
+                    lora_sha256_2=second,
+                )
+            }
+        )
+
+    a, b = stacker("bb" * 32), stacker("cc" * 32)
+    assert [s.is_lora for s in slots(_doc(a)) if s.widget.startswith("lora_")] == [
+        True,
+        True,
+    ]
+    # Both are recipe slots by default, so the card does not fork on a swap.
+    assert _key(a) == _key(b)
+    # ...but the variant hash still moves, because the recipe did.
+    assert structural_hash(a) != structural_hash(b)
+
+
+def test_a_checkpoint_id_that_is_not_a_shelf_id_names_nothing():
+    """The node refuses anything but digits, so the hash rule does too.
+
+    Name-only would let any node with a widget of that name write whatever it
+    holds into ``workflow_recipe_asset``, which is kept forever and shared.
+    """
+    for value in (
+        "",
+        "Not A Model",
+        "a picture of a cat\nin two lines",
+        # `^\d+$` accepts both of these -- `$` matches before a final newline,
+        # and a character class says nothing about length. `str.isdigit()` and
+        # the cap are what refuse them.
+        "11\n",
+        "1" * 400,
+        "x" * 400,
+    ):
+        assert slots(_doc(_shelf_graph(value))) == [], value
+    # A third-party node is judged by the same rule: digits are a model
+    # whoever carries them, and anything else is a parameter.
+    prose = _graph(extra={"60": _node("SomeOtherPack_Loader", checkpoint_id="latest")})
+    assert [s.widget for s in slots(_doc(prose))] == ["ckpt_name"]

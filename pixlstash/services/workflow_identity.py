@@ -33,7 +33,7 @@ from typing import Collection, Optional
 
 from pixlstash.services.comfyui_recipe_service import (
     INPUT_IMAGE_FIELDS,
-    LORA_DIGEST_FIELDS,
+    LORA_DIGEST_FIELD_RE,
     LORA_FILENAME_FIELD_RE,
 )
 from pixlstash.services.workflow_hash import (
@@ -79,7 +79,26 @@ _STRUCTURAL_LORA_RE = re.compile(
 # whether it was a picture or a model. A custom node naming its input
 # picture some other way still splits cards per picture.
 _PICTURE_WIDGET_RE = re.compile(r"(^|_)(image|images|video|mask)(_|$)")
-_CHECKPOINT_WIDGETS = frozenset({"ckpt_name", "unet_name"})
+# Every widget a base model is named by, so "other checkpoint" says which model
+# changed rather than falling back to "other models". The shelf loader names
+# its checkpoint by id, not by filename (#1416).
+#
+# **Kept identical to `BASE_WIDGETS` in `frontend/src/utils/workflowShelf.js`**,
+# which answers the same question for the Models column, and which had drifted
+# from this set in both directions - `diffusion_model` and `model_path` were
+# only there, `checkpoint_id` only here. A workflow then reads as having a base
+# model on one side and a changed one on the other. The drift is what #1416
+# was, so it is asserted rather than agreed:
+# `tests/test_architecture_guardrails.py::test_base_model_widgets_agree_across_the_stack`.
+CHECKPOINT_WIDGETS = frozenset(
+    {
+        "ckpt_name",
+        "unet_name",
+        "diffusion_model",
+        "model_path",
+        "checkpoint_id",
+    }
+)
 
 PLUMBING = "plumbing"
 UPSCALE = "upscale"
@@ -131,7 +150,16 @@ class Slot:
 
 
 def _is_lora_widget(widget: str) -> bool:
-    return bool(LORA_FILENAME_FIELD_RE.match(widget)) or widget in LORA_DIGEST_FIELDS
+    """Whether this widget names a LoRA, so its slot takes a mark.
+
+    Both spellings carry the numbered form a stacker gives its second and third
+    slot (`lora_name_2`, `lora_sha256_2`). A slot missed here is not a LoRA
+    slot, so it reaches the card key unconditionally and a character LoRA swap
+    forks the workflow into a new card.
+    """
+    return bool(
+        LORA_FILENAME_FIELD_RE.match(widget) or LORA_DIGEST_FIELD_RE.match(widget)
+    )
 
 
 def slots(document: dict) -> list[Slot]:
@@ -445,8 +473,8 @@ def differs_by(
         member_slots, lora=False
     )
     if models_differ:
-        checkpoint = _assets(cover_slots, lora=False, widgets=_CHECKPOINT_WIDGETS)
-        if checkpoint != _assets(member_slots, lora=False, widgets=_CHECKPOINT_WIDGETS):
+        checkpoint = _assets(cover_slots, lora=False, widgets=CHECKPOINT_WIDGETS)
+        if checkpoint != _assets(member_slots, lora=False, widgets=CHECKPOINT_WIDGETS):
             chips.append("other checkpoint")
         else:
             chips.append("other models")
