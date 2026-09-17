@@ -22,6 +22,7 @@ from pixlstash.db_models import (
     Picture,
     User,
 )
+from pixlstash.hub import workflow_cards
 from pixlstash.hub.workflows import (
     forget_input_modes,
     input_modes_by_workflow,
@@ -212,7 +213,7 @@ def _store_workflow(
             "name": existing,
             "workflow_dir": workflow_dir,
             "matched": True,
-            "topology_hash": _file_in_hub(hub, workflow),
+            "topology_hash": _file_in_hub(hub, existing, workflow),
         }
     if os.path.exists(path) and not overwrite:
         if not keep_both:
@@ -230,7 +231,7 @@ def _store_workflow(
         "name": name,
         "workflow_dir": workflow_dir,
         "matched": False,
-        "topology_hash": _file_in_hub(hub, workflow),
+        "topology_hash": _file_in_hub(hub, name, workflow),
     }
 
 
@@ -284,22 +285,31 @@ def _find_stored_copy(wanted: str) -> str | None:
     return None
 
 
-def _file_in_hub(hub, workflow: dict) -> str | None:
+def _file_in_hub(hub, name: str, workflow: dict) -> str | None:
     """File the workflow in the library, returning its topology hash.
 
     Content-addressed and idempotent, so a workflow the library already has
     from its pictures lands on that same row. Not being filed does not stop
     the import: the file is what runs.
+
+    *name* is the name the file is stored under, and it is what puts the FILE on
+    the card its pictures already made (``hub/workflow_cards.py``). A UI-format
+    file has only a topology, so it lands on a card with no assets.
     """
     if hub is None:
         return None
     try:
         if isinstance(workflow.get("nodes"), list):
-            return record_ui_graph(hub, workflow)
-        graph = workflow.get("prompt")
-        if not isinstance(graph, dict):
-            graph = workflow
-        return record_api_graph(hub, graph).topology_hash
+            topology_hash = record_ui_graph(hub, workflow)
+            structural_hash = None
+        else:
+            graph = workflow.get("prompt")
+            if not isinstance(graph, dict):
+                graph = workflow
+            keys = record_api_graph(hub, graph)
+            topology_hash, structural_hash = keys.topology_hash, keys.structural_hash
+        _card_the_file(hub, name, topology_hash, structural_hash)
+        return topology_hash
     except WorkflowGraphError as exc:
         logger.info(
             "Imported workflow is not filed in the library, its graph "
@@ -324,6 +334,26 @@ def _file_in_hub(hub, workflow: dict) -> str | None:
             exc,
         )
     return None
+
+
+def _card_the_file(hub, name: str, topology_hash: str, structural_hash: str | None):
+    """Put the stored file on its card, without ever costing the caller its hash.
+
+    Its own handler rather than the one around the filing above: a card is the
+    optional half, and letting it raise would make the import answer
+    ``topology_hash: null`` for a graph that *was* filed - the essential half
+    retracted by the secondary one. The backfill finder picks the card up.
+    """
+    try:
+        workflow_cards.record_file(hub, name, topology_hash, structural_hash)
+    except Exception as exc:
+        logger.warning(
+            "Imported workflow %s is filed but not on a card yet, which failed "
+            "with %s: %s",
+            name,
+            type(exc).__name__,
+            exc,
+        )
 
 
 MAX_SEED = 2**32 - 1
@@ -1649,6 +1679,10 @@ def create_router(server) -> APIRouter:
                 (
                     "parameter pins",
                     lambda: replace_parameter_pins(hub, stored_name, None),
+                ),
+                (
+                    "place on its workflow card",
+                    lambda: workflow_cards.forget_file(hub, stored_name),
                 ),
             ):
                 try:

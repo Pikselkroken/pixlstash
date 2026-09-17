@@ -966,6 +966,7 @@ The write path has to tell the two apart. Blanking a description is how a pictur
 | `SCRAPHEAP_RETENTION_PURGE` | CPU | `ScrapheapRetentionPurgeFinder` | Scrapheap auto-purge. Every 15 minutes, selects UNPROTECTED, UNLOCKED soft-deleted pictures whose deadline has passed and permanently destroys them through the ONE destruction path, `scrapheap_service.purge_scrapheap_pictures(..., include_protected=False)`. **Deadline = `max(deleted_at + scrapheap_retention_days, scrapheap_retention_reduced_at + 1 day)`** — the second term is a FLOOR measured from the last window *lowering*, not a per-picture extension, so after a reduction nothing is purgeable for a day regardless of age. (Measuring the grace from `deleted_at` would only help the `[days, days+1)` band, leaving `Never -> 30` free to wipe a long-lived scrapheap on the next sweep.) The deadline and the locked-set freeze are enforced **twice** — in the finder's candidate query and again by a `RetentionGuard` inside `build_purge_plan`, which re-derives them from the row's current `deleted_at` (the task runs at LOW priority, so a restore/re-delete in between is a real TOCTOU). Locked-set members (directly, or via a live stack sibling) are skipped and reported, never raised — on **every** path: `build_purge_plan` enforces the freeze unconditionally, so the manual `DELETE /pictures/scrapheap` cannot destroy one either, at either `include_protected` value (returned as `skipped_locked`). `POST /pictures/scrapheap/delete-preview` reports `locked_count` / `protected_count` / `unprotected_count` as three DISJOINT buckets summing to `total_count`, keyed on which action destroys the row — locked classified FIRST (the opposite of `auto_purge_exempt_reason`, where protected wins) because the preview answers "what will this button destroy?" and must lead with the binding blocker, while the badge answers "why is this kept?" and leads with the permanent reason. The candidate query evaluates the deadline in SQL — `deleted = TRUE AND deleted_at <= now - retention_days`, keyset-paginated on `(deleted_at, id)` so `ix_picture_deleted_at` is actually used (ordering by `id` instead made SQLite walk every scrapheap row via `ix_picture_deleted`: 1.23 ms/page vs 0.08 ms/page on a 200k library with a 20k scrapheap) — and returns early without scanning at all while `now < reduced_at + grace`, since no row can be due inside the floor. The lock lookup is chunked; the lock lookup is chunked to `LOCK_QUERY_CHUNK` ids so a large scrapheap cannot hit the 999-variable limit of SQLite < 3.32 and silently disable the sweep. The scrapheap listing applies the SAME two exemptions through the same helpers, exposing `purge_at` / `auto_purge_exempt` / `auto_purge_exempt_reason` (`"protected"` | `"locked"` | `null`; protected wins when both apply), so the countdown the UI renders can never disagree with what the sweep will do. Full restore and per-resource restore both re-stamp `deleted_at = now()` on restored scrapheap rows, so restoring an old snapshot cannot hand the sweep an already-expired deadline. Protected reference-folder originals (`allow_delete_file=False`) are exempt from any timer and are excluded from the candidate query — only the consent-gated manual delete-forever (`include_protected=true`) can destroy them. `scrapheap_retention_days=null` ("Never") disables the finder entirely, and a config save NEVER purges synchronously. **`null` is the DEFAULT (`scrapheap_service.DEFAULT_RETENTION_DAYS`): auto-purge is opt-in.** An unattended path that removes files from disk must be one the user switched on, so an install that has never saved a window — a fresh install, or one upgraded from a release without the setting — is never on the clock; an unparseable stored value also resolves to Never rather than to a window. The server-config key is written *only* by `apply_retention_config` (i.e. by an explicit PATCH), so "key absent" reliably means "never chosen" and an existing explicit choice, including an explicit `30`, survives the upgrade untouched. Because the default is Never (an infinite window), **turning auto-purge on is a *reduction*** and therefore earns both the grace floor and the `/impact` confirm — the switch-on is the one change that can expose an entire long-lived scrapheap at once. Registered in `vault.py`. |
 | `TAG_HEALTH_AUTO_REBUILD` | CPU | `TagHealthAutoRebuildFinder` | Checks `tag_health_service.is_stale` at most every 5 minutes (`AUTO_REBUILD_CHECK_INTERVAL_S`); when stale and no rebuild is running, dispatches through the same idempotent `start_rebuild` path `POST /tag_health/rebuild` uses. Closes the loop so `GET /tag_health`'s `stale` flag (new pictures / `TaggerRun`s / reviewed `TagSuggestion`s since the cache's `computed_at`) self-heals without a manual click. |
 | `GHOST_CASCADE` | CPU | `GhostCascadeFinder` | Picture ghosts (B4). Hub-attached vaults only. Every 10 s, drains `pending_ghost_cascade`, which the `picture` delete/re-hash triggers fill, through the covered-ghost cascade (see *Picture ghosts* below) |
+| `WORKFLOW_CARD_BACKFILL` | CPU | `WorkflowCardBackfillFinder` | Workflow cards (v1.12 B2). Hub-attached vaults only, and hub-only in the strongest sense: every input is a stored `workflow_recipe_graph.document`, so it reads no picture and keys the recipes of libraries that are not attached. Hands out variants with no card or with one keyed by a superseded `WORKFLOW_KEY_VERSION` / `CORE_VERSION`, which is the whole of the backfill's once-only-ness; a document that will not reduce is deferred for the life of the process, since it cannot change by itself, while a busy hub (`sqlite3.OperationalError`) leaves its batch eligible — deriving a card is cheap to retry, unlike the 24 GB read the checkpoint hasher this is modelled on defers for. LOW priority, 50 variants per task, and counted over the hub's recipes rather than the library's pictures (`workflows_carded`) so the row does not read as finished from the first second |
 | `CHECKPOINT_HASH` | CPU | `MissingCheckpointHashFinder` | Model shelf (v1.10). The **only finder that works on the hub rather than on the vault**, because a model folder is a fact about the machine: `ModelFolderScanner` (`services/model_folder_scanner.py`) registers a checkpoint the instant it sees it as a `model` row with `file_kind = 'checkpoint'` and `sha256` NULL — it may be 24 GB and the shelf must not stall behind it — and this fills the digest in, which is what `model.hashed_at` was always for. **A changed file at a known path forks onto a new `model` row rather than editing the old one in place.** A `model` row is per *content* and legitimately holds many `model_file` rows, so clearing `sha256` by id stripped the digest off copies in other folders that nobody had touched, and it was rejected outright by `CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)` when an adapter had been replaced by a checkpoint at that path, rolling the whole write batch back and aborting the scan before its missing and unreachable sweeps ran. The stored row is reused only when it is that path's sole location and its `file_kind` still matches, which is the case where the entry is the same and only the hash is stale. Adapters are not in this lane; they are hashed on sight by the scan, and `CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)` is what makes that a schema fact. The queue is `sha256 IS NULL` joined to a `model_file` row in state `present`, matching the partial index `ix_model_hash_queue`. **A `sha256 UNIQUE` collision is a MERGE inside the task, never a raise**: two rows legitimately reach one digest, because an unhashed checkpoint is identified by the location it was found at, so one file in two registered folders is two rows (as is the duplicate the move invariant's crash window is *designed* to leave). The lower id survives, **every `model_file` row the dropped id held is repointed at it**, and it fills any column only the dropped row had. That location move is what stops a checkpoint present at two paths being re-hashed and re-merged once per scan cycle forever. A row whose file cannot be read is deferred for the life of the process, or one broken path would make the planner submit a doomed task every cycle; a re-scan re-queues it. Registered in `vault.py` only when the vault was opened through a hub registration (`RegisteredVaultPath`), so a Vault built without a hub — CLI tools, most tests — simply does not have this lane. |
 
 **Re-processing**: setting a work column to `NULL` (e.g. via an Alembic migration) makes the corresponding finder pick the row up on the next pass — this is how data regenerations are triggered.
@@ -2905,6 +2906,86 @@ the shipped implementation was run over the same libraries and lands on the same
 order of magnitude as the probe those documents were written from, and that all
 six of the hash spec's §Node identity invariants hold on real graphs drawn at
 random rather than only on fixtures.
+
+#### Cards: what a workflow is, and which cards stack (v1.12, B2)
+
+A `workflow_recipe` row is a **variant**; what a person means by "a workflow" is
+a **card**. `services/workflow_identity.py` (§10) computes both keys from a
+stored document and `hub/workflow_cards.py` stores them. **New tables only,
+amended into schema v2** for the reason the model shelf was: a build shipped
+before this change has `CURRENT_SCHEMA_VERSION = 2` and would refuse a v3 hub
+with `HubSchemaTooNewError`, locking the owner out of a downgrade.
+
+| Table | Holds |
+|---|---|
+| `workflow_variant` | Which card each stored variant belongs to, with the `key_version` that keyed it. **No timestamp column**, here or on the cache below: deriving the same hub twice has to write byte-identical rows, or "the backfill runs twice with identical rows" is a claim no test can make |
+| `workflow_topology_core` | Per topology: the automatic stack key (`core_hash` + `core_version`), the workflow type, and the slot list every mark and override addresses. **No filename and no asset reference.** The stamped version is `CORE_RULE_VERSION`, which is `CORE_VERSION` *plus the strip flag*: `core_hash` does not carry that flag inside its digest the way `workflow_key` carries `WORKFLOW_KEY_VERSION` inside its own, so a flip would otherwise change every core hash while the stamp still read current, and the hub would hold two rules' stacks at once |
+| `workflow_slot_mark` | `structural` or `recipe` per LoRA slot, **frozen the first time the slot is seen** |
+| `workflow_file` | A stored workflow file on its card, keyed by `workflow_name` as the older file-keyed tables are. `structural_hash` NULL for a UI-format file, which has only a topology and so becomes a card with no assets. Deleting the file drops the row and leaves the card, which its pictures made |
+| `workflow_attr`, `workflow_default_override`, `workflow_key_pins` (no writer yet) | The owner's name, notes, hidden flag, parameter overrides and pins, keyed by `workflow_key`, with parameters addressed by **(slot label, input name)** rather than by node id — a node id is whatever the last serialisation called it |
+| `workflow_key_picture_input`, `workflow_cover` (no writer yet) | Input modes, Fixed pictures and the chosen cover, keyed by `(library_uuid, workflow_key)` and naming pictures by `pixel_sha`, for the ghost table's reason: a picture is a picture in one vault |
+| `workflow_stack`, `workflow_stack_member`, `workflow_unstacked` (no writer yet) | Stacks of cards (`position` 0 is the cover) and the owner taking a card out of its automatic one |
+
+**Eight of those tables have no writer in B2**, and are created ahead of the
+steps that fill them on purpose: their shape is decided here, they hold the
+owner's own decisions about a card, and a hub table is append-only, so adding
+each with its writer means one more guarded amendment of v2 per step. Only
+`workflow_variant` gets an index in B2 — an index on a table nothing writes yet
+is a write cost bought for a query that does not exist.
+
+**Marks are frozen, never recomputed.** `guess_mark` reads a filename, so
+re-guessing as pictures arrive would silently re-key cards the owner has by then
+named, pinned and stacked. The name comes from `workflow_recipe_asset`, resolved
+against the document's opaque references; a reference resolving to nothing — a
+name that was forgotten, or was never filed — falls to `recipe` rather than to a
+guess, which is also the direction the guess errs in, since a wrong `structural`
+splits a card per LoRA. **No card row holds a readable name**, so "forget this
+model name" stays one row delete in `workflow_recipe_asset`.
+
+Two consequences follow from the freeze and are worth stating rather than
+discovering. A card key is a function of what arrived first, so two machines
+that imported the same pictures in a different order can put one variant on
+different cards — the alternative, re-guessing per filing, silently re-keys
+cards the owner has by then named, pinned and stacked. And a mark outlives
+`forget_asset_names`: the readable filename goes, the decision that keys the
+card stays, so `structural` still says the forgotten file looked like a speed
+LoRA. That is a classification rather than the name, and the owner-facing
+correction is a flip (a later step), never a delete.
+
+**The automatic grouping is a query, not rows.** Cards sharing a `core_hash` are
+one automatic stack and `workflow_cards.card_grouping` counts them — over rows
+stamped with the rule this build applies, so a grouping read mid-re-derivation
+reports cards whose cache has not caught up as `ungrouped` rather than mixing
+two rules or folding them into one enormous NULL bucket. The stack tables hold
+the owner's own decisions, so a rule bump regroups without destroying anything,
+and `STRIP_LORAS_FOR_STACKS` is the one line that decides whether "the same
+workflow plus a character LoRA" stacks. The report is logged once per drain
+(`WorkflowCardBackfillFinder.on_all_tasks_complete`), not once per batch.
+
+**The backfill is hub-only and needs no data-version counter.**
+`WorkflowCardBackfillFinder` hands out exactly the variants whose card is
+missing or keyed by a superseded rule, so the first pass drains the hub, a
+re-run finds nothing, and a later `WORKFLOW_KEY_VERSION` or `CORE_VERSION` bump
+re-fills the queue by itself. A `CURRENT_DATA_VERSION` step would be the wrong
+shape twice: it cannot see recipes filed after it ran, and it would be skipped
+on the one hub whose first pass was interrupted. Nothing here reads a picture,
+so a library that has since been trimmed still gets its cards, and a variant
+whose stored document will not reduce is deferred for the session rather than
+handed back every sweep.
+
+**Filing hooks where a graph is already filed.** `hub/workflows.record_reduction`
+derives the card after it writes the recipe rows, which covers the import route,
+the watched inbox and the ComfyUI extraction in one place rather than once per
+caller — **only for a recipe the hub had not seen**, because a library is
+thousands of pictures over a handful of recipes and the thousandth filing of one
+recipe has nothing to add; a recipe already here whose card is missing is the
+finder's; the import route additionally records the `workflow_file` row, because
+only it knows the name. A card that cannot be derived is logged and never fails
+the filing — `except Exception`, because the derivation indexes into a parsed
+document and a malformed one raises `KeyError` rather than `WorkflowGraphError`,
+and on the import route the card write has a handler of its own so a failed card
+cannot retract the `topology_hash` of a graph that *was* filed. The picture's
+ingest and the file's import do not depend on a card, and the backfill retries.
 
 #### The workflow scan rides the ComfyUI extraction (v1.11)
 
