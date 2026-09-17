@@ -6,6 +6,7 @@ asserted there cannot drift apart.
 """
 
 import json
+import logging
 import sqlite3
 
 import pytest
@@ -17,7 +18,13 @@ from pixlstash.hub.workflows import (
     record_api_graph,
     record_ui_graph,
 )
-from pixlstash.services.workflow_identity import RECIPE, STRUCTURAL
+from pixlstash.services.workflow_identity import (
+    CORE_VERSION,
+    RECIPE,
+    STRUCTURAL,
+    WORKFLOW_KEY_VERSION,
+)
+from pixlstash.task_runner import TaskCancelledError
 from pixlstash.tasks.workflow_card_backfill_finder import WorkflowCardBackfillFinder
 from pixlstash.tasks.workflow_card_backfill_task import WorkflowCardBackfillTask
 from tests.test_workflow_identity import _graph
@@ -86,7 +93,7 @@ def test_filing_a_graph_gives_it_a_card(hub):
         (keys.topology_hash,),
     )
     assert cached["workflow_type"] == "txt2img"
-    assert cached["core_version"] == "v1"
+    assert cached["core_version"] == workflow_cards.CORE_RULE_VERSION
     assert json.loads(cached["slots"]) == [
         {
             "label": json.loads(cached["slots"])[0]["label"],
@@ -218,19 +225,28 @@ def test_a_slot_whose_name_was_forgotten_is_not_guessed_at(hub):
 def test_the_backfill_keys_what_was_filed_before_it_and_runs_twice_the_same(hub):
     """A hub filed by an older build, then the pass, then the pass again.
 
-    The second pass is run with the guard REMOVED - the card rows are wiped and
-    derived again from the same stored documents - because a re-run that returns
-    early proves only that the early return exists. Byte-identical rows is the
-    acceptance criterion, and it is why nothing here carries a timestamp.
+    The second pass is run with the guard REMOVED - every derived row is wiped
+    and derived again from the same stored documents - because a re-run that
+    returns early proves only that the early return exists. Byte-identical rows
+    is the acceptance criterion, and it is why no card table carries a
+    timestamp. ``workflow_file`` is compared as well and is empty here: it is
+    written by an import rather than derived, and
+    :func:`test_replacing_a_file_moves_it_to_the_new_card` owns it.
     """
     filed = [
         record_api_graph(hub, _graph()),
         record_api_graph(hub, _graph(ckpt="dreamshaper.safetensors")),
         record_api_graph(hub, _graph(loras=(CHARACTER_LORA,), upscale=True)),
     ]
-    wipe = "DELETE FROM workflow_variant", "DELETE FROM workflow_topology_core"
+    wipe = (
+        "DELETE FROM workflow_variant",
+        "DELETE FROM workflow_topology_core",
+        # The marks go too, or the second derivation reads back the first one's
+        # and the comparison is of a table with itself.
+        "DELETE FROM workflow_slot_mark",
+    )
     with hub.transaction() as conn:
-        for statement in (*wipe, "DELETE FROM workflow_slot_mark"):
+        for statement in wipe:
             conn.execute(statement)
     finder = WorkflowCardBackfillFinder(hub=hub)
     assert finder.progress() == (3, 3)
@@ -255,8 +271,80 @@ def test_the_backfill_keys_what_was_filed_before_it_and_runs_twice_the_same(hub)
     assert all_card_rows(hub) == after_one_pass
 
 
-def test_the_grouping_the_owner_gate_reads(hub):
-    """Two checkpoints of one workflow stack; an unrelated workflow does not."""
+def test_a_superseded_key_rule_re_queues_the_variants_it_keyed(hub):
+    """The bump is this PR's answer to a data-version counter, so it is tested.
+
+    Stamping an old ``key_version`` on the rows is what a bumped
+    ``WORKFLOW_KEY_VERSION`` looks like to every query here: the finder has to
+    hand them back, and the derivation has to rewrite them rather than read the
+    stale card and return it.
+    """
+    keys = record_api_graph(hub, _graph())
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_variant SET workflow_key = 'stale', key_version = 'v0'"
+        )
+    finder = WorkflowCardBackfillFinder(hub=hub)
+
+    assert finder.progress() == (1, 1)
+    assert finder.find_task()._run_task()["identified"] == 1
+
+    row = hub.fetchone("SELECT workflow_key, key_version FROM workflow_variant")
+    assert row["key_version"] == WORKFLOW_KEY_VERSION
+    assert row["workflow_key"] != "stale"
+    assert row["workflow_key"] == card_of(hub, keys.structural_hash)
+
+
+def test_a_superseded_core_rule_re_queues_the_topologies_it_cached(hub):
+    """The other half, and the one a stale early return would swallow.
+
+    A variant whose card is current but whose topology cache is not is still
+    outstanding: returning the card and leaving the stale core hash would have
+    the finder hand it back on every sweep forever, and would report a grouping
+    under a rule this build does not apply.
+    """
+    record_api_graph(hub, _graph())
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET core_hash = 'stale', core_version = 'v0'"
+        )
+    finder = WorkflowCardBackfillFinder(hub=hub)
+
+    assert finder.progress() == (1, 1)
+    # Nothing is grouped while the only cache row is stamped with the old rule.
+    assert workflow_cards.card_grouping(hub)["ungrouped"] == 1
+
+    assert finder.find_task()._run_task()["identified"] == 1
+
+    row = hub.fetchone("SELECT core_hash, core_version FROM workflow_topology_core")
+    assert row["core_version"] == workflow_cards.CORE_RULE_VERSION
+    assert row["core_hash"] != "stale"
+    assert finder.progress() == (1, 0)
+    assert workflow_cards.card_grouping(hub)["ungrouped"] == 0
+
+
+def test_flipping_the_lora_strip_is_a_new_core_rule(hub):
+    """The owner gate's one-line flip must re-key the stacks, not mix two rules.
+
+    ``core_hash`` does not carry the flag inside its digest, so the stamp has to
+    name it; otherwise flipping the default changes every core hash while the
+    stored ``core_version`` still reads current and nothing is re-derived.
+    """
+    assert workflow_cards.STRIP_LORAS_FOR_STACKS is True
+    assert "stripped" in workflow_cards.CORE_RULE_VERSION
+
+    record_api_graph(hub, _graph(loras=(CHARACTER_LORA,)))
+    stamped = hub.fetchone("SELECT core_version FROM workflow_topology_core")
+    assert stamped["core_version"] == workflow_cards.CORE_RULE_VERSION
+    assert stamped["core_version"] != CORE_VERSION
+
+
+def test_the_grouping_the_owner_gate_reads(hub, caplog):
+    """Two checkpoints of one workflow stack; an unrelated workflow does not.
+
+    Reported through the finder's own drain callback, which is the caller the
+    owner gate actually reads - once per drain rather than once per batch.
+    """
     record_api_graph(hub, _graph())
     record_api_graph(hub, _graph(ckpt="dreamshaper.safetensors"))
     record_api_graph(hub, _graph(preview=True))
@@ -272,6 +360,11 @@ def test_the_grouping_the_owner_gate_reads(hub):
         3,
         1,
     )
+
+    with caplog.at_level(logging.INFO, logger="pixlstash.tasks"):
+        WorkflowCardBackfillFinder(hub=hub).on_all_tasks_complete()
+    assert "4 variants over 3 topologies make 4 cards" in caplog.text
+    assert "1 automatic stacks holding 3 of them, 1 one-offs" in caplog.text
 
 
 def test_an_unkeyable_document_is_deferred_rather_than_retried(hub):
@@ -315,13 +408,18 @@ def test_an_unkeyable_document_is_deferred_rather_than_retried(hub):
     assert finder.progress() == (1, 1)
 
 
-def test_a_failed_batch_is_deferred_and_a_cancelled_one_is_not(hub):
+def test_only_an_error_that_will_not_pass_retires_a_batch(hub):
+    """Cancelled and locked stay eligible; anything else is deferred.
+
+    The hub is shared with a second process under a busy timeout, and deriving
+    a card is cheap to retry, so a momentary lock must not retire fifty
+    variants until the next restart - which is what this finder's model, the
+    checkpoint hasher, does, because ITS retry is 24 GB of reading.
+    """
     keys = record_api_graph(hub, _graph())
     with hub.transaction() as conn:
         conn.execute("DELETE FROM workflow_variant")
     finder = WorkflowCardBackfillFinder(hub=hub)
-
-    from pixlstash.task_runner import TaskCancelledError
 
     task = finder.find_task()
     assert task.params["structural_hashes"] == [keys.structural_hash]
@@ -329,6 +427,9 @@ def test_a_failed_batch_is_deferred_and_a_cancelled_one_is_not(hub):
     assert finder.find_task() is not None
 
     finder.on_task_complete(task, sqlite3.OperationalError("database is locked"))
+    assert finder.find_task() is not None
+
+    finder.on_task_complete(task, RuntimeError("the worker died"))
     assert finder.find_task() is None
 
 

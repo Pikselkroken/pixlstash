@@ -9,12 +9,17 @@ costs one reduction per recipe.
 Re-runnable by construction. :func:`~pixlstash.hub.workflow_cards.record_identity`
 is keyed by content and every write is a REPLACE of the identical row or an
 IGNORE, so a second pass over the same hub leaves the same rows.
+
+The owner gate's grouping report is the finder's
+(``on_all_tasks_complete``), not this task's: it is one number for the whole
+hub, and computing it per batch is a full scan and a log line per fifty
+variants for a figure that is only true once the drain is over.
 """
 
 from __future__ import annotations
 
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.workflow_cards import card_grouping, record_identity
+from pixlstash.hub.workflow_cards import record_identity
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import WorkflowGraphError
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
@@ -56,7 +61,9 @@ class WorkflowCardBackfillTask(BaseTask):
                 # A stored document that will not reduce, or one with nothing
                 # left once the stack strip runs. Deferred rather than retried:
                 # the document does not change by itself, so the finder would
-                # otherwise hand it back on every sweep forever.
+                # otherwise hand it back on every sweep forever. Narrow on
+                # purpose - anything else (a locked hub) is the batch's error
+                # and stays retryable.
                 logger.warning(
                     "Workflow variant %s gets no card, its stored document "
                     "cannot be keyed: %s",
@@ -69,19 +76,4 @@ class WorkflowCardBackfillTask(BaseTask):
                 deferred.append(structural_hash)
             else:
                 identified += 1
-        grouping = card_grouping(self._hub)
-        # The owner gate reads this line: how many cards, how many automatic
-        # stacks and how many one-offs the current rules produce over a real
-        # library. If the stacks swallow everything, `STRIP_LORAS_FOR_STACKS`
-        # is the default to flip.
-        logger.info(
-            "Workflow cards: %d variants over %d topologies make %d cards, "
-            "%d automatic stacks holding %d of them, and %d one-offs.",
-            grouping["variants"],
-            grouping["topologies"],
-            grouping["cards"],
-            grouping["stacks"],
-            grouping["stacked_cards"],
-            grouping["one_offs"],
-        )
-        return {"identified": identified, "deferred": deferred, "grouping": grouping}
+        return {"identified": identified, "deferred": deferred}

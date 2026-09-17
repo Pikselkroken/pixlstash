@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.workflow_cards import unidentified_variants, variant_counts
+from pixlstash.hub.workflow_cards import (
+    card_grouping,
+    unidentified_variants,
+    variant_counts,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.task_runner import TaskCancelledError
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
@@ -68,6 +74,30 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
         self._handed_out.update(batch)
         return WorkflowCardBackfillTask(hub=self._hub, structural_hashes=batch)
 
+    def on_all_tasks_complete(self) -> None:
+        """Report the grouping once the hub is drained: the owner gate reads it.
+
+        Here rather than in the task, because it is one number for the whole hub
+        and a per-batch report is a full scan and a log line per fifty variants
+        for a figure that is only true at the end.
+        """
+        grouping = card_grouping(self._hub)
+        if not grouping["variants"]:
+            return
+        logger.info(
+            "Workflow cards: %d variants over %d topologies make %d cards, "
+            "%d automatic stacks holding %d of them, %d one-offs and %d not "
+            "grouped yet. If the stacks swallow everything, "
+            "STRIP_LORAS_FOR_STACKS is the default to flip.",
+            grouping["variants"],
+            grouping["topologies"],
+            grouping["cards"],
+            grouping["stacks"],
+            grouping["stacked_cards"],
+            grouping["one_offs"],
+            grouping["ungrouped"],
+        )
+
     def on_task_complete(self, task, error) -> None:
         """Record which variants must not be handed out again this session."""
         hashes = (getattr(task, "params", None) or {}).get("structural_hashes") or []
@@ -78,6 +108,19 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
             logger.debug(
                 "Workflow card backfill was cancelled before it ran: %s. Those "
                 "variants stay eligible.",
+                error,
+            )
+            return
+        if isinstance(error, sqlite3.OperationalError):
+            # A busy hub, not a bad document. The hub is shared with a second
+            # process under a 5 s timeout, and deriving a card is cheap to
+            # retry, so retiring fifty variants until the next restart over a
+            # lock is the wrong trade - unlike the checkpoint hasher this is
+            # modelled on, where a retry is 24 GB of reading.
+            logger.warning(
+                "Workflow card backfill could not reach the hub for %d "
+                "variants: %s. They stay eligible.",
+                len(hashes),
                 error,
             )
             return

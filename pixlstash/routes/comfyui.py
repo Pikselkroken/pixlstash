@@ -299,14 +299,15 @@ def _file_in_hub(hub, name: str, workflow: dict) -> str | None:
     try:
         if isinstance(workflow.get("nodes"), list):
             topology_hash = record_ui_graph(hub, workflow)
-            workflow_cards.record_file(hub, name, topology_hash)
-            return topology_hash
-        graph = workflow.get("prompt")
-        if not isinstance(graph, dict):
-            graph = workflow
-        keys = record_api_graph(hub, graph)
-        workflow_cards.record_file(hub, name, keys.topology_hash, keys.structural_hash)
-        return keys.topology_hash
+            structural_hash = None
+        else:
+            graph = workflow.get("prompt")
+            if not isinstance(graph, dict):
+                graph = workflow
+            keys = record_api_graph(hub, graph)
+            topology_hash, structural_hash = keys.topology_hash, keys.structural_hash
+        _card_the_file(hub, name, topology_hash, structural_hash)
+        return topology_hash
     except WorkflowGraphError as exc:
         logger.info(
             "Imported workflow is not filed in the library, its graph "
@@ -331,6 +332,26 @@ def _file_in_hub(hub, name: str, workflow: dict) -> str | None:
             exc,
         )
     return None
+
+
+def _card_the_file(hub, name: str, topology_hash: str, structural_hash: str | None):
+    """Put the stored file on its card, without ever costing the caller its hash.
+
+    Its own handler rather than the one around the filing above: a card is the
+    optional half, and letting it raise would make the import answer
+    ``topology_hash: null`` for a graph that *was* filed - the essential half
+    retracted by the secondary one. The backfill finder picks the card up.
+    """
+    try:
+        workflow_cards.record_file(hub, name, topology_hash, structural_hash)
+    except Exception as exc:
+        logger.warning(
+            "Imported workflow %s is filed but not on a card yet, which failed "
+            "with %s: %s",
+            name,
+            type(exc).__name__,
+            exc,
+        )
 
 
 MAX_SEED = 2**32 - 1

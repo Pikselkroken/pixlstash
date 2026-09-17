@@ -33,7 +33,6 @@ from pixlstash.services.workflow_hash import (
     MODEL_EXTENSIONS,
     ReducedNode,
     SHA256_FIELD_RE,
-    WorkflowGraphError,
     asset_reference,
     assets_from_reduction,
     digests_with_prefix,
@@ -228,10 +227,19 @@ def record_reduction(
     if new_recipe:
         try:
             workflow_cards.record_identity(hub, keys.structural_hash)
-        except (WorkflowGraphError, sqlite3.Error) as exc:
+        except Exception as exc:
+            # Deliberately everything, with the type logged. The derivation
+            # indexes into a parsed document, so a malformed one raises
+            # KeyError or TypeError rather than WorkflowGraphError, and this
+            # runs inside the extraction task's ingest of a picture: a card is
+            # secondary to the filing, exactly as it is on the import route
+            # (`routes/comfyui.py._file_in_hub`), and the backfill finder is
+            # what retries it.
             logger.warning(
-                "Recipe %s is filed but has no workflow card yet: %s",
+                "Recipe %s is filed but has no workflow card yet, deriving it "
+                "failed with %s: %s",
                 keys.structural_hash,
+                type(exc).__name__,
                 exc,
             )
     return keys

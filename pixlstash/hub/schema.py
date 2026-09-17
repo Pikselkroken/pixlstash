@@ -781,10 +781,11 @@ CREATE TABLE IF NOT EXISTS workflow_parameter_pins (
 # hence ``key_version``, which is what makes a stale row findable rather than
 # silently wrong.
 #
-# **No ``computed_at``, here or on the cache below.** Deriving the same hub twice
-# has to write byte-identical rows, or "the backfill runs twice with identical
-# rows" is a claim no test can make; a wall-clock column would churn every row on
-# every re-derivation and hide a real difference in the noise.
+# **No timestamp column on any card table.** Deriving the same hub twice has to
+# write byte-identical rows, or "the backfill runs twice with identical rows" is
+# a claim no test can make; a wall-clock column would churn every row on every
+# re-derivation and hide a real difference in the noise. Nothing reads "when was
+# this derived" - and a step that wants it can add the column then.
 _V2_WORKFLOW_VARIANT = """
 CREATE TABLE IF NOT EXISTS workflow_variant (
     structural_hash  TEXT PRIMARY KEY REFERENCES workflow_recipe(structural_hash),
@@ -840,7 +841,6 @@ CREATE TABLE IF NOT EXISTS workflow_slot_mark (
     topology_hash  TEXT NOT NULL,
     slot_label     TEXT NOT NULL,
     mark           TEXT NOT NULL CHECK (mark IN ('structural', 'recipe')),
-    marked_at      TEXT NOT NULL,
     PRIMARY KEY (topology_hash, slot_label)
 )
 """
@@ -854,8 +854,7 @@ CREATE TABLE IF NOT EXISTS workflow_file (
     workflow_name    TEXT PRIMARY KEY,
     topology_hash    TEXT NOT NULL,
     structural_hash  TEXT,
-    workflow_key     TEXT NOT NULL,
-    filed_at         TEXT NOT NULL
+    workflow_key     TEXT NOT NULL
 )
 """
 

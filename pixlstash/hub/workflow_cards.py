@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
@@ -57,6 +56,17 @@ logger = get_logger(__name__)
 # answers, and this is the single line that flips it.
 STRIP_LORAS_FOR_STACKS = True
 
+# What is stamped on a cached core hash, and it is NOT `CORE_VERSION` alone.
+# `core_hash` does not carry the flag above inside its digest the way
+# `workflow_key` carries `WORKFLOW_KEY_VERSION` inside its own, so flipping the
+# flag changes every core hash while leaving `CORE_VERSION` at "v1": the finder
+# would not re-queue, and the hub would hold two rules' stacks at once with no
+# way to tell them apart. Naming the flag in the stamp makes a flip a
+# re-derivation, which is what the owner gate needs it to be.
+CORE_RULE_VERSION = (
+    f"{CORE_VERSION}-loras-{'stripped' if STRIP_LORAS_FOR_STACKS else 'kept'}"
+)
+
 # Every variant with a stored document, left-joined to the card rules THIS build
 # writes. A row whose join came back empty needs the pass: it has no card, or it
 # has one from a superseded rule. One fragment, so the finder's query, its
@@ -71,12 +81,8 @@ _VARIANT_JOIN = (
     "LEFT JOIN workflow_topology_core c ON c.topology_hash = r.topology_hash "
     "AND c.core_version = ? "
 )
-_VARIANT_VERSIONS = (WORKFLOW_KEY_VERSION, CORE_VERSION)
+_VARIANT_VERSIONS = (WORKFLOW_KEY_VERSION, CORE_RULE_VERSION)
 _VARIANT_PENDING = "(v.structural_hash IS NULL OR c.topology_hash IS NULL)"
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def topology_only_key(topology_hash: str) -> str:
@@ -185,19 +191,23 @@ def _freeze_marks(
             (structural_hash,),
         ).fetchall()
     }
-    now = _now()
+    # A label is shared by loaders Weisfeiler-Leman cannot separate (genuine
+    # twins), and `slots` returns them sorted by `(label, asset)` - so where a
+    # topology has twins the mark is frozen from the lexicographically smaller
+    # `asset:<digest>`, a stable choice made on something meaningless. Same
+    # freeze as the order dependence in the module docstring, same answer: the
+    # correction is a flip, never a re-guess.
     # IGNORE is the freeze: the first sighting of a slot decides it, and every
     # later one - a different LoRA in that slot, a re-run of the backfill - is a
     # no-op.
     conn.executemany(
         "INSERT OR IGNORE INTO workflow_slot_mark "
-        "(topology_hash, slot_label, mark, marked_at) VALUES (?, ?, ?, ?)",
+        "(topology_hash, slot_label, mark) VALUES (?, ?, ?)",
         [
             (
                 topology_hash,
                 slot.label,
                 guess_mark(names[slot.asset]) if slot.asset in names else RECIPE,
-                now,
             )
             for slot in document_slots
             if slot.is_lora
@@ -232,7 +242,7 @@ def _cache_topology(
         (
             topology_hash,
             core,
-            CORE_VERSION,
+            CORE_RULE_VERSION,
             workflow_type(document),
             json.dumps(
                 [
@@ -284,9 +294,9 @@ def record_file(
     with hub.transaction() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO workflow_file "
-            "(workflow_name, topology_hash, structural_hash, workflow_key, filed_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (name, topology_hash, structural_hash, key, _now()),
+            "(workflow_name, topology_hash, structural_hash, workflow_key) "
+            "VALUES (?, ?, ?, ?)",
+            (name, topology_hash, structural_hash, key),
         )
     return key
 
@@ -337,21 +347,36 @@ def card_grouping(hub: HubDatabase) -> dict:
     tables are for the owner's own decisions, and the automatic grouping IS this
     query - so a regrouping costs nothing and destroys nothing.
 
-    One grouped scan rather than a count per figure: this runs once per backfill
-    batch, and five separate aggregates over the same table is five scans for
-    numbers that have to agree with each other anyway.
+    **Only rows stamped with the rule this build applies are grouped.** Read
+    mid-re-derivation the cache legitimately holds a superseded ``core_hash``,
+    and mixing the two would report a grouping no build ever produces. A card
+    whose cache row has not caught up is counted in ``cards`` and reported as
+    ``ungrouped`` rather than folded into a NULL bucket, which would otherwise
+    read as one enormous stack.
+
+    One grouped scan rather than a count per figure: five separate aggregates
+    over the same table is five scans for numbers that have to agree anyway.
     """
     rows = hub.fetchall(
         "SELECT c.core_hash AS core_hash, v.topology_hash AS topology_hash, "
         "v.workflow_key AS workflow_key, COUNT(*) AS variants "
         "FROM workflow_variant v "
         "LEFT JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
-        "GROUP BY c.core_hash, v.topology_hash, v.workflow_key"
+        "AND c.core_version = ? "
+        "GROUP BY c.core_hash, v.topology_hash, v.workflow_key",
+        (CORE_RULE_VERSION,),
     )
     cards_per_core: dict[str, set] = {}
+    ungrouped: set = set()
     for row in rows:
+        if row["core_hash"] is None:
+            ungrouped.add(row["workflow_key"])
+            continue
         cards_per_core.setdefault(row["core_hash"], set()).add(row["workflow_key"])
     sizes = [len(cards) for cards in cards_per_core.values()]
+    # A card with two variants can have one of them cached and the other not,
+    # so a card that is grouped at all is not also counted as ungrouped.
+    grouped = set().union(*cards_per_core.values()) if cards_per_core else set()
     return {
         "variants": sum(int(row["variants"]) for row in rows),
         "topologies": len({row["topology_hash"] for row in rows}),
@@ -359,4 +384,7 @@ def card_grouping(hub: HubDatabase) -> dict:
         "stacks": sum(1 for size in sizes if size > 1),
         "stacked_cards": sum(size for size in sizes if size > 1),
         "one_offs": sum(1 for size in sizes if size == 1),
+        # Cards whose topology cache is missing or stamped with a superseded
+        # rule. Zero once the backfill has drained.
+        "ungrouped": len(ungrouped - grouped),
     }
