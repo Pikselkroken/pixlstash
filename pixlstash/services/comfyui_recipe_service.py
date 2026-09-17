@@ -20,6 +20,7 @@ Two rules govern everything here:
 
 from __future__ import annotations
 
+import math
 import random
 import re
 from copy import deepcopy
@@ -86,6 +87,11 @@ LORA_DIGEST_FIELDS = ("adapter_sha256", "lora_sha256")
 # Deliberately NOT used by `detect_lora_targets` above, which wants ONE digest
 # slot per node whatever the pack spelled it, and says so.
 LORA_DIGEST_FIELD_RE = re.compile(r"^(adapter|lora)_sha256(_\d+)?$")
+
+# How hard a LoRA slot is applied, reported beside it. ``strength`` is the
+# model-only loaders' single widget, so it fills ``model`` when the two-widget
+# spelling is absent rather than becoming a third key nobody reads.
+_LORA_STRENGTH_FIELDS = (("model", "strength_model"), ("clip", "strength_clip"))
 
 # The ComfyUI-PixlStash loader: LoraLoader's signature with the file named by
 # digest, so it can go where ComfyUI does not have the file by name (#1376).
@@ -553,7 +559,8 @@ def detect_lora_targets(prompt_graph: dict) -> list[dict]:
         prompt_graph: The API-format graph.
 
     Returns:
-        ``[{"node_id", "class_type", "field", "value", "by"}, …]``.
+        ``[{"node_id", "class_type", "field", "value", "by", "strengths"}, …]``,
+        ``strengths`` being :func:`_lora_strengths` for that slot.
     """
     targets: list[dict] = []
     for node_id, node in (prompt_graph or {}).items():
@@ -580,9 +587,43 @@ def detect_lora_targets(prompt_graph: dict) -> list[dict]:
                     "field": field,
                     "value": value,
                     "by": "digest" if field == digest else "filename",
+                    "strengths": _lora_strengths(inputs, field),
                 }
             )
     return targets
+
+
+def _lora_strengths(inputs: dict, field: str) -> dict:
+    """The strengths applied beside the LoRA slot named by *field*.
+
+    A stacker that numbers its widgets in step - ``lora_name_2`` weighted by
+    ``strength_model_2`` - has each slot's strengths picked out by that slot's
+    own suffix rather than the node's first pair. **A pack that numbers them
+    some other way** (``model_weight_2``, ``lora_wt_2``) reports the slot with
+    no strengths, the same honest empty answer a wired one gets; the rule here
+    is the core loader's spelling, as the slot rule above is. A wired strength is computed at run time and has no
+    value to report, so it is left out rather than reported as its link.
+
+    Returns:
+        ``{"model": float, "clip": float}``, either key absent when the node
+        does not carry it.
+    """
+    suffix = field[len("lora_name") :] if field.startswith("lora_name") else ""
+    strengths: dict[str, float] = {}
+    for key, widget in _LORA_STRENGTH_FIELDS:
+        value = inputs.get(f"{widget}{suffix}")
+        if value is None and key == "model":
+            value = inputs.get(f"strength{suffix}")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        # A non-finite strength is refused rather than reported: the graph is
+        # attacker-authorable file metadata, `json.loads` accepts the `NaN` and
+        # `Infinity` literals, and every route that hands these dicts back
+        # renders with `allow_nan=False` - so reporting one is a 500 on a read
+        # a share-token holder can make.
+        if math.isfinite(value):
+            strengths[key] = float(value)
+    return strengths
 
 
 def _shelf_name_in(filenames: list[str], options: list[str]) -> str | None:

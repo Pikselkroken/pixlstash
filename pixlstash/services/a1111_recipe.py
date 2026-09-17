@@ -87,6 +87,10 @@ _MODEL_FIELD_RE = re.compile(
 # ponytail: a longer genuine line is read as no A1111 data; raise if one shows.
 _MAX_FIELDS_LINE = 8_000
 
+# How many lines from the end are searched for that fields line. See
+# `parse_infotext`: the count multiplies the per-line cost above.
+_MAX_FIELDS_LINES = 32
+
 _VOLATILE_FIELDS = frozenset(
     {
         "Seed",
@@ -152,7 +156,17 @@ def parse_infotext(text: str) -> Optional[tuple[str, str, dict[str, str]]]:
     if text.lstrip().startswith("{"):
         return None
     lines = text.strip().split("\n")
-    for index in range(len(lines) - 1, -1, -1):
+    # Only the tail is searched. `_parse_fields` is quadratic up to its own
+    # 8,000-character ceiling, so a line count is a multiplier on it: a crafted
+    # chunk of thousands of near-ceiling lines that each hold "Steps:" without
+    # yielding a `Steps` field is minutes of CPU. That was a background pass's
+    # problem when this had one caller; it is a request handler's now
+    # (`GET /comfyui/pictures/{id}/recipe`), reachable with a share token. The
+    # grammar loses nothing: A1111 escapes newlines, so its fields line IS the
+    # last, and the search below exists only for a tool that appended a few.
+    # ponytail: a genuine fields line further back than this reads as no A1111
+    # data; raise the bound if one shows up.
+    for index in range(len(lines) - 1, max(len(lines) - _MAX_FIELDS_LINES, 0) - 1, -1):
         fields = _parse_fields(lines[index])
         if fields is None:
             continue

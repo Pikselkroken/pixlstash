@@ -1,6 +1,7 @@
 import asyncio
 import functools
 import json
+import math
 import os
 import sqlite3
 import threading
@@ -37,11 +38,13 @@ from pixlstash.utils.comfyui_utilities import (
     collect_seed_inputs,
     extract_comfy_workflow_info,
     extract_generation_info,
+    extract_recipe_extras,
     NotAWorkflowError,
     check_comfy_workflow,
     find_comfy_api_prompt,
     summarize_comfy_workflow,
 )
+from pixlstash.services.a1111_recipe import A1111Recipe, reduce_a1111
 from pixlstash.services.comfyui_recipe_service import (
     MAX_SEED_64,
     apply_adapter,
@@ -1075,11 +1078,8 @@ def _picture_source_origin(server, pic_id: int) -> tuple[bool, str | None]:
     return False, None
 
 
-def _load_embedded_api_prompt(server, pic_id: int) -> dict | None:
-    """Return the picture's embedded API-format ``prompt`` graph, or ``None``.
-
-    ``None`` covers every honest "there is nothing to replay" case: a UI-graph
-    only file, A1111 metadata, a stripped PNG, or a JPEG. It is not an error.
+def _read_embedded_metadata(server, pic_id: int) -> dict:
+    """The picture file's embedded metadata.
 
     Raises:
         HTTPException: 404 when the picture or its file cannot be resolved,
@@ -1087,7 +1087,7 @@ def _load_embedded_api_prompt(server, pic_id: int) -> dict | None:
     """
     file_path = _resolve_picture_file(server, pic_id)
     try:
-        embedded_metadata = ImageUtils.extract_embedded_metadata(file_path)
+        return ImageUtils.extract_embedded_metadata(file_path)
     except Exception as exc:
         logger.warning(
             "[comfyui] Failed to read embedded metadata for picture id=%s (%s): %s",
@@ -1098,7 +1098,131 @@ def _load_embedded_api_prompt(server, pic_id: int) -> dict | None:
         raise HTTPException(
             status_code=500, detail="Failed to read embedded metadata"
         ) from exc
-    return find_comfy_api_prompt(embedded_metadata)
+
+
+def _load_embedded_api_prompt(server, pic_id: int) -> dict | None:
+    """Return the picture's embedded API-format ``prompt`` graph, or ``None``.
+
+    ``None`` covers every honest "there is nothing to replay" case: a UI-graph
+    only file, A1111 metadata, a stripped PNG, or a JPEG. It is not an error.
+
+    Raises:
+        HTTPException: 404 when the picture or its file cannot be resolved,
+            500 when the file exists but its metadata cannot be read.
+    """
+    return find_comfy_api_prompt(_read_embedded_metadata(server, pic_id))
+
+
+def _picture_workflow_key(server, pic_id: int) -> str | None:
+    """The workflow card this picture's variant is on, or ``None``.
+
+    Two reads and no derivation: the picture names its variant
+    (``workflow_structural_hash``) and the hub says which card that variant is
+    on. A picture whose graph has not been filed yet, or whose card has not
+    been derived yet, honestly has no key - deriving one here would report a
+    card the hub does not hold and cannot be asked about.
+
+    Never raises: this is one field of an advisory dialog, and a hub that
+    cannot be read must not be what breaks the recipe read.
+    """
+    hub = getattr(server, "hub", None)
+    if hub is None:
+        return None
+    try:
+        pics = server.vault.db.run_immediate_read_task(
+            Picture.find,
+            id=pic_id,
+            select_fields=["id", "workflow_structural_hash"],
+        )
+        structural_hash = (
+            getattr(pics[0], "workflow_structural_hash", None) if pics else None
+        )
+        if not structural_hash:
+            return None
+        return workflow_cards.key_of_variant(hub, structural_hash)
+    except Exception as exc:
+        logger.warning(
+            "[comfyui] Could not read the workflow card for picture id=%s: %s; "
+            "reporting the recipe without a workflow_key.",
+            pic_id,
+            exc,
+        )
+        return None
+
+
+def _a1111_strengths(value) -> dict:
+    """An A1111 LoRA weight as ``{"model": float}``, or ``{}`` if it is not one.
+
+    A1111 writes the weight as text, so it is parsed here to keep ``strengths``
+    ONE type across both branches of this route - a client formatting a number
+    must not have to find out that this branch hands it a string. Two cases
+    give nothing rather than something of another shape: the same LoRA used
+    twice in a picture, which ``services/a1111_recipe.py`` records as both
+    weights joined by a comma (reporting either alone would be a claim about
+    which applied), and a non-finite value, which cannot be rendered at all
+    (``allow_nan=False``) and would turn this read into a 500.
+    """
+    try:
+        weight = float(value)
+    except (TypeError, ValueError):
+        return {}
+    return {"model": weight} if math.isfinite(weight) else {}
+
+
+def _a1111_recipe_payload(recipe: A1111Recipe) -> dict:
+    """The recipe an A1111 picture can answer with, from its reduced graph.
+
+    Read off :func:`reduce_a1111`'s nodes rather than re-parsing the infotext,
+    so this endpoint and the hub agree about what the picture's recipe is: the
+    node names here are that function's own (``checkpoint``, ``positive``,
+    ``negative``, ``sampler``, ``lora_N``).
+
+    ``node_count`` and ``node_classes`` are deliberately left at their defaults.
+    They exist for the consent decision - what would execute on the owner's
+    ComfyUI - and an A1111 picture executes nothing, so a count of the reduction
+    the hub happens to build would be a number about PixlStash, not about the
+    picture.
+    """
+    widgets = {
+        node_id: dict(node.instance_widgets) for node_id, node in recipe.nodes.items()
+    }
+    sampler = widgets.get("sampler", {})
+    loras = [
+        (node_id, w)
+        for node_id, w in sorted(widgets.items())
+        if node_id.startswith("lora_") and w.get("lora_name")
+    ]
+    checkpoint = widgets.get("checkpoint", {}).get("ckpt_name")
+    return {
+        "available": False,
+        # Not ``no_prompt_chunk``: there IS a recipe here, it is simply not a
+        # graph any ComfyUI could be handed. A client that does not know the
+        # value still falls through to "nothing to replay", which is true.
+        "reason": "a1111",
+        "source": "a1111",
+        "summary": "A1111 parameters",
+        "positive_prompt": widgets.get("positive", {}).get("text") or None,
+        "negative_prompt": widgets.get("negative", {}).get("text") or None,
+        "seed": int(recipe.seed) if recipe.seed else None,
+        "models": [checkpoint] if checkpoint else [],
+        "loras": [w["lora_name"] for _, w in loras],
+        "settings": {k: v for k, v in sampler.items() if v is not None},
+        # The same shape the ComfyUI branch reports, with no node named: the
+        # reduction's own ids ("lora_0") are not in any graph, and `node_id` is
+        # what a client sends back as `lora_node_id` to swap a slot in a
+        # replay. There is no replay here, so there is no node to name.
+        "lora_slots": [
+            {
+                "node_id": None,
+                "class_type": None,
+                "field": "lora_name",
+                "value": w["lora_name"],
+                "by": "filename",
+                "strengths": _a1111_strengths(w.get("strength")),
+            }
+            for _node_id, w in loras
+        ],
+    }
 
 
 def _describe_preflight_failure(preflight: dict) -> str:
@@ -1411,9 +1535,20 @@ class ComfyUIPictureRecipeResponse(BaseModel):
 
     available: bool = False
     reason: Optional[str] = None
+    # Which generator wrote the recipe: "comfyui" for an embedded API graph,
+    # "a1111" for a picture whose recipe is A1111 infotext.
+    source: str = "comfyui"
     summary: Optional[str] = None
     positive_prompt: Optional[str] = None
+    negative_prompt: Optional[str] = None
     seed: Optional[int] = None
+    # The sampler settings (steps, cfg, sampler, scheduler, denoise), or the
+    # A1111 fields. Read from the file, like the prompts beside it.
+    settings: dict = {}
+    # The workflow card this picture's variant is on, None when the hub has
+    # not filed or keyed it. An opaque digest of the graph's topology and
+    # model slots; what it GROUPS is an owner-only question, asked elsewhere.
+    workflow_key: Optional[str] = None
     models: list[str] = []
     loras: list[str] = []
     node_count: int = 0
@@ -1428,7 +1563,7 @@ class ComfyUIPictureRecipeResponse(BaseModel):
     seed_inputs: list[dict] = []
     # Every LoRA slot a replay can swap, so "Generate variants" can offer the
     # shelf where the picture's own graph has a loader, and say so where it
-    # does not.
+    # does not. Each carries its own ``strengths`` (model / clip).
     lora_slots: list[dict] = []
     # Set only when lora_slots is empty: where a loader would be added (#1376).
     lora_insertion: Optional[ComfyUILoraInsertionResponse] = None
@@ -2810,8 +2945,11 @@ def create_router(server) -> APIRouter:
             "server actually executed - and pre-flights it against the target "
             "ComfyUI's /object_info. The UI `workflow` chunk is deliberately "
             "NOT considered: it is not submittable and is never converted. "
+            "A picture with no graph but with A1111 infotext answers from that "
+            'instead, as `source: "a1111"` with `available: false`: its recipe '
+            "is readable but not submittable to ComfyUI. "
             '`available: false` with `reason: "no_prompt_chunk"` is the normal '
-            "answer for imported photos, A1111 output and stripped files, not an "
+            "answer for imported photos and stripped files, not an "
             "error. A `preflight` with `checked: false` means ComfyUI could not "
             "be reached, not that the recipe passed."
         ),
@@ -2823,15 +2961,28 @@ def create_router(server) -> APIRouter:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
-        prompt_graph = _load_embedded_api_prompt(server, pic_id)
+        embedded_metadata = _read_embedded_metadata(server, pic_id)
+        prompt_graph = find_comfy_api_prompt(embedded_metadata)
         if not prompt_graph:
-            return {"available": False, "reason": "no_prompt_chunk"}
+            # No graph is not the end of the question: an A1111 picture carries
+            # its recipe as text, and the same fields can be read off it.
+            a1111 = reduce_a1111(embedded_metadata)
+            if a1111 is None:
+                return {"available": False, "reason": "no_prompt_chunk"}
+            source_is_imported, source_label = _picture_source_origin(server, pic_id)
+            return {
+                **_a1111_recipe_payload(a1111),
+                "source_is_imported": source_is_imported,
+                "source_label": source_label,
+                "workflow_key": _picture_workflow_key(server, pic_id),
+            }
 
         user = server.auth.get_user_for_request(request)
         comfyui_url = _comfyui_url(user)
 
         graph = sanitize_prompt_graph(prompt_graph)
         gen_info = extract_generation_info(graph)
+        extras = extract_recipe_extras(graph)
         stats = summarize_comfy_workflow(graph)
         object_info, object_info_error = _read_object_info(comfyui_url)
         preflight, seed_targets = _inspect_graph(graph, object_info, object_info_error)
@@ -2852,8 +3003,28 @@ def create_router(server) -> APIRouter:
                 if has_pixlstash_nodes
                 else (None if seed_targets else "no_seed_input")
             ),
+            "source": "comfyui",
             "summary": f"API Workflow · {stats['node_count']} nodes",
             "positive_prompt": gen_info["positive_prompt"],
+            "negative_prompt": extras["negative_prompt"],
+            "settings": extras["settings"],
+            # The card this picture's variant is on, in a form the owner-only
+            # card routes can be asked about. An opaque digest: no filename, no
+            # prompt, no count, and the graph it digests is one this same token
+            # can already read whole from the `/workflow` sibling.
+            #
+            # **It is NOT purely a function of this file, and saying so would
+            # be false.** `workflow_key` folds in which LoRA slots this
+            # topology marks structural, and that mark was frozen from the
+            # filename of whichever picture of that topology was filed FIRST in
+            # this library (`hub/schema.py`, `workflow_slot_mark`). So a holder
+            # of two pictures that differ only in a LoRA learns one bit the
+            # files alone do not give them: whether that slot counts as part of
+            # the workflow. One bit, per topology, about a classification a
+            # published rule makes from a filename - not the filename, not any
+            # picture they cannot see, and nothing about the rest of the
+            # library. That is the exposure, stated rather than denied.
+            "workflow_key": _picture_workflow_key(server, pic_id),
             "seed": gen_info["seed"],
             "models": gen_info["models"],
             "loras": gen_info["loras"],

@@ -5,6 +5,8 @@ reported as *unchecked*, never as passing and never as missing, because a
 spurious "missing model" blocks a run that would have worked.
 """
 
+import json
+
 import pytest
 
 from pixlstash.services.comfyui_recipe_service import (
@@ -22,6 +24,7 @@ from pixlstash.services.comfyui_recipe_service import (
     sanitize_prompt_graph,
     unchecked_preflight,
 )
+from pixlstash.utils.comfyui_utilities import extract_recipe_extras
 
 GRAPH = {
     "3": {"class_type": "KSampler", "inputs": {"seed": 1, "model": ["4", 0]}},
@@ -557,6 +560,7 @@ class TestDetectLoraTargets:
                 "field": "adapter_sha256",
                 "value": "a" * 64,
                 "by": "digest",
+                "strengths": {"model": 0.8},
             }
         ]
 
@@ -580,6 +584,107 @@ class TestDetectLoraTargets:
             "lora_name_1",
             "lora_name_2",
         ]
+
+    def test_each_numbered_slot_reports_its_own_strengths(self):
+        """The numbers have to line up, or a slot is reported at another's weight."""
+        graph = {
+            "1": {
+                "class_type": "SomeLoRAStacker",
+                "inputs": {
+                    "lora_name_1": "a.safetensors",
+                    "strength_model_1": 0.25,
+                    "lora_name_2": "b.safetensors",
+                    "strength_model_2": 0.75,
+                },
+            }
+        }
+        assert [t["strengths"] for t in detect_lora_targets(graph)] == [
+            {"model": 0.25},
+            {"model": 0.75},
+        ]
+
+    def test_a_model_only_loader_reports_its_single_strength(self):
+        """``strength`` is the one-widget spelling, so it fills ``model``."""
+        graph = {
+            "1": {
+                "class_type": "LoraLoaderModelOnly",
+                "inputs": {"lora_name": "a.safetensors", "strength": 0.5},
+            }
+        }
+        assert [t["strengths"] for t in detect_lora_targets(graph)] == [{"model": 0.5}]
+
+    def test_a_wired_strength_is_left_out_rather_than_reported_as_a_link(self):
+        graph = {
+            "1": {
+                "class_type": "LoraLoader",
+                "inputs": {"lora_name": "a.safetensors", "strength_model": ["9", 0]},
+            }
+        }
+        assert [t["strengths"] for t in detect_lora_targets(graph)] == [{}]
+
+    def test_a_non_finite_strength_is_refused_rather_than_rendered(self):
+        """`json.loads` takes `NaN`; the response renders with allow_nan=False.
+
+        So a crafted file carrying one would 500 every route that hands these
+        dicts back - to a share-token holder, on a read they can just make.
+        """
+        graph = json.loads(
+            '{"1": {"class_type": "LoraLoader", "inputs": '
+            '{"lora_name": "a.safetensors", "strength_model": NaN, '
+            '"strength_clip": Infinity}}}'
+        )
+        strengths = detect_lora_targets(graph)[0]["strengths"]
+        assert strengths == {}
+        json.dumps(strengths, allow_nan=False)  # would raise if one got through
+
+
+class TestRecipeExtras:
+    """The negative prompt and the settings, off an API graph."""
+
+    def test_the_settings_come_from_any_node_that_names_one(self):
+        """A split-sampler graph, the shape the shipped Flux2 templates use.
+
+        The step count is on the scheduler, the sampler name on its own
+        selector and the CFG on the guider. Reading the sampler alone answers
+        with one field out of five for PixlStash's own workflows.
+        """
+        graph = {
+            "61": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+            "62": {
+                "class_type": "Flux2Scheduler",
+                "inputs": {"steps": 20, "width": 1024, "height": 1024},
+            },
+            "63": {
+                "class_type": "CFGGuider",
+                "inputs": {"cfg": 3.5, "negative": ["7", 0]},
+            },
+            "64": {
+                "class_type": "SamplerCustomAdvanced",
+                "inputs": {"sampler": ["61", 0], "guider": ["63", 0]},
+            },
+            "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "blurry"}},
+        }
+        extras = extract_recipe_extras(graph)
+        assert extras["settings"] == {"steps": 20, "cfg": 3.5, "sampler_name": "euler"}
+        # The guider is a sampler class, so the negative walk still starts.
+        assert extras["negative_prompt"] == "blurry"
+
+    def test_a_wired_or_non_finite_setting_is_left_out(self):
+        graph = json.loads(
+            '{"3": {"class_type": "KSampler", "inputs": '
+            '{"cfg": NaN, "steps": Infinity, "denoise": ["9", 0], '
+            '"sampler_name": "euler", "scheduler": true}}}'
+        )
+        settings = extract_recipe_extras(graph)["settings"]
+        assert settings == {"sampler_name": "euler"}
+        json.dumps(settings, allow_nan=False)  # would raise if one got through
+
+    def test_a_graph_with_nothing_to_say_says_nothing(self):
+        assert extract_recipe_extras({}) == {"negative_prompt": None, "settings": {}}
+        assert extract_recipe_extras({"1": "not a node"}) == {
+            "negative_prompt": None,
+            "settings": {},
+        }
 
     def test_a_node_spelling_its_digest_twice_is_still_one_slot(self):
         graph = {

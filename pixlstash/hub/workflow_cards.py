@@ -316,6 +316,76 @@ def forget_file(hub: HubDatabase, name: str) -> int:
         )
 
 
+def key_of_variant(hub: HubDatabase, structural_hash: str) -> Optional[str]:
+    """The card a filed variant is on, or ``None`` if it has none yet.
+
+    A read, never a derivation: a variant whose card has not been derived (or
+    was keyed by a superseded rule) has no card to report, and inventing one
+    here would hand out a key the hub does not hold.
+    """
+    row = hub.fetchone(
+        "SELECT workflow_key FROM workflow_variant "
+        "WHERE structural_hash = ? AND key_version = ?",
+        (structural_hash, WORKFLOW_KEY_VERSION),
+    )
+    return row["workflow_key"] if row else None
+
+
+def variants_on_key(hub: HubDatabase, key: str) -> list[str]:
+    """Every variant on one card, for the picture filter's ``IN``.
+
+    An empty list is a real answer - a card with no filed variant - and the
+    caller must keep it as a filter matching nothing rather than as no filter.
+    """
+    return [
+        row["structural_hash"]
+        for row in hub.fetchall(
+            "SELECT structural_hash FROM workflow_variant "
+            "WHERE workflow_key = ? AND key_version = ? ORDER BY structural_hash",
+            (key, WORKFLOW_KEY_VERSION),
+        )
+    ]
+
+
+def variants_in_stack(hub: HubDatabase, stack_id: str) -> list[str]:
+    """Every variant on every card in one stack.
+
+    *stack_id* is read two ways, in one query rather than one-then-the-other,
+    because a stack can be named either way:
+
+    - a **stored** stack (``workflow_stack``, manual or auto) has a row per
+      card in ``workflow_stack_member``;
+    - an automatic grouping that **has not been stored** is not a row at all -
+      it IS the set of cards sharing a ``core_hash`` (:func:`card_grouping`
+      computes it and writes nothing), so until it is materialised the only
+      thing that names it is that hash.
+
+    Nothing writes the stack tables yet, so today every answer comes from the
+    ``core_hash`` half; the membership half is here because the schema already
+    says a stack has its own id, and a filter that ignored it would answer a
+    stored stack with an empty grid the day one is written.
+
+    **Not consulted: ``workflow_unstacked``**, the owner taking a card out of
+    its automatic grouping. Nothing writes that table either, and the step that
+    does owns making every reader agree with it.
+
+    A value that names neither matches nothing.
+    """
+    return [
+        row["structural_hash"]
+        for row in hub.fetchall(
+            "SELECT DISTINCT v.structural_hash AS structural_hash "
+            "FROM workflow_variant v "
+            "LEFT JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
+            "AND c.core_version = ? "
+            "WHERE v.key_version = ? AND (c.core_hash = ? OR v.workflow_key IN ("
+            "SELECT workflow_key FROM workflow_stack_member WHERE stack_id = ?)) "
+            "ORDER BY v.structural_hash",
+            (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION, stack_id, stack_id),
+        )
+    ]
+
+
 def unidentified_variants(hub: HubDatabase, limit: int) -> list[str]:
     """Filed variants with no card, or with one keyed by a superseded rule."""
     return [

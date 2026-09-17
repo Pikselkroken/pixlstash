@@ -7,6 +7,7 @@ picture tagger when building text embeddings from ComfyUI generation data.
 """
 
 import json
+import math
 from typing import Any
 
 from pixlstash.pixl_logging import get_logger
@@ -52,6 +53,14 @@ _SEED_CLASSES = {
 }
 # Input field names that hold seed values
 _SEED_FIELDS = {"seed", "noise_seed"}
+# The settings a recipe is read for. Named rather than "every scalar input",
+# because a node also carries its wiring and its pack's own extras, and a
+# settings block nobody can read is worse than a short one. Read from ANY node
+# that names one, not from the sampler: the split-sampler graphs (the shipped
+# Flux2-Klein templates among them) put the step count on a scheduler node, the
+# sampler name on a `KSamplerSelect` and the CFG on a `CFGGuider`, so reading
+# only the sampler reports one field out of five for PixlStash's own workflows.
+_SETTING_FIELDS = ("steps", "cfg", "sampler_name", "scheduler", "denoise")
 # Nodes that carry a raw STRING value (positive-prompt primitive wired into subgraphs)
 _PRIMITIVE_STRING_CLASSES = {
     "PrimitiveStringMultiline",
@@ -345,12 +354,20 @@ def _resolve_text_api(value: Any, workflow: dict, depth: int = 0) -> str | None:
     return None
 
 
-def _follow_positive_api(
+def _follow_prompt_api(
     node_id: str,
     workflow: dict,
     depth: int = 0,
+    side: str = "positive",
 ) -> str | None:
-    """Walk upstream conditioning links in API format to find prompt text."""
+    """Walk upstream conditioning links in API format to find prompt text.
+
+    ``side`` names the conditioning input a passthrough node is followed
+    through, so the same walk reaches the negative encoder: a node that takes
+    both (a ControlNet applier, a conditioning combine) has to be followed on
+    the side the caller started on, or the negative chain arrives at the
+    positive prompt.
+    """
     if depth > _MAX_FOLLOW_DEPTH:
         return None
     node = workflow.get(str(node_id))
@@ -364,10 +381,10 @@ def _follow_positive_api(
         return _resolve_text_api(text, workflow, depth + 1)
 
     # Follow conditioning passthrough nodes upstream
-    for key in ("conditioning", "positive"):
+    for key in ("conditioning", side):
         ref = inputs.get(key)
         if _is_api_ref(ref):
-            result = _follow_positive_api(str(ref[0]), workflow, depth + 1)
+            result = _follow_prompt_api(str(ref[0]), workflow, depth + 1, side)
             if result is not None:
                 return result
     return None
@@ -409,7 +426,7 @@ def _extract_generation_info_api(workflow: dict) -> dict:
             if positive_prompt is None:
                 ref = inputs.get("positive")
                 if _is_api_ref(ref):
-                    positive_prompt = _follow_positive_api(str(ref[0]), workflow)
+                    positive_prompt = _follow_prompt_api(str(ref[0]), workflow)
             if seed is None and class_type in _SEED_CLASSES:
                 for field in _SEED_FIELDS:
                     val = inputs.get(field)
@@ -468,6 +485,76 @@ def extract_generation_info(workflow: dict) -> dict:
     except Exception:
         logger.warning("Failed to extract generation info from workflow", exc_info=True)
         return {"models": [], "loras": [], "positive_prompt": None, "seed": None}
+
+
+def extract_recipe_extras(workflow: dict) -> dict:
+    """The negative prompt and the sampler settings of an **API-format** graph.
+
+    Split from :func:`extract_generation_info` rather than folded into it
+    because only the API format is read here: the recipe endpoint works on the
+    embedded ``prompt`` chunk, and a UI graph reaching this would quietly
+    report no settings at all. A caller holding a UI graph gets the same empty
+    answer as one holding a graph with no sampler, which is honest for both.
+
+    Args:
+        workflow: The API-format graph.
+
+    Returns:
+        ``{"negative_prompt": str | None, "settings": {field: value}}``. The
+        first node that names a field wins, and that is **iteration order, not
+        execution order**: a graph that samples twice (a hires-fix pass) can
+        report the second pass's step count beside the first's CFG. Reading it
+        as "the settings of the pass that made the picture" is therefore wrong;
+        it is "what this graph says", which is what a recipe read can honestly
+        offer without walking the execution graph.
+    """
+    negative_prompt: str | None = None
+    settings: dict[str, Any] = {}
+    try:
+        for node in workflow.values():
+            if not isinstance(node, dict):
+                continue
+            inputs = node.get("inputs") or {}
+            if not isinstance(inputs, dict):
+                continue
+            if (
+                negative_prompt is None
+                and node.get("class_type", "") in _SAMPLER_CLASSES
+            ):
+                ref = inputs.get("negative")
+                if _is_api_ref(ref):
+                    negative_prompt = _follow_prompt_api(
+                        str(ref[0]), workflow, side="negative"
+                    )
+            for field in _SETTING_FIELDS:
+                if field in settings:
+                    continue
+                value = _finite_setting(inputs.get(field))
+                if value is not None:
+                    settings[field] = value
+    except Exception:
+        logger.warning("Failed to extract recipe extras from workflow", exc_info=True)
+        return {"negative_prompt": None, "settings": {}}
+    return {"negative_prompt": negative_prompt, "settings": settings}
+
+
+def _finite_setting(value: Any) -> Any:
+    """*value* if it is a reportable setting, else ``None``.
+
+    **A non-finite float is refused, and that is not tidiness.** The graph is
+    attacker-authorable file metadata and ``json.loads`` accepts the
+    ``Infinity`` and ``NaN`` literals, while the response is rendered with
+    ``allow_nan=False`` - so a crafted ``prompt`` chunk would turn this read
+    into a 500 for anyone holding a share token for the picture.
+
+    A wired input (``[node_id, slot]``) has no value until the graph runs, and
+    a bool is not a setting any of these fields declares.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
 
 
 def _parse_metadata_value(value: Any) -> Any:

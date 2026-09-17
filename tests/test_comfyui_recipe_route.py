@@ -18,13 +18,20 @@ in the dialog is not a control:
 
 Both directions throughout: the refusal must fire without the flag AND the run
 must still succeed with it, since over-blocking is its own regression.
+
+The B5 classes at the foot of the file cover the same endpoint's *extended*
+read - the negative prompt, the sampler settings, the LoRA strengths, the
+workflow card, and the A1111 branch - plus the picture-list filters that
+resolve a card to the variants that made its pictures.
 """
 
 import gc
 import io
 import json
 import os
+import sqlite3
 import tempfile
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -33,7 +40,10 @@ from PIL.PngImagePlugin import PngInfo
 
 import pixlstash.routes.comfyui as comfyui_module
 from pixlstash.db_models import Picture
+from pixlstash.hub import workflow_cards
+from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
 from pixlstash.server import Server
+from pixlstash.services.workflow_identity import WORKFLOW_KEY_VERSION
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 from tests.utils import upload_pictures_and_wait
 
@@ -671,3 +681,359 @@ class TestSwappingALoRAIntoAReplay:
         assert r.status_code == 400, r.text
         assert "has no LoraLoader node" in r.json()["detail"]
         assert submitted == []
+
+
+# ── The extended read (B5): the rest of the recipe, and the workflow filters ──
+
+# A graph that actually carries what the extended read reports: both prompts
+# wired to a sampler, a LoRA at two strengths, and the five sampler settings.
+FULL_GRAPH = {
+    "3": {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": 42,
+            "steps": 25,
+            "cfg": 7.5,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+            "denoise": 1.0,
+            "model": ["5", 0],
+            # Through a node that carries BOTH sides, so the walk has to
+            # follow the one it started on rather than whichever it meets.
+            "positive": ["8", 0],
+            "negative": ["8", 1],
+        },
+    },
+    "4": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {"ckpt_name": "sd_xl_base_1.0.safetensors"},
+    },
+    "5": {
+        "class_type": "LoraLoader",
+        "inputs": {
+            "lora_name": "example-style.safetensors",
+            "strength_model": 0.8,
+            "strength_clip": 0.6,
+            "model": ["4", 0],
+            "clip": ["4", 1],
+        },
+    },
+    "6": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "a castle on a hill", "clip": ["5", 1]},
+    },
+    "7": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "blurry, watermark", "clip": ["5", 1]},
+    },
+    "8": {
+        "class_type": "ControlNetApplyAdvanced",
+        "inputs": {
+            "positive": ["6", 0],
+            "negative": ["7", 0],
+            "strength": 1.0,
+        },
+    },
+    "9": {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "ComfyUI", "images": ["3", 0]},
+    },
+}
+
+# One A1111 generation, written the way the web UI writes it: the prompts on
+# their own lines, the fields on the last one, a LoRA as a prompt tag.
+A1111_PARAMETERS = (
+    "a castle on a hill <lora:example-style:0.8>\n"
+    "Negative prompt: blurry, watermark\n"
+    "Steps: 25, Sampler: Euler a, CFG scale: 7, Seed: 4242, Size: 512x768, "
+    "Model hash: 0123456789, Model: sd_xl_base_1.0"
+)
+
+
+def _a1111_png_bytes(parameters: str, colour: tuple[int, int, int]) -> bytes:
+    """A PNG carrying A1111 infotext in its ``parameters`` text chunk."""
+    img = Image.new("RGB", (256, 256), colour)
+    meta = PngInfo()
+    meta.add_text("parameters", parameters)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", pnginfo=meta)
+    return buf.getvalue()
+
+
+def _upload_one(client, name: str, data: bytes) -> int:
+    """Import one picture and return its id."""
+    st = upload_pictures_and_wait(
+        client, [("file", (name, data, "image/png"))], timeout_s=60
+    )
+    assert st["status"] == "completed", st
+    r = client.get(f"{API}/pictures")
+    assert r.status_code == 200, r.text
+    return max(p["id"] for p in r.json())
+
+
+def _variant_of(server, pic_id: int) -> str:
+    """The variant the import filed for *pic_id*, waited for.
+
+    Read rather than written: the extraction pass owns
+    ``picture.workflow_structural_hash`` and would overwrite a hand-written
+    one, so a test that needs a picture on a card has to card the variant the
+    picture actually has.
+    """
+    for _ in range(120):
+        pics = server.vault.db.run_immediate_read_task(
+            Picture.find, id=pic_id, select_fields=["id", "workflow_structural_hash"]
+        )
+        value = getattr(pics[0], "workflow_structural_hash", None) if pics else None
+        if value:
+            return value
+        time.sleep(0.5)
+    raise AssertionError(f"picture {pic_id} was never filed under a variant")
+
+
+def _card_picture(server, pic_id: int, key: str, core: str) -> str:
+    """Put *pic_id*'s variant on card *key*, and its topology in stack *core*.
+
+    The rows the card pass derives, written directly with the names this test
+    can assert on. Content-addressed rows (the topology and the recipe) are the
+    pipeline's own and are left alone.
+    """
+    structural = _variant_of(server, pic_id)
+    row = server.hub.fetchone(
+        "SELECT topology_hash FROM workflow_recipe WHERE structural_hash = ?",
+        (structural,),
+    )
+    assert row is not None, f"the hub filed no recipe for {structural}"
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_variant "
+            "(structural_hash, topology_hash, workflow_key, key_version) "
+            "VALUES (?, ?, ?, ?)",
+            (structural, row["topology_hash"], key, WORKFLOW_KEY_VERSION),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_topology_core "
+            "(topology_hash, core_hash, core_version, workflow_type, slots) "
+            "VALUES (?, ?, ?, NULL, '[]')",
+            (row["topology_hash"], core, CORE_RULE_VERSION),
+        )
+    return structural
+
+
+class TestRecipeReadsTheWholeRecipe:
+    def test_a_comfyui_graph_reports_prompts_settings_and_strengths(
+        self, env, monkeypatch
+    ):
+        server, client, _ = env
+        # Deliberately with ComfyUI down: none of these fields comes from it,
+        # and the dialog has to be able to describe the recipe regardless.
+        _comfyui_unreachable(monkeypatch)
+        pic = _upload_one(client, "full.png", _recipe_png_bytes(FULL_GRAPH, (9, 9, 90)))
+
+        r = client.get(f"{API}/comfyui/pictures/{pic}/recipe")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["source"] == "comfyui"
+        assert body["positive_prompt"] == "a castle on a hill"
+        assert body["negative_prompt"] == "blurry, watermark"
+        assert body["settings"] == {
+            "steps": 25,
+            "cfg": 7.5,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+            "denoise": 1.0,
+        }
+        assert body["models"] == ["sd_xl_base_1.0.safetensors"]
+        assert [(s["node_id"], s["strengths"]) for s in body["lora_slots"]] == [
+            ("5", {"model": 0.8, "clip": 0.6})
+        ]
+
+    def test_a_graph_with_no_sampler_settings_reports_none_not_a_guess(
+        self, env, monkeypatch
+    ):
+        server, client, pic_id = env
+        _comfyui_unreachable(monkeypatch)
+        # RECIPE_GRAPH's sampler names no conditioning and no cfg/scheduler.
+        body = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe").json()
+        assert body["negative_prompt"] is None
+        assert body["settings"] == {"steps": 20}
+
+    def test_an_a1111_picture_answers_from_its_infotext(self, env, monkeypatch):
+        server, client, _ = env
+        _comfyui_unreachable(monkeypatch)
+        pic = _upload_one(
+            client, "a1111.png", _a1111_png_bytes(A1111_PARAMETERS, (200, 40, 40))
+        )
+
+        r = client.get(f"{API}/comfyui/pictures/{pic}/recipe")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        # Readable, but not submittable to ComfyUI: there is no graph to run.
+        assert body["available"] is False
+        assert body["reason"] == "a1111"
+        assert body["source"] == "a1111"
+        assert body["positive_prompt"] == "a castle on a hill"
+        assert body["negative_prompt"] == "blurry, watermark"
+        assert body["seed"] == 4242
+        assert body["models"] == ["sd_xl_base_1.0.safetensors"]
+        assert body["loras"] == ["example-style.safetensors"]
+        assert [s["strengths"] for s in body["lora_slots"]] == [{"model": 0.8}]
+        # No node is named: the reduction's ids are in no graph, and there is
+        # no replay to send one back to.
+        assert [s["node_id"] for s in body["lora_slots"]] == [None]
+        assert body["settings"] == {
+            "steps": "25",
+            "sampler": "Euler a",
+            "cfg_scale": "7",
+            "size": "512x768",
+        }
+        # The consent fields are about what would execute, and nothing would.
+        assert body["node_classes"] == []
+        assert body["node_count"] == 0
+
+    def test_a_picture_with_neither_is_still_no_prompt_chunk(self, env, monkeypatch):
+        """The control: the A1111 branch must not answer for a plain photo."""
+        server, client, _ = env
+        _comfyui_unreachable(monkeypatch)
+        buf = io.BytesIO()
+        Image.new("RGB", (256, 256), (7, 7, 7)).save(buf, format="PNG")
+        pic = _upload_one(client, "plain.png", buf.getvalue())
+
+        body = client.get(f"{API}/comfyui/pictures/{pic}/recipe").json()
+        assert body["reason"] == "no_prompt_chunk"
+        assert body["source"] == "comfyui"
+
+    def test_the_workflow_key_is_the_card_the_hub_holds(self, env, monkeypatch):
+        server, client, pic_id = env
+        _comfyui_unreachable(monkeypatch)
+        _card_picture(server, pic_id, "key-alpha", "core-shared")
+
+        body = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe").json()
+        assert body["workflow_key"] == "key-alpha"
+
+    def test_a_variant_the_hub_has_no_card_for_gets_no_key(self, env):
+        """The other direction: the read reports a card, it never invents one."""
+        server, _client, _pic_id = env
+        assert workflow_cards.key_of_variant(server.hub, "z" * 64) is None
+
+
+class TestPictureListWorkflowFilters:
+    """Both directions: the card's own pictures, and nobody else's."""
+
+    def _two_carded_pictures(self, server, client) -> tuple[int, int]:
+        alpha = _upload_one(
+            client, "alpha.png", _recipe_png_bytes(FULL_GRAPH, (1, 2, 3))
+        )
+        beta = _upload_one(
+            client, "beta.png", _a1111_png_bytes(A1111_PARAMETERS, (3, 2, 1))
+        )
+        _card_picture(server, alpha, "key-alpha", "core-shared")
+        _card_picture(server, beta, "key-beta", "core-shared")
+        return alpha, beta
+
+    def _ids(self, client, query: str) -> set[int]:
+        r = client.get(f"{API}/pictures{query}")
+        assert r.status_code == 200, r.text
+        return {p["id"] for p in r.json()}
+
+    def test_a_key_lists_its_own_pictures_and_only_those(self, env):
+        server, client, pic_id = env
+        alpha, beta = self._two_carded_pictures(server, client)
+
+        assert self._ids(client, "?workflow_key=key-alpha") == {alpha}
+        assert self._ids(client, "?workflow_key=key-beta") == {beta}
+        # The control: without the filter all three are there, so the two
+        # assertions above are narrowing rather than describing an empty grid.
+        assert {alpha, beta, pic_id} <= self._ids(client, "")
+
+    def test_an_automatic_stack_lists_every_card_sharing_its_core_hash(self, env):
+        server, client, _pic_id = env
+        alpha, beta = self._two_carded_pictures(server, client)
+
+        assert self._ids(client, "?workflow_stack=core-shared") == {alpha, beta}
+
+    def test_a_stored_stack_lists_the_cards_it_names(self, env):
+        """The other half of the same query: membership rows, not a core hash.
+
+        Nothing writes these tables yet, so the rows are written here - the
+        point is that a stack named by its own id resolves rather than coming
+        back as an empty grid.
+        """
+        server, client, _pic_id = env
+        alpha, _beta = self._two_carded_pictures(server, client)
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO workflow_stack (stack_id, kind, core_hash) "
+                "VALUES ('stack-one', 'manual', NULL)"
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO workflow_stack_member "
+                "(stack_id, workflow_key, position) VALUES ('stack-one', 'key-alpha', 0)"
+            )
+
+        # Only the card the stack names, though both cards share a core hash.
+        assert self._ids(client, "?workflow_stack=stack-one") == {alpha}
+
+    def test_an_empty_parameter_is_a_filter_not_the_absence_of_one(self, env):
+        """`?workflow_key=` names no card, so it must not answer with everything."""
+        server, client, _pic_id = env
+        self._two_carded_pictures(server, client)
+
+        assert self._ids(client, "?workflow_key=") == set()
+
+    def test_a_card_nothing_was_made_with_lists_nothing(self, env):
+        """The direction that fails open if the empty list reads as no filter."""
+        server, client, _ = env
+        self._two_carded_pictures(server, client)
+
+        assert self._ids(client, "?workflow_key=key-nobody-has") == set()
+        assert self._ids(client, "?workflow_stack=core-nobody-has") == set()
+
+    def test_the_two_filters_narrow_each_other(self, env):
+        server, client, _ = env
+        alpha, _ = self._two_carded_pictures(server, client)
+
+        assert self._ids(
+            client, "?workflow_key=key-alpha&workflow_stack=core-shared"
+        ) == {alpha}
+        assert (
+            self._ids(client, "?workflow_key=key-alpha&workflow_stack=core-nobody-has")
+            == set()
+        )
+
+
+class TestTheFieldsThatCannotBeRendered:
+    """Pure functions, no server: what a crafted file must not be able to do."""
+
+    def test_an_a1111_weight_that_is_not_a_finite_number_gives_no_strength(self):
+        """`<lora:x:inf>` parses as a float and cannot be rendered.
+
+        `allow_nan=False` is the renderer's default, so reporting it would turn
+        the read into a 500 for a share-token holder. A weight that is not a
+        single finite number gives nothing rather than something of another
+        shape - `strengths` is numbers on both branches or it is absent.
+        """
+        for weight in ("inf", "-inf", "nan", "0.8,0.5", "", None, "heavy"):
+            assert comfyui_module._a1111_strengths(weight) == {}, weight
+        assert comfyui_module._a1111_strengths("0.8") == {"model": 0.8}
+
+    def test_the_workflow_filter_fails_closed_when_the_hub_cannot_answer(self):
+        """A filter that cannot be resolved lists nothing, never everything.
+
+        The dangerous direction: widening a grid that was asked for one
+        workflow back to the whole library reads as the filter working.
+        """
+        from pixlstash.routes.pictures._listing import _resolve_workflow_filter
+
+        class _NoHub:
+            hub = None
+
+        class _BrokenHub:
+            class hub:  # noqa: N801 - a stand-in, not a class being defined
+                @staticmethod
+                def fetchall(*_a, **_kw):
+                    raise sqlite3.OperationalError("the hub is not answering")
+
+        assert _resolve_workflow_filter(_NoHub(), {"workflow_key": "k"}) == []
+        assert _resolve_workflow_filter(_BrokenHub(), {"workflow_key": "k"}) == []
+        # The control: no filter asked for is still no filter, not an empty one.
+        assert _resolve_workflow_filter(_NoHub(), {}) is None
