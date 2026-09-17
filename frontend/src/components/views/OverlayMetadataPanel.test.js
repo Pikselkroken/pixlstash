@@ -10,7 +10,7 @@ import OverlayMetadataPanel from "./OverlayMetadataPanel.vue";
 
 const rows = (wrapper) =>
   wrapper.findAll(".metadata-info-item").map((item) => ({
-    label: item.find(".metadata-info-label").text(),
+    label: item.find("dt").text(),
     value: item.find(".metadata-info-value").text(),
   }));
 

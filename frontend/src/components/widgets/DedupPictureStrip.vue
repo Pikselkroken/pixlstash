@@ -369,11 +369,12 @@ watch(
 /* Marked as a stranger: the tile the primary button is about to move out.
    Deliberately NOT the excluded fade. A marked tile is the row's EVIDENCE, and
    fading it would say "inert" about the only tiles that are not; the border is
-   the 3:1 UI job the warning token is authored for. One treatment for both the
+   a warning drawn as a mark, so it takes `surface-warning`, the foreground
+   family. One treatment for both the
    engine's marks and the user's, because they behave identically and compose
    into the one list the button acts on. */
 .gthumb--marked {
-  border-color: rgb(var(--v-theme-warning));
+  border-color: rgb(var(--v-theme-surface-warning));
 }
 
 /* An excluded candidate stays visible and stays clickable: it is a choice the
@@ -524,7 +525,7 @@ watch(
       rgb(var(--v-theme-warning)) 26%,
       transparent
     );
-    color: rgb(var(--v-theme-warning));
+    color: rgb(var(--v-theme-dark-surface-warning));
   }
 }
 
@@ -538,7 +539,7 @@ watch(
       rgb(var(--v-theme-warning)) 26%,
       transparent
     );
-    color: rgb(var(--v-theme-warning));
+    color: rgb(var(--v-theme-dark-surface-warning));
   }
 }
 

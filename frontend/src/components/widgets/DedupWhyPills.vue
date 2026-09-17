@@ -155,10 +155,10 @@ const pills = computed(() => {
    with one differing signal rather than as two different components. */
 .why-pill--neg {
   background: rgba(var(--v-theme-error), 0.12);
-  border-color: rgba(var(--v-theme-error), 0.35);
+  border-color: rgba(var(--v-theme-surface-error), 0.35);
 }
 .why-pill--neg .why-pill__ico {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 /* A measurement, not an argument. Same box as the other two so the family reads

@@ -512,6 +512,125 @@ class TestSwappingALoRAIntoAReplay:
         assert "no LoRA loader" in r.json()["detail"]
         assert submitted == []
 
+    def _typed_object_info(self) -> dict:
+        """OBJECT_INFO with the outputs the insertion plan reads links by."""
+        info = dict(OBJECT_INFO)
+        info["CheckpointLoaderSimple"] = {
+            **OBJECT_INFO["CheckpointLoaderSimple"],
+            "output": ["MODEL", "CLIP", "VAE"],
+        }
+        info["KSampler"] = {**OBJECT_INFO["KSampler"], "output": ["LATENT"]}
+        info["CLIPTextEncode"] = {
+            **OBJECT_INFO["CLIPTextEncode"],
+            "output": ["CONDITIONING"],
+        }
+        return info
+
+    def test_a_replay_never_adds_the_pixlstash_loader(self, env, monkeypatch):
+        """Its variant would be one Generate variants refuses to replay.
+
+        The graph carries a PixlStash node then, and run_recipe refuses any
+        such graph - so the loader that resolves a LoRA by digest is the one
+        option a replay must not take, however well it would work here.
+        """
+        server, client, pic_id = env
+        info = self._typed_object_info()
+        # The core loader is there but does not list this shelf LoRA, which on
+        # any other route is exactly when the digest loader goes in instead.
+        info["LoraLoaderModelOnly"] = {
+            "input": {
+                "required": {
+                    "model": ["MODEL", {}],
+                    "lora_name": [["something-else.safetensors"], {}],
+                }
+            },
+            "output": ["MODEL"],
+        }
+        info["PixlStashAdapterLoader"] = {
+            "input": {
+                "required": {
+                    "model": ["MODEL", {}],
+                    "adapter_sha256": ["STRING", {"default": ""}],
+                },
+                "optional": {"clip": ["CLIP", {}]},
+            },
+            "output": ["MODEL", "CLIP", "STRING"],
+        }
+        monkeypatch.setattr(comfyui_module, "fetch_object_info", lambda url: info)
+        self._shelf_lora(server)
+        submitted = _capture_submissions(monkeypatch)
+
+        r = client.post(
+            f"{API}/comfyui/run_recipe",
+            json={
+                "picture_id": pic_id,
+                "adapter_sha256": self.SHA,
+                "insert_lora_loader": True,
+            },
+        )
+        assert r.status_code == 400, r.text
+        assert "not on this ComfyUI" in r.json()["detail"]
+        assert "PixlStashAdapterLoader" not in r.text
+        assert submitted == []
+
+        # The control: the same ComfyUI, the same shelf LoRA, listed by the
+        # core loader - the replay runs and takes that one.
+        info["LoraLoaderModelOnly"]["input"]["required"]["lora_name"] = [
+            [self.COMFY_NAME],
+            {},
+        ]
+        r = client.post(
+            f"{API}/comfyui/run_recipe",
+            json={
+                "picture_id": pic_id,
+                "adapter_sha256": self.SHA,
+                "insert_lora_loader": True,
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert submitted[0]["10"]["class_type"] == "LoraLoaderModelOnly"
+
+    def test_a_recipe_with_no_lora_loader_takes_one_added_where_it_was_shown(
+        self, env, monkeypatch
+    ):
+        """#1376: the read shows the splice, and the replay carries it out.
+
+        RECIPE_GRAPH's text encoders read no CLIP, so the loader is model-only.
+        """
+        server, client, pic_id = env
+        info = self._typed_object_info()
+        info["LoraLoaderModelOnly"] = {
+            "input": {
+                "required": {
+                    "model": ["MODEL", {}],
+                    "lora_name": [[self.COMFY_NAME], {}],
+                }
+            },
+            "output": ["MODEL"],
+        }
+        monkeypatch.setattr(comfyui_module, "fetch_object_info", lambda url: info)
+        self._shelf_lora(server)
+        submitted = _capture_submissions(monkeypatch)
+
+        r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe")
+        assert r.status_code == 200, r.text
+        plan = r.json()["lora_insertion"]["plan"]
+        assert plan["model"]["node_id"] == "4" and plan["clip"] is None
+        assert [(w["node_id"], w["field"]) for w in plan["rewires"]] == [("3", "model")]
+
+        r = client.post(
+            f"{API}/comfyui/run_recipe",
+            json={
+                "picture_id": pic_id,
+                "adapter_sha256": self.SHA,
+                "insert_lora_loader": True,
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert submitted[0]["10"]["class_type"] == "LoraLoaderModelOnly"
+        assert submitted[0]["10"]["inputs"]["lora_name"] == self.COMFY_NAME
+        assert submitted[0]["3"]["inputs"]["model"] == ["10", 0]
+
     def test_an_unchecked_replay_will_not_guess_a_name(self, env, monkeypatch):
         """No object_info, no swap: the acknowledgement covers the graph, not the file list.
 

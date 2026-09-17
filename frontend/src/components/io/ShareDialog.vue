@@ -248,6 +248,6 @@ async function copyUrl() {
 .share-dialog-error {
   margin: 0;
   font-size: var(--text-sm);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 </style>

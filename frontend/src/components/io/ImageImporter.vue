@@ -1062,7 +1062,7 @@ defineExpose({ startImport });
 }
 
 .note-icon--error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .note-title {
@@ -1093,7 +1093,7 @@ defineExpose({ startImport });
 }
 
 .stall {
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .bar-track {

@@ -419,7 +419,7 @@ watch(
                 <template #activator="{ props: tooltipProps }">
                   <v-icon
                     v-bind="tooltipProps"
-                    color="error"
+                    color="surface-error"
                     size="18"
                     tabindex="0"
                     class="server-port-warning"
@@ -845,7 +845,7 @@ watch(
 }
 
 .settings-error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   font-size: var(--text-xs);
   white-space: pre-wrap;
 }

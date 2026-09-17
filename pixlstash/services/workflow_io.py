@@ -48,6 +48,14 @@ PICTURE_INPUT_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
+def is_picture_loader(class_type: str) -> bool:
+    """True for a node that loads the picture a run starts from."""
+    return (
+        "loadimage" in class_type.lower().replace(" ", "")
+        or class_type in _PICTURE_INPUT_CLASSES
+    )
+
+
 def picture_fields(class_type: str) -> tuple[str, ...]:
     """The inputs of a picture loader that name its picture."""
     return PICTURE_INPUT_FIELDS.get(class_type, ("image",))
@@ -129,10 +137,7 @@ def detect_workflow_io(document: dict) -> WorkflowIO:
     # not found, and its image field shows as a parameter (#1306) rather than
     # an input. Typing loaders from object_info would find it.
     picture_inputs = sorted(
-        key
-        for key, node in nodes.items()
-        if "loadimage" in node.class_type.lower().replace(" ", "")
-        or node.class_type in _PICTURE_INPUT_CLASSES
+        key for key, node in nodes.items() if is_picture_loader(node.class_type)
     )
     ambiguities = []
     if len(save_nodes) > 1:

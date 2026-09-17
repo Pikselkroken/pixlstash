@@ -229,18 +229,20 @@
       </template>
 
       <!-- ── LoRA (both modes) ────────────────────────────────────────
-           Swapping only: the LoRA goes into a loader the graph already has,
-           and one with none says so rather than offering a choice the run
-           would refuse (#1310). Shown once the graph is known - the recipe
-           read, or a template chosen - since until then "no LoRA loader"
-           would be a guess. -->
+           The LoRA goes into a loader the graph already has (#1310), or
+           into one PixlStash adds where it has none and can show where
+           (#1376); otherwise it says why not. Shown once the graph is known -
+           the recipe read, or a template chosen - since until then "no LoRA
+           loader" would be a guess. -->
       <div v-if="loraGraphKnown" class="remix-field">
         <span class="remix-label">LoRA</span>
-        <p v-if="!loraSlots.length" class="remix-note" role="status">
+        <p v-if="!loraSlots.length && !canInsert" class="remix-note" role="status">
           {{
-            selectedMode === "recipe"
-              ? "This picture's workflow has no LoRA loader, so there is nothing to swap."
-              : "This template has no LoRA loader, so there is nothing to swap."
+            noLoraText(
+              selectedMode === "recipe"
+                ? "This picture's workflow"
+                : "This template",
+            )
           }}
         </p>
         <p v-else-if="adaptersError" class="remix-error" role="alert">
@@ -255,6 +257,10 @@
             </select>
             <v-icon size="18" class="remix-select-chevron">mdi-chevron-down</v-icon>
           </div>
+          <!-- What adding the loader does, before the run does it. -->
+          <p v-if="canInsert && adapterSha" class="remix-note" role="status">
+            {{ insertionText }}
+          </p>
           <!-- Which slot, when the graph has more than one: swapping them all
                would load the chosen LoRA twice and lose the others. Labelled
                where it can be seen, like the panel's. -->
@@ -380,6 +386,7 @@ import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Segmented from "../widgets/Segmented.vue";
 import {
+  getLoraInsertion,
   getPictureRecipe,
   getPictureWorkflow,
   listWorkflows,
@@ -750,15 +757,34 @@ const loraGraphKnown = computed(() => {
   return false;
 });
 
+/**
+ * Where a loader would go when this mode's graph has none: the recipe read
+ * already carries it, a template is asked. `null` until the graph is known.
+ */
+const loraInsertionSource = computed(() => {
+  if (!loraGraphKnown.value) return null;
+  if (selectedMode.value === "recipe") {
+    const read = recipe.value?.lora_insertion || null;
+    return { key: `recipe:${props.image?.id}`, load: async () => read };
+  }
+  const name = activeTemplate.value?.name;
+  return name
+    ? { key: `template:${name}`, load: () => getLoraInsertion(name) }
+    : null;
+});
+
 const {
   adapterSha,
   chosenSlot,
   adaptersError,
   adapterOptions,
   slotOptions,
+  canInsert,
+  insertionText,
+  noLoaderText: noLoraText,
   resetChoice: resetLoraChoice,
   body: loraBody,
-} = useLoraSwap(loraSlots);
+} = useLoraSwap(loraSlots, loraInsertionSource);
 
 // A LoRA picked for the recipe does not ride into a template, even one whose
 // slot happens to have the same node and field: they are different graphs.
@@ -1217,7 +1243,7 @@ async function submit() {
 /* "Offered, with a warning" - deliberately NOT --off: this row can still be
    chosen, so it must not take the opacity drop that says otherwise. */
 .remix-mode--caution {
-  border-color: rgba(var(--v-theme-warning), 0.5);
+  border-color: rgba(var(--v-theme-surface-warning), 0.5);
 }
 
 .remix-mode--caution.remix-mode--on {
@@ -1225,7 +1251,7 @@ async function submit() {
 }
 
 .remix-mode-icon {
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
   vertical-align: -2px;
 }
 
@@ -1405,7 +1431,7 @@ async function submit() {
   gap: var(--space-3);
   margin: 0;
   padding: var(--space-3) var(--space-4);
-  border: 1px solid rgba(var(--v-theme-warning), 0.5);
+  border: 1px solid rgba(var(--v-theme-surface-warning), 0.5);
   border-radius: var(--radius-md);
   background: rgba(var(--v-theme-warning), 0.08);
   font-size: var(--text-xs);
@@ -1416,7 +1442,7 @@ async function submit() {
 .remix-alert-icon {
   flex-shrink: 0;
   margin-top: var(--space-1);
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 /* ── Seed ──────────────────────────────────────────────────────────────── */
@@ -1458,7 +1484,7 @@ async function submit() {
   margin: 0;
   font-size: var(--text-sm);
   line-height: var(--leading-snug);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 </style>

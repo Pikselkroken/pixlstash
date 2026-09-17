@@ -225,7 +225,7 @@ watch(
 
 .captions-dlg__error {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   margin: 0;
 }
 

@@ -385,7 +385,7 @@
     </div>
 
     <div v-if="confirmingDelete" class="editor-delete-confirm">
-      <v-icon size="18" color="error" style="flex-shrink: 0">
+      <v-icon size="18" color="surface-error" style="flex-shrink: 0">
         mdi-alert-circle-outline
       </v-icon>
       <div class="editor-delete-confirm-text">
@@ -1207,7 +1207,7 @@ async function copyToClipboard(value, successMessage) {
 }
 
 .editor-toggle-desc--warning {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   opacity: 1;
 }
 
@@ -1274,9 +1274,9 @@ async function copyToClipboard(value, successMessage) {
 
 .editor-error {
   font-size: var(--text-sm);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   background: rgba(var(--v-theme-error), 0.08);
-  border: 1px solid rgba(var(--v-theme-error), 0.22);
+  border: 1px solid rgba(var(--v-theme-surface-error), 0.22);
   border-radius: var(--radius-sm);
   padding: var(--space-3) var(--space-3);
 }
@@ -1288,7 +1288,7 @@ async function copyToClipboard(value, successMessage) {
   padding: var(--space-3) var(--space-4);
   background: rgba(var(--v-theme-error), 0.08);
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(var(--v-theme-error), 0.25);
+  border: 1px solid rgba(var(--v-theme-surface-error), 0.25);
   font-size: var(--text-sm);
 }
 

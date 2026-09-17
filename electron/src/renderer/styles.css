@@ -19,7 +19,7 @@
   --on-accent: #f7f1ea; /* on-accent / on-primary - warm near-white label */
   --border: #363d45; /* border */
   /* Red as a FOREGROUND on dark chrome, so it comes from the dark-surface-*
-     family, not from the theme's `error` fill (#b54538, tuned to carry a warm
+     family, not from the theme's `error` fill (#b0392b, tuned to carry a warm
      label rather than to be one). */
   --err: #c9786f; /* dark-surface-error */
 }

@@ -99,7 +99,7 @@ onBeforeUnmount(unregisterConfirmHost);
   gap: var(--space-3);
   margin: 0;
   padding: var(--space-3) var(--space-4);
-  border: 1px solid rgb(var(--v-theme-warning));
+  border: 1px solid rgb(var(--v-theme-surface-warning));
   border-radius: var(--radius-md);
   color: rgb(var(--v-theme-on-surface));
   background: rgba(var(--v-theme-warning), 0.1);

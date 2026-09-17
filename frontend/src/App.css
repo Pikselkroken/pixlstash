@@ -516,6 +516,13 @@ kbd {
 .tbm-caret--end {
   right: 22px;
 }
+/* The same, for a --control-h-sm (24px) icon activator: the workflow card's ⓘ.
+   5.5px is the caret's half-width, kept beside its 32px sibling so the two
+   cannot drift. */
+.tbm-caret--icon-sm-end {
+  right: calc(var(--control-h-sm) / 2 - 5.5px);
+}
+
 /* A 32px icon activator whose panel is end-aligned. Keep the panel's connected
    viewport clamping, but point the caret at the activator's 16px centre rather
    than the 22px inset used by wider toolbar buttons. */
@@ -1134,7 +1141,7 @@ kbd {
    as one of the row rather than as a second kind of control. */
 .bar-btn--danger,
 .bar-btn--danger:hover:not(:disabled):not([aria-disabled="true"]) {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 .bar-btn--danger:hover:not(:disabled):not([aria-disabled="true"]) {
   background: rgba(var(--v-theme-error), 0.08);

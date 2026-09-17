@@ -28,6 +28,7 @@ from typing import Any
 import requests
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.workflow_hash import is_link
 
 logger = get_logger(__name__)
 
@@ -74,6 +75,10 @@ INPUT_IMAGE_FIELDS: dict[str, tuple[str, ...]] = {
 # second and third slot (`lora_name_2`), and each of those is a slot of its own.
 LORA_FILENAME_FIELD_RE = re.compile(r"^lora_name(_\d+)?$")
 LORA_DIGEST_FIELDS = ("adapter_sha256", "lora_sha256")
+
+# The ComfyUI-PixlStash loader: LoraLoader's signature with the file named by
+# digest, so it can go where ComfyUI does not have the file by name (#1376).
+PIXLSTASH_ADAPTER_LOADER = "PixlStashAdapterLoader"
 
 # Loader input fields that hold a model FILE NAME, keyed by the node's own
 # `class_type`. Checks are filename-level only: we compare the graph's value
@@ -676,6 +681,352 @@ def apply_adapter(
         inputs[target["field"]] = name
         written += 1
     return written
+
+
+def plan_lora_insertion(prompt_graph: dict, object_info: dict) -> dict:
+    """Where a LoRA loader would go in a graph that has none (#1376).
+
+    The loader is spliced in **right after the model source**: every input that
+    reads the loaded model's MODEL output reads the loader's instead, and the
+    same for CLIP, so the whole chain downstream - model patches, samplers,
+    text encoders - keeps working and sees the LoRA. Nothing is written here;
+    the plan is what the owner is shown before a run, and what
+    :func:`insert_adapter` carries out.
+
+    **Typed by ComfyUI, not by field name.** A link in an API-format graph is
+    ``[node_id, output_index]`` with no type, and a consumer's input name is a
+    guess (``ModelMergeSimple`` takes ``model1``). ``object_info`` lists every
+    class's outputs, so a link's type is exact - and an input the rewiring
+    missed would run that branch without the LoRA and say nothing.
+
+    The source is the node handing out MODEL that takes no MODEL itself: a
+    checkpoint, a UNET or GGUF loader. CLIP the same way, which may be another
+    node (a UNET graph with its own CLIP loader) or none at all (a graph whose
+    conditioning does not come from a CLIP), when a model-only loader goes in.
+
+    Returns:
+        ``{"model": {"node_id", "class_type", "output"}, "clip": … or None,
+        "rewires": [{"node_id", "class_type", "field", "type"}, …],
+        "pixlstash_loader": bool}`` - the last being whether the loader that
+        resolves by digest could be the one inserted, which is what makes a
+        picture from that run unreplayable by "Generate variants".
+
+    Raises:
+        LookupError: When the graph cannot be spliced honestly - no model
+            source, more than one (a refiner, a merge: which one the LoRA is
+            for is the owner's call), a second model chain of a type this
+            loader cannot patch (``WANVIDEOMODEL`` and the like), a node
+            already loading a LoRA some way of its own, a CLIP source that
+            reads the model (splicing would make a cycle), or a node this
+            ComfyUI does not have, so what it hands on is unknown.
+    """
+    graph = prompt_graph or {}
+    links: list[dict] = []
+    for node_id, node in graph.items():
+        if not isinstance(node, dict) or not isinstance(node.get("inputs"), dict):
+            continue
+        if _already_loads_a_lora(node, object_info):
+            # A loader detect_lora_targets cannot swap is still a loader: adding
+            # another ahead of it would stack two adapters without saying so.
+            raise LookupError(
+                f"Node {node_id} ({node.get('class_type')}) already loads a LoRA "
+                "in a way PixlStash cannot swap, so it will not add a second one. "
+                "Change it in ComfyUI."
+            )
+        for field, value in node["inputs"].items():
+            if not is_link(value) or not isinstance(graph.get(value[0]), dict):
+                continue
+            source_class = graph[value[0]].get("class_type")
+            spec = object_info.get(source_class)
+            if not isinstance(spec, dict):
+                raise LookupError(
+                    f"This ComfyUI has no {source_class} node, so PixlStash cannot "
+                    f"tell what node {value[0]} hands on, or where a LoRA would go."
+                )
+            outputs = spec.get("output")
+            if not isinstance(outputs, list) or not 0 <= value[1] <= len(outputs) - 1:
+                # Not a type PixlStash can read as "not a model": a spec with no
+                # output list, or one shorter than the graph's own link, hides
+                # exactly the second model chain the refusals below exist for.
+                raise LookupError(
+                    f"This ComfyUI does not say what {source_class} (node "
+                    f"{value[0]}) hands on, so PixlStash cannot tell whether a "
+                    "LoRA belongs there."
+                )
+            kind = outputs[value[1]]
+            # A MODEL-ish type that is not MODEL (WANVIDEOMODEL, and the packs
+            # that mint their own) is kept, because the > 1 refusal has to see
+            # it: a LoRA loader cannot patch it, and a graph carrying one beside
+            # a patchable model would otherwise run half-LoRA'd in silence.
+            if kind == "MODEL" or kind == "CLIP" or "MODEL" in str(kind):
+                links.append(
+                    {
+                        "node_id": str(node_id),
+                        "class_type": node.get("class_type"),
+                        "field": field,
+                        "type": kind if kind in ("MODEL", "CLIP") else "OTHER_MODEL",
+                        "source": (value[0], value[1]),
+                        "kind": kind,
+                    }
+                )
+
+    def source_of(kind: str) -> dict | None:
+        takers = {link["node_id"] for link in links if link["type"] == kind}
+        roots = sorted(
+            {
+                link["source"]
+                for link in links
+                if link["type"] == kind and link["source"][0] not in takers
+            }
+        )
+        if len(roots) > 1:
+            named = ", ".join(f"#{n} {graph[n].get('class_type')}" for n, _ in roots)
+            what = "models" if kind == "MODEL" else "text encoders"
+            raise LookupError(
+                f"This workflow loads {len(roots)} {what} ({named}), so PixlStash "
+                "cannot tell which one the LoRA is for. Add the loader in ComfyUI."
+            )
+        if not roots:
+            return None
+        node_id, output = roots[0]
+        return {
+            "node_id": node_id,
+            "class_type": graph[node_id].get("class_type"),
+            "output": output,
+        }
+
+    foreign = source_of("OTHER_MODEL")
+    if foreign is not None:
+        raise LookupError(
+            f"#{foreign['node_id']} {foreign['class_type']} loads a model of its "
+            "own kind, which a LoRA loader cannot patch, so PixlStash will not "
+            "add one to part of this workflow. Add the loader in ComfyUI."
+        )
+    model = source_of("MODEL")
+    if model is None:
+        raise LookupError(
+            "PixlStash could not find the model this workflow loads, so there is "
+            "nowhere to put a LoRA."
+        )
+    clip = source_of("CLIP")
+    if clip is not None and clip["node_id"] in {
+        link["node_id"] for link in links if link["type"] == "MODEL"
+    }:
+        # The loader would feed a node its own CLIP input comes through: a cycle
+        # ComfyUI refuses, after the run is queued.
+        raise LookupError(
+            f"#{clip['node_id']} {clip['class_type']} hands out this workflow's "
+            "CLIP and reads its model, so a LoRA loader cannot sit in front of "
+            "both. Add the loader in ComfyUI."
+        )
+    sources = {"MODEL": model, "CLIP": clip}
+    rewires = [
+        {key: link[key] for key in ("node_id", "class_type", "field", "type")}
+        for link in links
+        if sources[link["type"]] is not None
+        and link["source"]
+        == (sources[link["type"]]["node_id"], sources[link["type"]]["output"])
+    ]
+    # Numeric where the id is a number, so the owner-facing sentence reads
+    # #3 before #10; a subgraph id ("75:83") keeps its place after them.
+    rewires.sort(
+        key=lambda r: (
+            r["type"],
+            0 if r["node_id"].isdigit() else 1,
+            int(r["node_id"]) if r["node_id"].isdigit() else 0,
+            r["node_id"],
+            r["field"],
+        )
+    )
+    return {
+        "model": model,
+        "clip": clip,
+        "rewires": rewires,
+        # Whether _inserted_loader *could* reach for the digest loader: which
+        # one it takes depends on the adapter, which is not chosen yet, and the
+        # owner is owed the worse case before they choose.
+        "pixlstash_loader": PIXLSTASH_ADAPTER_LOADER in object_info,
+    }
+
+
+def _already_loads_a_lora(node: dict, object_info: dict) -> bool:
+    """True when this node loads a LoRA in a way :func:`detect_lora_targets` misses.
+
+    **Decided at the class level, not on widget spellings.** By the time
+    insertion is being planned, a swappable slot has been ruled out, so any
+    remaining node that has anything to do with LoRAs is one PixlStash cannot
+    swap - and splicing a loader in front of it would leave two adapters live
+    with nothing said. Widget spellings only covered the two shapes anyone
+    happened to name: a wired ``lora_name``, rgthree's ``lora_1`` dicts, and
+    then not ``lora_1_name`` (easy-loraStack), a prompt tag
+    (``<lora:style:0.8>``), or a ``lora_name`` holding ``None``.
+
+    The three rules: the class name mentions a LoRA, ComfyUI declares a
+    LoRA-ish type on one of its inputs or outputs, or one of its values carries
+    a ``<lora:…>`` prompt tag.
+    """
+    class_type = str(node.get("class_type") or "")
+    if "lora" in class_type.lower():
+        return True
+    spec = object_info.get(class_type)
+    if isinstance(spec, dict):
+        declared = [str(out) for out in spec.get("output") or []]
+        for group in ("required", "optional"):
+            for entry in ((spec.get("input") or {}).get(group) or {}).values():
+                if isinstance(entry, (list, tuple)) and entry:
+                    declared.append(str(entry[0]))
+        if any("LORA" in name.upper() for name in declared):
+            return True
+    return any(
+        isinstance(value, str) and "<lora:" in value.lower()
+        for value in (node.get("inputs") or {}).values()
+    )
+
+
+def _widget_defaults(node_spec: dict) -> dict:
+    """The value every widget of a node would start at in ComfyUI's own editor."""
+    values = {}
+    inputs = node_spec.get("input") if isinstance(node_spec, dict) else None
+    for group in ("required", "optional"):
+        for field, entry in ((inputs or {}).get(group) or {}).items():
+            if not isinstance(entry, (list, tuple)) or not entry:
+                continue
+            opts = entry[1] if len(entry) > 1 and isinstance(entry[1], dict) else {}
+            if "default" in opts:
+                values[field] = opts["default"]
+            elif group == "required":
+                options = _combo_options(node_spec, field)
+                if options:
+                    values[field] = options[0]
+    return values
+
+
+def _inserted_loader(
+    adapter: dict, object_info: dict, with_clip: bool, digest_loader: bool = True
+) -> tuple[str, str, str]:
+    """``(class, field, value)`` of the loader to insert for *adapter*.
+
+    ComfyUI's own loader first, when this ComfyUI lists the file: it needs no
+    node pack, and a picture made with it stays replayable by "Generate
+    variants", which refuses any graph carrying a PixlStash node. The
+    ComfyUI-PixlStash loader when the file is not there by name, since it
+    resolves the file by its digest and fetches it when it has to.
+
+    ``digest_loader=False`` leaves the second out, for a replay: its output
+    would carry a PixlStash node, which "Generate variants" then refuses.
+
+    Raises:
+        LookupError: When neither can load it, saying why the first could not.
+    """
+    core = "LoraLoader" if with_clip else "LoraLoaderModelOnly"
+    reason = f"This ComfyUI has no {core} node"
+    if core in object_info:
+        options = _combo_options(object_info[core], "lora_name")
+        if options is None:
+            reason = f"This ComfyUI does not say which LoRA files {core} can load"
+        else:
+            try:
+                name = _shelf_name_in(adapter.get("filenames") or [], options)
+            except LookupError as exc:
+                logger.info("A LoRA name is ambiguous on this ComfyUI: %s", exc)
+                name, reason = None, str(exc).rstrip(".")
+            else:
+                reason = "That LoRA is on your shelf but not on this ComfyUI"
+            if name is not None:
+                return core, "lora_name", name
+    if not digest_loader:
+        raise LookupError(f"{reason}.")
+    if PIXLSTASH_ADAPTER_LOADER in object_info:
+        return PIXLSTASH_ADAPTER_LOADER, "adapter_sha256", adapter["sha256"]
+    raise LookupError(
+        f"{reason}, and ComfyUI-PixlStash, which could fetch it by its hash, is "
+        "not installed there."
+    )
+
+
+def insert_adapter(
+    prompt_graph: dict,
+    plan: dict,
+    adapter: dict,
+    object_info: dict,
+    digest_loader: bool = True,
+) -> dict:
+    """Add a LoRA loader carrying *adapter* to *prompt_graph*, as *plan* says.
+
+    The loader is chosen by :func:`_inserted_loader`, starts at its widgets'
+    own defaults (strength 1.0), takes the planned sources, and every planned
+    input is rewired to it. The plan is checked against the graph first, so a
+    graph that no longer reads what the plan saw is refused whole rather than
+    half rewired.
+
+    Args:
+        prompt_graph: The graph to mutate in place.
+        plan: The output of :func:`plan_lora_insertion` for this graph.
+        adapter: ``{"sha256", "filenames"}``, as for :func:`apply_adapter`.
+        object_info: The map the plan was made with.
+        digest_loader: Whether the ComfyUI-PixlStash loader may be used.
+
+    Returns:
+        ``{"node_id", "class_type"}`` of the loader added.
+
+    Raises:
+        LookupError: When no loader can carry the adapter on this ComfyUI, or
+            the graph has diverged from the plan.
+    """
+    clip = plan.get("clip")
+    loader, field, value = _inserted_loader(
+        adapter, object_info, clip is not None, digest_loader
+    )
+    spec = object_info.get(loader) or {}
+    outputs = spec.get("output") if isinstance(spec.get("output"), list) else []
+    sources = {"MODEL": plan["model"], "CLIP": clip}
+    for kind, wire in (("MODEL", "model"), ("CLIP", "clip"))[: 2 if clip else 1]:
+        if kind not in outputs:
+            raise LookupError(
+                f"{loader} on this ComfyUI hands on no {kind}, so PixlStash "
+                "cannot wire it in."
+            )
+        # Its inputs are checked too, not only its outputs: a fork naming them
+        # something else would take the wiring and fail in ComfyUI's own
+        # validation, after the run was queued - the failure this whole
+        # pre-flight exists to happen before.
+        if find_input_spec(spec, wire) is None:
+            raise LookupError(
+                f"{loader} on this ComfyUI takes no {wire} input, so PixlStash "
+                "cannot wire it in."
+            )
+    for rewire in plan.get("rewires") or []:
+        source = sources.get(rewire["type"])
+        node = prompt_graph.get(rewire["node_id"])
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        if source is None or not isinstance(inputs, dict):
+            current = None
+        else:
+            current = inputs.get(rewire["field"])
+        if source is None or current != [source["node_id"], source["output"]]:
+            raise LookupError(
+                f"Node {rewire['node_id']} no longer reads its {rewire['type']} "
+                "where PixlStash planned the LoRA loader."
+            )
+    node_id = str(
+        max((int(k) for k in prompt_graph if str(k).isdigit()), default=0) + 1
+    )
+    inputs = _widget_defaults(spec)
+    inputs[field] = value
+    inputs["model"] = [plan["model"]["node_id"], plan["model"]["output"]]
+    if clip:
+        inputs["clip"] = [clip["node_id"], clip["output"]]
+    prompt_graph[node_id] = {
+        "class_type": loader,
+        "inputs": inputs,
+        "_meta": {"title": "LoRA (added by PixlStash)"},
+    }
+    for rewire in plan.get("rewires") or []:
+        prompt_graph[rewire["node_id"]]["inputs"][rewire["field"]] = [
+            node_id,
+            outputs.index(rewire["type"]),
+        ]
+    return {"node_id": node_id, "class_type": loader}
 
 
 def format_prompt_rejection(body: Any) -> str | None:

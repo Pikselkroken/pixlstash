@@ -74,6 +74,9 @@ _WORKFLOW_ROUTES = (
     ("PATCH", "/api/v1/server-config/ghost-retention"),
     ("DELETE", "/api/v1/server-config/ghost-retention/ghosts"),
     ("DELETE", "/api/v1/server-config/ghost-retention/model-ghosts"),
+    # Where a LoRA loader would go (#1376): it reaches the owner's ComfyUI, and
+    # its refusal is measured with the GET belts emptied in the test below.
+    ("GET", "/api/v1/comfyui/workflows/{workflow_name}/lora-insertion"),
 )
 
 
@@ -1461,12 +1464,21 @@ def test_parameters_are_typed_from_comfyui_and_leave_the_prompt_out(
 def test_an_unreachable_comfyui_still_shows_the_recorded_values(
     workflow_env, sampler_workflow
 ):
-    sampler_workflow.info = RuntimeError("Could not reach ComfyUI at the test URL")
+    """The values survive the outage, and the exception's own text does not.
+
+    ``comfyui_error`` is composed by the route, not taken from the exception:
+    whatever the fetch failed on - a chained error, an internal address, a
+    token echoed back by a proxy - belongs in the log, not in a response.
+    """
+    sampler_workflow.info = RuntimeError(
+        "Could not reach ComfyUI at http://127.0.0.1:8188 (example-secret)"
+    )
     r = workflow_env.owner.get(sampler_workflow.parameters)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["typed"] is False
-    assert body["comfyui_error"] == "Could not reach ComfyUI at the test URL"
+    assert body["comfyui_error"].startswith("Could not read ComfyUI's node types at")
+    assert "example-secret" not in body["comfyui_error"]
     steps = _parameter(body, "1", "steps")
     assert (steps["value"], steps["min"], steps["max"]) == (20, None, None)
     assert _parameter(body, "1", "sampler_name")["options"] is None
@@ -2165,6 +2177,134 @@ def test_a_workflow_with_no_lora_loader_is_refused_by_name(
     assert r.status_code == 400, r.text
     assert "no LoRA loader" in r.json()["detail"]
     assert fake_comfyui.submitted == [] and fake_comfyui.uploads == []
+
+
+@pytest.fixture
+def loaderless_workflow(tmp_path, lora_workflow):
+    """A checkpoint workflow with no LoRA loader, and a ComfyUI that types it (#1376)."""
+    graph = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "{{image_path}}"}},
+        "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "x"}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["4", 1]}},
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["4", 0], "positive": ["6", 0]},
+        },
+        "9": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+    }
+    bound, _changed = workflow_bindings.migrate_placeholders(graph)
+    (tmp_path / "plain.json").write_text(json.dumps(bound), encoding="utf-8")
+    lora_workflow.info = {
+        "LoadImage": {"output": ["IMAGE", "MASK"]},
+        "CheckpointLoaderSimple": {"output": ["MODEL", "CLIP", "VAE"]},
+        "CLIPTextEncode": {"output": ["CONDITIONING"]},
+        "LoraLoader": {
+            "input": {
+                "required": {
+                    "model": ["MODEL", {}],
+                    "clip": ["CLIP", {}],
+                    "lora_name": [[_COMFY_LORA_NAME], {}],
+                    "strength_model": ["FLOAT", {"default": 1.0}],
+                }
+            },
+            "output": ["MODEL", "CLIP"],
+        },
+    }
+    return lora_workflow
+
+
+def test_a_workflow_with_no_lora_loader_shows_where_one_would_go(
+    workflow_env, loaderless_workflow
+):
+    owner = workflow_env.owner
+    r = owner.get(f"{API}/comfyui/workflows/plain.json/lora-insertion")
+    assert r.status_code == 200, r.text
+    plan = r.json()["plan"]
+    assert r.json()["has_lora_loader"] is False and r.json()["reason"] is None
+    assert plan["model"]["node_id"] == "4" and plan["clip"]["output"] == 1
+    assert [(w["node_id"], w["field"]) for w in plan["rewires"]] == [
+        ("6", "clip"),
+        ("3", "model"),
+    ]
+
+    # The control: a workflow that has a loader needs no plan.
+    r = owner.get(f"{API}/comfyui/workflows/lora.json/lora-insertion")
+    assert r.status_code == 200 and r.json()["has_lora_loader"] is True, r.text
+    assert r.json()["plan"] is None
+
+    # A ComfyUI that cannot be asked says so rather than guessing a splice.
+    loaderless_workflow.info = RuntimeError("Could not reach ComfyUI at example")
+    r = owner.get(f"{API}/comfyui/workflows/plain.json/lora-insertion")
+    assert r.status_code == 200 and r.json()["plan"] is None, r.text
+    assert "could not ask ComfyUI" in r.json()["reason"]
+
+
+def test_the_insertion_preview_is_owner_only(
+    workflow_env, loaderless_workflow, monkeypatch
+):
+    """Measured at the gate, on the route under test, in both directions.
+
+    The GET belts are emptied first: ``/api/v1/comfyui/workflows/`` is a
+    READ-blocked prefix, so the middleware would answer 403 before routing and
+    the declaration this test is named after could be loosened to ANY_TOKEN
+    with the test still green. ``assert_real_route`` is the other half - a
+    renamed or unmounted path 403s identically.
+    """
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
+    path = f"{API}/comfyui/workflows/plain.json/lora-insertion"
+    assert_real_route(workflow_env.server.api, "GET", path)
+    token = _mint(
+        workflow_env.owner,
+        "lora insertion probe",
+        resource_type="character",
+        resource_id=workflow_env.character_id,
+    )
+    client = _bearer(workflow_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, (
+        "the scoped token is dead; the refusal below would prove nothing"
+    )
+    r = client.get(path)
+    assert r.status_code == 403, r.text
+    # The positive control: the owner still reads it, with the belts down.
+    assert workflow_env.owner.get(path).status_code == 200
+
+
+def test_a_lora_goes_into_a_loader_added_only_when_asked(
+    workflow_env, loaderless_workflow, fake_comfyui
+):
+    ids = _picture_ids(workflow_env.server)
+
+    def run(**body):
+        return _run(
+            workflow_env.owner,
+            "plain.json",
+            picture_ids=[ids["busy_one.png"]],
+            stack=False,
+            adapter_sha256=_SHELF_LORA_SHA,
+            **body,
+        )
+
+    # A bare adapter_sha256 never adds a node to the owner's graph.
+    r = run()
+    assert r.status_code == 400 and "insert_lora_loader" in r.text, r.text
+    assert fake_comfyui.submitted == []
+
+    r = run(insert_lora_loader=True)
+    assert r.status_code == 200, r.text
+    submitted = fake_comfyui.submitted[0]
+    assert submitted["10"]["class_type"] == "LoraLoader"
+    assert submitted["10"]["inputs"]["lora_name"] == _COMFY_LORA_NAME
+    assert submitted["10"]["inputs"]["model"] == ["4", 0]
+    assert submitted["3"]["inputs"]["model"] == ["10", 0]
+    assert submitted["6"]["inputs"]["clip"] == ["10", 1]
+    # The stored file is untouched: the loader is the run's, not the workflow's.
+    r = workflow_env.owner.get(f"{API}/comfyui/workflows/plain.json/lora-insertion")
+    assert r.json()["plan"] is not None
+
+    # No loader, so no slot to name.
+    r = run(insert_lora_loader=True, lora_node_id="4")
+    assert r.status_code == 400 and "no slot to name" in r.text
 
 
 def test_a_lora_the_shelf_or_comfyui_does_not_have_stops_before_any_upload(

@@ -338,12 +338,12 @@ function cancelReduction() {
 .sr-error {
   margin-top: var(--space-2);
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .sr-success {
   margin-top: var(--space-2);
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-surface-success));
 }
 </style>

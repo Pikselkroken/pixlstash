@@ -1432,6 +1432,17 @@ Load-bearing behaviours, each of which is a deliberate decision rather than an i
 - **The caution styling is not the disabled styling.** `.remix-mode--caution` takes a warning-toned border and an `mdi-alert-outline` glyph (status never rides on colour alone) with **no** opacity drop, because the row can still be chosen. `.remix-alert` text is `on-surface`, never `on-warning`: `on-<x>` is only correct on a solid `<x>` fill and measures ~1.4:1 over an 8% tint.
 - **Nothing fails silently.** The live region announces `unreachable` on resolve, both outcomes of "Check again" (the failure especially — nothing visible changes), and an Enter / Ctrl+Enter that the disabled Generate is blocking, naming the blocker.
 
+#### `WorkflowCard.vue`, `ChipRow.vue`, `InfoPopover.vue` (`widgets/`, v1.12 Workflows & Recipes)
+The uniform workflow card and its two parts, built ahead of the Workflows screen that will host them (not mounted anywhere yet). In this code a `workflow_recipe` / structural hash is a **variant**; a user's Recipe is a **saved recipe**.
+
+- **The card shape is snake_case and uses B1's slot vocabulary** (`mark: "structural" | "recipe"`, #1390), documented at the top of `utils/workflowCard.js`, so `GET /workflows/cards` (B3) needs no mapping layer and cannot invert the solid/dashed meaning in translation. `models` carries **every** non-LoRA slot (checkpoint, unet, vae, clip), because a stack whose difference reads "other models" has to have those models behind it in ⓘ; a card row still names the checkpoint only.
+- **`WorkflowCard`** takes one `card`, `expanded` and `panelId`; emits `toggle` (▸) and `run` (*Run it…* on a card with no pictures). **Every card is exactly `--wf-card-h` (252px)**: a `--wf-cover-h` (132px) 2fr/1fr cover, then four `--control-h-sm` rows (name, checkpoint, LoRAs, special facts) that clip rather than wrap. Both heights are component-local by design decision. Cover and meta are fixed-height `flex: none` boxes, so content cannot grow the card and a change to the sum shows as a wrong height. jsdom has no layout, so `WorkflowCard.test.js` resolves the stylesheet against the token sheet and asserts the sum and that row 4's right padding keeps it clear of ⓘ; the content cases (0 and 5 LoRAs, long names) were measured once in Chromium, not in CI.
+- **A stack** (`stackSize` ≥ 2) adds ▸ before the name and a layered count on the cover; its facts row reads "differs by". ▸ and ⓘ are real `AppButton`s at `tabindex="-1"`: the Workflows grid's roving cursor will own Tab.
+- **"+N" is not a control.** The card's `aria-label` (`cardAccessibleName`) carries every chip, saying "workflow LoRA" or "recipe LoRA slot" because the solid/dashed border is not announced, and ratings as "4.8 of 5".
+- **`ChipRow`** measures its chips from a hidden natural-width copy, shows as many as fit (`fitChipCount`, which always keeps one and ellipsizes it rather than showing a bare "+N"), and emits `overflow` with the hidden count (F2's List column is the second consumer).
+- **The chip is the design system's Tag, xs size** (`components/core/Tag.jsx`: 18px, `--space-2`, `--text-2xs`, a 10% ink wash, muted label, no border, no icon), held by `--tag-h-xs` so the app keeps the DS's three chip heights rather than adding a fourth. A **recipe slot** is the one departure: dashed border, transparent, after the `.tag-chip--some` precedent, which makes it the only border in the row. That dashed chip is a new design decision and is flagged for the owner's sign-off.
+- **`InfoPopover`** is the app's first shared popover component (Tooltip and HelpTip are hover tips): a `v-menu` holding a `.tbm` panel with `.tbm-caret--icon-sm-end`, `--stats-panel-w` wide, grouped Models, Differs by, Defaults and the saved-recipe count. The trigger comes from its `activator` slot. **The panel takes focus on open** (`tabindex="-1"` plus a focus call): `VMenu` moves focus only to the first *focusable* child and this panel has none, so without it a screen-reader user hears "expanded" and then nothing from content teleported to the end of `<body>`. `InfoPopover.a11y.test.js` mounts the real `VMenu` to hold that, since the stubbed menu elsewhere is always open and focuses nothing.
+
 #### Shared shell pieces (issue #1301)
 Four pieces every screen builds on, to the design system's shell contract (`ui_kits/app/unified-shell.html`, rules 2, 3, 8 and 9). Reuse them; do not re-roll them.
 
@@ -2131,7 +2142,7 @@ While the lightbox overlay is open, the user's own in-overlay edits (and any oth
 
    - **The rotate applier is the one card op that is NOT deferred.** `useGridRealtimeSync`'s `pixels` branch runs `grid.applyRotatedCards()` under an open overlay rather than marking a deferred refresh, because that applier is fields-only — it writes the shape and the bitmap of cards already in the grid and never inserts, removes or reorders, a turned photo having nowhere to move to — so there is nothing to keep off the frozen filmstrip. What deferring it cost was the **close**: a marked deferral queues a whole-grid refetch for `closeOverlay`, so every lightbox session containing a rotate paid one. (The card itself is behind the overlay and invisible until then, and the filmstrip reads the frozen snapshot either way — neither is the argument.) Its `detections` sibling still defers: that one is a plain metadata refresh with no fields-only guarantee.
 
-   - **A signal is not enough on its own: the re-seed had to stop clobbering it.** `applyRotatedCards` replaces the `allGridImages` array, and `ImageOverlay`'s `allImages` watcher re-seeds the open card through `setOverlayImageById`, which reads the sequence **frozen at open** and preserved description / smartScore / score / tags but not the byte fields. So the fix above turned the picture and the grid's own repaint turned it straight back a moment later — and because the re-seed reads the snapshot rather than the array it is handed, even a correctly-rotated new record did not help. `orientation` and `pixel_sha` are now preserved across that re-seed for the same picture, on the same reasoning as `fetchOverlayMetadata`'s exception to its local-wins merge: for the open card the overlay's value comes from the server and is never staler than a snapshot taken before the turn. **Any future overlay field that the server owns and a turn moves belongs in both places.**
+   - **A signal is not enough on its own: the re-seed has to stop clobbering it.** `applyRotatedCards` replaces the `allGridImages` array, and `ImageOverlay`'s `allImages` watcher re-seeds the open card through `setOverlayImageById`, which reads the sequence **frozen at open** — not the array it is handed, so a correctly-rotated record does not save it. A turn arriving over the socket therefore lands and is then undone by the grid's own repaint a moment later. **Two mechanisms stop it, and both came from the local-rotate side of the same bug:** `fetchOverlayMetadata` patches the frozen snapshot's `orientation` after a metadata read, and `setOverlayImageById` preserves `orientation` / `pixel_sha` across the re-seed for a row that patch cannot reach (an expanded stack member resolved from the filmstrip's own rows). They are redundant for a picture that is in the snapshot and are not redundant in general; `ImageOverlayRotate.test.js` pins each. **Any future overlay field that the server owns and a turn moves belongs in all three places** — the metadata merge's local-wins exception, the snapshot patch, and the re-seed.
 
 3. **On close, reconcile in place (no pill).** `ImageGrid.closeOverlay()` applies the deferred work directly: it swaps in any `pendingGridImages` and, when `pendingOverlayGridRefresh` / `pendingTagFilterRefresh` is set, runs `debouncedFetchAllGridImages()`. So the now-non-matching picture leaves the grid and any re-sort applies as a direct in-place refresh — never as a pill flashing on exit.
 
@@ -4401,7 +4412,29 @@ read once per component lifetime and again after a failure; `unknown` files the
 backend would accept are not offered, since the shelf lists them apart. A slot
 label is the node and what it loads now - which only the owner-only reads carry;
 the workflow list is open to share-link tokens and omits it, so those menus fall
-back to the class. Inserting a loader into a graph that has none is #1376.
+back to the class.
+
+**A graph with no loader can take one (#1376)**, through the same composable:
+its second argument is an `insertionSource` - `{key, load}` or `null` - that
+each surface builds from what it already reads (the run panel and the overlay
+ask `GET /comfyui/workflows/{name}/lora-insertion` for the chosen workflow,
+Remix reads `lora_insertion` off the recipe in recipe mode and asks for the
+template in template mode). Only once `load` answers with a `plan` is the shelf
+offered, its first option reading "No LoRA" rather than "Keep the workflow's
+own", and choosing one shows `insertionSummary(plan)` - where the loader goes
+and every input it takes over - before the run; only then does `body()` add
+`insert_lora_loader: true`. Otherwise the note is the backend's `reason` **instead of**, not after, "this
+workflow has no LoRA loader": half the reasons contradict that sentence (an
+rgthree stacker is a loader; a UI-format file may have one), and the backend
+deliberately declines to make the claim. With no reason yet it says the check
+is running, and a failed ask says the check failed rather than that nothing can
+be added. `key` names the graph, so two
+workflows that both have no slot still reset the choice, and an answer for a
+graph no longer shown is dropped. The overlay's workflow list is open to
+share-link tokens and the insertion read is not, so under a read-only session
+the overlay passes no source and says only that there is no loader. The summary
+also warns, where `plan.pixlstash_loader` says the digest loader could be the
+one added, that those pictures cannot be re-run by "Generate variants". Stacking a second adapter is not offered.
 
 **A grid filtered to one workflow is deliberately not here.** "Show its
 pictures" as a *grid* would mean a new picture filter carried through
@@ -4718,7 +4751,7 @@ about the row not looking like the queue is superseded.
   else in its stack). At the measured 12% a mark is one tile in eight and
   becomes a warning field, and the soft cases are often legitimate. It reuses
   `StackBadge`'s icon slot, freed because the edge ticks already say "this is a
-  stack": `mdi-alert-outline` in `--v-theme-warning` over `--scrim-photo-strong`
+  stack": `mdi-alert-outline` in `--v-theme-dark-surface-warning` over `--scrim-photo-strong`
   with a 1px inset warning ring, no motion. Below 168px (the ladder's `small`
   rung) the dense rule INVERTS: an unflagged deck keeps its numeral and drops
   the icon, a flagged one keeps the icon and drops the numeral. Badge

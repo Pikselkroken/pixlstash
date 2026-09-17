@@ -9,11 +9,14 @@
 //      useGridRealtimeSync refreshes the grid card - and the overlay re-reads
 //      `orientation` (which is what its `<img>` URL's `?v=o<n>` is built from)
 //      only when the displayed card changes. Fixed by `wsPixelsUpdate`.
-//   2. Telling it was not enough. `setOverlayImageById` re-seeds the open card
-//      from the sequence FROZEN when the overlay opened, and preserved the
-//      description, score and tags but not `orientation` - so the very next
-//      replacement of the `allImages` array (which `applyRotatedCards` performs
-//      right after a rotate) turned the picture back to how it was.
+//   2. Telling it was not enough. The overlay re-seeds the open card from the
+//      sequence FROZEN when the overlay opened, and that snapshot kept the
+//      pre-rotate `orientation` - so the very next replacement of the
+//      `allImages` array (which `applyRotatedCards` performs right after a
+//      rotate) turned the picture back to how it was. Fixed on `develop` in
+//      parallel with this branch, from the local-rotate side: the frozen
+//      snapshot is patched, and the re-seed preserves the byte fields for rows
+//      the patch cannot reach. ImageOverlayRotate.test.js owns both.
 //
 // Everything here is a mounted regression and the assertion is the `<img>`'s
 // src, which is what the user actually sees. Assertions about copies of the
@@ -156,12 +159,18 @@ describe("the open lightbox follows a turn made elsewhere", () => {
     expect(fullImageSrc(wrapper)).toBe("http://test/pictures/7.jpg?v=o6");
   });
 
-  // Defect 2. `applyRotatedCards` hands the grid a NEW allGridImages array, and
-  // the overlay re-seeds the open card whenever that prop moves. Without the
-  // byte fields being preserved there, the undo above turned the picture and
-  // this turned it straight back - and because it reads the SNAPSHOT taken at
-  // open, not the array it is handed, even the correctly-rotated record below
-  // did not save it.
+  // Defect 2, end to end. `applyRotatedCards` hands the grid a NEW
+  // allGridImages array, and the overlay re-seeds the open card whenever that
+  // prop moves - from the snapshot frozen at open, not from the array it is
+  // handed, so a correctly-rotated record does not save it either.
+  //
+  // TWO mechanisms keep the turn now, and they are redundant for the case here,
+  // so this test fails only when BOTH are gone (verified): `fetchOverlayMetadata`
+  // patches the frozen snapshot's orientation, and `setOverlayImageById`
+  // preserves the byte fields for a row that patch never reaches. Each is
+  // pinned individually by ImageOverlayRotate.test.js, which owns them. What
+  // this one holds is the whole #1419 chain - socket signal through to the
+  // `<img>` - which neither of those exercises.
   it("keeps the new orientation when the grid replaces its image array", async () => {
     const wrapper = await openOverlayOnCard7();
 

@@ -1981,7 +1981,7 @@ defineExpose({ focusTasksTab });
 
 .stats-error {
   font-size: var(--text-xs);
-  color: rgba(var(--v-theme-error), 1);
+  color: rgba(var(--v-theme-surface-error), 1);
   padding: var(--space-3) 0;
 }
 
@@ -2098,7 +2098,7 @@ defineExpose({ focusTasksTab });
   font-size: var(--text-2xs);
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-pill);
-  border: 1px solid rgba(var(--v-theme-warning), 0.4);
+  border: 1px solid rgba(var(--v-theme-surface-warning), 0.4);
   color: rgba(var(--v-theme-on-surface), 0.45);
   transition:
     background 0.12s,
@@ -2108,13 +2108,13 @@ defineExpose({ focusTasksTab });
 }
 .penalised-toggle:hover {
   background: rgba(var(--v-theme-warning), 0.1);
-  color: rgba(var(--v-theme-warning), 1);
-  border-color: rgba(var(--v-theme-warning), 0.7);
+  color: rgba(var(--v-theme-surface-warning), 1);
+  border-color: rgba(var(--v-theme-surface-warning), 0.7);
 }
 .penalised-toggle.active {
   background: rgba(var(--v-theme-warning), 0.18);
-  color: rgba(var(--v-theme-warning), 1);
-  border-color: rgba(var(--v-theme-warning), 0.7);
+  color: rgba(var(--v-theme-surface-warning), 1);
+  border-color: rgba(var(--v-theme-surface-warning), 0.7);
 }
 
 .stats-bars {
@@ -2205,7 +2205,7 @@ defineExpose({ focusTasksTab });
 }
 
 .tag-penalised {
-  color: rgba(var(--v-theme-warning), 1);
+  color: rgba(var(--v-theme-surface-warning), 1);
 }
 
 .cooc-sep {
@@ -2297,9 +2297,9 @@ defineExpose({ focusTasksTab });
    agreement, fixed by its position in the grid), OPACITY is how many pictures
    are in it. The hue is redundant with position and every populated cell prints
    its count, so nothing here is carried by colour alone - which is what makes a
-   red/green pair acceptable for colour-blind readers. Status hues come from the
-   theme's own success/warning/error tokens, which are defined per theme, so
-   light and dark each get their tuned value. The fill IS the value, so hover
+   red/green pair acceptable for colour-blind readers. Status hues are the
+   success/warning/error FILLS, one value in both themes, never the lifted
+   `surface-*` text family: the counts below sit on them. The fill IS the value, so hover
    must not change it: hover and focus ring the cell instead. */
 .agreement-cell-rect {
   fill: rgb(var(--v-theme-primary));
@@ -2314,7 +2314,7 @@ defineExpose({ focusTasksTab });
   fill: rgb(var(--v-theme-error));
 }
 /* Once the fill is strong enough to carry it, the count switches to that hue's
-   own label ink (each pairs 4.8:1+ with its fill in both themes). */
+   own label ink (4.57:1+ on its fill, the same in both themes). */
 .agreement-cell--good .agreement-count--on-fill {
   fill: rgb(var(--v-theme-on-success));
 }
@@ -2512,7 +2512,7 @@ defineExpose({ focusTasksTab });
   border-radius: var(--radius-sm);
 }
 .tm-comfy-abort:hover {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   background: rgba(var(--v-theme-error), 0.12);
 }
 

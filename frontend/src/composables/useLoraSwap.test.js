@@ -10,7 +10,7 @@ vi.mock("../api/modelShelf", () => ({
   listAdapters: (...args) => listAdapters(...args),
 }));
 
-import { slotKey, slotLabel, useLoraSwap } from "./useLoraSwap";
+import { insertionSummary, slotKey, slotLabel, useLoraSwap } from "./useLoraSwap";
 
 const SHA = "a".repeat(64);
 const loader = (node_id, field = "lora_name", value) => ({
@@ -141,5 +141,88 @@ describe("whose choice it is", () => {
     slots.value = [loader("3")];
     await flush();
     expect(swap.adapterSha.value).toBe(SHA);
+  });
+});
+
+describe("adding a loader where there is none (#1376)", () => {
+  const PLAN = {
+    model: { node_id: "1", class_type: "UnetLoaderGGUF", output: 0 },
+    clip: { node_id: "2", class_type: "DualCLIPLoader", output: 0 },
+    rewires: [
+      { node_id: "4", class_type: "CLIPTextEncode", field: "clip", type: "CLIP" },
+      { node_id: "3", class_type: "ModelSamplingFlux", field: "model", type: "MODEL" },
+    ],
+  };
+  const source = (key, result) => ref({ key, load: vi.fn().mockResolvedValue(result) });
+
+  it("says where it goes and every input it takes over", () => {
+    expect(insertionSummary(PLAN)).toBe(
+      "A LoRA loader is added after #1 UnetLoaderGGUF and #2 DualCLIPLoader, " +
+        "feeding #4 CLIPTextEncode (clip), #3 ModelSamplingFlux (model).",
+    );
+    expect(insertionSummary({ ...PLAN, clip: null, rewires: [] })).toContain(
+      "loads the model only",
+    );
+    expect(insertionSummary(null)).toBe("");
+  });
+
+  it("asks only for a graph with no slot, and sends the opt-in once it can show it", async () => {
+    const slots = ref([loader("3")]);
+    const insertion = source("a.json", { plan: PLAN, reason: null });
+    const swap = useLoraSwap(slots, insertion);
+    await flush();
+    expect(insertion.value.load).not.toHaveBeenCalled();
+
+    slots.value = [];
+    await flush();
+    expect(insertion.value.load).toHaveBeenCalledTimes(1);
+    expect(swap.canInsert.value).toBe(true);
+    expect(swap.adapterOptions.value[0].label).toBe("No LoRA");
+    swap.adapterSha.value = SHA;
+    expect(swap.body()).toEqual({ adapter_sha256: SHA, insert_lora_loader: true });
+  });
+
+  it("sends nothing where no loader can be added", async () => {
+    const swap = useLoraSwap(ref([]), source("a.json", { plan: null, reason: "Two models." }));
+    await flush();
+    swap.adapterSha.value = SHA;
+    expect(swap.canInsert.value).toBe(false);
+    expect(swap.insertion.value.reason).toBe("Two models.");
+    expect(swap.body()).toEqual({});
+    expect(listAdapters).not.toHaveBeenCalled();
+  });
+
+  it("drops the choice between two workflows that both have no slot", async () => {
+    const insertion = source("a.json", { plan: PLAN, reason: null });
+    const swap = useLoraSwap(ref([]), insertion);
+    await flush();
+    swap.adapterSha.value = SHA;
+
+    insertion.value = { key: "b.json", load: vi.fn().mockResolvedValue({ plan: PLAN }) };
+    await flush();
+    expect(swap.adapterSha.value).toBe("");
+  });
+
+  it("ignores the answer for a graph no longer shown", async () => {
+    let answerFirst;
+    const insertion = ref({
+      key: "a.json",
+      load: () => new Promise((resolve) => (answerFirst = resolve)),
+    });
+    const swap = useLoraSwap(ref([]), insertion);
+    await flush();
+    insertion.value = source("b.json", { plan: null, reason: "Not this one." }).value;
+    await flush();
+    answerFirst({ plan: PLAN, reason: null });
+    await flush();
+    expect(swap.canInsert.value).toBe(false);
+    expect(swap.insertion.value.reason).toBe("Not this one.");
+  });
+
+  it("says a failed check failed, rather than that nothing can be added", async () => {
+    const insertion = ref({ key: "a.json", load: vi.fn().mockRejectedValue(new Error("403")) });
+    const swap = useLoraSwap(ref([]), insertion);
+    await flush();
+    expect(swap.insertion.value.reason).toContain("The check failed");
   });
 });

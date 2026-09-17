@@ -377,19 +377,19 @@ const close = () => desktop?.windowClose?.();
 }
 
 .titlebar-update-security {
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .titlebar-update-security:hover {
-  color: rgba(var(--v-theme-warning), 0.85);
+  color: rgba(var(--v-theme-surface-warning), 0.85);
 }
 
 .titlebar-update-security--high {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .titlebar-update-security--high:hover {
-  color: rgba(var(--v-theme-error), 0.85);
+  color: rgba(var(--v-theme-surface-error), 0.85);
 }
 
 .titlebar-controls {

@@ -96,17 +96,17 @@
         />
       </div>
 
-      <!-- Swapping only: the LoRA goes into a loader the workflow already has,
-           and a workflow with none says so rather than offering a choice the
-           run would refuse (#1310). Shown only once the inputs are read:
-           before that "no LoRA loader" would be a guess, and after a failed
-           read a confident wrong one. -->
+      <!-- The LoRA goes into a loader the workflow already has (#1310), or
+           into one PixlStash adds where it has none and can show where
+           (#1376); otherwise it says why not. Shown only once the inputs are
+           read: before that "no LoRA loader" would be a guess, and after a
+           failed read a confident wrong one. -->
       <div v-if="inputs !== null && !inputsError" class="inspector-section">
         <span class="section-label">LoRA</span>
         <!-- role=status on the note itself, not the section: a live region
              around the selects would announce every option change. -->
-        <p v-if="!loraSlots.length" class="wfrun-note" role="status">
-          This workflow has no LoRA loader, so there is nothing to swap.
+        <p v-if="!loraSlots.length && !canInsert" class="wfrun-note" role="status">
+          {{ noLoraText("This workflow") }}
         </p>
         <p v-else-if="adaptersError" class="wfrun-note wfrun-error" role="alert">
           {{ adaptersError }}
@@ -118,6 +118,10 @@
             hide-label
             :options="adapterOptions"
           />
+          <!-- What adding the loader does, before the run does it. -->
+          <p v-if="canInsert && adapterSha" class="wfrun-note" role="status">
+            {{ insertionText }}
+          </p>
           <!-- Which slot, when the workflow has more than one: swapping them
                all would load the chosen LoRA twice and lose the others. -->
           <AppSelect
@@ -192,6 +196,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
 import {
+  getLoraInsertion,
   getWorkflowInputs,
   listWorkflows,
   runWorkflow,
@@ -241,16 +246,37 @@ const inputsError = ref("");
 /** Picker input node id -> the picture chosen for it. */
 const picks = reactive({});
 const pickerFor = ref(null);
+const chosenName = computed({
+  get: () => chosenByOrigin[runStore.origin] || "",
+  set: (name) => {
+    chosenByOrigin[runStore.origin] = name;
+  },
+});
+
 /** Every LoRA slot of the chosen workflow, as the inputs route reports them. */
 const loraSlots = ref([]);
+
+/**
+ * Where a loader would go, asked once the inputs say the workflow has none.
+ * Declared after `chosenName` rather than relying on a short-circuit: the swap
+ * reads this during setup, so anything it names has to exist by now.
+ */
+const loraInsertionSource = computed(() => {
+  if (inputs.value === null || inputsError.value) return null;
+  const name = chosenName.value;
+  return name ? { key: name, load: () => getLoraInsertion(name) } : null;
+});
 const {
   adapterSha,
   chosenSlot,
   adaptersError,
   adapterOptions,
   slotOptions,
+  canInsert,
+  insertionText,
+  noLoaderText: noLoraText,
   body: loraBody,
-} = useLoraSwap(loraSlots);
+} = useLoraSwap(loraSlots, loraInsertionSource);
 const caption = ref("");
 const seedMode = ref("random");
 const seed = ref(0);
@@ -281,13 +307,6 @@ const noneOffered = computed(() =>
     ? "No workflow runs on a selection. It needs a save node, API format, and a picture input set to Selection in Workflows."
     : "No workflow runs without a selection. One whose picture inputs are all Picker or Fixed in Workflows is offered here.",
 );
-
-const chosenName = computed({
-  get: () => chosenByOrigin[runStore.origin] || "",
-  set: (name) => {
-    chosenByOrigin[runStore.origin] = name;
-  },
-});
 
 const chosen = computed(
   () => offered.value.find((w) => w.name === chosenName.value) || null,
@@ -561,6 +580,6 @@ watch(
 }
 
 .wfrun-error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 </style>

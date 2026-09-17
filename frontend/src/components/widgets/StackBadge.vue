@@ -224,20 +224,21 @@ const title = computed(() => {
    (visual-language.md §7). The 1px inset ring is the second, non-colour
    channel (the flag must not be carried by hue alone), and it is inset rather
    than an outline so it cannot grow the badge's box on a tile that is already
-   short of corner. `warning` here is a foreground/border on the chip, which is
-   the 3:1 UI job the token is authored for; `on-warning` would be the wrong
-   token, since there is no solid warning fill under it.
+   short of corner. The chip sits on a photo scrim, which is dark in both
+   themes, so the hue is `dark-surface-warning`, the foreground family for a
+   dark ground; `on-warning` would be the wrong token, since there is no solid
+   warning fill under it.
 
    No motion, deliberately: the flag is a standing fact about the stack, not an
    event that just happened. Moving `--v-theme-warning` in this app means a
    refused press. */
 .sbadge--flagged {
   background-color: var(--scrim-photo-strong);
-  box-shadow: inset 0 0 0 1px rgb(var(--v-theme-warning));
+  box-shadow: inset 0 0 0 1px rgb(var(--v-theme-dark-surface-warning));
 }
 
 .sbadge--flagged .sbico {
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-dark-surface-warning));
 }
 
 /* Quieter than a real stack, deliberately. Same scrim so it stays legible over

@@ -367,6 +367,6 @@ async function submit() {
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-panel));
   background: rgba(var(--v-theme-warning), 0.14);
-  border: 1px solid rgba(var(--v-theme-warning), 0.4);
+  border: 1px solid rgba(var(--v-theme-surface-warning), 0.4);
 }
 </style>

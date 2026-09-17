@@ -178,6 +178,6 @@ function childImageCount() {
 }
 
 .sidebar-folder-error-row {
-  color: rgba(var(--v-theme-error, 244, 67, 54), 0.8);
+  color: rgba(var(--v-theme-surface-error), 0.8);
 }
 </style>

@@ -925,7 +925,7 @@ function netDelta(row) {
 
 .layout-dlg__error {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   margin: 0;
 }
 
@@ -1178,7 +1178,7 @@ function netDelta(row) {
 }
 
 .layout-flags :deep(.v-icon) {
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .layout-never {

@@ -25,6 +25,7 @@ from pixlstash.server import Server
 from pixlstash.tasks.face_extraction_task import FaceExtractionTask
 from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
 from pixlstash.tasks.tag_task import TagTask
+from tests.process_teardown import exit_if_enabled, remember_session
 
 # pytest appends the phase it is in to PYTEST_CURRENT_TEST.
 _PYTEST_PHASE = re.compile(r" \((setup|call|teardown)\)$")
@@ -710,11 +711,16 @@ def _enforce_no_leaked_threads(session) -> None:
     A worker thread that outlives the session is a defect on its own: the
     object that owns it was never closed, so whatever that object held -
     a SQLAlchemy engine, pooled SQLite connections, an fd on vault.db - is
-    still live too. It is also the leading suspect for the Windows-only
-    SIGSEGV that fires *seconds after* a fully green pytest summary: CPython
-    kills surviving daemon threads mid-instruction during ``Py_FinalizeEx``,
-    and one that is inside ``sqlite3`` C code at that moment takes the process
-    down with an access violation, long after pytest has stopped watching.
+    still live too.
+
+    It was also the leading suspect for the Windows-only SIGSEGV that fires
+    *seconds after* a fully green pytest summary, on the theory that CPython
+    kills surviving daemon threads mid-instruction during ``Py_FinalizeEx``.
+    The evidence did not bear that out: run 35252455611 crashed with no
+    separator from this check anywhere in its log, i.e. with nothing but the
+    main thread alive. See ``tests/process_teardown`` for where that left the
+    diagnosis. This check stays because the defect it names is real on its own
+    terms, not because it is the fix.
 
     Threads with no frame of ours anywhere in their stack are reported but not
     failed on - a third-party pool we do not own is not ours to close.
@@ -787,6 +793,11 @@ def _stop_tqdm_monitors() -> None:
 def pytest_sessionfinish(session, exitstatus):
     """Release native model/session resources before interpreter teardown.
 
+    The session is recorded first, before anything below can raise, because
+    ``pytest_unconfigure`` needs its final exit status and is handed only the
+    config. That status is settled by then: the checks below are the last
+    things that can move it.
+
     ``trylast`` so any other session-finish work runs before this one. The
     phase reports the budget check measures are filed during the run rather
     than at teardown, so its input is complete wherever it sits.
@@ -795,6 +806,8 @@ def pytest_sessionfinish(session, exitstatus):
     ever raises, the release below has already happened, rather than the
     session dropping into interpreter teardown still holding models.
     """
+    remember_session(session)
+
     try:
         # Drain optional CPU spillover tagger if one was created by tag tasks.
         TagTask.release_idle_cpu_spillover_engine(force=True)
@@ -822,3 +835,18 @@ def pytest_sessionfinish(session, exitstatus):
     _enforce_no_leaked_threads(session)
 
     _enforce_test_time_budget(session)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_unconfigure(config):
+    """End the process without native teardown where that teardown crashes.
+
+    ``trylast`` so every other plugin's ``pytest_unconfigure`` has run: this
+    one does not return. It is the last hook pytest calls, so the terminal
+    summary, the durations report and the leak report above are all already
+    written.
+
+    Returns normally everywhere except Windows. See ``tests/process_teardown``
+    for the evidence and for the environment variable that overrides it.
+    """
+    exit_if_enabled(config)

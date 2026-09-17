@@ -243,7 +243,7 @@ function viewProgress() {
 }
 
 .tub-icon--done {
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-surface-success));
 }
 
 .tub-label {

@@ -222,11 +222,11 @@
                       ></textarea>
                     </div>
                   </template>
-                  <!-- Swapping only: the LoRA goes into a loader the workflow
-                       already has, and one with none says so rather than
-                       offering a choice the run would refuse (#1310). Only
-                       once a workflow is chosen: with none there is nothing
-                       to say about its loaders. -->
+                  <!-- The LoRA goes into a loader the workflow already has
+                       (#1310), or into one PixlStash adds where it has none
+                       and can show where (#1376); otherwise it says why not.
+                       Only once a workflow is chosen: with none there is
+                       nothing to say about its loaders. -->
                   <template v-if="selectedComfyWorkflow">
                     <label
                       class="overlay-comfy-field-label"
@@ -235,12 +235,11 @@
                       LoRA
                     </label>
                     <div
-                      v-if="!comfyLoraSlots.length"
+                      v-if="!comfyLoraSlots.length && !comfyCanInsert"
                       class="overlay-comfy-note"
                       role="status"
                     >
-                      This workflow has no LoRA loader, so there is nothing to
-                      swap.
+                      {{ comfyNoLoraText("This workflow") }}
                     </div>
                     <div
                       v-else-if="adaptersError"
@@ -263,6 +262,14 @@
                           {{ opt.label }}
                         </option>
                       </select>
+                      <!-- What adding the loader does, before the run does it. -->
+                      <div
+                        v-if="comfyCanInsert && comfyAdapterSha"
+                        class="overlay-comfy-note"
+                        role="status"
+                      >
+                        {{ comfyInsertionText }}
+                      </div>
                       <!-- Which slot, when the workflow has more than one:
                            swapping them all would load the chosen LoRA twice
                            and lose the others. -->
@@ -1052,6 +1059,7 @@ import {
 import { listStackPictures } from "../../api/stacks";
 import { useLoraSwap } from "../../composables/useLoraSwap";
 import {
+  getLoraInsertion,
   listWorkflows,
   runImageToImage,
   getPictureWorkflow,
@@ -1388,20 +1396,6 @@ function setOverlayImageById(nextId) {
     const existingDescription = image.value?.description;
     const existingSmartScore = image.value?.smartScore;
     const existingScore = image.value?.score;
-    // The picture's own BYTES. `target` is the sequence FROZEN when the overlay
-    // opened, and the only thing that moves these two on `image.value` is
-    // `fetchOverlayMetadata`, which reads them from the server - so for the same
-    // picture the value on screen is never staler than the snapshot's, and
-    // letting the snapshot win throws away a turn that has already landed.
-    //
-    // This runs on every replacement of the `allImages` array, which is exactly
-    // what `ImageGrid.applyRotatedCards` does after a rotate. So an undo turned
-    // the picture back and the grid's own repaint turned it forward again a
-    // moment later (#1419) - and it read from the snapshot, so even handing this
-    // watcher a correctly-rotated record did not help. Same two fields, same
-    // reason, as fetchOverlayMetadata's exception to its local-wins merge.
-    const existingOrientation = image.value?.orientation;
-    const existingPixelSha = image.value?.pixel_sha;
     image.value = {
       ...target,
       // Preserve the existing description when re-setting the same image from filmstrip
@@ -1419,11 +1413,23 @@ function setOverlayImageById(nextId) {
       // for the same image would clobber an optimistic rating change (a 0 toggle is a
       // valid edit, hence the != null guard rather than a truthiness check).
       ...(isSameImage && existingScore != null ? { score: existingScore } : {}),
-      ...(isSameImage && existingOrientation != null
-        ? { orientation: existingOrientation }
+      // Preserve the file's bytes for the same reason. A rotate's metadata read
+      // moved them, and `target` may be a row that read never reached (an
+      // expanded stack member from the filmstrip); re-applying its old
+      // orientation puts the pre-rotate `?v=` back on the <img>.
+      //
+      // `target` is usually the sequence FROZEN when the overlay opened, and
+      // this runs on every replacement of the `allImages` array - which is what
+      // `ImageGrid.applyRotatedCards` does right after a rotate. So the same
+      // clobber undid a turn that arrived over the socket: an undo turned the
+      // picture back and the grid's own repaint turned it forward again a
+      // moment later (#1419). Reading the snapshot rather than the array it is
+      // handed, it did that even for a correctly-rotated new record.
+      ...(isSameImage && image.value?.orientation != null
+        ? { orientation: image.value.orientation }
         : {}),
-      ...(isSameImage && existingPixelSha != null
-        ? { pixel_sha: existingPixelSha }
+      ...(isSameImage && image.value?.pixel_sha != null
+        ? { pixel_sha: image.value.pixel_sha }
         : {}),
       tags: dedupeTagList(
         isSameImage ? (existingTags.length ? existingTags : targetTags) : [],
@@ -1779,15 +1785,28 @@ const comfyLoraSlots = computed(
   () => selectedComfyWorkflow.value?.lora_slots || [],
 );
 
+/**
+ * Where a loader would go, when the chosen workflow has none. Not asked by a
+ * share link: the read is owner-only, and a refusal is not news to them.
+ */
+const comfyLoraInsertionSource = computed(() => {
+  if (isReadOnly.value) return null;
+  const name = selectedComfyWorkflow.value?.name;
+  return name ? { key: name, load: () => getLoraInsertion(name) } : null;
+});
+
 const {
   adapterSha: comfyAdapterSha,
   chosenSlot: comfyLoraSlot,
   adaptersError,
   adapterOptions: comfyAdapterOptions,
   slotOptions: comfySlotOptions,
+  canInsert: comfyCanInsert,
+  insertionText: comfyInsertionText,
+  noLoaderText: comfyNoLoraText,
   resetChoice: resetComfyLoraChoice,
   body: comfyLoraBody,
-} = useLoraSwap(comfyLoraSlots);
+} = useLoraSwap(comfyLoraSlots, comfyLoraInsertionSource);
 
 const selectedComfyUsesCaption = computed(() => {
   const missing = Array.isArray(
@@ -3864,6 +3883,26 @@ async function fetchOverlayMetadata(imageId) {
       merged.metadata = { ...currentMeta, ...dataMeta };
     }
     image.value = merged;
+    // Carry the orientation into the snapshot frozen on open as well. Every
+    // re-resolve of the picture reads that snapshot - the grid's list refresh
+    // after a rotate, and moving to a neighbour and back - so a stale entry
+    // there puts the pre-rotate `?v=` back on the <img>.
+    const frozen = frozenAllImages.value;
+    const frozenIndex = Array.isArray(frozen)
+      ? frozen.findIndex((item) => String(item?.id) === String(imageId))
+      : -1;
+    if (
+      frozenIndex >= 0 &&
+      merged.orientation != null &&
+      frozen[frozenIndex].orientation !== merged.orientation
+    ) {
+      const next = frozen.slice();
+      next[frozenIndex] = {
+        ...frozen[frozenIndex],
+        orientation: merged.orientation,
+      };
+      frozenAllImages.value = next;
+    }
     void ensureOverlayFilmstripForImage();
     void tagsPanelRef.value?.refetchPredictions(imageId);
   } catch (e) {

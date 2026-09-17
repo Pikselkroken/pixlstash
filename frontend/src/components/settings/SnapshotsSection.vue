@@ -503,7 +503,7 @@ function handleRestore(cp) {
   --kind-hue: var(--v-theme-secondary);
 }
 .kind-pill--incompatible {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .snapshot-created-at {
@@ -563,13 +563,13 @@ function handleRestore(cp) {
 /* ── Inline status ─────────────────────────────────────────────────────── */
 .snapshot-inline-error {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   margin-top: var(--space-2);
 }
 
 .snapshot-inline-success {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-surface-success));
   margin-top: var(--space-2);
 }
 

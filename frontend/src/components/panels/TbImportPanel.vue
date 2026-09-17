@@ -403,7 +403,7 @@ function triggerLocalImport(files) {
 }
 
 .tb-import-project-status--error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .tb-import-retry {

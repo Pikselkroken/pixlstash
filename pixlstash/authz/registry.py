@@ -1452,6 +1452,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Workflow parameters; reaches the owner's ComfyUI; owner only",
     ),
+    ("GET", "/api/v1/comfyui/workflows/{workflow_name}/lora-insertion"): RoutePolicy(
+        _OWNER,
+        justification="LoRA loader insertion; reaches the owner's ComfyUI; owner only",
+    ),
     ("PUT", "/api/v1/comfyui/workflows/{workflow_name}/pins"): RoutePolicy(
         _OWNER,
         justification="Workflow pins; PUT blocked for READ tokens; owner only",

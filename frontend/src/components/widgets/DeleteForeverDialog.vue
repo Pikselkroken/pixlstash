@@ -265,7 +265,7 @@ function confirmDeleteUnprotected() {
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
-  border: 1px solid rgba(var(--v-theme-info), 0.5);
+  border: 1px solid rgba(var(--v-theme-surface-info), 0.5);
   background: rgba(var(--v-theme-info), 0.08);
   border-radius: var(--radius-md);
   padding: var(--space-4);
@@ -278,7 +278,7 @@ function confirmDeleteUnprotected() {
    disk, not just a library entry. error-tinted panel, tokenized. */
 .ref-warn {
   display: block;
-  border: 1px solid rgba(var(--v-theme-error), 0.5);
+  border: 1px solid rgba(var(--v-theme-surface-error), 0.5);
   background: rgba(var(--v-theme-error), 0.08);
   border-radius: var(--radius-md);
   padding: var(--space-4);
@@ -291,7 +291,7 @@ function confirmDeleteUnprotected() {
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-snug);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .ref-warn-paths {

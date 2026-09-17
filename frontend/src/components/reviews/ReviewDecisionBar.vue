@@ -337,7 +337,7 @@ onUnmounted(() => {
       rgb(var(--v-theme-warning)) 26%,
       transparent
     );
-    color: rgb(var(--v-theme-warning));
+    color: rgb(var(--v-theme-dark-surface-warning));
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -348,7 +348,7 @@ onUnmounted(() => {
       rgb(var(--v-theme-warning)) 26%,
       transparent
     );
-    color: rgb(var(--v-theme-warning));
+    color: rgb(var(--v-theme-dark-surface-warning));
   }
 }
 .rs-decide-btn kbd {
