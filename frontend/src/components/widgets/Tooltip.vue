@@ -5,7 +5,6 @@
     v-model="open"
     :location="location"
     :open-delay="openDelay"
-    :close-delay="closeDelay"
     :disabled="disabled || !(text || $slots.default)"
     :activator-props="activatorProps"
     :eager="false"
@@ -32,13 +31,7 @@ function tooltipDelays() {
   if (!delays) {
     const style = getComputedStyle(document.documentElement);
     const ms = (name) => parseFloat(style.getPropertyValue(name)) || 0;
-    delays = {
-      openDelay: ms("--tooltip-delay"),
-      // Vuetify's `interactive` does not exist in 3.6: hoverable is the
-      // `pointer-events` rule below plus this grace, without which the tip
-      // closes on the next tick while the pointer crosses the gap to it.
-      closeDelay: ms("--dur-1"),
-    };
+    delays = { openDelay: ms("--tooltip-delay") };
   }
   return delays;
 }
@@ -88,10 +81,14 @@ import { VTooltip } from "vuetify/components";
  * The one tooltip surface (docs/design/buttons.md, "Tooltips").
  *
  * A name for the configuration `HelpTip` worked out: Vuetify's tooltip, which
- * already opens on focus and on touch, made hoverable so a long tip can be
- * read (WCAG 1.4.13; Vuetify's stylesheet sets `pointer-events: none`),
- * painted on the app's own surface, and given an open delay. Vuetify's
- * default delay is none, so a tip strobed open as the pointer crossed a bar.
+ * already opens on focus and on touch, painted on the app's own surface, and
+ * given an open delay. Vuetify's default delay is none, so a tip strobed open
+ * as the pointer crossed a bar.
+ *
+ * The surface is not hoverable: it keeps Vuetify's `pointer-events: none`, and
+ * closes as the pointer leaves the control. A tip lands on the neighbouring
+ * control (the next filmstrip thumb, the row above), and a hoverable one took
+ * the click meant for it (#1380).
  *
  * Hover waits `--tooltip-delay`; keyboard focus opens at once, because a
  * keyboard user asked for this control. Escape dismisses, and so does a
@@ -118,7 +115,7 @@ const instance = getCurrentInstance();
 const open = ref(false);
 const tipRef = ref(null);
 
-const { openDelay, closeDelay } = tooltipDelays();
+const { openDelay } = tooltipDelays();
 
 const description = computed(() =>
   props.describe && props.text ? props.text : "",
@@ -331,8 +328,7 @@ function onFocus(e) {
 // leaves, as a native `title` does. Closing on the press alone is not enough:
 // the pointer is still over the control, so the hover delay that was already
 // running reopens the tip a moment later, over the menu the press just opened
-// (a right-click on a sidebar row), where its hoverable surface takes the
-// click meant for a menu row.
+// (a right-click on a sidebar row), where it hides the row the pointer wants.
 let pressed = false;
 
 function onPress() {
@@ -371,7 +367,6 @@ function onDocumentKeydown(e) {
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   line-height: var(--leading-snug);
-  pointer-events: auto;
 }
 
 .app-tooltip__key {
