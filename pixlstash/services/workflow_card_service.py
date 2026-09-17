@@ -349,7 +349,10 @@ def read_grid(hub: HubDatabase, vault) -> Grid:
     one_offs = sum(1 for figure in visible if figure.one_off)
     visible = [figure for figure in visible if not figure.one_off]
 
-    _apply_chosen_covers(hub, vault, visible)
+    # Over every card and not only the drawn ones: a hidden card still opens
+    # on the detail route, and it would otherwise show a cover the owner has
+    # already replaced. The same single query either way.
+    _apply_chosen_covers(hub, vault, figures)
     stacks, _ = effective_stacks(visible, stack_rows(hub))
     describe_differences(hub, visible, stacks)
     visible.sort(key=_rank_order)
