@@ -33,10 +33,10 @@ const LONG = "a-checkpoint-name-that-is-far-too-long-for-any-card-column_v12";
 const BARE = {
   key: "w0",
   name: "Outpaint to 16:9",
-  checkpoint: "flux1-fill-dev",
+  models: [{ name: "flux1-fill-dev", kind: "checkpoint" }],
   loras: [],
   type: "outpaint",
-  pictureCount: 22,
+  picture_count: 22,
   rating: 3.4,
   covers: ["/a.webp", "/b.webp", "/c.webp"],
 };
@@ -45,14 +45,17 @@ const CROWDED = {
   ...BARE,
   key: "w5",
   name: `${LONG} ${LONG}`,
-  checkpoint: LONG,
+  models: [{ name: LONG, kind: "checkpoint" }],
   loras: [
-    ...Array.from({ length: 4 }, (_, i) => ({ name: `${LONG}-${i}` })),
-    { recipe: true },
+    ...Array.from({ length: 4 }, (_, i) => ({
+      name: `${LONG}-${i}`,
+      mark: "structural",
+    })),
+    { mark: "recipe" },
   ],
-  differsBy: ["+ face detailer", "+ upscale 2×", "other checkpoint"],
+  differs_by: ["+ face detailer", "+ upscale 2×", "other checkpoint"],
   imported: true,
-  stackSize: 6,
+  stack_size: 6,
 };
 
 function mountCard(card, props = {}) {
@@ -145,6 +148,17 @@ describe("WorkflowCard height", () => {
     expect(rowContentEnd).toBeGreaterThan(infoLeftEdge);
   });
 
+  it("turns ▸'s rotation off under reduced motion", () => {
+    // The only claim in this component that a mounted test cannot reach.
+    const css = read("./WorkflowCard.vue").split("<style scoped>")[1];
+    const block = css.match(
+      /@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/,
+    );
+    expect(block, "no reduced-motion block").toBeTruthy();
+    expect(block[1]).toContain(".wf-card__toggle");
+    expect(block[1]).toContain("transition: none");
+  });
+
   it("keeps every row on one line, the name ellipsized", () => {
     // Rows do not clip themselves (that would cut ▸'s focus ring); the name
     // and each ChipRow do.
@@ -204,7 +218,7 @@ describe("WorkflowCard", () => {
   });
 
   it("keeps the layered count on a stack with no pictures", () => {
-    const wrapper = mountCard({ ...CROWDED, covers: [], pictureCount: 0 });
+    const wrapper = mountCard({ ...CROWDED, covers: [], picture_count: 0 });
     expect(wrapper.find(".wf-card__cover--empty").exists()).toBe(true);
     expect(wrapper.find(".wf-card__badge--start").text()).toContain("6");
   });
@@ -234,7 +248,7 @@ describe("WorkflowCard", () => {
   });
 
   it("keeps the cover for a card with no pictures and offers Run it…", async () => {
-    const wrapper = mountCard({ ...BARE, covers: [], pictureCount: 0 });
+    const wrapper = mountCard({ ...BARE, covers: [], picture_count: 0 });
     const cover = wrapper.find(".wf-card__cover--empty");
     expect(cover.classes()).toContain("wf-card__cover");
     expect(cover.find(".wf-card__type").text()).toBe("outpaint");
@@ -245,11 +259,53 @@ describe("WorkflowCard", () => {
     expect(wrapper.emitted("run")).toHaveLength(1);
   });
 
+  it("hides every visible row from assistive tech", () => {
+    // The card's own label already reads all four rows, including the chips
+    // "+N" clipped; leaving them exposed reads the card out twice.
+    const wrapper = mountCard(CROWDED);
+    const visible = [
+      ...wrapper.findAll(".chip-row"),
+      ...wrapper.findAll(".wf-card__name"),
+      ...wrapper.findAll(".wf-card__none"),
+    ];
+    expect(visible.length).toBeGreaterThan(4);
+    for (const node of visible) {
+      expect(node.attributes("aria-hidden"), node.classes().join(" ")).toBe(
+        "true",
+      );
+    }
+  });
+
+  it("hides the pictureless cover's own words too", () => {
+    const wrapper = mountCard({ ...BARE, covers: [], picture_count: 0 });
+    expect(wrapper.find(".wf-card__type").attributes("aria-hidden")).toBe(
+      "true",
+    );
+    expect(wrapper.find(".wf-card__empty-line").attributes("aria-hidden")).toBe(
+      "true",
+    );
+  });
+
+  it("lists every model, not just the checkpoint, in the ⓘ popover", () => {
+    const text = mountCard({
+      ...BARE,
+      models: [
+        { name: "flux1-dev", kind: "unet" },
+        { name: "ae", kind: "vae" },
+      ],
+    })
+      .find('[data-testid="workflow-info-popover"]')
+      .text();
+    expect(text).toContain("flux1-dev");
+    expect(text).toContain("ae");
+    expect(text).toContain("vae");
+  });
+
   it("lists models, differences and defaults in the ⓘ popover", () => {
     const popover = mountCard({
       ...CROWDED,
       defaults: [{ label: "Steps · CFG", value: "8 · 2.0" }],
-      savedRecipeCount: 3,
+      saved_recipe_count: 3,
     }).find('[data-testid="workflow-info-popover"]');
     const text = popover.text();
     expect(text).toContain("Stack of 6 workflows · found in 22 pictures");

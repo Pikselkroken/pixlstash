@@ -1,12 +1,30 @@
 // Pure helpers behind WorkflowCard and ChipRow, kept out of the components so
 // the fitting arithmetic and the accessible name are testable without layout.
 //
-// The card's input is one workflow card from the Workflows & Recipes contract:
-//   { key, name, checkpoint, loras: [{ name, recipe }], type, imported,
-//     differsBy: [string], pictureCount, rating, covers: [url],
-//     stackSize, savedRecipeCount, defaults: [{ label, value }] }
-// A LoRA with `recipe: true` is a slot the recipe fills, not a file the
-// workflow carries. A `stackSize` of 2 or more makes the card a stack.
+// THE CARD SHAPE. One card as `GET /workflows/cards` will serve it (plan §6.4,
+// step B3). It is **snake_case, like every other response this app reads**, and
+// a slot's `mark` uses B1's own vocabulary (#1390: `structural` | `recipe`), so
+// nothing translates between the two and inverts a meaning on the way:
+//
+//   {
+//     key, name, type, imported,
+//     models: [{ name, kind, mark? }],  // every non-LoRA slot: checkpoint,
+//                                       // unet, vae, clip… `kind` is the slot
+//     loras:  [{ name, mark }],         // "structural" = in the workflow
+//                                       // (a wash chip), "recipe" = a slot
+//                                       // the recipe fills (dashed)
+//     differs_by: [string],             // a stack: the union over its members
+//     picture_count, rating,            // rating 1-5; 0 or null is unrated
+//     covers: [url],                    // up to 3, the cover first
+//     stack_size,                       // 2 or more makes the card a stack
+//     saved_recipe_count,
+//     defaults: [{ label, value }],
+//   }
+//
+// A card row names the checkpoint only; ⓘ lists every model, so a stack whose
+// difference is "other models" always has the models behind it.
+
+const RECIPE = "recipe";
 
 /**
  * How many chips fit on one line, leaving room for a "+N" chip when some do not.
@@ -30,16 +48,23 @@ export function fitChipCount(widths, available, gap, moreWidth) {
 }
 
 export function isStack(card) {
-  return (card.stackSize ?? 0) > 1;
+  return (card.stack_size ?? 0) > 1;
 }
 
-/** The LoRA row's chips: solid for the workflow's own, dashed for a slot. */
+/** The model the card's second row names: the checkpoint, or the first slot. */
+export function checkpointModel(card) {
+  const models = card.models ?? [];
+  return (
+    models.find((model) => model.kind === "checkpoint") ?? models[0] ?? null
+  );
+}
+
+/** The LoRA row: a wash chip per workflow LoRA, a dashed one per recipe slot. */
 export function loraChips(card) {
   return (card.loras ?? []).map((lora, i) => ({
     key: `lora-${i}`,
-    label: lora.recipe ? "recipe LoRA" : lora.name,
-    icon: lora.recipe ? "plus" : "layers",
-    variant: lora.recipe ? "dashed" : "solid",
+    label: lora.mark === RECIPE ? "recipe LoRA" : lora.name,
+    dashed: lora.mark === RECIPE,
   }));
 }
 
@@ -49,17 +74,13 @@ export function loraChips(card) {
  */
 export function factChips(card) {
   const labels = isStack(card)
-    ? (card.differsBy ?? [])
+    ? (card.differs_by ?? [])
     : [
-        ...(card.differsBy ?? []),
+        ...(card.differs_by ?? []),
         card.type,
         card.imported ? "imported" : null,
       ].filter(Boolean);
-  return labels.map((label, i) => ({
-    key: `fact-${i}`,
-    label,
-    variant: "fact",
-  }));
+  return labels.map((label, i) => ({ key: `fact-${i}`, label }));
 }
 
 /** "4.9 of 5", or null when nothing is rated (0 or missing). */
@@ -70,18 +91,19 @@ export function ratingLabel(rating) {
 /**
  * The card's accessible name. "+N" is not a control, so this is the only place
  * a screen reader hears the chips a narrow card clipped, and it says "workflow"
- * or "recipe" because the solid/dashed border is not announced.
+ * or "recipe" because the dashed border is not announced.
  */
 export function cardAccessibleName(card) {
-  const count = card.pictureCount ?? 0;
+  const count = card.picture_count ?? 0;
+  const checkpoint = checkpointModel(card);
   const loras = (card.loras ?? []).map((lora) =>
-    lora.recipe ? "recipe LoRA slot" : `${lora.name}, workflow LoRA`,
+    lora.mark === RECIPE ? "recipe LoRA slot" : `${lora.name}, workflow LoRA`,
   );
   const facts = factChips(card).map((chip) => chip.label);
   const parts = [
     card.name,
-    isStack(card) ? `stack of ${card.stackSize} workflows` : null,
-    card.checkpoint ? `checkpoint ${card.checkpoint}` : null,
+    isStack(card) ? `stack of ${card.stack_size} workflows` : null,
+    checkpoint ? `${checkpoint.kind} ${checkpoint.name}` : null,
     loras.length ? `LoRAs: ${loras.join("; ")}` : "no LoRAs",
     facts.length
       ? `${isStack(card) ? "differs by" : "facts"}: ${facts.join(", ")}`

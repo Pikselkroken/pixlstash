@@ -11,7 +11,7 @@
         <img v-if="covers[i - 1]" :src="covers[i - 1]" alt="" loading="lazy" />
       </span>
       <span class="wf-card__badge wf-card__badge--end" aria-hidden="true">
-        <v-icon size="12">mdi-image-multiple</v-icon>{{ card.pictureCount }}
+        <v-icon size="12">mdi-image-multiple</v-icon>{{ card.picture_count }}
       </span>
       <span
         v-if="rating"
@@ -26,8 +26,12 @@
       class="wf-card__cover wf-card__cover--empty"
       :class="{ 'wf-card__cover--stack': stack }"
     >
-      <span v-if="card.type" class="wf-card__type">{{ card.type }}</span>
-      <span class="wf-card__empty-line">No pictures yet</span>
+      <span v-if="card.type" class="wf-card__type" aria-hidden="true">{{
+        card.type
+      }}</span>
+      <span class="wf-card__empty-line" aria-hidden="true"
+        >No pictures yet</span
+      >
       <AppButton
         variant="outline"
         size="sm"
@@ -43,7 +47,7 @@
       class="wf-card__badge wf-card__badge--start"
       aria-hidden="true"
     >
-      <v-icon size="12">mdi-layers</v-icon>{{ card.stackSize }}
+      <v-icon size="12">mdi-layers</v-icon>{{ card.stack_size }}
     </span>
 
     <!-- The visible rows are hidden from assistive tech: the card's own label
@@ -125,6 +129,7 @@ import { VIcon } from "vuetify/components";
 
 import {
   cardAccessibleName,
+  checkpointModel,
   factChips,
   isStack,
   loraChips,
@@ -150,19 +155,12 @@ const covers = computed(() => (props.card.covers ?? []).slice(0, 3));
 const rating = computed(() => props.card.rating > 0);
 // Pictures, not loaded covers, decide "No pictures yet".
 const hasPictures = computed(
-  () => covers.value.length > 0 || (props.card.pictureCount ?? 0) > 0,
+  () => covers.value.length > 0 || (props.card.picture_count ?? 0) > 0,
 );
-const checkpointChips = computed(() =>
-  props.card.checkpoint
-    ? [
-        {
-          key: "checkpoint",
-          label: props.card.checkpoint,
-          icon: "cube-outline",
-        },
-      ]
-    : [],
-);
+const checkpointChips = computed(() => {
+  const model = checkpointModel(props.card);
+  return model ? [{ key: "checkpoint", label: model.name }] : [];
+});
 const loras = computed(() => loraChips(props.card));
 const facts = computed(() => factChips(props.card));
 const accessibleName = computed(() => cardAccessibleName(props.card));
@@ -266,14 +264,23 @@ const accessibleName = computed(() => cardAccessibleName(props.card));
   background: rgb(var(--v-theme-input-background));
 }
 
+/* A category, not a status, so the control tier's radius and the same Tag xs
+   the rows use. */
 .wf-card__type {
   display: inline-flex;
   align-items: center;
-  height: var(--chip-h);
-  padding: 0 var(--space-3);
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-pill);
+  box-sizing: border-box;
+  height: var(--tag-h-xs);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: color-mix(
+    in srgb,
+    rgb(var(--v-theme-on-surface)) 10%,
+    transparent
+  );
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   font-size: var(--text-2xs);
+  line-height: var(--leading-snug);
 }
 
 .wf-card__empty-line {

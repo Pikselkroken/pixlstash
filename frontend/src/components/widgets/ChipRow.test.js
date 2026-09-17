@@ -1,6 +1,7 @@
 // ChipRow clips to one line and reports "+N". jsdom has no layout, so each test
 // hands the row the widths a browser would have measured.
 
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 
@@ -40,18 +41,20 @@ function resize(wrapper, rowW, chipW = 40) {
 
 /** The row's own chips (not the measuring copies) that are on screen. */
 const own = (wrapper) =>
-  [...wrapper.element.children].filter((el) =>
-    el.classList.contains("chip-row__chip"),
+  [...wrapper.element.children].filter(
+    (el) =>
+      el.classList.contains("chip-row__chip") ||
+      el.classList.contains("chip-row__more"),
   );
 
 const shown = (wrapper) =>
   own(wrapper)
-    .filter((el) => !el.classList.contains("chip-row__chip--more"))
+    .filter((el) => el.classList.contains("chip-row__chip"))
     .filter((el) => el.style.display !== "none")
     .map((el) => el.textContent.trim());
 
 const moreChip = (wrapper) =>
-  own(wrapper).find((el) => el.classList.contains("chip-row__chip--more"));
+  own(wrapper).find((el) => el.classList.contains("chip-row__more"));
 
 describe("ChipRow", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -94,10 +97,27 @@ describe("ChipRow", () => {
     expect(wrapper.emitted("overflow").at(-1)).toEqual([0]);
   });
 
-  it("variants reach the chip class", () => {
+  it("clips the row rather than wrapping it", () => {
+    // jsdom lays nothing out, so this one is read off the stylesheet: without
+    // it the clipped chips are simply drawn over the rest of the card.
+    const css = readFileSync("src/components/widgets/ChipRow.vue", "utf8")
+      .split("<style scoped>")[1]
+      .replace(/\/\*[\s\S]*?\*\//g, "");
+    const row = css
+      .split("}")
+      .find((r) => r.split("{")[0].trim() === ".chip-row");
+    expect(row).toContain("overflow: hidden");
+    expect(row).toContain("white-space: nowrap");
+  });
+
+  it("marks a recipe slot dashed and leaves a model chip plain", () => {
     const wrapper = mount(ChipRow, {
-      props: { items: [{ label: "slot", variant: "dashed" }] },
+      props: {
+        items: [{ label: "lightning" }, { label: "slot", dashed: true }],
+      },
     });
-    expect(wrapper.find(".chip-row__chip--dashed").exists()).toBe(true);
+    const chips = wrapper.findAll(".chip-row > .chip-row__chip");
+    expect(chips[0].classes()).not.toContain("chip-row__chip--dashed");
+    expect(chips[1].classes()).toContain("chip-row__chip--dashed");
   });
 });

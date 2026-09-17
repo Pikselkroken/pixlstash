@@ -10,6 +10,7 @@ import {
   fitChipCount,
   loraChips,
   ratingLabel,
+  checkpointModel,
 } from "./workflowCard";
 
 describe("fitChipCount", () => {
@@ -36,21 +37,37 @@ describe("fitChipCount", () => {
 
 const STACK = {
   name: "Cinematic portrait",
-  checkpoint: "realvisXL_v5",
-  loras: [{ name: "lightning-8step" }, { name: "", recipe: true }],
-  differsBy: ["+ face detailer", "+ upscale 2×"],
+  models: [
+    { name: "sdxl_vae", kind: "vae" },
+    { name: "realvisXL_v5", kind: "checkpoint" },
+  ],
+  loras: [
+    { name: "lightning-8step", mark: "structural" },
+    { name: "", mark: "recipe" },
+  ],
+  differs_by: ["+ face detailer", "+ upscale 2×"],
   type: "txt2img",
-  pictureCount: 184,
+  picture_count: 184,
   rating: 4.85,
-  stackSize: 6,
+  stack_size: 6,
 };
 
 describe("card chips", () => {
-  it("draws a recipe slot dashed and a workflow LoRA solid", () => {
-    expect(loraChips(STACK).map((c) => [c.label, c.variant])).toEqual([
-      ["lightning-8step", "solid"],
-      ["recipe LoRA", "dashed"],
+  it("draws a recipe slot dashed and a workflow LoRA as a plain chip", () => {
+    // The mark is B1's own word, so nothing inverts on the way in.
+    expect(loraChips(STACK).map((c) => [c.label, !!c.dashed])).toEqual([
+      ["lightning-8step", false],
+      ["recipe LoRA", true],
     ]);
+  });
+
+  it("names the checkpoint slot, whatever order the models arrive in", () => {
+    expect(checkpointModel(STACK).name).toBe("realvisXL_v5");
+    // No checkpoint slot (a unet graph): the first model still names the row.
+    expect(
+      checkpointModel({ models: [{ name: "flux1-dev", kind: "unet" }] }).name,
+    ).toBe("flux1-dev");
+    expect(checkpointModel({})).toBeNull();
   });
 
   it("gives a stack its differences and a single workflow its type", () => {
@@ -58,7 +75,7 @@ describe("card chips", () => {
       "+ face detailer",
       "+ upscale 2×",
     ]);
-    const single = { ...STACK, stackSize: 1, differsBy: [], imported: true };
+    const single = { ...STACK, stack_size: 1, differs_by: [], imported: true };
     expect(factChips(single).map((c) => c.label)).toEqual([
       "txt2img",
       "imported",
@@ -68,10 +85,13 @@ describe("card chips", () => {
 
 describe("cardAccessibleName", () => {
   it("names every LoRA with workflow or recipe, since +N is not a control", () => {
-    const loras = Array.from({ length: 5 }, (_, i) => ({ name: `lora-${i}` }));
+    const loras = Array.from({ length: 5 }, (_, i) => ({
+      name: `lora-${i}`,
+      mark: "structural",
+    }));
     const name = cardAccessibleName({
       ...STACK,
-      loras: [...loras, { recipe: true }],
+      loras: [...loras, { mark: "recipe" }],
     });
     for (let i = 0; i < 5; i++)
       expect(name).toContain(`lora-${i}, workflow LoRA`);
@@ -85,7 +105,7 @@ describe("cardAccessibleName", () => {
     const name = cardAccessibleName({
       name: "Bare",
       loras: [],
-      pictureCount: 1,
+      picture_count: 1,
     });
     expect(name).toBe("Bare, no LoRAs, 1 picture");
   });
@@ -95,5 +115,7 @@ describe("ratingLabel", () => {
   it("reads as out of five", () => {
     expect(ratingLabel(4.9)).toBe("4.9 of 5");
     expect(ratingLabel(null)).toBeNull();
+    // 0 is unrated, not a zero-star rating.
+    expect(ratingLabel(0)).toBeNull();
   });
 });

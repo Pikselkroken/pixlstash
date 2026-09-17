@@ -242,10 +242,11 @@
   --badge-size: 16px;      /* min height / min-width of a count pill (on-grid; was an ad-hoc 15px) */
   --badge-size-dot: 8px;   /* the no-count activity dot (on-grid; was an ad-hoc 7px) */
 
-  /* A model chip: the checkpoint and LoRA chips on a workflow card, in the
-     inspector and in the overlay's Recipe tab. One height so a row of them
-     sits inside a --control-h-sm row with room for its 1px border. */
-  --chip-h: 20px;
+  /* The design system's Tag xs height (`components/core/Tag.jsx`: xs 18px, sm
+     --control-h-sm, md --control-h). It is the dense chip: the workflow card's
+     rows, and the overlay/filmstrip metadata the DS names. Named here rather
+     than spelled in each component so the three chip heights stay three. */
+  --tag-h-xs: 18px;
 
   /* The countdown drain hairline on a self-dismissing transient surface: the
      action receipt today, and the notice card is the obvious second consumer.
