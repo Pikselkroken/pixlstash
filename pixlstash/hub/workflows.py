@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
+from pixlstash.hub import workflow_cards
 from pixlstash.hub.db import HubDatabase
 from pixlstash.services.model_folder_scanner import MODEL_SUFFIX as SHELF_MODEL_SUFFIX
 from pixlstash.pixl_logging import get_logger
@@ -32,6 +33,7 @@ from pixlstash.services.workflow_hash import (
     MODEL_EXTENSIONS,
     ReducedNode,
     SHA256_FIELD_RE,
+    WorkflowGraphError,
     asset_reference,
     assets_from_reduction,
     digests_with_prefix,
@@ -205,6 +207,32 @@ def record_reduction(
                     instance_document,
                     now,
                 ),
+            )
+    # The card, from the rows just written. Here and not at the three callers -
+    # the import route, the watched inbox and the extraction task - because
+    # every one of them files a graph through this function, and a hook per
+    # caller is a hook the next caller forgets. Outside the transaction above:
+    # `hub.transaction` is not re-entrant, and this one is a whole transaction
+    # of its own.
+    #
+    # **Only for a recipe this hub had not seen**, which is the difference
+    # between a card derived once and a four-table join run once per PICTURE:
+    # a library is thousands of pictures over a handful of recipes, and the
+    # thousandth filing of one recipe has nothing to add. A recipe already here
+    # whose card is missing (filed by a build before this one, or refused at the
+    # time) is the backfill finder's, which sweeps for exactly that.
+    #
+    # Never fatal to the filing. A graph that will not reduce into a card is
+    # still a filed recipe, and the backfill finder retries it, so the picture's
+    # own ingest is not failed over a card it can do without.
+    if new_recipe:
+        try:
+            workflow_cards.record_identity(hub, keys.structural_hash)
+        except (WorkflowGraphError, sqlite3.Error) as exc:
+            logger.warning(
+                "Recipe %s is filed but has no workflow card yet: %s",
+                keys.structural_hash,
+                exc,
             )
     return keys
 

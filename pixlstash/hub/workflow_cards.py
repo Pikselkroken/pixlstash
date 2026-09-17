@@ -1,0 +1,362 @@
+"""Cards: which workflow a stored variant belongs to (v1.12 B2).
+
+:mod:`pixlstash.hub.workflows` files a graph's identity; this module derives the
+**card** from what is already filed and stores it.
+:mod:`pixlstash.services.workflow_identity` owns every rule, so nothing here
+decides anything - it reads the stored document, freezes the marks that have to
+be frozen, and writes rows.
+
+**Hub documents only.** The whole derivation runs off
+``workflow_recipe_graph.document``, whose assets are opaque references, which is
+what lets the backfill be a hub pass with no picture rescan and what keeps a
+forgotten model name forgotten: a LoRA whose name has been forgotten cannot be
+guessed at and falls to ``recipe``, rather than resolving to something readable.
+
+**Idempotent, and no row carries a timestamp.** Deriving the same hub twice
+writes byte-identical rows, which is what lets the backfill be re-run with no
+reconciliation pass. A ``computed_at`` would have made every re-derivation churn
+every row and turned "runs twice the same" into a claim no test could make.
+
+**One thing here is NOT content alone: a LoRA slot's mark.** It is frozen the
+first time the slot is seen (``workflow_slot_mark``), so two machines that
+imported the same pictures in a different order can put the same variant on
+different cards. That is the design and not an oversight - re-guessing per
+filing would re-key cards the owner has by then named, pinned and stacked - but
+it is the reason nothing else here is allowed to depend on when a row was
+written.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from datetime import datetime, timezone
+from typing import Optional
+
+from pixlstash.hub.db import HubDatabase
+from pixlstash.pixl_logging import get_logger
+from pixlstash.services.workflow_hash import WorkflowGraphError, asset_reference
+from pixlstash.services.workflow_identity import (
+    CORE_VERSION,
+    RECIPE,
+    STRUCTURAL,
+    WORKFLOW_KEY_VERSION,
+    Slot,
+    core_hash,
+    guess_mark,
+    slots,
+    workflow_key,
+    workflow_type,
+)
+
+logger = get_logger(__name__)
+
+# Whether the automatic stack key ignores LoRA loaders. True groups "the same
+# workflow plus a character LoRA" into one stack, which is the point of the
+# grouping; whether it OVER-groups is what the owner gate on the dogfood copy
+# answers, and this is the single line that flips it.
+STRIP_LORAS_FOR_STACKS = True
+
+# Every variant with a stored document, left-joined to the card rules THIS build
+# writes. A row whose join came back empty needs the pass: it has no card, or it
+# has one from a superseded rule. One fragment, so the finder's query, its
+# progress count and the derivation itself cannot disagree about what is
+# outstanding - a variant reported as done but still handed out is a finder that
+# never settles.
+_VARIANT_JOIN = (
+    "FROM workflow_recipe r "
+    "JOIN workflow_recipe_graph g ON g.structural_hash = r.structural_hash "
+    "LEFT JOIN workflow_variant v ON v.structural_hash = r.structural_hash "
+    "AND v.key_version = ? "
+    "LEFT JOIN workflow_topology_core c ON c.topology_hash = r.topology_hash "
+    "AND c.core_version = ? "
+)
+_VARIANT_VERSIONS = (WORKFLOW_KEY_VERSION, CORE_VERSION)
+_VARIANT_PENDING = "(v.structural_hash IS NULL OR c.topology_hash IS NULL)"
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def topology_only_key(topology_hash: str) -> str:
+    """The card key for a graph whose models are not known.
+
+    A UI-format file names its widget values by position, so it has a topology
+    and no assets. It gets a card all the same - the same card an API graph of
+    that topology naming no models at all would get, which is the right answer:
+    neither of them says which model it uses.
+    """
+    return workflow_key(topology_hash, [], [])
+
+
+def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
+    """Derive and store the card a filed variant belongs to; return its key.
+
+    Returns ``None`` when the variant is not filed here or its document has
+    gone: an identity is derived from a stored document, never guessed.
+
+    One transaction, so a crash cannot leave a card keyed on marks that were not
+    written. It holds no file and waits on nobody, which is what the hub's short
+    write transactions ask.
+
+    Raises:
+        pixlstash.services.workflow_hash.WorkflowGraphError: The stored document
+            cannot be reduced, or nothing survives the strip. Callers filing
+            arbitrary pictures catch this and skip the variant.
+    """
+    row = hub.fetchone(
+        "SELECT r.topology_hash AS topology_hash, g.document AS document, "
+        "v.workflow_key AS workflow_key, c.topology_hash AS core_cached "
+        f"{_VARIANT_JOIN} WHERE r.structural_hash = ?",
+        (*_VARIANT_VERSIONS, structural_hash),
+    )
+    if row is None:
+        return None
+    # Both halves, and on the same rule the finder selects by: returning early
+    # on a current card while the topology cache is stale would leave the finder
+    # handing this variant out on every sweep, for a pass that does nothing.
+    if row["workflow_key"] is not None and row["core_cached"] is not None:
+        return row["workflow_key"]
+    try:
+        document = json.loads(row["document"])
+    except json.JSONDecodeError as exc:
+        logger.error(
+            "Stored workflow document for variant %s is not valid JSON, so it "
+            "gets no card: %s",
+            structural_hash,
+            exc,
+        )
+        return None
+
+    topology_hash = row["topology_hash"]
+    document_slots = slots(document)
+    # Computed before the transaction opens: this is the CPU of the pass (a
+    # Weisfeiler-Leman refinement and a strip), and the write lock is shared
+    # with a second process. Only when the cache is missing or stale, because a
+    # topology with 200 variants would otherwise recompute and rewrite one row
+    # 200 times in a single pass.
+    core = (
+        None
+        if row["core_cached"] is not None
+        else core_hash(document, strip_loras=STRIP_LORAS_FOR_STACKS)
+    )
+    with hub.transaction() as conn:
+        marks = _freeze_marks(conn, topology_hash, structural_hash, document_slots)
+        if core is not None:
+            _cache_topology(conn, topology_hash, document, document_slots, core)
+        key = workflow_key(
+            topology_hash,
+            document_slots,
+            [label for label, mark in marks.items() if mark == STRUCTURAL],
+        )
+        # REPLACE and not IGNORE: a re-keyed variant (a flipped mark, a new
+        # WORKFLOW_KEY_VERSION) has to land on its new card, and this row is the
+        # only place the old key is recorded.
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_variant "
+            "(structural_hash, topology_hash, workflow_key, key_version) "
+            "VALUES (?, ?, ?, ?)",
+            (structural_hash, topology_hash, key, WORKFLOW_KEY_VERSION),
+        )
+    return key
+
+
+def _freeze_marks(
+    conn: sqlite3.Connection,
+    topology_hash: str,
+    structural_hash: str,
+    document_slots: list[Slot],
+) -> dict[str, str]:
+    """Mark every unmarked LoRA slot of this topology, and read them all back.
+
+    The guess needs the filename, which the document deliberately does not
+    carry: it names assets by reference, and the readable name lives in
+    ``workflow_recipe_asset``. A reference resolving to nothing is a name that
+    was forgotten or never filed, and falls to ``recipe`` - the guess errs that
+    way anyway, because a wrong ``structural`` pulls a character LoRA into the
+    card key and splits the card per LoRA.
+    """
+    names = {
+        asset_reference(name): name
+        for (name,) in conn.execute(
+            "SELECT normalized_filename FROM workflow_recipe_asset "
+            "WHERE structural_hash = ?",
+            (structural_hash,),
+        ).fetchall()
+    }
+    now = _now()
+    # IGNORE is the freeze: the first sighting of a slot decides it, and every
+    # later one - a different LoRA in that slot, a re-run of the backfill - is a
+    # no-op.
+    conn.executemany(
+        "INSERT OR IGNORE INTO workflow_slot_mark "
+        "(topology_hash, slot_label, mark, marked_at) VALUES (?, ?, ?, ?)",
+        [
+            (
+                topology_hash,
+                slot.label,
+                guess_mark(names[slot.asset]) if slot.asset in names else RECIPE,
+                now,
+            )
+            for slot in document_slots
+            if slot.is_lora
+        ],
+    )
+    return {
+        label: mark
+        for label, mark in conn.execute(
+            "SELECT slot_label, mark FROM workflow_slot_mark WHERE topology_hash = ?",
+            (topology_hash,),
+        ).fetchall()
+    }
+
+
+def _cache_topology(
+    conn: sqlite3.Connection,
+    topology_hash: str,
+    document: dict,
+    document_slots: list[Slot],
+    core: str,
+) -> None:
+    """Cache this topology's stack key, type and slot list.
+
+    ``slots`` is JSON and holds no filename and no asset reference: a model's
+    readable name lives in ``workflow_recipe_asset`` and nowhere else, so
+    forgetting it stays one delete.
+    """
+    conn.execute(
+        "INSERT OR REPLACE INTO workflow_topology_core "
+        "(topology_hash, core_hash, core_version, workflow_type, slots) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            topology_hash,
+            core,
+            CORE_VERSION,
+            workflow_type(document),
+            json.dumps(
+                [
+                    {
+                        "label": slot.label,
+                        "class_type": slot.class_type,
+                        "widget": slot.widget,
+                        "is_lora": slot.is_lora,
+                    }
+                    for slot in document_slots
+                ],
+                separators=(",", ":"),
+            ),
+        ),
+    )
+
+
+def record_file(
+    hub: HubDatabase,
+    name: str,
+    topology_hash: str,
+    structural_hash: Optional[str] = None,
+) -> Optional[str]:
+    """Put a stored workflow file on its card; return the card's key.
+
+    Called where a file is filed - the import route, and so the watched inbox
+    too - so a file lands on the card its pictures already made rather than
+    starting one of its own.
+
+    REPLACE, because a file name is the owner's and can be overwritten with a
+    different workflow; the row describes what is in the file now.
+    """
+    key = None
+    if structural_hash is not None:
+        try:
+            key = record_identity(hub, structural_hash)
+        except WorkflowGraphError as exc:
+            logger.info(
+                "Workflow file %s gets a card with no assets, its stored graph "
+                "cannot be keyed: %s",
+                name,
+                exc,
+            )
+    if key is None:
+        # Either a UI-format file, or a document that would not reduce. Both are
+        # a card with no assets rather than no card: a file the owner can see in
+        # the folder and not on the Workflows view is the worse answer.
+        key = topology_only_key(topology_hash)
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_file "
+            "(workflow_name, topology_hash, structural_hash, workflow_key, filed_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (name, topology_hash, structural_hash, key, _now()),
+        )
+    return key
+
+
+def forget_file(hub: HubDatabase, name: str) -> int:
+    """Take a deleted workflow file off its card. Returns how many rows went.
+
+    The card itself stays: it is made by the pictures, and the file was only one
+    way to run it.
+    """
+    with hub.transaction() as conn:
+        return (
+            conn.execute(
+                "DELETE FROM workflow_file WHERE workflow_name = ?", (name,)
+            ).rowcount
+            or 0
+        )
+
+
+def unidentified_variants(hub: HubDatabase, limit: int) -> list[str]:
+    """Filed variants with no card, or with one keyed by a superseded rule."""
+    return [
+        structural_hash
+        for (structural_hash,) in hub.fetchall(
+            f"SELECT r.structural_hash {_VARIANT_JOIN} WHERE {_VARIANT_PENDING} "
+            "ORDER BY r.structural_hash LIMIT ?",
+            (*_VARIANT_VERSIONS, limit),
+        )
+    ]
+
+
+def variant_counts(hub: HubDatabase) -> tuple[int, int]:
+    """``(variants with a stored document, how many still need the pass)``."""
+    row = hub.fetchone(
+        f"SELECT COUNT(*) AS total, SUM({_VARIANT_PENDING}) AS pending {_VARIANT_JOIN}",
+        _VARIANT_VERSIONS,
+    )
+    if row is None:
+        return 0, 0
+    return int(row["total"] or 0), int(row["pending"] or 0)
+
+
+def card_grouping(hub: HubDatabase) -> dict:
+    """What the cards group into: the owner gate's report.
+
+    A ``core_hash`` shared by two or more cards is one automatic stack; a
+    ``core_hash`` with one card is a one-off. Nothing is written - the stack
+    tables are for the owner's own decisions, and the automatic grouping IS this
+    query - so a regrouping costs nothing and destroys nothing.
+
+    One grouped scan rather than a count per figure: this runs once per backfill
+    batch, and five separate aggregates over the same table is five scans for
+    numbers that have to agree with each other anyway.
+    """
+    rows = hub.fetchall(
+        "SELECT c.core_hash AS core_hash, v.topology_hash AS topology_hash, "
+        "v.workflow_key AS workflow_key, COUNT(*) AS variants "
+        "FROM workflow_variant v "
+        "LEFT JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
+        "GROUP BY c.core_hash, v.topology_hash, v.workflow_key"
+    )
+    cards_per_core: dict[str, set] = {}
+    for row in rows:
+        cards_per_core.setdefault(row["core_hash"], set()).add(row["workflow_key"])
+    sizes = [len(cards) for cards in cards_per_core.values()]
+    return {
+        "variants": sum(int(row["variants"]) for row in rows),
+        "topologies": len({row["topology_hash"] for row in rows}),
+        "cards": len({row["workflow_key"] for row in rows}),
+        "stacks": sum(1 for size in sizes if size > 1),
+        "stacked_cards": sum(size for size in sizes if size > 1),
+        "one_offs": sum(1 for size in sizes if size == 1),
+    }
