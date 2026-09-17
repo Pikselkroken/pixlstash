@@ -28,6 +28,7 @@ from watchdog.observers import Observer
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import workflow_bindings
+from pixlstash.utils.path_utils import resolve_path_within
 
 logger = get_logger(__name__)
 
@@ -137,6 +138,7 @@ def trash_workflow(folder: str, name: str, workflow: dict) -> None:
     :data:`INBOX_LOCK`, and remove the stored workflow before releasing it.
 
     Raises:
+        ValueError: *name* would put the copy outside *folder*.
         OSError, send2trash.TrashPermissionError: The file could not be written
             or trashed. The stored workflow must then be kept.
     """
@@ -145,9 +147,13 @@ def trash_workflow(folder: str, name: str, workflow: dict) -> None:
     stem = _split(name)[0]
     written, counter = f"{stem}.{digest}.json", 2
     while True:
+        # The name comes from the request the delete arrived on, so the inbox
+        # gets the same guard the user workflow directory already gets: the
+        # copy is written where it is meant to be or not at all.
+        path = resolve_path_within(folder, written)
         try:
             # "x": never over a file already there.
-            with open(os.path.join(folder, written), "x", encoding="utf-8") as handle:
+            with open(path, "x", encoding="utf-8") as handle:
                 json.dump(workflow, handle, indent=2, ensure_ascii=True)
             break
         except FileExistsError:

@@ -22,13 +22,39 @@ function sources(dir = SRC) {
   });
 }
 
+/**
+ * A comment, or a lone comment delimiter left behind by removing one.
+ *
+ * The delimiters are in the pattern on purpose: `<!-- <!-- x --> -->` has its
+ * inner comment removed first, and what is left of the outer one is a bare
+ * `-->` that no comment rule matches.
+ */
+const COMMENT = /\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->|<!--|-->|\/\*|\*\//g;
+
+/**
+ * *text* with its comments removed, repeated until a pass changes nothing.
+ *
+ * One pass is not enough in either direction: removing a comment can join
+ * what surrounded it into a new one, and removing a delimiter can spell a new
+ * delimiter (`<!<!---->` leaves `<!--`). Looping to a fixed point is what
+ * makes the result free of both, so a token value named in a note is never
+ * counted as a use.
+ */
+function withoutComments(text) {
+  let stripped = text;
+  let previous;
+  do {
+    previous = stripped;
+    stripped = stripped.replace(COMMENT, "");
+  } while (stripped !== previous);
+  return stripped;
+}
+
 const files = sources()
   .filter((path) => !path.endsWith(join("styles", "design-tokens.css")))
   .map((path) => ({
     name: relative(SRC, path),
-    text: readFileSync(path, "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/<!--[\s\S]*?-->/g, ""),
+    text: withoutComments(readFileSync(path, "utf8")),
   }));
 
 /** Every match of `re` across the sources, as `file: match`. */

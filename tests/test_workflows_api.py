@@ -1461,12 +1461,21 @@ def test_parameters_are_typed_from_comfyui_and_leave_the_prompt_out(
 def test_an_unreachable_comfyui_still_shows_the_recorded_values(
     workflow_env, sampler_workflow
 ):
-    sampler_workflow.info = RuntimeError("Could not reach ComfyUI at the test URL")
+    """The values survive the outage, and the exception's own text does not.
+
+    ``comfyui_error`` is composed by the route, not taken from the exception:
+    whatever the fetch failed on - a chained error, an internal address, a
+    token echoed back by a proxy - belongs in the log, not in a response.
+    """
+    sampler_workflow.info = RuntimeError(
+        "Could not reach ComfyUI at http://127.0.0.1:8188 (example-secret)"
+    )
     r = workflow_env.owner.get(sampler_workflow.parameters)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["typed"] is False
-    assert body["comfyui_error"] == "Could not reach ComfyUI at the test URL"
+    assert body["comfyui_error"].startswith("Could not read ComfyUI's node types at")
+    assert "example-secret" not in body["comfyui_error"]
     steps = _parameter(body, "1", "steps")
     assert (steps["value"], steps["min"], steps["max"]) == (20, None, None)
     assert _parameter(body, "1", "sampler_name")["options"] is None
