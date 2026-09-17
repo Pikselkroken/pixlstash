@@ -786,12 +786,18 @@ defineExpose({
               <!-- Moves is a destination for the same reason Insights is: it
                    reports on the queue rather than showing the library, so it
                    replaces the grid instead of floating over it. -->
-              <MovesReview v-else-if="isMovesView" />
+              <MovesReview
+                v-else-if="isMovesView"
+                @open-settings="openSettingsDialog"
+              />
               <!-- The workflow library lists graphs the hub knows about rather
                    than pictures in this library, so like the shelf it replaces
                    the grid instead of floating over it, and the grid stays
                    unmounted while it is open. -->
-              <WorkflowShelf v-else-if="isWorkflowsView" />
+              <WorkflowShelf
+                v-else-if="isWorkflowsView"
+                @open-settings="openSettingsDialog"
+              />
               <ImageGrid
                 v-else
                 ref="gridContainer"
@@ -839,8 +845,12 @@ defineExpose({
         <!-- One rail, four uses (implementation plan §F2). On the workflow
              library it carries the selected workflow; everywhere else it is the
              statistics panel it has always been. -->
-        <WorkflowInspector v-if="isWorkflowsView" />
-        <WorkflowRunPanel v-else-if="workflowRunStore.open" />
+        <!-- A run outranks the inspector, including on the workflow library:
+             starting one force-opens this rail (`useWorkflowRunStore.openFor`),
+             so with the inspector first the rail opened onto "Pick a workflow"
+             while a run was in progress behind it. -->
+        <WorkflowRunPanel v-if="workflowRunStore.open" />
+        <WorkflowInspector v-else-if="isWorkflowsView" />
         <StatsSidebar v-else ref="statsSidebarRef" />
       </div>
       <ReviewSessionsOverlay

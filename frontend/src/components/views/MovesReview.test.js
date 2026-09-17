@@ -20,6 +20,7 @@ vi.mock("../../api/moves", () => ({
 }));
 
 import MovesReview from "./MovesReview.vue";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const globalOpts = { global: { stubs: { "v-icon": true, VTooltip: true } } };
 
@@ -226,5 +227,49 @@ describe("MovesReview - a failed fetch", () => {
 
     expect(wrapper.text()).toContain("network down");
     expect(wrapper.text()).not.toContain("Nothing to reconcile");
+  });
+});
+
+// #1415: the screen replaces the grid and its toolbar, so without the app-wide
+// tail nothing here opens Settings or the right rail.
+describe("MovesReview - the app-wide toolbar tail", () => {
+  it("asks App.vue for Settings and toggles the rail itself", async () => {
+    const wrapper = await mountScreen(summary());
+    const sidebar = useSidebarStore();
+
+    await wrapper
+      .find(".mv-toolbar button[aria-label='Settings']")
+      .trigger("click");
+    expect(wrapper.emitted("open-settings")).toHaveLength(1);
+
+    sidebar.statsOpen = false;
+    await wrapper.find(".mv-toolbar .tb-stats-btn").trigger("click");
+    expect(sidebar.statsOpen).toBe(true);
+    await wrapper.find(".mv-toolbar .tb-stats-btn").trigger("click");
+    expect(sidebar.statsOpen).toBe(false);
+  });
+
+  it("puts the tail last in the bar, behind its separator", async () => {
+    const wrapper = await mountScreen(summary());
+    const bar = wrapper.find(".mv-toolbar").element;
+    const separator = wrapper.find(".mv-toolbar .bar-separator").element;
+    const settings = wrapper.find(
+      ".mv-toolbar button[aria-label='Settings']",
+    ).element;
+
+    expect(separator.nextElementSibling).toBe(settings);
+    expect(
+      bar.lastElementChild.lastElementChild.classList.contains("tb-stats-btn"),
+    ).toBe(true);
+  });
+
+  it("is listened to by App.vue, which owns the Settings dialog", async () => {
+    const { readFileSync } = await import("node:fs");
+    const app = readFileSync(`${process.cwd()}/src/App.vue`, "utf8");
+    const tag = app.slice(
+      app.indexOf("<MovesReview"),
+      app.indexOf(">", app.indexOf("<MovesReview")),
+    );
+    expect(tag).toContain('@open-settings="openSettingsDialog"');
   });
 });

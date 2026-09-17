@@ -24,9 +24,9 @@
       close them. Group, Sort and Show choose the order, the bands and which
       rows are listed, and Ghosts keeps only workflows that still hold something
       of a deleted picture or model. Drop a workflow JSON file here to add it,
-      unchanged.
-      Right-click a row for what can be done with it. Escape clears the
-      selection.
+      unchanged. The end of the toolbar carries Settings and the right sidebar's
+      toggle, which shows the selected workflow's details. Right-click a row for
+      what can be done with it. Escape clears the selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -177,6 +177,26 @@
         >Ghosts</AppBarButton
       >
       <span class="wfshelf-spacer"></span>
+
+      <!-- The app-wide tail, minus undo, as the model shelf ends its bar:
+           [separator] [TbGlobalActions]. This view replaces the grid, and with
+           it the grid's toolbar, so without this pair nothing on the screen
+           opened Settings or the right rail - and the rail is where
+           WorkflowInspector's content is shown, so the inspector was
+           unreachable (#1415). No undo: nothing here writes to the operation
+           log.
+
+           The cluster is not decoration: TbGlobalActions is multi-root, so its
+           buttons would otherwise sit at this bar's wider gap and the pair
+           would be 4px wider here than in every other view, which is the one
+           thing mounting the SAME component is meant to prevent. -->
+      <span class="wfshelf-bar-tail">
+        <TbGlobalActions
+          separator
+          rail-name="inspector"
+          @open-settings="emit('open-settings')"
+        />
+      </span>
     </div>
 
     <div class="wfshelf-scroll">
@@ -580,6 +600,7 @@ import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import OptionRows from "../widgets/OptionRows.vue";
 import Segmented from "../widgets/Segmented.vue";
+import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import { importWorkflow } from "../../api/comfyui";
 import { getWorkflowGraph, listWorkflowVariants } from "../../api/workflows";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -597,6 +618,9 @@ import {
   workflowDescriptor,
 } from "../../utils/workflowShelf";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
+
+// Settings is App.vue's dialog; TbGlobalActions flips the sidebar store itself.
+const emit = defineEmits(["open-settings"]);
 
 const store = useWorkflowShelfStore();
 const notices = useNoticeStore();
@@ -1168,6 +1192,12 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: var(--space-4);
+  /* The names the shared chrome's own `@container` rules are written against.
+     Declared without them the tokens on the element were inert, and a control
+     mounted here would have degraded by no rule at all once the grid - the
+     only other `toolbar` container - unmounted. */
+  container-type: inline-size;
+  container-name: shelfbar toolbar;
   /* The shelf bar's own box recipe: a fixed 36 with the hairline INSIDE it and
      no vertical padding, so this bar and the model shelf's sit at the same
      height beside each other. `--bar-height` is 48 and would not. */
@@ -1179,18 +1209,50 @@ onMounted(() => {
   border-bottom: 1px solid rgb(var(--v-theme-divider));
 }
 
+/* Size and ink shared with every other view bar's identity pair
+   (Toolbar.test.js pins them together): a --text-lg heading does not sit in a
+   36px band, and the pair reads as one bar in two contexts only at one size.
+
+   It is also the bar's give. Every control here is `nowrap` at the flex
+   default `min-width: auto`, so without a shrinking member the surplus left
+   through the right edge and the clipped control was the tail - the toggle
+   that had just narrowed the column by opening the rail, and the one needed to
+   close it again. The title gives first and from the right, as the queue's
+   does. */
 .wfshelf-title {
-  font-size: var(--text-lg);
+  font-size: var(--text-md);
   font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  min-width: 0;
+  flex-shrink: 6;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .wfshelf-sub {
-  font-size: var(--text-sm);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-toolbar-text), 0.6);
+  white-space: nowrap;
+  min-width: 0;
+  flex-shrink: 4;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .wfshelf-spacer {
   flex: 1;
+}
+
+/* The app-wide tail's own gap, on `.shelf-bar-cluster`'s reason: this bar
+   spaces its controls at --space-4, and the tail must land at the --space-3
+   every other host lays it out at. */
+.wfshelf-bar-tail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  /* Never the member that gives: it is the app-wide chrome, and the control
+     that closes the rail must not be the one the edge eats. */
+  flex: 0 0 auto;
 }
 
 /* The column-name strip, standing above the list rather than inside it: a
@@ -1293,7 +1355,6 @@ onMounted(() => {
 .wfshelf-row:focus-visible {
   outline-offset: calc(var(--focus-width) * -1);
 }
-
 
 .wfshelf-file-name {
   overflow: hidden;
