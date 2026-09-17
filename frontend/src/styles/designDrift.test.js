@@ -61,6 +61,16 @@ describe("design drift", () => {
     ).toEqual([]);
   });
 
+  // A tip lands on the neighbouring control; if it takes the pointer, it takes
+  // that control's click (#1380). Vuetify's own rule is `pointer-events: none`.
+  it("leaves the tooltip surface click-through", () => {
+    expect(
+      hits(
+        /(?:app-tooltip|v-tooltip)[^{]*\{[^}]*pointer-events:\s*(?!none\b)\w[^;]*/g,
+      ),
+    ).toEqual([]);
+  });
+
   it("gives the two button dialects a tooltip, never a native title", () => {
     expect(
       hits(/<App(?:Bar)?Button\b(?:[^>"']|"[^"]*"|'[^']*')*?\s:?title=/g),

@@ -31,8 +31,7 @@ import Tooltip from "./Tooltip.vue";
  * A separate focusable `<button>` rather than a tooltip hung on the blocked
  * control: a natively `disabled` control fires no pointer events and holds no
  * focus, so a tooltip on it is unreachable by both routes. It is a preset of
- * the one `Tooltip` surface, which opens on hover and on focus and can itself
- * be hovered (WCAG 1.4.13).
+ * the one `Tooltip` surface, which opens on hover and on focus.
  *
  * The reason is ALSO rendered as visible text on the surface and pointed at by
  * the blocked control's `aria-describedby`. This mark is the pointer-and-focus
