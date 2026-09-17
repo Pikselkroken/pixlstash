@@ -72,7 +72,7 @@ const statsTitle = computed(() =>
   right: 7px;
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   background: rgb(var(--v-theme-accent));
   box-shadow: 0 0 5px rgba(var(--v-theme-accent), 0.7);
   animation: tb-stats-pulse 1.4s ease-in-out infinite;
