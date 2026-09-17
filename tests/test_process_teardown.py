@@ -34,22 +34,32 @@ from tests.process_teardown import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# A conftest that wires the module the same way tests/conftest.py does, so the
-# subprocess exercises the real glue rather than a re-implementation of it.
-_CONFTEST = """
-import pytest
-from tests.process_teardown import exit_if_enabled, remember_session
+
+def _conftest(after_remember="pass"):
+    """The wiring tests/conftest.py uses, so the subprocess exercises the glue.
+
+    ``after_remember`` is the session-finish work that follows the recording,
+    which in tests/conftest.py is the leaked-thread and time-budget
+    guardrails. What one of those does to the run when it raises is the thing
+    under test, so it is a parameter rather than a fixed body.
+    """
+    return textwrap.dedent(
+        f"""
+        import pytest
+        from tests.process_teardown import exit_if_enabled, remember_session
 
 
-@pytest.hookimpl(trylast=True)
-def pytest_sessionfinish(session, exitstatus):
-    remember_session(session)
+        @pytest.hookimpl(trylast=True)
+        def pytest_sessionfinish(session, exitstatus):
+            remember_session(session)
+            {after_remember}
 
 
-@pytest.hookimpl(trylast=True)
-def pytest_unconfigure(config):
-    exit_if_enabled(config)
-"""
+        @pytest.hookimpl(trylast=True)
+        def pytest_unconfigure(config):
+            exit_if_enabled(config)
+        """
+    )
 
 
 def _subprocess_env(*, fast_exit):
@@ -68,9 +78,9 @@ def _subprocess_env(*, fast_exit):
     }
 
 
-def _run_pytest(tmp_path, body, *, fast_exit):
+def _run_pytest(tmp_path, body, *, fast_exit, after_remember="pass"):
     """Run a one-test pytest session in its own process and return it."""
-    (tmp_path / "conftest.py").write_text(_CONFTEST)
+    (tmp_path / "conftest.py").write_text(_conftest(after_remember))
     (tmp_path / "test_subject.py").write_text(textwrap.dedent(body))
     return subprocess.run(
         [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "test_subject.py"],
@@ -116,6 +126,33 @@ def test_a_failing_session_still_exits_nonzero_and_says_so(tmp_path, fast_exit):
     assert result.returncode == 1, result.stdout + result.stderr
     assert "1 failed" in result.stdout, result.stdout + result.stderr
     assert "deliberate failure" in result.stdout, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("fast_exit", [True, False])
+def test_a_session_finish_hook_that_raises_is_never_a_green_job(tmp_path, fast_exit):
+    """A guardrail that raises stays red, and still says why.
+
+    pytest catches only ``exit.Exception`` around ``pytest_sessionfinish``.
+    Anything else escapes ``wrap_session``'s ``finally`` - skipping the
+    ``_ensure_unconfigure`` there - and reaches ``main``'s own, which runs
+    ``pytest_unconfigure`` with the exception still propagating and the
+    session's exit status still 0, because nothing updated it. Exiting on that
+    status unchanged would turn every raising guardrail on Windows into a
+    green job, and ``os._exit`` would take the traceback with it, so both arms
+    have to end non-zero and both have to print the reason.
+    """
+    result = _run_pytest(
+        tmp_path,
+        """
+        def test_ok():
+            assert True
+        """,
+        fast_exit=fast_exit,
+        after_remember='raise AssertionError("deliberate guardrail failure")',
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "deliberate guardrail failure" in output, output
 
 
 def test_the_fast_exit_announces_itself(tmp_path):

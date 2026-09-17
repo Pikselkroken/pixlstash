@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import os
 import sys
+import traceback
 from collections.abc import Mapping
 from typing import Any, NoReturn
 
@@ -137,6 +138,19 @@ def _end_process(config: Any, status: int, reason: str) -> NoReturn:
             capman.stop_global_capturing()
         except Exception as exc:
             print(f"Could not stop global capturing: {exc!r}", file=sys.stderr)
+
+    # An exception on its way out of ``pytest_sessionfinish`` arrives here:
+    # ``wrap_session`` catches only ``exit.Exception`` around that hook, so
+    # anything else escapes its ``finally`` and reaches ``main``'s own
+    # ``finally: config._ensure_unconfigure()``, which calls this. The session
+    # still reads the status it had before the hook ran - nothing updated it -
+    # so exiting on it unchanged would report a guardrail failure as a green
+    # job, and ``os._exit`` would take the traceback with it. Print it, and
+    # never leave a propagating exception looking like success.
+    if sys.exc_info()[0] is not None:
+        traceback.print_exc()
+        if status == 0:
+            status = 1
 
     print(
         f"Exiting with status {status} without interpreter finalization "
