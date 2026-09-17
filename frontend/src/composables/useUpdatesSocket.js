@@ -383,6 +383,20 @@ export function useUpdatesSocket({
             const nextKey = (wsStore.wsTextUpdate?.key || 0) + 1;
             wsStore.wsTextUpdate = { key: nextKey, pictureIds };
           }
+          // The picture's bytes were rewritten. FIVE producers stamp this
+          // field and only two of them are turns: `POST /pictures/rotate`,
+          // the operation-log restore behind undo/redo (an orientation OR a
+          // location), the background thumbnail regeneration task, and the
+          // layout move route and its migration task. The overlay's metadata
+          // is what carries `orientation`, and its grid card refresh is
+          // deferred under an open overlay (§9.1), so it needs its own signal
+          // to turn the picture without being closed and reopened. Sorting the
+          // turns from the rest is the overlay's job, not this gate's: it
+          // compares the orientation the read brings back.
+          if (changedFields.includes("pixels")) {
+            const nextKey = (wsStore.wsPixelsUpdate?.key || 0) + 1;
+            wsStore.wsPixelsUpdate = { key: nextKey, pictureIds };
+          }
         }
         if (
           pictureIds.length > 0 &&

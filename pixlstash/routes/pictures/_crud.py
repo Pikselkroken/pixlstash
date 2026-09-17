@@ -1833,12 +1833,25 @@ def register_routes(router, server):
         if rotated_ids:
             # The card keeps its place and its id; its bitmap and its aspect
             # ratio changed. ``updated`` is the kind for that.
+            #
+            # ``pixels`` names WHICH facet changed, exactly as the undo of this
+            # operation already does (``operation_log_service._emit``). Without
+            # it the event is a bare ``updated``, so a receiving client re-reads
+            # metadata it already has and goes on painting the pre-rotate
+            # bitmap - the thumbnail URL comes from the batch-thumbnail
+            # endpoint, not from ``GET /pictures/{id}/metadata``. Naming the
+            # field is what tells the client a metadata refresh is not enough.
+            #
+            # This was the one producer of a byte rewrite that did not name it;
+            # the restore above, ``ThumbnailGenerationTask`` and the layout move
+            # (route and task) all did.
             server.vault.notify(
                 EventType.CHANGED_PICTURES,
                 {
                     "picture_ids": rotated_ids,
                     "origin_client_id": origin_client_id,
                     "change_kind": "updated",
+                    "fields": ["pixels"],
                 },
             )
         return {

@@ -5153,6 +5153,16 @@ on painting the pre-rotate image for up to an hour. The token is now
 `"<W>x<H>o<orientation>"` for a rotated picture and unchanged for an unrotated
 one, so backfilling the mirror does not invalidate every thumbnail at once.
 
+**The event names the field: `fields: ["pixels"]`.** The forward rotate and the
+undo/redo restore both stamp it (`_crud.rotate_pictures` and
+`operation_log_service._emit`), for the reason §23's move does: the thumbnail URL
+and its cache token come from the batch-thumbnail endpoint, never from
+`GET /pictures/{id}/metadata`, so a client told only `updated` re-reads metadata
+it already has and goes on painting the pre-rotate bitmap. The client that
+*issued* the rotate refreshes itself, so the forward event is for everybody else
+— another tab, and the open lightbox, which rebuilds its `<img>` URL from
+`orientation` and had no other signal that would re-read it (#1419).
+
 **Authorization: `PICTURE_SCOPED` on `body_ids="picture_ids"`, the same tier and
 the same shape as `DELETE /pictures`.** It shipped `OWNER_ONLY` on the argument
 that an in-place write to the owner's original bytes is categorically different;

@@ -624,6 +624,28 @@ export function useGridRealtimeSync(deps) {
       if (pictureIds.length > MAX_TARGETED_UPDATE) {
         return reloadOrDefer("card-content-refresh-too-large");
       }
+      // A `pixels` change rewrote the FILE, so the card's shape and its bitmap
+      // both move - from two different reads, which have to land together or the
+      // tile turns twice on screen. `applyRotatedCards` owns both, so it
+      // REPLACES the metadata refresh below rather than following it.
+      //
+      // It also runs UNDER an open overlay, where the refresh below defers.
+      // That is not an exception to §9.1 but the rule read correctly: the
+      // applier is FIELDS-ONLY (see ImageGrid.applyRotatedCards) - nothing is
+      // inserted, removed or reordered, because a turned photo does not move in
+      // the grid - so there is no restructuring to keep off the frozen
+      // filmstrip.
+      //
+      // What deferring it actually cost is the close: marking a deferred
+      // refresh queues a WHOLE-GRID refetch for `closeOverlay`, so every
+      // lightbox session containing a rotate paid one, to repair a card a
+      // fields-only write had already repaired. The card itself is behind the
+      // overlay and invisible until then - that is not the argument, and the
+      // filmstrip reads the frozen snapshot either way.
+      if (fields.includes("pixels")) {
+        void grid.applyRotatedCards?.(pictureIds);
+        return { action: TARGETED, reason: "card-content-rotate" };
+      }
       if (deferWhileOverlayOpen()) {
         // Only the GRID card refresh is deferred here. The open lightbox keeps
         // itself current off App.vue's `wsDetectionUpdate` signal, which it uses
@@ -633,16 +655,8 @@ export function useGridRealtimeSync(deps) {
           reason: "card-content-refresh-overlay-deferred",
         };
       }
-      // A `pixels` change rewrote the FILE, so the card's shape and its bitmap
-      // both move - from two different reads, which have to land together or the
-      // tile turns twice on screen. `applyRotatedCards` owns both, so it
-      // REPLACES the metadata refresh here rather than following it.
       // `detections` leaves the file alone and takes the plain refresh.
-      if (fields.includes("pixels")) {
-        void grid.applyRotatedCards?.(pictureIds);
-      } else {
-        for (const id of pictureIds) grid.refreshGridImage?.(id);
-      }
+      for (const id of pictureIds) grid.refreshGridImage?.(id);
       return { action: TARGETED, reason: "card-content-refresh" };
     }
 

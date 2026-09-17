@@ -1111,7 +1111,7 @@ describe("useGridRealtimeSync - a rotate's pixels changed", () => {
       fields: ["pixels"],
     });
     expect(res.action).toBe("targeted");
-    expect(res.reason).toBe("card-content-refresh");
+    expect(res.reason).toBe("card-content-rotate");
     // One applier, not a metadata refresh followed by a thumbnail refresh: the
     // tile's shape and its bitmap have to land in the same frame or the picture
     // turns twice on screen. Asserting the old pair is asserting the bug.
@@ -1145,6 +1145,26 @@ describe("useGridRealtimeSync - a rotate's pixels changed", () => {
     });
     expect(h.reload).not.toHaveBeenCalled();
     expect(h.wsStore.addSortChangedExternalIds).not.toHaveBeenCalled();
+  });
+
+  // The applier is fields-only, so unlike the metadata refresh its `detections`
+  // sibling takes, it has nothing to keep off the frozen filmstrip. Deferring it
+  // left the card behind the lightbox painting the pre-rotate bitmap and queued
+  // a whole-grid refetch for close to repair it.
+  it("repaints the card under an open overlay instead of deferring", () => {
+    const h = makeHarness({ overlayOpen: true });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [16],
+      change_kind: "updated",
+      fields: ["pixels"],
+    });
+    expect(res.reason).toBe("card-content-rotate");
+    expect(h.grid.applyRotatedCards).toHaveBeenCalledWith([16]);
+    expect(h.grid.markOverlayDeferredRefresh).not.toHaveBeenCalled();
+    expect(h.reload).not.toHaveBeenCalled();
   });
 
   it("leaves the thumbnail alone for a change that did not touch the file", () => {

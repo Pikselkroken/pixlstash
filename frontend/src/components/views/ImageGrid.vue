@@ -10,6 +10,7 @@
     :smartScoreUpdate="wsStore.wsSmartScoreUpdate"
     :detectionUpdate="wsStore.wsDetectionUpdate"
     :textUpdate="wsStore.wsTextUpdate"
+    :pixelsUpdate="wsStore.wsPixelsUpdate"
     :hiddenTags="userPrefsStore.hiddenTags"
     :applyTagFilter="userPrefsStore.applyTagFilter"
     :dateFormat="userPrefsStore.dateFormat"

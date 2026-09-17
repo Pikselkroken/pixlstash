@@ -594,3 +594,58 @@ describe("useUpdatesSocket: text read from a picture (#1197)", () => {
     expect(wsStore.wsTextUpdate.key).toBe(1);
   });
 });
+
+// The wire that carries an undo of a rotate from the socket to the open
+// lightbox. Without it the overlay's watcher is never triggered at all, and
+// nothing that tests the overlay by setting its prop would notice (#1419).
+describe("useUpdatesSocket: a picture's bytes changed (#1419)", () => {
+  it("signals the lightbox with the pictures whose bytes changed", () => {
+    connect();
+    const wsStore = useWsStore();
+    receive({
+      type: "pictures_changed",
+      change_kind: "updated",
+      picture_ids: [7],
+      fields: ["pixels"],
+    });
+    expect(wsStore.wsPixelsUpdate).toEqual({ key: 1, pictureIds: [7] });
+  });
+
+  it("signals for a layout move, which names the field alongside the path", () => {
+    connect();
+    const wsStore = useWsStore();
+    receive({
+      type: "pictures_changed",
+      change_kind: "updated",
+      picture_ids: [7],
+      fields: ["file_path", "pixels"],
+    });
+    expect(wsStore.wsPixelsUpdate).toEqual({ key: 1, pictureIds: [7] });
+  });
+
+  it("stays put for a change that did not rewrite the file", () => {
+    connect();
+    const wsStore = useWsStore();
+    receive({
+      type: "pictures_changed",
+      change_kind: "updated",
+      picture_ids: [7],
+      fields: ["detections"],
+    });
+    expect(wsStore.wsPixelsUpdate.key).toBe(0);
+  });
+
+  it("advances the key per frame, so two turns are two signals", () => {
+    connect();
+    const wsStore = useWsStore();
+    const frame = {
+      type: "pictures_changed",
+      change_kind: "updated",
+      picture_ids: [7],
+      fields: ["pixels"],
+    };
+    receive(frame);
+    receive(frame);
+    expect(wsStore.wsPixelsUpdate.key).toBe(2);
+  });
+});

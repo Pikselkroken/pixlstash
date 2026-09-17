@@ -836,7 +836,7 @@ The backend's [EventType](../pixlstash/event_types.py) enum names are **not** se
 | `source` | `"ui"` \| `"external"` | Coarse origin class. `"ui"` = an attributable owner action through the SPA; `"external"` = work that originated outside the UI (watch/reference folders, external API writes, background ML finishers, externally-run ComfyUI). Defaults to `"external"`. |
 | `origin_client_id` | `string` \| `null` | The `X-Client-Id` of the originating tab, or `null` for background/external work. **The primary signal** — a tab recognises the echo of its own change by matching this against its own id. |
 | `picture_ids` | `number[]` | Affected picture ids. |
-| `fields` | `string[]` (optional) | Columns that changed (e.g. `["smart_score"]`); drives the silent-vs-sort-changed decision. Omitted for edits that may affect any view (user edits, imports). Two values are **not** columns and name a routing class instead: `detections` (card content) and `stack_count` (the stack's live member count, derived by the listing endpoint and re-read by its own targeted call). See §8.2. |
+| `fields` | `string[]` (optional) | Columns that changed (e.g. `["smart_score"]`); drives the silent-vs-sort-changed decision. Omitted for edits that may affect any view (user edits, imports). Three values are **not** columns and name a routing class instead: `detections` (card content), `pixels` (the picture's own bytes were rewritten — see §8.3) and `stack_count` (the stack's live member count, derived by the listing endpoint and re-read by its own targeted call). See §8.2. |
 | `change_kind` | `"added"` \| `"updated"` \| `"removed"` \| `"restored"` (optional) | Set at the emit site where cheap (`removed` on deletes is free; `added` is implicit for `picture_imported`). **Omitted entirely when unset** — the SPA infers `added` for `picture_imported` and falls back to `updated` otherwise. `"restored"` is a scrapheap comeback (undo of a move, or `POST /pictures/scrapheap/restore`): the card returns, but the picture is **not** new to the vault, so the sidebar must not raise its NEW marker for it. The value set is a closed allowlist on **both** ends — `WsBroadcasterMixin.CHANGE_KINDS` and `resolveChangeKind` — and each silently degrades an unknown kind (the backend drops the field, the SPA falls back to `updated`), so the two move together or not at all. |
 
 Per-type payload specifics (all carry the envelope fields above):
@@ -894,8 +894,10 @@ The picture-event policy lives in [`useGridRealtimeSync.js`](../frontend/src/com
 Two field classes are decided **before** the origin dispatch, because for both
 of them the origin makes no difference to what has to happen:
 
-- **Card-content fields** (`detections`) → a targeted per-card
-  `refreshGridImage`, never a pill and never a reshuffle.
+- **Card-content fields** (`detections`, `pixels`) → never a pill and never a
+  reshuffle. `detections` takes a targeted per-card `refreshGridImage`; `pixels`
+  takes `applyRotatedCards` instead, and is the one card op that is **not**
+  deferred under an open overlay. See §8.3.
 - **Stack facets** (`stack_count`) → **one batched** `refreshStackFacets(ids)`
   read for the whole event, never a pill, never a reshuffle, and never the
   per-card path: `stack_count` is derived per stack by the listing endpoint and
@@ -903,6 +905,46 @@ of them the origin makes no difference to what has to happen:
   repair a stack badge. Uniform across origins for the same reason `restored`
   is: the acting tab has no optimistic local copy of a server-computed count,
   and an undo (Ctrl+Z, the toolbar, the lightbox) has no local grid op at all.
+
+### 8.3 `pixels`: the picture's own bytes
+
+`fields: ["pixels"]` means the FILE was rewritten, so two things the client
+holds are stale at once: the thumbnail URL and its cache token (which come from
+`POST /pictures/thumbnails`, never from `GET /pictures/{id}/metadata`) and, for
+a turn, the `orientation` every surface builds its display URL's `?v=o<n>` from.
+A client told only `updated` re-reads metadata it already has and goes on
+painting the picture it was already painting.
+
+**Five producers stamp it, and only two of them are turns:**
+
+| Producer | Fields | A turn? |
+|---|---|---|
+| `POST /pictures/rotate` | `["pixels"]` | yes |
+| the operation-log restore behind undo/redo (`_emit`) | `["pixels"]` | an orientation **or** a location |
+| `ThumbnailGenerationTask` | `["pixels"]` | no — a regenerated bitmap, up to 64 ids per batch |
+| `POST /pictures/layout/move-to-match` and `LayoutMoveTask` | `["file_path", "pixels"]` | no — the path moved |
+
+Consumers must not assume a turn. The grid does not care which it was: the
+thumbnail is re-read either way. The **lightbox** does — the boxes and the text
+are undone by a turn and not by a byte rewrite as such — so it re-reads metadata
+on every signal and compares the orientation that read brings back before
+re-reading `/faces`, `/detections` and `/text`. Re-reading the text
+unconditionally would take the viewer's word selection with it on every
+background thumbnail batch.
+
+**The grid's rotate applier runs under an open overlay**, unlike every other
+deferred op in §9.1 of the frontend document: `applyRotatedCards` is fields-only
+— it writes the shape and bitmap of cards already present and never inserts,
+removes or reorders, a turned photo having nowhere to move to — so there is no
+restructuring to keep off the frozen filmstrip, and deferring it only queued a
+whole-grid refetch for overlay close.
+
+**The overlay must survive that write.** `applyRotatedCards` replaces the
+`allGridImages` array, and the lightbox re-seeds its open card from the sequence
+frozen at open whenever that prop moves; `orientation` and `pixel_sha` are
+therefore preserved across that re-seed, exactly as `fetchOverlayMetadata`
+excepts the same two fields from its local-wins merge. Without that, an undo
+turned the picture and the grid's own repaint turned it straight back (#1419).
   There is no `MAX_TARGETED_UPDATE` escalation here, deliberately: one read is
   not a fetch storm, and the reload it would escalate to is precisely what must
   not happen while a ghost window is open.
