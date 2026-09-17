@@ -1401,6 +1401,16 @@ function setOverlayImageById(nextId) {
       // for the same image would clobber an optimistic rating change (a 0 toggle is a
       // valid edit, hence the != null guard rather than a truthiness check).
       ...(isSameImage && existingScore != null ? { score: existingScore } : {}),
+      // Preserve the file's bytes for the same reason. A rotate's metadata read
+      // moved them, and `target` may be a row that read never reached (an
+      // expanded stack member from the filmstrip); re-applying its old
+      // orientation puts the pre-rotate `?v=` back on the <img>.
+      ...(isSameImage && image.value?.orientation != null
+        ? { orientation: image.value.orientation }
+        : {}),
+      ...(isSameImage && image.value?.pixel_sha != null
+        ? { pixel_sha: image.value.pixel_sha }
+        : {}),
       tags: dedupeTagList(
         isSameImage ? (existingTags.length ? existingTags : targetTags) : [],
       ),
@@ -3774,6 +3784,26 @@ async function fetchOverlayMetadata(imageId) {
       merged.metadata = { ...currentMeta, ...dataMeta };
     }
     image.value = merged;
+    // Carry the orientation into the snapshot frozen on open as well. Every
+    // re-resolve of the picture reads that snapshot - the grid's list refresh
+    // after a rotate, and moving to a neighbour and back - so a stale entry
+    // there puts the pre-rotate `?v=` back on the <img>.
+    const frozen = frozenAllImages.value;
+    const frozenIndex = Array.isArray(frozen)
+      ? frozen.findIndex((item) => String(item?.id) === String(imageId))
+      : -1;
+    if (
+      frozenIndex >= 0 &&
+      merged.orientation != null &&
+      frozen[frozenIndex].orientation !== merged.orientation
+    ) {
+      const next = frozen.slice();
+      next[frozenIndex] = {
+        ...frozen[frozenIndex],
+        orientation: merged.orientation,
+      };
+      frozenAllImages.value = next;
+    }
     void ensureOverlayFilmstripForImage();
     void tagsPanelRef.value?.refetchPredictions(imageId);
   } catch (e) {

@@ -45,12 +45,14 @@ const getMock = vi.fn(async (url) => {
     throw e;
   }
   if (path.includes("/metadata")) {
+    const id = Number(path.match(/\/pictures\/(\d+)\//)?.[1] ?? 7);
     return {
       data: {
-        id: 7,
+        id,
         format: "jpg",
         pixel_sha: metadataPixelSha,
-        orientation: metadataOrientation,
+        // Only picture 7 is ever turned; a neighbour stays upright.
+        orientation: id === 7 ? metadataOrientation : 1,
         width: 1600,
         height: 1200,
         tags: [],
@@ -108,12 +110,15 @@ const STUBS = {
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-async function openOverlay(image = { id: 7, format: "jpg", tags: [] }) {
+async function openOverlay(
+  image = { id: 7, format: "jpg", tags: [] },
+  allImages = [image],
+) {
   const wrapper = mount(ImageOverlay, {
     props: {
       open: false,
       initialImageId: image.id,
-      allImages: [image],
+      allImages,
       backendUrl: "http://test",
       tagUpdate: { key: 0, pictureIds: [] },
       descriptionUpdate: { key: 0, pictureIds: [] },
@@ -353,6 +358,75 @@ describe("ImageOverlay - the picture on screen after a rotate", () => {
     // content hash is identical on both sides of the turn and is not in it.
     expect(srcAfter).toContain("?v=o3");
     expect(srcAfter).not.toContain("sha-stable");
+  });
+
+  it("stays turned when the grid hands back its list after the rotate", async () => {
+    // `overlay-change` makes the grid re-read the tile and push a new
+    // `allImages`. The overlay re-resolves the open picture from the snapshot it
+    // froze on open, which still carries the pre-rotate orientation; letting
+    // that win put the old `?v=` back and the browser repainted the old bytes.
+    const wrapper = await openOverlay();
+
+    metadataOrientation = 6;
+    press("]");
+    await flush();
+    await flush();
+    expect(wrapper.find(".overlay-img").attributes("src")).toContain("?v=o6");
+
+    await wrapper.setProps({
+      allImages: [{ id: 7, format: "jpg", orientation: 6, tags: [] }],
+    });
+    await flush();
+    await flush();
+
+    expect(wrapper.find(".overlay-img").attributes("src")).toContain("?v=o6");
+  });
+
+  it("stays turned when the refreshed row is not from the frozen snapshot", async () => {
+    // An expanded stack member is resolved from the filmstrip's own rows, which
+    // the snapshot patch never reaches. Same shape here: the picture is absent
+    // from the snapshot, so the grid's stale row re-resolves it directly.
+    const wrapper = await openOverlay({ id: 7, format: "jpg", tags: [] }, []);
+
+    metadataOrientation = 6;
+    press("]");
+    await flush();
+    await flush();
+    expect(wrapper.find(".overlay-img").attributes("src")).toContain("?v=o6");
+
+    await wrapper.setProps({
+      allImages: [{ id: 7, format: "jpg", orientation: 1, tags: [] }],
+    });
+    await flush();
+    await flush();
+
+    expect(wrapper.find(".overlay-img").attributes("src")).toContain("?v=o6");
+  });
+
+  it("stays turned after moving to a neighbour and back", async () => {
+    // Coming back re-resolves the picture from the frozen snapshot too, and a
+    // row with no orientation there would pin the bare, unrotated URL.
+    const seven = { id: 7, format: "jpg", tags: [] };
+    const wrapper = await openOverlay(seven, [
+      seven,
+      { id: 8, format: "jpg", tags: [] },
+    ]);
+
+    metadataOrientation = 6;
+    press("]");
+    await flush();
+    await flush();
+    expect(wrapper.find(".overlay-img").attributes("src")).toContain("?v=o6");
+
+    await wrapper.setProps({ initialImageId: 8 });
+    await flush();
+    await flush();
+    await wrapper.setProps({ initialImageId: 7 });
+    // Right away, before the metadata read lands: no flash of the old file.
+    expect(wrapper.find(".overlay-img").attributes("src")).toContain("?v=o6");
+    await flush();
+    await flush();
+    expect(wrapper.find(".overlay-img").attributes("src")).toContain("?v=o6");
   });
 
   it("unpins the URL when the first known orientation comes from rotate", async () => {
