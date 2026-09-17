@@ -11,12 +11,23 @@
 // it loads and how big it is. That is the "not named" state from the design's
 // `States.dc.html`, and it is the ordinary case rather than the exception.
 
-/** Widget names whose value is the checkpoint or diffusion model. */
+/**
+ * Widget names whose value is the checkpoint or diffusion model.
+ *
+ * The mirror of `_CHECKPOINT_WIDGETS` in
+ * `pixlstash/services/workflow_identity.py`; the two must agree, or a
+ * workflow reads as having no base model on one side and a changed one on the
+ * other. `checkpoint_id` is the PixlStash shelf loader's, whose value is a
+ * shelf row id rather than a filename (#1416) -- so `modelStem` of it is a
+ * bare number until something resolves ids to names, exactly as the shelf
+ * loaders' `*_sha256` values already show as digests.
+ */
 const BASE_WIDGETS = new Set([
   "ckpt_name",
   "unet_name",
   "diffusion_model",
   "model_path",
+  "checkpoint_id",
 ]);
 
 /** File extensions that mean "a picture the graph loads", not a model. */

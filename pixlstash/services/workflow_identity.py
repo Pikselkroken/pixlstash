@@ -79,7 +79,10 @@ _STRUCTURAL_LORA_RE = re.compile(
 # whether it was a picture or a model. A custom node naming its input
 # picture some other way still splits cards per picture.
 _PICTURE_WIDGET_RE = re.compile(r"(^|_)(image|images|video|mask)(_|$)")
-_CHECKPOINT_WIDGETS = frozenset({"ckpt_name", "unet_name"})
+# Every widget a base model is named by, so "other checkpoint" says which
+# model changed rather than falling back to "other models". The shelf
+# loader names its checkpoint by id, not by filename (#1416).
+_CHECKPOINT_WIDGETS = frozenset({"ckpt_name", "unet_name", "checkpoint_id"})
 
 PLUMBING = "plumbing"
 UPSCALE = "upscale"

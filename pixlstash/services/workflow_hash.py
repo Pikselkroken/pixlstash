@@ -131,14 +131,39 @@ _TEXT_FIELD_SUFFIX_RE = re.compile(r"_(text|prompt|caption|query|search)$", re.I
 _MAX_FILENAME_LENGTH = 255
 
 # The ComfyUI-PixlStash loaders name their asset by digest rather than by
-# filename (`lora_sha256`, `checkpoint_sha256`), so the extension rules below
-# cannot see them. Without this a LoRA swap on a PixlStash node would leave the
-# recipe unchanged, which is the one error the spec calls unrecoverable.
-SHA256_FIELD_RE = re.compile(r"(^|_)sha256$")
+# filename (`lora_sha256`, `adapter_sha256`, `vae_sha256`, `clip_sha256`), so
+# the extension rules below cannot see them. Without this a LoRA swap on a
+# PixlStash node would leave the recipe unchanged, which is the one error the
+# spec calls unrecoverable.
+#
+# A numbered suffix is ComfyUI's convention for a second slot on one node, and
+# it names a model exactly as the first does: the PixlStash CLIP loader's
+# `clip_sha256_2` is the T5 or Llama beside a clip-l, and `lora_name_2` is a
+# stacker's second LoRA. Anchoring on `sha256$` alone read the pair's second
+# encoder as a parameter and nulled it (#1416).
+SHA256_FIELD_RE = re.compile(r"(^|_)sha256(_\d+)?$")
 # What such a value must look like to name a model: the whole digest, or the
 # 10- or 12-digit prefix A1111 writes for a checkpoint or an embedding. No other
 # length, so a partial value in some other node's widget names nothing.
 DIGEST_PREFIX_RE = re.compile(r"^(?:[0-9a-f]{10}|[0-9a-f]{12}|[0-9a-f]{64})$")
+
+# The one shelf loader that cannot address its model by digest.
+# `PixlStashCheckpointLoader` takes a `checkpoint_id`, because a model's
+# `sha256` is NULL until the background hasher has read the file and a 24 GB
+# checkpoint is listable long before that, so the node's picker writes the
+# shelf's row id instead. A bare id carries no extension and is not a digest,
+# so neither rule above saw it: the structural hash did not move when the
+# checkpoint did, and every graph on that loader shared one workflow key
+# whatever it loaded (#1416).
+SHELF_ID_FIELD_RE = re.compile(r"^checkpoint_id$")
+# And what such a value must look like: the node itself refuses anything that
+# is not `str.isdigit()`, so the hash rule is held to the node's own contract.
+# Without it the rule is name-only, and a third-party node with a widget of
+# that name would write whatever it holds -- prose, a newline, a kilobyte --
+# into `workflow_recipe_asset`, which is kept forever and is the tier the
+# design calls safe to share. The two guards below (no newline, 255 bytes) sit
+# AFTER this branch and would not catch it.
+SHELF_ID_VALUE_RE = re.compile(r"^\d+$")
 
 # Defense in depth against a third-party node that puts a credential in a
 # widget. Nothing in the shipped ComfyUI-PixlStash suite does - its connection
@@ -251,6 +276,20 @@ def structural_widget_value(name: str, value: Any) -> Optional[str]:
 
     ``None`` means the widget is bucket P or V and its value is nulled. A
     returned string is a topology asset (bucket TA), normalized per rule 5.
+
+    A widget naming its model by digest or by shelf id keeps its value as it
+    is: there is no filename to normalize, and both name the model as surely
+    as a filename does. See :data:`SHA256_FIELD_RE` and
+    :data:`SHELF_ID_FIELD_RE`.
+
+    **An empty value names no model**, on either of those paths. A shelf
+    loader's widget is empty until its Browse button has been clicked, and the
+    CLIP loader's second encoder is empty on every SD and SDXL graph -- the
+    common case, not the odd one. Keeping it wrote a junk
+    ``workflow_recipe_asset`` row and an ``asset:e3b0c442...`` reference (the
+    digest of the empty string) into a stored document whose whole purpose is
+    to say which model went there. A shelf id that is not a shelf id names
+    nothing either; see :data:`SHELF_ID_VALUE_RE`.
     """
     if SEED_FIELD_RE.search(name) or name == "filename_prefix":
         return None
@@ -258,8 +297,10 @@ def structural_widget_value(name: str, value: Any) -> Optional[str]:
         return None
     if not isinstance(value, str):
         return None
+    if SHELF_ID_FIELD_RE.match(name):
+        return value if SHELF_ID_VALUE_RE.match(value) else None
     if SHA256_FIELD_RE.search(name):
-        return value.lower()
+        return value.lower() or None
     lowered = name.lower()
     if lowered in _TEXT_FIELD_NAMES or _TEXT_FIELD_SUFFIX_RE.search(lowered):
         return None
