@@ -338,6 +338,9 @@ const infoHeaderLabel = computed(() => {
 const pictureInfoEntries = computed(() => {
   if (!props.image) return [];
   const entries = [];
+  if (props.image.id != null) {
+    entries.push({ label: "ID", value: String(props.image.id) });
+  }
   const fallbackW = Number(props.image.width || 0);
   const fallbackH = Number(props.image.height || 0);
   const width = fallbackW > 0 ? fallbackW : null;
