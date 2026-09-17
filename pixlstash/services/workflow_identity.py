@@ -26,8 +26,6 @@ frozen into the hub by the caller the first time a slot is seen.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -41,11 +39,13 @@ from pixlstash.services.comfyui_recipe_service import (
 from pixlstash.services.workflow_hash import (
     ReducedNode,
     WorkflowGraphError,
+    _digest,
     drop_widgets,
     graph_key,
     node_labels,
     reduce_api_graph,
 )
+from pixlstash.services.workflow_io import is_picture_loader
 
 # Stamped beside every cached value, so a change of rule re-keys visibly.
 # Stack overrides are keyed on workflow keys, not on core hashes, so a
@@ -60,10 +60,16 @@ RECIPE = "recipe"
 
 # The filename guess for a LoRA slot's mark. Speed LoRAs change how a workflow
 # samples (steps, CFG), so they are part of the workflow; anything else is
-# taken to be the look. Anchored on non-letters so "hyperrealism" and
-# "turbocharged_style" stay recipe LoRAs.
+# taken to be the look. The guess is frozen on first sight, so precision beats
+# recall: a false "structural" pulls a character LoRA into the card key. Hence
+# whole words only ("superturbo_style" stays recipe), "hyper" only as Hyper-SD,
+# and a step count of at most two digits (speed LoRAs run 1-16 steps; a
+# training checkpoint says "3000steps").
 _STRUCTURAL_LORA_RE = re.compile(
-    r"(?<![a-z])(lightning|turbo|hyper|lcm)(?![a-z])|(?<![a-z0-9])\d+[-_ ]?steps?(?![a-z])"
+    r"(?<![a-z])(lightning|turbo|lcm|lightx2v|causvid|dmd2?|tcd|pcm)(?![a-z])"
+    r"|(?<![a-z])hyper[-_ ]?(sd|sdxl|flux)(?![a-z])"
+    r"|(?<![a-z])sdxl[-_ ]?flash(?![a-z])"
+    r"|(?<![a-z0-9])\d{1,2}[-_ ]?steps?(?![a-z])"
 )
 
 # A widget naming the picture a run starts from. It is an asset in the
@@ -80,9 +86,9 @@ UPSCALE = "upscale"
 FACE_DETAILER = "face_detailer"
 LORA = "lora"
 
-_PLUMBING_CLASSES = frozenset(
-    {"PreviewImage", "Reroute", "Note", "MarkdownNote", "GetNode", "SetNode"}
-)
+# Only these reach a stored document: API graphs have no Reroute or Note, and
+# the UI reduction drops them before anything is stored.
+_PLUMBING_CLASSES = frozenset({"PreviewImage"})
 _UPSCALE_CLASS_RE = re.compile(
     r"^(UpscaleModelLoader|ImageUpscaleWithModel|ImageScale|LatentUpscale|UltimateSDUpscale)"
 )
@@ -109,6 +115,11 @@ class Slot:
     the widget name, so it is the same however the file numbered its nodes.
     Refined until stable, so loaders in a long chain are told apart; only
     loaders WL cannot separate (genuine twins) share a label and a mark.
+
+    **A label only means something within one topology.** At full refinement
+    it encodes the whole graph, so adding a PreviewImage changes every label.
+    Marks and parameter addresses keyed by label must be keyed with the
+    topology too, as :func:`workflow_key` is.
     """
 
     label: str
@@ -117,11 +128,6 @@ class Slot:
     widget: str
     asset: str
     is_lora: bool
-
-
-def _digest(payload: object) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _is_lora_widget(widget: str) -> bool:
@@ -135,19 +141,15 @@ def slots(document: dict) -> list[Slot]:
         document: A stored structural document, assets as references.
 
     Raises:
-        WorkflowGraphError: The document holds no usable node.
+        WorkflowGraphError: The document holds no usable node, or is a raw
+            graph rather than a stored document.
     """
-    nodes = reduce_api_graph(document)
-    topology = drop_widgets(nodes)
-    labels = node_labels(topology, rounds=len(topology))
-    raw = {str(node_id): node for node_id, node in document.items()}
+    nodes = _reduce(document)
+    labels = node_labels(drop_widgets(nodes), rounds=None)
     found = []
     for node_id, node in nodes.items():
-        raw_inputs = raw[node_id].get("inputs") or {}
-        for widget, value in raw_inputs.items():
-            if not isinstance(value, str) or not value.startswith(
-                ASSET_REFERENCE_PREFIX
-            ):
+        for widget, value in node.widgets:
+            if value is None:
                 continue
             if _PICTURE_WIDGET_RE.search(widget) or widget in INPUT_IMAGE_FIELDS.get(
                 node.class_type, ()
@@ -164,6 +166,44 @@ def slots(document: dict) -> list[Slot]:
                 )
             )
     return sorted(found, key=lambda s: (s.label, s.asset))
+
+
+def _reduce(document: dict) -> dict[str, ReducedNode]:
+    """The document's reduction, each widget carrying its asset reference.
+
+    ``reduce_api_graph`` nulls a reference under a filename widget (it has no
+    extension), which would make two loaders with swapped models look alike, so
+    the references are put back from the document.
+
+    Raises:
+        WorkflowGraphError: A widget holds a readable asset, meaning this is a
+            raw graph. Every function here would otherwise see no models and
+            quietly collapse every checkpoint into one card.
+    """
+    nodes = reduce_api_graph(document)
+    raw = {str(node_id): node for node_id, node in document.items()}
+    reduced = {}
+    for node_id, node in nodes.items():
+        if any(
+            value is not None and not value.startswith(ASSET_REFERENCE_PREFIX)
+            for _, value in node.widgets
+        ):
+            raise WorkflowGraphError(
+                f"node {node_id} names an asset by value; workflow identity "
+                "needs a stored document (structural_document), not a raw graph"
+            )
+        inputs = raw[node_id].get("inputs") or {}
+        widgets = tuple(
+            (name, _reference(inputs.get(name))) for name, _ in node.widgets
+        )
+        reduced[node_id] = ReducedNode(node.class_type, widgets, node.inputs)
+    return reduced
+
+
+def _reference(value: object) -> Optional[str]:
+    if isinstance(value, str) and value.startswith(ASSET_REFERENCE_PREFIX):
+        return value
+    return None
 
 
 def guess_mark(normalized_filename: str) -> str:
@@ -256,10 +296,15 @@ def core_hash(document: dict, *, strip_loras: bool = True) -> str:
         WorkflowGraphError: Nothing is left once the strip groups are removed.
     """
     strip = {PLUMBING, UPSCALE, FACE_DETAILER} | ({LORA} if strip_loras else set())
-    return _stripped_key(reduce_api_graph(document), strip)
+    return _stripped_key(_reduce(document), strip)
 
 
-def _stripped_key(nodes: dict[str, ReducedNode], strip: Collection[str]) -> str:
+def _stripped_key(
+    nodes: dict[str, ReducedNode],
+    strip: Collection[str],
+    *,
+    keep_widgets: bool = False,
+) -> str:
     groups = node_groups(nodes)
     removed = {node_id for node_id, group in groups.items() if group in strip}
 
@@ -286,7 +331,11 @@ def _stripped_key(nodes: dict[str, ReducedNode], strip: Collection[str]) -> str:
             resolved = resolve(source, slot)
             if resolved is not None:
                 inputs.append((name, resolved[0], resolved[1]))
-        kept[node_id] = ReducedNode(node.class_type, (), tuple(sorted(inputs)))
+        kept[node_id] = ReducedNode(
+            node.class_type,
+            node.widgets if keep_widgets else (),
+            tuple(sorted(inputs)),
+        )
     if not kept:
         raise WorkflowGraphError("nothing is left of the graph once stripped")
     return graph_key(kept)
@@ -298,15 +347,20 @@ def workflow_type(document: dict) -> Optional[str]:
     One of ``outpaint``, ``inpaint``, ``upscale``, ``img2img``, ``txt2img``,
     tested in that order because an outpaint graph also encodes for inpaint
     and an img2img graph may still carry an empty latent. ``None`` when none
-    applies.
+    applies. A picture source is whatever ``workflow_io`` calls a picture
+    loader, the PixlStash one included.
     """
-    nodes = reduce_api_graph(document)
+    nodes = _reduce(document)
     classes = {node.class_type for node in nodes.values()}
     if "ImagePadForOutpaint" in classes:
         return "outpaint"
-    if classes & {"VAEEncodeForInpaint", "InpaintModelConditioning"}:
+    if classes & {
+        "VAEEncodeForInpaint",
+        "InpaintModelConditioning",
+        "SetLatentNoiseMask",
+    }:
         return "inpaint"
-    has_picture_input = any(cls.startswith("LoadImage") for cls in classes)
+    has_picture_input = any(is_picture_loader(cls) for cls in classes)
     has_sampler = any(_SAMPLER_CLASS_RE.search(cls) for cls in classes)
     if (
         has_picture_input
@@ -331,7 +385,7 @@ def _fed_by_picture(node_id: str, nodes: dict[str, ReducedNode]) -> bool:
         if current in seen or current not in nodes:
             continue
         seen.add(current)
-        if nodes[current].class_type.startswith("LoadImage"):
+        if is_picture_loader(nodes[current].class_type):
             return True
         stack.extend(source for _, source, _ in nodes[current].inputs)
     return False
@@ -348,17 +402,17 @@ def differs_by(
     Chips: ``+ face detailer`` / ``− face detailer``, ``+ upscale`` (``+
     upscale 2×`` when the member's factor is known) / ``− upscale``, ``other
     checkpoint`` / ``other models``, ``plumbing only``, and ``N nodes differ``
-    for everything this taxonomy does not classify. Empty when the class sets
-    and models are the same.
+    for everything this taxonomy does not classify. Empty only when the two
+    documents are the same graph with the same models in the same places.
 
     **"plumbing only" is never a guess.** It is returned only when every
-    differing node is plumbing, the two graphs are identical once plumbing is
-    stepped through (same wiring, not just the same classes), AND every asset,
-    LoRAs included, is equal. A
-    wrong one invites hiding a workflow that really is different.
+    differing node is plumbing and the two graphs are identical once plumbing
+    is stepped through: same wiring, and every asset, LoRAs included, on the
+    same loader. A wrong one invites hiding a workflow that really is
+    different.
     """
-    cover_nodes = reduce_api_graph(cover_document)
-    member_nodes = reduce_api_graph(member_document)
+    cover_nodes = _reduce(cover_document)
+    member_nodes = _reduce(member_document)
     cover = _class_counts(cover_nodes)
     member = _class_counts(member_nodes)
     added, removed = member - cover, cover - member
@@ -396,7 +450,6 @@ def differs_by(
             chips.append("other checkpoint")
         else:
             chips.append("other models")
-    loras_differ = _assets(cover_slots, lora=True) != _assets(member_slots, lora=True)
 
     plumbing = count(added, PLUMBING) + count(removed, PLUMBING)
     unclassified += sum(
@@ -406,17 +459,33 @@ def differs_by(
         plumbing
         and not chips
         and not unclassified
-        and not loras_differ
-        and _stripped_key(cover_nodes, {PLUMBING})
-        == _stripped_key(member_nodes, {PLUMBING})
+        and _stripped_key(cover_nodes, {PLUMBING}, keep_widgets=True)
+        == _stripped_key(member_nodes, {PLUMBING}, keep_widgets=True)
     ):
         return ["plumbing only"]
     unclassified += plumbing
+    if not chips and not unclassified:
+        # Same classes and the same models overall, but not on the same
+        # loaders (a base and a refiner swapped) or not wired the same way.
+        # Never [] for graphs that are not the same.
+        unclassified = _nodes_differing(cover_nodes, member_nodes)
     if unclassified:
         chips.append(
             "1 node differs" if unclassified == 1 else f"{unclassified} nodes differ"
         )
     return chips
+
+
+def _nodes_differing(
+    cover_nodes: dict[str, ReducedNode], member_nodes: dict[str, ReducedNode]
+) -> int:
+    if graph_key(cover_nodes) == graph_key(member_nodes):
+        return 0
+    cover = Counter((n.class_type, n.widgets) for n in cover_nodes.values())
+    member = Counter((n.class_type, n.widgets) for n in member_nodes.values())
+    # Wiring alone can differ with every node descriptor equal; that is still
+    # at least one node that differs.
+    return max(sum((cover - member).values()), sum((member - cover).values()), 1)
 
 
 def _slots_outside(

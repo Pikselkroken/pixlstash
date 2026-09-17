@@ -8,7 +8,11 @@ import json
 
 import pytest
 
-from pixlstash.services.workflow_hash import structural_document, topology_hash
+from pixlstash.services.workflow_hash import (
+    WorkflowGraphError,
+    structural_document,
+    topology_hash,
+)
 from pixlstash.services.workflow_identity import (
     RECIPE,
     STRUCTURAL,
@@ -212,9 +216,16 @@ def test_slots_name_models_by_reference_never_by_filename():
         ("lcm-lora-sdxl.safetensors", STRUCTURAL),
         ("z_image_turbo_distill.safetensors", STRUCTURAL),
         ("wan_4steps.safetensors", STRUCTURAL),
+        ("wan2.1_lightx2v_cfg_step_distill.safetensors", STRUCTURAL),
+        ("causvid_14b.safetensors", STRUCTURAL),
+        ("sdxl_flash.safetensors", STRUCTURAL),
         ("alice_character_v2.safetensors", RECIPE),
         ("hyperrealism_style.safetensors", RECIPE),
+        ("hyper_detailed_skin.safetensors", RECIPE),
         ("turbocharged_cars.safetensors", RECIPE),
+        ("superturbo_style.safetensors", RECIPE),
+        ("alice_3000steps.safetensors", RECIPE),
+        ("alice-v2-1500-steps.safetensors", RECIPE),
     ],
 )
 def test_guess_mark(filename, mark):
@@ -232,9 +243,8 @@ def test_guess_mark(filename, mark):
         {"face_detailer": True},
         {"hires": True},
         {"loras": ("alice_character.safetensors",)},
-        {"extra": {"99": _node("Note", text="remember")}},
     ],
-    ids=["preview", "upscale", "face-detailer", "hires-fix", "lora", "note"],
+    ids=["preview", "upscale", "face-detailer", "hires-fix", "lora"],
 )
 def test_plumbing_and_post_processing_stack_with_the_plain_workflow(variant):
     plain, member = _graph(), _graph(**variant)
@@ -350,3 +360,48 @@ def test_a_picture_fed_encode_is_img2img_even_beside_an_empty_latent():
     graph = _graph(img2img=True)
     graph["4"] = _node("EmptyLatentImage", width=512, height=512, batch_size=1)
     assert workflow_type(_doc(graph)) == "img2img"
+
+
+def _base_and_refiner(base: str, refiner: str, *, preview: bool = False) -> dict:
+    g = {
+        "1": _node("CheckpointLoaderSimple", ckpt_name=base),
+        "2": _node("CheckpointLoaderSimple", ckpt_name=refiner),
+        "3": _node("CLIPTextEncode", text="a cat", clip=["1", 1]),
+        "4": _node("EmptyLatentImage", width=512, height=512, batch_size=1),
+        "5": _node(
+            "KSampler", model=["1", 0], positive=["3", 0], latent_image=["4", 0]
+        ),
+        "6": _node(
+            "KSampler", model=["2", 0], positive=["3", 0], latent_image=["5", 0]
+        ),
+        "7": _node("VAEDecode", samples=["6", 0], vae=["2", 2]),
+        "8": _node("SaveImage", images=["7", 0], filename_prefix="out"),
+    }
+    if preview:
+        g["9"] = _node("PreviewImage", images=["7", 0])
+    return g
+
+
+def test_models_swapped_between_loaders_are_a_difference():
+    cover = _doc(_base_and_refiner("base.safetensors", "refiner.safetensors"))
+    swapped = _base_and_refiner("refiner.safetensors", "base.safetensors")
+    assert differs_by(cover, _doc(swapped)) != []
+    with_preview = _base_and_refiner(
+        "refiner.safetensors", "base.safetensors", preview=True
+    )
+    assert "plumbing only" not in differs_by(cover, _doc(with_preview))
+
+
+def test_a_raw_graph_is_refused_rather_than_read_as_having_no_models():
+    with pytest.raises(WorkflowGraphError):
+        slots(_graph())
+    with pytest.raises(WorkflowGraphError):
+        core_hash(_graph())
+
+
+def test_the_pixlstash_picture_loader_and_a_noise_mask_are_picture_sources():
+    graph = _graph(img2img=True)
+    graph["10"] = _node("PixlStashPictureLoader", picture_ids="1,2")
+    assert workflow_type(_doc(graph)) == "img2img"
+    graph["13"] = _node("SetLatentNoiseMask", samples=["12", 0])
+    assert workflow_type(_doc(graph)) == "inpaint"
