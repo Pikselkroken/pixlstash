@@ -577,7 +577,7 @@
         <UndoControl />
         <!-- ── Toolbar: Settings + stats toggle (shared with the duplicates
              queue, which is why they live in their own component). Never
-             folds (amendment #2); the activity dot stays first-class on the
+             folds (amendment #2); the activity light stays first-class on the
              Stats button at every width. -->
         <TbGlobalActions @open-settings="emit('open-settings')" />
       </div>

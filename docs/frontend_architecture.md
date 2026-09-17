@@ -267,7 +267,7 @@ Sub-components that manage independent data (e.g. `AccountSection`, `SmartScoreS
 
 **Consumers (deny nothing, just read):**
 - `StatsSidebar` renders the **Tasks tab** purely from `tasksStore.activeEntries` — backend workers as a throughput sparkline + rate, ComfyUI runs as a progress bar + abort. It owns only the canvas drawing and label formatting now; it no longer fetches or polls. Its **Tasks-tab button pulses** when `hasActiveTasks`.
-- `Toolbar`'s **stats toggle** shows a pulsing activity dot when `hasActiveTasks`, so background work is visible even with the stats sidebar collapsed.
+- `Toolbar`'s **stats toggle** pulses its whole icon in `accent` when `hasActiveTasks`, so background work is visible even with the stats sidebar collapsed.
 - `ComfyUiRunner` retired its inline in-progress banner (progress now lives in the Tasks tab). It still renders an **inline banner for the failed state only**, so an error is never buried in a collapsed sidebar.
 
 All indicator animations honour `prefers-reduced-motion: reduce`.
