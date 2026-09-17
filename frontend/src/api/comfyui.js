@@ -57,6 +57,24 @@ export async function getWorkflowInputs(name) {
 }
 
 /**
+ * Where a LoRA loader would be added to a saved workflow that has none (#1376).
+ *
+ * `plan` is `{model, clip, rewires}`: the node the loader takes the model from
+ * (and the CLIP, `null` for a model-only loader) and every input it would
+ * rewire. It is `null` when no loader can be added, and `reason` says why;
+ * `has_lora_loader` is true when there is a loader to swap instead. Owner-only,
+ * since it asks the owner's ComfyUI.
+ *
+ * @param {string} name - the workflow's `name` as listed.
+ * @returns {Promise<{plan: Object|null, reason: string|null, has_lora_loader: boolean}>}
+ */
+export async function getLoraInsertion(name) {
+  return unwrap(apiClient.get(
+    comfyUrl(`/workflows/${encodeURIComponent(name)}/lora-insertion`),
+  ));
+}
+
+/**
  * Replace how every picture input of a saved workflow is filled.
  *
  * @param {string} name - the workflow's `name` as listed.

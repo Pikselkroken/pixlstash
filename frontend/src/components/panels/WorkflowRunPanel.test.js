@@ -13,6 +13,7 @@ import { setActivePinia, createPinia } from "pinia";
 const listWorkflows = vi.fn();
 const getWorkflowInputs = vi.fn();
 const runWorkflow = vi.fn();
+const getLoraInsertion = vi.fn();
 
 const listAdapters = vi.fn();
 
@@ -20,6 +21,7 @@ vi.mock("../../api/comfyui", () => ({
   listWorkflows: (...args) => listWorkflows(...args),
   getWorkflowInputs: (...args) => getWorkflowInputs(...args),
   runWorkflow: (...args) => runWorkflow(...args),
+  getLoraInsertion: (...args) => getLoraInsertion(...args),
 }));
 
 vi.mock("../../api/modelShelf", () => ({
@@ -107,6 +109,10 @@ beforeEach(() => {
       { node_id: "1", title: "Style", mode: "picker", picture_id: null },
       { node_id: "2", title: "Subject", mode: "selection", picture_id: null },
     ],
+  });
+  getLoraInsertion.mockReset().mockResolvedValue({
+    plan: null,
+    reason: "PixlStash could not find the model this workflow loads.",
   });
   listAdapters.mockReset().mockResolvedValue([
     { sha256: "a".repeat(64), display_name: "Subject v2", filename: "s.st" },
@@ -491,17 +497,53 @@ describe("a LoRA from the shelf (#1310)", () => {
     expect(runWorkflow.mock.calls[0][1].lora_node_id).toBeUndefined();
   });
 
-  it("says a workflow with no LoRA loader has nothing to swap", async () => {
+  it("says why a workflow with no LoRA loader cannot take one", async () => {
     getWorkflowInputs.mockResolvedValue({ ...WITH_SLOTS, lora_slots: [] });
     const { wrapper, store } = await mountFrom(FROM_SELECTION);
     store.selectionIds = [7];
     await flush(wrapper);
     expect(wrapper.text()).toContain("no LoRA loader");
+    expect(wrapper.text()).toContain("could not find the model");
     expect(wrapper.findAll("select")).toHaveLength(1);
     expect(listAdapters).not.toHaveBeenCalled();
     await runButton(wrapper).trigger("click");
     await flush(wrapper);
     expect(runWorkflow.mock.calls[0][1].adapter_sha256).toBeUndefined();
+  });
+
+  it("adds a loader only where it has shown where it goes (#1376)", async () => {
+    getWorkflowInputs.mockResolvedValue({ ...WITH_SLOTS, lora_slots: [] });
+    getLoraInsertion.mockResolvedValue({
+      plan: {
+        model: { node_id: "4", class_type: "CheckpointLoaderSimple", output: 0 },
+        clip: { node_id: "4", class_type: "CheckpointLoaderSimple", output: 1 },
+        rewires: [
+          { node_id: "3", class_type: "KSampler", field: "model", type: "MODEL" },
+        ],
+      },
+      reason: null,
+    });
+    const { wrapper, store } = await mountFrom(FROM_SELECTION);
+    store.selectionIds = [7];
+    await flush(wrapper);
+    expect(getLoraInsertion).toHaveBeenCalledWith("edit.json");
+    expect(wrapper.text()).not.toContain("no LoRA loader");
+    const lora = wrapper.findAll("select")[1];
+    expect(lora.findAll("option")[0].text()).toBe("No LoRA");
+    // Nothing is said about rewiring until a LoRA would actually cause it.
+    expect(wrapper.text()).not.toContain("A LoRA loader is added");
+
+    await lora.setValue("a".repeat(64));
+    await flush(wrapper);
+    expect(wrapper.text()).toContain(
+      "A LoRA loader is added after #4 CheckpointLoaderSimple, feeding #3 KSampler (model).",
+    );
+    await runButton(wrapper).trigger("click");
+    await flush(wrapper);
+    expect(runWorkflow.mock.calls[0][1]).toMatchObject({
+      adapter_sha256: "a".repeat(64),
+      insert_lora_loader: true,
+    });
   });
 
   it("does not send a LoRA to a workflow that has moved on to no slots", async () => {

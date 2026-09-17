@@ -16,6 +16,8 @@ from pixlstash.services.comfyui_recipe_service import (
     detect_lora_targets,
     detect_seed_targets,
     format_prompt_rejection,
+    insert_adapter,
+    plan_lora_insertion,
     preflight_prompt,
     sanitize_prompt_graph,
     unchecked_preflight,
@@ -687,3 +689,214 @@ class TestApplyAdapter:
         stale = [{"node_id": "99", "field": "adapter_sha256", "by": "digest"}]
         assert apply_adapter(graph, stale, self.ADAPTER, {}) == 0
         assert apply_adapter(graph, None, self.ADAPTER, {}) == 0
+
+
+def _loader_spec(outputs, lora_names, clip=True):
+    required = {
+        "model": ["MODEL", {}],
+        "lora_name": [lora_names, {}],
+        "strength_model": ["FLOAT", {"default": 1.0}],
+    }
+    if clip:
+        required["clip"] = ["CLIP", {}]
+        required["strength_clip"] = ["FLOAT", {"default": 1.0}]
+    return {"input": {"required": required}, "output": outputs}
+
+
+class TestLoraInsertion:
+    """#1376: a loader spliced in after the model source, typed by object_info."""
+
+    ADAPTER = {"sha256": "b" * 64, "filenames": ["subject-v2.safetensors"]}
+    INFO = {
+        "CheckpointLoaderSimple": {"output": ["MODEL", "CLIP", "VAE"]},
+        "UnetLoaderGGUF": {"output": ["MODEL"]},
+        "DualCLIPLoader": {"output": ["CLIP"]},
+        "ModelSamplingFlux": {"output": ["MODEL"]},
+        "CLIPTextEncode": {"output": ["CONDITIONING"]},
+        "KSampler": {"output": ["LATENT"]},
+        "BasicGuider": {"output": ["GUIDER"]},
+        "LoraLoader": _loader_spec(["MODEL", "CLIP"], ["subject-v2.safetensors"]),
+        "LoraLoaderModelOnly": _loader_spec(
+            ["MODEL"], ["subject-v2.safetensors"], clip=False
+        ),
+    }
+
+    def _checkpoint_graph(self):
+        return {
+            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "x"}},
+            "6": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["4", 1]}},
+            "7": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["4", 1]}},
+            "3": {
+                "class_type": "KSampler",
+                "inputs": {
+                    "model": ["4", 0],
+                    "positive": ["6", 0],
+                    "negative": ["7", 0],
+                },
+            },
+            "8": {
+                "class_type": "VAEDecode",
+                "inputs": {"samples": ["3", 0], "vae": ["4", 2]},
+            },
+        }
+
+    def test_a_checkpoint_graph_rewires_every_model_and_clip_reader(self):
+        graph = self._checkpoint_graph()
+        info = {**self.INFO, "VAEDecode": {"output": ["IMAGE"]}}
+        plan = plan_lora_insertion(graph, info)
+        assert plan["model"] == {
+            "node_id": "4",
+            "class_type": "CheckpointLoaderSimple",
+            "output": 0,
+        }
+        assert plan["clip"]["output"] == 1
+        # Both text encoders, not only the first: the negative prompt without
+        # the LoRA's CLIP is a different run.
+        assert [(r["node_id"], r["field"]) for r in plan["rewires"]] == [
+            ("6", "clip"),
+            ("7", "clip"),
+            ("3", "model"),
+        ]
+
+        added = insert_adapter(graph, plan, self.ADAPTER, info)
+        assert added == {"node_id": "9", "class_type": "LoraLoader"}
+        loader = graph["9"]["inputs"]
+        assert loader["model"] == ["4", 0] and loader["clip"] == ["4", 1]
+        assert loader["lora_name"] == "subject-v2.safetensors"
+        assert loader["strength_model"] == 1.0 and loader["strength_clip"] == 1.0
+        assert graph["3"]["inputs"]["model"] == ["9", 0]
+        assert graph["6"]["inputs"]["clip"] == ["9", 1]
+        assert graph["7"]["inputs"]["clip"] == ["9", 1]
+        # The VAE is not a LoRA's business and stays on the checkpoint.
+        assert graph["8"]["inputs"]["vae"] == ["4", 2]
+
+    def test_a_gguf_chain_with_its_own_clip_loader_splices_after_the_unet(self):
+        graph = {
+            "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": "f.gguf"}},
+            "2": {"class_type": "DualCLIPLoader", "inputs": {}},
+            "3": {"class_type": "ModelSamplingFlux", "inputs": {"model": ["1", 0]}},
+            "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0]}},
+            "5": {"class_type": "BasicGuider", "inputs": {"model": ["3", 0]}},
+        }
+        plan = plan_lora_insertion(graph, self.INFO)
+        # Right after the loader, not after the model patch: the patch reads
+        # the LoRA'd model, and the guider still reads the patch.
+        assert plan["model"]["node_id"] == "1" and plan["clip"]["node_id"] == "2"
+        insert_adapter(graph, plan, self.ADAPTER, self.INFO)
+        assert graph["3"]["inputs"]["model"] == ["6", 0]
+        assert graph["5"]["inputs"]["model"] == ["3", 0]
+        assert graph["4"]["inputs"]["clip"] == ["6", 1]
+        assert graph["6"]["inputs"]["clip"] == ["2", 0]
+
+    def test_a_graph_reading_no_clip_gets_a_model_only_loader(self):
+        graph = {
+            "1": {"class_type": "UnetLoaderGGUF", "inputs": {}},
+            "2": {"class_type": "KSampler", "inputs": {"model": ["1", 0]}},
+            "3": {"class_type": "BasicGuider", "inputs": {"model": ["1", 0]}},
+        }
+        plan = plan_lora_insertion(graph, self.INFO)
+        assert plan["clip"] is None
+        added = insert_adapter(graph, plan, self.ADAPTER, self.INFO)
+        assert added["class_type"] == "LoraLoaderModelOnly"
+        assert "clip" not in graph[added["node_id"]]["inputs"]
+        # Several readers of one MODEL output, all moved.
+        assert graph["2"]["inputs"]["model"] == graph["3"]["inputs"]["model"]
+        assert graph["2"]["inputs"]["model"] == [added["node_id"], 0]
+
+    def test_two_model_sources_are_refused_rather_than_picked_between(self):
+        graph = {
+            "1": {"class_type": "CheckpointLoaderSimple", "inputs": {}},
+            "2": {"class_type": "CheckpointLoaderSimple", "inputs": {}},
+            "3": {"class_type": "KSampler", "inputs": {"model": ["1", 0]}},
+            "4": {"class_type": "KSampler", "inputs": {"model": ["2", 0]}},
+        }
+        with pytest.raises(LookupError, match="loads 2 models"):
+            plan_lora_insertion(graph, self.INFO)
+        # The control: one sampler fewer and there is exactly one source.
+        del graph["4"]
+        assert plan_lora_insertion(graph, self.INFO)["model"]["node_id"] == "1"
+
+    def test_a_node_this_comfyui_lacks_is_refused_not_read_as_untyped(self):
+        graph = self._checkpoint_graph()
+        info = {k: v for k, v in self.INFO.items() if k != "CheckpointLoaderSimple"}
+        with pytest.raises(LookupError, match="no CheckpointLoaderSimple node"):
+            plan_lora_insertion(graph, info)
+
+    def test_a_graph_with_no_model_has_nowhere_to_put_one(self):
+        graph = {"1": {"class_type": "KSampler", "inputs": {"latent": ["2", 0]}}}
+        graph["2"] = {"class_type": "CLIPTextEncode", "inputs": {}}
+        with pytest.raises(LookupError, match="could not find the model"):
+            plan_lora_insertion(graph, self.INFO)
+
+    def test_the_pixlstash_loader_goes_in_only_where_comfyui_lacks_the_file(self):
+        info = {
+            **self.INFO,
+            "PixlStashAdapterLoader": {
+                "input": {
+                    "required": {
+                        "model": ["MODEL", {}],
+                        "adapter_kind": [["— Any —", "lora"], {}],
+                        "adapter_sha256": ["STRING", {"default": ""}],
+                    },
+                    "optional": {"strength_model": ["FLOAT", {"default": 1.0}]},
+                },
+                "output": ["MODEL", "CLIP", "STRING"],
+            },
+        }
+        # The file is on this ComfyUI: its own loader, which needs no pack.
+        graph = self._checkpoint_graph()
+        plan = plan_lora_insertion(graph, info)
+        assert insert_adapter(graph, plan, self.ADAPTER, info)["class_type"] == (
+            "LoraLoader"
+        )
+
+        graph = self._checkpoint_graph()
+        elsewhere = {"sha256": "c" * 64, "filenames": ["elsewhere.safetensors"]}
+        added = insert_adapter(graph, plan, elsewhere, info)
+        assert added["class_type"] == "PixlStashAdapterLoader"
+        inputs = graph[added["node_id"]]["inputs"]
+        assert inputs["adapter_sha256"] == "c" * 64
+        assert inputs["adapter_kind"] == "— Any —"
+        assert inputs["clip"] == ["4", 1]
+
+        # A replay never gets it: its variant would carry a PixlStash node,
+        # which Generate variants refuses to replay.
+        graph = self._checkpoint_graph()
+        with pytest.raises(LookupError, match="not on this ComfyUI"):
+            insert_adapter(graph, plan, elsewhere, info, digest_loader=False)
+        assert "9" not in graph
+
+        # Neither: refused, saying why the core loader could not.
+        graph = self._checkpoint_graph()
+        with pytest.raises(LookupError, match="not on this ComfyUI.*ComfyUI-PixlStash"):
+            insert_adapter(graph, plan, elsewhere, self.INFO)
+        assert "9" not in graph
+
+    def test_a_graph_that_no_longer_reads_the_plan_is_refused_whole(self):
+        graph = self._checkpoint_graph()
+        plan = plan_lora_insertion(graph, self.INFO)
+        graph["7"]["inputs"]["clip"] = ["99", 0]
+        with pytest.raises(LookupError, match="Node 7 no longer reads its CLIP"):
+            insert_adapter(graph, plan, self.ADAPTER, self.INFO)
+        # Nothing half done: no loader, the first reader untouched.
+        assert "9" not in graph and graph["6"]["inputs"]["clip"] == ["4", 1]
+
+    @pytest.mark.parametrize(
+        "loader",
+        [
+            # A loader whose file is wired in reads as no slot at all.
+            {"class_type": "LoraLoader", "inputs": {"lora_name": ["8", 0]}},
+            # rgthree's stacker holds its slots as dicts.
+            {
+                "class_type": "Power Lora Loader (rgthree)",
+                "inputs": {"lora_1": {"on": True, "lora": "a.st", "strength": 1}},
+            },
+        ],
+    )
+    def test_a_lora_loaded_where_no_slot_is_seen_is_not_stacked_on(self, loader):
+        graph = self._checkpoint_graph()
+        # The control: the same graph without it takes a loader.
+        assert plan_lora_insertion(graph, self.INFO)["model"]["node_id"] == "4"
+        graph["5"] = loader
+        with pytest.raises(LookupError, match="already loads a LoRA"):
+            plan_lora_insertion(graph, self.INFO)

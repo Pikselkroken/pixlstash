@@ -563,7 +563,8 @@ owner's ComfyUI.
 
 The body is `{picture_ids?, pictures?: [{node_id, picture_id}], caption?,
 values?: [{node_id, name, value}], seed_mode?, seed?, stack?, client_id?,
-set_id?, project_id?, character_id?, adapter_sha256?}`. `picture_ids` is the selection: a workflow
+set_id?, project_id?, character_id?, adapter_sha256?, lora_node_id?, lora_field?,
+insert_lora_loader?}`. `picture_ids` is the selection: a workflow
 with a Selection input needs at least one and submits **one run per picture**,
 stacking each output with the picture it read (`picture_id` in `prompts`); one
 without refuses a selection and runs once (`picture_id: null`), filing its output
@@ -585,9 +586,23 @@ ComfyUI-PixlStash loader. It is applied after `values`, so it wins over a
 LoRAs would otherwise load the chosen one twice: whatever `lora_node_id` and
 `lora_field` leave must be exactly one slot, and a 400 lists the slots when it is
 not (`7 lora_name_1, 7 lora_name_2`) or names the node or field that matched
-nothing. No
-loader is inserted or substituted, so a workflow with no LoRA loader is a 400
-saying so (#1376 is the inserter); so are a name this ComfyUI does not have, one
+nothing. **A workflow with no LoRA loader (#1376)** gets one added, but only
+with `insert_lora_loader: true` - a bare `adapter_sha256` there is a 400 naming
+the flag, and naming a slot is a 400 too. The surfaces send it only after showing
+the splice from `GET /comfyui/workflows/{workflow_name}/lora-insertion`
+(`OWNER_ONLY`, it asks the owner's ComfyUI): `{workflow, has_lora_loader, plan,
+reason}`, `plan` being `{model: {node_id, class_type, output}, clip: … | null,
+rewires: [{node_id, class_type, field, type}]}` and `null` with a `reason` when
+no loader can go in (several models or text encoders, no model, a node this
+ComfyUI lacks, ComfyUI unreachable). `GET /comfyui/pictures/{id}/recipe` carries
+the same `{plan, reason}` as `lora_insertion` when its `lora_slots` is empty. The
+run recomputes the plan rather than trusting one sent back. The loader added is
+`LoraLoader` (`LoraLoaderModelOnly` where nothing reads a CLIP) when this ComfyUI
+lists the file, else `PixlStashAdapterLoader` by digest when that pack is
+installed (never on `run_recipe`, whose variant it would make unreplayable),
+else a 400. A graph already loading a LoRA no slot is seen for (a wired
+`lora_name`, rgthree's stacker) is refused rather than stacked on. The loader is the run's, never written into the stored file.
+Also a 400: a name this ComfyUI does not have, one
 naming several of its files, and a loader that does not enumerate them. A
 ComfyUI that cannot be reached to ask is a 502. A hash the shelf does not have is
 a 404; a checkpoint, VAE, text encoder or engine is a 400 naming the kind (only

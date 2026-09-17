@@ -26,6 +26,7 @@ vi.mock("../../api/comfyui", () => ({
   getPictureWorkflow: (...a) => getPictureWorkflow(...a),
   runImageToImage: (...a) => runImageToImage(...a),
   runRecipe: (...a) => runRecipe(...a),
+  getLoraInsertion: vi.fn().mockResolvedValue({ plan: null, reason: null }),
 }));
 
 vi.mock("../../api/pictures", () => ({
