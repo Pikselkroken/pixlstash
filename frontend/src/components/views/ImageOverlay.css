@@ -807,7 +807,8 @@
 /* ── Word boxes (Text tab, #1197) ──────────────────────────────────────────
    A photo can be any colour, so every mark pairs a line with a contrasting
    halo underneath: a dark halo under the olive selected ring, a light halo
-   under the dark dashed match outline. The overlay is a dark surface in both
+   under the dark dashed match outline and the hovered box, and a faint light
+   one under the faint resting line. The overlay is a dark surface in both
    themes, so the ink comes from the `dark-surface` family, not the theme. The
    alphas are the approved design's and live only here. */
 .picture-text-boxes {
@@ -823,6 +824,7 @@
 }
 
 .picture-text-box rect {
+  rx: var(--radius-sm);
   fill: transparent;
   stroke: transparent;
   vector-effect: non-scaling-stroke;
@@ -840,11 +842,16 @@
   stroke: rgba(var(--v-theme-dark-surface), 0.13);
 }
 
+.picture-text-box .picture-text-box-halo {
+  stroke: rgba(var(--v-theme-on-dark-surface), 0.13);
+}
+
 .picture-text-box:hover .picture-text-box-line {
   fill: rgba(var(--v-theme-dark-surface), 0.12);
   stroke: rgba(var(--v-theme-dark-surface), 0.6);
 }
 
+.picture-text-box:hover .picture-text-box-halo,
 .picture-text-box--match .picture-text-box-halo {
   stroke: rgba(var(--v-theme-on-dark-surface), 0.9);
 }
@@ -855,7 +862,7 @@
   stroke-width: 1.25px;
 }
 
-.picture-text-box--selected .picture-text-box-halo {
+.picture-text-box.picture-text-box--selected .picture-text-box-halo {
   stroke: rgb(var(--v-theme-dark-surface));
   stroke-width: 4px;
 }

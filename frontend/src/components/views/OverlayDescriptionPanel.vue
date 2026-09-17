@@ -48,7 +48,7 @@
           @keydown="onTabKeydown"
         >
           Text
-          <template v-if="textState === 'pending'">
+          <template v-if="textState === 'pending' || textReadBusy">
             <v-icon size="12" class="mdi-spin" aria-hidden="true"
               >mdi-loading</v-icon
             >
@@ -58,13 +58,15 @@
       </div>
       <span v-else>Description</span>
       <span v-if="isTextTab" class="section-meta-group">
+        <!-- aria-disabled, not disabled, while busy: a disabled button drops
+             the keyboard focus that just pressed it to <body>. -->
         <button
           v-if="props.image && !readOnly"
           class="section-meta-btn"
           type="button"
           aria-label="Read the text again"
-          :disabled="textReadBusy"
-          @click.stop="emit('read-text-again')"
+          :aria-disabled="textReadBusy ? 'true' : undefined"
+          @click.stop="!textReadBusy && emit('read-text-again')"
         >
           <Tooltip
             text="Read the text again"
@@ -87,7 +89,7 @@
           </v-icon>
         </button>
         <span class="section-meta">{{ fullText.length }}</span>
-        <v-icon size="16" style="opacity: 0.6">{{
+        <v-icon size="16" class="section-chevron">{{
           descriptionCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
         }}</v-icon>
       </span>
@@ -205,9 +207,18 @@
         class="picture-text"
         role="tabpanel"
         :aria-labelledby="textTabId"
+        :aria-busy="textReadBusy ? 'true' : undefined"
       >
+        <!-- Reading again: the old words are about to be replaced, so they
+             leave rather than dim (there is no busy fade, design-tokens.css). -->
+        <div v-if="textReadBusy" class="picture-text-reading">
+          <v-icon size="16" class="mdi-spin" aria-hidden="true"
+            >mdi-loading</v-icon
+          >
+          Reading the text again…
+        </div>
         <div
-          v-for="(line, lineIdx) in wordLines"
+          v-for="(line, lineIdx) in textReadBusy ? [] : wordLines"
           :key="lineIdx"
           class="picture-text-line"
         >
@@ -221,15 +232,17 @@
               'picture-text-word--selected': selectedSet.has(word.index),
             }"
             :aria-pressed="selectedSet.has(word.index)"
+            :tabindex="word.index === tabStopWord ? 0 : -1"
             :data-word="word.index"
-            @click.stop="emit('select-word', word.index, $event.shiftKey)"
+            @click.stop="onWordClick(word.index, $event)"
+            @keydown="onWordKeydown($event, word, lineIdx)"
           >
             {{ word.text }}
           </button>
         </div>
       </div>
       <div class="picture-text-selection" aria-live="polite">
-        <template v-if="selectedText">
+        <template v-if="!textReadBusy && props.selectedWords.length">
           <span class="picture-text-selection-words">{{ selectedText }}</span>
           <button
             class="picture-text-mini"
@@ -246,7 +259,7 @@
             Clear
           </button>
         </template>
-        <span v-else
+        <span v-else-if="!textReadBusy"
           >Click a word to find it in the picture. Shift-click to add
           words.</span
         >
@@ -409,6 +422,48 @@ const selectedText = computed(() =>
 // Which copy button last succeeded ("text" | "selection"), for its check mark.
 const textCopyState = ref("");
 let textCopyTimer = null;
+// Roving focus: the word list is one tab stop, and arrows move inside it.
+const focusWord = ref(0);
+const tabStopWord = computed(() =>
+  focusWord.value < words.value.length ? focusWord.value : 0,
+);
+watch(
+  () => props.textLines,
+  () => {
+    focusWord.value = props.selectedWords[0] ?? 0;
+  },
+);
+
+function onWordClick(index, event) {
+  focusWord.value = index;
+  emit("select-word", index, event.shiftKey);
+}
+
+/**
+ * Arrow keys move between words: Left/Right to the previous/next word, Up/Down
+ * to the same position on the previous/next line. Stopped here, or the
+ * overlay's own arrow keys would switch pictures.
+ */
+function onWordKeydown(event, word, lineIdx) {
+  const lines = wordLines.value;
+  let target;
+  if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    const step = event.key === "ArrowLeft" ? -1 : 1;
+    target = words.value[word.index + step] ?? word;
+  } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+    const line = lines[lineIdx + (event.key === "ArrowUp" ? -1 : 1)];
+    const pos = lines[lineIdx].indexOf(word);
+    target = line ? line[Math.min(pos, line.length - 1)] : word;
+  } else {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  focusWord.value = target.index;
+  textFieldRef.value
+    ?.querySelector?.(`[data-word="${target.index}"]`)
+    ?.focus?.();
+}
 
 function pickTab(tab) {
   if (tab === TEXT_TAB && !hasWords.value) return;
@@ -846,8 +901,10 @@ defineExpose({
   text-decoration-thickness: 1.5px;
 }
 
+/* The dark theme's --active-wash, spelled out: this surface is dark in both
+   themes, and the light theme's token is built on the deep olive. */
 .picture-text-word--selected {
-  background: rgba(var(--v-theme-dark-surface-primary), 0.28);
+  background: rgba(var(--v-theme-dark-surface-primary), 0.2);
   box-shadow: inset 0 0 0 1px rgb(var(--v-theme-dark-surface-primary));
 }
 
@@ -879,11 +936,31 @@ defineExpose({
   display: inline-flex;
   align-items: center;
   flex: none;
-  height: 24px;
+  height: var(--control-h-sm);
   padding: 0 var(--space-3);
   border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
   color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.picture-text-reading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  font-family: var(--font-ui);
+  color: rgba(
+    var(--v-theme-on-dark-surface),
+    var(--opacity-text-secondary)
+  );
+}
+
+.section-chevron {
+  opacity: var(--opacity-text-secondary);
+}
+
+.section-meta-btn[aria-disabled="true"] {
+  cursor: progress;
 }
 
 .picture-text-mini:hover {

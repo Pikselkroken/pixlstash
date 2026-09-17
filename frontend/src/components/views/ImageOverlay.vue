@@ -736,7 +736,7 @@
                 v-if="showTextBoxes"
                 class="picture-text-boxes"
                 aria-hidden="true"
-                :style="textBoxesStyle"
+                :style="wordLayerStyle(overlayDims)"
                 :viewBox="`0 0 ${overlayDims.width} ${overlayDims.height}`"
               >
                 <g
@@ -758,8 +758,7 @@
                     v-for="part in ['halo', 'line']"
                     :key="part"
                     :class="`picture-text-box-${part}`"
-                    v-bind="textBoxRect(word.box)"
-                    rx="1.5"
+                    v-bind="wordBoxRect(word.box, overlayDims)"
                   />
                   <title>{{ word.text }}</title>
                 </g>
@@ -1017,6 +1016,8 @@ import { useWheelZoom } from "../../composables/useWheelZoom";
 import {
   TEXT_TAB,
   usePictureText,
+  wordBoxRect,
+  wordLayerStyle,
 } from "../../composables/usePictureText";
 import {
   isSupportedVideoFile,
@@ -1201,8 +1202,12 @@ const pictureText = usePictureText({
   pictureId: computed(() => (open.value ? (image.value?.id ?? null) : null)),
   getSearchQuery: () => searchStore.searchQuery || "",
 });
+// Hidden while a "Read again" runs: the old boxes are about to be replaced.
 const showTextBoxes = computed(
-  () => pictureText.activeTab.value === TEXT_TAB && overlayReady.value,
+  () =>
+    pictureText.activeTab.value === TEXT_TAB &&
+    !pictureText.readAgainBusy.value &&
+    overlayReady.value,
 );
 const selectedWordSet = computed(
   () => new Set(pictureText.selectedWords.value),
@@ -1547,6 +1552,9 @@ async function runRotate(imageId, direction) {
     // server now reports is what the grid and every other surface will draw.
     fetchFaceBboxes(imageId);
     fetchDetections(imageId);
+    // The server drops the text on a turn, so this reads `pending` and the
+    // word boxes go until the new read lands.
+    if (String(image.value?.id) === imageIdKey) pictureText.refresh();
     emit("overlay-change", { imageId, fields: { pixels: true } });
   } catch (e) {
     console.error(`Rotate ${direction} failed for picture ${imageId}`, e);
@@ -4421,28 +4429,6 @@ function getOverlayBoxStyle(bbox, color) {
     top: `${top || 0}px`,
     width: `${width || 0}px`,
     height: `${height || 0}px`,
-  };
-}
-
-/** The word-box layer sits exactly over the displayed picture. */
-const textBoxesStyle = computed(() => {
-  const dims = overlayDims.value;
-  return {
-    left: `${dims.offsetX || 0}px`,
-    top: `${dims.offsetY || 0}px`,
-    width: `${dims.width}px`,
-    height: `${dims.height}px`,
-  };
-});
-
-function textBoxRect(box) {
-  if (!Array.isArray(box) || box.length !== 4) return {};
-  const dims = overlayDims.value;
-  return {
-    x: box[0] * dims.width,
-    y: box[1] * dims.height,
-    width: box[2] * dims.width,
-    height: box[3] * dims.height,
   };
 }
 

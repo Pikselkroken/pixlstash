@@ -2,10 +2,11 @@
 
 import json
 import tempfile
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session, delete, select
+from sqlmodel import Session, delete, select, text
 
 from pixlstash.database import (
     OCR_TEXT_MATCH_WEIGHT,
@@ -35,16 +36,16 @@ SCREENSHOT = (
 # with shows up here first: near misses of words they do carry ("cart" against
 # CARD, "cafe" against CAKE), short words, and ordinary photo searches.
 MUST_NOT_MATCH = [
-    "dog",
     "cat",
     "cart",
     "cafe",
-    "sunset beach",
+    "rake",
+    "moon",
+    "shank",
+    "sound effects",
     "portrait of a woman",
     "red car",
-    "mountain lake",
     "coffee shop",
-    "white dress",
     "notification bell",
     "tea party",
 ]
@@ -70,6 +71,10 @@ def test_misread_word_matches_but_short_words_must_be_exact():
     assert not ocr_word_matches("cart", "CARD")
     assert not ocr_word_matches("cafe", "Cake")
     assert not ocr_word_matches("coffee", "toffees")
+    # One edit is allowed from five letters, but never on the first letter.
+    assert ocr_word_matches("loose", "L0OSE")
+    assert not ocr_word_matches("loose", "goose")
+    assert not ocr_word_matches("shank", "THANK")
 
 
 def test_query_terms_drop_stopwords_unless_nothing_is_left():
@@ -88,8 +93,8 @@ def test_every_query_word_must_appear():
 
 @pytest.mark.parametrize("query", MUST_NOT_MATCH)
 def test_known_text_heavy_pictures_do_not_answer_unrelated_queries(query):
-    for text in (RECEIPT, MENU, SCREENSHOT):
-        assert ocr_text_match(text, query) == 0.0, (query, text.splitlines()[0])
+    for page in (RECEIPT, MENU, SCREENSHOT):
+        assert ocr_text_match(page, query) == 0.0, (query, page.splitlines()[0])
 
 
 # ── word boxes from Florence line regions ────────────────────────────────────
@@ -103,7 +108,7 @@ def test_line_regions_split_into_word_boxes_by_character_share():
             [0, 0, 0, 0, 0, 0, 0, 0],
             [10, 10, 50, 10, 50, 20, 10, 20],
         ],
-        labels=["COFFEE 3.80", "</s>BAKERY No.4", "degenerate", "   "],
+        labels=["  COFFEE 3.80 ", "</s>BAKERY No.4", "degenerate", "   "],
         image_size=(800, 600),
     )
     assert [[w["text"] for w in line] for line in lines] == [
@@ -120,6 +125,11 @@ def test_line_regions_split_into_word_boxes_by_character_share():
     ]
     assert no4["box"][0] == round((40 + 7 * 22) / 800, 4)
     assert no4["box"][2] == round(4 * 22 / 800, 4)
+    # Padding around a label takes no width: "COFFEE 3.80" is 11 characters
+    # over 238 px, starting at the box's left edge.
+    coffee, _ = lines[1]
+    assert coffee["box"][0] == 0.05
+    assert coffee["box"][2] == round(6 * 238 / 11 / 800, 4)
 
 
 # ── the server: search, the text routes, the task ────────────────────────────
@@ -317,6 +327,34 @@ def test_task_stores_text_and_marks_unreadable_pictures_read(server, client, pic
     assert stored[pictures["unread"]] == ("", None)
 
 
+def test_a_picture_the_reader_skipped_in_a_good_batch_is_stored_empty(server, pictures):
+    lines = _lines("OPEN 8-18")
+
+    class PartialEngine:
+        def read_text(self, paths):
+            return {"/home/me/shop.png": lines}
+
+    pics = _set_files(
+        server,
+        {
+            pictures["photo"]: "/home/me/shop.png",
+            pictures["unread"]: "/home/me/bad.png",
+        },
+    )
+    OcrTask(server.vault.db, PartialEngine(), list(pics))._run_task()
+
+    def fetch(session: Session):
+        return {
+            pid: session.get(Picture, pid).ocr_text
+            for pid in (pictures["photo"], pictures["unread"])
+        }
+
+    assert server.vault.db.run_immediate_read_task(fetch) == {
+        pictures["photo"]: "OPEN 8-18",
+        pictures["unread"]: "",
+    }
+
+
 def _set_files(server, ids_to_paths):
     def update(session: Session):
         for pid, path in ids_to_paths.items():
@@ -342,7 +380,15 @@ def test_words_are_marked_only_when_every_query_word_matched(client, pictures):
     ]
 
 
-@pytest.mark.parametrize("stored", ["not json", "[1]", '[[{"box": [0, 0, 1, 1]}]]'])
+@pytest.mark.parametrize(
+    "stored",
+    [
+        "not json",
+        "[1]",
+        '[[{"box": [0, 0, 1, 1]}]]',
+        '[[{"text": "SALE", "box": [0, 0, 1]}]]',
+    ],
+)
 def test_malformed_word_boxes_read_as_no_text(server, client, pictures, stored):
     def corrupt(session: Session):
         pic = session.get(Picture, pictures["menu"])
@@ -432,3 +478,49 @@ def test_text_routes_follow_the_token_scope(server, client, pictures):
         ).status_code
         == 403
     )
+
+
+def test_a_failed_batch_is_deferred_but_a_cancelled_one_is_not(server, pictures):
+    from pixlstash.task_runner import TaskCancelledError
+    from pixlstash.tasks.missing_ocr_finder import MissingOcrFinder
+
+    _set_files(server, {pictures["unread"]: "/home/me/unread.png"})
+    finder = MissingOcrFinder(server.vault.db, engine_getter=lambda: object())
+    task = SimpleNamespace(params={"picture_ids": [pictures["unread"]]})
+
+    def candidate_ids():
+        found = server.vault.db.run_immediate_read_task(finder._fetch_candidates, 50)
+        return {pic.id for pic in found}
+
+    finder.on_task_complete(task, TaskCancelledError("stopped"))
+    assert pictures["unread"] in candidate_ids()
+    finder.on_task_complete(task, RuntimeError("reader returned nothing"))
+    assert pictures["unread"] not in candidate_ids()
+
+
+def test_text_match_flags_are_looked_up_only_for_the_ids_given(server, pictures):
+    def lookup(session: Session, ids):
+        return Picture.ids_matching_text(session, "coffee", ids)
+
+    run = server.vault.db.run_immediate_read_task
+    assert run(lookup, [pictures["receipt"], pictures["photo"]]) == {
+        pictures["receipt"]
+    }
+    assert run(lookup, [pictures["photo"]]) == set()
+
+
+def test_the_finder_probe_reads_the_partial_index(server):
+    def plan(session: Session):
+        statement = OcrTask._unread_query(select(Picture.id)).order_by(
+            Picture.text_score.desc()
+        )
+        compiled = statement.compile(
+            session.get_bind(), compile_kwargs={"literal_binds": True}
+        )
+        return session.exec(text(f"EXPLAIN QUERY PLAN {compiled}")).all()
+
+    details = " ".join(
+        str(row[-1]) for row in server.vault.db.run_immediate_read_task(plan)
+    )
+    assert "ix_picture_ocr_unread" in details, details
+    assert "TEMP B-TREE" not in details, details

@@ -143,7 +143,7 @@ describe("OverlayDescriptionPanel - Description and Text tabs (#1197)", () => {
     expect(words[0].attributes("aria-pressed")).toBe("true");
     expect(w.find(".picture-text-selection").text()).toContain("BAKERY");
     // The header count is the whole text, lines joined by a newline.
-    expect(w.find(".section-meta").text()).toBe(String("BAKERY No.4\nC0FFEE".length));
+    expect(w.find(".section-meta").text()).toBe("18");
 
     await words[1].trigger("click", { shiftKey: true });
     expect(w.emitted("select-word")).toEqual([[1, true]]);
@@ -158,5 +158,152 @@ describe("OverlayDescriptionPanel - Description and Text tabs (#1197)", () => {
     expect(w.find(".picture-text-selection").text()).toContain(
       "Click a word to find it in the picture",
     );
+  });
+
+  it("with a selected word whose text is empty, the strip still offers Copy and Clear", () => {
+    const w = mountPanel({
+      textState: "read",
+      textLines: [[word("")], [word("EXIT")]],
+      activeTab: "text",
+      selectedWords: [0],
+    });
+    expect(
+      w.findAll(".picture-text-mini").map((b) => b.text()),
+    ).toEqual(["Copy", "Clear"]);
+  });
+});
+
+/** Dispatch a real, bubbling keydown and report whether window heard it. */
+function keydownReachesWindow(el, key) {
+  const heard = vi.fn();
+  window.addEventListener("keydown", heard);
+  const event = new KeyboardEvent("keydown", {
+    key,
+    bubbles: true,
+    cancelable: true,
+  });
+  el.dispatchEvent(event);
+  window.removeEventListener("keydown", heard);
+  return { event, reached: heard.mock.calls.length > 0 };
+}
+
+describe("OverlayDescriptionPanel - keyboard in the text (#1197)", () => {
+  const word = (text) => ({ text, box: [0.1, 0.1, 0.1, 0.05] });
+  // Line 0: A B C, line 1: D E.
+  const LINES = [
+    [word("A"), word("B"), word("C")],
+    [word("D"), word("E")],
+  ];
+  const mountText = (props = {}) =>
+    mountPanel({
+      textState: "read",
+      textLines: LINES,
+      activeTab: "text",
+      ...props,
+    });
+  const wordButtons = (w) => w.findAll(".picture-text-word");
+
+  it("the word list is one tab stop", () => {
+    const w = mountText();
+    expect(wordButtons(w).map((b) => b.attributes("tabindex"))).toEqual([
+      "0",
+      "-1",
+      "-1",
+      "-1",
+      "-1",
+    ]);
+  });
+
+  it("Left/Right move by word, Up/Down by line, and never reach the overlay", async () => {
+    const w = mountText();
+    const buttons = wordButtons(w);
+    buttons[0].element.focus();
+
+    const { event, reached } = keydownReachesWindow(
+      buttons[0].element,
+      "ArrowRight",
+    );
+    await w.vm.$nextTick();
+    expect(reached).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(buttons[1].element);
+    expect(buttons[1].attributes("tabindex")).toBe("0");
+    expect(buttons[0].attributes("tabindex")).toBe("-1");
+
+    keydownReachesWindow(buttons[1].element, "ArrowDown");
+    await w.vm.$nextTick();
+    expect(document.activeElement).toBe(buttons[4].element);
+
+    keydownReachesWindow(buttons[4].element, "ArrowUp");
+    await w.vm.$nextTick();
+    expect(document.activeElement).toBe(buttons[1].element);
+
+    keydownReachesWindow(buttons[1].element, "ArrowLeft");
+    await w.vm.$nextTick();
+    expect(document.activeElement).toBe(buttons[0].element);
+
+    // At the edge the key is still kept from the overlay.
+    const edge = keydownReachesWindow(buttons[0].element, "ArrowLeft");
+    expect(edge.reached).toBe(false);
+    expect(document.activeElement).toBe(buttons[0].element);
+  });
+
+  it("other keys are left alone", () => {
+    const w = mountText();
+    const { reached } = keydownReachesWindow(wordButtons(w)[0].element, "a");
+    expect(reached).toBe(true);
+  });
+
+  it("arrow keys on a tab switch tabs and never reach the overlay", async () => {
+    const w = mountPanel({ textState: "read", textLines: LINES });
+    const tabs = w.findAll('[role="tab"]');
+    const { event, reached } = keydownReachesWindow(
+      tabs[0].element,
+      "ArrowRight",
+    );
+    expect(reached).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(w.emitted("pick-tab")).toEqual([["text"]]);
+  });
+});
+
+describe("OverlayDescriptionPanel - reading the text again (#1197)", () => {
+  const LINES = [[{ text: "EXIT", box: [0.1, 0.1, 0.1, 0.05] }]];
+  const readAgainButton = (w) =>
+    w.find('[aria-label="Read the text again"]');
+
+  it("keeps the pressed button mounted and focusable while busy", async () => {
+    const w = mountPanel({
+      textState: "read",
+      textLines: LINES,
+      activeTab: "text",
+    });
+    const button = readAgainButton(w);
+    button.element.focus();
+    await button.trigger("click");
+    expect(w.emitted("read-text-again")).toHaveLength(1);
+
+    await w.setProps({ textReadBusy: true });
+    const busy = readAgainButton(w);
+    expect(busy.element).toBe(button.element);
+    expect(busy.attributes("disabled")).toBeUndefined();
+    expect(busy.attributes("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(button.element);
+    // A second press while busy asks for nothing.
+    await busy.trigger("click");
+    expect(w.emitted("read-text-again")).toHaveLength(1);
+  });
+
+  it("stays on the Text panel, showing that it is reading instead of the old words", () => {
+    const w = mountPanel({
+      textState: "read",
+      textLines: LINES,
+      activeTab: "text",
+      textReadBusy: true,
+    });
+    expect(w.find("textarea").exists()).toBe(false);
+    expect(w.find(".picture-text").attributes("aria-busy")).toBe("true");
+    expect(w.find(".picture-text-reading").exists()).toBe(true);
+    expect(w.findAll(".picture-text-word")).toHaveLength(0);
   });
 });

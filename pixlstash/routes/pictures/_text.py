@@ -9,10 +9,10 @@ the authz gate checks scope before the handler runs.
 
 import json
 from types import SimpleNamespace
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
 from fastapi import HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 from pixlstash.database import ocr_query_terms, ocr_text_match, ocr_word_matches
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import picture_service
@@ -23,7 +23,7 @@ logger = get_logger(__name__)
 
 class PictureTextWord(BaseModel):
     text: str
-    box: list[float]
+    box: Annotated[list[float], Field(min_length=4, max_length=4)]
     matched: bool = False
 
 
@@ -77,18 +77,20 @@ def register_routes(router, server):
         try:
             lines = [
                 [
-                    {
-                        "text": str(word["text"]),
-                        "box": word["box"],
-                        "matched": any(
+                    # Validated here, not only on the way out, so a wrong-shaped
+                    # box reads as no text instead of a 500.
+                    PictureTextWord(
+                        text=str(word["text"]),
+                        box=word["box"],
+                        matched=any(
                             ocr_word_matches(term, str(word["text"])) for term in terms
                         ),
-                    }
+                    )
                     for word in line
                 ]
                 for line in json.loads(ocr_words)
             ]
-        except (ValueError, TypeError, KeyError) as exc:
+        except (ValueError, TypeError, KeyError, ValidationError) as exc:
             logger.error(
                 "Stored word boxes for picture %s are not lines of words: %s",
                 pic_id,

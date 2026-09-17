@@ -11,9 +11,13 @@ import { useSearchStore } from "../../stores/useSearchStore";
 
 enableAutoUnmount(afterEach);
 
+// Picture id -> its /text body (or a promise of one); unlisted has no words.
+let textBodies = {};
+
 const getMock = vi.fn(async (url) => {
   if (typeof url === "string" && url.includes("/text")) {
-    return { data: { state: "read", lines: [] } };
+    const id = url.match(/\/pictures\/(\d+)\/text/)?.[1];
+    return { data: (await textBodies[id]) ?? { state: "read", lines: [] } };
   }
   if (typeof url === "string" && url.includes("/metadata")) {
     return { data: { id: 7, tags: [] } };
@@ -35,6 +39,8 @@ vi.mock("../../utils/apiClient", () => ({
   isReadOnly: { value: false },
 }));
 
+const revealWord = vi.fn();
+
 const STUBS = {
   OverlayTagsPanel: true,
   OverlayFilmstrip: true,
@@ -43,6 +49,9 @@ const STUBS = {
     methods: {
       cancelEditDescription() {},
       resetCopyState() {},
+      revealWord(index) {
+        revealWord(index);
+      },
     },
     template: "<div class='description-panel'></div>",
   },
@@ -83,6 +92,8 @@ async function openOverlayOnCard7() {
 beforeEach(() => {
   setActivePinia(createPinia());
   getMock.mockClear();
+  revealWord.mockClear();
+  textBodies = {};
 });
 
 describe("ImageOverlay - text in the picture", () => {
@@ -109,5 +120,107 @@ describe("ImageOverlay - text in the picture", () => {
     await wrapper.setProps({ textUpdate: { key: 1, pictureIds: [8, 9] } });
     await flush();
     expect(textCalls().length).toBe(before);
+  });
+});
+
+describe("ImageOverlay - word boxes over the picture", () => {
+  const COFFEE = {
+    state: "read",
+    lines: [
+      [
+        { text: "BAKERY", box: [0.1, 0.1, 0.2, 0.1], matched: false },
+        { text: "COFFEE", box: [0.4, 0.1, 0.2, 0.1], matched: true },
+      ],
+    ],
+  };
+
+  /** Give the jsdom <img> a size, so the overlay counts as laid out. */
+  async function layOut(wrapper) {
+    const img = wrapper.find(".overlay-img");
+    for (const [property, value] of [
+      ["complete", true],
+      ["naturalWidth", 800],
+      ["naturalHeight", 600],
+      ["clientWidth", 400],
+      ["clientHeight", 300],
+    ]) {
+      Object.defineProperty(img.element, property, {
+        configurable: true,
+        value,
+      });
+    }
+    await img.trigger("load");
+    await flush();
+  }
+
+  async function openOnCoffee() {
+    // A search matching picture 7's text opens it on the Text tab.
+    useSearchStore().searchQuery = "coffee";
+    textBodies = { 7: COFFEE };
+    const wrapper = mount(ImageOverlay, {
+      props: {
+        open: false,
+        initialImageId: 7,
+        allImages: [
+          { id: 7, format: "jpg", tags: [] },
+          { id: 8, format: "jpg", tags: [] },
+        ],
+        backendUrl: "http://test",
+        textUpdate: { key: 0, pictureIds: [] },
+      },
+      global: { stubs: STUBS },
+      attachTo: document.body,
+    });
+    await wrapper.setProps({ open: true });
+    await flush();
+    await flush();
+    await layOut(wrapper);
+    return wrapper;
+  }
+
+  it("draws one box per word, in pixels of the displayed picture", async () => {
+    const wrapper = await openOnCoffee();
+    const boxes = wrapper.findAll(".picture-text-box");
+    expect(boxes).toHaveLength(2);
+    const line = boxes[1].find(".picture-text-box-line");
+    expect(line.attributes()).toMatchObject({
+      x: "160",
+      y: "30",
+      width: "80",
+      height: "30",
+    });
+    // The search match lands selected.
+    expect(boxes[1].classes()).toContain("picture-text-box--selected");
+  });
+
+  it("clicking a box selects its word and reveals it in the sidebar", async () => {
+    const wrapper = await openOnCoffee();
+    await wrapper.findAll(".picture-text-box")[0].trigger("click");
+    expect(revealWord).toHaveBeenCalledWith(0);
+    const boxes = wrapper.findAll(".picture-text-box");
+    expect(boxes[0].classes()).toContain("picture-text-box--selected");
+    expect(boxes[1].classes()).not.toContain("picture-text-box--selected");
+  });
+
+  it("the boxes go when the picture changes", async () => {
+    const wrapper = await openOnCoffee();
+    expect(wrapper.findAll(".picture-text-box")).toHaveLength(2);
+    // Picked by hand, so the next picture opens on Text too.
+    wrapper
+      .findComponent({ name: "OverlayDescriptionPanel" })
+      .vm.$emit("pick-tab", "text");
+    // Picture 8's text is still on its way: nothing of 7's may stay drawn.
+    textBodies[8] = new Promise(() => {});
+
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+    );
+    await flush();
+    await flush();
+    expect(getMock.mock.calls.map(([url]) => url)).toContain(
+      "/pictures/8/text?query=coffee",
+    );
+    await layOut(wrapper);
+    expect(wrapper.findAll(".picture-text-box")).toHaveLength(0);
   });
 });

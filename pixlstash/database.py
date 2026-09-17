@@ -708,23 +708,36 @@ def ocr_query_terms(query: str) -> tuple[str, ...]:
     return tuple(significant or words)
 
 
+def _ocr_term_matches_token(term: str, token: str) -> bool:
+    """Whether one lower-cased alphanumeric token matches one query term.
+
+    No edits below five letters, one below nine, two beyond, and never on the
+    first letter: OCR confuses letters inside a word ("C0FFEE"), while a
+    different first letter is usually a different word ("goose" for "loose").
+    """
+    if token == term:
+        return True
+    budget = 0 if len(term) < 5 else 1 if len(term) < 9 else 2
+    return (
+        budget > 0
+        and token[:1] == term[:1]
+        and Levenshtein.distance(term, token, score_cutoff=budget) <= budget
+    )
+
+
 def ocr_word_matches(term: str, word: str) -> bool:
     """Whether one word read from a picture matches one query term.
-
-    Tolerates the character errors OCR makes ("C0FFEE" for "coffee") without
-    letting short words match their neighbours: no edits below five letters,
-    one below nine, two beyond.
 
     Args:
         term: A lower-cased query term from :func:`ocr_query_terms`.
         word: A word as it was read, punctuation included.
 
     Returns:
-        True when any alphanumeric run in *word* is within the edit budget.
+        True when any alphanumeric run in *word* matches, by
+        :func:`_ocr_term_matches_token`.
     """
-    budget = 0 if len(term) < 5 else 1 if len(term) < 9 else 2
     return any(
-        Levenshtein.distance(term, token, score_cutoff=budget) <= budget
+        _ocr_term_matches_token(term, token)
         for token in re.findall(r"\w+", word.lower())
     )
 
@@ -734,7 +747,8 @@ def ocr_text_match(ocr_text, query) -> float:
 
     Matched word against word rather than scored as a bag like tags are: a
     receipt carries hundreds of words, and averaging over them would reward a
-    picture for how much text it has rather than for what it says.
+    picture for how much text it has rather than for what it says. The text is
+    tokenised once, and an exact hit skips the edit-distance pass.
 
     Args:
         ocr_text: ``Picture.ocr_text``; NULL or empty never matches.
@@ -748,8 +762,11 @@ def ocr_text_match(ocr_text, query) -> float:
     terms = ocr_query_terms(query)
     if not terms:
         return 0.0
-    words = ocr_text.split()
-    matched = all(any(ocr_word_matches(term, word) for word in words) for term in terms)
+    tokens = set(re.findall(r"\w+", ocr_text.lower()))
+    matched = all(
+        term in tokens or any(_ocr_term_matches_token(term, token) for token in tokens)
+        for term in terms
+    )
     return 1.0 if matched else 0.0
 
 

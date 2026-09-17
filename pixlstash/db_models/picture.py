@@ -39,6 +39,7 @@ from .tag import Tag
 from .tag_prediction import TagPrediction
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.sql_chunking import chunked
 
 if TYPE_CHECKING:
     from .character import Character
@@ -200,6 +201,12 @@ def _scope_predicates_for_leaders(
 
 class Picture(SQLModel, table=True):
     ExportType: ClassVar[type["ExportType"]] = ExportType
+    # Left out of ``metadata_fields()`` (#1197): a screenshot's words and boxes
+    # run to kilobytes, which every metadata and search row would carry.
+    # ``GET /pictures/{id}/text`` serves them shaped; the generic
+    # ``GET /pictures/{id}/{field}`` reader still returns the raw columns, under
+    # the same picture scope.
+    OCR_FIELDS: ClassVar[frozenset] = frozenset({"ocr_text", "ocr_words"})
     id: int = Field(default=None, primary_key=True)
     file_path: Optional[str] = None
     description: Optional[str] = None
@@ -606,6 +613,18 @@ class Picture(SQLModel, table=True):
             "id",
             sqlite_where=text("aesthetic_score IS NULL"),
         ),
+        # MissingOcrFinder: ocr_text IS NULL AND deleted IS 0 AND text_score >=
+        # the threshold, most text first. The two equality terms lead, as above;
+        # the range on text_score comes last so the index also serves the ORDER
+        # BY. Without it the probe range-scans every qualifying picture, read or
+        # not, on ``ix_picture_text_score``.
+        Index(
+            "ix_picture_ocr_unread",
+            "ocr_text",
+            "deleted",
+            "text_score",
+            sqlite_where=text("ocr_text IS NULL"),
+        ),
     )
 
     class Config:
@@ -889,27 +908,35 @@ class Picture(SQLModel, table=True):
         return output
 
     @classmethod
-    def ids_matching_text(cls, session: Session, query: str) -> set[int]:
-        """Return the ids of pictures whose read text matches every query word.
+    def ids_matching_text(
+        cls, session: Session, query: str, picture_ids: List[int]
+    ) -> set[int]:
+        """Return which of *picture_ids* have read text matching every query word.
 
-        The function only runs on pictures that were read and hold text; every
-        other row is rejected by the NULL/empty check before it is called.
+        Only the ids given are looked at, by primary key, so the cost follows
+        the rows a search returned rather than the size of the library.
 
         Args:
             session: Open database session.
             query: The search text.
+            picture_ids: The pictures to check, typically one search's rows.
 
         Returns:
-            Picture ids for which ``ocr_text_match`` is 1.
+            The subset of *picture_ids* for which ``ocr_text_match`` is 1.
         """
-        rows = session.exec(
-            select(cls.id).where(
-                cls.ocr_text.is_not(None),
-                cls.ocr_text != "",
-                func.ocr_text_match(cls.ocr_text, query) > 0,
+        matched: set[int] = set()
+        for chunk in chunked(list(picture_ids)):
+            matched.update(
+                session.exec(
+                    select(cls.id).where(
+                        cls.id.in_(chunk),
+                        cls.ocr_text.is_not(None),
+                        cls.ocr_text != "",
+                        func.ocr_text_match(cls.ocr_text, query) > 0,
+                    )
+                ).all()
             )
-        ).all()
-        return set(rows)
+        return matched
 
     @staticmethod
     def serialize_with_likeness(picture_and_score):
@@ -1239,10 +1266,6 @@ class Picture(SQLModel, table=True):
             return session.execute(query).scalar_one()
 
         return session.exec(query).all()
-
-    # Served by ``GET /pictures/{id}/text`` alone: a screenshot's words and
-    # boxes run to kilobytes, which every metadata and search row would carry.
-    OCR_FIELDS: ClassVar[frozenset] = frozenset({"ocr_text", "ocr_words"})
 
     @classmethod
     def metadata_fields(cls):

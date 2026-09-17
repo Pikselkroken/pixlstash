@@ -19,6 +19,8 @@ import {
   joinPictureText,
   nextWordSelection,
   usePictureText,
+  wordBoxRect,
+  wordLayerStyle,
 } from "./usePictureText";
 
 const w = (text, matched = false) => ({
@@ -149,19 +151,81 @@ describe("usePictureText - landing", () => {
     expect(text.activeTab.value).toBe(DESCRIPTION_TAB);
   });
 
-  it("read again goes pending, and the refreshed text opens the tab it was on", async () => {
+  it("read again stays on Text, busy, until the refreshed text lands", async () => {
     getPictureText.mockResolvedValue(PLAIN);
     readPictureText.mockResolvedValue({ state: "pending" });
     const { text } = setup();
     await settle();
     text.pickTab(TEXT_TAB);
+    text.selectWord(0);
 
     await text.readAgain();
     expect(readPictureText).toHaveBeenCalledWith(1);
-    expect(text.isPending.value).toBe(true);
-    expect(text.activeTab.value).toBe(DESCRIPTION_TAB);
+    // The server keeps the old text meanwhile: the user is not bounced to
+    // Description, and the busy flag is what says a read is running.
+    expect(text.readAgainBusy.value).toBe(true);
+    expect(text.activeTab.value).toBe(TEXT_TAB);
+    expect(text.selectedWords.value).toEqual([]);
 
     await text.refresh();
+    expect(text.readAgainBusy.value).toBe(false);
     expect(text.activeTab.value).toBe(TEXT_TAB);
+  });
+
+  it("a failed read again is not left busy", async () => {
+    getPictureText.mockResolvedValue(PLAIN);
+    readPictureText.mockRejectedValue(new Error("boom"));
+    const { text } = setup();
+    await settle();
+    await text.readAgain();
+    expect(text.readAgainBusy.value).toBe(false);
+  });
+
+  it("read again is busy for its own picture only", async () => {
+    getPictureText.mockResolvedValue(PLAIN);
+    let finishPost;
+    readPictureText.mockReturnValue(new Promise((r) => (finishPost = r)));
+    const { text, pictureId } = setup();
+    await settle();
+
+    const pending = text.readAgain();
+    expect(text.readAgainBusy.value).toBe(true);
+    pictureId.value = 2;
+    await settle();
+    expect(text.readAgainBusy.value).toBe(false);
+    finishPost({});
+    await pending;
+    expect(text.readAgainBusy.value).toBe(false);
+  });
+});
+
+describe("word box geometry", () => {
+  const DIMS = { width: 400, height: 200, offsetX: 12, offsetY: 30 };
+
+  it("turns fractions of the picture into pixels", () => {
+    expect(wordBoxRect([0.25, 0.5, 0.1, 0.05], DIMS)).toEqual({
+      x: 100,
+      y: 100,
+      width: 40,
+      height: 10,
+    });
+  });
+
+  it("draws nothing for a missing or malformed box", () => {
+    expect(wordBoxRect(null, DIMS)).toEqual({});
+    expect(wordBoxRect([0.1, 0.1, 0.1], DIMS)).toEqual({});
+  });
+
+  it("lays the layer exactly over the displayed picture", () => {
+    expect(wordLayerStyle(DIMS)).toEqual({
+      left: "12px",
+      top: "30px",
+      width: "400px",
+      height: "200px",
+    });
+    expect(wordLayerStyle({ width: 5, height: 6 })).toMatchObject({
+      left: "0px",
+      top: "0px",
+    });
   });
 });

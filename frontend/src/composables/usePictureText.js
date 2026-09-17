@@ -68,6 +68,32 @@ export function nextWordSelection(selected, index, additive) {
 }
 
 /**
+ * Where a word box sits in the word-box layer, in pixels.
+ * @param {number[]|null} box - `[x, y, width, height]` as fractions of the picture.
+ * @param {{width: number, height: number}} dims - the displayed picture's size.
+ * @returns {Object} rect attributes, or `{}` for a missing or malformed box.
+ */
+export function wordBoxRect(box, dims) {
+  if (!Array.isArray(box) || box.length !== 4) return {};
+  return {
+    x: box[0] * dims.width,
+    y: box[1] * dims.height,
+    width: box[2] * dims.width,
+    height: box[3] * dims.height,
+  };
+}
+
+/** The word-box layer's style: exactly over the displayed picture. */
+export function wordLayerStyle(dims) {
+  return {
+    left: `${dims.offsetX || 0}px`,
+    top: `${dims.offsetY || 0}px`,
+    width: `${dims.width}px`,
+    height: `${dims.height}px`,
+  };
+}
+
+/**
  * @param {Object} deps
  * @param {import("vue").Ref<number|string|null>} deps.pictureId - the open picture.
  * @param {() => string} deps.getSearchQuery - the active text search, or "".
@@ -82,7 +108,10 @@ export function usePictureText({ pictureId, getSearchQuery }) {
   const chosenTab = ref(DESCRIPTION_TAB);
   let lastPickedTab = DESCRIPTION_TAB;
   const selectedWords = ref([]);
-  const readAgainBusy = ref(false);
+  // The picture a "Read again" is running for, until its new text lands.
+  // Landing on another picture clears it, so the next one is never busy.
+  const rereadingId = ref(null);
+  const readAgainBusy = computed(() => rereadingId.value != null);
   let requestId = 0;
 
   const words = computed(() => flattenWords(text.value.lines));
@@ -121,6 +150,7 @@ export function usePictureText({ pictureId, getSearchQuery }) {
   async function load(id, { landing = false } = {}) {
     const current = (requestId += 1);
     if (landing) {
+      rereadingId.value = null;
       text.value = NO_TEXT;
       selectedWords.value = [];
       chosenTab.value = lastPickedTab;
@@ -157,27 +187,28 @@ export function usePictureText({ pictureId, getSearchQuery }) {
   async function readAgain() {
     const id = pictureId.value;
     if (id == null || readAgainBusy.value) return;
-    readAgainBusy.value = true;
+    // The server keeps the old text until the new read lands, so the words stay
+    // put and this flag is the busy state; `refresh` (the `ocr_text` frame)
+    // clears it.
+    rereadingId.value = id;
+    selectedWords.value = [];
     try {
       await readPictureText(id);
-      if (pictureId.value !== id) return;
-      // Invalidate a load still in flight: it would land the old text.
-      requestId += 1;
-      text.value = { state: "pending", lines: [] };
-      selectedWords.value = [];
     } catch (err) {
+      if (rereadingId.value === id) rereadingId.value = null;
       console.error(`Failed to re-read the text of picture ${id}`, err);
       noticeStore.error(
         `Couldn't read the text again. ${errorDetail(err) || err?.message || "Please try again."}`,
         { key: "picture-text-read" },
       );
-    } finally {
-      readAgainBusy.value = false;
     }
   }
 
-  function refresh() {
-    return load(pictureId.value);
+  /** Read the open picture's text again, e.g. because the server says it changed. */
+  async function refresh() {
+    const id = pictureId.value;
+    await load(id);
+    if (rereadingId.value === id) rereadingId.value = null;
   }
 
   watch(pictureId, (id) => load(id, { landing: true }), { immediate: true });

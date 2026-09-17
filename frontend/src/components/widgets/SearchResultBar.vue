@@ -665,6 +665,10 @@ onUnmounted(() => {
   box-shadow: var(--elevation-1);
 }
 
+.search-result-scope-opt[aria-pressed="true"]:not([aria-disabled="true"]):hover {
+  background-image: var(--hover-shade);
+}
+
 .search-result-scope-count {
   font-variant-numeric: tabular-nums;
 }

@@ -14,6 +14,7 @@ from sqlmodel import Session, select
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture
 from pixlstash.pixl_logging import get_logger
+from pixlstash.tagger_plugins.florence2 import FLORENCE_OCR_NUM_BEAMS
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.media_files import SUPPORTED_IMAGE_EXTS
@@ -45,8 +46,7 @@ class OcrTask(BaseTask):
         interactive: True when a person asked for this read ("Read again").
     """
 
-    # Kept small: reading decodes with three beams and up to 1024 tokens, more
-    # than the captioning estimate the VRAM gate charges for.
+    # Kept small: one dense page makes the whole batch decode to its length.
     BATCH_SIZE = 4
 
     def __init__(
@@ -79,16 +79,18 @@ class OcrTask(BaseTask):
         self._stop_event.set()
 
     def estimated_vram_mb(self) -> int:
-        # Same model as captioning, so the same estimate.
+        # Captioning's estimate for the same model, times the beams reading
+        # decodes with: each beam carries its own cache of generated tokens.
         try:
             return max(
                 0,
                 self._engine.description_workflow.estimate_vram_mb(
-                    len(self._pictures), plugin_name="florence2"
+                    len(self._pictures) * FLORENCE_OCR_NUM_BEAMS,
+                    plugin_name="florence2",
                 ),
             )
         except Exception as exc:
-            logger.debug(
+            logger.warning(
                 "OcrTask: VRAM estimate failed for %d picture(s); assuming 0: %s",
                 len(self._pictures),
                 exc,
@@ -172,14 +174,16 @@ class OcrTask(BaseTask):
         """Return pictures that look like they carry text and have not been read.
 
         Loads only what the task reads: the planner runs this probe continuously,
-        and a whole row drags the embedding blobs along (§7, probe cost). The
-        ``text_score`` index narrows it to the few pictures that qualify.
+        and a whole row drags the embedding blobs along (§7, probe cost).
+        ``ix_picture_ocr_unread`` serves both the filter and the order.
         """
+        # Most text first, so a batch holds pages of similar length: batched
+        # generation runs every picture until the longest one finishes.
         return session.exec(
             OcrTask._unread_query(
                 select(Picture).options(load_only(Picture.id, Picture.file_path))
             )
-            .order_by(Picture.id)
+            .order_by(Picture.text_score.desc())
             .limit(limit)
         ).all()
 

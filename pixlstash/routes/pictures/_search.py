@@ -466,7 +466,9 @@ def register_routes(router, server):
         # Per row, whether the picture's own text matched: the result pill counts
         # and narrows on this without a second search (#1197).
         text_matched_ids = (
-            server.vault.db.run_immediate_read_task(Picture.ids_matching_text, query)
+            server.vault.db.run_immediate_read_task(
+                Picture.ids_matching_text, query, [row.get("id") for row in rows]
+            )
             if rows
             else set()
         )

@@ -17,6 +17,7 @@ if TYPE_CHECKING:  # annotations only - see the function-local import note below
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TaggerPlugin
 from pixlstash.utils.model_utils import from_pretrained_local_first
+from pixlstash.utils.vram_utils import is_vram_oom
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 
 # ML imports (torch / torchvision) are deliberately FUNCTION-LOCAL throughout
@@ -31,6 +32,9 @@ FLORENCE_BATCH_SIZE_CPU = 2
 FLORENCE_BASE_VRAM_MB = 900  # Florence-2-base model footprint (fp16 on GPU)
 FLORENCE_LARGE_FT_VRAM_MB = 2600  # Florence-2-large-ft footprint (0.77B, fp16 on GPU)
 FLORENCE_PER_IMAGE_VRAM_MB = 40  # Activation scratch per image in a GPU mini-batch
+FLORENCE_OCR_NUM_BEAMS = (
+    3  # Beams text reading decodes with; the VRAM gate charges per beam
+)
 FLORENCE_MODEL_REVISION = "00921df66db728a9ceb750f5eca43e5c203a2051"
 
 # Selectable Florence-2 checkpoints. One setting drives BOTH captioning and
@@ -86,8 +90,10 @@ def _words_from_ocr_regions(quad_boxes, labels, image_size) -> list:
     Florence boxes whole lines. Each word gets the slice of its line's box that
     its characters take up.
 
-    ponytail: proportional split, so a word's box drifts on proportional fonts
-    and wide gaps; a detector with word boxes of its own would fix that.
+    ponytail: proportional split over the line quad's axis-aligned bounds, so a
+    word's box drifts on proportional fonts and wide gaps, and on text set at an
+    angle the bounds are far larger than the line and every word lands in the
+    wrong place. A detector with word boxes of its own would fix both.
 
     Args:
         quad_boxes: One ``[x1, y1, ..., x4, y4]`` quad per line, in pixels.
@@ -102,10 +108,20 @@ def _words_from_ocr_regions(quad_boxes, labels, image_size) -> list:
     width, height = image_size
     if width <= 0 or height <= 0:
         return []
+    quad_boxes, labels = quad_boxes or [], labels or []
+    if len(quad_boxes) != len(labels):
+        # A generation cut off at the token cap: keep the lines that pair up.
+        logger.warning(
+            "Florence-2 returned %d line boxes for %d lines of text; lines "
+            "without a partner are dropped",
+            len(quad_boxes),
+            len(labels),
+        )
     lines = []
-    for quad, label in zip(quad_boxes or [], labels or []):
-        text = str(label or "").replace("</s>", "").replace("<s>", "")
-        if not text.strip() or not quad or len(quad) != 8:
+    for quad, label in zip(quad_boxes, labels):
+        # Florence boxes the ink, so padding around the label takes no width.
+        text = str(label or "").replace("</s>", "").replace("<s>", "").strip()
+        if not text or not quad or len(quad) != 8:
             continue
         xs, ys = quad[0::2], quad[1::2]
         x1 = min(max(min(xs), 0), width)
@@ -676,7 +692,7 @@ class Florence2Service:
                     max_new_tokens=max_new_tokens,
                     early_stopping=False,
                     do_sample=False,
-                    num_beams=3,
+                    num_beams=FLORENCE_OCR_NUM_BEAMS,
                     pad_token_id=self._processor.tokenizer.pad_token_id,
                 )
             generated_texts = self._processor.batch_decode(
@@ -698,6 +714,10 @@ class Florence2Service:
             return texts
 
         except Exception as e:
+            if is_vram_oom(e):
+                # Out of memory is the task runner's to retry once VRAM is freed;
+                # falling back to CPU here would move captioning there too.
+                raise
             if _retry_on_cpu and self._is_cuda_error(e):
                 logger.warning(
                     "Florence-2 text reading failed on GPU (%s); retrying on CPU.", e

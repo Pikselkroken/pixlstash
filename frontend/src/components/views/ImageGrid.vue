@@ -8597,6 +8597,9 @@ async function handleAssignFaceSearchResults() {
 watch(
   () => searchStore.searchQuery,
   (newVal) => {
+    // The cached response is for the old query; the "In text" re-cut only
+    // ever reuses the current query's, which the fetch writes after this.
+    textSearchResults.value = null;
     if (newVal && newVal.trim()) {
       resetFaceAndImageSearches();
     }
