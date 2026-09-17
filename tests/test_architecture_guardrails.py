@@ -2344,10 +2344,13 @@ _PRIVATE_ADDRESS_RE = re.compile(
 )
 
 # Named roots, never a repo-root walk: that is what lets every scan in this
-# file work without a node_modules / dist / .venv exclusion list, and a
-# too-greedy exclusion is a silent pass. The list is wide because the scan it
-# mirrors reads the whole diff - a literal in a workflow, an installer script
-# or the website blocks a push exactly as one in a test does.
+# file work without a dist / .venv exclusion list, and a too-greedy exclusion
+# is a silent pass. A node_modules path component is skipped under every root,
+# because electron/ is walked and npm install drops vendored .d.ts files there
+# that document the network APIs with RFC 1918 examples; it is gitignored
+# everywhere, so nothing it hides can reach a push. The list is wide because
+# the scan it mirrors reads the whole diff - a literal in a workflow, an
+# installer script or the website blocks a push exactly as one in a test does.
 _PRIVATE_ADDRESS_ROOTS = (
     ".github",
     "docs",
@@ -2448,11 +2451,14 @@ def _private_address_offenders(root: Path, repo_root: Path) -> list[str]:
     named = root.is_file()
     paths = [root] if named else sorted(root.rglob("*"))
     for path in paths:
+        rel = path.relative_to(repo_root)
+        # A component, not a substring: node_modules_notes.md is first-party.
+        if "node_modules" in rel.parts:
+            continue
         if not path.is_file():
             continue
         if not named and path.suffix not in _PRIVATE_ADDRESS_SUFFIXES:
             continue
-        rel = path.relative_to(repo_root)
         if rel.as_posix().startswith(_PRIVATE_ADDRESS_SKIP):
             continue
         try:
@@ -2538,12 +2544,25 @@ def test_private_address_guardrail_has_teeth(tmp_path):
         + "\n"
     )
     (tmp_path / "longer.md").write_text(f"the gateway is {LAN_IPV4}.7\n")
+    # Vendored code is skipped by path component, and only that: a first-party
+    # file beside it, or one merely named after it, is still read.
+    vendored = tmp_path / "app" / "node_modules" / "@types" / "node"
+    vendored.mkdir(parents=True)
+    (vendored / "net.d.ts").write_text(f"// Subnet: {_TEETH_OFFENDER}\n")
+    (tmp_path / "app" / "main.js").write_text(f"// host {_TEETH_OFFENDER}\n")
+    (tmp_path / "app" / "node_modules_notes.md").write_text(f"{_TEETH_OFFENDER}\n")
 
     offenders = _private_address_offenders(tmp_path, tmp_path)
-    caught = {o.split(":", 1)[0] for o in offenders}
-    assert caught == {"bad.md", "mixed.md", "longer.md", "digit.md", "sentence.md"}, (
-        f"the guardrail reported the wrong set of files: {offenders}"
-    )
+    caught = {o.split(":", 1)[0].replace("\\", "/") for o in offenders}
+    assert caught == {
+        "bad.md",
+        "mixed.md",
+        "longer.md",
+        "digit.md",
+        "sentence.md",
+        "app/main.js",
+        "app/node_modules_notes.md",
+    }, f"the guardrail reported the wrong set of files: {offenders}"
 
 
 def test_private_address_guardrail_reads_a_named_file_of_any_kind(tmp_path):
