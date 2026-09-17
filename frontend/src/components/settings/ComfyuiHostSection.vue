@@ -297,7 +297,7 @@ watch(
 
 .wf-error {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   margin-top: var(--space-2);
 }
 

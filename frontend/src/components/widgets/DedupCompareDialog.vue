@@ -2368,7 +2368,7 @@ function onZoomContextMenu() {
    and quieting it would say "inert" about the one card that is not. The flag
    chip is the second, non-colour channel (WCAG 1.4.1). */
 .dc-card--split {
-  border-color: rgb(var(--v-theme-warning));
+  border-color: rgb(var(--v-theme-surface-warning));
 }
 
 .dc-pick {
@@ -2545,7 +2545,7 @@ function onZoomContextMenu() {
 .dc-val--gap {
   font-weight: var(--weight-semibold);
   background: rgba(var(--v-theme-warning), 0.12);
-  border: 1px solid rgba(var(--v-theme-warning), 0.35);
+  border: 1px solid rgba(var(--v-theme-surface-warning), 0.35);
   border-radius: var(--radius-sm);
   padding: 0 var(--space-2);
   align-self: flex-start;
@@ -2638,12 +2638,12 @@ function onZoomContextMenu() {
 /* The hue is on the glyph and the border; the text stays `on-surface`, because
    `on-<x>` is only ever correct on a solid `<x>` fill. */
 .dc-expansion-state--error {
-  border-color: rgb(var(--v-theme-warning));
+  border-color: rgb(var(--v-theme-surface-warning));
   color: rgb(var(--v-theme-on-surface));
 }
 
 .dc-expansion-state--error .v-icon {
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 /* The consequence sentence sits with the two buttons that answer it, so the

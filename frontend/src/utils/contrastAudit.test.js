@@ -83,6 +83,26 @@ describe('main.js status tokens', () => {
           themes[theme][`dark-surface-${level}`],
           `${theme}.dark-surface-${level}`,
         ).toMatch(/^#[0-9a-f]{6}$/i)
+        expect(
+          themes[theme][`surface-${level}`],
+          `${theme}.surface-${level}`,
+        ).toMatch(/^#[0-9a-f]{6}$/i)
+      }
+      expect(themes[theme]['selected-ink'], `${theme}.selected-ink`).toMatch(
+        /^#[0-9a-f]{6}$/i,
+      )
+    }
+  })
+
+  it('keeps every status fill and its label identical across the two themes', () => {
+    // The design system's status fills are unified (tokens/colors.css): one
+    // value per hue whatever the canvas. The per-theme job belongs to
+    // `surface-<status>`, so a fill that differs means one theme drifted.
+    for (const level of ['error', 'warning', 'success', 'info']) {
+      for (const key of [level, `on-${level}`]) {
+        expect(themes.dark[key], `${key} differs between themes`).toBe(
+          themes.light[key],
+        )
       }
     }
   })
@@ -110,8 +130,9 @@ describe('main.js status tokens', () => {
   })
 
   it('measures every pair it claims to', () => {
-    // 2 themes x 4 levels x (fill label + notice rail + dark-chrome text +
-    // dark-chrome rail) = 32. Guards against a loop silently skipping a family.
-    expect(auditContrast(themes)).toHaveLength(32)
+    // 2 themes x (4 levels x (fill label + notice rail + 3 status-text grounds
+    // + dark-chrome text + dark-chrome rail) + 2 selected-ink grounds) = 60.
+    // Guards against a loop silently skipping a family.
+    expect(auditContrast(themes)).toHaveLength(60)
   })
 })

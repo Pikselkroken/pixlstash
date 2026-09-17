@@ -356,7 +356,7 @@ watch(
 }
 
 .smart-score-status--error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .smart-score-status--success {

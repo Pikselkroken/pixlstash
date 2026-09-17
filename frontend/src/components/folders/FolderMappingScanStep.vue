@@ -306,7 +306,7 @@ onUnmounted(() => {
 }
 
 .scan-step__stat--warn {
-  border-color: rgb(var(--v-theme-warning));
+  border-color: rgb(var(--v-theme-surface-warning));
 }
 
 .scan-step__stat-value {

@@ -1440,7 +1440,7 @@ onMounted(() => {
 }
 
 .wfshelf-note--error {
-  border-left: 3px solid rgb(var(--v-theme-error));
+  border-left: 3px solid rgb(var(--v-theme-surface-error));
   background: rgba(var(--v-theme-error), 0.08);
 }
 </style>

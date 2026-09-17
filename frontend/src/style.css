@@ -79,7 +79,7 @@ body {
   --active-wash: rgba(var(--v-theme-dark-surface-primary), 0.2);
   /* Olive as a foreground where something is merely chosen: the active bar
      button's icon, the option row's check. Words stay `--active-text`. */
-  --selected-ink: rgb(var(--v-theme-dark-surface-primary));
+  --selected-ink: rgb(var(--v-theme-selected-ink));
   /* Focus is ink (design-tokens.css). */
   --focus-stroke: rgb(var(--v-theme-on-surface));
   --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
@@ -135,7 +135,7 @@ body {
   --hover-neutral: linear-gradient(rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.2));
   /* Olive in both themes; the deep olive clears a light ground (4.66:1 on panel). */
   --active-wash: rgba(var(--v-theme-primary), 0.16);
-  --selected-ink: rgb(var(--v-theme-primary));
+  --selected-ink: rgb(var(--v-theme-selected-ink));
   --focus-stroke: rgb(var(--v-theme-on-surface));
   --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
   --focus-glow: 0 0 6px 2px var(--focus-stroke);

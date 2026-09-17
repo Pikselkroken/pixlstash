@@ -922,7 +922,7 @@ watch(
 
 .account-error {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .account-success {
@@ -1165,7 +1165,7 @@ watch(
 }
 
 .account-token-expired {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   font-weight: var(--weight-semibold);
 }
 

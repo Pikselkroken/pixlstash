@@ -127,7 +127,7 @@ function clearAll() {
 }
 .filter-chip-x:hover {
   background: var(--hover-wash);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 .filter-strip-tail {
   margin-left: auto;

@@ -473,7 +473,7 @@ onMounted(() => {
 }
 
 .mv-state--error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .mv-lede {
@@ -494,11 +494,11 @@ onMounted(() => {
 }
 
 .mv-card--clear {
-  border-left: 3px solid rgb(var(--v-theme-success));
+  border-left: 3px solid rgb(var(--v-theme-surface-success));
 }
 
 .mv-card--warn {
-  border-left: 3px solid rgb(var(--v-theme-warning));
+  border-left: 3px solid rgb(var(--v-theme-surface-warning));
 }
 
 .mv-card-head {
@@ -601,12 +601,12 @@ onMounted(() => {
 
 .mv-etag--out {
   background: rgba(var(--v-theme-error), 0.12);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .mv-etag--in {
   background: rgba(var(--v-theme-success), 0.14);
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-surface-success));
 }
 
 .mv-etag-facet {

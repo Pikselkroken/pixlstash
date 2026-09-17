@@ -42,7 +42,7 @@ defineProps({
 }
 
 .mapping-card--warn {
-  border-color: rgb(var(--v-theme-warning));
+  border-color: rgb(var(--v-theme-surface-warning));
 }
 
 .mapping-card__title {

@@ -414,7 +414,7 @@ watch(
   padding: var(--space-3);
   border-radius: var(--radius-md);
   background: rgba(var(--v-theme-warning), 0.12);
-  border: 1px solid rgba(var(--v-theme-warning), 0.35);
+  border: 1px solid rgba(var(--v-theme-surface-warning), 0.35);
   font-size: var(--text-xs);
   line-height: var(--leading-body);
   color: rgb(var(--v-theme-on-surface));
@@ -428,7 +428,7 @@ watch(
   gap: var(--space-1);
   margin: 0;
   padding-left: var(--space-4);
-  border-left: var(--rail-w) solid rgb(var(--v-theme-error));
+  border-left: var(--rail-w) solid rgb(var(--v-theme-surface-error));
 }
 
 .kco-figure {
@@ -465,7 +465,7 @@ watch(
 .kco-skips {
   margin: 0;
   padding: var(--space-3);
-  border: 1px solid rgba(var(--v-theme-warning), 0.35);
+  border: 1px solid rgba(var(--v-theme-surface-warning), 0.35);
   border-radius: var(--radius-md);
   background: rgba(var(--v-theme-warning), 0.08);
   font-size: var(--text-xs);
@@ -514,7 +514,7 @@ watch(
   gap: var(--space-3);
   margin: 0;
   padding: var(--space-4);
-  border: 1px solid rgba(var(--v-theme-info), 0.5);
+  border: 1px solid rgba(var(--v-theme-surface-info), 0.5);
   background: rgba(var(--v-theme-info), 0.08);
   border-radius: var(--radius-md);
   color: rgb(var(--v-theme-on-surface));

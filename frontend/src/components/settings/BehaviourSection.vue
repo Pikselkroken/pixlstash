@@ -544,14 +544,14 @@ watch(
   padding: 0;
   margin: var(--space-3) 0 0;
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   overflow-wrap: anywhere;
   max-height: 72px;
   overflow-y: auto;
 }
 
 .settings-error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   font-size: var(--text-xs);
   margin-top: var(--space-2);
 }
@@ -582,6 +582,6 @@ watch(
 }
 
 .vram-err {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 </style>

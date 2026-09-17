@@ -4561,7 +4561,7 @@ watch(
    hue and the hatch - the state has to survive greyscale and forced-colors. */
 .shelf-band--reject {
   background: rgba(var(--v-theme-error), 0.1);
-  box-shadow: inset 0 0 0 2px rgba(var(--v-theme-error), 0.65);
+  box-shadow: inset 0 0 0 2px rgba(var(--v-theme-surface-error), 0.65);
   cursor: no-drop;
 }
 
@@ -4664,11 +4664,11 @@ watch(
 /* The glyph is non-text at 16px, so it may carry the hue: 3.09 light, 6.72
    dark, both over the 3:1 UI floor. */
 .shelf-band-figures--low .v-icon {
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .shelf-band-figures--reject .v-icon {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .shelf-band-figures {
@@ -5079,7 +5079,7 @@ button.shelf-head-cell:hover {
    They are told apart in GREYSCALE, which is what makes this a treatment and
    not a hue: solid rail, dashed rail, no rail, plus two different glyphs. */
 .shelf-row--broken {
-  border-left-color: rgb(var(--v-theme-error));
+  border-left-color: rgb(var(--v-theme-surface-error));
 }
 
 .shelf-row--offline {
@@ -5231,7 +5231,7 @@ button.shelf-head-cell:hover {
 
 .shelf-row-loc--missing,
 .shelf-row-loc--forgotten {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 /* Muted, never the error colour, and 0.7 like every other muted figure on this
@@ -5309,13 +5309,13 @@ button.shelf-head-cell:hover {
 .shelf-row-new {
   flex: none;
   padding: 0 var(--space-2);
-  border: 1px solid rgba(var(--v-theme-success), 0.5);
+  border: 1px solid rgba(var(--v-theme-surface-success), 0.5);
   border-radius: var(--radius-pill);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-surface-success));
 }
 
 .shelf-col {

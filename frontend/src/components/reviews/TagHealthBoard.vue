@@ -813,11 +813,11 @@ const TAIL_TOGGLE_TITLE =
 .rs-board-rebuild-persistent--stale {
   border-color: color-mix(
     in srgb,
-    rgb(var(--v-theme-warning)) 55%,
+    rgb(var(--v-theme-dark-surface-warning)) 55%,
     transparent
   );
   background: color-mix(in srgb, rgb(var(--v-theme-warning)) 12%, transparent);
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-dark-surface-warning));
 }
 
 .rs-board-controls {
@@ -1223,7 +1223,7 @@ button.rs-board-hdr {
   color: rgb(var(--v-theme-dark-surface-error));
 }
 .rs-legend-warning {
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-dark-surface-warning));
 }
 .rs-legend-tertiary {
   color: rgb(var(--v-theme-tertiary));

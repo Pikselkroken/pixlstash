@@ -779,7 +779,7 @@ function clearTags() {
 }
 .fm-stars {
   display: inline-flex;
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
 }
 .fm-star--off {
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));

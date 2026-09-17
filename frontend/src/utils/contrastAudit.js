@@ -1,5 +1,6 @@
 /**
- * Contrast audit for the status-colour token families in `src/main.js`.
+ * Contrast audit for the status-colour and olive-foreground token families in
+ * `src/main.js`.
  *
  * Why this exists: on 2026-07-26 the dark-mode status hues were deepened in one
  * pass. That was right for the FILL tier and wrong for `dark-surface-<status>`,
@@ -29,6 +30,14 @@ const LEVELS = ['error', 'warning', 'success', 'info']
 const THEME_SURFACE = { light: '#ffffff', dark: '#23282f' }
 
 /**
+ * The ink a hovered row washes itself with (`--hover-wash`, style.css): the
+ * text colour at 16%. A `surface-<status>` label on a hovered `panel` row is
+ * the tightest ground the foreground family is drawn on.
+ */
+const HOVER_INK = { light: '#23211d', dark: '#f2e5da' }
+const HOVER_WASH = 0.16
+
+/**
  * The deliberately-dark surfaces. These stay dark in BOTH themes, which is the
  * whole reason `dark-surface-<status>` is a separate family.
  */
@@ -46,6 +55,13 @@ const TINT_ON_DARK_CHROME = 0.14
  */
 const FLOOR_TEXT = 4.5
 const FLOOR_RAIL = 2.5
+/**
+ * The app's own text floor (design system `tokens/colors.css`: "text 4:1"),
+ * for the foreground families `surface-<status>` and `selected-ink`. A hovered
+ * row costs a lifted hue most of its margin, which is why this is 4 and not
+ * the 4.5 the older pairs above were authored against.
+ */
+const FLOOR_SURFACE_TEXT = 4
 
 /** `#rrggbb` → `{r,g,b}`. Tolerates stray whitespace in the source value. */
 export function parseHex(value) {
@@ -195,6 +211,37 @@ export function auditContrast(themes = readThemeColors()) {
         c[`surface-${level}`] ?? fill,
         composite(fill, surface, TINT_ON_THEME_SURFACE),
         FLOOR_RAIL,
+      )
+    }
+
+    // Status hues as TEXT on the theme's own grounds: resting `surface`,
+    // resting `panel`, and a hovered `panel` row.
+    const grounds = [
+      ['surface', need('surface')],
+      ['panel', need('panel')],
+      ['hovered panel', composite(HOVER_INK[theme], need('panel'), HOVER_WASH)],
+    ]
+    for (const level of LEVELS) {
+      for (const [where, ground] of grounds) {
+        add(
+          `${theme} · status text`,
+          `surface-${level} on ${where}`,
+          need(`surface-${level}`),
+          ground,
+          FLOOR_SURFACE_TEXT,
+        )
+      }
+    }
+
+    // Olive as a foreground (a selected option). Resting grounds only: a
+    // selected row carries the selection wash, not the hover ink.
+    for (const [where, ground] of grounds.slice(0, 2)) {
+      add(
+        `${theme} · selected ink`,
+        `selected-ink on ${where}`,
+        need('selected-ink'),
+        ground,
+        FLOOR_SURFACE_TEXT,
       )
     }
 

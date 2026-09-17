@@ -101,7 +101,7 @@ defineExpose({
 }
 
 .app-input__wrap--error {
-  border-color: rgb(var(--v-theme-error));
+  border-color: rgb(var(--v-theme-surface-error));
 }
 
 /* The field inside is borderless and outline-free, so the wrap draws the
@@ -145,6 +145,6 @@ defineExpose({
   display: block;
   margin-top: var(--space-2);
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 </style>

@@ -368,7 +368,7 @@ const { pending: createFolderLoading, run: createFolder } =
 }
 
 .browse-create-error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   padding: var(--space-2) var(--space-5) 0;
   font-size: var(--text-sm);
 }
@@ -386,7 +386,7 @@ const { pending: createFolderLoading, run: createFolder } =
 }
 
 .browse-error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   padding: var(--space-4) var(--space-5);
   font-size: var(--text-sm);
 }
