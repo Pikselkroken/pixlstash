@@ -62,7 +62,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 1
+CURRENT_DATA_VERSION = 2
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -1136,6 +1136,41 @@ def read_schema_version(conn: sqlite3.Connection) -> int:
     return int(row[0]) if row else 0
 
 
+def _drop_blank_recipe_assets(conn: sqlite3.Connection) -> int:
+    """Delete the asset rows that name no model at all (#1416).
+
+    A shelf loader's widget is blank until its Browse button is clicked, and
+    the PixlStash CLIP loader's second encoder is blank on every SD and SDXL
+    graph. ``workflow_hash`` used to keep that blank as a topology asset, so
+    each one filed a ``workflow_recipe_asset`` row with an empty
+    ``normalized_filename``. It now keeps only a digest, but the rows already
+    written are unreachable: ``_model_ghost_names`` routes a ``*_sha256``
+    widget to the digest branch, where an empty value is not a digest and so is
+    never a ghost, so "forget model names not on the shelf" cannot clear them.
+
+    Deleting one loses nothing -- an empty name identifies nobody and resolves
+    to no shelf row -- and no hash moves and no stored document is rewritten,
+    exactly as forgetting a name does not. The ``asset:e3b0c442...`` reference
+    in the document stays, which is the same shape a forgotten name leaves.
+
+    Runs exactly once per hub (see :data:`CURRENT_DATA_VERSION`).
+
+    Args:
+        conn: An open hub connection, inside the caller's transaction.
+
+    Returns:
+        How many rows were deleted.
+    """
+    deleted = conn.execute(
+        "DELETE FROM workflow_recipe_asset WHERE normalized_filename = ''"
+    ).rowcount
+    if deleted:
+        logger.info(
+            "Hub data v2: dropped %d recipe asset row(s) naming no model.", deleted
+        )
+    return deleted
+
+
 def apply_migrations(conn: sqlite3.Connection) -> int:
     """Bring *conn* up to :data:`CURRENT_SCHEMA_VERSION` and return that version.
 
@@ -1219,6 +1254,8 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                 conn.execute("BEGIN IMMEDIATE")
                 if data_version < 1:
                     _backfill_component_roles(conn)
+                if data_version < 2:
+                    _drop_blank_recipe_assets(conn)
                 # No placeholder: PRAGMA takes no parameters, and the value is
                 # this module's own constant rather than anything from outside.
                 conn.execute(f"PRAGMA user_version = {CURRENT_DATA_VERSION:d}")

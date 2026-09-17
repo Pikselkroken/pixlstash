@@ -14,13 +14,18 @@
 /**
  * Widget names whose value is the checkpoint or diffusion model.
  *
- * The mirror of `_CHECKPOINT_WIDGETS` in
- * `pixlstash/services/workflow_identity.py`; the two must agree, or a
- * workflow reads as having no base model on one side and a changed one on the
- * other. `checkpoint_id` is the PixlStash shelf loader's, whose value is a
- * shelf row id rather than a filename (#1416) -- so `modelStem` of it is a
- * bare number until something resolves ids to names, exactly as the shelf
- * loaders' `*_sha256` values already show as digests.
+ * The mirror of `CHECKPOINT_WIDGETS` in
+ * `pixlstash/services/workflow_identity.py`, which answers the same question
+ * for the `other checkpoint` chip. The two must hold the same names or a
+ * workflow reads as having a base model on one side and a changed one on the
+ * other — the drift #1416 was. It is asserted, not agreed:
+ * `tests/test_architecture_guardrails.py::test_base_model_widgets_agree_across_the_stack`
+ * parses this literal, so keep it a plain list of string literals.
+ *
+ * `checkpoint_id` is the PixlStash shelf loader's, whose value is a shelf row
+ * id rather than a filename, so `modelStem` of it is a bare number until
+ * something resolves ids to names — exactly as that pack's `*_sha256` values
+ * already show as digests.
  */
 const BASE_WIDGETS = new Set([
   "ckpt_name",

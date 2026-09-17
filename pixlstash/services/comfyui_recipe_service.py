@@ -74,6 +74,17 @@ INPUT_IMAGE_FIELDS: dict[str, tuple[str, ...]] = {
 # second and third slot (`lora_name_2`), and each of those is a slot of its own.
 LORA_FILENAME_FIELD_RE = re.compile(r"^lora_name(_\d+)?$")
 LORA_DIGEST_FIELDS = ("adapter_sha256", "lora_sha256")
+# The same names as a PATTERN, for the different question "is this widget a
+# LoRA slot at all?" - which `workflow_identity._is_lora_widget` asks of a
+# widget it already has, and which has to cover the numbered spelling because
+# `workflow_hash.SHA256_FIELD_RE` keys one as an asset. A digest slot missed
+# here lands in the card key with no mark check, so swapping a character LoRA
+# forks the workflow into a new card - the error `guess_mark`'s
+# precision-beats-recall rule exists to prevent.
+#
+# Deliberately NOT used by `detect_lora_targets` above, which wants ONE digest
+# slot per node whatever the pack spelled it, and says so.
+LORA_DIGEST_FIELD_RE = re.compile(r"^(adapter|lora)_sha256(_\d+)?$")
 
 # Loader input fields that hold a model FILE NAME, keyed by the node's own
 # `class_type`. Checks are filename-level only: we compare the graph's value

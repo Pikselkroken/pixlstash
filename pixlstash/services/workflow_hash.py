@@ -52,7 +52,14 @@ logger = get_logger(__name__)
 
 # Stamped on every row this module's hashes key, so a change of rule is visible
 # in the data rather than inferred from a build number.
-HASH_VERSION = "v1"
+#
+# v2 (#1416): a ComfyUI-PixlStash loader's `checkpoint_id` and numbered
+# `*_sha256_N` widgets became topology assets, and a `*_sha256` value that is
+# not digest-shaped (a blank one included) stopped being one. Rows written
+# under either rule are stamped, so `WHERE hash_version = 'v1'` names the ones
+# the old rule produced -- which is what this column is for, and the only way
+# to find them later, since nothing re-keys them in place.
+HASH_VERSION = "v2"
 
 # How many refinement rounds. The spec says 3 to 4; four is taken because the
 # cost is linear in edges and the extra round is what separates nodes that are
@@ -155,15 +162,16 @@ DIGEST_PREFIX_RE = re.compile(r"^(?:[0-9a-f]{10}|[0-9a-f]{12}|[0-9a-f]{64})$")
 # so neither rule above saw it: the structural hash did not move when the
 # checkpoint did, and every graph on that loader shared one workflow key
 # whatever it loaded (#1416).
-SHELF_ID_FIELD_RE = re.compile(r"^checkpoint_id$")
-# And what such a value must look like: the node itself refuses anything that
-# is not `str.isdigit()`, so the hash rule is held to the node's own contract.
-# Without it the rule is name-only, and a third-party node with a widget of
-# that name would write whatever it holds -- prose, a newline, a kilobyte --
-# into `workflow_recipe_asset`, which is kept forever and is the tier the
-# design calls safe to share. The two guards below (no newline, 255 bytes) sit
-# AFTER this branch and would not catch it.
-SHELF_ID_VALUE_RE = re.compile(r"^\d+$")
+SHELF_ID_FIELD = "checkpoint_id"
+# The node refuses anything that is not `str.isdigit()`, so the hash rule is
+# held to the node's own contract rather than to a looser spelling of it -
+# `^\d+$` accepts a trailing newline, which `isdigit()` does not. The cap is
+# what a row id can plausibly be: SQLite's own AUTOINCREMENT ceiling is 19
+# digits and a real shelf runs to four, so 12 refuses a kilobyte of digits
+# without ever refusing a shelf. Both matter because this branch returns
+# BEFORE the newline and 255-byte guards further down, and its value is
+# written to `workflow_recipe_asset`, which is kept forever and shared.
+_MAX_SHELF_ID_LENGTH = 12
 
 # Defense in depth against a third-party node that puts a credential in a
 # widget. Nothing in the shipped ComfyUI-PixlStash suite does - its connection
@@ -277,30 +285,48 @@ def structural_widget_value(name: str, value: Any) -> Optional[str]:
     ``None`` means the widget is bucket P or V and its value is nulled. A
     returned string is a topology asset (bucket TA), normalized per rule 5.
 
-    A widget naming its model by digest or by shelf id keeps its value as it
-    is: there is no filename to normalize, and both name the model as surely
-    as a filename does. See :data:`SHA256_FIELD_RE` and
-    :data:`SHELF_ID_FIELD_RE`.
+    A widget naming its model by digest (:data:`SHA256_FIELD_RE`) or by shelf
+    id (:data:`SHELF_ID_FIELD`) keeps its value rather than a normalized
+    filename: there is no filename, and both name the model as surely as one
+    does.
 
-    **An empty value names no model**, on either of those paths. A shelf
-    loader's widget is empty until its Browse button has been clicked, and the
-    CLIP loader's second encoder is empty on every SD and SDXL graph -- the
-    common case, not the odd one. Keeping it wrote a junk
-    ``workflow_recipe_asset`` row and an ``asset:e3b0c442...`` reference (the
-    digest of the empty string) into a stored document whose whole purpose is
-    to say which model went there. A shelf id that is not a shelf id names
-    nothing either; see :data:`SHELF_ID_VALUE_RE`.
+    **Both are checked against what such a value can be, not merely against
+    the widget's name.** A digest widget keeps a digest (:data:`DIGEST_PREFIX_RE`)
+    and a shelf id keeps an id; anything else in either names no model and is
+    nulled. That covers the blank each of them holds until its Browse button
+    is clicked -- the CLIP loader's second encoder is blank on every SD and
+    SDXL graph, the common case rather than the odd one -- which used to file
+    a junk ``workflow_recipe_asset`` row and write ``asset:e3b0c442...``, the
+    digest of the empty string, into a document whose whole purpose is to say
+    which model went there. It also covers prose: these two branches return
+    above the newline and 255-byte guards below, and their values are kept
+    forever and shared, so a custom node putting a paragraph in a widget of
+    either name must not reach them.
     """
     if SEED_FIELD_RE.search(name) or name == "filename_prefix":
         return None
     if _OUTPUT_PATH_RE.match(name):
         return None
+    if name == SHELF_ID_FIELD:
+        # An API prompt written by a script rather than by ComfyUI's frontend
+        # carries this as a JSON number, and the node executes it (it does
+        # `str(checkpoint_id or "").strip()`), so nulling it would leave #1416
+        # unfixed for that spelling. `bool` is not an id.
+        if isinstance(value, int) and not isinstance(value, bool):
+            value = str(value)
+        if not isinstance(value, str):
+            return None
+        return value if value.isdigit() and len(value) <= _MAX_SHELF_ID_LENGTH else None
     if not isinstance(value, str):
         return None
-    if SHELF_ID_FIELD_RE.match(name):
-        return value if SHELF_ID_VALUE_RE.match(value) else None
     if SHA256_FIELD_RE.search(name):
-        return value.lower() or None
+        # A digest names a model; anything else in a digest widget names
+        # nothing. `hub/workflows._model_ghost_names` already judges these
+        # values by exactly this rule, so applying it here is what stops the
+        # two disagreeing -- and it is what keeps prose, a newline or a
+        # kilobyte in a `*_sha256` widget out of the kept-forever document.
+        lowered = value.lower()
+        return lowered if DIGEST_PREFIX_RE.match(lowered) else None
     lowered = name.lower()
     if lowered in _TEXT_FIELD_NAMES or _TEXT_FIELD_SUFFIX_RE.search(lowered):
         return None

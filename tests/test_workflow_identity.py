@@ -4,6 +4,7 @@ Every stacking case in the user plan §2 is a pair: two workflows, and whether
 they share a card (``workflow_key``) and a stack (``core_hash``).
 """
 
+import hashlib
 import json
 
 import pytest
@@ -411,7 +412,7 @@ def test_the_pixlstash_picture_loader_and_a_noise_mask_are_picture_sources():
 # ── the PixlStash shelf loaders (#1416) ─────────────────────────────────────
 
 
-def _shelf_graph(checkpoint_id: str = "11", **kwargs) -> dict:
+def _shelf_graph(checkpoint_id="11") -> dict:
     """The same txt2img graph, loading its checkpoint off the model shelf.
 
     ``PixlStashCheckpointLoader`` is shaped after ``CheckpointLoaderSimple`` --
@@ -419,7 +420,7 @@ def _shelf_graph(checkpoint_id: str = "11", **kwargs) -> dict:
     names its model by the shelf's row id rather than by digest, because a
     checkpoint's ``sha256`` is NULL until the background hasher has read it.
     """
-    graph = _graph(**kwargs)
+    graph = _graph()
     graph["1"] = _node("PixlStashCheckpointLoader", checkpoint_id=checkpoint_id)
     return graph
 
@@ -507,9 +508,56 @@ def test_an_unpicked_shelf_widget_names_no_model():
 
     blank = clip_loader(clip_sha256="aa" * 32, clip_sha256_2="")
     assert {s.widget for s in slots(_doc(blank))} == {"ckpt_name", "clip_sha256"}
-    assert structural_hash(blank) == structural_hash(
-        clip_loader(clip_sha256="aa" * 32, clip_sha256_2="")
+    # And a blank is not merely absent from the slots: it must not key the
+    # graph either, or two SD/SDXL workflows differing in nothing fork.
+    assert structural_hash(blank) != structural_hash(
+        clip_loader(clip_sha256="aa" * 32, clip_sha256_2="bb" * 32)
     )
+    assert "asset:" + _digest_of_empty() not in json.dumps(_doc(blank))
+
+
+def _digest_of_empty() -> str:
+    """The reference a blank widget used to be filed as."""
+    return hashlib.sha256(b"").hexdigest()
+
+
+def test_a_checkpoint_id_written_as_a_number_names_the_same_model():
+    """A script-written prompt carries it as JSON number; the node runs it."""
+    as_text, as_number = _shelf_graph("11"), _shelf_graph(11)
+    assert structural_hash(as_text) == structural_hash(as_number)
+    assert _key(as_text) == _key(as_number)
+    # `True` is an `int` in Python and is not a shelf id.
+    assert slots(_doc(_shelf_graph(True))) == []
+
+
+def test_a_numbered_digest_slot_is_a_lora_slot_and_takes_a_mark():
+    """`SHA256_FIELD_RE` keys it, so `_is_lora_widget` has to claim it.
+
+    Missed, it is a non-LoRA slot and reaches the card key unconditionally, so
+    swapping a character LoRA in a stacker's second slot forks the workflow
+    into a new card -- what marks exist to prevent.
+    """
+
+    def stacker(second: str) -> dict:
+        return _graph(
+            extra={
+                "60": _node(
+                    "PixlStashLoraStacker",
+                    lora_sha256="aa" * 32,
+                    lora_sha256_2=second,
+                )
+            }
+        )
+
+    a, b = stacker("bb" * 32), stacker("cc" * 32)
+    assert [s.is_lora for s in slots(_doc(a)) if s.widget.startswith("lora_")] == [
+        True,
+        True,
+    ]
+    # Both are recipe slots by default, so the card does not fork on a swap.
+    assert _key(a) == _key(b)
+    # ...but the variant hash still moves, because the recipe did.
+    assert structural_hash(a) != structural_hash(b)
 
 
 def test_a_checkpoint_id_that_is_not_a_shelf_id_names_nothing():
@@ -518,8 +566,18 @@ def test_a_checkpoint_id_that_is_not_a_shelf_id_names_nothing():
     Name-only would let any node with a widget of that name write whatever it
     holds into ``workflow_recipe_asset``, which is kept forever and shared.
     """
-    for value in ("", "Not A Model", "a picture of a cat\nin two lines", "x" * 400):
-        assert slots(_doc(_shelf_graph(value))) == []
+    for value in (
+        "",
+        "Not A Model",
+        "a picture of a cat\nin two lines",
+        # `^\d+$` accepts both of these -- `$` matches before a final newline,
+        # and a character class says nothing about length. `str.isdigit()` and
+        # the cap are what refuse them.
+        "11\n",
+        "1" * 400,
+        "x" * 400,
+    ):
+        assert slots(_doc(_shelf_graph(value))) == [], value
     # A third-party node is judged by the same rule: digits are a model
     # whoever carries them, and anything else is a parameter.
     prose = _graph(extra={"60": _node("SomeOtherPack_Loader", checkpoint_id="latest")})

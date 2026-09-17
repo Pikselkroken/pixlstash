@@ -2721,6 +2721,42 @@ def test_frontend_import_extensions_match_the_staging_allowlist():
     )
 
 
+def test_base_model_widgets_agree_across_the_stack():
+    """One list of "this widget names the base model", not two that drift.
+
+    `CHECKPOINT_WIDGETS` decides whether `differs_by` says `other checkpoint`
+    or falls back to `other models`; `BASE_WIDGETS` decides whether the
+    Workflows list calls an asset the base model and heads the row with it.
+    They answer the same question and had drifted in BOTH directions -
+    `diffusion_model` and `model_path` only on the client, `checkpoint_id`
+    (#1416) only on the server - so one workflow read as having a base model
+    on one side and a changed one on the other. A comment saying "keep these
+    in sync" is what let that happen; this is the thing holding them together.
+    """
+    from pixlstash.services.workflow_identity import CHECKPOINT_WIDGETS
+
+    shelf_js = (
+        REPO_ROOT / "frontend" / "src" / "utils" / "workflowShelf.js"
+    ).read_text(encoding="utf-8")
+    match = re.search(
+        r"const BASE_WIDGETS = new Set\(\[(.*?)\]\);", shelf_js, re.DOTALL
+    )
+    assert match, (
+        "BASE_WIDGETS is gone from frontend/src/utils/workflowShelf.js - the "
+        "Models column is classifying base models against something else, and "
+        "this guardrail can no longer see what."
+    )
+    frontend_widgets = set(re.findall(r'"([^"]+)"', match.group(1)))
+
+    assert frontend_widgets == set(CHECKPOINT_WIDGETS), (
+        "the base-model widget lists disagree: "
+        f"client-only={sorted(frontend_widgets - CHECKPOINT_WIDGETS)}, "
+        f"server-only={sorted(CHECKPOINT_WIDGETS - frontend_widgets)}. "
+        "A client-only widget heads a row with a model the chip calls "
+        "unchanged; a server-only one is a base model the list never names."
+    )
+
+
 def _assemble_changelog_module():
     """The release's changelog assembler, loaded from ``scripts/`` by path.
 

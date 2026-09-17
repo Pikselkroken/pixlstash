@@ -910,7 +910,7 @@ def test_the_stored_row_records_which_rule_keyed_it(hub):
     )
     # The literal the spec names, not the module's own constant: comparing a
     # written value against the thing that wrote it asserts nothing.
-    assert row["hash_version"] == "v1"
+    assert row["hash_version"] == "v2"
     assert row["node_count"] == len(TXT2IMG)
 
 
