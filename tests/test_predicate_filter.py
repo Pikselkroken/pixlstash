@@ -231,6 +231,24 @@ def test_unscored_with_a_range_adds_the_unrated_to_it(session):
     _assert_matches_agrees(session, flt, {never.id, cleared.id, three.id, four.id})
 
 
+def test_unscored_with_a_range_spanning_every_rating_is_everything(session):
+    """Decided, not inherited: ``max_score=5`` (the sidebar's "any rating") or
+    ``min_score=0`` beside ``unscored`` is "any rating or unrated", so no picture
+    is left out. Under the old AND it was the score-0 pictures only."""
+    never = _add_picture(session, file_path="never.jpg", score=None)
+    cleared = _add_picture(session, file_path="cleared.jpg", score=0)
+    three = _add_picture(session, file_path="three.jpg", score=3)
+    five = _add_picture(session, file_path="five.jpg", score=5)
+    everything = {never.id, cleared.id, three.id, five.id}
+
+    _assert_matches_agrees(
+        session, PredicateFilter(max_score=5, unscored=True), everything
+    )
+    _assert_matches_agrees(
+        session, PredicateFilter(min_score=0, unscored=True), everything
+    )
+
+
 def test_smart_score_bucket_unscored(session):
     unscored = _add_picture(session, file_path="a.jpg", smart_score=None)
     _add_picture(session, file_path="b.jpg", smart_score=2.5)

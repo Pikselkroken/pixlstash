@@ -1,6 +1,6 @@
 <template>
   <div class="fm-cascade" @keydown.left="onLeft">
-    <div ref="rootRef" class="tbm fm-root" role="dialog" aria-label="Filters">
+    <div ref="rootRef" class="tbm fm-root" role="group" aria-label="Filters">
       <span class="tbm-caret tbm-caret--start"></span>
       <div class="tbm-header">
         <v-icon size="18" class="tbm-header-icon">mdi-filter</v-icon>
@@ -83,7 +83,7 @@
       <div
         v-if="PICK_ONE[sub]"
         class="tbm fm-sub"
-        role="dialog"
+        role="group"
         :aria-label="PICK_ONE[sub].title"
       >
         <div class="tbm-header">
@@ -103,8 +103,7 @@
             :options="pickOptions(sub)"
             :model-value="pickValue(sub)"
             :aria-label="PICK_ONE[sub].title"
-            @update:model-value="(id) => changePick(sub, id)"
-            @pick="(id) => repick(sub, id)"
+            @update:model-value="(id) => setPick(sub, id)"
           >
             <template #meta="{ option }">
               <span class="fm-n">{{ formatCount(option.count) }}</span>
@@ -112,15 +111,14 @@
           </OptionRows>
         </div>
         <div class="tbm-footer">
-          On the strip as "{{ PICK_ONE[sub].kind }}
-          {{ pickOptions(sub)[0].chip }}".
+          On the strip as "{{ PICK_ONE[sub].kind }} {{ pickFooterChip(sub) }}".
         </div>
       </div>
 
       <div
         v-else-if="sub === 'score'"
         class="tbm fm-sub"
-        role="dialog"
+        role="group"
         aria-label="Score"
       >
         <div class="tbm-header">
@@ -135,66 +133,85 @@
             Clear
           </button>
         </div>
-        <div class="tbm-section" role="radiogroup" aria-label="At least">
+        <div
+          class="tbm-section"
+          role="radiogroup"
+          aria-label="At least"
+          @keydown="(e) => onStarKeydown(e, 'minScoreFilter')"
+        >
           <span class="tbm-label">At least</span>
           <button
-            v-for="n in STAR_ROWS"
-            :key="`min-${n}`"
+            v-for="o in starOptions('minScoreFilter')"
+            :key="`minScoreFilter-${o.id}`"
             class="fm-row"
             type="button"
             role="radio"
-            :aria-checked="store.minScoreFilter === n ? 'true' : 'false'"
-            :aria-label="n == null ? 'Any' : `At least ${n} stars`"
-            @click="setMin(n)"
+            :aria-checked="store.minScoreFilter === o.id ? 'true' : 'false'"
+            :aria-label="o.id == null ? 'Any' : `At least ${o.id} stars`"
+            :tabindex="
+              o.id ===
+              tabStopId(starOptions('minScoreFilter'), store.minScoreFilter)
+                ? 0
+                : -1
+            "
+            :disabled="o.disabled"
+            @click="setStar('minScoreFilter', o.id)"
           >
             <span class="fm-row-label">
-              <template v-if="n == null">Any</template>
+              <template v-if="o.id == null">Any</template>
               <span v-else class="fm-stars" aria-hidden="true">
                 <v-icon
                   v-for="i in 5"
                   :key="i"
                   size="14"
-                  :class="{ 'fm-star--off': i > n }"
+                  :class="{ 'fm-star--off': i > o.id }"
                   >mdi-star</v-icon
                 >
               </span>
             </span>
             <v-icon size="16" class="fm-row-trail">{{
-              store.minScoreFilter === n ? "mdi-check" : ""
+              store.minScoreFilter === o.id ? "mdi-check" : ""
             }}</v-icon>
           </button>
         </div>
-        <div class="tbm-section" role="radiogroup" aria-label="At most">
+        <div
+          class="tbm-section"
+          role="radiogroup"
+          aria-label="At most"
+          @keydown="(e) => onStarKeydown(e, 'maxScoreFilter')"
+        >
           <span class="tbm-label">At most</span>
           <button
-            v-for="n in STAR_ROWS"
-            :key="`max-${n}`"
+            v-for="o in starOptions('maxScoreFilter')"
+            :key="`maxScoreFilter-${o.id}`"
             class="fm-row"
             type="button"
             role="radio"
-            :aria-checked="store.maxScoreFilter === n ? 'true' : 'false'"
-            :aria-label="n == null ? 'Any' : `At most ${n} stars`"
-            :disabled="
-              n != null &&
-              store.minScoreFilter != null &&
-              n < store.minScoreFilter
+            :aria-checked="store.maxScoreFilter === o.id ? 'true' : 'false'"
+            :aria-label="o.id == null ? 'Any' : `At most ${o.id} stars`"
+            :tabindex="
+              o.id ===
+              tabStopId(starOptions('maxScoreFilter'), store.maxScoreFilter)
+                ? 0
+                : -1
             "
-            @click="setMax(n)"
+            :disabled="o.disabled"
+            @click="setStar('maxScoreFilter', o.id)"
           >
             <span class="fm-row-label">
-              <template v-if="n == null">Any</template>
+              <template v-if="o.id == null">Any</template>
               <span v-else class="fm-stars" aria-hidden="true">
                 <v-icon
                   v-for="i in 5"
                   :key="i"
                   size="14"
-                  :class="{ 'fm-star--off': i > n }"
+                  :class="{ 'fm-star--off': i > o.id }"
                   >mdi-star</v-icon
                 >
               </span>
             </span>
             <v-icon size="16" class="fm-row-trail">{{
-              store.maxScoreFilter === n ? "mdi-check" : ""
+              store.maxScoreFilter === o.id ? "mdi-check" : ""
             }}</v-icon>
           </button>
         </div>
@@ -215,7 +232,7 @@
       <div
         v-else-if="sub === 'problems'"
         class="tbm fm-sub"
-        role="dialog"
+        role="group"
         aria-label="Problems"
       >
         <div class="tbm-header">
@@ -358,6 +375,7 @@
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import OptionRows from "../widgets/OptionRows.vue";
 import Segmented from "../widgets/Segmented.vue";
+import { arrowStep, tabStopId } from "../../utils/radioGroup.js";
 import FilterChecklistMenu from "./FilterChecklistMenu.vue";
 import FilterConfidenceMenu from "./FilterConfidenceMenu.vue";
 import { isReadOnly } from "../../utils/apiClient";
@@ -508,11 +526,14 @@ function openKind(kind) {
   const row = rowRefs[kind];
   // Line the submenu's top up with the row that opened it.
   subTop.value = row ? Math.max(0, row.offsetTop - 8) : 0;
+  // Into the body, never the header's Clear. The checklist and confidence
+  // menus focus their own search field once they mount.
   nextTick(() => {
-    const target = subRef.value?.querySelector(
-      'input:not([disabled]), [role="radio"][tabindex="0"], [role="radio"], button:not([disabled])',
-    );
-    if (target && document.activeElement?.tagName !== "INPUT") target.focus();
+    const body = subRef.value?.querySelector(".tbm-section");
+    const target =
+      body?.querySelector('[role="radio"][tabindex="0"]') ??
+      body?.querySelector("input:not([disabled]), button:not([disabled])");
+    target?.focus();
   });
 }
 
@@ -567,16 +588,11 @@ function setPick(kind, id) {
   store[def.field] = id == null ? def.off : id;
 }
 
-// Arrows and clicks both select (update fires); a click on the row that was
-// already chosen (pick without update) turns it back off.
-let justChanged = null;
-function changePick(kind, id) {
-  justChanged = id;
-  setPick(kind, id);
-}
-function repick(kind, id) {
-  if (justChanged === id) justChanged = null;
-  else setPick(kind, null);
+// The chosen option's chip, or the first option's as an example.
+function pickFooterChip(kind) {
+  const def = PICK_ONE[kind];
+  const value = pickValue(kind);
+  return (def.options.find((o) => o.id === value) ?? def.options[0]).chip;
 }
 
 // ── Score ────────────────────────────────────────────────────────────────────
@@ -596,15 +612,33 @@ const scoreHint = computed(() => {
   return "At least and At most make one Score chip.";
 });
 
-function setMin(n) {
-  store.minScoreFilter = n;
-  if (n != null && store.maxScoreFilter != null && store.maxScoreFilter < n) {
+// At most rows below the minimum are disabled, which arrowStep and tabStopId
+// both skip.
+function starOptions(field) {
+  const min = store.minScoreFilter;
+  return STAR_ROWS.map((id) => ({
+    id,
+    disabled:
+      field === "maxScoreFilter" && id != null && min != null && id < min,
+  }));
+}
+
+function setStar(field, n) {
+  store[field] = n;
+  if (
+    field === "minScoreFilter" &&
+    n != null &&
+    store.maxScoreFilter != null &&
+    store.maxScoreFilter < n
+  ) {
     store.maxScoreFilter = n;
   }
 }
 
-function setMax(n) {
-  store.maxScoreFilter = n;
+// The radiogroup contract (utils/radioGroup.js): one tab stop, arrows select.
+function onStarKeydown(event, field) {
+  const id = arrowStep(event, starOptions(field), store[field]);
+  if (id !== undefined) setStar(field, id);
 }
 
 function clearScore() {
@@ -711,7 +745,7 @@ function clearTags() {
   gap: var(--space-2);
 }
 .fm-root {
-  width: 320px;
+  width: var(--filter-menu-w);
   max-width: 94vw;
 }
 .fm-of {

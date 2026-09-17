@@ -158,6 +158,9 @@ export function filterChips(store, { allPicturesView = true } = {}) {
       store.unscoredOnlyFilter = false;
     });
   }
+  // Smart score and Resolution have no row in the filter menu: they are set
+  // from the stats sidebar's charts. They still get chips, so the strip names
+  // every filter narrowing the grid and Clear all reaches them.
   if (store.smartScoreBucketFilter != null) {
     const b = store.smartScoreBucketFilter;
     push(

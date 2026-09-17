@@ -1,7 +1,9 @@
 // The filter menu's own rules, which the strip then shows: a tag is required or
 // excluded but never both, raising the minimum score drags the maximum up, a
-// tag-confidence threshold is one chip per tag that a second pick moves or
-// removes, and every count is the view plus exactly one filter.
+// tag-confidence threshold is one chip per tag that another pick moves, every
+// pick-one list follows the radiogroup contract (arrows select, one tab stop),
+// Clear puts each kind back to its own "off" value, and every count is the view
+// plus exactly one filter.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -10,6 +12,7 @@ import { setActivePinia, createPinia } from "pinia";
 import FilterMenu from "./FilterMenu.vue";
 import { useFilterStore } from "../../stores/useFilterStore.js";
 import { getPictureCount } from "../../api/pictures";
+import { resetFilterCounts } from "../../composables/useFilterCounts";
 
 vi.mock("../../api/tags", () => ({
   listTags: vi.fn().mockResolvedValue([
@@ -52,6 +55,7 @@ function checkbox(wrapper, label) {
 beforeEach(() => {
   setActivePinia(createPinia());
   getPictureCount.mockClear();
+  resetFilterCounts();
 });
 
 describe("FilterMenu", () => {
@@ -97,7 +101,7 @@ describe("FilterMenu", () => {
     ).toBeDefined();
   });
 
-  it("keeps one confidence chip per tag: a new threshold moves it, the same one removes it", async () => {
+  it("keeps one confidence chip per tag: another threshold moves it", async () => {
     const store = useFilterStore();
     const wrapper = await mountMenu();
     await openKind(wrapper, "Tag confidence");
@@ -115,7 +119,7 @@ describe("FilterMenu", () => {
     await pick("90%");
     expect(store.tagConfidenceAboveFilter).toEqual(["hat:0.90"]);
     await pick("90%");
-    expect(store.tagConfidenceAboveFilter).toEqual([]);
+    expect(store.tagConfidenceAboveFilter).toEqual(["hat:0.90"]);
   });
 
   it("counts each choice as the view plus that one filter", async () => {
@@ -132,17 +136,82 @@ describe("FilterMenu", () => {
     expect(wrapper.find(".fm-sub .fm-n").text()).toBe("3");
   });
 
-  it("toggles a picked pick-one choice back off", async () => {
+  // One case per "off" sentinel: "all", null and false. A coerced sentinel is
+  // how a pick-one filter ends up stuck on or silently off.
+  it.each([
+    ["Media", "mediaTypeFilter", "Images", "images", "all"],
+    ["Faces", "faceBboxFilter", "Has face", "with_face", null],
+    ["Stacks", "stackStateFilter", "Stacked", "stacked", "all"],
+    ["Sharing", "sharedOnlyFilter", "Shared", true, false],
+  ])(
+    "%s: arrow selects, Enter keeps it, Clear restores the off value",
+    async (kind, field, label, on, off) => {
+      const store = useFilterStore();
+      const wrapper = await mountMenu();
+      await openKind(wrapper, kind);
+      const group = wrapper.find('.fm-sub [role="radiogroup"]');
+      const row = () =>
+        wrapper
+          .findAll('[role="radio"]')
+          .find((b) => b.text().startsWith(label));
+
+      await group.trigger("keydown", { key: "ArrowDown" });
+      expect(store[field]).toBe(on);
+      expect(wrapper.find(".tbm-footer").text()).toContain(
+        `On the strip as "${kind}`,
+      );
+      // Enter on the chosen row is a click on it: it confirms, never undoes.
+      await row().trigger("click");
+      expect(store[field]).toBe(on);
+
+      const clear = wrapper
+        .findAll(".fm-sub .tbm-ghost")
+        .find((b) => b.text() === "Clear");
+      await clear.trigger("click");
+      expect(store[field]).toBe(off);
+    },
+  );
+
+  it("names the chosen option in the footer, not the first", async () => {
+    const store = useFilterStore();
+    store.mediaTypeFilter = "videos";
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Media");
+    expect(wrapper.find(".fm-sub .tbm-footer").text()).toBe(
+      'On the strip as "Media video".',
+    );
+  });
+
+  it("gives each Score radiogroup one tab stop, moved and selected by arrows", async () => {
     const store = useFilterStore();
     const wrapper = await mountMenu();
-    await openKind(wrapper, "Stacks");
-    const stacked = () =>
-      wrapper
+    await openKind(wrapper, "Score");
+    const [atLeast] = wrapper.findAll('.fm-sub [role="radiogroup"]');
+    const stops = () =>
+      atLeast
         .findAll('[role="radio"]')
-        .find((b) => b.text().startsWith("Stacked"));
-    await stacked().trigger("click");
-    expect(store.stackStateFilter).toBe("stacked");
-    await stacked().trigger("click");
-    expect(store.stackStateFilter).toBe("all");
+        .filter((b) => b.attributes("tabindex") === "0");
+
+    expect(stops()).toHaveLength(1);
+    await atLeast.trigger("keydown", { key: "ArrowDown" });
+    expect(store.minScoreFilter).toBe(1);
+    await atLeast.trigger("keydown", { key: "ArrowDown" });
+    expect(store.minScoreFilter).toBe(2);
+    expect(stops()).toHaveLength(1);
+    expect(stops()[0].attributes("aria-label")).toBe("At least 2 stars");
+  });
+
+  it("opens a submenu with focus in its body, not on Clear", async () => {
+    const store = useFilterStore();
+    store.stackStateFilter = "stacked";
+    const wrapper = mount(FilterMenu, {
+      props: { countBaseQuery: "set_id=4", open: true },
+      global: { stubs: { "v-icon": true, Tooltip: true } },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    await openKind(wrapper, "Stacks");
+    expect(document.activeElement?.getAttribute("role")).toBe("radio");
+    wrapper.unmount();
   });
 });

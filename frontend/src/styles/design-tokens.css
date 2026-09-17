@@ -281,6 +281,18 @@
      fifth number. */
   --stats-panel-w: 288px;
 
+  /* The toolbar filter menu (FilterMenu) and each submenu beside it. Narrower
+     than a lone toolbar panel (the old filter panel was 376px) because two sit
+     side by side: 320 + 280 keeps the pair near 610px with Score open. */
+  --filter-menu-w: 320px;
+  --filter-submenu-w: 280px;
+
+  /* The toolbar filter menu (FilterMenu) and each submenu beside it. Narrower
+     than a lone toolbar panel (the old filter panel was 376px) because two sit
+     side by side: 320 + 280 keeps the pair near 610px with Score open. */
+  --filter-menu-w: 320px;
+  --filter-submenu-w: 280px;
+
   /* The toolbar band. The inspector's tab band is pinned to it so one bottom
      rule runs across the window; the toolbar and the sidebar tabs still spell
      36px and move onto it when next touched. The bar buttons inside it are

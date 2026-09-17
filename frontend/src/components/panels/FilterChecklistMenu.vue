@@ -1,5 +1,5 @@
 <template>
-  <div class="tbm fm-sub" role="dialog" :aria-label="title">
+  <div class="tbm fm-sub" role="group" :aria-label="title">
     <div class="tbm-header">
       <span class="tbm-title">{{ title }}</span>
       <span class="tbm-spacer"></span>
@@ -23,14 +23,25 @@
           :placeholder="placeholder"
           :aria-label="placeholder"
           autocomplete="off"
+          :aria-controls="listId"
+          :aria-activedescendant="
+            shown[highlight] ? `${listId}-${highlight}` : undefined
+          "
           @keydown.down.prevent="move(1)"
           @keydown.up.prevent="move(-1)"
           @keydown.enter.prevent="toggleHighlighted"
         />
       </div>
-      <div class="fm-list" role="group" :aria-label="title">
+      <div
+        :id="listId"
+        ref="listRef"
+        class="fm-list"
+        role="group"
+        :aria-label="title"
+      >
         <label
           v-for="(item, idx) in shown"
+          :id="`${listId}-${idx}`"
           :key="item.value"
           class="tbm-check fm-check"
           :class="{ 'fm-check--kbd': idx === highlight }"
@@ -83,6 +94,8 @@ const emit = defineEmits(["toggle", "clear"]);
 const query = ref("");
 const highlight = ref(0);
 const fieldRef = ref(null);
+const listRef = ref(null);
+const listId = `fm-list-${Math.random().toString(36).slice(2, 8)}`;
 
 const matching = computed(() => {
   const q = query.value.trim().toLowerCase();
@@ -111,6 +124,12 @@ function formatCount(n) {
 function move(step) {
   const last = shown.value.length - 1;
   highlight.value = Math.max(0, Math.min(last, highlight.value + step));
+  // The list scrolls; keep the row Enter would tick in view.
+  nextTick(() =>
+    listRef.value?.children[highlight.value]?.scrollIntoView?.({
+      block: "nearest",
+    }),
+  );
 }
 
 function toggleHighlighted() {

@@ -35,8 +35,8 @@
  * The row of active filters under the toolbar: one chip per filter, each with
  * its own ×, and Clear all at the end. It is only there while a filter is on.
  */
-import { computed, ref, watch } from "vue";
-import { getPictureCount } from "../../api/pictures";
+import { computed } from "vue";
+import { useFilterCounts } from "../../composables/useFilterCounts";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { filterChips } from "../../utils/filterChips";
@@ -54,30 +54,9 @@ const chips = computed(() =>
   filterChips(store, { allPicturesView: props.allPicturesView }),
 );
 
-const total = ref(null);
-let request = 0;
-
-// The view's size, the "of N". Fetched when the strip appears or the view
-// changes; an import while filters stay on leaves it stale until then.
-watch(
-  [() => props.countBaseQuery, () => chips.value.length > 0],
-  async ([query, visible]) => {
-    if (!visible) return;
-    if (query == null) {
-      total.value = null;
-      return;
-    }
-    const mine = ++request;
-    try {
-      const body = await getPictureCount(query);
-      if (mine === request) total.value = Number(body?.count ?? 0);
-    } catch (err) {
-      console.warn("Filter strip total failed", query, err);
-      if (mine === request) total.value = null;
-    }
-  },
-  { immediate: true },
-);
+// The view's size, the "of N", from the same cache the menu header reads.
+const { count } = useFilterCounts(() => props.countBaseQuery);
+const total = computed(() => (chips.value.length ? count("") : undefined));
 
 const ofLabel = computed(() => {
   const n = Number(gridStore.matchCount || 0).toLocaleString();
@@ -111,7 +90,8 @@ function clearAll() {
   gap: var(--space-2);
   min-width: 0;
   overflow-x: auto;
-  scrollbar-width: none;
+  /* Visible, so chips past the edge read as more to scroll to. */
+  scrollbar-width: thin;
 }
 .filter-chip {
   display: inline-flex;

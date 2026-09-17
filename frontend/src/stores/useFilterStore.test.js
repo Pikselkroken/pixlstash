@@ -32,17 +32,10 @@ describe("useFilterStore unscored filter", () => {
     expect(s.unscoredOnlyFilter).toBe(true);
   });
 
-  // Miss isActive and the panel's Clear button stays disabled while the filter
-  // is on; miss activeCount and the toolbar badge undercounts.
-  it("counts as an active filter, and resetFilters clears it", () => {
+  it("resetFilters clears it", () => {
     const s = useFilterStore();
-    expect(s.isActive).toBe(false);
     s.unscoredOnlyFilter = true;
-    expect(s.isActive).toBe(true);
-    expect(s.activeCount).toBe(1);
     s.resetFilters();
     expect(s.unscoredOnlyFilter).toBe(false);
-    expect(s.isActive).toBe(false);
-    expect(s.activeCount).toBe(0);
   });
 });

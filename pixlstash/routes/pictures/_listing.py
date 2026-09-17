@@ -281,7 +281,8 @@ class PictureListFilters:
             description=(
                 "Pictures the user never rated: score IS NULL or score = 0. "
                 "With min_score/max_score, added to that range rather than "
-                "intersected with it."
+                "intersected with it, so a range spanning every rating "
+                "(min_score=0 or max_score=5) plus unscored is every picture."
             ),
         ),
         smart_score_bucket: str | None = Query(

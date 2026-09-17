@@ -1,5 +1,5 @@
 <template>
-  <div class="tbm fm-sub" role="dialog" aria-label="Tag confidence">
+  <div class="tbm fm-sub" role="group" aria-label="Tag confidence">
     <div class="tbm-header">
       <span class="tbm-title">Tag confidence</span>
       <span class="tbm-spacer"></span>
@@ -52,7 +52,7 @@
         :model-value="currentThreshold"
         :disabled="!tag"
         aria-label="Threshold"
-        @pick="pickThreshold"
+        @update:model-value="setThreshold"
       >
         <template #meta="{ option }">
           <span class="fm-n">{{ formatCount(option.count) }}</span>
@@ -68,9 +68,10 @@
 
 <script setup>
 /**
- * Tag confidence as one menu of three sections: kind, tag, threshold. Picking
- * a threshold adds (or moves) the chip for that tag; picking the checked one
- * removes it. The menu stays open for the next tag.
+ * Tag confidence as one menu of three sections: kind, tag, threshold. Choosing
+ * a threshold (click or arrow, the radiogroup contract) adds the chip for that
+ * tag or moves it; the chip's × or Clear removes it. The menu stays open for
+ * the next tag.
  */
 import { computed, nextTick, onMounted, ref } from "vue";
 import OptionRows from "../widgets/OptionRows.vue";
@@ -167,16 +168,13 @@ const chipPreview = computed(() => {
     : `Doubtful tag ${tag.value} under ${t}`;
 });
 
-function pickThreshold(threshold) {
+function setThreshold(threshold) {
   if (!tag.value) return;
   const key = listKey.value;
   const kept = (store[key] || []).filter(
     (e) => parseConfidenceEntry(e).tag !== tag.value,
   );
-  store[key] =
-    threshold === currentThreshold.value
-      ? kept
-      : [...kept, confidenceEntry(tag.value, threshold)];
+  store[key] = [...kept, confidenceEntry(tag.value, threshold)];
 }
 
 function clearAll() {

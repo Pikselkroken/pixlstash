@@ -974,7 +974,7 @@ kbd {
    why they are global. Rows follow OptionRows: 28px, radius-sm, hover wash, no
    fill; a trailing chevron opens a submenu, a trailing number is a count. */
 .fm-sub {
-  width: 280px;
+  width: var(--filter-submenu-w);
   max-width: 94vw;
 }
 .fm-row {
@@ -1037,8 +1037,10 @@ kbd {
 .fm-check:hover {
   background: var(--hover-wash);
 }
+/* The keyboard highlight in a checklist whose focus stays in the search field.
+   A wash, not a ring: a ring would read as a second focus. */
 .fm-check--kbd {
-  box-shadow: inset 0 0 0 var(--focus-width) var(--focus-stroke);
+  background: var(--hover-wash);
 }
 .fm-check-label {
   flex: 1;

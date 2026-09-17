@@ -227,17 +227,14 @@
               v-bind="menuProps"
               icon="filter"
               chevron
-              :active="filterStore.isActive && !gbFilterMenuOpen"
+              :active="filterChipCount > 0 && !gbFilterMenuOpen"
               :open="gbFilterMenuOpen"
               tooltip="Filters"
             />
           </template>
           <FilterMenu
             :count-base-query="props.filterCountBaseQuery"
-            :all-pictures-view="
-              String(props.selectedCharacter ?? '') ===
-              String(props.allPicturesId ?? '')
-            "
+            :all-pictures-view="isAllPicturesView"
             :open="gbFilterMenuOpen"
           />
         </v-menu>
@@ -606,6 +603,7 @@ import {
   sizeLabelForLevel,
 } from "../../utils/thumbnailSizes";
 import FilterMenu from "./FilterMenu.vue";
+import { filterChips } from "../../utils/filterChips";
 import TbGlobalActions from "./TbGlobalActions.vue";
 import TbExportPanel from "./TbExportPanel.vue";
 import TbImportPanel from "./TbImportPanel.vue";
@@ -977,6 +975,17 @@ const gbSortTypeIcon = computed(() => {
 
 // ── Grid Bar: Filter ───────────────────────────────────────────────────────────
 const gbFilterMenuOpen = ref(false);
+// The funnel is lit exactly when the strip has a chip: the chips are the one
+// answer to "which filters are on", so the two cannot disagree.
+const isAllPicturesView = computed(
+  () =>
+    String(props.selectedCharacter ?? "") === String(props.allPicturesId ?? ""),
+);
+const filterChipCount = computed(
+  () =>
+    filterChips(filterStore, { allPicturesView: isAllPicturesView.value })
+      .length,
+);
 
 // ── Grid Bar: View ─────────────────────────────────────────────────────────────
 const gbViewMenuOpen = ref(false);

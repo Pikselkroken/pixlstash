@@ -41,7 +41,7 @@ describe("filterChips", () => {
     ]);
   });
 
-  it("counts every chip the toolbar badge counted", () => {
+  it("gives the filters the menu has no row for a chip too", () => {
     const s = useFilterStore();
     s.mediaTypeFilter = "videos";
     s.faceBboxFilter = "with_face";
@@ -50,9 +50,21 @@ describe("filterChips", () => {
     s.smartScoreBucketFilter = "3-4";
     s.resolutionBucketFilter = "lt1mp";
     s.comfyuiLoraFilter = ["detail.safetensors"];
-    // min and max are one "Score" chip; the store counts them as two.
     s.minScoreFilter = 1;
-    expect(filterChips(s)).toHaveLength(s.activeCount);
+    expect(chipText(s)).toEqual([
+      "Problem face tags, no face",
+      "Problem people tags, no humans",
+      "Media video",
+      "Faces has face",
+      "Stacks stacked",
+      "Score 1+",
+      "Smart score 3–4",
+      "Resolution under 1 MP",
+      "LoRA detail",
+    ]);
+    // Removing every chip is the same as resetting the store.
+    filterChips(s).forEach((c) => c.remove());
+    expect(filterChips(s)).toEqual([]);
   });
 
   it("removes exactly the filter its chip names", () => {
