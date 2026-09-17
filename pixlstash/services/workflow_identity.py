@@ -1,0 +1,443 @@
+"""What a workflow card is, and which cards stack, derived from a stored graph.
+
+``workflow_hash`` gives a graph three content keys: topology, structural
+(called a **variant** in new code) and instance. None of them is what a person
+means by "a workflow" (user plan §2), so this module derives the two that are:
+
+* **workflow_key** - the card. The topology plus every non-LoRA model slot
+  (checkpoint, VAE, UNET, CLIP) and every LoRA slot marked *structural*. A
+  different checkpoint is a different workflow; a character LoRA, marked
+  *recipe*, is not. The structural hash alone would give every character LoRA
+  its own card, and the topology alone would merge checkpoints.
+* **core_hash** - the automatic stack. The topology with plumbing,
+  post-processing and (by default) LoRA loaders removed and the edges re-wired
+  through them, so "adds a face detailer" and "differs only in checkpoint"
+  stack by construction.
+
+Everything here reads the **stored document** (``workflow_recipe_graph``,
+rendered by :func:`workflow_hash.structural_document`), whose assets are opaque
+references. That is what lets the backfill run over the hub alone, with no
+picture rescan, and what keeps a forgotten model name forgotten: a slot names
+its model by reference, never by filename.
+
+Pure functions only. No schema, no I/O; the marks this module guesses are
+frozen into the hub by the caller the first time a slot is seen.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections import Counter
+from dataclasses import dataclass
+from typing import Collection, Optional
+
+from pixlstash.services.comfyui_recipe_service import (
+    INPUT_IMAGE_FIELDS,
+    LORA_DIGEST_FIELDS,
+    LORA_FILENAME_FIELD_RE,
+)
+from pixlstash.services.workflow_hash import (
+    ReducedNode,
+    WorkflowGraphError,
+    drop_widgets,
+    graph_key,
+    node_labels,
+    reduce_api_graph,
+)
+
+# Stamped beside every cached value, so a change of rule re-keys visibly.
+# Stack overrides are keyed on workflow keys, not on core hashes, so a
+# CORE_VERSION bump regroups automatic stacks without losing a user's choice.
+WORKFLOW_KEY_VERSION = "v1"
+CORE_VERSION = "v1"
+
+ASSET_REFERENCE_PREFIX = "asset:"
+
+STRUCTURAL = "structural"
+RECIPE = "recipe"
+
+# The filename guess for a LoRA slot's mark. Speed LoRAs change how a workflow
+# samples (steps, CFG), so they are part of the workflow; anything else is
+# taken to be the look. Anchored on non-letters so "hyperrealism" and
+# "turbocharged_style" stay recipe LoRAs.
+_STRUCTURAL_LORA_RE = re.compile(
+    r"(?<![a-z])(lightning|turbo|hyper|lcm)(?![a-z])|(?<![a-z0-9])\d+[-_ ]?steps?(?![a-z])"
+)
+
+# A widget naming the picture a run starts from. It is an asset in the
+# structural hash, but an input rather than part of the workflow, so it never
+# reaches the card key: an img2img workflow is one card whatever it was fed.
+# By name, because the stored document holds only a reference and cannot say
+# whether it was a picture or a model. A custom node naming its input
+# picture some other way still splits cards per picture.
+_PICTURE_WIDGET_RE = re.compile(r"(^|_)(image|images|video|mask)(_|$)")
+_CHECKPOINT_WIDGETS = frozenset({"ckpt_name", "unet_name"})
+
+PLUMBING = "plumbing"
+UPSCALE = "upscale"
+FACE_DETAILER = "face_detailer"
+LORA = "lora"
+
+_PLUMBING_CLASSES = frozenset(
+    {"PreviewImage", "Reroute", "Note", "MarkdownNote", "GetNode", "SetNode"}
+)
+_UPSCALE_CLASS_RE = re.compile(
+    r"^(UpscaleModelLoader|ImageUpscaleWithModel|ImageScale|LatentUpscale|UltimateSDUpscale)"
+)
+_LATENT_UPSCALE_RE = re.compile(r"^LatentUpscale")
+_FACE_DETAILER_CLASS_RE = re.compile(
+    r"^(FaceDetailer|Detailer|SAMLoader|SAMDetector|UltralyticsDetectorProvider"
+    r"|BboxDetector|SegmDetector|ONNXDetector)"
+)
+_SAMPLER_CLASS_RE = re.compile(r"Sampler")
+
+# What a removed node's output stands for when an edge is re-wired through it:
+# the input carrying the same stream. A LoRA loader passes MODEL on slot 0 and
+# CLIP on slot 1; everything else stripped here passes one picture or latent.
+_LORA_THROUGH = ("model", "clip")
+_STREAM_INPUTS = ("image", "images", "pixels", "samples", "latent_image", "latent")
+_MAX_THROUGH_HOPS = 256
+
+
+@dataclass(frozen=True)
+class Slot:
+    """One model a workflow names, addressed so it survives re-serialisation.
+
+    ``label`` is the loader node's Weisfeiler-Leman label at topology tier plus
+    the widget name, so it is the same however the file numbered its nodes.
+    Refined until stable, so loaders in a long chain are told apart; only
+    loaders WL cannot separate (genuine twins) share a label and a mark.
+    """
+
+    label: str
+    node_id: str
+    class_type: str
+    widget: str
+    asset: str
+    is_lora: bool
+
+
+def _digest(payload: object) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _is_lora_widget(widget: str) -> bool:
+    return bool(LORA_FILENAME_FIELD_RE.match(widget)) or widget in LORA_DIGEST_FIELDS
+
+
+def slots(document: dict) -> list[Slot]:
+    """Every model slot a stored document names, pictures excluded.
+
+    Args:
+        document: A stored structural document, assets as references.
+
+    Raises:
+        WorkflowGraphError: The document holds no usable node.
+    """
+    nodes = reduce_api_graph(document)
+    topology = drop_widgets(nodes)
+    labels = node_labels(topology, rounds=len(topology))
+    raw = {str(node_id): node for node_id, node in document.items()}
+    found = []
+    for node_id, node in nodes.items():
+        raw_inputs = raw[node_id].get("inputs") or {}
+        for widget, value in raw_inputs.items():
+            if not isinstance(value, str) or not value.startswith(
+                ASSET_REFERENCE_PREFIX
+            ):
+                continue
+            if _PICTURE_WIDGET_RE.search(widget) or widget in INPUT_IMAGE_FIELDS.get(
+                node.class_type, ()
+            ):
+                continue
+            found.append(
+                Slot(
+                    label=f"{labels[node_id]}/{widget}",
+                    node_id=node_id,
+                    class_type=node.class_type,
+                    widget=widget,
+                    asset=value,
+                    is_lora=_is_lora_widget(widget),
+                )
+            )
+    return sorted(found, key=lambda s: (s.label, s.asset))
+
+
+def guess_mark(normalized_filename: str) -> str:
+    """The first-sight guess for a LoRA slot: ``structural`` or ``recipe``.
+
+    **Frozen by the caller, never recomputed.** Re-guessing as pictures arrive
+    would silently re-key cards; the guess is only where the mark starts.
+    """
+    if _STRUCTURAL_LORA_RE.search(normalized_filename.lower()):
+        return STRUCTURAL
+    return RECIPE
+
+
+def workflow_key(
+    topology_hash: str, workflow_slots: list[Slot], structural_labels: Collection[str]
+) -> str:
+    """The card key: topology, non-LoRA models and structural LoRA slots.
+
+    Args:
+        topology_hash: The document's topology hash.
+        workflow_slots: :func:`slots` of the document.
+        structural_labels: Labels of the LoRA slots marked structural. A LoRA
+            slot not named here is a recipe slot and does not reach the key.
+    """
+    pairs = sorted(
+        [slot.label, slot.asset]
+        for slot in workflow_slots
+        if not slot.is_lora or slot.label in structural_labels
+    )
+    return _digest([WORKFLOW_KEY_VERSION, topology_hash, pairs])
+
+
+def node_groups(nodes: dict[str, ReducedNode]) -> dict[str, Optional[str]]:
+    """Each node's taxonomy group, or ``None`` for one that does real work.
+
+    A sampler is post-processing only when its latent comes straight from a
+    latent upscale: that pair is a hires fix, and the second sampler goes with
+    the upscale it refines.
+    """
+    groups: dict[str, Optional[str]] = {}
+    for node_id, node in nodes.items():
+        cls = node.class_type
+        if cls in _PLUMBING_CLASSES or cls.startswith("Primitive"):
+            groups[node_id] = PLUMBING
+        elif _UPSCALE_CLASS_RE.match(cls):
+            groups[node_id] = UPSCALE
+        elif _FACE_DETAILER_CLASS_RE.match(cls):
+            groups[node_id] = FACE_DETAILER
+        elif any(_is_lora_widget(name) for name, _ in node.widgets) or (
+            "lora" in cls.lower() and "loader" in cls.lower()
+        ):
+            groups[node_id] = LORA
+        elif _SAMPLER_CLASS_RE.search(cls) and any(
+            name == "latent_image"
+            and source in nodes
+            and _LATENT_UPSCALE_RE.match(nodes[source].class_type)
+            for name, source, _ in node.inputs
+        ):
+            groups[node_id] = UPSCALE
+        else:
+            groups[node_id] = None
+    return groups
+
+
+def _through_input(node: ReducedNode, group: str, slot: int) -> Optional[str]:
+    names = {name for name, _, _ in node.inputs}
+    if group == LORA:
+        wanted = _LORA_THROUGH[slot] if slot < len(_LORA_THROUGH) else None
+        return wanted if wanted in names else None
+    for name in _STREAM_INPUTS:
+        if name in names:
+            return name
+    return next(iter(names)) if len(names) == 1 else None
+
+
+def core_hash(document: dict, *, strip_loras: bool = True) -> str:
+    """The automatic stack key: the topology without plumbing or post-processing.
+
+    Removed nodes are stepped through rather than cut out, so a sampler fed by
+    a LoRA loader reads as fed by the checkpoint, and a save node fed by an
+    upscale reads as fed by the decode. Checkpoint names never reach the
+    topology tier, so members differing only in checkpoint stack.
+
+    Args:
+        document: A stored structural document.
+        strip_loras: Remove LoRA loaders too, so an extra character LoRA
+            loader does not split a stack.
+
+    Raises:
+        WorkflowGraphError: Nothing is left once the strip groups are removed.
+    """
+    strip = {PLUMBING, UPSCALE, FACE_DETAILER} | ({LORA} if strip_loras else set())
+    return _stripped_key(reduce_api_graph(document), strip)
+
+
+def _stripped_key(nodes: dict[str, ReducedNode], strip: Collection[str]) -> str:
+    groups = node_groups(nodes)
+    removed = {node_id for node_id, group in groups.items() if group in strip}
+
+    def resolve(source: str, slot: int) -> Optional[tuple[str, int]]:
+        for _ in range(_MAX_THROUGH_HOPS):
+            if source not in removed:
+                return source, slot
+            node = nodes[source]
+            name = _through_input(node, groups[source], slot)
+            edge = next((e for e in node.inputs if e[0] == name), None)
+            if edge is None:
+                return None
+            source, slot = edge[1], edge[2]
+        raise WorkflowGraphError(
+            f"re-wiring through stripped nodes did not end after {_MAX_THROUGH_HOPS} hops"
+        )
+
+    kept: dict[str, ReducedNode] = {}
+    for node_id, node in nodes.items():
+        if node_id in removed:
+            continue
+        inputs = []
+        for name, source, slot in node.inputs:
+            resolved = resolve(source, slot)
+            if resolved is not None:
+                inputs.append((name, resolved[0], resolved[1]))
+        kept[node_id] = ReducedNode(node.class_type, (), tuple(sorted(inputs)))
+    if not kept:
+        raise WorkflowGraphError("nothing is left of the graph once stripped")
+    return graph_key(kept)
+
+
+def workflow_type(document: dict) -> Optional[str]:
+    """What kind of picture the workflow makes, from its node classes.
+
+    One of ``outpaint``, ``inpaint``, ``upscale``, ``img2img``, ``txt2img``,
+    tested in that order because an outpaint graph also encodes for inpaint
+    and an img2img graph may still carry an empty latent. ``None`` when none
+    applies.
+    """
+    nodes = reduce_api_graph(document)
+    classes = {node.class_type for node in nodes.values()}
+    if "ImagePadForOutpaint" in classes:
+        return "outpaint"
+    if classes & {"VAEEncodeForInpaint", "InpaintModelConditioning"}:
+        return "inpaint"
+    has_picture_input = any(cls.startswith("LoadImage") for cls in classes)
+    has_sampler = any(_SAMPLER_CLASS_RE.search(cls) for cls in classes)
+    if (
+        has_picture_input
+        and classes & {"UpscaleModelLoader", "ImageUpscaleWithModel"}
+        and not has_sampler
+    ):
+        return "upscale"
+    if any(
+        node.class_type == "VAEEncode" and _fed_by_picture(node_id, nodes)
+        for node_id, node in nodes.items()
+    ):
+        return "img2img"
+    if any(re.match(r"^Empty.*Latent", cls) for cls in classes):
+        return "txt2img"
+    return None
+
+
+def _fed_by_picture(node_id: str, nodes: dict[str, ReducedNode]) -> bool:
+    seen, stack = set(), [node_id]
+    while stack:
+        current = stack.pop()
+        if current in seen or current not in nodes:
+            continue
+        seen.add(current)
+        if nodes[current].class_type.startswith("LoadImage"):
+            return True
+        stack.extend(source for _, source, _ in nodes[current].inputs)
+    return False
+
+
+def differs_by(
+    cover_document: dict,
+    member_document: dict,
+    *,
+    upscale_factor: Optional[float] = None,
+) -> list[str]:
+    """How a stack member differs from the stack's cover, as card chips.
+
+    Chips: ``+ face detailer`` / ``− face detailer``, ``+ upscale`` (``+
+    upscale 2×`` when the member's factor is known) / ``− upscale``, ``other
+    checkpoint`` / ``other models``, ``plumbing only``, and ``N nodes differ``
+    for everything this taxonomy does not classify. Empty when the class sets
+    and models are the same.
+
+    **"plumbing only" is never a guess.** It is returned only when every
+    differing node is plumbing, the two graphs are identical once plumbing is
+    stepped through (same wiring, not just the same classes), AND every asset,
+    LoRAs included, is equal. A
+    wrong one invites hiding a workflow that really is different.
+    """
+    cover_nodes = reduce_api_graph(cover_document)
+    member_nodes = reduce_api_graph(member_document)
+    cover = _class_counts(cover_nodes)
+    member = _class_counts(member_nodes)
+    added, removed = member - cover, cover - member
+
+    def count(counter: Counter, group: Optional[str]) -> int:
+        return sum(n for (_, g), n in counter.items() if g == group)
+
+    chips: list[str] = []
+    unclassified = 0
+    # A step one side lacks brings its own models (an upscaler, a detector);
+    # they are that step's chip, not "other models".
+    chipped: set[str] = set()
+    for group, label in ((FACE_DETAILER, "face detailer"), (UPSCALE, "upscale")):
+        plus, minus = count(added, group), count(removed, group)
+        if plus or minus:
+            chipped.add(group)
+        if plus and minus:
+            unclassified += plus + minus
+        elif plus:
+            factor = (
+                f" {upscale_factor:g}×" if group == UPSCALE and upscale_factor else ""
+            )
+            chips.append(f"+ {label}{factor}")
+        elif minus:
+            chips.append(f"− {label}")
+
+    cover_slots = _slots_outside(cover_document, cover_nodes, chipped)
+    member_slots = _slots_outside(member_document, member_nodes, chipped)
+    models_differ = _assets(cover_slots, lora=False) != _assets(
+        member_slots, lora=False
+    )
+    if models_differ:
+        checkpoint = _assets(cover_slots, lora=False, widgets=_CHECKPOINT_WIDGETS)
+        if checkpoint != _assets(member_slots, lora=False, widgets=_CHECKPOINT_WIDGETS):
+            chips.append("other checkpoint")
+        else:
+            chips.append("other models")
+    loras_differ = _assets(cover_slots, lora=True) != _assets(member_slots, lora=True)
+
+    plumbing = count(added, PLUMBING) + count(removed, PLUMBING)
+    unclassified += sum(
+        count(counter, group) for counter in (added, removed) for group in (LORA, None)
+    )
+    if (
+        plumbing
+        and not chips
+        and not unclassified
+        and not loras_differ
+        and _stripped_key(cover_nodes, {PLUMBING})
+        == _stripped_key(member_nodes, {PLUMBING})
+    ):
+        return ["plumbing only"]
+    unclassified += plumbing
+    if unclassified:
+        chips.append(
+            "1 node differs" if unclassified == 1 else f"{unclassified} nodes differ"
+        )
+    return chips
+
+
+def _slots_outside(
+    document: dict, nodes: dict[str, ReducedNode], groups: Collection[str]
+) -> list[Slot]:
+    node_group = node_groups(nodes)
+    return [s for s in slots(document) if node_group[s.node_id] not in groups]
+
+
+def _class_counts(nodes: dict[str, ReducedNode]) -> Counter:
+    groups = node_groups(nodes)
+    return Counter(
+        (node.class_type, groups[node_id]) for node_id, node in nodes.items()
+    )
+
+
+def _assets(
+    workflow_slots: list[Slot], *, lora: bool, widgets: Collection[str] = ()
+) -> Counter:
+    return Counter(
+        (slot.widget, slot.asset)
+        for slot in workflow_slots
+        if slot.is_lora == lora and (not widgets or slot.widget in widgets)
+    )

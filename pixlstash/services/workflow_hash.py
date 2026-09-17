@@ -432,16 +432,18 @@ def promote_instance_widgets(nodes: dict[str, ReducedNode]) -> dict[str, Reduced
     }
 
 
-def graph_key(nodes: dict[str, ReducedNode]) -> str:
-    """Return the order-invariant key for a reduced graph.
+def node_labels(
+    nodes: dict[str, ReducedNode], rounds: int = REFINEMENT_ROUNDS
+) -> dict[str, str]:
+    """Each node's order-invariant label after Weisfeiler-Leman refinement.
 
-    Weisfeiler-Leman refinement over sorted neighbour lists, then a sorted
-    multiset of node descriptors. Nothing here reads a node id, so relabelling
-    every node - or nesting half of them in a subgraph - cannot change the
-    result.
+    The label depends on the node's class, its widgets and its neighbourhood
+    *rounds* hops out, never on its id, so it names "this node in this graph"
+    the same way however the file was serialised. The hashes use the default
+    and must keep it; a caller that needs nodes told apart as far as WL can
+    (the middle of a long chain) passes ``len(nodes)``, by which point the
+    refinement has stabilised.
     """
-    if not nodes:
-        raise WorkflowGraphError("cannot key an empty graph")
     labels = {
         node_id: _digest([node.class_type, node.widgets])
         for node_id, node in nodes.items()
@@ -452,7 +454,7 @@ def graph_key(nodes: dict[str, ReducedNode]) -> str:
             if source in downstream:
                 downstream[source].append(node_id)
 
-    for _ in range(REFINEMENT_ROUNDS):
+    for _ in range(rounds):
         labels = {
             node_id: _digest(
                 [
@@ -463,7 +465,20 @@ def graph_key(nodes: dict[str, ReducedNode]) -> str:
             )
             for node_id, node in nodes.items()
         }
+    return labels
 
+
+def graph_key(nodes: dict[str, ReducedNode]) -> str:
+    """Return the order-invariant key for a reduced graph.
+
+    Weisfeiler-Leman refinement over sorted neighbour lists, then a sorted
+    multiset of node descriptors. Nothing here reads a node id, so relabelling
+    every node - or nesting half of them in a subgraph - cannot change the
+    result.
+    """
+    if not nodes:
+        raise WorkflowGraphError("cannot key an empty graph")
+    labels = node_labels(nodes)
     descriptors = sorted(
         json.dumps(
             [
