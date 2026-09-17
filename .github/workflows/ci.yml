@@ -561,6 +561,7 @@ jobs:
           tests/test_plugin_create.py
           tests/test_plugin_install.py
           tests/test_plugin_lifecycle_gaps.py
+          tests/test_process_teardown.py
           tests/test_project_membership_service.py
           tests/test_projects_api.py
           tests/test_rate_limiter.py
@@ -927,14 +928,17 @@ jobs:
     # See the `backend` job for the rationale and the read-only token requirement.
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      # This job intermittently exits 139 SECONDS AFTER pytest prints a fully
-      # green summary, with no traceback anywhere in the log. pytest's bundled
-      # faulthandler plugin tears itself down in pytest_unconfigure, so it is
-      # already gone by then; that places the crash in Py_FinalizeEx. The env
-      # var enables faulthandler at interpreter start-up instead, where nothing
-      # can unregister it, so the next occurrence names the thread and frame.
-      # Costs nothing: it only installs a signal handler, and prints only if
-      # the process actually dies on a fatal signal.
+      # This job used to intermittently exit 139 SECONDS AFTER pytest printed a
+      # fully green summary, with no traceback anywhere in the log. The suite
+      # now ends this process with os._exit once pytest has its status, which
+      # skips the exit-time native destructors the crash was traced to.
+      # tests/process_teardown.py carries the evidence and the opt-out.
+      #
+      # PYTHONFAULTHANDLER stays. It enables faulthandler at interpreter
+      # start-up, where pytest's own plugin cannot unregister it in
+      # pytest_unconfigure, so it covers the whole run rather than stopping at
+      # the summary. Costs nothing: it only installs a handler, and prints only
+      # if the process actually dies on a fatal signal.
       PYTHONFAULTHANDLER: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1005,6 +1009,7 @@ jobs:
           tests/test_comfyui_workflow_extraction.py
           tests/test_watch_folder_worker.py
           tests/test_work_planner.py
+          tests/test_process_teardown.py
 
       # `PYTHONFAULTHANDLER` above did not name it, and that is itself the
       # finding: pytest's faulthandler plugin restores the handler in its
@@ -1016,6 +1021,13 @@ jobs:
       # one layer below that, an Application Error record naming the faulting
       # module, its version and the fault offset — the DLL this has never been
       # able to name.
+      #
+      # This step has not narrowed it further either. Run 35252455611 printed
+      # "No Application Error record", i.e. the Application log held nothing
+      # from either provider — which on a hosted runner may only mean Windows
+      # Error Reporting is switched off, so it is not evidence either way. The
+      # step is kept because it costs a second on an already-failing job and
+      # would name the module the moment a runner does log one.
       #
       # Read the event rather than shipping a minidump: artifacts on a public
       # repository are downloadable by anyone, and dumped process memory reaches
