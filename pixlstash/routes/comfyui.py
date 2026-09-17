@@ -1471,7 +1471,7 @@ def create_router(server) -> APIRouter:
         try:
             with workflow_inbox.INBOX_LOCK:
                 _trash_stored_workflow(path, normalized)
-        except (TrashPermissionError, OSError, RecursionError) as exc:
+        except (TrashPermissionError, OSError, RecursionError, ValueError) as exc:
             logger.warning("Failed to delete workflow %s: %s", normalized, exc)
             raise HTTPException(status_code=500, detail="Failed to delete workflow")
         # The placeholder migration's backup goes with the workflow it copied.
@@ -1730,7 +1730,11 @@ def create_router(server) -> APIRouter:
                     comfyui_url,
                     exc,
                 )
-                comfyui_error = str(exc)
+                # Composed here rather than taken from the exception: what the
+                # fetch failed on belongs in the log, and the field only has to
+                # say that the values below are the file's own. Why it failed
+                # does not change what the client can do about it.
+                comfyui_error = f"Could not read ComfyUI's node types at {comfyui_url}"
             else:
                 parameters = _parameters_of(name, document, object_info, detected)
                 typed = True
