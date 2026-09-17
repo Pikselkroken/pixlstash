@@ -51,6 +51,7 @@ vi.mock("../../api/comfyui", () => ({
 import WorkflowShelf from "./WorkflowShelf.vue";
 import { useWorkflowShelfStore } from "../../stores/useWorkflowShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const globalOpts = {
   global: {
@@ -681,5 +682,78 @@ describe("dropping a workflow file", () => {
     expect(useNoticeStore().notices.map((n) => n.text)).toEqual([
       "flow.json is not valid JSON.",
     ]);
+  });
+});
+
+// #1415: the view replaces the grid and its toolbar, so without the app-wide
+// tail nothing on this screen opened Settings or the stats rail - and
+// WorkflowInspector only renders while that rail is open.
+describe("the app-wide toolbar tail", () => {
+  it("asks App.vue for Settings and toggles the stats sidebar itself", async () => {
+    const wrapper = await mountShelf();
+    const sidebar = useSidebarStore();
+
+    await wrapper
+      .find(".wfshelf-toolbar button[aria-label='Settings']")
+      .trigger("click");
+    expect(wrapper.emitted("open-settings")).toHaveLength(1);
+
+    // From the shut state a fresh session starts in: the first press opens the
+    // rail, the second closes it.
+    sidebar.statsOpen = false;
+    await wrapper.find(".wfshelf-toolbar .tb-stats-btn").trigger("click");
+    expect(sidebar.statsOpen).toBe(true);
+    await wrapper.find(".wfshelf-toolbar .tb-stats-btn").trigger("click");
+    expect(sidebar.statsOpen).toBe(false);
+  });
+
+  it("orders the tail separator → TbGlobalActions, last in the bar", async () => {
+    // Placement, not presence: the app-wide chrome sits after this view's own
+    // controls, ruled off from them, at the end - as ModelShelf's bar does.
+    const wrapper = await mountShelf();
+    const bar = wrapper.find(".wfshelf-toolbar").element;
+    const tail = wrapper.find(".wfshelf-bar-tail").element;
+    // TbGlobalActions is multi-root; its Settings button is a stable anchor.
+    const settings = wrapper.find(
+      ".wfshelf-toolbar button[aria-label='Settings']",
+    ).element;
+    const separator = wrapper.find(".wfshelf-toolbar .bar-separator").element;
+    // Ghosts is the last of this view's own controls.
+    const ghosts = wrapper
+      .findAll(".wfshelf-toolbar button")
+      .find((btn) => btn.text().includes("Ghosts")).element;
+    const follows = (a, b) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+    expect(follows(ghosts, separator)).toBe(true);
+    // Adjacency, not merely order: the rule marks the boundary, so nothing may
+    // slip between it and the chrome it rules off.
+    expect(separator.nextElementSibling).toBe(settings);
+    // Nothing of this view's own follows the app-wide chrome. TbGlobalActions
+    // is multi-root, so its stats button is the tail's last element.
+    expect(bar.lastElementChild).toBe(tail);
+    expect(tail.lastElementChild.classList.contains("tb-stats-btn")).toBe(true);
+  });
+
+  // Nothing here writes to the operation log, so undo/redo and the History
+  // popover are not offered at all - the model shelf's exception, for its
+  // reason.
+  it("mounts no undo control", async () => {
+    const wrapper = await mountShelf();
+    expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(false);
+  });
+
+  // The emit above is only half the fix: App.vue has to listen, and nothing
+  // else in this suite fails if that binding is deleted. Asserted against the
+  // source because App.vue needs a mount harness this suite does not have -
+  // the same readFileSync shape Toolbar.test.js uses for its bar recipe.
+  it("is listened to by App.vue, which owns the Settings dialog", async () => {
+    const { readFileSync } = await import("node:fs");
+    const app = readFileSync(`${process.cwd()}/src/App.vue`, "utf8");
+    const tag = app.slice(
+      app.indexOf("<WorkflowShelf"),
+      app.indexOf(">", app.indexOf("<WorkflowShelf")),
+    );
+    expect(tag).toContain('@open-settings="openSettingsDialog"');
   });
 });

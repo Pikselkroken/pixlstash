@@ -791,7 +791,10 @@ defineExpose({
                    than pictures in this library, so like the shelf it replaces
                    the grid instead of floating over it, and the grid stays
                    unmounted while it is open. -->
-              <WorkflowShelf v-else-if="isWorkflowsView" />
+              <WorkflowShelf
+                v-else-if="isWorkflowsView"
+                @open-settings="openSettingsDialog"
+              />
               <ImageGrid
                 v-else
                 ref="gridContainer"

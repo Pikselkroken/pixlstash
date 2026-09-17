@@ -227,8 +227,13 @@ describe("Toolbar - the shell band's one box recipe", () => {
       "src/components/views/LibraryInsights.vue",
       ".ins-toolbar",
     );
+    // The fifth bar, and the fourth host of the app-wide tail (#1415).
+    const workflows = blockOf(
+      "src/components/views/WorkflowShelf.vue",
+      ".wfshelf-toolbar",
+    );
 
-    for (const block of [grid, dq, shelf, insights]) {
+    for (const block of [grid, dq, shelf, insights, workflows]) {
       expect(block).toContain("height: 36px");
       expect(block).toContain("box-sizing: border-box");
       // min-height + vertical padding is exactly the recipe that drifted.
@@ -261,6 +266,7 @@ describe("Toolbar - the shell band's one box recipe", () => {
     expect(rightInset(dq)).toBe(rightInset(grid));
     expect(rightInset(shelf)).toBe(rightInset(grid));
     expect(rightInset(insights)).toBe(rightInset(grid));
+    expect(rightInset(workflows)).toBe(rightInset(grid));
 
     // Two of the three bars LEAD with an identity (the queue's count, the
     // shelf's title) and each carries a quieter count beneath it. They read as

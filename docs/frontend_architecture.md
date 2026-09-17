@@ -4223,6 +4223,17 @@ a pasted `/workflows` URL is bounced to the library by the same watcher that
 bounces `/models` — a guard cannot do it, because the router's first navigation
 resolves before the session context is fetched.
 
+**And like the shelf its bar carries the shell chrome.** Replacing the grid
+replaces the grid's toolbar, so `.wfshelf-toolbar` ends in
+`[separator] [TbGlobalActions]`, with `TbGlobalActions` emitting `open-settings`
+up to `App.vue`. Without it nothing on this screen opened Settings or the right
+rail, and the rail is where `WorkflowInspector`'s content is shown (`AppInspector`
+gates it on `sidebarStore.statsOpen`), so the inspector was unreachable (#1415).
+The pair sits in its own `--space-3` cluster, because the bar spaces its own
+controls wider and the whole point of every host mounting the same component is
+that the tail is identical in each. `UndoControl` is left off for the model
+shelf's reason: nothing here writes to the operation log.
+
 **The list opens at topology level.** One row is one graph, whatever it was
 bound to; the recipes filed under it are the same graph with different models and
 are the row's *expansion*. A row's `assets` are therefore the **set** of files

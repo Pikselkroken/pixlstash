@@ -24,7 +24,8 @@
       close them. Group, Sort and Show choose the order, the bands and which
       rows are listed, and Ghosts keeps only workflows that still hold something
       of a deleted picture or model. Drop a workflow JSON file here to add it,
-      unchanged.
+      unchanged. The end of the toolbar carries Settings and the right
+      sidebar's toggle, which shows the selected workflow's details.
       Right-click a row for what can be done with it. Escape clears the
       selection.
     </p>
@@ -177,6 +178,23 @@
         >Ghosts</AppBarButton
       >
       <span class="wfshelf-spacer"></span>
+
+      <!-- The app-wide tail, minus undo, as the model shelf ends its bar:
+           [separator] [TbGlobalActions]. This view replaces the grid, and with
+           it the grid's toolbar, so without this pair nothing on the screen
+           opened Settings or the right rail - and the rail is where
+           WorkflowInspector's content is shown, so the inspector was
+           unreachable (#1415). No undo: nothing here writes to the operation
+           log.
+
+           The cluster is not decoration: TbGlobalActions is multi-root, so its
+           buttons would otherwise sit at this bar's wider gap and the pair
+           would be 4px wider here than in every other view, which is the one
+           thing mounting the SAME component is meant to prevent. -->
+      <span class="wfshelf-bar-tail">
+        <span class="bar-separator" aria-hidden="true"></span>
+        <TbGlobalActions @open-settings="emit('open-settings')" />
+      </span>
     </div>
 
     <div class="wfshelf-scroll">
@@ -580,6 +598,7 @@ import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import OptionRows from "../widgets/OptionRows.vue";
 import Segmented from "../widgets/Segmented.vue";
+import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import { importWorkflow } from "../../api/comfyui";
 import { getWorkflowGraph, listWorkflowVariants } from "../../api/workflows";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -597,6 +616,9 @@ import {
   workflowDescriptor,
 } from "../../utils/workflowShelf";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
+
+// Settings is App.vue's dialog; TbGlobalActions flips the sidebar store itself.
+const emit = defineEmits(["open-settings"]);
 
 const store = useWorkflowShelfStore();
 const notices = useNoticeStore();
@@ -1191,6 +1213,15 @@ onMounted(() => {
 
 .wfshelf-spacer {
   flex: 1;
+}
+
+/* The app-wide tail's own gap, on `.shelf-bar-cluster`'s reason: this bar
+   spaces its controls at --space-4, and the tail must land at the --space-3
+   every other host lays it out at. */
+.wfshelf-bar-tail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
 }
 
 /* The column-name strip, standing above the list rather than inside it: a
