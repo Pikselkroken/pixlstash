@@ -718,7 +718,7 @@ These already exist hand-rolled; the tokens above consolidate them. Reuse the
 pattern, don't re-roll the numbers.
 
 - **Attention pulse** — a soft, looping "look here" on a live indicator. Reference:
-  `tb-stats-pulse` (Toolbar activity dot), `tm-dot-pulse` (stats). ~1.4s
+  `tb-stats-pulse` (Toolbar stats icon), `tm-dot-pulse` (stats). ~1.4s
   `ease-in-out infinite`, scale + opacity. Looping cadence is contextual, so it
   lives with the pattern, not as a raw duration token.
 - **Landing pulse (one-shot)** — a single glow-and-settle when something new
@@ -951,9 +951,9 @@ vanish — they **fold** into the ⋯ overflow (`TbOverflowMenu`, a
   compresses to its icon rather than folding — a filter that hides is a
   filter the user forgets.
 - **State travels with the row.** A folded toggle wears `aria-pressed` and
-  the primary-token pressed colour; the stats toggle's attention dot moves to
-  the ⋯ trigger while folded (same pulse recipe, `prefers-reduced-motion`
-  honoured), so background work never goes invisible.
+  the primary-token pressed colour. The stats toggle never folds, so its
+  pulsing amber icon (`prefers-reduced-motion` honoured) keeps background work
+  visible at every width.
 
 ---
 

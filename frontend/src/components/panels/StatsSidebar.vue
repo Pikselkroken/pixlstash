@@ -2469,14 +2469,14 @@ defineExpose({ focusTasksTab });
 .tm-status-dot {
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   flex-shrink: 0;
   background: rgba(var(--v-theme-on-surface), 0.2);
 }
 
 .tm-status-dot--running {
-  background: rgb(var(--v-theme-primary));
-  box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.55);
+  background: rgb(var(--v-theme-accent));
+  box-shadow: 0 0 5px rgba(var(--v-theme-accent), 0.55);
   animation: tm-dot-pulse 1.4s ease-in-out infinite;
 }
 
@@ -2517,17 +2517,19 @@ defineExpose({ focusTasksTab });
 }
 
 /* ── Tasks tab "busy" indicators ───────────────────────────────────────────── */
+/* Live work wears the accent, not primary: olive is the selection mark (the
+   active tab's underline), and an attention dot is accent (visual-language §12). */
 .tm-tab-icon--busy {
   animation: tm-dot-pulse 1.4s ease-in-out infinite;
-  color: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-accent));
 }
 
 .tm-tab-pulse {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
-  background: rgb(var(--v-theme-primary));
-  box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.6);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-accent));
+  box-shadow: 0 0 5px rgba(var(--v-theme-accent), 0.6);
   animation: tm-dot-pulse 1.4s ease-in-out infinite;
 }
 
@@ -2572,15 +2574,15 @@ defineExpose({ focusTasksTab });
 
 @keyframes tm-import-glow {
   0% {
-    box-shadow: 0 0 0 0 rgba(var(--v-theme-primary), 0.5);
-    border-color: rgba(var(--v-theme-primary), 0.6);
+    box-shadow: 0 0 0 0 rgba(var(--v-theme-accent), 0.5);
+    border-color: rgba(var(--v-theme-accent), 0.6);
   }
   35% {
-    box-shadow: 0 0 0 4px rgba(var(--v-theme-primary), 0.18);
-    border-color: rgba(var(--v-theme-primary), 0.45);
+    box-shadow: 0 0 0 4px rgba(var(--v-theme-accent), 0.18);
+    border-color: rgba(var(--v-theme-accent), 0.45);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(var(--v-theme-primary), 0);
+    box-shadow: 0 0 0 0 rgba(var(--v-theme-accent), 0);
     border-color: rgba(var(--v-theme-on-surface), 0.07);
   }
 }

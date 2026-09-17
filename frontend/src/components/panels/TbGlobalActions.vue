@@ -7,11 +7,10 @@
     @click="emit('open-settings')"
   />
   <!-- ── Stats toggle ──────────────────────────────────────────────────── -->
-  <!-- App-wide activity light (`--busy`, drawn as ::after): pulses whenever
-       the task manager has any active work, so background tasks are visible
-       without opening the stats sidebar. A pseudo-element rather than a
-       slotted span, because a slotted button is a labelled one and would lose
-       its icon-only size. -->
+  <!-- App-wide activity light (`--busy`): the whole glyph pulses amber
+       whenever the task manager has any active work, so background tasks are
+       visible without opening the stats sidebar. A corner dot was too subtle
+       to notice (#1343). -->
   <AppBarButton
     class="tb-stats-btn"
     :class="{ 'tb-stats-btn--busy': tasksStore.hasActiveTasks }"
@@ -63,20 +62,11 @@ const statsTitle = computed(() =>
    whoever changed one to remember the other; the five rules were still
    byte-identical, and now there is one copy. */
 
-/* App-wide task-activity light on the stats toggle (`.bar-btn` is already
-   `position: relative`). */
-.tb-stats-btn--busy::after {
-  content: "";
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: rgb(var(--v-theme-primary));
-  box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.7);
+/* App-wide task-activity light on the stats toggle. Accent, not the olive
+   the active (open) state gives the glyph: live work is not selection. */
+.tb-stats-btn--busy :deep(.v-icon) {
+  color: rgb(var(--v-theme-accent));
   animation: tb-stats-pulse 1.4s ease-in-out infinite;
-  pointer-events: none;
 }
 
 @keyframes tb-stats-pulse {
@@ -92,7 +82,7 @@ const statsTitle = computed(() =>
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tb-stats-btn--busy::after {
+  .tb-stats-btn--busy :deep(.v-icon) {
     animation: none;
   }
 }
@@ -100,6 +90,6 @@ const statsTitle = computed(() =>
 /* No collapse rule here on purpose (amendment #2 in
    docs/design/toolbar-responsive-decisions.md): Settings and Stats never
    fold - a burger may only collapse controls from its own visual group, and
-   these are the app-wide tail's. The activity dot stays first-class on the
+   these are the app-wide tail's. The activity light stays first-class on the
    Stats button at every width. */
 </style>
