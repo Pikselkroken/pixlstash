@@ -35,6 +35,7 @@
     @run-plugin="handlePluginRunRequest"
     @request-context-menu="handleOverlayContextMenuRequest"
     @character-created="emit('refresh-sidebar')"
+    @open-remix-dialog="openRemixDialog"
   />
   <ImageImporter
     ref="imageImporterRef"

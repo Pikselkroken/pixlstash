@@ -3094,6 +3094,46 @@ function focusDrawnRow(key) {
   }
 }
 
+// ── Arriving from a picture's Recipe section (#1313) ───────────────────────
+//
+// `?model=<id>` picks that model and puts the cursor on it, so a chip clicked
+// in the lightbox lands on the file the picture used rather than at the top of
+// a shelf of a couple of thousand rows. A model the shelf is not drawing - a
+// filter hides it, its group is collapsed, its stack is closed - is left alone
+// rather than forced into view: the row the link names is a fact, and what the
+// reader has filtered the shelf down to is a decision of theirs.
+//
+// Honoured once per value, because `drawnRows` recomputes on every filter,
+// sort and refresh while the query string stays put, and applying it twice
+// would take focus back off whatever the reader had moved to.
+let honouredModel = null;
+
+function honourModelQuery() {
+  const wanted = route?.query?.model;
+  if (!wanted) {
+    honouredModel = null;
+    return;
+  }
+  if (honouredModel === wanted) return;
+  const row = drawnRows.value.find(
+    (entry) => String(entry.id) === String(wanted),
+  );
+  if (!row) return;
+  honouredModel = wanted;
+  focusedRowKey.value = row.key;
+  store.selectFromClick(row.id, {}, orderedRowIds.value);
+  nextTick(() => focusDrawnRow(row.key));
+}
+
+// Registered on mount rather than at setup. A watcher reads its source once
+// when it is created, and `drawnRows` reads `shownGroups`, which is declared
+// below this point - so a watcher created here would evaluate it inside its own
+// temporal dead zone. The rows are fetched asynchronously anyway, so nothing is
+// missed by waiting for the mount.
+onMounted(() => {
+  watch([() => route?.query?.model, drawnRows], honourModelQuery);
+});
+
 function onRowKeydown(row, event) {
   const drawn = drawnRows.value;
   const index = drawn.findIndex((drawnRow) => drawnRow.key === row.rowKey);

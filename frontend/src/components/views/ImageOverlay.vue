@@ -968,9 +968,16 @@
             @request-metadata-refresh="fetchOverlayMetadata"
           />
 
+          <OverlayRecipePanel
+            :recipe="comfyMetadata"
+            :can-generate-variants="
+              comfyuiConfigured && !isReadOnly && !!image?.id
+            "
+            @generate-variants="emit('open-remix-dialog', image?.id)"
+          />
+
           <OverlayMetadataPanel
             :image="image"
-            :comfy-metadata="comfyMetadata"
             :date-format="dateFormat"
             :video-duration="videoMeta.duration"
           />
@@ -1078,6 +1085,7 @@ import CharacterEditor from "../editors/CharacterEditor.vue";
 import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";
 import OverlayFilmstrip from "./OverlayFilmstrip.vue";
 import OverlayMetadataPanel from "./OverlayMetadataPanel.vue";
+import OverlayRecipePanel from "./OverlayRecipePanel.vue";
 import OverlayTagsPanel from "./OverlayTagsPanel.vue";
 import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
 import OverlaySaveAsDialog from "../widgets/OverlaySaveAsDialog.vue";
@@ -1445,6 +1453,9 @@ const emit = defineEmits([
   "run-plugin",
   "request-context-menu",
   "character-created",
+  // The Recipe section's "Generate variants..." (#1313). The Remix dialog is
+  // the grid's, so the lightbox asks for it rather than hosting a second one.
+  "open-remix-dialog",
 ]);
 
 const descriptionPanelRef = ref(null);
@@ -3723,8 +3734,13 @@ async function fetchComfyWorkflow(imageId) {
           isApiFormat: data.is_api_format,
           summary: data.summary,
           positive_prompt: data.positive_prompt || null,
-          models: data.models || [],
-          loras: data.loras || [],
+          // The Recipe section's own fields (#1313). `model_slots` carries the
+          // strengths and the shelf rows that the flat `models` name list
+          // cannot; `inputs` is the resolution lock.
+          modelSlots: data.model_slots || [],
+          settings: data.settings || [],
+          inputs: data.inputs || [],
+          topologyHash: data.topology_hash || null,
         }
       : null;
   } catch (e) {
