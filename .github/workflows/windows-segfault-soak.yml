@@ -10,7 +10,8 @@ name: Windows segfault soak
 # control on the same runner image on the same day.
 #
 # So every leg runs the real `backend-windows` command N times and tallies how
-# many process exits ended in 139, in two arms:
+# many process exits ended in an access violation (139, or 3221225477 when the
+# runner reports the native status), in two arms:
 #
 #   fast-exit  the shipped behaviour: PIXLSTASH_PYTEST_FAST_EXIT is left unset
 #              so the win32 branch in tests/process_teardown.py decides, which
@@ -193,9 +194,14 @@ jobs:
             else
               fired=no
             fi
+            # Both statuses are the same access violation: bash reports it as
+            # 139 when the shell maps the native status onto a signal, and as
+            # 3221225477 (0xC0000005) when the runner surfaces it raw. Counting
+            # only 139 would report a leg that crashed three times as a clean
+            # arm, which is the one number this job exists to get right.
             case "$status" in
               0) ;;
-              139) crashes=$((crashes + 1)) ;;
+              139|3221225477) crashes=$((crashes + 1)) ;;
               *) other=$((other + 1)) ;;
             esac
             echo "run $run: exit $status, fast exit fired: $fired"
@@ -203,9 +209,9 @@ jobs:
           done
 
           echo ""
-          echo "=== $ARM shard $CI_SHARD: $crashes/$SOAK_REPEATS exited 139, $other other non-zero ==="
+          echo "=== $ARM shard $CI_SHARD: $crashes/$SOAK_REPEATS crashed (139 or 0xC0000005), $other other non-zero ==="
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**$ARM shard $CI_SHARD: $crashes/$SOAK_REPEATS exited 139**, $other other non-zero." >> "$GITHUB_STEP_SUMMARY"
+          echo "**$ARM shard $CI_SHARD: $crashes/$SOAK_REPEATS crashed (139 or 0xC0000005)**, $other other non-zero." >> "$GITHUB_STEP_SUMMARY"
 
           # Never fails on a crash: a crash is the data this job exists to
           # collect, and a red leg would stop the matrix being read as a tally.
