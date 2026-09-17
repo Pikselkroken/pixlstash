@@ -594,3 +594,85 @@ describe("useUpdatesSocket: text read from a picture (#1197)", () => {
     expect(wsStore.wsTextUpdate.key).toBe(1);
   });
 });
+
+// The wire that carries an undo of a rotate from the socket to the open
+// lightbox. Without it the overlay's watcher is never triggered at all, and
+// nothing that tests the overlay by setting its prop would notice (#1419).
+describe("useUpdatesSocket: a picture was turned (#1419)", () => {
+  it("signals the lightbox with the pictures that were turned", () => {
+    connect();
+    const wsStore = useWsStore();
+    receive({
+      type: "pictures_changed",
+      change_kind: "updated",
+      picture_ids: [7],
+      fields: ["orientation", "pixels"],
+    });
+    expect(wsStore.wsOrientationUpdate).toEqual({ key: 1, pictureIds: [7] });
+  });
+
+  // The narrowing that keeps background work out of the lightbox. Three
+  // producers rewrite a file's bytes without turning it: the thumbnail
+  // regeneration task (`["pixels"]`, up to 64 ids a batch, streaming for the
+  // length of an import) and the layout move route and its task
+  // (`["file_path", "pixels"]`). The overlay's <img> URL is built from the
+  // picture id, the format and the orientation, so none of them touch it.
+  it("stays put for a thumbnail regeneration, which turns nothing", () => {
+    connect();
+    const wsStore = useWsStore();
+    receive({
+      type: "pictures_changed",
+      change_kind: "updated",
+      picture_ids: [7],
+      fields: ["pixels"],
+    });
+    expect(wsStore.wsOrientationUpdate.key).toBe(0);
+  });
+
+  it("stays put for a layout move, which turns nothing either", () => {
+    connect();
+    const wsStore = useWsStore();
+    receive({
+      type: "pictures_changed",
+      change_kind: "updated",
+      picture_ids: [7],
+      fields: ["file_path", "pixels"],
+    });
+    expect(wsStore.wsOrientationUpdate.key).toBe(0);
+  });
+
+  it("stays put for a change that did not rewrite the file", () => {
+    connect();
+    const wsStore = useWsStore();
+    receive({
+      type: "pictures_changed",
+      change_kind: "updated",
+      picture_ids: [7],
+      fields: ["detections"],
+    });
+    expect(wsStore.wsOrientationUpdate.key).toBe(0);
+  });
+
+  it("advances the key per frame, so two turns are two signals", () => {
+    connect();
+    const wsStore = useWsStore();
+    const frame = {
+      type: "pictures_changed",
+      change_kind: "updated",
+      picture_ids: [7],
+      fields: ["orientation", "pixels"],
+    };
+    receive(frame);
+    receive(frame);
+    expect(wsStore.wsOrientationUpdate.key).toBe(2);
+  });
+
+  it("never reloads the grid or raises the view-changed pill for a turn", () => {
+    connect();
+    expect(
+      realtimeDeps.pictureChangeAffectsView(["orientation", "pixels"]),
+    ).toBe(false);
+    // The control: an unknown field still does.
+    expect(realtimeDeps.pictureChangeAffectsView(["tags"])).toBe(true);
+  });
+});

@@ -2024,9 +2024,18 @@ def _emit(
     # A restored location moves the FILE, so the card's thumbnail URL changes
     # for exactly the reason a restored orientation does - the URL is derived
     # from the path, not from ``GET /pictures/{id}/metadata``.
-    updated_fields = (
-        ["pixels"] if facets & {FACET_ORIENTATION, FACET_LOCATION} else None
-    )
+    #
+    # ``orientation`` rides alongside ``pixels`` when the restore was a TURN.
+    # Three other producers of ``pixels`` rewrite bytes without turning anything
+    # (the thumbnail regeneration task, the layout move route and its task), and
+    # a client cannot tell them apart from the bare field - which left the open
+    # lightbox inferring "was this a turn?" from a metadata read it could not
+    # rely on (#1419). A restored LOCATION is not a turn and does not get it.
+    updated_fields: Optional[list[str]] = None
+    if facets & {FACET_ORIENTATION, FACET_LOCATION}:
+        updated_fields = ["pixels"]
+        if FACET_ORIENTATION in facets:
+            updated_fields.insert(0, "orientation")
     for event in events:
         _notify(event, updated, "updated", updated_fields)
     _notify(EventType.CHANGED_PICTURES, scrapheaped, "removed")
