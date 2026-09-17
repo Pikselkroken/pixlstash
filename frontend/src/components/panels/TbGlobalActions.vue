@@ -28,18 +28,25 @@
 // every view - the styles live here, not in either host.
 //
 // Both buttons act on global state (the settings dialog lives in App.vue, the
-// stats rail in the sidebar store), so the component takes no data props; the
-// optional separator is for hosts whose bar does not already draw one.
+// stats rail in the sidebar store), so the component takes no data props. The
+// two it does take are about the HOST: an optional separator for a bar that
+// does not already draw one, and what the rail is called on that screen.
 
 import { computed } from "vue";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import AppBarButton from "../widgets/AppBarButton.vue";
 
-defineProps({
+const props = defineProps({
   // Draw the toolbar's vertical rule ahead of the pair. The grid toolbar
   // already has one before its actions group; the duplicates toolbar does not.
   separator: { type: Boolean, default: false },
+  // What the right rail IS on this screen, because the toggle's tooltip is
+  // also its accessible name (AppBarButton promotes an icon-only button's
+  // tooltip to `aria-label`). One rail, more than one panel: on the workflow
+  // library it carries WorkflowInspector, so a reader there was offered "Show
+  // stats sidebar" for a control that opens the inspector (#1415).
+  railName: { type: String, default: "stats sidebar" },
 });
 
 const emit = defineEmits(["open-settings"]);
@@ -51,8 +58,8 @@ const statsTitle = computed(() =>
   tasksStore.hasActiveTasks
     ? `${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? "" : "s"} running`
     : sidebarStore.statsOpen
-      ? "Hide stats sidebar"
-      : "Show stats sidebar",
+      ? `Hide ${props.railName}`
+      : `Show ${props.railName}`,
 );
 </script>
 

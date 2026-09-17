@@ -193,7 +193,10 @@
            thing mounting the SAME component is meant to prevent. -->
       <span class="wfshelf-bar-tail">
         <span class="bar-separator" aria-hidden="true"></span>
-        <TbGlobalActions @open-settings="emit('open-settings')" />
+        <TbGlobalActions
+          rail-name="inspector"
+          @open-settings="emit('open-settings')"
+        />
       </span>
     </div>
 

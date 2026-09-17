@@ -2244,7 +2244,10 @@ a screen the reader was not on, and the pair sat permanently at "Nothing to
 undo" or else offered to revert a library edit made elsewhere — a recovery
 control that never answers for what is in front of it, next to shelf actions
 that say in as many words that they cannot be undone. **`Ctrl+Z` declines here
-too** (`useGlobalKeydown`, the `.shelf` check beside the existing modal guard):
+too** (`useGlobalKeydown`, the `UNDO_BLIND_ROOTS` check beside the existing
+modal guard — `.shelf, .wfshelf, .mv, .ins`, every destination that replaces
+the grid and narrates nothing; the shelf was guarded alone until #1415 and the
+other three took the chord silently):
 the shelf mounts no `ActionReceipt` either, and `UndoControl` is the app's only
 renderer of the "Changed elsewhere" warning, so the chord would otherwise
 revert a library action with nothing on screen to say it happened — the same
@@ -4226,13 +4229,24 @@ resolves before the session context is fetched.
 **And like the shelf its bar carries the shell chrome.** Replacing the grid
 replaces the grid's toolbar, so `.wfshelf-toolbar` ends in
 `[separator] [TbGlobalActions]`, with `TbGlobalActions` emitting `open-settings`
-up to `App.vue`. Without it nothing on this screen opened Settings or the right
-rail, and the rail is where `WorkflowInspector`'s content is shown (`AppInspector`
-gates it on `sidebarStore.statsOpen`), so the inspector was unreachable (#1415).
-The pair sits in its own `--space-3` cluster, because the bar spaces its own
+up to `App.vue`. **A run outranks the inspector in the rail**
+(`WorkflowRunPanel` is the `v-if`, the inspector the `v-else-if`): starting one
+force-opens the rail from `useWorkflowRunStore.openFor`, and with the inspector
+first the rail opened onto "Pick a workflow" while the run was in progress.
+Without the tail nothing on this screen opened Settings or the right
+rail, and the rail is where `WorkflowInspector`'s content is shown
+(`AppInspector` gates it on `sidebarStore.statsOpen`), so the inspector was
+unreachable (#1415). The pair sits in its own `--space-3` cluster, because the bar spaces its own
 controls wider and the whole point of every host mounting the same component is
-that the tail is identical in each. `UndoControl` is left off for the model
-shelf's reason: nothing here writes to the operation log.
+that the tail is identical in each. It passes `rail-name="inspector"`: the
+toggle's tooltip is also its accessible name, and this rail is not the stats
+sidebar it is called in the views that have one. **Moves and Insights carried
+the same gap and were fixed with it** (#1415) — the population was three
+screens, not one; they take the tail's own `separator` prop at the end of their
+existing right-hand group. On Insights it emits Settings on the `act` channel
+App.vue already routes. `UndoControl` is left off for the
+model shelf's reason: nothing here writes to the operation log — and `Ctrl+Z`
+now declines on all three (`useGlobalKeydown`'s `UNDO_BLIND_ROOTS`).
 
 **The list opens at topology level.** One row is one graph, whatever it was
 bound to; the recipes filed under it are the same graph with different models and

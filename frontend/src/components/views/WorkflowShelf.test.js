@@ -747,6 +747,32 @@ describe("the app-wide toolbar tail", () => {
   // else in this suite fails if that binding is deleted. Asserted against the
   // source because App.vue needs a mount harness this suite does not have -
   // the same readFileSync shape Toolbar.test.js uses for its bar recipe.
+  // The toggle's tooltip is its accessible name, and the rail on this screen is
+  // the inspector, not the stats sidebar it is called everywhere else.
+  it("names the rail it actually opens here", async () => {
+    const wrapper = await mountShelf();
+    const stats = wrapper.find(".wfshelf-toolbar .tb-stats-btn");
+    expect(stats.attributes("aria-label")).toBe("Show inspector");
+    useSidebarStore().statsOpen = true;
+    await wrapper.vm.$nextTick();
+    expect(stats.attributes("aria-label")).toBe("Hide inspector");
+  });
+
+  // A run force-opens this rail (`useWorkflowRunStore.openFor`), so the run
+  // panel has to outrank the inspector or the rail opens on "Pick a workflow"
+  // while the run is in progress. App.vue needs a mount harness this suite does
+  // not have, so this is asserted against the source, as above.
+  it("leaves a running workflow's panel ahead of the inspector", async () => {
+    const { readFileSync } = await import("node:fs");
+    const app = readFileSync(`${process.cwd()}/src/App.vue`, "utf8");
+    const run = app.indexOf("<WorkflowRunPanel");
+    const inspector = app.indexOf("<WorkflowInspector");
+    expect(run).toBeGreaterThan(-1);
+    expect(run).toBeLessThan(inspector);
+    expect(app.slice(run, inspector)).toContain('v-if="workflowRunStore.open"');
+    expect(app.slice(inspector, inspector + 80)).toContain("v-else-if");
+  });
+
   it("is listened to by App.vue, which owns the Settings dialog", async () => {
     const { readFileSync } = await import("node:fs");
     const app = readFileSync(`${process.cwd()}/src/App.vue`, "utf8");
