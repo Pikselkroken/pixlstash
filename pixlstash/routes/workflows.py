@@ -50,7 +50,10 @@ from pixlstash.hub.workflows import (
     topology_index,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.hub.workflow_card_reads import find_card
+from pixlstash.services.workflow_card_service import card_defaults, read_grid
 from pixlstash.services.workflow_library_service import (
+    read_card_picture_ids,
     read_library,
     read_recipe_activity,
     read_topology_picture_ids,
@@ -176,6 +179,95 @@ class WorkflowGraph(BaseModel):
     runnable: bool = False
 
 
+class WorkflowCard(BaseModel):
+    """One card of the Workflows grid (v1.12 B3).
+
+    A **card** is a workflow as a person means it: the topology, the non-LoRA
+    models and the LoRA slots marked structural, so swapping a character LoRA
+    stays the same card. ``variants`` counts the stored graphs it is made of;
+    they are the tier the older routes on this file call a recipe.
+
+    ``rank`` is the Bayesian cover rank
+    (``services/workflow_card_service``), and the list is returned in it.
+    ``differs_by`` is empty unless the card sits in a stack, because a card on
+    its own has nothing to differ from.
+    """
+
+    workflow_key: str
+    topology_hash: str
+    name: str | None = Field(
+        None, description="The owner's own name, if they gave one."
+    )
+    workflow_type: str | None = None
+    variants: int
+    pictures: int = 0
+    rated: int = 0
+    rank: float = 0.0
+    last_used: str | None = None
+    cover_picture_ids: list[int] = Field(default_factory=list)
+    imported: bool = Field(
+        False, description="A workflow file on this machine runs this card."
+    )
+    stack_id: str | None = None
+    differs_by: list[str] = Field(default_factory=list)
+
+
+class WorkflowStack(BaseModel):
+    """An effective stack: members in order, the first one the cover.
+
+    ``stack_id`` is the stored id for a manual stack and ``auto:<core hash>``
+    for the automatic grouping, which exists whether or not anybody has
+    reordered it. ``differs_by`` is the union of the members' chips, which is
+    what the stack's single tile shows.
+    """
+
+    stack_id: str
+    kind: str
+    member_keys: list[str]
+    differs_by: list[str] = Field(default_factory=list)
+
+
+class WorkflowCards(BaseModel):
+    """``GET /workflows/cards``: the grid, its stacks and what it left out.
+
+    ``one_offs`` and ``hidden`` are counts rather than rows on purpose: both
+    sets are excluded from ``cards``, and the view offers them as a way back in
+    rather than as clutter.
+    """
+
+    cards: list[WorkflowCard]
+    stacks: list[WorkflowStack]
+    one_offs: int = 0
+    hidden: int = 0
+
+
+class WorkflowDefault(BaseModel):
+    """One parameter a card starts from.
+
+    Addressed by ``(slot_label, input_name)`` and never by node id: a node id
+    is renumbered by every re-serialisation and the card's variants do not
+    agree about them. ``provenance`` is ``best`` (the mode over the card's
+    pictures rated 4 stars and up), ``all`` (the same over every picture of the
+    card, when none is rated) or ``edited`` (the owner's own value, which
+    replaces both); a client renders ``best`` as "from your best pictures".
+    """
+
+    slot_label: str
+    input_name: str
+    value: object
+    provenance: str
+
+
+class WorkflowCardDetail(BaseModel):
+    """``GET /workflows/cards/{workflow_key}``: one card opened."""
+
+    card: WorkflowCard
+    notes: str | None = None
+    hidden: bool = False
+    variants: list[WorkflowVariant] = Field(default_factory=list)
+    defaults: list[WorkflowDefault] = Field(default_factory=list)
+
+
 def _require_hash(value: str, name: str) -> str:
     if not _HASH_RE.match(value):
         raise HTTPException(
@@ -194,6 +286,60 @@ def _assets(rows) -> list[WorkflowAsset]:
         WorkflowAsset(widget=row["widget_name"], name=row["normalized_filename"])
         for row in rows
     ]
+
+
+def _card(figure) -> "WorkflowCard":
+    """Render one card's figures, whatever list it came out of."""
+    return WorkflowCard(
+        workflow_key=figure.card.workflow_key,
+        topology_hash=figure.card.topology_hash,
+        name=figure.card.name,
+        workflow_type=figure.card.workflow_type,
+        variants=len(figure.card.variants),
+        pictures=figure.pictures,
+        rated=figure.rated,
+        rank=figure.rank,
+        last_used=_iso(figure.last_used),
+        cover_picture_ids=figure.cover_picture_ids,
+        imported=figure.card.imported,
+        stack_id=figure.stack_id,
+        differs_by=figure.differs_by,
+    )
+
+
+def _card_variants(hub, vault, card) -> list[WorkflowVariant]:
+    """The stored graphs one card is made of, with what each one made.
+
+    The card's variants are a subset of its topology's recipes - a topology can
+    carry several cards, one per set of models - so the topology-wide hub reads
+    are filtered rather than re-queried per variant.
+    """
+    wanted = set(card.variants)
+    recipes = [
+        row
+        for row in recipes_for_topology(hub, card.topology_hash)
+        if row["structural_hash"] in wanted
+    ]
+    activity = read_recipe_activity(vault, [row["structural_hash"] for row in recipes])
+    assets = assets_for_topology_recipes(hub, card.topology_hash)
+    forgotten = forgotten_asset_counts(hub, card.topology_hash).get(
+        card.topology_hash, {}
+    )
+    variants = []
+    for row in recipes:
+        seen = activity.get(row["structural_hash"])
+        variants.append(
+            WorkflowVariant(
+                structural_hash=row["structural_hash"],
+                node_count=row["node_count"],
+                first_seen_at=row["first_seen_at"],
+                pictures=seen.pictures if seen else 0,
+                last_used=_iso(seen.last_used) if seen else None,
+                assets=_assets(assets.get(row["structural_hash"], [])),
+                forgotten_models=forgotten.get(row["structural_hash"], 0),
+            )
+        )
+    return variants
 
 
 def create_router(server) -> APIRouter:
@@ -358,5 +504,105 @@ def create_router(server) -> APIRouter:
                 detail="This workflow's stored graph could not be read.",
             )
         return WorkflowGraph(structural_hash=structural_hash, document=document)
+
+    # ── The cards (v1.12 B3) ────────────────────────────────────────────────
+    # Under `/workflows/cards` rather than on `/workflows` itself, because the
+    # shipped topology list keeps working until F1b swaps the route. The detail
+    # and picture routes sit under the same prefix rather than at
+    # `/workflows/{workflow_key}`: `/workflows/{topology_hash}/pictures` is
+    # already mounted, and a second route of that shape would never be reached
+    # by FastAPI's matcher while still reading, in the source and in the route
+    # table, as though it were. B9 moves the prefix, not the shape.
+
+    @router.get(
+        "/workflows/cards",
+        summary="The Workflows grid",
+        description=(
+            "Every workflow card this machine holds, in cover-rank order, with "
+            "its effective stacks. Hidden cards and one-offs are counted rather "
+            "than listed."
+        ),
+        response_model=WorkflowCards,
+    )
+    def list_cards(request: Request):
+        server.auth.ensure_secure_when_required(request)
+        grid = read_grid(_hub(), server.vault)
+        return WorkflowCards(
+            cards=[_card(figure) for figure in grid.cards],
+            stacks=[
+                WorkflowStack(
+                    stack_id=stack.stack_id,
+                    kind=stack.kind,
+                    member_keys=stack.member_keys,
+                    differs_by=stack.differs_by,
+                )
+                for stack in grid.stacks
+            ],
+            one_offs=grid.one_offs,
+            hidden=grid.hidden,
+        )
+
+    @router.get(
+        "/workflows/cards/{workflow_key}",
+        summary="One workflow card",
+        description=(
+            "A card opened: its variants, and the value each featured "
+            "parameter starts from with where that value came from."
+        ),
+        response_model=WorkflowCardDetail,
+        responses={404: {"description": "This machine has no such card."}},
+    )
+    def get_card(request: Request, workflow_key: str):
+        server.auth.ensure_secure_when_required(request)
+        _require_hash(workflow_key, "workflow_key")
+        hub = _hub()
+        # The whole grid for one card, because its rank is Bayesian: the prior
+        # is the library's own mean rating, which cannot be read off one card.
+        figure = read_grid(hub, server.vault).figure(workflow_key)
+        if figure is None:
+            raise HTTPException(status_code=404, detail="Unknown workflow card.")
+        card = figure.card
+        return WorkflowCardDetail(
+            card=_card(figure),
+            notes=card.notes,
+            hidden=card.hidden,
+            variants=_card_variants(hub, server.vault, card),
+            defaults=[
+                WorkflowDefault(
+                    slot_label=default.slot_label,
+                    input_name=default.input_name,
+                    value=default.value,
+                    provenance=default.provenance,
+                )
+                for default in card_defaults(hub, server.vault, card)
+            ],
+        )
+
+    @router.get(
+        "/workflows/cards/{workflow_key}/pictures",
+        summary="Pictures made with a card",
+        description=(
+            "The newest kept pictures made by any variant of one card, newest "
+            "first. Ids only: the caller already has the thumbnail route."
+        ),
+        response_model=list[int],
+        responses={404: {"description": "This machine has no such card."}},
+    )
+    def list_card_pictures(
+        request: Request,
+        workflow_key: str,
+        limit: int = Query(
+            MAX_SAMPLE_PICTURES // 2,
+            ge=1,
+            le=MAX_SAMPLE_PICTURES,
+            description="How many ids to return, newest first.",
+        ),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        _require_hash(workflow_key, "workflow_key")
+        card = find_card(_hub(), workflow_key)
+        if card is None:
+            raise HTTPException(status_code=404, detail="Unknown workflow card.")
+        return read_card_picture_ids(server.vault, card.variants, limit)
 
     return router

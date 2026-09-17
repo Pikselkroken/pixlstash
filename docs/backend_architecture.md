@@ -721,6 +721,9 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/telemetry/install-id                                                  | telemetry       | Get the anonymous install ID                                |
 | POST   | /api/v1/telemetry/install-id/recreate                                         | telemetry       | Recreate the anonymous install ID                           |
 | GET    | /api/v1/workflows                                                             | workflows       | List workflows                                              |
+| GET    | /api/v1/workflows/cards                                                       | workflows       | The Workflows grid                                          |
+| GET    | /api/v1/workflows/cards/{workflow_key}                                        | workflows       | One workflow card                                           |
+| GET    | /api/v1/workflows/cards/{workflow_key}/pictures                               | workflows       | Pictures made with a card                                   |
 | GET    | /api/v1/workflows/recipes/{structural_hash}/graph                             | workflows       | A recipe's stored graph                                     |
 | GET    | /api/v1/workflows/{topology_hash}/pictures                                    | workflows       | Pictures made with a workflow                               |
 | GET    | /api/v1/workflows/{topology_hash}/variants                                    | workflows       | List a workflow's variants                                  |

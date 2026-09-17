@@ -449,8 +449,8 @@ preview, the run and the ghosting. Five points where the wiring is load-bearing:
 
 ### 2.3 The `/workflows` contract (v1.11)
 
-The Workflows view's read side (implementation plan §F1/§F2). Four GETs, no
-mutators: naming a workflow is a later step, and running one is the run route further down this section. Forgetting ghosts
+The Workflows view's read side (implementation plan §F1/§F2, plus the v1.12
+card grid). Seven GETs, no mutators: naming a workflow is a later step, and running one is the run route further down this section. Forgetting ghosts
 is not here either: it is two purges beside the retention setting,
 `DELETE /server-config/ghost-retention/ghosts` and
 `.../model-ghosts?expected=N`, whose counts `GET /server-config/ghost-retention`
@@ -464,6 +464,9 @@ and a `409` means the set changed and nothing was forgotten.
 | `GET /api/v1/workflows/{topology_hash}/variants` | One row's expansion | `[WorkflowVariant]` |
 | `GET /api/v1/workflows/{topology_hash}/pictures?limit=` | Ids for the inspector's tiles, newest first | `[int]` |
 | `GET /api/v1/workflows/recipes/{structural_hash}/graph` | One recipe's stored graph | `{structural_hash, document, runnable}` |
+| `GET /api/v1/workflows/cards` | The card grid, in cover-rank order | `{cards: [WorkflowCard], stacks: [WorkflowStack], one_offs, hidden}` |
+| `GET /api/v1/workflows/cards/{workflow_key}` | One card opened | `{card, notes, hidden, variants: [WorkflowVariant], defaults: [WorkflowDefault]}` |
+| `GET /api/v1/workflows/cards/{workflow_key}/pictures?limit=` | Ids for one card's pictures, newest first | `[int]` |
 
 Five things the two sides have agreed and neither may drift from:
 
@@ -515,6 +518,31 @@ read across every non-deleted picture in the vault, so a scoped token holding
 them would learn the size of the whole library one workflow at a time. There is
 therefore no scoped/narrowed variant of these routes, and adding one means adding
 a narrowing parameter and a policy to check it against.
+
+**The cards (v1.12 B3) sit beside the topology list, not on top of it.** The
+shipped Workflows shelf reads `GET /workflows` and keeps working until F1b
+swaps the route; B9 then moves the grid onto `/workflows` itself. Four things
+the two sides have agreed:
+
+1. **A card is not a topology and not a variant.** `workflow_key` is the
+   topology plus the non-LoRA models plus the LoRA slots marked *structural*
+   (`services/workflow_identity.py`), so adding a character LoRA keeps the same
+   card. In this API and in the code the `workflow_recipe` /
+   `structural_hash` tier is a **variant**; a *saved recipe* is the look a
+   person keeps, and it has no route yet.
+2. **Nothing is precomputed.** `cards` is two vault queries — one `GROUP BY
+   workflow_structural_hash` and one `ROW_NUMBER()` window — joined in memory
+   to the hub's card rows. There is no aggregate table, so no client may assume
+   a figure is stable across a rating or an import.
+3. **`cards` is what the grid draws.** Hidden cards and one-offs (fewer than
+   three pictures, never rated, never imported) are excluded and returned as
+   the counts `hidden` and `one_offs`. Both still open by key on the detail
+   route: hiding is a decision about the grid, not a deletion.
+4. **`stacks` is the effective grouping, and `stack_id` is not always stored.**
+   A manual assignment wins, then an unstacking, then the automatic group by
+   `core_hash`, whose id is `auto:<core hash>` and which exists whether or not
+   anybody has reordered it. A stack's `differs_by` is the union of its
+   members' chips; a card outside a stack has none.
 
 **A saved workflow's picture inputs (#1305)** are the one write the view makes,
 and they live on the ComfyUI routes because they belong to the file, not to a
@@ -640,9 +668,6 @@ body.
 `GET /api/v1/comfyui/workflows` carries `has_selection_input` and `runnable`
 (a save node, in API format). The selection path offers a runnable workflow
 where `has_selection_input` is true, and the toolbar one where it is false.
-
----
-
 
 ---
 

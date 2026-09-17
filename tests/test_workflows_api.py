@@ -45,8 +45,10 @@ from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, ReferenceFolder
+from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
 from pixlstash.hub.workflows import PictureGhost, record_picture_ghosts
 from pixlstash.services.workflow_hash import WorkflowGraphError, asset_reference
+from pixlstash.services.workflow_identity import WORKFLOW_KEY_VERSION
 from pixlstash.services.workflow_io import detect_workflow_io
 import pixlstash.routes.comfyui as comfyui_module
 from pixlstash.services import workflow_bindings, workflow_inbox
@@ -66,6 +68,9 @@ _WORKFLOW_ROUTES = (
     ("GET", "/api/v1/workflows/{topology_hash}/variants"),
     ("GET", "/api/v1/workflows/{topology_hash}/pictures"),
     ("GET", "/api/v1/workflows/recipes/{structural_hash}/graph"),
+    ("GET", "/api/v1/workflows/cards"),
+    ("GET", "/api/v1/workflows/cards/{workflow_key}"),
+    ("GET", "/api/v1/workflows/cards/{workflow_key}/pictures"),
     # The ghost routes. Pinned here as well as refused in the authz test below:
     # every token that test can mint is READ, which the middleware refuses on a
     # DELETE before the gate reads the declaration, so a loosened entry would
@@ -97,6 +102,43 @@ BINNED_TOPOLOGY = _h("binnedtopology")
 BINNED_RECIPE = _h("binnedrecipe")
 FORGOTTEN_TOPOLOGY = _h("forgottentopology")
 FORGOTTEN_RECIPE = _h("forgottenrecipe")
+HIDDEN_TOPOLOGY = _h("hiddentopology")
+HIDDEN_RECIPE = _h("hiddenrecipe")
+
+# The cards (v1.12 B3). Hand-written rather than derived, so a change to the
+# key rule cannot silently re-shape the fixture underneath these assertions.
+# BUSY and FORGOTTEN share a core hash and therefore stack; BINNED and HIDDEN
+# are the two cards the grid must leave out, for two different reasons.
+BUSY_CARD = _h("busycard")
+FORGOTTEN_CARD = _h("forgottencard")
+BINNED_CARD = _h("binnedcard")
+HIDDEN_CARD = _h("hiddencard")
+SHARED_CORE = _h("sharedcore")
+LONE_CORE = _h("lonecore")
+HIDDEN_CORE = _h("hiddencore")
+
+# (structural_hash, topology_hash, workflow_key)
+_SEED_VARIANTS = (
+    (BUSY_RECIPE_A, BUSY_TOPOLOGY, BUSY_CARD),
+    (BUSY_RECIPE_B, BUSY_TOPOLOGY, BUSY_CARD),
+    (BINNED_RECIPE, BINNED_TOPOLOGY, BINNED_CARD),
+    (FORGOTTEN_RECIPE, FORGOTTEN_TOPOLOGY, FORGOTTEN_CARD),
+    (HIDDEN_RECIPE, HIDDEN_TOPOLOGY, HIDDEN_CARD),
+)
+
+# (topology_hash, core_hash, workflow_type)
+_SEED_CORES = (
+    (BUSY_TOPOLOGY, SHARED_CORE, "txt2img"),
+    (FORGOTTEN_TOPOLOGY, SHARED_CORE, "img2img"),
+    (BINNED_TOPOLOGY, LONE_CORE, None),
+    (HIDDEN_TOPOLOGY, HIDDEN_CORE, "upscale"),
+)
+
+# Instance documents, the tier a default is read off. Node ids match the
+# variant's stored document, because that is what carries the slot labels.
+BUSY_INSTANCE_ONE = _h("busyinstanceone")
+BUSY_INSTANCE_TWO = _h("busyinstancetwo")
+FORGOTTEN_INSTANCE = _h("forgotteninstance")
 
 # (structural_hash, topology_hash, node_count, first_seen_at)
 _SEED_RECIPES = (
@@ -104,6 +146,7 @@ _SEED_RECIPES = (
     (BUSY_RECIPE_B, BUSY_TOPOLOGY, 47, "2026-08-02T00:00:00Z"),
     (BINNED_RECIPE, BINNED_TOPOLOGY, 12, "2026-08-03T00:00:00Z"),
     (FORGOTTEN_RECIPE, FORGOTTEN_TOPOLOGY, 38, "2026-08-04T00:00:00Z"),
+    (HIDDEN_RECIPE, HIDDEN_TOPOLOGY, 9, "2026-08-05T00:00:00Z"),
 )
 
 # (structural_hash, widget_name, normalized_filename). The forgotten recipe has
@@ -131,6 +174,13 @@ _DOCUMENTS = {
                 "model": ["1", 0],
             },
         },
+        # The parameters are nulled in a STORED document; the instance
+        # documents below are where the values live, which is the whole
+        # difference the defaults read depends on.
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {"steps": None, "cfg": None, "model": ["2", 0]},
+        },
     },
     BUSY_RECIPE_B: {
         "1": {
@@ -138,6 +188,7 @@ _DOCUMENTS = {
             "inputs": {"ckpt_name": asset_reference("realvisxl.safetensors")},
         },
     },
+    HIDDEN_RECIPE: {"1": {"class_type": "SaveImage", "inputs": {}}},
     BINNED_RECIPE: {"1": {"class_type": "SaveImage", "inputs": {}}},
     FORGOTTEN_RECIPE: {
         "1": {
@@ -152,29 +203,92 @@ _DOCUMENTS = {
             "class_type": "LoraLoader",
             "inputs": {"lora_name": asset_reference("gone_two.safetensors")},
         },
+        "4": {
+            "class_type": "KSampler",
+            "inputs": {"steps": None, "cfg": None, "model": ["3", 0]},
+        },
     },
 }
+
+# (library-scoped) instance documents: the stored graph with its parameters
+# filled in. ``busy_one`` and ``busy_two`` are the pictures rated 4 and up, so
+# the card's defaults are the mode over these two and never over the third.
+_INSTANCE_DOCUMENTS = {
+    BUSY_INSTANCE_ONE: (BUSY_RECIPE_A, {"steps": 30, "cfg": 7.0}),
+    BUSY_INSTANCE_TWO: (BUSY_RECIPE_A, {"steps": 30, "cfg": 8.0}),
+    FORGOTTEN_INSTANCE: (FORGOTTEN_RECIPE, {"steps": 20, "cfg": 5.0}),
+}
+
+
+def _instance_document(structural_hash: str, values: dict) -> dict:
+    """The variant's document with the sampler's parameters filled in."""
+    document = json.loads(json.dumps(_DOCUMENTS[structural_hash]))
+    for node in document.values():
+        if node["class_type"] == "KSampler":
+            node["inputs"].update(values)
+    return document
+
 
 # The one model on the shelf: BUSY's checkpoint. Its LoRA is not, which makes
 # ``add_detail.safetensors`` a model ghost.
 _SHELF_FILENAME = "realvisxl.safetensors"
 
-# (file_path, topology, structural, deleted, created_at)
+# (file_path, topology, structural, deleted, created_at, score, instance)
+#
+# ``score`` is the star rating, and NULL is genuinely unrated rather than zero:
+# the cover rank counts only stars somebody put there. ``instance`` names the
+# row in ``workflow_recipe_instance`` that carries the parameters that run used.
 _SEED_PICTURES = (
-    ("busy_one.png", BUSY_TOPOLOGY, BUSY_RECIPE_A, False, "2026-08-10T00:00:00Z"),
-    ("busy_two.png", BUSY_TOPOLOGY, BUSY_RECIPE_A, False, "2026-08-11T00:00:00Z"),
-    ("busy_three.png", BUSY_TOPOLOGY, BUSY_RECIPE_B, False, "2026-08-12T00:00:00Z"),
-    ("binned.png", BINNED_TOPOLOGY, BINNED_RECIPE, True, "2026-08-13T00:00:00Z"),
+    (
+        "busy_one.png",
+        BUSY_TOPOLOGY,
+        BUSY_RECIPE_A,
+        False,
+        "2026-08-10T00:00:00Z",
+        5,
+        BUSY_INSTANCE_ONE,
+    ),
+    (
+        "busy_two.png",
+        BUSY_TOPOLOGY,
+        BUSY_RECIPE_A,
+        False,
+        "2026-08-11T00:00:00Z",
+        4,
+        BUSY_INSTANCE_TWO,
+    ),
+    (
+        "busy_three.png",
+        BUSY_TOPOLOGY,
+        BUSY_RECIPE_B,
+        False,
+        "2026-08-12T00:00:00Z",
+        None,
+        None,
+    ),
+    (
+        "binned.png",
+        BINNED_TOPOLOGY,
+        BINNED_RECIPE,
+        True,
+        "2026-08-13T00:00:00Z",
+        None,
+        None,
+    ),
+    # Rated, but below "your best pictures", so its card's defaults fall back
+    # to every picture it has. A card nobody rated 4 still has to offer one.
     (
         "forgotten.png",
         FORGOTTEN_TOPOLOGY,
         FORGOTTEN_RECIPE,
         False,
         "2026-08-14T00:00:00Z",
+        3,
+        FORGOTTEN_INSTANCE,
     ),
     # Read for a workflow and found to carry none: it counts towards `scanned`
     # and belongs to no topology. Every real library has these.
-    ("photograph.jpg", None, None, False, "2026-08-15T00:00:00Z"),
+    ("photograph.jpg", None, None, False, "2026-08-15T00:00:00Z", None, None),
 )
 
 # The one picture the pass has NOT reached. Seeded separately because it is the
@@ -205,6 +319,15 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_picture_ghost")
         conn.execute("DELETE FROM workflow_picture_input")
         conn.execute("DELETE FROM workflow_parameter_pins")
+        conn.execute("DELETE FROM workflow_attr")
+        conn.execute("DELETE FROM workflow_default_override")
+        conn.execute("DELETE FROM workflow_key_pins")
+        conn.execute("DELETE FROM workflow_key_picture_input")
+        conn.execute("DELETE FROM workflow_cover")
+        conn.execute("DELETE FROM workflow_stack_member")
+        conn.execute("DELETE FROM workflow_stack")
+        conn.execute("DELETE FROM workflow_unstacked")
+        conn.execute("DELETE FROM workflow_recipe_instance")
         conn.execute(
             "DELETE FROM model WHERE filename IN (?, ?)",
             (_SHELF_FILENAME, "add_detail.safetensors"),
@@ -220,6 +343,7 @@ def _seed_hub(server) -> None:
             (BUSY_TOPOLOGY, 47, "2026-08-01T00:00:00Z"),
             (BINNED_TOPOLOGY, 12, "2026-08-03T00:00:00Z"),
             (FORGOTTEN_TOPOLOGY, 38, "2026-08-04T00:00:00Z"),
+            (HIDDEN_TOPOLOGY, 9, "2026-08-05T00:00:00Z"),
         ):
             conn.execute(
                 "INSERT INTO workflow_topology "
@@ -244,6 +368,55 @@ def _seed_hub(server) -> None:
             "VALUES (?, 'x', ?, '2026-08-01T00:00:00Z')",
             [(key, json.dumps(doc)) for key, doc in _DOCUMENTS.items()],
         )
+        conn.executemany(
+            "INSERT INTO workflow_variant "
+            "(structural_hash, topology_hash, workflow_key, key_version) "
+            "VALUES (?, ?, ?, ?)",
+            [(*row, WORKFLOW_KEY_VERSION) for row in _SEED_VARIANTS],
+        )
+        conn.executemany(
+            "INSERT INTO workflow_topology_core "
+            "(topology_hash, core_hash, core_version, workflow_type, slots) "
+            "VALUES (?, ?, ?, ?, '[]')",
+            [
+                (topology, core, CORE_RULE_VERSION, kind)
+                for topology, core, kind in _SEED_CORES
+            ],
+        )
+        # The one card the owner has hidden. Written as a row rather than
+        # inferred, because "hidden" is a decision and nothing derives it.
+        conn.execute(
+            "INSERT INTO workflow_attr (workflow_key, name, hidden) "
+            "VALUES (?, 'A workflow I hid', 1)",
+            (HIDDEN_CARD,),
+        )
+        # It also has a workflow file, and that is load-bearing rather than
+        # decoration: with no file and no pictures it would be a one-off too,
+        # and the test that says hiding removes it from the grid would pass
+        # because the one-off clause removed it instead.
+        conn.execute(
+            "INSERT INTO workflow_file "
+            "(workflow_name, topology_hash, structural_hash, workflow_key) "
+            "VALUES ('hidden.json', ?, ?, ?)",
+            (HIDDEN_TOPOLOGY, HIDDEN_RECIPE, HIDDEN_CARD),
+        )
+        conn.executemany(
+            "INSERT INTO workflow_recipe_instance "
+            "(library_uuid, instance_hash, structural_hash, hash_version, "
+            "document, first_seen_at) VALUES (?, ?, ?, 'v1', ?, '2026-08-10T00:00:00Z')",
+            [
+                (
+                    server.vault.library_uuid,
+                    instance_hash,
+                    structural_hash,
+                    json.dumps(_instance_document(structural_hash, values)),
+                )
+                for instance_hash, (
+                    structural_hash,
+                    values,
+                ) in _INSTANCE_DOCUMENTS.items()
+            ],
+        )
 
 
 def _seed_pictures(server) -> None:
@@ -251,14 +424,24 @@ def _seed_pictures(server) -> None:
 
     def write(session):
         session.exec(delete(Picture))
-        for path, topology, structural, deleted, created in _SEED_PICTURES:
+        for (
+            path,
+            topology,
+            structural,
+            deleted,
+            created,
+            score,
+            instance,
+        ) in _SEED_PICTURES:
             session.add(
                 Picture(
                     file_path=path,
                     deleted=deleted,
                     created_at=_stamp(created),
+                    score=score,
                     workflow_topology_hash=topology,
                     workflow_structural_hash=structural,
+                    workflow_instance_hash=instance,
                     workflow_hash_version="v1",
                 )
             )
@@ -444,6 +627,9 @@ def test_no_scoped_token_can_read_the_workflow_library(workflow_env):
         f"{API}/workflows/{BUSY_TOPOLOGY}/variants",
         f"{API}/workflows/{BUSY_TOPOLOGY}/pictures",
         f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph",
+        f"{API}/workflows/cards",
+        f"{API}/workflows/cards/{BUSY_CARD}",
+        f"{API}/workflows/cards/{BUSY_CARD}/pictures",
     )
     for path in paths:
         assert_real_route(workflow_env.server.api, "GET", path)
@@ -457,10 +643,15 @@ def test_no_scoped_token_can_read_the_workflow_library(workflow_env):
 
 
 def test_the_list_is_one_row_per_topology_not_per_recipe(workflow_env):
-    """§F1's whole shape: four recipes, three rows, variants counted not listed."""
+    """§F1's whole shape: five recipes, four rows, variants counted not listed."""
     payload = workflow_env.owner.get(f"{API}/workflows").json()
     rows = _by_hash(payload)
-    assert set(rows) == {BUSY_TOPOLOGY, BINNED_TOPOLOGY, FORGOTTEN_TOPOLOGY}
+    assert set(rows) == {
+        BUSY_TOPOLOGY,
+        BINNED_TOPOLOGY,
+        FORGOTTEN_TOPOLOGY,
+        HIDDEN_TOPOLOGY,
+    }
     assert rows[BUSY_TOPOLOGY]["variants"] == 2
     assert rows[BINNED_TOPOLOGY]["variants"] == 1
 
@@ -2585,3 +2776,334 @@ def test_a_ui_format_file_is_refused_as_what_it_is_before_the_shelf_is_asked():
         )
     assert refused.value.status_code == 400
     assert "UI format" in refused.value.detail
+
+
+# ===========================================================================
+# The cards (v1.12 B3)
+# ===========================================================================
+#
+# Every figure below is stated as a number rather than as a relation, because a
+# relation ("the busy card ranks higher") stays true when the whole formula is
+# wrong. The seeded library's ratings are 5, 4 and 3, so the library mean is
+# exactly 4.0 and every Bayesian rank in this block is a fraction with a small
+# denominator - which is the only reason they can be written down at all.
+
+_LIBRARY_MEAN = 4.0
+_BUSY_RANK = (5 * _LIBRARY_MEAN + 9) / (5 + 2)
+_FORGOTTEN_RANK = (5 * _LIBRARY_MEAN + 3) / (5 + 1)
+_AUTO_STACK = f"auto:{SHARED_CORE}"
+
+
+def _cards(owner) -> dict:
+    payload = owner.get(f"{API}/workflows/cards")
+    assert payload.status_code == 200, payload.text
+    return payload.json()
+
+
+def _by_key(payload) -> dict:
+    return {card["workflow_key"]: card for card in payload["cards"]}
+
+
+def _sampler_label() -> str:
+    """The slot label of the seeded KSampler, as an override addresses it."""
+    from pixlstash.services.workflow_identity import topology_node_labels
+
+    return topology_node_labels(_DOCUMENTS[BUSY_RECIPE_A])["3"]
+
+
+def test_the_grid_is_one_card_per_key_not_one_per_variant(workflow_env):
+    """A card is the unit, and BUSY's two variants are one card, not two.
+
+    The hidden card and the one-off are the grid's two exclusions and are
+    asserted by name rather than by a count, so the test cannot pass because
+    something else went missing.
+    """
+    payload = _cards(workflow_env.owner)
+    cards = _by_key(payload)
+    assert set(cards) == {BUSY_CARD, FORGOTTEN_CARD}
+    assert cards[BUSY_CARD]["variants"] == 2
+    assert cards[FORGOTTEN_CARD]["variants"] == 1
+    assert cards[BUSY_CARD]["topology_hash"] == BUSY_TOPOLOGY
+    assert cards[BUSY_CARD]["workflow_type"] == "txt2img"
+
+
+def test_a_card_adds_up_every_variants_kept_pictures_and_ratings(workflow_env):
+    """Three pictures across two variants, two of them rated; the binned one
+    belongs to a different card and is soft-deleted besides."""
+    cards = _by_key(_cards(workflow_env.owner))
+    assert cards[BUSY_CARD]["pictures"] == 3
+    assert cards[BUSY_CARD]["rated"] == 2
+    assert cards[FORGOTTEN_CARD]["pictures"] == 1
+    assert cards[FORGOTTEN_CARD]["rated"] == 1
+    assert cards[BUSY_CARD]["last_used"].startswith("2026-08-12")
+
+
+def test_the_cover_rank_is_the_bayesian_mean_and_orders_the_grid(workflow_env):
+    """The exact number, not an ordering.
+
+    A plain mean would put FORGOTTEN (one 3) and BUSY (a 5 and a 4) at 3.0 and
+    4.5; the prior pulls both towards the library's own 4.0 in proportion to
+    how little each has been rated, and the list is returned in it.
+    """
+    payload = _cards(workflow_env.owner)
+    cards = _by_key(payload)
+    assert cards[BUSY_CARD]["rank"] == pytest.approx(_BUSY_RANK)
+    assert cards[FORGOTTEN_CARD]["rank"] == pytest.approx(_FORGOTTEN_RANK)
+    assert [card["workflow_key"] for card in payload["cards"]] == [
+        BUSY_CARD,
+        FORGOTTEN_CARD,
+    ]
+
+
+def test_the_cover_strip_is_the_cards_best_pictures_across_its_variants(
+    workflow_env,
+):
+    """Best first, and drawn from both variants rather than from one.
+
+    The ids are resolved by file path rather than written down: the vault
+    assigns them, and a test naming 1, 2, 3 passes on the ordering of the seed
+    instead of on the ordering under test.
+    """
+    cards = _by_key(_cards(workflow_env.owner))
+    ids = _picture_ids_by_path(workflow_env.server)
+    assert cards[BUSY_CARD]["cover_picture_ids"] == [
+        ids["busy_one.png"],
+        ids["busy_two.png"],
+        ids["busy_three.png"],
+    ]
+
+
+def _picture_ids_by_path(server) -> dict[str, int]:
+    def read(session):
+        return {
+            picture.file_path: picture.id
+            for picture in session.exec(select(Picture)).all()
+        }
+
+    return server.vault.db.run_task(read, priority=DBPriority.IMMEDIATE)
+
+
+def test_a_hidden_card_is_counted_never_listed_and_still_opens(workflow_env):
+    """Hiding is a decision about the grid, not a deletion.
+
+    The detail route is the half that gets forgotten: a card nobody can reach
+    once it is hidden cannot be un-hidden.
+    """
+    payload = _cards(workflow_env.owner)
+    assert payload["hidden"] == 1
+    assert HIDDEN_CARD not in _by_key(payload)
+    r = workflow_env.owner.get(f"{API}/workflows/cards/{HIDDEN_CARD}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["hidden"] is True
+    assert body["card"]["name"] == "A workflow I hid"
+
+
+def test_a_one_off_is_counted_and_an_imported_file_takes_it_out_of_the_count(
+    workflow_env,
+):
+    """Every clause of the one-off predicate, by moving one of them.
+
+    BINNED has no kept picture, no rating and no file, so it is folded into the
+    count. Filing a workflow file against it is the owner saying they run this
+    on purpose, and it must come back into the grid - which is the assertion
+    that fails if the `imported` clause is dropped.
+    """
+    assert _cards(workflow_env.owner)["one_offs"] == 1
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_file "
+            "(workflow_name, topology_hash, structural_hash, workflow_key) "
+            "VALUES ('binned.json', ?, ?, ?)",
+            (BINNED_TOPOLOGY, BINNED_RECIPE, BINNED_CARD),
+        )
+    payload = _cards(workflow_env.owner)
+    assert payload["one_offs"] == 0
+    assert _by_key(payload)[BINNED_CARD]["imported"] is True
+
+
+def test_cards_sharing_a_core_hash_stack_with_the_higher_ranked_as_cover(
+    workflow_env,
+):
+    """The automatic group exists with no stack row behind it at all."""
+    payload = _cards(workflow_env.owner)
+    (stack,) = payload["stacks"]
+    assert stack["kind"] == "auto"
+    assert stack["stack_id"] == _AUTO_STACK
+    assert stack["member_keys"] == [BUSY_CARD, FORGOTTEN_CARD]
+    assert _by_key(payload)[BUSY_CARD]["stack_id"] == _AUTO_STACK
+
+
+def test_a_stack_shows_the_union_of_its_members_difference_chips(workflow_env):
+    """The cover has no chips of its own; every other member's go on the stack."""
+    payload = _cards(workflow_env.owner)
+    (stack,) = payload["stacks"]
+    cards = _by_key(payload)
+    assert cards[BUSY_CARD]["differs_by"] == []
+    assert cards[FORGOTTEN_CARD]["differs_by"], "a stack member with no chips"
+    assert stack["differs_by"] == cards[FORGOTTEN_CARD]["differs_by"]
+
+
+def test_unstacking_a_card_takes_it_out_of_the_automatic_group(workflow_env):
+    """And a group of one is not a stack, so nothing is left behind."""
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_unstacked (workflow_key) VALUES (?)",
+            (FORGOTTEN_CARD,),
+        )
+    payload = _cards(workflow_env.owner)
+    assert payload["stacks"] == []
+    assert _by_key(payload)[BUSY_CARD]["stack_id"] is None
+    assert set(_by_key(payload)) == {BUSY_CARD, FORGOTTEN_CARD}
+
+
+def _stack_row(server, stack_id, kind, core_hash, members):
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_stack (stack_id, kind, core_hash) VALUES (?, ?, ?)",
+            (stack_id, kind, core_hash),
+        )
+        conn.executemany(
+            "INSERT INTO workflow_stack_member (stack_id, workflow_key, position) "
+            "VALUES (?, ?, ?)",
+            [(stack_id, key, position) for position, key in enumerate(members)],
+        )
+
+
+def test_a_member_row_for_a_card_that_left_the_group_is_ignored(workflow_env):
+    """A stored position must never re-admit a card whose core hash moved.
+
+    The row is written against LONE_CORE while both cards carry SHARED_CORE, so
+    both of its positions describe a group neither card is in any more.
+    Honouring them would hand the cover to FORGOTTEN, which ranks second - so
+    the grid falling back to cover rank is the whole assertion.
+    """
+    _stack_row(
+        workflow_env.server,
+        "s-left",
+        "auto",
+        LONE_CORE,
+        [FORGOTTEN_CARD, BUSY_CARD],
+    )
+    payload = _cards(workflow_env.owner)
+    (stack,) = payload["stacks"]
+    assert stack["stack_id"] == _AUTO_STACK
+    assert stack["member_keys"] == [BUSY_CARD, FORGOTTEN_CARD]
+
+
+def test_a_card_that_joined_a_group_since_is_appended_not_prepended(workflow_env):
+    """FORGOTTEN has a stored position and BUSY does not.
+
+    BUSY ranks higher, so ordering by rank alone would make it the cover; the
+    owner's order has to win for the cards it names, and the newcomer goes
+    after them rather than in front.
+    """
+    _stack_row(workflow_env.server, "s-auto", "auto", SHARED_CORE, [FORGOTTEN_CARD])
+    payload = _cards(workflow_env.owner)
+    (stack,) = payload["stacks"]
+    assert stack["member_keys"] == [FORGOTTEN_CARD, BUSY_CARD]
+
+
+def test_a_manual_assignment_beats_the_automatic_group(workflow_env):
+    """A manual stack is the owner's, so it wins over the core hash."""
+    _stack_row(
+        workflow_env.server, "s-manual", "manual", None, [FORGOTTEN_CARD, BUSY_CARD]
+    )
+    payload = _cards(workflow_env.owner)
+    (stack,) = payload["stacks"]
+    assert stack["kind"] == "manual"
+    assert stack["stack_id"] == "s-manual"
+    assert stack["member_keys"] == [FORGOTTEN_CARD, BUSY_CARD]
+
+
+def _defaults(owner, workflow_key) -> dict:
+    r = owner.get(f"{API}/workflows/cards/{workflow_key}")
+    assert r.status_code == 200, r.text
+    return {row["input_name"]: row for row in r.json()["defaults"]}
+
+
+def test_defaults_are_the_mode_over_the_cards_best_pictures(workflow_env):
+    """30 steps twice beats nothing else; the two cfg values tie and resolve
+    the same way on every read, which is what stops a card's defaults moving
+    when nothing has changed."""
+    defaults = _defaults(workflow_env.owner, BUSY_CARD)
+    assert defaults["steps"]["value"] == 30
+    assert defaults["steps"]["provenance"] == "best"
+    assert defaults["steps"]["slot_label"] == _sampler_label()
+    assert defaults["cfg"]["value"] == 8.0
+
+
+def test_defaults_fall_back_to_every_picture_when_none_is_rated_four(
+    workflow_env,
+):
+    """A card whose only picture is a 3 still has to offer a default, and has
+    to say the value did not come from anybody's best work."""
+    defaults = _defaults(workflow_env.owner, FORGOTTEN_CARD)
+    assert defaults["steps"]["value"] == 20
+    assert defaults["steps"]["provenance"] == "all"
+
+
+def test_an_owner_override_replaces_a_default_and_says_it_was_edited(
+    workflow_env,
+):
+    """And it is addressed by slot label, never by node id."""
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_default_override "
+            "(workflow_key, slot_label, input_name, value) VALUES (?, ?, 'steps', '8')",
+            (BUSY_CARD, _sampler_label()),
+        )
+    defaults = _defaults(workflow_env.owner, BUSY_CARD)
+    assert defaults["steps"]["value"] == "8"
+    assert defaults["steps"]["provenance"] == "edited"
+    # The parameters the owner has not touched are untouched by the override.
+    assert defaults["cfg"]["provenance"] == "best"
+
+
+def test_the_card_detail_lists_its_own_variants_and_not_its_topologys(
+    workflow_env,
+):
+    """A topology can carry several cards, so the variant list is filtered by
+    the card and not by the graph it is a binding of."""
+    body = workflow_env.owner.get(f"{API}/workflows/cards/{BUSY_CARD}").json()
+    by_hash = {variant["structural_hash"]: variant for variant in body["variants"]}
+    assert set(by_hash) == {BUSY_RECIPE_A, BUSY_RECIPE_B}
+    assert by_hash[BUSY_RECIPE_A]["pictures"] == 2
+    assert {asset["name"] for asset in by_hash[BUSY_RECIPE_A]["assets"]} == {
+        "realvisxl.safetensors",
+        "add_detail.safetensors",
+    }
+
+
+def test_card_pictures_are_every_variants_newest_kept_pictures(workflow_env):
+    """Newest first, both variants, and never the soft-deleted one."""
+    ids = _picture_ids_by_path(workflow_env.server)
+    r = workflow_env.owner.get(f"{API}/workflows/cards/{BUSY_CARD}/pictures")
+    assert r.status_code == 200, r.text
+    assert r.json() == [
+        ids["busy_three.png"],
+        ids["busy_two.png"],
+        ids["busy_one.png"],
+    ]
+    limited = workflow_env.owner.get(
+        f"{API}/workflows/cards/{BUSY_CARD}/pictures?limit=1"
+    )
+    assert limited.json() == [ids["busy_three.png"]]
+
+
+def test_an_unknown_card_is_a_404_and_a_malformed_key_a_422(workflow_env):
+    """Both card routes, because a key is a content address: an empty 200 would
+    read as "this card has nothing" rather than "this machine has no such card".
+    """
+    unknown = _h("nosuchcard")
+    for path in (
+        f"{API}/workflows/cards/{unknown}",
+        f"{API}/workflows/cards/{unknown}/pictures",
+    ):
+        assert_real_route(workflow_env.server.api, "GET", path)
+        assert workflow_env.owner.get(path).status_code == 404, path
+    for path in (
+        f"{API}/workflows/cards/not-a-digest",
+        f"{API}/workflows/cards/not-a-digest/pictures",
+    ):
+        assert workflow_env.owner.get(path).status_code == 422, path
