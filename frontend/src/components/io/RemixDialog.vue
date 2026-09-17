@@ -238,14 +238,11 @@
         <span class="remix-label">LoRA</span>
         <p v-if="!loraSlots.length && !canInsert" class="remix-note" role="status">
           {{
-            selectedMode === "recipe"
-              ? "This picture's workflow has no LoRA loader."
-              : "This template has no LoRA loader."
-          }}
-          {{
-            insertionLoading
-              ? "Checking whether PixlStash can add one…"
-              : insertion?.reason || ""
+            noLoraText(
+              selectedMode === "recipe"
+                ? "This picture's workflow"
+                : "This template",
+            )
           }}
         </p>
         <p v-else-if="adaptersError" class="remix-error" role="alert">
@@ -782,10 +779,9 @@ const {
   adaptersError,
   adapterOptions,
   slotOptions,
-  insertion,
-  insertionLoading,
   canInsert,
   insertionText,
+  noLoaderText: noLoraText,
   resetChoice: resetLoraChoice,
   body: loraBody,
 } = useLoraSwap(loraSlots, loraInsertionSource);

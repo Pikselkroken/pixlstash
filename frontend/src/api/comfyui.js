@@ -45,7 +45,8 @@ export async function deleteWorkflow(name) {
  *
  * `lora_slots` is every LoRA a run can swap (`by` is `filename` for a core
  * loader, `digest` for a ComfyUI-PixlStash one); empty means the graph has no
- * LoRA loader, and a run naming one is refused.
+ * LoRA loader to swap, and a run adds one only with `insert_lora_loader: true`
+ * (see `getLoraInsertion`).
  *
  * @param {string} name - the workflow's `name` as listed.
  * @returns {Promise<{workflow: string, inputs: Array<Object>}>}
@@ -59,9 +60,10 @@ export async function getWorkflowInputs(name) {
 /**
  * Where a LoRA loader would be added to a saved workflow that has none (#1376).
  *
- * `plan` is `{model, clip, rewires}`: the node the loader takes the model from
- * (and the CLIP, `null` for a model-only loader) and every input it would
- * rewire. It is `null` when no loader can be added, and `reason` says why;
+ * `plan` is `{model, clip, rewires, pixlstash_loader}`: the node the loader
+ * takes the model from (and the CLIP, `null` for a model-only loader), every
+ * input it would rewire, and whether the loader may be the ComfyUI-PixlStash
+ * one, which leaves the pictures un-replayable by "Generate variants". It is `null` when no loader can be added, and `reason` says why;
  * `has_lora_loader` is true when there is a loader to swap instead. Owner-only,
  * since it asks the owner's ComfyUI.
  *
@@ -179,6 +181,9 @@ export async function getPictureWorkflow(pictureId) {
  * imported photos, so callers should read `available` rather than rely on a
  * rejection.
  *
+ * `lora_insertion` is `{plan, reason}` where `lora_slots` is empty: where a
+ * LoRA loader would be added (#1376), or why none can be.
+ *
  * `preflight` reports whether the recipe's models and LoRAs are present on the
  * ComfyUI server. `preflight.checked === false` means ComfyUI could not be
  * reached at all - it does NOT mean the recipe passed its checks.
@@ -211,6 +216,10 @@ export async function getPictureRecipe(pictureId) {
  * @param {number} [body.seed] - the explicit seed, when `seed_mode` needs one.
  * @param {string} [body.client_id] - ties progress events back to this tab.
  * @param {boolean} [body.stack] - stack the outputs with their source.
+ * @param {string} [body.adapter_sha256] - a shelf LoRA to put into the graph.
+ * @param {boolean} [body.insert_lora_loader] - add a loader where the graph has
+ *   none, as `getPictureRecipe`'s `lora_insertion.plan` showed. Needs
+ *   `adapter_sha256`; without the flag such a graph is refused.
  * @param {boolean} [body.allow_unchecked] - the user's explicit acknowledgement
  *   that they want to run a graph the server could not inspect. The backend
  *   refuses the run with a 400 without it whenever `preflight.checked` is

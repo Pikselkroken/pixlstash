@@ -106,12 +106,7 @@
         <!-- role=status on the note itself, not the section: a live region
              around the selects would announce every option change. -->
         <p v-if="!loraSlots.length && !canInsert" class="wfrun-note" role="status">
-          This workflow has no LoRA loader.
-          {{
-            insertionLoading
-              ? "Checking whether PixlStash can add one…"
-              : insertion?.reason || ""
-          }}
+          {{ noLoraText("This workflow") }}
         </p>
         <p v-else-if="adaptersError" class="wfrun-note wfrun-error" role="alert">
           {{ adaptersError }}
@@ -251,12 +246,20 @@ const inputsError = ref("");
 /** Picker input node id -> the picture chosen for it. */
 const picks = reactive({});
 const pickerFor = ref(null);
+const chosenName = computed({
+  get: () => chosenByOrigin[runStore.origin] || "",
+  set: (name) => {
+    chosenByOrigin[runStore.origin] = name;
+  },
+});
+
 /** Every LoRA slot of the chosen workflow, as the inputs route reports them. */
 const loraSlots = ref([]);
+
 /**
- * Where a loader would go, asked once the inputs say there is none. Checks
- * `inputs` first: `chosenName` is declared further down, and the swap reads
- * this immediately, while the inputs are still unread.
+ * Where a loader would go, asked once the inputs say the workflow has none.
+ * Declared after `chosenName` rather than relying on a short-circuit: the swap
+ * reads this during setup, so anything it names has to exist by now.
  */
 const loraInsertionSource = computed(() => {
   if (inputs.value === null || inputsError.value) return null;
@@ -269,10 +272,9 @@ const {
   adaptersError,
   adapterOptions,
   slotOptions,
-  insertion,
-  insertionLoading,
   canInsert,
   insertionText,
+  noLoaderText: noLoraText,
   body: loraBody,
 } = useLoraSwap(loraSlots, loraInsertionSource);
 const caption = ref("");
@@ -305,13 +307,6 @@ const noneOffered = computed(() =>
     ? "No workflow runs on a selection. It needs a save node, API format, and a picture input set to Selection in Workflows."
     : "No workflow runs without a selection. One whose picture inputs are all Picker or Fixed in Workflows is offered here.",
 );
-
-const chosenName = computed({
-  get: () => chosenByOrigin[runStore.origin] || "",
-  set: (name) => {
-    chosenByOrigin[runStore.origin] = name;
-  },
-});
 
 const chosen = computed(
   () => offered.value.find((w) => w.name === chosenName.value) || null,

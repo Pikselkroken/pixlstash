@@ -51,8 +51,32 @@ export function insertionSummary(plan) {
   const rewires = (plan.rewires || [])
     .map((r) => `${node(r)} (${r.field})`)
     .join(", ");
-  const onlyModel = plan.clip ? "" : " It loads the model only: nothing here reads a CLIP.";
-  return `A LoRA loader is added after ${from}, feeding ${rewires}.${onlyModel}`;
+  const onlyModel = plan.clip
+    ? ""
+    : " It loads the model only: nothing here reads a CLIP.";
+  // Which loader is decided by whether this ComfyUI has the file, which is not
+  // known until a LoRA is chosen - so the owner is told the case that costs
+  // them something, and only where that loader exists to be reached for.
+  const pixlstash = plan.pixlstash_loader
+    ? " If your ComfyUI does not have that file, PixlStash's own loader node " +
+      "goes in instead, and \u201cGenerate variants\u201d cannot re-run the pictures."
+    : "";
+  return `A LoRA loader is added after ${from}, feeding ${rewires}.${onlyModel}${pixlstash}`;
+}
+
+/**
+ * What a surface says when no LoRA can go in: the backend's own reason where
+ * there is one, since "this workflow has no LoRA loader" contradicts half of
+ * them - an rgthree stacker *is* a loader, and a UI-format file may well have
+ * one nobody can read.
+ *
+ * @param {string} subject - "This workflow", "This template", …
+ */
+export function noLoaderNote(subject, insertion, loading) {
+  if (insertion?.reason) return insertion.reason;
+  if (loading)
+    return `${subject} has no LoRA loader PixlStash can swap. Checking whether it can add one…`;
+  return `${subject} has no LoRA loader, so there is nothing to swap.`;
 }
 
 /**
@@ -201,6 +225,9 @@ export function useLoraSwap(slots, insertionSource = ref(null)) {
     insertionLoading,
     canInsert,
     insertionText: computed(() => insertionSummary(insertion.value?.plan)),
+    /** @param {string} subject - what to call this graph in the note. */
+    noLoaderText: (subject) =>
+      noLoaderNote(subject, insertion.value, insertionLoading.value),
     loadAdapters,
     resetChoice,
     body,

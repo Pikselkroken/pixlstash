@@ -838,7 +838,12 @@ class TestLoraInsertion:
                         "adapter_kind": [["— Any —", "lora"], {}],
                         "adapter_sha256": ["STRING", {"default": ""}],
                     },
-                    "optional": {"strength_model": ["FLOAT", {"default": 1.0}]},
+                    "optional": {
+                        # Optional on the real node, where ComfyUI's own loader
+                        # requires it: one class covers both shapes.
+                        "clip": ["CLIP", {}],
+                        "strength_model": ["FLOAT", {"default": 1.0}],
+                    },
                 },
                 "output": ["MODEL", "CLIP", "STRING"],
             },
@@ -891,6 +896,16 @@ class TestLoraInsertion:
                 "class_type": "Power Lora Loader (rgthree)",
                 "inputs": {"lora_1": {"on": True, "lora": "a.st", "strength": 1}},
             },
+            # easy-loraStack numbers the name itself, which no lora_name rule
+            # matches.
+            {"class_type": "easy loraStack", "inputs": {"lora_1_name": "a.st"}},
+            # A prompt-tag loader: nothing about its inputs says "lora" at all.
+            {
+                "class_type": "ImpactWildcardEncode",
+                "inputs": {"text": "a cat <lora:styleA:0.8>"},
+            },
+            # A slot holding None reads as no slot, and the node is still one.
+            {"class_type": "LoraLoaderModelOnly", "inputs": {"lora_name": None}},
         ],
     )
     def test_a_lora_loaded_where_no_slot_is_seen_is_not_stacked_on(self, loader):
@@ -900,3 +915,81 @@ class TestLoraInsertion:
         graph["5"] = loader
         with pytest.raises(LookupError, match="already loads a LoRA"):
             plan_lora_insertion(graph, self.INFO)
+
+    def test_a_node_comfyui_declares_a_lora_type_on_is_one_too(self):
+        """Nothing in its name or its values says LoRA; its spec does."""
+        graph = self._checkpoint_graph()
+        graph["5"] = {"class_type": "Efficient Loader", "inputs": {"stack": ["9", 0]}}
+        info = {
+            **self.INFO,
+            "Efficient Loader": {
+                "input": {"required": {"stack": ["LORA_STACK", {}]}},
+                "output": ["CONDITIONING"],
+            },
+        }
+        with pytest.raises(LookupError, match="already loads a LoRA"):
+            plan_lora_insertion(graph, info)
+
+    def test_a_second_model_chain_of_another_kind_refuses_the_whole_graph(self):
+        """A model no LoRA loader can patch, beside one it can, is not half-done."""
+        graph = self._checkpoint_graph()
+        graph["20"] = {"class_type": "WanVideoModelLoader", "inputs": {}}
+        graph["21"] = {"class_type": "WanVideoSampler", "inputs": {"model": ["20", 0]}}
+        info = {
+            **self.INFO,
+            "WanVideoModelLoader": {"output": ["WANVIDEOMODEL"]},
+            "WanVideoSampler": {"output": ["LATENT"]},
+            "VAEDecode": {"output": ["IMAGE"]},
+        }
+        with pytest.raises(LookupError, match="own kind, which a LoRA loader cannot"):
+            plan_lora_insertion(graph, info)
+        # The control: the same graph without that chain still splices.
+        del graph["21"], graph["20"]
+        assert plan_lora_insertion(graph, info)["model"]["node_id"] == "4"
+
+    def test_a_spec_that_does_not_say_what_a_node_hands_on_is_refused(self):
+        """An output list too short hides exactly the chain the refusals look for."""
+        graph = self._checkpoint_graph()
+        info = {**self.INFO, "VAEDecode": {"output": ["IMAGE"]}}
+        info["CheckpointLoaderSimple"] = {"output": ["MODEL"]}
+        with pytest.raises(
+            LookupError, match="does not say what CheckpointLoaderSimple"
+        ):
+            plan_lora_insertion(graph, info)
+
+    def test_a_clip_source_that_reads_the_model_will_not_take_a_loader(self):
+        """Splicing in front of both would wire the loader into its own input."""
+        graph = {
+            "1": {"class_type": "CheckpointLoaderSimple", "inputs": {}},
+            "2": {"class_type": "ClipFromModel", "inputs": {"model": ["1", 0]}},
+            "3": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0]}},
+            "4": {"class_type": "KSampler", "inputs": {"model": ["1", 0]}},
+        }
+        info = {**self.INFO, "ClipFromModel": {"output": ["CLIP"]}}
+        with pytest.raises(LookupError, match="hands out this workflow's CLIP"):
+            plan_lora_insertion(graph, info)
+
+    def test_a_loader_this_comfyui_spells_differently_is_not_wired_blind(self):
+        """Its outputs were checked; its inputs are the other half of the wiring."""
+        info = {
+            **self.INFO,
+            "LoraLoader": {
+                "input": {"required": {"lora_name": [["subject-v2.safetensors"], {}]}},
+                "output": ["MODEL", "CLIP"],
+            },
+        }
+        graph = self._checkpoint_graph()
+        plan = plan_lora_insertion(graph, info)
+        with pytest.raises(LookupError, match="takes no model input"):
+            insert_adapter(graph, plan, self.ADAPTER, info)
+        assert "9" not in graph
+
+    def test_the_sentence_reads_in_node_order_not_string_order(self):
+        graph = self._checkpoint_graph()
+        graph["10"] = {"class_type": "KSampler", "inputs": {"model": ["4", 0]}}
+        info = {**self.INFO, "VAEDecode": {"output": ["IMAGE"]}}
+        plan = plan_lora_insertion(graph, info)
+        assert [r["node_id"] for r in plan["rewires"] if r["type"] == "MODEL"] == [
+            "3",
+            "10",
+        ]

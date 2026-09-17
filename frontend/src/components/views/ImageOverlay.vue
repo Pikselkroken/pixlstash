@@ -239,12 +239,7 @@
                       class="overlay-comfy-note"
                       role="status"
                     >
-                      This workflow has no LoRA loader.
-                      {{
-                        comfyInsertionLoading
-                          ? "Checking whether PixlStash can add one…"
-                          : comfyInsertion?.reason || ""
-                      }}
+                      {{ comfyNoLoraText("This workflow") }}
                     </div>
                     <div
                       v-else-if="adaptersError"
@@ -1718,10 +1713,9 @@ const {
   adaptersError,
   adapterOptions: comfyAdapterOptions,
   slotOptions: comfySlotOptions,
-  insertion: comfyInsertion,
-  insertionLoading: comfyInsertionLoading,
   canInsert: comfyCanInsert,
   insertionText: comfyInsertionText,
+  noLoaderText: comfyNoLoraText,
   resetChoice: resetComfyLoraChoice,
   body: comfyLoraBody,
 } = useLoraSwap(comfyLoraSlots, comfyLoraInsertionSource);

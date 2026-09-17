@@ -588,13 +588,20 @@ LoRAs would otherwise load the chosen one twice: whatever `lora_node_id` and
 not (`7 lora_name_1, 7 lora_name_2`) or names the node or field that matched
 nothing. **A workflow with no LoRA loader (#1376)** gets one added, but only
 with `insert_lora_loader: true` - a bare `adapter_sha256` there is a 400 naming
-the flag, and naming a slot is a 400 too. The surfaces send it only after showing
+the flag, naming a slot is a 400 too, and so is the flag without an
+`adapter_sha256`. The surfaces send it only after showing
 the splice from `GET /comfyui/workflows/{workflow_name}/lora-insertion`
 (`OWNER_ONLY`, it asks the owner's ComfyUI): `{workflow, has_lora_loader, plan,
 reason}`, `plan` being `{model: {node_id, class_type, output}, clip: … | null,
-rewires: [{node_id, class_type, field, type}]}` and `null` with a `reason` when
-no loader can go in (several models or text encoders, no model, a node this
-ComfyUI lacks, ComfyUI unreachable). `GET /comfyui/pictures/{id}/recipe` carries
+rewires: [{node_id, class_type, field, type}], pixlstash_loader}` and `null`
+with a `reason` when no loader can go in (several models or text encoders, a
+second model chain of another kind, a node already loading a LoRA some way of
+its own, a CLIP source that reads the model, no model, a node this ComfyUI
+lacks or that does not say what it hands on, ComfyUI unreachable).
+`has_lora_loader` is `null` for a UI-format file. `pixlstash_loader` says the
+digest loader could be the one inserted, which leaves the outputs unreplayable
+by "Generate variants"; the recipe read reports it `false`, since that route
+never inserts it. `GET /comfyui/pictures/{id}/recipe` carries
 the same `{plan, reason}` as `lora_insertion` when its `lora_slots` is empty. The
 run recomputes the plan rather than trusting one sent back. The loader added is
 `LoraLoader` (`LoraLoaderModelOnly` where nothing reads a CLIP) when this ComfyUI

@@ -530,6 +530,17 @@ def _resolve_lora_swap(
             502 when ComfyUI cannot be asked at all.
     """
     if payload.get("adapter_sha256") is None:
+        if payload.get("insert_lora_loader") is True:
+            # Asked for a loader and named no LoRA: an empty loader is not a
+            # thing to add, and running as if nothing was asked hides a client
+            # bug in a successful run.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "insert_lora_loader asks for a LoRA loader to be added, so "
+                    "the run must also name the LoRA with adapter_sha256."
+                ),
+            )
         return None
     if graph is None:
         # Said as what it is: "no LoRA loader" would be false about a UI-format
@@ -660,9 +671,20 @@ def _resolve_lora_insertion(
 
 
 def _describe_lora_insertion(
-    graph: dict | None, object_info: dict | None, error: str | None
+    graph: dict | None,
+    object_info: dict | None,
+    error: str | None,
+    digest_loader: bool = True,
 ) -> dict | None:
     """Where a LoRA loader would go, for the owner to see before a run (#1376).
+
+    Args:
+        graph: The API-format graph, or ``None`` for a UI-format file.
+        object_info: The map already read for this request, or ``None``.
+        error: Why ComfyUI could not be asked, when it could not.
+        digest_loader: Whether this surface's run would allow the
+            ComfyUI-PixlStash loader; ``False`` for a replay, so the plan does
+            not warn about a node that route will never insert.
 
     Returns:
         ``None`` when the graph already has a LoRA loader, else
@@ -685,8 +707,11 @@ def _describe_lora_insertion(
             "reason": f"PixlStash could not ask ComfyUI where a loader would go: {error}",
         }
     try:
-        return {"plan": plan_lora_insertion(graph, object_info), "reason": None}
+        plan = plan_lora_insertion(graph, object_info)
+        plan["pixlstash_loader"] = plan["pixlstash_loader"] and digest_loader
+        return {"plan": plan, "reason": None}
     except LookupError as exc:
+        logger.info("No LoRA loader can be added to this graph: %s", exc)
         return {"plan": None, "reason": str(exc)}
 
 
@@ -1204,7 +1229,8 @@ class ComfyUIWorkflowLoraInsertionResponse(ComfyUILoraInsertionResponse):
     """A saved workflow's LoRA insertion; ``has_lora_loader`` needs none."""
 
     workflow: str
-    has_lora_loader: bool = False
+    # None for a UI-format file: whether it has a loader cannot be read from it.
+    has_lora_loader: Optional[bool] = False
 
 
 class ComfyUIWorkflowParametersResponse(BaseModel):
@@ -1903,7 +1929,8 @@ def create_router(server) -> APIRouter:
             "from ComfyUI's object_info, so the owner sees the change before a "
             "run sends insert_lora_loader. plan is null and reason says why "
             "when no loader can be added; has_lora_loader is true, with neither, "
-            "when the workflow already has one to swap."
+            "when the workflow already has one to swap, and null for a "
+            "UI-format file, which may have one PixlStash cannot read."
         ),
         response_model=ComfyUIWorkflowLoraInsertionResponse,
     )
@@ -1912,6 +1939,15 @@ def create_router(server) -> APIRouter:
         graph = api_graph(document)
         if graph is not None and detect_lora_targets(graph):
             return {"workflow": name, "has_lora_loader": True}
+        if graph is None:
+            # Not `false`: a UI-format file may well have a loader, and saying
+            # it has none would be the claim _resolve_lora_swap declines to
+            # make. Unknown, with the reason.
+            return {
+                "workflow": name,
+                "has_lora_loader": None,
+                **_describe_lora_insertion(None, None, None),
+            }
         object_info, error = None, None
         if graph is not None:
             comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
@@ -2785,7 +2821,11 @@ def create_router(server) -> APIRouter:
             "seed_inputs": seed_targets,
             "lora_slots": detect_lora_targets(graph),
             "lora_insertion": _describe_lora_insertion(
-                graph, object_info, object_info_error
+                graph,
+                object_info,
+                object_info_error,
+                # A replay never inserts it, so it is never a warning here.
+                digest_loader=False,
             ),
             "preflight": preflight,
         }

@@ -74,6 +74,9 @@ _WORKFLOW_ROUTES = (
     ("PATCH", "/api/v1/server-config/ghost-retention"),
     ("DELETE", "/api/v1/server-config/ghost-retention/ghosts"),
     ("DELETE", "/api/v1/server-config/ghost-retention/model-ghosts"),
+    # Where a LoRA loader would go (#1376): it reaches the owner's ComfyUI, and
+    # its refusal is measured with the GET belts emptied in the test below.
+    ("GET", "/api/v1/comfyui/workflows/{workflow_name}/lora-insertion"),
 )
 
 
@@ -2227,7 +2230,21 @@ def test_a_workflow_with_no_lora_loader_shows_where_one_would_go(
     assert "could not ask ComfyUI" in r.json()["reason"]
 
 
-def test_the_insertion_preview_is_owner_only(workflow_env, loaderless_workflow):
+def test_the_insertion_preview_is_owner_only(
+    workflow_env, loaderless_workflow, monkeypatch
+):
+    """Measured at the gate, on the route under test, in both directions.
+
+    The GET belts are emptied first: ``/api/v1/comfyui/workflows/`` is a
+    READ-blocked prefix, so the middleware would answer 403 before routing and
+    the declaration this test is named after could be loosened to ANY_TOKEN
+    with the test still green. ``assert_real_route`` is the other half - a
+    renamed or unmounted path 403s identically.
+    """
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
+    path = f"{API}/comfyui/workflows/plain.json/lora-insertion"
+    assert_real_route(workflow_env.server.api, "GET", path)
     token = _mint(
         workflow_env.owner,
         "lora insertion probe",
@@ -2235,10 +2252,13 @@ def test_the_insertion_preview_is_owner_only(workflow_env, loaderless_workflow):
         resource_id=workflow_env.character_id,
     )
     client = _bearer(workflow_env.server, token)
-    # The route resolves: the same token reads the workflow list.
-    assert client.get(f"{API}/comfyui/workflows").status_code == 200
-    r = client.get(f"{API}/comfyui/workflows/plain.json/lora-insertion")
+    assert client.get(f"{API}/pictures").status_code == 200, (
+        "the scoped token is dead; the refusal below would prove nothing"
+    )
+    r = client.get(path)
     assert r.status_code == 403, r.text
+    # The positive control: the owner still reads it, with the belts down.
+    assert workflow_env.owner.get(path).status_code == 200
 
 
 def test_a_lora_goes_into_a_loader_added_only_when_asked(

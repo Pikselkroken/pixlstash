@@ -502,8 +502,10 @@ describe("a LoRA from the shelf (#1310)", () => {
     const { wrapper, store } = await mountFrom(FROM_SELECTION);
     store.selectionIds = [7];
     await flush(wrapper);
-    expect(wrapper.text()).toContain("no LoRA loader");
+    // The backend's own reason, and not a sentence in front of it: half the
+    // reasons contradict "this workflow has no LoRA loader".
     expect(wrapper.text()).toContain("could not find the model");
+    expect(wrapper.text()).not.toContain("has no LoRA loader");
     expect(wrapper.findAll("select")).toHaveLength(1);
     expect(listAdapters).not.toHaveBeenCalled();
     await runButton(wrapper).trigger("click");
