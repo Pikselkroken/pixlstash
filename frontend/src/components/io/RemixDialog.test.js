@@ -16,6 +16,7 @@ const listWorkflows = vi.fn();
 const getPictureRecipe = vi.fn();
 const runImageToImage = vi.fn();
 const runRecipe = vi.fn();
+const getLoraInsertion = vi.fn();
 const getPictureMetadata = vi.fn();
 const getPictureWorkflow = vi.fn();
 const listAdapters = vi.fn();
@@ -26,6 +27,7 @@ vi.mock("../../api/comfyui", () => ({
   getPictureWorkflow: (...a) => getPictureWorkflow(...a),
   runImageToImage: (...a) => runImageToImage(...a),
   runRecipe: (...a) => runRecipe(...a),
+  getLoraInsertion: (...a) => getLoraInsertion(...a),
 }));
 
 vi.mock("../../api/pictures", () => ({
@@ -166,6 +168,7 @@ function rowFor(w, title) {
 beforeEach(() => {
   sessionStorage.clear();
   vi.clearAllMocks();
+  getLoraInsertion.mockResolvedValue({ plan: null, reason: null });
   listWorkflows.mockResolvedValue({
     workflows: [
       {
@@ -862,7 +865,11 @@ describe("swapping a LoRA into a variant (#1310)", () => {
   });
 
   it("says so when the picture's recipe has no LoRA loader", async () => {
-    getPictureRecipe.mockResolvedValue({ ...CLEAN_RECIPE, lora_slots: [] });
+    getPictureRecipe.mockResolvedValue({
+      ...CLEAN_RECIPE,
+      lora_slots: [],
+      lora_insertion: { plan: null, reason: null },
+    });
     const w = await settle(mountDialog());
     expect(w.text()).toContain("no LoRA loader");
     expect(loraSelect(w)).toBeUndefined();
@@ -870,5 +877,86 @@ describe("swapping a LoRA into a variant (#1310)", () => {
     await w.findAll("button").find((b) => b.text().trim() === "Generate").trigger("click");
     await settle(w);
     expect(runRecipe.mock.calls[0][0].adapter_sha256).toBeUndefined();
+  });
+});
+
+describe("adding a LoRA loader to a variant (#1376)", () => {
+  const PLAN = {
+    model: { node_id: "4", class_type: "CheckpointLoaderSimple", output: 0 },
+    clip: null,
+    rewires: [
+      { node_id: "3", class_type: "KSampler", field: "model", type: "MODEL" },
+    ],
+  };
+
+  async function generate(w) {
+    await w
+      .findAll("button")
+      .find((b) => b.text().trim() === "Generate")
+      .trigger("click");
+    await settle(w);
+  }
+
+  const loraSelect = (w) =>
+    w
+      .findAll("select.remix-select")
+      .find((s) => s.attributes("aria-label") === "LoRA");
+
+  it("adds one to the picture's own recipe, from the recipe read", async () => {
+    getPictureRecipe.mockResolvedValue({
+      ...CLEAN_RECIPE,
+      lora_slots: [],
+      lora_insertion: { plan: PLAN, reason: null },
+    });
+    const w = await settle(mountDialog());
+    expect(w.text()).not.toContain("no LoRA loader");
+    // The recipe read carries it; no second request is made for it.
+    expect(getLoraInsertion).not.toHaveBeenCalled();
+
+    // Settled twice: the mode resolves a tick after the recipe read, and
+    // switching mode clears the LoRA choice by design (#1310).
+    await settle(w);
+    await loraSelect(w).setValue("a".repeat(64));
+    await settle(w);
+    expect(w.text()).toContain("A LoRA loader is added after #4");
+    expect(w.text()).toContain("loads the model only");
+    await generate(w);
+    expect(runRecipe.mock.calls[0][0]).toMatchObject({
+      adapter_sha256: "a".repeat(64),
+      insert_lora_loader: true,
+    });
+  });
+
+  it("asks for a template's own graph, and sends the flag with that run", async () => {
+    getPictureRecipe.mockResolvedValue({
+      available: false,
+      reason: "no_prompt_chunk",
+    });
+    getLoraInsertion.mockResolvedValue({ plan: PLAN, reason: null });
+    const w = await settle(mountDialog());
+    await settle(w);
+    expect(getLoraInsertion).toHaveBeenCalled();
+
+    await loraSelect(w).setValue("a".repeat(64));
+    await generate(w);
+    expect(runImageToImage.mock.calls[0][0]).toMatchObject({
+      adapter_sha256: "a".repeat(64),
+      insert_lora_loader: true,
+    });
+  });
+
+  it("says the backend's reason rather than a sentence contradicting it", async () => {
+    getPictureRecipe.mockResolvedValue({
+      ...CLEAN_RECIPE,
+      lora_slots: [],
+      lora_insertion: {
+        plan: null,
+        reason: "Node 7 (Power Lora Loader (rgthree)) already loads a LoRA.",
+      },
+    });
+    const w = await settle(mountDialog());
+    expect(w.text()).toContain("already loads a LoRA");
+    expect(w.text()).not.toContain("has no LoRA loader");
+    expect(loraSelect(w)).toBeUndefined();
   });
 });

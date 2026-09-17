@@ -222,11 +222,11 @@
                       ></textarea>
                     </div>
                   </template>
-                  <!-- Swapping only: the LoRA goes into a loader the workflow
-                       already has, and one with none says so rather than
-                       offering a choice the run would refuse (#1310). Only
-                       once a workflow is chosen: with none there is nothing
-                       to say about its loaders. -->
+                  <!-- The LoRA goes into a loader the workflow already has
+                       (#1310), or into one PixlStash adds where it has none
+                       and can show where (#1376); otherwise it says why not.
+                       Only once a workflow is chosen: with none there is
+                       nothing to say about its loaders. -->
                   <template v-if="selectedComfyWorkflow">
                     <label
                       class="overlay-comfy-field-label"
@@ -235,12 +235,11 @@
                       LoRA
                     </label>
                     <div
-                      v-if="!comfyLoraSlots.length"
+                      v-if="!comfyLoraSlots.length && !comfyCanInsert"
                       class="overlay-comfy-note"
                       role="status"
                     >
-                      This workflow has no LoRA loader, so there is nothing to
-                      swap.
+                      {{ comfyNoLoraText("This workflow") }}
                     </div>
                     <div
                       v-else-if="adaptersError"
@@ -263,6 +262,14 @@
                           {{ opt.label }}
                         </option>
                       </select>
+                      <!-- What adding the loader does, before the run does it. -->
+                      <div
+                        v-if="comfyCanInsert && comfyAdapterSha"
+                        class="overlay-comfy-note"
+                        role="status"
+                      >
+                        {{ comfyInsertionText }}
+                      </div>
                       <!-- Which slot, when the workflow has more than one:
                            swapping them all would load the chosen LoRA twice
                            and lose the others. -->
@@ -1052,6 +1059,7 @@ import {
 import { listStackPictures } from "../../api/stacks";
 import { useLoraSwap } from "../../composables/useLoraSwap";
 import {
+  getLoraInsertion,
   listWorkflows,
   runImageToImage,
   getPictureWorkflow,
@@ -1699,15 +1707,28 @@ const comfyLoraSlots = computed(
   () => selectedComfyWorkflow.value?.lora_slots || [],
 );
 
+/**
+ * Where a loader would go, when the chosen workflow has none. Not asked by a
+ * share link: the read is owner-only, and a refusal is not news to them.
+ */
+const comfyLoraInsertionSource = computed(() => {
+  if (isReadOnly.value) return null;
+  const name = selectedComfyWorkflow.value?.name;
+  return name ? { key: name, load: () => getLoraInsertion(name) } : null;
+});
+
 const {
   adapterSha: comfyAdapterSha,
   chosenSlot: comfyLoraSlot,
   adaptersError,
   adapterOptions: comfyAdapterOptions,
   slotOptions: comfySlotOptions,
+  canInsert: comfyCanInsert,
+  insertionText: comfyInsertionText,
+  noLoaderText: comfyNoLoraText,
   resetChoice: resetComfyLoraChoice,
   body: comfyLoraBody,
-} = useLoraSwap(comfyLoraSlots);
+} = useLoraSwap(comfyLoraSlots, comfyLoraInsertionSource);
 
 const selectedComfyUsesCaption = computed(() => {
   const missing = Array.isArray(

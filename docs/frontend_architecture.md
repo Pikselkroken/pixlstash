@@ -4406,7 +4406,29 @@ read once per component lifetime and again after a failure; `unknown` files the
 backend would accept are not offered, since the shelf lists them apart. A slot
 label is the node and what it loads now - which only the owner-only reads carry;
 the workflow list is open to share-link tokens and omits it, so those menus fall
-back to the class. Inserting a loader into a graph that has none is #1376.
+back to the class.
+
+**A graph with no loader can take one (#1376)**, through the same composable:
+its second argument is an `insertionSource` - `{key, load}` or `null` - that
+each surface builds from what it already reads (the run panel and the overlay
+ask `GET /comfyui/workflows/{name}/lora-insertion` for the chosen workflow,
+Remix reads `lora_insertion` off the recipe in recipe mode and asks for the
+template in template mode). Only once `load` answers with a `plan` is the shelf
+offered, its first option reading "No LoRA" rather than "Keep the workflow's
+own", and choosing one shows `insertionSummary(plan)` - where the loader goes
+and every input it takes over - before the run; only then does `body()` add
+`insert_lora_loader: true`. Otherwise the note is the backend's `reason` **instead of**, not after, "this
+workflow has no LoRA loader": half the reasons contradict that sentence (an
+rgthree stacker is a loader; a UI-format file may have one), and the backend
+deliberately declines to make the claim. With no reason yet it says the check
+is running, and a failed ask says the check failed rather than that nothing can
+be added. `key` names the graph, so two
+workflows that both have no slot still reset the choice, and an answer for a
+graph no longer shown is dropped. The overlay's workflow list is open to
+share-link tokens and the insertion read is not, so under a read-only session
+the overlay passes no source and says only that there is no loader. The summary
+also warns, where `plan.pixlstash_loader` says the digest loader could be the
+one added, that those pictures cannot be re-run by "Generate variants". Stacking a second adapter is not offered.
 
 **A grid filtered to one workflow is deliberately not here.** "Show its
 pictures" as a *grid* would mean a new picture filter carried through
