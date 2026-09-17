@@ -1317,7 +1317,7 @@ recorded as a `PluginLoadError` that **`GET /taggers/plugin-diagnostics`** retur
 than by association: the message is `str(exc)` from an exception raised by third-party code
 during import, so an `OSError` out of a plugin's module body carries whatever absolute path
 it was reaching for. Sanitising that text would be guesswork. The **Auto-tagging** settings
-section renders the list; `PluginsTable.vue` never could, since a failed plugin carries
+section renders the list; `PluginSelect.vue` never could, since a failed plugin carries
 neither capability flag.
 Registration also calls `plugin_schema()` once, because `GET /taggers`,
 `user_settings_utils` and `fill_defaults()` (on the library-open path, `server.py`) all
