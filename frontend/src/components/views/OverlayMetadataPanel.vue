@@ -43,7 +43,7 @@
           v-if="metadataTab === 'info' && pictureInfoEntries.length"
           class="metadata-tab-panel"
         >
-          <div class="metadata-info-grid">
+          <dl class="inspector-kv">
             <div
               v-for="entry in pictureInfoEntries"
               :key="entry.label"
@@ -55,10 +55,10 @@
               :title="entry.fullWidth ? entry.value : undefined"
               @click="entry.clickable ? openSourceFileLocation() : undefined"
             >
-              <div class="metadata-info-label">{{ entry.label }}</div>
-              <div class="metadata-info-value">{{ entry.value }}</div>
+              <dt>{{ entry.label }}</dt>
+              <dd class="metadata-info-value">{{ entry.value }}</dd>
             </div>
-          </div>
+          </dl>
         </div>
         <div
           v-if="metadataTab === 'comfy' && comfyMetadata"
@@ -452,10 +452,6 @@ watch(
 </script>
 
 <style scoped>
-.sidebar-section {
-  margin-bottom: 6px; /* no token: equidistant between --space-2 (4px) and --space-3 (8px) */
-}
-
 .section-header--collapsible {
   cursor: pointer;
   user-select: none;
@@ -479,49 +475,41 @@ watch(
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
+/* Info and ComfyUI are two tabs of one box: the inspector's tab band, one
+   level down, in the lightbox's dark-surface inks. */
 .metadata-tabbox {
   display: flex;
   flex-direction: column;
-  border-radius: var(--radius-md);
-  background: rgba(var(--v-theme-on-dark-surface), 0.06);
-  overflow: hidden;
 }
 
 .metadata-tab-strip {
   display: flex;
-  border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.1);
+  height: var(--toolbar-height);
+  border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
 }
 
 .metadata-tab-btn {
   flex: 1;
-  padding: 6px var(--space-3); /* 6px vertical has no token: between --space-2 (4px) and --space-3 (8px) */
+  padding: 0 var(--space-3);
+  border-bottom: 2px solid transparent;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
-  color: rgba(var(--v-theme-on-dark-surface), 0.5);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
   transition:
-    color 0.15s,
-    background 0.15s;
+    color var(--dur-1) var(--ease-standard),
+    background var(--dur-1) var(--ease-standard),
+    border-color var(--dur-1) var(--ease-standard);
   text-align: center;
   white-space: nowrap;
 }
 
-.metadata-tab-btn:first-child {
-  border-radius: var(--radius-md) 0 0 0;
-}
-
-.metadata-tab-btn:last-child {
-  border-radius: 0 var(--radius-md) 0 0;
-}
-
-.metadata-tab-btn:only-child {
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
-}
-
-/* Selected is the dark-surface olive wash with the words in ink: the panel is
-   dark in both themes, so the per-theme --active-wash would be wrong in light. */
+/* Olive marks, words stay ink. The olive is the dark-surface one: the panel is
+   dark in both themes, so the per-theme --active-bar would be wrong in light. */
 .metadata-tab-btn.active {
   color: rgb(var(--v-theme-on-dark-surface));
-  background: rgba(var(--v-theme-dark-surface-primary), 0.2);
+  border-bottom-color: rgb(var(--v-theme-dark-surface-primary));
 }
 
 .metadata-tab-btn:hover:not(.active) {
@@ -530,19 +518,10 @@ watch(
 }
 
 .metadata-tab-panel {
-  padding: 10px; /* no token: 10px is between --space-3 (8px) and --space-4 (12px) */
-}
-
-.metadata-info-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3) var(--space-4);
+  padding-top: var(--space-4);
 }
 
 .metadata-info-item {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -558,14 +537,7 @@ watch(
   text-decoration: underline;
 }
 
-.metadata-info-label {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-
 .metadata-info-value {
-  font-size: var(--text-xs);
-  color: rgb(var(--v-theme-on-dark-surface));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

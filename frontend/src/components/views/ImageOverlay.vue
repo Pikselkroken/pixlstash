@@ -856,9 +856,14 @@
           @navigate="onFilmstripNavigate"
         />
 
-        <aside
+        <!-- The shared inspector (shell contract rule 8), in its lightbox
+             variant: dark in both themes, laid over the canvas. -->
+        <AppInspector
           class="overlay-sidebar"
-          :class="{ open: sidebarOpen, hidden: chromeHidden }"
+          :class="{ hidden: chromeHidden }"
+          label="Picture details"
+          lightbox
+          :open="sidebarOpen"
         >
           <OverlayDescriptionPanel
             ref="descriptionPanelRef"
@@ -962,7 +967,7 @@
             :date-format="dateFormat"
             :video-duration="videoMeta.duration"
           />
-        </aside>
+        </AppInspector>
 
         <!-- The lightbox's own narration of an undoable action. Last child of
              `.overlay-main` on purpose: this is where `--filmstrip-rail-width`
@@ -1060,6 +1065,7 @@ import { useProjectStore } from "../../stores/useProjectStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { nextFreeCharacterName } from "../../utils/characterCreateFlow.js";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
+import AppInspector from "../widgets/AppInspector.vue";
 import CharacterEditor from "../editors/CharacterEditor.vue";
 import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";
 import OverlayFilmstrip from "./OverlayFilmstrip.vue";
