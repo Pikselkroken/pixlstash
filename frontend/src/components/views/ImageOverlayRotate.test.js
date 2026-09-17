@@ -310,6 +310,22 @@ describe("ImageOverlay - the [ and ] shortcuts", () => {
 });
 
 describe("ImageOverlay - the picture on screen after a rotate", () => {
+  it("reads the picture's text again, whose word boxes the turn invalidated", async () => {
+    await openOverlay();
+    const textReads = () =>
+      getMock.mock.calls.filter(([url]) =>
+        String(url ?? "").startsWith("/pictures/7/text"),
+      ).length;
+    const before = textReads();
+    expect(before).toBeGreaterThan(0);
+
+    press("]");
+    await flush();
+    await flush();
+    expect(rotateCalls().length).toBe(1);
+    expect(textReads()).toBe(before + 1);
+  });
+
   it("re-requests the file when 180° leaves the pixels alone", async () => {
     // Two presses the same way is 180°. `pixel_sha` never moves across either
     // of them - the pixels are untouched - so if the buster were the sha alone

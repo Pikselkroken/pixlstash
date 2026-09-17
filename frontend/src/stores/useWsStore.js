@@ -52,6 +52,9 @@ export const useWsStore = defineStore("ws", () => {
   // Without this signal an open overlay kept showing the pre-segment boxes until
   // it was closed and reopened.
   const wsDetectionUpdate = ref({ key: 0, pictureIds: [] });
+  // Signals the text read from the given pictures (OCR, `ocr_text`) changed.
+  // The grid never shows that text, so only the open lightbox listens.
+  const wsTextUpdate = ref({ key: 0, pictureIds: [] });
   const wsPluginProgress = ref({ key: 0, payload: null });
   const isUploadInProgress = ref(false);
 
@@ -116,6 +119,7 @@ export const useWsStore = defineStore("ws", () => {
     wsDescriptionUpdate,
     wsSmartScoreUpdate,
     wsDetectionUpdate,
+    wsTextUpdate,
     wsPluginProgress,
     isUploadInProgress,
     clientId,

@@ -32,6 +32,7 @@
 22. [Folder-Structure Commit API (v1.11, Phase 3)](#22-folder-structure-commit-api-v111-phase-3)
 23. [Layout & Move API (v1.11, Phase 4b)](#23-layout--move-api-v111-phase-4b)
 24. [Move Reconciliation API (v1.11, Phase 5)](#24-move-reconciliation-api-v111-phase-5)
+25. [Text in Pictures (#1197)](#25-text-in-pictures-1197)
 
 ---
 
@@ -2591,6 +2592,25 @@ carries no picture ids or counts — see the table entry above. There is no
 the caller already has the result of, and `CHANGED_PICTURES` (with
 `change_kind: "updated"`) is emitted separately for the pictures an `apply`
 actually changed, the same envelope every other membership write uses.
+
+---
+
+## 25. Text in Pictures (#1197)
+
+Text read out of a picture is its own data: never `description`, never tags.
+
+| Route | Purpose | Response |
+|---|---|---|
+| `GET /pictures/search` | every search also matches the text | each row gains `text_match: bool`, true when every query word appears in the picture's text |
+| `GET /pictures/{id}/text?query=` | the Text tab and the word boxes | `{ state: "none" \| "pending" \| "read", lines: [[{ text, box: [x, y, w, h], matched }]] }` |
+| `POST /pictures/{id}/text/read` | *Read again*; the stored text is kept until the new read succeeds | `{ state: "pending", lines: [] }` |
+
+- `box` is in fractions of the picture **as displayed** (EXIF orientation applied), so the overlay draws it without knowing the pixel size.
+- `matched` is computed server-side with the rule search uses (`database.ocr_word_matches`: no edits under five letters, one under nine, two beyond, never on the first letter), so the Text tab and the result pill never disagree about "C0FFEE" matching "coffee". Words are marked only when the whole query matched the picture (every word), the same test that sets `text_match`. Omit `query` when no search is active.
+- `pending` means the picture is not in the scrapheap, its `text_score` qualifies and it has not been read yet; `none` covers both "not worth reading" and "read, nothing found".
+- A finished read emits `pictures_changed` with `fields: ["ocr_text"]`. The field affects no sort or filter, so the grid ignores it; the open overlay refetches.
+- Ranking: a text match adds `OCR_TEXT_MATCH_WEIGHT` (0.35) to the combined score and nothing otherwise, so a page of words gains nothing on a search its words do not answer. The SPA searches with `threshold=0.1`; at the route's own default of 0.5 a picture matched by its text alone (0.35) is filtered out, so an API caller wanting text-only matches must pass a lower threshold. `text_match` is computed only for the rows a search returns. `tests/test_ocr_text.py` holds the queries that must not match known text-heavy pictures.
+- The result pill's *All · In text* switch filters on `text_match` client-side; nothing is refetched and nothing is remembered.
 
 ---
 

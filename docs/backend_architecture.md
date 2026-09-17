@@ -650,6 +650,8 @@ Public guest scoring and shared-link endpoints.
 | DELETE | /api/v1/pictures/{id}/tags                                                    | tags            | Clear all tags on picture                                   |
 | POST   | /api/v1/pictures/{id}/tags/remove_all                                         | tags            | Remove tag everywhere on picture                            |
 | DELETE | /api/v1/pictures/{id}/tags/{tag_id}                                           | tags            | Remove picture tag                                          |
+| GET    | /api/v1/pictures/{id}/text                                                    | pictures        | Get the text read out of a picture                          |
+| POST   | /api/v1/pictures/{id}/text/read                                               | pictures        | Read the text in a picture again                            |
 | GET    | /api/v1/pictures/{picture_id}/stack                                           | stacks          | Get picture's stack                                         |
 | GET    | /api/v1/projects                                                              | projects        | List all projects                                           |
 | POST   | /api/v1/projects                                                              | projects        | Create a project                                            |
@@ -737,6 +739,7 @@ All models live in [pixlstash/db_models/](../pixlstash/db_models/).
 Picture
   id, file_path, pixel_sha, format, width, height,
   created_at, imported_at, score, smart_score, text_score,
+  ocr_text, ocr_words (JSON; both left out of metadata_fields()),
   import_excluded, deleted, deleted_at, source_picture_id, stack_id,
   character_likeness, image_embedding (BLOB), text_embedding (BLOB),
   comfyui_models (JSON), comfyui_loras (JSON),
@@ -948,6 +951,7 @@ The write path has to tell the two apart. Blanking a description is how a pictur
 | `LIKENESS_PARAMETERS` | CPU | `MissingLikenessParametersFinder` | Per-character similarity params |
 | `SMART_SCORE` | GPU | `MissingSmartScoreFinder` | Anchor-based heuristic score. Takes a full `Vault` (not just `database`) so it can resolve the tagger's per-label acceptance thresholds for the anomaly penalty, and is therefore registered in `vault.py` rather than `WorkPlanner.work_finders()` — same reason as `GFS_SNAPSHOT` and `TAG_HEALTH_AUTO_REBUILD`. |
 | `TEXT_SCORE` | CPU | `MissingTextScoreFinder` | MSER-based text-in-image score |
+| `OCR` | GPU | `MissingOcrFinder` | Reads the text in pictures with `text_score >= OCR_MIN_TEXT_SCORE` (0.25) into `Picture.ocr_text` / `ocr_words` (#1197). Florence-2 `<OCR_WITH_REGION>` via `InferenceEngine.read_text`, sharing the captioning model; it boxes lines, and each word gets the share of its line's box its characters take. Run on the picture as displayed (EXIF applied), so boxes are fractions of the displayed picture. `""` marks read-with-nothing, and a picture whose file could not be opened; a batch the reader returns nothing for fails the task and writes nothing, so a model that is not loaded or ran out of memory leaves the pictures for a later sweep. Idle while `active_description_plugin` is unset. A failed task defers its pictures for the session (the `MissingCheckpointHashFinder` pattern), so a reader that cannot load is not handed the same batch every cycle. The probe reads `ix_picture_ocr_unread` (`ocr_text, deleted, text_score WHERE ocr_text IS NULL`), most text first so a batch holds pages of similar length. The VRAM gate is charged captioning's estimate times the three beams reading decodes with, and an out-of-memory error is re-raised to the runner's retry instead of falling back to CPU. Pictures are read at 1024 px on the long side, so body text on a large screenshot or photographed page can be too small to survive: such a picture is stored as read with nothing found and is not retried. `depends_on=[TEXT_SCORE, DESCRIPTION]`. `POST /pictures/{id}/text/read` submits an URGENT task directly and keeps the stored text until that read succeeds; a rotate (`apply_orientation`) clears them too. Completion emits `pictures_changed` with `fields: ["ocr_text"]`. |
 | `WATCH_FOLDERS` | CPU | `MissingWatchFolderImportFinder` | Ingest from watch folders |
 | `COMFYUI_EXTRACTION` | CPU | `MissingComfyUIExtractionFinder` | Parse ComfyUI metadata, and file the picture's workflow in the hub (see *The workflow scan rides the ComfyUI extraction* below) |
 | `SOURCE_FACE_LIKENESS` | GPU | `MissingSourceFaceLikenessCharacterFinder` | Face↔reference similarity |

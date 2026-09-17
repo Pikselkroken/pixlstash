@@ -299,6 +299,30 @@ export async function listPictureDetections(id) {
 }
 
 /**
+ * Read the text found in a picture (OCR), one entry per word with its box.
+ * @param {number|string} id
+ * @param {Object} [options]
+ * @param {string} [options.query] - the active text search; marks each word
+ *   the search matched (`matched: true`). Omitted when no text search is on.
+ * @returns {Promise<Object>} `{ state: "none"|"pending"|"read", lines }`, where
+ *   `lines` is `[[{ text, box: [x, y, w, h] as fractions, matched }]]`.
+ */
+export async function getPictureText(id, { query } = {}) {
+  const suffix = query ? `?query=${encodeURIComponent(query)}` : "";
+  return unwrap(apiClient.get(`/pictures/${id}/text${suffix}`));
+}
+
+/**
+ * Clear a picture's text and read it again in the background. A
+ * `pictures_changed` frame with `fields: ["ocr_text"]` follows when it lands.
+ * @param {number|string} id
+ * @returns {Promise<Object>} `{ state: "pending" }`.
+ */
+export async function readPictureText(id) {
+  return unwrap(apiClient.post(`/pictures/${id}/text/read`));
+}
+
+/**
  * Add a hand-drawn face box to a picture.
  * @param {number|string} id
  * @param {Object} body - `{ bbox: [x1, y1, x2, y2], frame_index }`.

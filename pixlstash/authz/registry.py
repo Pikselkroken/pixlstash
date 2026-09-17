@@ -827,6 +827,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/pictures/{id}/faces"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/{id}/{field}"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/{id}/anomaly_region"): RoutePolicy(_PIC, id_param="id"),
+    ("GET", "/api/v1/pictures/{id}/text"): RoutePolicy(_PIC, id_param="id"),
+    # Re-reads one picture's text: derived data only, nothing the owner wrote is
+    # touched. Same class as the other per-picture mutations; READ tokens are
+    # refused earlier by the middleware (POST not in READ_SAFE).
+    ("POST", "/api/v1/pictures/{id}/text/read"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/thumbnails/{id}.webp"): RoutePolicy(_PIC, id_param="id"),
     ("PATCH", "/api/v1/pictures/{id}"): RoutePolicy(_PIC, id_param="id"),
     ("POST", "/api/v1/pictures/{id}/face"): RoutePolicy(_PIC, id_param="id"),

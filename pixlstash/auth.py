@@ -109,6 +109,8 @@ READ_SAFE_POST_PATHS: frozenset[str] = frozenset(
         "/api/v1/pictures/likeness-search",
         "/api/v1/pictures/face-search",
         "/api/v1/characters/likeness-search",
+        # Do NOT add /api/v1/pictures/{id}/text/read: it queues GPU work with no
+        # dedupe, and it is safe only because no resource-scoped token can POST.
     }
 )
 

@@ -1212,7 +1212,9 @@ def apply_orientation(
       ``MissingThumbnailFinder`` regenerates the bitmap;
     * ``image_embedding`` / ``perceptual_hash``, NULLed so
       ``MissingImageEmbeddingFinder`` recomputes them - both describe the decoded
-      image, which now decodes at a different rotation.
+      image, which now decodes at a different rotation;
+    * ``ocr_text`` / ``ocr_words``, NULLed so ``MissingOcrFinder`` reads the
+      text again in the new orientation.
 
     ``Picture.width`` / ``height`` are deliberately untouched: they describe the
     stored bitmap, which is copied through byte for byte.
@@ -1346,6 +1348,10 @@ def apply_orientation(
         )
     else:
         _rotate_picture_boxes(session, picture, steps, current)
+    # Text is read from the picture as displayed, so a turn is read again rather
+    # than having its word boxes transformed: sideways text reads badly anyway.
+    picture.ocr_text = None
+    picture.ocr_words = None
 
     # The container changed, so the tier-1 duplicate key and the on-disk size did
     # too. Re-derived here rather than snapshotted, like every other derived value

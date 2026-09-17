@@ -1315,6 +1315,22 @@ class Vault:
             )
             return
 
+        if task.type == "OcrTask":
+            self._notify_worker_ids_processed(TaskType.OCR, changed)
+            picture_ids = [pic_id for _, pic_id, _, _ in changed]
+            if picture_ids:
+                # Not visible in the grid and no sort reads it: the open
+                # overlay refetches, nothing else moves.
+                self.notify(
+                    EventType.CHANGED_PICTURES,
+                    {
+                        "picture_ids": picture_ids,
+                        "change_kind": "updated",
+                        "fields": ["ocr_text"],
+                    },
+                )
+            return
+
         if task.type == "TextEmbeddingTask":
             self._notify_worker_ids_processed(TaskType.TEXT_EMBEDDING, changed)
             return
@@ -1697,6 +1713,13 @@ class Vault:
                     self.db.run_immediate_read_task(self._count_missing_text_score) or 0
                 )
                 label = "text_score"
+            elif worker_type == TaskType.OCR:
+                # Counted over the pictures that qualify for reading, not the
+                # library: most pictures are never read at all.
+                total, missing = self.db.run_immediate_read_task(
+                    self._count_ocr_progress
+                ) or (0, 0)
+                label = "text_read"
             elif worker_type == TaskType.DETECTION:
                 # User-triggered (no finder): surface live progress straight from
                 # the running task(s), mirroring the WATCH_FOLDERS handling.
@@ -1991,6 +2014,12 @@ class Vault:
         from pixlstash.tasks.text_score_task import TextScoreTask
 
         return TextScoreTask.count_missing_text_score(session)
+
+    @staticmethod
+    def _count_ocr_progress(session: Session) -> tuple[int, int]:
+        from pixlstash.tasks.ocr_task import OcrTask
+
+        return OcrTask.count_progress(session)
 
     @staticmethod
     def _count_pending_likeness_queue(session: Session) -> int:

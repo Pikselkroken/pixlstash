@@ -727,6 +727,42 @@
                   </span>
                 </div>
               </template>
+              <!-- Word boxes for the Text tab. Same layout space as the face
+                   boxes (inside the transformed media), so they follow zoom
+                   and pan; box coordinates are fractions of the displayed,
+                   orientation-corrected picture. aria-hidden: the word buttons
+                   in the sidebar are the keyboard and screen-reader path. -->
+              <svg
+                v-if="showTextBoxes"
+                class="picture-text-boxes"
+                aria-hidden="true"
+                :style="wordLayerStyle(overlayDims)"
+                :viewBox="`0 0 ${overlayDims.width} ${overlayDims.height}`"
+              >
+                <g
+                  v-for="word in pictureText.words.value"
+                  v-show="word.box"
+                  :key="word.index"
+                  class="picture-text-box"
+                  :class="{
+                    'picture-text-box--match': word.matched,
+                    'picture-text-box--selected': selectedWordSet.has(
+                      word.index,
+                    ),
+                  }"
+                  @pointerdown.stop
+                  @dblclick.stop
+                  @click.stop="onTextBoxClick(word.index, $event)"
+                >
+                  <rect
+                    v-for="part in ['halo', 'line']"
+                    :key="part"
+                    :class="`picture-text-box-${part}`"
+                    v-bind="wordBoxRect(word.box, overlayDims)"
+                  />
+                  <title>{{ word.text }}</title>
+                </g>
+              </svg>
               <!-- The rubber-band rectangle rides INSIDE the transformed
                    media (like the face boxes), so the same layout-space math
                    is correct at every continuous zoom scale; the draw layer
@@ -829,8 +865,17 @@
             :image="image"
             :locked="isCurrentLocked"
             :lock-note="currentLockReason"
+            :text-state="pictureText.text.value.state"
+            :text-lines="pictureText.text.value.lines"
+            :active-tab="pictureText.activeTab.value"
+            :selected-words="pictureText.selectedWords.value"
+            :text-read-busy="pictureText.readAgainBusy.value"
             @update-description="handleDescriptionUpdate"
             @editing-finished="focusOverlayCanvas"
+            @pick-tab="pictureText.pickTab"
+            @select-word="pictureText.selectWord"
+            @clear-word-selection="pictureText.clearSelection"
+            @read-text-again="pictureText.readAgain"
           />
 
           <div class="sidebar-section sidebar-section--faces">
@@ -969,6 +1014,12 @@ import {
 } from "vue";
 import { useWheelZoom } from "../../composables/useWheelZoom";
 import {
+  TEXT_TAB,
+  usePictureText,
+  wordBoxRect,
+  wordLayerStyle,
+} from "../../composables/usePictureText";
+import {
   isSupportedVideoFile,
   getOverlayFormat,
   buildMediaUrl,
@@ -1006,6 +1057,7 @@ import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useOperationStore } from "../../stores/useOperationStore";
 import { useProjectStore } from "../../stores/useProjectStore";
+import { useSearchStore } from "../../stores/useSearchStore";
 import { nextFreeCharacterName } from "../../utils/characterCreateFlow.js";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import CharacterEditor from "../editors/CharacterEditor.vue";
@@ -1099,6 +1151,8 @@ const props = defineProps({
   descriptionUpdate: { type: Object, default: () => ({}) },
   smartScoreUpdate: { type: Object, default: () => ({}) },
   detectionUpdate: { type: Object, default: () => ({}) },
+  // Signals the OCR text of the named pictures changed (`ocr_text`).
+  textUpdate: { type: Object, default: () => ({}) },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
   dateFormat: { type: String, default: "locale" },
@@ -1124,6 +1178,7 @@ const {
   descriptionUpdate,
   smartScoreUpdate,
   detectionUpdate,
+  textUpdate,
   hiddenTags,
   applyTagFilter,
   showStacks,
@@ -1139,6 +1194,24 @@ const {
 } = toRefs(props);
 
 const image = ref(null);
+const searchStore = useSearchStore();
+// Text in the picture (#1197). The sidebar's Text tab and the word boxes over
+// the picture share its tab and selection.
+const pictureText = usePictureText({
+  // Null while closed, so reopening lands afresh (the search may have moved).
+  pictureId: computed(() => (open.value ? (image.value?.id ?? null) : null)),
+  getSearchQuery: () => searchStore.searchQuery || "",
+});
+// Hidden while a "Read again" runs: the old boxes are about to be replaced.
+const showTextBoxes = computed(
+  () =>
+    pictureText.activeTab.value === TEXT_TAB &&
+    !pictureText.readAgainBusy.value &&
+    overlayReady.value,
+);
+const selectedWordSet = computed(
+  () => new Set(pictureText.selectedWords.value),
+);
 // Grouping (project/set) membership is stack-atomic: a single stack member shown
 // in the overlay cannot have its membership changed individually - the user must
 // unstack first. Whole-stack edits happen from the collapsed grid tile.
@@ -1368,6 +1441,7 @@ const lastTagUpdateKey = ref(0);
 const lastDescriptionUpdateKey = ref(0);
 const lastSmartScoreUpdateKey = ref(0);
 const lastDetectionUpdateKey = ref(0);
+const lastTextUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
 const comfyuiMenuOpen = ref(false);
 const pluginMenuOpen = ref(false);
@@ -1478,6 +1552,9 @@ async function runRotate(imageId, direction) {
     // server now reports is what the grid and every other surface will draw.
     fetchFaceBboxes(imageId);
     fetchDetections(imageId);
+    // The server drops the text on a turn, so this reads `pending` and the
+    // word boxes go until the new read lands.
+    if (String(image.value?.id) === imageIdKey) pictureText.refresh();
     emit("overlay-change", { imageId, fields: { pixels: true } });
   } catch (e) {
     console.error(`Rotate ${direction} failed for picture ${imageId}`, e);
@@ -4286,6 +4363,25 @@ watch(
   },
 );
 
+// OCR finished (or was cleared for a re-read) for some pictures. Unlike the
+// detection signal this one is gated on the open picture: a text read is one
+// picture's own task, and its frame names that picture.
+watch(
+  () => textUpdate.value,
+  (payload) => {
+    if (!payload || typeof payload !== "object") return;
+    const nextKey = payload.key || 0;
+    if (!nextKey || nextKey === lastTextUpdateKey.value) return;
+    lastTextUpdateKey.value = nextKey;
+    if (!open.value || !image.value?.id) return;
+    const pictureIds = Array.isArray(payload.pictureIds)
+      ? payload.pictureIds.map((id) => String(id))
+      : [];
+    if (!pictureIds.includes(String(image.value.id))) return;
+    pictureText.refresh();
+  },
+);
+
 const faceAssignItems = computed(() => {
   const faces = Array.isArray(faceBboxes.value) ? faceBboxes.value : [];
   return faces.map((face, idx) => ({
@@ -4334,6 +4430,12 @@ function getOverlayBoxStyle(bbox, color) {
     width: `${width || 0}px`,
     height: `${height || 0}px`,
   };
+}
+
+/** Clicking a box selects its word (shift adds) and brings it into view. */
+function onTextBoxClick(index, event) {
+  pictureText.selectWord(index, Boolean(event?.shiftKey));
+  descriptionPanelRef.value?.revealWord?.(index);
 }
 
 /** Return the keyboard to the overlay once a sidebar edit ends. */

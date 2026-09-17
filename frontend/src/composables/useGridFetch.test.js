@@ -6,7 +6,12 @@ import { useFilterStore } from "../stores/useFilterStore.js";
 import { useSelectionStore } from "../stores/useSelectionStore.js";
 import { useDedupStore } from "../stores/useDedupStore.js";
 import { useGridFetch } from "./useGridFetch.js";
-import { getPictureCount, streamPictures } from "../api/pictures";
+import { useSearchStore } from "../stores/useSearchStore.js";
+import {
+  getPictureCount,
+  searchPictures,
+  streamPictures,
+} from "../api/pictures";
 
 // Mock the pictures API module so streaming-path tests can control the count
 // and stream responses. The overlay-defer test below returns before any
@@ -66,6 +71,7 @@ function makeHarness({
     exportProgress: reactive({ visible: false, percent: 0, message: "" }),
     reverseImageSearchPictureIds: ref([]),
     faceLikenessSearchFaceId: ref(null),
+    textSearchResults: ref(null),
   };
 
   const sortStore = useSortStore();
@@ -237,5 +243,45 @@ describe("useGridFetch streaming path", () => {
 
     expect(streamPictures.mock.calls[0][0]).not.toContain("stack_state");
     expect(getPictureCount.mock.calls[0][0]).not.toContain("stack_state");
+  });
+});
+
+describe("useGridFetch text search: narrowing to text matches (#1197)", () => {
+  const ROWS = [
+    { id: 1, text_match: true },
+    { id: 2, text_match: false },
+    { id: 3, text_match: true },
+  ];
+
+  beforeEach(() => {
+    searchPictures.mockReset();
+    searchPictures.mockResolvedValue(ROWS);
+  });
+
+  it("narrows the fetched rows to text matches without searching again", async () => {
+    const { grid, refs } = makeHarness();
+    const searchStore = useSearchStore();
+    searchStore.searchQuery = "coffee";
+
+    await grid.fetchAllGridImages({ force: true });
+    expect(refs.allGridImages.value.map((r) => r.id)).toEqual([1, 2, 3]);
+    expect(refs.textSearchResults.value.rows).toHaveLength(3);
+
+    searchStore.textMatchesOnly = true;
+    await grid.fetchAllGridImages({ textMatchRecut: true });
+    expect(refs.allGridImages.value.map((r) => r.id)).toEqual([1, 3]);
+
+    searchStore.textMatchesOnly = false;
+    await grid.fetchAllGridImages({ textMatchRecut: true });
+    expect(refs.allGridImages.value.map((r) => r.id)).toEqual([1, 2, 3]);
+    expect(searchPictures).toHaveBeenCalledTimes(1);
+  });
+
+  it("any other fetch searches again", async () => {
+    const { grid } = makeHarness();
+    useSearchStore().searchQuery = "coffee";
+    await grid.fetchAllGridImages({ force: true });
+    await grid.fetchAllGridImages({ force: true });
+    expect(searchPictures).toHaveBeenCalledTimes(2);
   });
 });

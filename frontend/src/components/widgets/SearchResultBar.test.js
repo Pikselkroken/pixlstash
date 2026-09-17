@@ -409,3 +409,61 @@ describe("SearchResultBar - the Esc keycap", () => {
     ).toBe("Clear search - press Esc twice, or click");
   });
 });
+
+describe("SearchResultBar - All / In text switch (#1197)", () => {
+  const textSearch = (overrides = {}) => ({
+    statusCount: 6,
+    statusLabel: 'matches for "coffee"',
+    isAllPicturesActive: true,
+    ...overrides,
+  });
+  const scopeGroup = (w) => w.find('[role="group"][aria-label="Show matches from"]');
+
+  it("is absent when no result matched text", () => {
+    expect(scopeGroup(mountBar(textSearch({ textMatchCount: 0 }))).exists()).toBe(
+      false,
+    );
+  });
+
+  it("appears with a text match, All pressed, the text count on In text", () => {
+    const group = scopeGroup(mountBar(textSearch({ textMatchCount: 4 })));
+    expect(group.exists()).toBe(true);
+    const [all, inText] = group.findAll("button");
+    expect(all.attributes("aria-pressed")).toBe("true");
+    expect(inText.attributes("aria-pressed")).toBe("false");
+    expect(inText.text()).toContain("In text");
+    expect(inText.text()).toContain("4");
+  });
+
+  it("pressing In text asks to narrow, pressing All asks to restore", async () => {
+    const w = mountBar(textSearch({ textMatchCount: 4 }));
+    await scopeGroup(w).findAll("button")[1].trigger("click");
+    expect(w.emitted("update:text-matches-only")).toEqual([[true]]);
+
+    await w.setProps({ textMatchesOnly: true });
+    const [all, inText] = scopeGroup(w).findAll("button");
+    expect(inText.attributes("aria-pressed")).toBe("true");
+    await all.trigger("click");
+    expect(w.emitted("update:text-matches-only")).toEqual([[true], [false]]);
+  });
+
+  it("gives way to the face search's tuning control", () => {
+    const w = mountBar(characterSearchProps({ textMatchCount: 4 }));
+    expect(scopeGroup(w).exists()).toBe(false);
+  });
+
+  it("announces the narrowed sentence", async () => {
+    vi.useFakeTimers();
+    const w = mountBar(textSearch({ textMatchCount: 4 }));
+    await w.setProps({
+      textMatchesOnly: true,
+      statusCount: 4,
+      statusLabel: 'matches in text for "coffee"',
+    });
+    vi.advanceTimersByTime(300);
+    await w.vm.$nextTick();
+    expect(w.find('[role="status"]').text()).toBe(
+      '4 matches in text for "coffee"',
+    );
+  });
+});

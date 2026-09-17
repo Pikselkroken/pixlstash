@@ -39,6 +39,7 @@ from .tag import Tag
 from .tag_prediction import TagPrediction
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.sql_chunking import chunked
 
 if TYPE_CHECKING:
     from .character import Character
@@ -200,6 +201,12 @@ def _scope_predicates_for_leaders(
 
 class Picture(SQLModel, table=True):
     ExportType: ClassVar[type["ExportType"]] = ExportType
+    # Left out of ``metadata_fields()`` (#1197): a screenshot's words and boxes
+    # run to kilobytes, which every metadata and search row would carry.
+    # ``GET /pictures/{id}/text`` serves them shaped; the generic
+    # ``GET /pictures/{id}/{field}`` reader still returns the raw columns, under
+    # the same picture scope.
+    OCR_FIELDS: ClassVar[frozenset] = frozenset({"ocr_text", "ocr_words"})
     id: int = Field(default=None, primary_key=True)
     file_path: Optional[str] = None
     description: Optional[str] = None
@@ -261,6 +268,16 @@ class Picture(SQLModel, table=True):
     aesthetic_score: Optional[float] = None
     smart_score: Optional[float] = Field(default=None, index=True)
     text_score: Optional[float] = Field(default=None, index=True)
+    # Text read out of the picture (#1197), words joined by spaces and lines by
+    # newlines. NULL means not read; "" means read and nothing found. Kept out
+    # of ``description`` so the caption embedding stays about meaning, and out
+    # of tags so the tag board and review queue never see it.
+    ocr_text: Optional[str] = Field(default=None)
+    # The same words with their boxes, as JSON lines of words:
+    # ``[[{"text": str, "box": [x, y, w, h]}, ...], ...]``, the box in fractions
+    # of the picture as displayed (orientation applied). NULL whenever
+    # ``ocr_text`` is.
+    ocr_words: Optional[str] = Field(default=None)
     pixel_sha: Optional[str] = Field(default=None, index=True)
     deleted: bool = Field(default=False, index=True)
     # When the picture was soft-deleted to the scrapheap (UTC). Stamped on the
@@ -596,6 +613,18 @@ class Picture(SQLModel, table=True):
             "id",
             sqlite_where=text("aesthetic_score IS NULL"),
         ),
+        # MissingOcrFinder: ocr_text IS NULL AND deleted IS 0 AND text_score >=
+        # the threshold, most text first. The two equality terms lead, as above;
+        # the range on text_score comes last so the index also serves the ORDER
+        # BY. Without it the probe range-scans every qualifying picture, read or
+        # not, on ``ix_picture_text_score``.
+        Index(
+            "ix_picture_ocr_unread",
+            "ocr_text",
+            "deleted",
+            "text_score",
+            sqlite_where=text("ocr_text IS NULL"),
+        ),
     )
 
     class Config:
@@ -658,6 +687,7 @@ class Picture(SQLModel, table=True):
         clip_text_to_embedding: callable = None,
         fuzzy_weight: float = 0.5,
         embedding_weight: float = 0.5,
+        text_match_weight: float = 0.0,
         threshold: float = 0.0,
         offset: int = 0,
         limit: int = sys.maxsize,
@@ -681,6 +711,11 @@ class Picture(SQLModel, table=True):
         """
         Hybrid semantic search: combines fuzzy tag search (levenshtein SQL function) and embedding similarity (cosine_similarity SQL function).
         Orders by combined score in SQL.
+
+        Text read out of a picture adds ``text_match_weight`` when every query
+        word appears in it (``ocr_text_match``), and nothing otherwise, so a
+        picture full of words gains nothing on searches its words do not answer.
+        The search route passes ``database.OCR_TEXT_MATCH_WEIGHT``.
         """
         if candidate_ids is not None and not candidate_ids:
             return []
@@ -762,14 +797,20 @@ class Picture(SQLModel, table=True):
             0.0, 1.0 - func.coalesce(tag_subq.c.min_tag_dist, 1.0)
         )
         fuzzy_score = func.pow(raw_fuzzy_score, 1.5)
+        # Skipped outright at weight 0 rather than evaluated and multiplied away.
+        text_match_score = (
+            func.ocr_text_match(cls.ocr_text, query) if text_match_weight else 0.0
+        )
 
         # Main query: join pictures with tag_subq, compute combined score
         stmt = (
             select(
                 cls,
-                (fuzzy_weight * fuzzy_score + embedding_weight * embedding_score).label(
-                    "combined_score"
-                ),
+                (
+                    fuzzy_weight * fuzzy_score
+                    + embedding_weight * embedding_score
+                    + text_match_weight * text_match_score
+                ).label("combined_score"),
                 fuzzy_score.label("fuzzy_score"),
                 embedding_score.label("embedding_score"),
                 tag_subq.c.min_tag_dist.label(
@@ -865,6 +906,37 @@ class Picture(SQLModel, table=True):
             if combined_score and combined_score >= threshold:
                 output.append((pic, combined_score))
         return output
+
+    @classmethod
+    def ids_matching_text(
+        cls, session: Session, query: str, picture_ids: List[int]
+    ) -> set[int]:
+        """Return which of *picture_ids* have read text matching every query word.
+
+        Only the ids given are looked at, by primary key, so the cost follows
+        the rows a search returned rather than the size of the library.
+
+        Args:
+            session: Open database session.
+            query: The search text.
+            picture_ids: The pictures to check, typically one search's rows.
+
+        Returns:
+            The subset of *picture_ids* for which ``ocr_text_match`` is 1.
+        """
+        matched: set[int] = set()
+        for chunk in chunked(list(picture_ids)):
+            matched.update(
+                session.exec(
+                    select(cls.id).where(
+                        cls.id.in_(chunk),
+                        cls.ocr_text.is_not(None),
+                        cls.ocr_text != "",
+                        func.ocr_text_match(cls.ocr_text, query) > 0,
+                    )
+                ).all()
+            )
+        return matched
 
     @staticmethod
     def serialize_with_likeness(picture_and_score):
@@ -1200,7 +1272,7 @@ class Picture(SQLModel, table=True):
         """
         Return a list of simple scalar fields
         """
-        return cls.scalar_fields() - cls.large_binary_fields()
+        return cls.scalar_fields() - cls.large_binary_fields() - cls.OCR_FIELDS
 
     @classmethod
     def grid_fields(cls):
