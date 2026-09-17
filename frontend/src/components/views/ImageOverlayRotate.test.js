@@ -382,6 +382,27 @@ describe("ImageOverlay - the picture on screen after a rotate", () => {
     expect(wrapper.find(".overlay-img").attributes("src")).toContain("?v=o6");
   });
 
+  it("stays turned when the refreshed row is not from the frozen snapshot", async () => {
+    // An expanded stack member is resolved from the filmstrip's own rows, which
+    // the snapshot patch never reaches. Same shape here: the picture is absent
+    // from the snapshot, so the grid's stale row re-resolves it directly.
+    const wrapper = await openOverlay({ id: 7, format: "jpg", tags: [] }, []);
+
+    metadataOrientation = 6;
+    press("]");
+    await flush();
+    await flush();
+    expect(wrapper.find(".overlay-img").attributes("src")).toContain("?v=o6");
+
+    await wrapper.setProps({
+      allImages: [{ id: 7, format: "jpg", orientation: 1, tags: [] }],
+    });
+    await flush();
+    await flush();
+
+    expect(wrapper.find(".overlay-img").attributes("src")).toContain("?v=o6");
+  });
+
   it("stays turned after moving to a neighbour and back", async () => {
     // Coming back re-resolves the picture from the frozen snapshot too, and a
     // row with no orientation there would pin the bare, unrotated URL.
