@@ -355,6 +355,28 @@ describe("ImageOverlay - the picture on screen after a rotate", () => {
     expect(srcAfter).not.toContain("sha-stable");
   });
 
+  it("stays turned when the grid hands back its list after the rotate", async () => {
+    // `overlay-change` makes the grid re-read the tile and push a new
+    // `allImages`. The overlay re-resolves the open picture from the snapshot it
+    // froze on open, which still carries the pre-rotate orientation; letting
+    // that win put the old `?v=` back and the browser repainted the old bytes.
+    const wrapper = await openOverlay();
+
+    metadataOrientation = 6;
+    press("]");
+    await flush();
+    await flush();
+    expect(wrapper.find(".overlay-img").attributes("src")).toContain("?v=o6");
+
+    await wrapper.setProps({
+      allImages: [{ id: 7, format: "jpg", orientation: 6, tags: [] }],
+    });
+    await flush();
+    await flush();
+
+    expect(wrapper.find(".overlay-img").attributes("src")).toContain("?v=o6");
+  });
+
   it("unpins the URL when the first known orientation comes from rotate", async () => {
     const defaultGetMock = getMock.getMockImplementation();
     let metadataCalls = 0;

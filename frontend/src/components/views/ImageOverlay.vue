@@ -1401,6 +1401,16 @@ function setOverlayImageById(nextId) {
       // for the same image would clobber an optimistic rating change (a 0 toggle is a
       // valid edit, hence the != null guard rather than a truthiness check).
       ...(isSameImage && existingScore != null ? { score: existingScore } : {}),
+      // Preserve the file's bytes as fetchOverlayMetadata last read them. After an
+      // in-place rotate the grid pushes a new list, and the frozen snapshot still
+      // carries the pre-rotate orientation: re-applying it puts the old `?v=` back
+      // on the <img> and the browser repaints the unrotated file from its cache.
+      ...(isSameImage && image.value?.orientation != null
+        ? { orientation: image.value.orientation }
+        : {}),
+      ...(isSameImage && image.value?.pixel_sha != null
+        ? { pixel_sha: image.value.pixel_sha }
+        : {}),
       tags: dedupeTagList(
         isSameImage ? (existingTags.length ? existingTags : targetTags) : [],
       ),
