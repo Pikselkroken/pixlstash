@@ -74,7 +74,7 @@ const globalOpts = {
       "v-slider": true,
       "v-switch": true,
       VTooltip: true,
-      GbFilterPanel: true,
+      FilterMenu: true,
       TbExportPanel: true,
       TbImportPanel: true,
       TbTagPanel: true,
@@ -539,5 +539,34 @@ describe("Toolbar - the ⋯ overflow mirrors its controls", () => {
     expect(wrapper.findComponent({ name: "TbGlobalActions" }).exists()).toBe(
       true,
     );
+  });
+});
+
+describe("Toolbar - the funnel is lit by the filter strip's chips", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  function funnel(wrapper) {
+    return wrapper
+      .findAll(".v-menu-stub")
+      .map((menu) => menu.find("button"))
+      .find((b) => b.exists() && b.attributes("aria-label") === "Filters");
+  }
+
+  it("is lit while a filter is on, and off when none is", async () => {
+    const wrapper = mountToolbar({ selectedCharacter: "ALL" });
+    expect(funnel(wrapper).classes()).not.toContain("bar-btn--active");
+    useFilterStore().tagFilter = ["hat"];
+    await wrapper.vm.$nextTick();
+    expect(funnel(wrapper).classes()).toContain("bar-btn--active");
+  });
+
+  // "No character" only applies in All Pictures, where it has a chip. In a set
+  // view it has none, so the funnel must not claim a filter nobody can see.
+  it("stays dark for a No character flag left over outside All Pictures", async () => {
+    useFilterStore().unassignedOnlyFilter = true;
+    const wrapper = mountToolbar({ selectedCharacter: "null" });
+    expect(funnel(wrapper).classes()).not.toContain("bar-btn--active");
   });
 });

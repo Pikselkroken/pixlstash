@@ -1016,10 +1016,7 @@ class Picture(SQLModel, table=True):
         """
         # Imported lazily: predicate_filter imports Picture, so a module-level
         # import here would be circular.
-        from pixlstash.utils.query.predicate_filter import (
-            PredicateFilter,
-            comfyui_leaf_parts,
-        )
+        from pixlstash.utils.query.predicate_filter import PredicateFilter
 
         query = select(func.count(cls.id)) if count_only else select(cls)
 
@@ -1105,16 +1102,6 @@ class Picture(SQLModel, table=True):
         )
         query = predicate_filter.apply(query)
 
-        # Build comfyui filter conditions via the shared leaf-snippet helper.  Two
-        # parallel fragment lists are returned:
-        # comfyui_self_parts   – fragments that test the picture row itself.
-        # comfyui_member_parts – equivalent fragments that test an aliased member
-        #                        row (_m) used in a stack-member EXISTS subquery.
-        # comfyui_bind_params  – shared bind-parameter dict (same names in both).
-        comfyui_self_parts, comfyui_member_parts, comfyui_bind_params = (
-            comfyui_leaf_parts(comfyui_models_filter, comfyui_loras_filter)
-        )
-
         # A stack leader is either an unstacked picture or the picture with
         # stack_position == 0 in its stack.  This inline condition replaces the
         # former _get_stack_leader_ids() round-trip + IN(ids) approach, which
@@ -1170,37 +1157,10 @@ class Picture(SQLModel, table=True):
                 )
             else:
                 query = query.where(cls.stack_leader_filter(leader_scope))
-        if comfyui_self_parts:
-            self_where = " OR ".join(comfyui_self_parts)
-            if stack_leaders_only:
-                # Restore the original behaviour: include a stack leader when
-                # *any* member of the stack satisfies the ComfyUI filter, not
-                # only when the leader row itself satisfies it.
-                member_where = " OR ".join(comfyui_member_parts)
-                # NOTE: the whole disjunction is wrapped in an extra outer pair of
-                # parentheses.  ``text()`` is opaque, so SQLAlchemy adds none of its
-                # own, and SQL ``AND`` binds tighter than ``OR``: without the wrapper
-                # this clause renders as ``... AND deleted = 0 AND <leader condition>
-                # AND self_match OR member_match``, which parses as ``(everything AND
-                # self) OR member``.  The stack-member branch then escapes every other
-                # predicate (the deleted filter, the stack-leader collapse, and any id
-                # or project scope narrowing) and returns each member of a matching
-                # stack as its own row.  Same trap, same fix, as the
-                # ``tags_confidence_above_filter`` branch in predicate_filter.py.
-                comfyui_sql = (
-                    f"(({self_where})"
-                    f" OR (picture.stack_id IS NOT NULL"
-                    f" AND EXISTS ("
-                    f"SELECT 1 FROM picture AS _m"
-                    f" WHERE _m.stack_id = picture.stack_id"
-                    f" AND ({member_where})"
-                    f")))"
-                )
-                query = query.where(text(comfyui_sql).bindparams(**comfyui_bind_params))
-            else:
-                query = query.where(
-                    text(f"({self_where})").bindparams(**comfyui_bind_params)
-                )
+        for clause in cls.comfyui_filter_clauses(
+            comfyui_models_filter, comfyui_loras_filter, stack_leaders_only
+        ):
+            query = query.where(clause)
 
         if sort_mech and not count_only:
             if sort_mech.key == SortMechanism.Keys.IMAGE_SIZE:
@@ -1384,6 +1344,8 @@ class Picture(SQLModel, table=True):
         stack_state: Optional[str] = None,
         impossible_sources: Optional[List[str]] = None,
         file_path_prefix: Optional[str] = None,
+        comfyui_models_filter: Optional[List[str]] = None,
+        comfyui_loras_filter: Optional[List[str]] = None,
         picture_ids: Optional[List[int]] = None,
         guest_session_id: Optional[str] = None,
         guest_token_public_id: Optional[str] = None,
@@ -1422,8 +1384,8 @@ class Picture(SQLModel, table=True):
 
         # Intrinsic-attribute predicates via the shared compiler.  The unassigned /
         # project / deleted scoping is applied above; stack-leader collapsing stays
-        # below.  find_unassigned never filters on comfyui / import-source /
-        # import-excluded, so those fields are left unset.
+        # below.  ComfyUI membership is applied after it, the same way `find`
+        # applies it. Import-source / import-excluded are not filtered here.
         #
         # ``file_path_prefix`` IS honoured, on the same children-only semantics
         # ``find()`` uses, so "the unassigned pictures in one folder" is one
@@ -1449,6 +1411,10 @@ class Picture(SQLModel, table=True):
             file_path_prefix=file_path_prefix,
             apply_deleted_filter=False,
         ).apply(query)
+        for clause in cls.comfyui_filter_clauses(
+            comfyui_models_filter, comfyui_loras_filter, stack_leaders_only
+        ):
+            query = query.where(clause)
 
         if stack_leaders_only:
             # Same rule and same implementation as `find` - see
@@ -1551,6 +1517,57 @@ class Picture(SQLModel, table=True):
             query = query.offset(offset).limit(limit)
 
         return session.exec(query).all()
+
+    @classmethod
+    def comfyui_filter_clauses(
+        cls,
+        models_filter: Optional[List[str]],
+        loras_filter: Optional[List[str]],
+        stack_leaders_only: bool,
+    ) -> list:
+        """WHERE clauses for the ComfyUI checkpoint and LoRA filters.
+
+        One clause per list, ANDed by the caller: ticking a checkpoint and a
+        LoRA narrows to pictures made with both. Within one list the names are
+        ORed, since a picture records one checkpoint and "either of these" is
+        the only useful reading of two. Both list-reading paths (`find` and
+        `find_unassigned`) take them from here, so a scope cannot drop them.
+
+        With ``stack_leaders_only`` a leader also matches when *any* member of
+        its stack does, not only when the leader row itself does.
+        """
+        # Imported lazily: predicate_filter imports Picture.
+        from pixlstash.utils.query.predicate_filter import comfyui_leaf_parts
+
+        clauses = []
+        for models, loras in ((models_filter, None), (None, loras_filter)):
+            self_parts, member_parts, bind_params = comfyui_leaf_parts(models, loras)
+            if not self_parts:
+                continue
+            self_where = " OR ".join(self_parts)
+            if not stack_leaders_only:
+                clauses.append(text(f"({self_where})").bindparams(**bind_params))
+                continue
+            member_where = " OR ".join(member_parts)
+            # The whole disjunction is wrapped in an extra outer pair of
+            # parentheses. ``text()`` is opaque, so SQLAlchemy adds none of its
+            # own, and SQL ``AND`` binds tighter than ``OR``: without the wrapper
+            # the stack-member branch escapes every other predicate (the deleted
+            # filter, the stack-leader collapse, any id or project scope) and
+            # returns each member of a matching stack as its own row. Same trap,
+            # same fix, as ``tags_confidence_above_filter`` in predicate_filter.py.
+            clauses.append(
+                text(
+                    f"(({self_where})"
+                    f" OR (picture.stack_id IS NOT NULL"
+                    f" AND EXISTS ("
+                    f"SELECT 1 FROM picture AS _m"
+                    f" WHERE _m.stack_id = picture.stack_id"
+                    f" AND ({member_where})"
+                    f")))"
+                ).bindparams(**bind_params)
+            )
+        return clauses
 
     @classmethod
     def stack_leader_filter(cls, scope_predicates: list):

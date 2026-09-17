@@ -478,8 +478,8 @@ kbd {
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Toolbar menus - shared chrome for the Sort / Filter / Grid-view popovers.
-   These three menus live in two different components (Toolbar.vue and
-   GbFilterPanel.vue) but must read as one family, so their chrome and controls
+   These menus live in several components (Toolbar.vue and the Filter*Menu
+   panels) but must read as one family, so their chrome and controls
    are defined here, globally, on the design tokens. See the "Toolbar Menus"
    card in the PixlStash Design System.
 
@@ -967,6 +967,114 @@ kbd {
 .tbm-ghost:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+/* ── Filter menus: a root menu of kinds and one submenu beside it ───────────
+   Shared by FilterMenu, FilterChecklistMenu and FilterConfidenceMenu, which is
+   why they are global. Rows follow OptionRows: 28px, radius-sm, hover wash, no
+   fill; a trailing chevron opens a submenu, a trailing number is a count. */
+.fm-sub {
+  width: var(--filter-submenu-w);
+  max-width: 94vw;
+}
+.fm-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: calc(100% + var(--space-3) * 2);
+  /* The design system's menu row: 32px, a 16px leading glyph, a 16px chevron. */
+  height: var(--control-h-bar);
+  margin-inline: calc(var(--space-3) * -1);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  color: rgb(var(--v-theme-on-panel));
+  font-size: var(--text-sm);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-standard);
+}
+.fm-row:hover,
+.fm-row[aria-expanded="true"] {
+  background: var(--hover-wash);
+}
+.fm-row[aria-checked="true"],
+.fm-row[aria-expanded="true"] {
+  font-weight: var(--weight-medium);
+}
+.fm-row:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+  background: none;
+}
+.fm-row-lead {
+  flex-shrink: 0;
+  opacity: var(--opacity-text-secondary);
+}
+.fm-row:hover .fm-row-lead,
+.fm-row[aria-expanded="true"] .fm-row-lead {
+  opacity: 1;
+}
+.fm-row-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fm-row-trail {
+  flex-shrink: 0;
+  opacity: var(--opacity-text-secondary);
+}
+.fm-row[aria-checked="true"] .fm-row-trail {
+  color: var(--selected-ink);
+  opacity: 1;
+}
+.fm-n {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
+}
+.fm-check {
+  display: flex;
+  width: calc(100% + var(--space-3) * 2);
+  min-height: var(--control-h-bar);
+  margin-inline: calc(var(--space-3) * -1);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+}
+.fm-check:hover {
+  background: var(--hover-wash);
+}
+/* The keyboard highlight in a checklist whose focus stays in the search field.
+   A wash, not a ring: a ring would read as a second focus. */
+.fm-check--kbd {
+  background: var(--hover-wash);
+}
+.fm-check-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fm-nest {
+  padding-left: var(--indent-step);
+}
+.fm-help {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
+}
+.fm-kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 1;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-input-background));
+  border: 1px solid rgb(var(--v-theme-border));
 }
 
 /* ── Bar buttons: the toolbar control dialect ──────────────────────────────

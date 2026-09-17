@@ -834,28 +834,38 @@ function clearConfidenceFilters(entries) {
 }
 
 // "Unscored" is not a star, so it maps to its own filter rather than to a score
-// range - the same shape as the smart-score chart's Unscored bucket below.
+// range - the same shape as the smart-score chart's Unscored bucket below. The
+// store lets a range and unscored combine (the filter menu's "include
+// unscored"), but each bar here is one pick, so a bar clears the other kind.
 function isScoreBarActive(label) {
-  if (label === "Unscored") return filterStore.unscoredOnlyFilter;
+  if (label === "Unscored")
+    return (
+      filterStore.unscoredOnlyFilter &&
+      filterStore.minScoreFilter == null &&
+      filterStore.maxScoreFilter == null
+    );
   const n = parseInt(label);
   if (isNaN(n)) return false;
-  return filterStore.minScoreFilter === n && filterStore.maxScoreFilter === n;
+  return (
+    filterStore.minScoreFilter === n &&
+    filterStore.maxScoreFilter === n &&
+    !filterStore.unscoredOnlyFilter
+  );
 }
 
 function handleScoreBarClick(label) {
+  const active = isScoreBarActive(label);
   if (label === "Unscored") {
-    filterStore.unscoredOnlyFilter = !filterStore.unscoredOnlyFilter;
+    filterStore.minScoreFilter = null;
+    filterStore.maxScoreFilter = null;
+    filterStore.unscoredOnlyFilter = !active;
     return;
   }
   const n = parseInt(label);
   if (isNaN(n)) return;
-  if (isScoreBarActive(label)) {
-    filterStore.minScoreFilter = null;
-    filterStore.maxScoreFilter = null;
-  } else {
-    filterStore.minScoreFilter = n;
-    filterStore.maxScoreFilter = n;
-  }
+  filterStore.unscoredOnlyFilter = false;
+  filterStore.minScoreFilter = active ? null : n;
+  filterStore.maxScoreFilter = active ? null : n;
 }
 
 const SMART_SCORE_LABEL_TO_BUCKET = {
@@ -989,6 +999,7 @@ function isAgreementCellActive(star, bucket) {
   return (
     filterStore.minScoreFilter === star &&
     filterStore.maxScoreFilter === star &&
+    !filterStore.unscoredOnlyFilter &&
     filterStore.smartScoreBucketFilter === bucket
   );
 }
@@ -1015,6 +1026,7 @@ function onAgreementCellClick(star, bucket, row, col) {
     clearAgreementFilter();
     return;
   }
+  filterStore.unscoredOnlyFilter = false;
   filterStore.minScoreFilter = star;
   filterStore.maxScoreFilter = star;
   filterStore.smartScoreBucketFilter = bucket;

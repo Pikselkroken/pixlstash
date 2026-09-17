@@ -210,11 +210,15 @@
              position learned here holds in Duplicates too. (The model shelf
              writes none and carries no undo - amendment #4.) -->
         <!-- ── Filter button ──────────────────────────────────────── -->
+        <!-- No count badge: the filter strip under the toolbar shows every
+             active filter as a chip. The menu stays open through every choice
+             (close-on-content-click off); Esc, a click outside or the funnel
+             close it. -->
         <v-menu
           v-model="gbFilterMenuOpen"
           :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
+          location="bottom start"
+          origin="top start"
           :offset="8"
           transition="scale-transition"
         >
@@ -223,21 +227,14 @@
               v-bind="menuProps"
               icon="filter"
               chevron
-              :badge="
-                filterStore.activeCount > 0
-                  ? filterStore.activeCount > 99
-                    ? '99+'
-                    : filterStore.activeCount
-                  : null
-              "
-              :active="filterStore.isActive && !gbFilterMenuOpen"
+              :active="filterChipCount > 0 && !gbFilterMenuOpen"
               :open="gbFilterMenuOpen"
               tooltip="Filters"
             />
           </template>
-          <GbFilterPanel
-            :selected-character="props.selectedCharacter"
-            :all-pictures-id="props.allPicturesId"
+          <FilterMenu
+            :count-base-query="props.filterCountBaseQuery"
+            :all-pictures-view="isAllPicturesView"
             :open="gbFilterMenuOpen"
           />
         </v-menu>
@@ -605,7 +602,8 @@ import {
   DEFAULT_THUMBNAIL_SIZE_LEVEL,
   sizeLabelForLevel,
 } from "../../utils/thumbnailSizes";
-import GbFilterPanel from "./GbFilterPanel.vue";
+import FilterMenu from "./FilterMenu.vue";
+import { filterChips } from "../../utils/filterChips";
 import TbGlobalActions from "./TbGlobalActions.vue";
 import TbExportPanel from "./TbExportPanel.vue";
 import TbImportPanel from "./TbImportPanel.vue";
@@ -623,6 +621,8 @@ const props = defineProps({
   allPicturesId: { type: String, required: true },
   backendUrl: { type: String, default: () => API_BASE_URL },
   comfyuiConfigured: { type: Boolean, default: false },
+  // The grid's view with no filters, for the filter menu's counts.
+  filterCountBaseQuery: { type: String, default: null },
 });
 
 const emit = defineEmits([
@@ -975,6 +975,17 @@ const gbSortTypeIcon = computed(() => {
 
 // ── Grid Bar: Filter ───────────────────────────────────────────────────────────
 const gbFilterMenuOpen = ref(false);
+// The funnel is lit exactly when the strip has a chip: the chips are the one
+// answer to "which filters are on", so the two cannot disagree.
+const isAllPicturesView = computed(
+  () =>
+    String(props.selectedCharacter ?? "") === String(props.allPicturesId ?? ""),
+);
+const filterChipCount = computed(
+  () =>
+    filterChips(filterStore, { allPicturesView: isAllPicturesView.value })
+      .length,
+);
 
 // ── Grid Bar: View ─────────────────────────────────────────────────────────────
 const gbViewMenuOpen = ref(false);

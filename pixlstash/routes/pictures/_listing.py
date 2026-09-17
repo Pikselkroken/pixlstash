@@ -279,7 +279,10 @@ class PictureListFilters:
         unscored: bool = Query(
             False,
             description=(
-                "Only pictures the user never rated: score IS NULL or score = 0."
+                "Pictures the user never rated: score IS NULL or score = 0. "
+                "With min_score/max_score, added to that range rather than "
+                "intersected with it, so a range spanning every rating "
+                "(min_score=0 or max_score=5) plus unscored is every picture."
             ),
         ),
         smart_score_bucket: str | None = Query(
@@ -955,6 +958,8 @@ def select_pictures_for_listing(
                 )
                 or None,
                 hidden_tags_filter=hidden_tags,
+                comfyui_models_filter=query_params.get("comfyui_models_filter"),
+                comfyui_loras_filter=query_params.get("comfyui_loras_filter"),
                 picture_ids=(
                     [int(i) for i in query_params["id"] if str(i).isdigit()]
                     if query_params.get("id")
@@ -991,6 +996,8 @@ def select_pictures_for_listing(
             stack_state=stack_state,
             impossible_sources=impossible_sources,
             file_path_prefix=file_path_prefix,
+            comfyui_models_filter=query_params.get("comfyui_models_filter"),
+            comfyui_loras_filter=query_params.get("comfyui_loras_filter"),
             picture_ids=(
                 [int(i) for i in query_params["id"] if str(i).isdigit()]
                 if query_params.get("id")

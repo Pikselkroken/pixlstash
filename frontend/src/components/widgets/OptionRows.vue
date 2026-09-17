@@ -33,8 +33,8 @@
 
 <script setup>
 /**
- * Pick one from a long or server-supplied list: sort by, and only sort by
- * (docs/design/buttons.md). Two to five short options are Segmented.
+ * Pick one from a long or server-supplied list: sort by, and the filter menu's
+ * pick-one lists. Two to five short options are Segmented.
  *
  * NO FILL. A fill means "press me", so the selected row carries a trailing
  * olive check and a medium-weight label in ink: olive marks, words stay
