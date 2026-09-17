@@ -36,6 +36,8 @@ from pixlstash.utils.comfyui_utilities import (
     collect_seed_inputs,
     extract_comfy_workflow_info,
     extract_generation_info,
+    NotAWorkflowError,
+    check_comfy_workflow,
     find_comfy_api_prompt,
     summarize_comfy_workflow,
 )
@@ -184,9 +186,11 @@ def _store_workflow(
     Raises:
         FileExistsError: *name* holds a different workflow and neither
             *overwrite* nor *keep_both* is set.
+        NotAWorkflowError: *workflow* is not shaped like a ComfyUI workflow.
         RecursionError: The document nests too deeply to compare.
         ValueError: *name* escapes the user folder.
     """
+    check_comfy_workflow(workflow)
     # A file exported while workflows carried placeholder tokens is stored
     # the way the start-up migration left its siblings, so it can run and
     # so a copy of a migrated workflow matches it.
@@ -2475,7 +2479,8 @@ def create_router(server) -> APIRouter:
             "workflow directory (a file still carrying placeholder tokens is "
             "stored with them migrated to bindings). A copy of a workflow already stored is matched "
             "to it rather than stored twice. A name taken by a different "
-            "workflow is refused unless overwrite or keep_both is set."
+            "workflow is refused unless overwrite or keep_both is set. A "
+            "document not shaped like a ComfyUI workflow is refused with 400."
         ),
         response_model=ComfyUIWorkflowImportResponse,
     )
@@ -2503,6 +2508,9 @@ def create_router(server) -> APIRouter:
                     overwrite=bool(payload.get("overwrite")),
                     keep_both=bool(payload.get("keep_both")),
                 )
+        except NotAWorkflowError as exc:
+            logger.warning("Refused importing %s: %s", name, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RecursionError as exc:
             logger.warning("Refused a workflow import that nests too deeply: %s", exc)
             raise HTTPException(

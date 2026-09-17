@@ -26,6 +26,7 @@ from pixlstash.services.workflow_inputs import (
 )
 from pixlstash.services.workflow_hash import topology_hash
 from pixlstash.services.workflow_io import detect_workflow_io
+from pixlstash.utils.comfyui_utilities import NotAWorkflowError, check_comfy_workflow
 
 BUILT_IN = (
     pathlib.Path(comfyui_module.__file__).parent.parent
@@ -728,7 +729,11 @@ def test_an_unfileable_or_too_deep_import_is_handled(import_route):
     call, user_dir, _built_in, _hub = import_route
     # Reducing this raises AttributeError, not WorkflowGraphError: the file is
     # still stored, just not filed.
-    odd = {"nodes": [{"id": 1, "type": "SaveImage"}], "definitions": ["x"]}
+    odd = {
+        "nodes": [{"id": 1, "type": "SaveImage"}],
+        "links": [],
+        "definitions": ["x"],
+    }
     body = call(name="odd", workflow=odd)
     assert body["topology_hash"] is None
     assert _load(user_dir / "odd.json") == odd
@@ -737,10 +742,71 @@ def test_an_unfileable_or_too_deep_import_is_handled(import_route):
     for _ in range(5000):
         current["n"] = {}
         current = current["n"]
+    # Inside a node, so it is a workflow until it is compared.
+    deep = {"1": {"class_type": "SaveImage", "inputs": deep}}
     with pytest.raises(HTTPException) as refused:
         call(name="deep", workflow=deep)
     assert refused.value.status_code == 400
+    assert refused.value.detail == "Workflow JSON nests too deeply"
     assert not (user_dir / "deep.json").exists()
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"name": "package", "version": "1.0.0", "dependencies": {}},
+        {},
+        {"nodes": [], "links": []},
+        {"nodes": [{"id": 1}], "links": []},
+        {"nodes": [{"type": "SaveImage"}], "links": []},
+        {"nodes": [{"id": 1, "type": "SaveImage"}], "links": {}},
+        {"nodes": [{"id": 1, "type": "SaveImage"}], "links": None, "state": {}},
+        {"nodes": ["SaveImage"], "links": []},
+        # React Flow and n8n exports: nodes with an id and type, but no links.
+        {"nodes": [{"id": "1", "type": "input"}], "edges": []},
+        {"nodes": [{"id": "a", "type": "n8n-nodes-base.start"}], "connections": {}},
+        {"1": {"class_type": "SaveImage", "inputs": {}}, "version": 2},
+        {"1": {"class_type": "SaveImage"}},
+        {"prompt": {"1": {"inputs": {}}}},
+    ],
+)
+def test_a_document_that_is_not_a_workflow_is_refused(import_route, document):
+    call, user_dir, _built_in, _hub = import_route
+    with pytest.raises(HTTPException) as refused:
+        call(name="unrelated", workflow=document)
+    assert refused.value.status_code == 400
+    assert "not a ComfyUI workflow" in refused.value.detail
+    assert not (user_dir / "unrelated.json").exists()
+
+
+def test_both_formats_are_accepted_with_pixlstash_keys_or_a_prompt_wrapper():
+    graph = _t2i_graph()
+    check_comfy_workflow(graph)
+    check_comfy_workflow({**graph, "pixlstash_output_nodes": ["6"]})
+    check_comfy_workflow({"prompt": graph, "extra_data": {}})
+    # Schema version 1 leaves out an empty links list.
+    node = {"id": 1, "type": "SaveImage"}
+    check_comfy_workflow({"version": 1, "state": {"lastNodeId": 1}, "nodes": [node]})
+    check_comfy_workflow({"last_node_id": 1, "nodes": [node]})
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted(BUILT_IN.glob("*.json")) + sorted(UI_FIXTURES.glob("*.json")),
+    ids=lambda path: path.name,
+)
+def test_every_shipped_and_fixture_workflow_is_accepted(path):
+    check_comfy_workflow(_load(path))
+
+
+def test_a_refusal_names_the_node_id_and_cuts_a_long_key_short():
+    nodes = [{"id": 1, "type": "SaveImage"}, {"id": 7}]
+    with pytest.raises(NotAWorkflowError, match="node '7' has no type"):
+        check_comfy_workflow({"nodes": nodes, "links": []})
+    graph = {**_t2i_graph(), "x" * 5000: 1}
+    with pytest.raises(NotAWorkflowError) as refused:
+        check_comfy_workflow(graph)
+    assert len(str(refused.value)) < 200
 
 
 def test_deleting_a_workflow_removes_its_migration_backup(import_route):
@@ -802,10 +868,11 @@ def test_a_broken_inbox_file_is_left_and_the_rest_imported(import_route, caplog)
     call.inbox.mkdir()
     (call.inbox / "broken.json").write_text("{not json", encoding="utf-8")
     (call.inbox / "list.json").write_text("[]", encoding="utf-8")
+    (call.inbox / "other.json").write_text('{"name": "x"}', encoding="utf-8")
     (call.inbox / "fine.json").write_text(json.dumps(_t2i_graph()), encoding="utf-8")
     assert workflow_inbox.reconcile(str(call.inbox), call.store) == 1
-    assert "broken.json" in caplog.text and "list.json" in caplog.text
-    assert "broken.json" in _inbox_names(call) and "list.json" in _inbox_names(call)
+    for left in ("broken.json", "list.json", "other.json"):
+        assert left in caplog.text and left in _inbox_names(call)
     assert sorted(p.name for p in user_dir.iterdir()) == ["fine.json"]
 
 
