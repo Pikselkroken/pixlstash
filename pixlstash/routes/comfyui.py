@@ -1347,7 +1347,10 @@ class ComfyUIRecipeModelSlot(BaseModel):
     one shelf model has it - the same tier the shelf's own picture counts use.
     """
 
-    model_config = ConfigDict(extra="allow")
+    # No `extra="allow"` here, unlike its siblings in this module. This route
+    # varies its answer by credential, so the model is a disclosure boundary: a
+    # key some future version of the service starts returning must be declared
+    # here before it reaches anybody, rather than passing through unread.
 
     name: str
     widget: str
@@ -1359,7 +1362,10 @@ class ComfyUIRecipeModelSlot(BaseModel):
 class ComfyUIRecipeSetting(BaseModel):
     """One sampler setting of the recipe: ``steps``, ``cfg``, ``width``…"""
 
-    model_config = ConfigDict(extra="allow")
+    # No `extra="allow"` here, unlike its siblings in this module. This route
+    # varies its answer by credential, so the model is a disclosure boundary: a
+    # key some future version of the service starts returning must be declared
+    # here before it reaches anybody, rather than passing through unread.
 
     label: str
     value: Any = None
@@ -1369,11 +1375,17 @@ class ComfyUIRecipeSetting(BaseModel):
 class ComfyUIRecipeInput(BaseModel):
     """The resolution lock: which picture one input of the run loaded.
 
-    ``input_picture_id`` is null once that picture has left this library, which
-    does not unmake what was made from it - ``pixel_sha`` still identifies it.
+    **Served to a fully-unscoped owner only** - a row names another picture's id
+    and its content hash, which a picture-scoped token is refused everywhere
+    else. ``input_picture_id`` is null once that picture has left this library,
+    which does not unmake what was made from it: ``pixel_sha`` still identifies
+    it.
     """
 
-    model_config = ConfigDict(extra="allow")
+    # No `extra="allow"` here, unlike its siblings in this module. This route
+    # varies its answer by credential, so the model is a disclosure boundary: a
+    # key some future version of the service starts returning must be declared
+    # here before it reaches anybody, rather than passing through unread.
 
     node_ref: str
     position: int
@@ -2831,6 +2843,10 @@ def create_router(server) -> APIRouter:
         # chunk is the recipe; the UI `workflow` chunk names the same files but
         # not the strengths they were loaded at, so a file that carries only the
         # latter gets model names with no strength rather than nothing.
+        # The Recipe section's owner-only half is not read for anyone else
+        # either: `describe_recipe` would drop it, and a row nobody is going to
+        # be served is a row worth not fetching.
+        owner = server.auth.is_unscoped_owner_request(request)
         return {
             **workflow_info,
             **describe_recipe(
@@ -2839,8 +2855,10 @@ def create_router(server) -> APIRouter:
                 (workflow_info.get("models") or [], workflow_info.get("loras") or []),
                 server.vault.db.run_immediate_read_task(
                     resolution_lock_in_session, picture_id=pic_id
-                ),
-                owner=server.auth.is_unscoped_owner_request(request),
+                )
+                if owner
+                else [],
+                owner=owner,
             ),
             "topology_hash": pic.workflow_topology_hash,
         }

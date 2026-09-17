@@ -429,7 +429,7 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
     pictures = vault.db.run_task(recipe_picture_counts, priority=DBPriority.IMMEDIATE)
     if not pictures:
         return {}
-    by_name, by_digest = recipe_asset_index(hub)
+    by_name, by_digest, _filenames = recipe_asset_index(hub)
     sorted_digests = sorted(by_digest)
 
     verified: dict[int, set[str]] = {}
@@ -465,19 +465,27 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
     }
 
 
-def recipe_asset_index(hub) -> tuple[dict[str, set[int]], dict[str, int]]:
-    """How a recipe's asset names reach shelf models: ``(by_name, by_digest)``.
+def recipe_asset_index(
+    hub,
+) -> tuple[dict[str, set[int]], dict[str, int], dict[int, str]]:
+    """How a recipe's asset names reach shelf models.
 
-    ``by_name`` maps a normalized basename to every model a file of that name
-    could be - the row's ``filename`` and each copy's basename - so a name two
-    rows share maps to both. ``by_digest`` maps a lowercase sha256 to its one
-    model.
+    Returns ``(by_name, by_digest, filenames)``. ``by_name`` maps a normalized
+    basename to every model a file of that name could be - the row's
+    ``filename`` and each copy's basename - so a name two rows share maps to
+    both. ``by_digest`` maps a lowercase sha256 to its one model. ``filenames``
+    is the same ``model`` read the first map is built from, kept by id rather
+    than thrown away: a caller that has resolved a digest needs the name to
+    show for it, and re-issuing the identical SELECT to get it is a second scan
+    of this table for nothing.
     """
     by_name: dict[str, set[int]] = {}
+    filenames: dict[int, str] = {}
     for row in hub.fetchall(
         "SELECT id, filename FROM model WHERE filename IS NOT NULL"
     ):
         by_name.setdefault(normalized_filename(row["filename"]), set()).add(row["id"])
+        filenames[row["id"]] = row["filename"]
     for row in hub.fetchall("SELECT model_id, relpath FROM model_file"):
         by_name.setdefault(normalized_filename(row["relpath"]), set()).add(
             row["model_id"]
@@ -486,7 +494,7 @@ def recipe_asset_index(hub) -> tuple[dict[str, set[int]], dict[str, int]]:
         row["sha256"].lower(): row["id"]
         for row in hub.fetchall("SELECT id, sha256 FROM model WHERE sha256 IS NOT NULL")
     }
-    return by_name, by_digest
+    return by_name, by_digest, filenames
 
 
 def models_for_digest(
@@ -563,7 +571,7 @@ def fetch_companions(hub, ids: list[int]) -> dict:
             "SELECT id, file_kind, display_name, filename, file_size FROM model"
         )
     }
-    by_name, by_digest = recipe_asset_index(hub)
+    by_name, by_digest, _filenames = recipe_asset_index(hub)
     sorted_digests = sorted(by_digest)
     # The ghost reader's rule (`hub/workflows._model_ghost_names`): a digest that
     # matches nothing proves nothing while a row still waits for its hash, since

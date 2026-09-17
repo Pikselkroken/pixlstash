@@ -30,7 +30,9 @@
             class="recipe-chip"
             :class="{ 'recipe-chip--linked': !!model.model_id }"
             :type="model.model_id ? 'button' : undefined"
-            @click="model.model_id ? openModelOnShelf(model.model_id) : undefined"
+            @click="
+              model.model_id ? openModelOnShelf(model.model_id) : undefined
+            "
           >
             <Tooltip :text="modelTooltip(model)" activator="parent" />
             <v-icon v-if="model.verified" size="12" class="recipe-chip-badge"
@@ -77,18 +79,22 @@
         <div class="recipe-input-row">
           <div
             v-for="input in inputs"
-            :key="`${input.node_ref}-${input.position}`"
+            :key="inputKey(input)"
             class="recipe-input"
-            :class="{ 'recipe-input--gone': !input.input_picture_id }"
+            :class="{ 'recipe-input--gone': !shownAsPicture(input) }"
           >
             <Tooltip :text="inputTooltip(input)" activator="parent" />
             <img
-              v-if="input.input_picture_id"
+              v-if="shownAsPicture(input)"
               class="recipe-input-thumb"
               :src="pictureThumbnailUrl(input.input_picture_id)"
-              alt=""
+              :alt="inputTooltip(input)"
+              @error="unloadable.add(inputKey(input))"
             />
-            <v-icon v-else size="18" class="recipe-input-thumb recipe-input-icon"
+            <v-icon
+              v-else
+              size="18"
+              class="recipe-input-thumb recipe-input-icon"
               >mdi-image-off-outline</v-icon
             >
           </div>
@@ -171,7 +177,7 @@
  * the grid's existing Remix dialog, and the two links are the shelf and the
  * Workflows view, each opened at the row this picture points to.
  */
-import { computed, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import Tooltip from "../widgets/Tooltip.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
@@ -186,6 +192,8 @@ const emit = defineEmits(["generate-variants"]);
 
 const router = useRouter();
 const collapsed = ref(false);
+/** Input rows whose thumbnail failed to load; see `shownAsPicture`. */
+const unloadable = reactive(new Set());
 
 const models = computed(() => props.recipe?.modelSlots || []);
 const settings = computed(() => props.recipe?.settings || []);
@@ -205,8 +213,17 @@ const SETTING_LABELS = {
   width: "Width",
 };
 
+/**
+ * `steps` → "Steps", and `steps (Refiner)` → "Steps (Refiner)".
+ *
+ * The backend qualifies a label by its node when a graph sets the same setting
+ * twice with two values, so the map is applied to the head rather than to the
+ * whole string.
+ */
 function settingLabel(label) {
-  return SETTING_LABELS[label] || label;
+  const [head, ...rest] = String(label).split(" (");
+  const mapped = SETTING_LABELS[head] || head;
+  return rest.length ? `${mapped} (${rest.join(" (")}` : mapped;
 }
 
 function formatValue(value) {
@@ -230,11 +247,28 @@ function modelTooltip(model) {
   return `${model.name} - not on your model shelf.`;
 }
 
+function inputKey(input) {
+  return `${input.node_ref}-${input.position}`;
+}
+
+/**
+ * A row that still has a picture to show.
+ *
+ * `input_picture_id` is nulled server-side once the input has left the library,
+ * and `unloadable` catches the rest: a row whose picture is still in the vault
+ * but whose thumbnail has not been written (or has been swept) would otherwise
+ * draw the browser's broken-image glyph, which reads as the panel being broken
+ * rather than as the picture being gone.
+ */
+function shownAsPicture(input) {
+  return Boolean(input.input_picture_id) && !unloadable.has(inputKey(input));
+}
+
 function inputTooltip(input) {
   const where = `${input.node_ref} · ${input.position + 1}`;
-  return input.input_picture_id
+  return shownAsPicture(input)
     ? `Input ${where}: picture ${input.input_picture_id}`
-    : `Input ${where}: the picture this run loaded is no longer in this library`;
+    : `Input ${where}: the picture this run loaded can no longer be shown`;
 }
 
 function openModelOnShelf(modelId) {
@@ -335,7 +369,7 @@ function downloadWorkflow() {
   background: rgba(var(--v-theme-on-dark-surface), 0.1);
   color: rgba(var(--v-theme-on-dark-surface), 0.85);
   border-radius: var(--radius-sm);
-  padding: var(--space-2) 6px; /* 6px horizontal has no token: between --space-2 (4px) and --space-3 (8px) */
+  padding: var(--space-2) var(--space-3);
 }
 
 .recipe-chip--linked {
@@ -368,6 +402,8 @@ function downloadWorkflow() {
 
 .recipe-settings {
   display: grid;
+  /* 96px = 12 steps of the 8px grid: the narrowest column that holds
+     "sampler_name" and its value without wrapping either. */
   grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
   gap: var(--space-2) var(--space-3);
   font-size: var(--text-2xs);
@@ -396,8 +432,10 @@ function downloadWorkflow() {
 }
 
 .recipe-input {
-  width: 44px;
-  height: 44px;
+  /* 40px = 5 steps of the 8px grid. Evidence, not a target: these tiles are
+     not interactive, so the 44px touch minimum does not apply. */
+  width: 40px;
+  height: 40px;
   border-radius: var(--radius-sm);
   overflow: hidden;
   background: rgba(var(--v-theme-shadow), 0.35);
@@ -449,7 +487,7 @@ function downloadWorkflow() {
 .recipe-details {
   background: rgba(var(--v-theme-shadow), 0.25);
   border-radius: var(--radius-md);
-  padding: var(--space-3) 10px; /* 10px horizontal has no token: between --space-3 (8px) and --space-4 (12px) */
+  padding: var(--space-3) var(--space-4);
 }
 
 .recipe-details summary {
@@ -466,7 +504,7 @@ function downloadWorkflow() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px; /* no token: 10px is between --space-3 (8px) and --space-4 (12px) */
+  gap: var(--space-4);
 }
 
 .recipe-summary-title {
@@ -509,7 +547,7 @@ function downloadWorkflow() {
 }
 
 .recipe-prompt {
-  min-height: 70px;
+  min-height: 72px;
   max-height: 160px;
   white-space: pre-wrap;
   word-break: break-word;

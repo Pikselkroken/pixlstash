@@ -19,6 +19,7 @@ import pytest
 
 from pixlstash.services.picture_recipe_service import (
     _model_slots,
+    _node_order,
     _resolve_against_shelf,
     _settings,
 )
@@ -114,11 +115,33 @@ def test_an_input_image_is_not_listed_as_a_model():
 
 
 def test_a_strength_wired_from_another_node_is_reported_as_none():
-    """A number computed at run time is not a number to print beside the file."""
+    """A number computed at run time is not a number to print beside the file.
+
+    The reduction files ``["9", 0]`` as a link rather than as a widget, so this
+    is the absent-key path;
+    :func:`test_a_strength_that_is_not_a_number_is_reported_as_none` is the
+    other one.
+    """
     graph = {
         "5": {
             "class_type": "LoraLoader",
             "inputs": {"lora_name": "Style.safetensors", "strength_model": ["9", 0]},
+        }
+    }
+    assert _model_slots(graph, ([], []))[0]["strength"] is None
+
+
+@pytest.mark.parametrize("value", ["0.8", True, None, {"weight": 0.8}])
+def test_a_strength_that_is_not_a_number_is_reported_as_none(value):
+    """The widget is there and holds something that is not a strength.
+
+    ``True`` is the one worth spelling out: Python reads a bool as an int, so
+    without the explicit check a toggle beside a LoRA would print as ``1.00``.
+    """
+    graph = {
+        "5": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": "Style.safetensors", "strength_model": value},
         }
     }
     assert _model_slots(graph, ([], []))[0]["strength"] is None
@@ -258,4 +281,48 @@ def test_an_unresolved_digest_keeps_the_digest_and_no_shelf_row():
 
 def test_without_a_hub_no_slot_claims_a_shelf_row():
     slots = _resolve_against_shelf(None, _model_slots(GRAPH, ([], [])))
+    # Non-empty first: "every slot is unmatched" is also true of no slots, and
+    # an empty list would make the assertion below prove nothing.
+    assert len(slots) == 3
     assert all("model_id" not in slot for slot in slots)
+
+
+# ===========================================================================
+# Ordering and labelling
+# ===========================================================================
+
+
+def test_a_setting_two_nodes_disagree_about_is_qualified_by_its_node():
+    """Two rows both reading "Steps" with different numbers read as a broken
+    screen rather than as a two-stage workflow."""
+    graph = {
+        "1": {"class_type": "KSampler", "inputs": {"steps": 20}},
+        "2": {
+            "class_type": "KSampler",
+            "_meta": {"title": "Refiner"},
+            "inputs": {"steps": 8},
+        },
+    }
+    assert [row["label"] for row in _settings(graph)] == [
+        "steps (KSampler)",
+        "steps (Refiner)",
+    ]
+
+
+def test_a_setting_two_nodes_agree_about_is_one_unqualified_row():
+    graph = {
+        "1": {"class_type": "KSampler", "inputs": {"steps": 20}},
+        "2": {"class_type": "KSampler", "inputs": {"steps": 20}},
+    }
+    assert [row["label"] for row in _settings(graph)] == ["steps"]
+
+
+def test_a_node_id_orders_as_a_number_not_as_text():
+    """Node 10 comes after node 7. A subgraph path orders segment by segment."""
+    assert sorted(["10", "7", "2", "75:61", "75:9"], key=_node_order) == [
+        "2",
+        "7",
+        "10",
+        "75:9",
+        "75:61",
+    ]

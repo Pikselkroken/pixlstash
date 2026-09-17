@@ -16,7 +16,8 @@ vi.mock("../../utils/apiClient", () => ({ API_BASE_URL: "/api/v1" }));
 vi.mock("../../api/pictures", () => ({
   pictureThumbnailUrl: (id) => `/api/v1/pictures/thumbnails/${id}.webp`,
 }));
-vi.mock("../../utils/clipboard", () => ({ copyText: vi.fn(async () => true) }));
+const copyText = vi.hoisted(() => vi.fn(async () => true));
+vi.mock("../../utils/clipboard", () => ({ copyText }));
 
 import OverlayRecipePanel from "./OverlayRecipePanel.vue";
 
@@ -54,8 +55,18 @@ const RECIPE = {
     { label: "sampler_name", value: "euler", node: "KSampler" },
   ],
   inputs: [
-    { node_ref: "7", position: 0, pixel_sha: "a".repeat(64), input_picture_id: 42 },
-    { node_ref: "8", position: 0, pixel_sha: "b".repeat(64), input_picture_id: null },
+    {
+      node_ref: "7",
+      position: 0,
+      pixel_sha: "a".repeat(64),
+      input_picture_id: 42,
+    },
+    {
+      node_ref: "8",
+      position: 0,
+      pixel_sha: "b".repeat(64),
+      input_picture_id: null,
+    },
   ],
 };
 
@@ -68,6 +79,7 @@ function render(props = {}) {
 
 beforeEach(() => {
   nav.push.mockClear();
+  copyText.mockClear();
 });
 
 describe("OverlayRecipePanel", () => {
@@ -89,6 +101,27 @@ describe("OverlayRecipePanel", () => {
     // A checkpoint has no strength, so it prints none rather than a zero.
     expect(chips[0].find(".recipe-chip-strength").exists()).toBe(false);
     expect(chips[1].find(".recipe-chip-strength").text()).toBe("0.80");
+  });
+
+  it("ticks only the model the recipe named by its digest", () => {
+    // The badge is the feature's whole claim: a ticked chip says "this exact
+    // file", an unticked one says "a file called that". Asserted per chip, so
+    // inverting the condition cannot leave the suite green.
+    const badged = render()
+      .findAll(".recipe-chip")
+      .map((chip) => chip.find(".recipe-chip-badge").exists());
+    expect(badged).toEqual([false, true, false]);
+  });
+
+  it("copies the workflow JSON, not a description of it", async () => {
+    const wrapper = render();
+    const copy = wrapper
+      .findAll(".recipe-action")
+      .find((b) => b.text().includes("Copy"));
+    await copy.trigger("click");
+    expect(copyText).toHaveBeenCalledWith(
+      JSON.stringify(RECIPE.workflow, null, 2),
+    );
   });
 
   it("makes a model on the shelf a link and one that is not inert", () => {
@@ -123,6 +156,18 @@ describe("OverlayRecipePanel", () => {
     expect(rows.map((r) => r.find("dd").text())).toEqual(["20", "euler"]);
   });
 
+  it("keeps the node qualifier on a setting a graph sets twice", () => {
+    // The backend writes `steps (Refiner)` when two samplers disagree; the
+    // label map must apply to the head rather than miss the whole string.
+    const wrapper = render({
+      recipe: {
+        ...RECIPE,
+        settings: [{ label: "steps (Refiner)", value: 8, node: "Refiner" }],
+      },
+    });
+    expect(wrapper.find(".recipe-setting dt").text()).toBe("Steps (Refiner)");
+  });
+
   it("shows a thumbnail per run input, and marks one that has left", () => {
     const inputs = render().findAll(".recipe-input");
     expect(inputs).toHaveLength(2);
@@ -133,7 +178,20 @@ describe("OverlayRecipePanel", () => {
     expect(inputs[1].classes()).toContain("recipe-input--gone");
   });
 
-  it("offers Generate variants only when a run could actually start", async () => {
+  it("falls back to the gone tile when a thumbnail will not load", async () => {
+    // Otherwise the browser's broken-image glyph reads as the panel being
+    // broken rather than as the picture being unshowable.
+    const wrapper = render();
+    await wrapper.findAll(".recipe-input")[0].find("img").trigger("error");
+    const tile = wrapper.findAll(".recipe-input")[0];
+    expect(tile.find("img").exists()).toBe(false);
+    expect(tile.classes()).toContain("recipe-input--gone");
+  });
+
+  // Named for what it checks. Whether the recipe is actually *replayable* is
+  // the Remix dialog's own pre-flight; this prop only carries whether ComfyUI
+  // is configured and the viewer may act at all.
+  it("offers Generate variants only when the caller says it may", async () => {
     expect(render().find(".recipe-action--primary").exists()).toBe(false);
     const wrapper = render({ canGenerateVariants: true });
     await wrapper.find(".recipe-action--primary").trigger("click");

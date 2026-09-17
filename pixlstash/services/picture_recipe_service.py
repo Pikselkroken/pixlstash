@@ -77,11 +77,20 @@ def describe_recipe(
             :func:`resolution_lock_in_session`. Passed in rather than read here,
             per the §10.1 rule that a service does its DB work on a session its
             caller opened.
-        owner: Whether the caller holds a fully-unscoped owner credential. A
-            scoped token is told the filename and the strength - both of which
-            it can already read out of the graph it is being served - and never
-            which shelf row the file is, which is a fact about the library
-            rather than about this picture.
+        owner: Whether the caller holds a fully-unscoped owner credential.
+
+    **Two of the three fields are owner-only, on one rule: a field about the
+    picture is served to whoever may see the picture, and a field about the
+    LIBRARY is not.** The filename and the strength of a model are in the graph
+    this route serves anyway, so they go to everyone; which row of the owner's
+    shelf that file is, does not. The resolution lock is the sharper case and
+    goes no further than the owner at all: a ``generation_input`` row names
+    ANOTHER picture's id and its ``pixel_sha``, and a token scoped to this
+    picture is refused that picture on every other route - so serving it here
+    would hand out an id the gate refuses, plus a content hash that answers
+    "does this library hold this exact image?" to anyone who can hash a
+    candidate. That is the BOLA-by-omission class ``docs/backend_architecture.md``
+    §16 exists to close, and no lineage is worth reopening it.
 
     Returns:
         ``{"model_slots": [...], "settings": [...], "inputs": [...]}``.
@@ -90,7 +99,7 @@ def describe_recipe(
     return {
         "model_slots": _resolve_against_shelf(hub, slots) if owner else slots,
         "settings": _settings(api_prompt),
-        "inputs": inputs,
+        "inputs": inputs if owner else [],
     }
 
 
@@ -187,19 +196,7 @@ def _resolve_against_shelf(hub, slots: list[dict]) -> list[dict]:
     if hub is None:
         return slots
     try:
-        by_name, by_digest = recipe_asset_index(hub)
-        # Only a digest slot needs the shelf's own filenames, and most graphs
-        # have none: a core LoRA loader names the file, not its hash.
-        filenames = (
-            {
-                row["id"]: row["filename"]
-                for row in hub.fetchall(
-                    "SELECT id, filename FROM model WHERE filename IS NOT NULL"
-                )
-            }
-            if any(SHA256_FIELD_RE.search(slot["widget"]) for slot in slots)
-            else {}
-        )
+        by_name, by_digest, filenames = recipe_asset_index(hub)
     except Exception:
         logger.warning(
             "Could not index the shelf for picture recipe models; the slots are "
@@ -268,7 +265,32 @@ def _settings(api_prompt: Optional[dict]) -> list[dict]:
         rows.append(
             {"label": label, "value": parameter.value, "node": parameter.node_title}
         )
+    # A graph with two samplers can set `steps` twice. Two rows both reading
+    # "Steps" with different numbers is a screen that says the workflow is
+    # inconsistent rather than that it has two stages, so where a label survives
+    # the dedupe more than once it is qualified by the node it belongs to.
+    repeated = {
+        row["label"]
+        for row in rows
+        if sum(1 for r in rows if r["label"] == row["label"]) > 1
+    }
+    for row in rows:
+        if row["label"] in repeated and row["node"]:
+            row["label"] = f"{row['label']} ({row['node']})"
     return rows
+
+
+def _node_order(node_ref: str) -> tuple:
+    """Sort key for a graph node id: numeric where it is a number.
+
+    ``"10"`` after ``"7"``, and a subgraph path (``"75:61"``) segment by
+    segment. A segment that is not a number sorts after the ones that are,
+    rather than raising.
+    """
+    return tuple(
+        (0, int(part), "") if part.isdigit() else (1, 0, part)
+        for part in str(node_ref).split(":")
+    )
 
 
 def resolution_lock_in_session(session: Session, picture_id: int) -> list[dict]:
@@ -282,8 +304,11 @@ def resolution_lock_in_session(session: Session, picture_id: int) -> list[dict]:
         select(GenerationInput, Picture.deleted)
         .where(GenerationInput.picture_id == picture_id)
         .outerjoin(Picture, Picture.id == GenerationInput.input_picture_id)
-        .order_by(GenerationInput.node_ref, GenerationInput.position)
     ).all()
+    # Ordered here rather than in SQL: a node ref is a graph id, and SQLite
+    # would sort it as text, putting node 10 before node 7. A subgraph id
+    # ("75:61") sorts by each segment for the same reason.
+    rows.sort(key=lambda pair: (_node_order(pair[0].node_ref), pair[0].position))
     return [
         {
             "node_ref": row.node_ref,

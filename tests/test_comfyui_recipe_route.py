@@ -719,35 +719,6 @@ def _topology_hash(server, pic_id: int) -> str:
     return value
 
 
-def test_the_recipe_read_carries_the_models_settings_and_workflow(env):
-    server, client, pic_id = env
-    _shelf_checkpoint(server)
-
-    r = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow")
-    assert r.status_code == 200, r.text
-    body = r.json()
-
-    slots = {slot["name"]: slot for slot in body["model_slots"]}
-    assert set(slots) == {"sd_xl_base_1.0.safetensors"}
-    assert slots["sd_xl_base_1.0.safetensors"]["model_id"] == _shelf_model_id(server)
-    # Matched by name, so it is a file called that and nothing stronger.
-    assert slots["sd_xl_base_1.0.safetensors"]["verified"] is False
-
-    assert {row["label"]: row["value"] for row in body["settings"]} == {"steps": 20}
-    # The graph itself is still served, unchanged: Copy and Download read it.
-    assert body["workflow"]["4"]["class_type"] == "CheckpointLoaderSimple"
-    # And the key the "Open in Workflows" link navigates by, which the scan
-    # wrote when it filed this picture.
-    assert body["topology_hash"] == _topology_hash(server, pic_id)
-
-
-def test_a_picture_nobody_ran_here_has_an_empty_resolution_lock(env):
-    """An import is not lineage: no `generation_input` row, so no claim."""
-    _server, client, pic_id = env
-    r = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow")
-    assert r.status_code == 200 and r.json()["inputs"] == [], r.text
-
-
 def _second_picture(client) -> int:
     """One more imported picture, to stand in as a run's input."""
     files = [
@@ -802,7 +773,34 @@ def _bin(server, picture_id: int):
     server.vault.db.run_task(write)
 
 
-def test_the_resolution_lock_names_the_picture_a_run_actually_loaded(env):
+def test_the_recipe_read_carries_the_models_settings_and_workflow(env):
+    server, client, pic_id = env
+    _shelf_checkpoint(server)
+
+    r = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow")
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    slots = {slot["name"]: slot for slot in body["model_slots"]}
+    assert set(slots) == {"sd_xl_base_1.0.safetensors"}
+    assert slots["sd_xl_base_1.0.safetensors"]["model_id"] == _shelf_model_id(server)
+    # Matched by name, so it is a file called that and nothing stronger.
+    assert slots["sd_xl_base_1.0.safetensors"]["verified"] is False
+
+    assert {row["label"]: row["value"] for row in body["settings"]} == {"steps": 20}
+    # The graph itself is still served, unchanged: Copy and Download read it.
+    assert body["workflow"]["4"]["class_type"] == "CheckpointLoaderSimple"
+    # And the key the "Open in Workflows" link navigates by, which the scan
+    # wrote when it filed this picture.
+    assert body["topology_hash"] == _topology_hash(server, pic_id)
+    # An import is not lineage: nothing ran here, so no `generation_input` row
+    # exists and none is invented.
+    assert body["inputs"] == []
+
+
+def test_the_resolution_lock_names_what_a_run_loaded_until_it_is_gone(env):
+    """Both states in one environment: a `Server` boot is the expensive part of
+    this module and neither half needs its own."""
     server, client, pic_id = env
     input_id = _second_picture(client)
     _lock_input(server, pic_id, input_id, "d" * 64)
@@ -818,26 +816,24 @@ def test_the_resolution_lock_names_the_picture_a_run_actually_loaded(env):
         }
     ]
 
-
-def test_an_input_that_has_left_the_library_keeps_its_sha_and_loses_its_id(env):
-    """Deleting the source does not unmake what was made from it - but the grid
-    can no longer show it, so the id must not be offered as if it could."""
-    server, client, pic_id = env
-    input_id = _second_picture(client)
-    _lock_input(server, pic_id, input_id, "e" * 64)
+    # Deleting the source does not unmake what was made from it - but the grid
+    # can no longer show it, so the id must not be offered as if it could.
     _bin(server, input_id)
-
     r = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow")
     assert r.status_code == 200, r.text
     row = r.json()["inputs"][0]
-    assert row["input_picture_id"] is None and row["pixel_sha"] == "e" * 64
+    assert row["input_picture_id"] is None and row["pixel_sha"] == "d" * 64
 
 
-def test_a_scoped_token_is_served_the_graph_but_never_the_shelf_row(env):
+def test_a_scoped_token_is_served_the_graph_but_never_the_library(env):
     """The filename and the strength are in the graph it is already being
-    served. Which row of the owner's shelf that file is, is not."""
+    served. Which row of the owner's shelf that file is, and which OTHER
+    picture a run loaded, are not - the second is an id the gate refuses this
+    token on every other route, plus a content hash of it."""
     server, client, pic_id = env
     _shelf_checkpoint(server)
+    input_id = _second_picture(client)
+    _lock_input(server, pic_id, input_id, "d" * 64)
 
     r = client.post(
         f"{API}/users/me/token",
@@ -852,16 +848,22 @@ def test_a_scoped_token_is_served_the_graph_but_never_the_shelf_row(env):
     scoped = TestClient(server.api)
     scoped.headers.update({"Authorization": f"Bearer {r.json()['token']}"})
 
-    # The positive control: the credential is live and in scope for this route.
+    # The positive control: the credential is live and in scope for this route,
+    # so what it does NOT get below is a refusal rather than a dead token.
     r = scoped.get(f"{API}/comfyui/pictures/{pic_id}/workflow")
     assert r.status_code == 200, r.text
-    slot = r.json()["model_slots"][0]
+    scoped_body = r.json()
+    slot = scoped_body["model_slots"][0]
     assert slot["name"] == "sd_xl_base_1.0.safetensors"
     assert slot["model_id"] is None and slot["verified"] is False
+    assert scoped_body["inputs"] == []
 
-    # And the owner, on the same picture, does get it - over-blocking would be
+    # And the control on the other side: this token really is refused that
+    # picture everywhere else, which is what makes serving its id here a leak.
+    assert scoped.get(f"{API}/pictures/{input_id}/metadata").status_code == 403
+
+    # The owner, on the same picture, does get both - over-blocking would be
     # its own regression.
-    owner_slot = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow").json()[
-        "model_slots"
-    ][0]
-    assert owner_slot["model_id"] == _shelf_model_id(server)
+    owner_body = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow").json()
+    assert owner_body["model_slots"][0]["model_id"] == _shelf_model_id(server)
+    assert owner_body["inputs"][0]["input_picture_id"] == input_id
