@@ -46,9 +46,9 @@ if (typeof window !== "undefined" && window.pixlstashDesktop) {
 // warm near-black ramp, never pure #000.
 //
 // SOURCE OF TRUTH: the Claude Design system's `tokens/colors.css`. Every value
-// here is one of its tokens, or an app-only key with its reason beside it
-// (`dark-surface-*`, `level-*`, `overlay`, `scrim`). Change the design system
-// first and copy the value here, never the other way round.
+// here is one of its tokens, or an app-only key that carries its reason inline.
+// Change the design system first and copy the value here, never the other way
+// round.
 const pixlStashLight = {
   dark: false,
   colors: {
@@ -150,6 +150,7 @@ const pixlStashLight = {
     // Warm, low-contrast borders: a visible-but-soft divider and a subtler line.
     border: "#d8d3c8",
     divider: "#e8e4dc",
+    // App-only: Vuetify's own overlay key (dialog and menu backdrops).
     overlay: "#00000033",
     // Warm hover wash (rgba(45,32,15,.06)) instead of cold black.
     hover: "#2d200f0f",
@@ -174,6 +175,8 @@ const pixlStashLight = {
     "surface-warning": "#755215",
     "surface-success": "#226534",
     "surface-info": "#30558c",
+    // App-only: the pure-black ink the track-trough and drive-meter tints in
+    // style.css are mixed from.
     scrim: "#000000",
     shadow: "#1c160c",
     panel: "#efede9",

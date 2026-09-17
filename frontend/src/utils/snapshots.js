@@ -5,7 +5,7 @@
 
 export function kindChipColor(kind) {
   const map = {
-    MANUAL: "primary",
+    MANUAL: "selected-ink",
     DAILY: "secondary",
     // Tonal chips draw their label in this colour, so status hues take the
     // `surface-*` foreground family rather than the fill.

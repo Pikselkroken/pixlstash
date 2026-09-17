@@ -357,7 +357,7 @@ for the wrong one is the single most common color bug in this codebase.
 | Status hue as a **fill or a tint** (background, meter, wash) | `success` `error` `warning` `info` | - |
 | Status hue as **text, a glyph, a rail or a border** on the theme's own canvas | `surface-<status>` | 4:1 |
 | Text or a glyph **on a SOLID status fill** | the matching `on-<status>` | 4.5:1 |
-| Status hue anywhere inside a **`dark-surface`** (lightbox, review overlay, photo scrim) | `dark-surface-<status>` | 4.5:1 |
+| Status hue anywhere inside a **`dark-surface`** (lightbox, review overlay, photo scrim) | `dark-surface-<status>` | 4.5:1 text / 2.5:1 rail |
 
 The four fills are one value in both themes (`error` `#b0392b`, `warning` `#e8912f`
 with a near-black label, `success` `#2a7d3e`, `info` `#30558c`). That is why none of

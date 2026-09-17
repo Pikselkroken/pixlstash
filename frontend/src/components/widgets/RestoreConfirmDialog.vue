@@ -415,6 +415,7 @@ const canRestore = computed(
             v-for="(warn, i) in preview.warnings"
             :key="i"
             type="warning"
+            color="surface-warning"
             density="compact"
             variant="tonal"
           >
