@@ -1,14 +1,14 @@
-// Overlay pixel refresh (#1419) - when a picture's BYTES are rewritten
+// Overlay turn refresh (#1419) - when a picture's BYTES are rewritten
 // somewhere other than this overlay (an undo or redo of a rotate, a rotate made
 // in another tab), the open lightbox must turn the picture without being closed
 // and reopened.
 //
 // Two defects, one visible symptom:
 //
-//   1. Nothing told the overlay. `pixels` is a card-content field, so
-//      useGridRealtimeSync refreshes the grid card - and the overlay re-reads
-//      `orientation` (which is what its `<img>` URL's `?v=o<n>` is built from)
-//      only when the displayed card changes. Fixed by `wsPixelsUpdate`.
+//   1. Nothing told the overlay. The grid's card refresh is deferred under an
+//      open lightbox, and the overlay re-reads `orientation` (which is what its
+//      `<img>` URL's `?v=o<n>` is built from) only when the displayed card
+//      changes. Fixed by `wsOrientationUpdate`.
 //   2. Telling it was not enough. The overlay re-seeds the open card from the
 //      sequence FROZEN when the overlay opened, and that snapshot kept the
 //      pre-rotate `orientation` - so the very next replacement of the
@@ -111,7 +111,7 @@ async function openOverlayOnCard7() {
       smartScoreUpdate: { key: 0, pictureIds: [] },
       detectionUpdate: { key: 0, pictureIds: [] },
       textUpdate: { key: 0, pictureIds: [] },
-      pixelsUpdate: { key: 0, pictureIds: [] },
+      orientationUpdate: { key: 0, pictureIds: [] },
     },
     global: { stubs: STUBS },
   });
@@ -133,7 +133,7 @@ describe("the open lightbox follows a turn made elsewhere", () => {
     expect(fullImageSrc(wrapper)).toBe("http://test/pictures/7.jpg?v=o6");
 
     metadataOrientation = 1; // the undo restored the pre-rotate orientation
-    await wrapper.setProps({ pixelsUpdate: { key: 1, pictureIds: [7] } });
+    await wrapper.setProps({ orientationUpdate: { key: 1, pictureIds: [7] } });
     await flush();
     await flush();
 
@@ -147,13 +147,13 @@ describe("the open lightbox follows a turn made elsewhere", () => {
     const wrapper = await openOverlayOnCard7();
 
     metadataOrientation = 1;
-    await wrapper.setProps({ pixelsUpdate: { key: 1, pictureIds: [7] } });
+    await wrapper.setProps({ orientationUpdate: { key: 1, pictureIds: [7] } });
     await flush();
     await flush();
     expect(fullImageSrc(wrapper)).toBe("http://test/pictures/7.jpg");
 
     metadataOrientation = 6;
-    await wrapper.setProps({ pixelsUpdate: { key: 2, pictureIds: [7] } });
+    await wrapper.setProps({ orientationUpdate: { key: 2, pictureIds: [7] } });
     await flush();
     await flush();
     expect(fullImageSrc(wrapper)).toBe("http://test/pictures/7.jpg?v=o6");
@@ -175,7 +175,7 @@ describe("the open lightbox follows a turn made elsewhere", () => {
     const wrapper = await openOverlayOnCard7();
 
     metadataOrientation = 1;
-    await wrapper.setProps({ pixelsUpdate: { key: 1, pictureIds: [7] } });
+    await wrapper.setProps({ orientationUpdate: { key: 1, pictureIds: [7] } });
     await flush();
     await flush();
     expect(fullImageSrc(wrapper)).toBe("http://test/pictures/7.jpg");
@@ -190,36 +190,33 @@ describe("the open lightbox follows a turn made elsewhere", () => {
     expect(fullImageSrc(wrapper)).toBe("http://test/pictures/7.jpg");
   });
 
-  // The signal is NOT gated on the payload's ids - see the watcher's comment -
-  // so a frame naming other pictures still costs one metadata read. What it
-  // must not do is re-read the boxes and the text: those are undone by a TURN,
-  // and three of the five producers of a `pixels` event (a thumbnail
-  // regeneration, a layout move and its migration) turn nothing. Re-reading the
-  // text would take the user's word selection away with it.
-  it("does not re-read boxes or text for a byte change that did not turn the picture", async () => {
+  // The signal names the pictures it turned and the watcher is gated on them, so
+  // a frame about other pictures costs nothing at all - not even a metadata
+  // read. `pictureText.refresh()` clears the viewer's word selection, so firing
+  // on somebody else's turn is a visible loss, and a 200-id rotate or a 64-id
+  // background batch names other pictures most of the time.
+  it("does nothing at all for a turn that names other pictures", async () => {
     const wrapper = await openOverlayOnCard7();
-    const detectionsBefore = callsMatching("/detections");
-    const facesBefore = callsMatching("/faces");
-    const textBefore = callsMatching("/text");
+    const before = getMock.mock.calls.length;
 
-    // Same orientation: a thumbnail regeneration, not a turn.
-    await wrapper.setProps({ pixelsUpdate: { key: 1, pictureIds: [4, 9] } });
+    metadataOrientation = 1; // would be picked up by a wrongly-ungated refresh
+    await wrapper.setProps({
+      orientationUpdate: { key: 1, pictureIds: [4, 9] },
+    });
     await flush();
     await flush();
 
-    expect(callsMatching("/detections")).toBe(detectionsBefore);
-    expect(callsMatching("/faces")).toBe(facesBefore);
-    expect(callsMatching("/text")).toBe(textBefore);
+    expect(getMock.mock.calls.length).toBe(before);
     expect(fullImageSrc(wrapper)).toBe("http://test/pictures/7.jpg?v=o6");
   });
 
-  it("does re-read the boxes and the text when the picture actually turned", async () => {
+  it("re-reads the boxes and the text when the open picture is turned", async () => {
     const wrapper = await openOverlayOnCard7();
     const detectionsBefore = callsMatching("/detections");
     const facesBefore = callsMatching("/faces");
 
     metadataOrientation = 1;
-    await wrapper.setProps({ pixelsUpdate: { key: 1, pictureIds: [7] } });
+    await wrapper.setProps({ orientationUpdate: { key: 1, pictureIds: [7] } });
     await flush();
     await flush();
 
@@ -232,14 +229,16 @@ describe("the open lightbox follows a turn made elsewhere", () => {
     const before = getMock.mock.calls.length;
 
     metadataOrientation = 1;
-    await wrapper.setProps({ pixelsUpdate: { key: 1, pictureIds: [7] } });
+    await wrapper.setProps({ orientationUpdate: { key: 1, pictureIds: [7] } });
     await flush();
     await flush();
     const afterFirst = getMock.mock.calls.length;
     expect(afterFirst).toBeGreaterThan(before);
 
     // Same key again: already processed.
-    await wrapper.setProps({ pixelsUpdate: { key: 1, pictureIds: [7, 8] } });
+    await wrapper.setProps({
+      orientationUpdate: { key: 1, pictureIds: [7, 8] },
+    });
     await flush();
     await flush();
     expect(getMock.mock.calls.length).toBe(afterFirst);
@@ -252,7 +251,7 @@ describe("the open lightbox follows a turn made elsewhere", () => {
     const before = getMock.mock.calls.length;
 
     metadataOrientation = 1;
-    await wrapper.setProps({ pixelsUpdate: { key: 1, pictureIds: [7] } });
+    await wrapper.setProps({ orientationUpdate: { key: 1, pictureIds: [7] } });
     await flush();
     await flush();
 

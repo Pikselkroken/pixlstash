@@ -1845,13 +1845,19 @@ def register_routes(router, server):
             # This was the one producer of a byte rewrite that did not name it;
             # the restore above, ``ThumbnailGenerationTask`` and the layout move
             # (route and task) all did.
+            #
+            # ``orientation`` says it was a TURN, which ``pixels`` alone does
+            # not: the thumbnail task and the layout move rewrite bytes without
+            # turning anything, and only a turn invalidates what is drawn in the
+            # file's own coordinate space (the face and object boxes, the text)
+            # or moves the ``?v=o<n>`` the lightbox builds its <img> from.
             server.vault.notify(
                 EventType.CHANGED_PICTURES,
                 {
                     "picture_ids": rotated_ids,
                     "origin_client_id": origin_client_id,
                     "change_kind": "updated",
-                    "fields": ["pixels"],
+                    "fields": ["orientation", "pixels"],
                 },
             )
         return {

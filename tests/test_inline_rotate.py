@@ -1073,7 +1073,7 @@ def _captured_notifications(server):
         server.vault.notify = real_notify
 
 
-def _assert_announced_pixels(emitted, picture_id, what):
+def _assert_announced_a_turn(emitted, picture_id, what):
     announcements = [
         event
         for event in emitted
@@ -1081,13 +1081,24 @@ def _assert_announced_pixels(emitted, picture_id, what):
         and event.get("change_kind") == "updated"
     ]
     assert announcements, f"the {what} announced nothing about the rotated picture"
-    assert any("pixels" in (event.get("fields") or []) for event in announcements), (
+    fields = [set(event.get("fields") or []) for event in announcements]
+    assert any("pixels" in names for names in fields), (
         f"a {what} must name `pixels`, or a receiving client refreshes the "
         "card's metadata and goes on painting the pre-rotate thumbnail"
     )
+    # `orientation` is what separates a turn from the three byte rewrites that
+    # turn nothing (the thumbnail regeneration task, the layout move route and
+    # its task). Only a turn redefines the coordinate space the face and object
+    # boxes are drawn in, drops the text, and moves the `?v=o<n>` the lightbox
+    # builds its <img> from - so a client that cannot tell them apart either
+    # re-reads all of that for every background batch or none of it for a turn.
+    assert any("orientation" in names for names in fields), (
+        f"a {what} must name `orientation` as well, or the client cannot tell "
+        "it from a thumbnail regeneration that rewrote the same bytes"
+    )
 
 
-def test_undo_announces_that_the_pixels_changed(client, server):
+def test_undo_announces_a_turn(client, server):
     """A bare ``updated`` leaves the grid painting the pre-rotate bitmap.
 
     A rotate rewrites the FILE, so the card's thumbnail URL changes - and that
@@ -1102,11 +1113,11 @@ def test_undo_announces_that_the_pixels_changed(client, server):
     with _captured_notifications(server) as emitted:
         assert client.post(f"{API}/operations/undo").status_code == 200
 
-    _assert_announced_pixels(emitted, picture_id, "orientation restore")
+    _assert_announced_a_turn(emitted, picture_id, "orientation restore")
 
 
-def test_the_rotate_itself_announces_that_the_pixels_changed(client, server):
-    """The forward rotate names the field for the same reason its undo does.
+def test_the_rotate_itself_announces_a_turn(client, server):
+    """The forward rotate names the fields for the same reason its undo does.
 
     The client that *issued* the rotate refreshes its own card and its own open
     lightbox, so this event is for everybody else: another tab, and any surface
@@ -1120,4 +1131,4 @@ def test_the_rotate_itself_announces_that_the_pixels_changed(client, server):
     with _captured_notifications(server) as emitted:
         assert _rotate(client, [picture_id], "cw").status_code == 200
 
-    _assert_announced_pixels(emitted, picture_id, "rotate")
+    _assert_announced_a_turn(emitted, picture_id, "rotate")

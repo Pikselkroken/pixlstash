@@ -928,7 +928,15 @@ of them the origin makes no difference to what has to happen:
   is: the acting tab has no optimistic local copy of a server-computed count,
   and an undo (Ctrl+Z, the toolbar, the lightbox) has no local grid op at all.
 
-### 8.3 `pixels`: the picture's own bytes
+  There is no `MAX_TARGETED_UPDATE` escalation here, deliberately: one read is
+  not a fetch storm, and the reload it would escalate to is precisely what must
+  not happen while a ghost window is open.
+
+Both require **every** named field to be in the class. Mixed fields fall through
+to the ordinary dispatch, so a cover that also gained a score still gets the
+sort treatment its own (separate) announcement carries.
+
+### 8.3 `pixels` and `orientation`: the picture's own bytes
 
 `fields: ["pixels"]` means the FILE was rewritten, so two things the client
 holds are stale at once: the thumbnail URL and its cache token (which come from
@@ -937,29 +945,61 @@ a turn, the `orientation` every surface builds its display URL's `?v=o<n>` from.
 A client told only `updated` re-reads metadata it already has and goes on
 painting the picture it was already painting.
 
-**Five producers stamp it, and only two of them are turns:**
+**Five producers stamp `pixels`, and only two of them are turns — those two
+stamp `orientation` alongside it, which is how a client tells them apart:**
 
 | Producer | Fields | A turn? |
 |---|---|---|
-| `POST /pictures/rotate` | `["pixels"]` | yes |
-| the operation-log restore behind undo/redo (`_emit`) | `["pixels"]` | an orientation **or** a location |
+| `POST /pictures/rotate` | `["orientation", "pixels"]` | yes |
+| the operation-log restore behind undo/redo (`_emit`) | `["orientation", "pixels"]` for an orientation; `["pixels"]` for a location | orientation only |
 | `ThumbnailGenerationTask` | `["pixels"]` | no — a regenerated bitmap, up to 64 ids per batch |
 | `POST /pictures/layout/move-to-match` and `LayoutMoveTask` | `["file_path", "pixels"]` | no — the path moved |
 
-Consumers must not assume a turn. The grid does not care which it was: the
-thumbnail is re-read either way. The **lightbox** does — the boxes and the text
-are undone by a turn and not by a byte rewrite as such — so it re-reads metadata
-on every signal and compares the orientation that read brings back before
-re-reading `/faces`, `/detections` and `/text`. Re-reading the text
-unconditionally would take the viewer's word selection with it on every
-background thumbnail batch.
+The grid does not care which it was: the thumbnail is re-read either way, so it
+keys its applier on `pixels` and uses `orientation` only to decide whether to
+defer. The **lightbox** cares about nothing else — its `<img>` URL is built from
+the picture id, the format and the orientation, so a regenerated thumbnail and a
+moved file leave it untouched, while a turn moves the `?v=o<n>` AND invalidates
+the boxes and the text drawn in the file's own coordinate space. Its
+`wsOrientationUpdate` signal therefore fires on `orientation`, not on `pixels`.
 
-**The grid's rotate applier runs under an open overlay**, unlike every other
-deferred op in §9.1 of the frontend document: `applyRotatedCards` is fields-only
-— it writes the shape and bitmap of cards already present and never inserts,
-removes or reorders, a turned photo having nowhere to move to — so there is no
+**Naming the turn is what removed the guesswork.** An earlier revision of this
+feature raised the overlay's signal on `pixels` and inferred the turn by
+comparing the orientation before and after a metadata read. That was wrong three
+ways: the read can be discarded by the shared request-id counter (leaving the
+lightbox stale with no retry, i.e. #1419 again), navigating away and back
+rebuilds the record under it, and a NULL orientation — every video, and any row
+`MissingOrientationFinder` has not backfilled — read as "turned", so a background
+batch re-read the boxes and cleared the viewer's word selection for a change that
+turned nothing. Neither `fields` nor a client should have to guess this.
+
+Because the signal is now precise, it is **id-gated** like `ocr_text` and unlike
+the score and detection signals: those are ungated because two of their frames
+can coalesce into one watcher flush, which cannot happen to a socket-driven ref
+(one write per `ws.onmessage`, one macrotask each, Vue's pre-flush queue drained
+on the microtask between).
+
+**A TURN's applier runs under an open overlay**, unlike every other deferred op
+in §9.1 of the frontend document: `applyRotatedCards` is fields-only — it writes
+the shape and bitmap of cards already present and never inserts, removes or
+reorders, a turned photo having nowhere to move to — so there is no
 restructuring to keep off the frozen filmstrip, and deferring it only queued a
-whole-grid refetch for overlay close.
+whole-grid refetch for overlay close. The exception is a grid list already
+parked for close (`pendingGridImages`): that branch of `closeOverlay` assigns
+wholesale and clears the deferral flags with it, so an in-place write made then
+is discarded with nothing queued to repair it, and the turn defers after all.
+
+A **non-turn** byte rewrite keeps the ordinary deferral. Its card still needs the
+applier rather than a metadata refresh — the thumbnail URL is not on
+`/pictures/{id}/metadata` — but it is background work arriving in a steady stream
+for the length of an import, not a gesture waiting to land.
+
+**`MAX_TARGETED_UPDATE` does not apply to the applier.** That cap is written for
+the per-id `refreshGridImage` loop ("one /metadata + thumbnail fetch each"), and
+the applier is one batched `POST /pictures/thumbnails` for the whole set.
+Escalating it sent the tab that *issued* a 51–200 picture rotate
+(`ROTATE_MAX_IDS` is 200) into a whole-library reload of a change it had already
+applied optimistically.
 
 **The overlay must survive that write.** `applyRotatedCards` replaces the
 `allGridImages` array, and the lightbox re-seeds its open card from the sequence
@@ -969,13 +1009,6 @@ stop it, both on the frontend: `fetchOverlayMetadata` patches that snapshot's
 `orientation`, and the re-seed preserves `orientation` / `pixel_sha` for rows
 the patch cannot reach, exactly as the metadata merge excepts the same two
 fields from local-wins. See `frontend_architecture.md` §9.1.
-  There is no `MAX_TARGETED_UPDATE` escalation here, deliberately: one read is
-  not a fetch storm, and the reload it would escalate to is precisely what must
-  not happen while a ghost window is open.
-
-Both require **every** named field to be in the class. Mixed fields fall through
-to the ordinary dispatch, so a cover that also gained a score still gets the
-sort treatment its own (separate) announcement carries.
 
 **The grid is not the only destination.** `useUpdatesSocket` routes each `pictures_changed` frame to every store that holds a snapshot of a server read, and each destination owns its own decision, the grid's table above is *not* shared. The other subscriber is the **Duplicates queue** (`useDedupStore.applyPictureEvent`), whose rows are groups rather than cards:
 

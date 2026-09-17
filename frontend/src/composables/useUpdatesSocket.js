@@ -203,6 +203,9 @@ export function useUpdatesSocket({
     // so reloading the grid or raising the "view changed" pill would both be
     // wrong for what is really a repaint of one tile.
     if (field === "pixels") return false;
+    // `orientation` rides with `pixels` when that rewrite was a TURN. Same
+    // reasoning: no sort reads it and no filter selects on it.
+    if (field === "orientation") return false;
     // Text read from a picture (OCR) is shown only in the lightbox's Text tab.
     // A text search reads it, but the results are fetched once per query, so
     // a re-read must not reload the grid or raise the "view changed" pill.
@@ -242,6 +245,8 @@ export function useUpdatesSocket({
     refreshThumbnailUrls: (ids) =>
       gridContainer.value?.refreshThumbnailUrls?.(ids),
     applyRotatedCards: (ids) => gridContainer.value?.applyRotatedCards?.(ids),
+    hasPendingGridImages: () =>
+      gridContainer.value?.hasPendingGridImages?.() === true,
     repositionImageByScore: (id, score) =>
       gridContainer.value?.repositionImageByScore?.(id, score),
     repositionImageBySmartScore: (id) =>
@@ -383,19 +388,19 @@ export function useUpdatesSocket({
             const nextKey = (wsStore.wsTextUpdate?.key || 0) + 1;
             wsStore.wsTextUpdate = { key: nextKey, pictureIds };
           }
-          // The picture's bytes were rewritten. FIVE producers stamp this
-          // field and only two of them are turns: `POST /pictures/rotate`,
-          // the operation-log restore behind undo/redo (an orientation OR a
-          // location), the background thumbnail regeneration task, and the
-          // layout move route and its migration task. The overlay's metadata
-          // is what carries `orientation`, and its grid card refresh is
-          // deferred under an open overlay (§9.1), so it needs its own signal
-          // to turn the picture without being closed and reopened. Sorting the
-          // turns from the rest is the overlay's job, not this gate's: it
-          // compares the orientation the read brings back.
-          if (changedFields.includes("pixels")) {
-            const nextKey = (wsStore.wsPixelsUpdate?.key || 0) + 1;
-            wsStore.wsPixelsUpdate = { key: nextKey, pictureIds };
+          // The picture was TURNED - a rotate, or the undo/redo of one. Keyed
+          // on `orientation` and not on `pixels`: five producers stamp
+          // `pixels` and only these two turn anything, and the lightbox cares
+          // about nothing else here. Its `<img>` URL is built from the picture
+          // id, the format and the orientation, so a regenerated thumbnail or
+          // a moved file leaves it untouched, while a turn moves the
+          // `?v=o<n>` AND invalidates the boxes and the text drawn in the
+          // file's own coordinate space. The grid's own card refresh for this
+          // is deferred under an open overlay (§9.1), so the lightbox needs a
+          // signal of its own to turn without being closed and reopened.
+          if (changedFields.includes("orientation")) {
+            const nextKey = (wsStore.wsOrientationUpdate?.key || 0) + 1;
+            wsStore.wsOrientationUpdate = { key: nextKey, pictureIds };
           }
         }
         if (

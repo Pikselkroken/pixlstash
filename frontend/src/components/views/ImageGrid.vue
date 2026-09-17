@@ -10,7 +10,7 @@
     :smartScoreUpdate="wsStore.wsSmartScoreUpdate"
     :detectionUpdate="wsStore.wsDetectionUpdate"
     :textUpdate="wsStore.wsTextUpdate"
-    :pixelsUpdate="wsStore.wsPixelsUpdate"
+    :orientationUpdate="wsStore.wsOrientationUpdate"
     :hiddenTags="userPrefsStore.hiddenTags"
     :applyTagFilter="userPrefsStore.applyTagFilter"
     :dateFormat="userPrefsStore.dateFormat"
@@ -7864,6 +7864,7 @@ defineExpose({
   isImagesLoading: () => imagesLoading.value,
   isOverlayOpen: () => overlayOpen.value,
   markOverlayDeferredRefresh,
+  hasPendingGridImages,
   clearFaceSelection,
   hasCursorFocus: computed(() => cursorIdx.value !== null),
   // Lets the sidebar's Scrapheap context menu reach the same consent-gated
@@ -7886,6 +7887,21 @@ defineExpose({
 function markOverlayDeferredRefresh() {
   if (!overlayOpen.value) return;
   pendingOverlayGridRefresh.value = true;
+}
+
+/**
+ * True when a background fetch has parked a whole grid list for overlay close.
+ *
+ * `closeOverlay` takes that branch first and assigns the parked list WHOLESALE,
+ * clearing the deferral flags with it - so any in-place write made to the live
+ * `allGridImages` while the overlay was open is discarded, with nothing queued
+ * to repair it. A caller that would otherwise write in place (the rotate
+ * applier) asks this first and marks a deferred refresh instead.
+ *
+ * @returns {boolean}
+ */
+function hasPendingGridImages() {
+  return pendingGridImages.value !== null;
 }
 
 // ============================================================

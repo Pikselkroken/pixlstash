@@ -23,16 +23,23 @@ const gridSource = read("./ImageGrid.vue");
 const storeSource = read("../../stores/useWsStore.js");
 const overlaySource = read("./ImageOverlay.vue");
 
-// The store's overlay-facing signals. `wsTagUpdate` is deliberately absent: the
-// GRID consumes that one (the LIKENESS_GROUPS re-rank and the tag-filter
-// refresh), not the lightbox. `wsPluginProgress` reaches the overlay through
-// App.vue's own `pluginProgress` prop rather than as a signal.
+// Every `ws…Update` the store exposes. `wsTagUpdate` belongs here too: the grid
+// consumes it (the LIKENESS_GROUPS re-rank, the tag-filter refresh) AND
+// ImageGrid binds it to the overlay, whose watcher re-reads metadata on a
+// foreign tag edit - so the template line is load-bearing for the lightbox and
+// deleting it is exactly the outage this file exists to catch. An earlier
+// version of this list excluded it on the opposite, wrong premise, which left
+// the one signal it skipped unguarded.
+//
+// `wsPluginProgress` is not in this family: it reaches the overlay through
+// App.vue's own `pluginProgress` prop, not as a `ws…Update` signal.
 const OVERLAY_SIGNALS = [
+  ["wsTagUpdate", "tagUpdate"],
   ["wsDescriptionUpdate", "descriptionUpdate"],
   ["wsSmartScoreUpdate", "smartScoreUpdate"],
   ["wsDetectionUpdate", "detectionUpdate"],
   ["wsTextUpdate", "textUpdate"],
-  ["wsPixelsUpdate", "pixelsUpdate"],
+  ["wsOrientationUpdate", "orientationUpdate"],
 ];
 
 describe("overlay WS signals are wired end to end", () => {
@@ -56,15 +63,14 @@ describe("overlay WS signals are wired end to end", () => {
     },
   );
 
-  it("names every signal the store actually exposes to the overlay", () => {
+  it("names every signal the store actually exposes", () => {
     // The point of the list above is to be complete. A new `ws*Update` ref that
     // nobody added here would slip through the per-signal checks entirely, so
-    // catch it by counting: every `ws…Update` the store declares is either in
-    // the list or is the grid's own.
-    const GRID_OWNED = new Set(["wsTagUpdate"]);
-    const declared = [...storeSource.matchAll(/const (ws\w*Update) = ref\(/g)]
-      .map((m) => m[1])
-      .filter((name) => !GRID_OWNED.has(name));
+    // catch it by counting - with no exclusion list, because an exclusion is
+    // how the last hole got in.
+    const declared = [
+      ...storeSource.matchAll(/const (ws\w*Update) = ref\(/g),
+    ].map((m) => m[1]);
     expect(declared.sort()).toEqual(OVERLAY_SIGNALS.map(([r]) => r).sort());
   });
 });

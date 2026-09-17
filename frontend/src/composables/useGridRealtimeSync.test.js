@@ -18,6 +18,7 @@ function makeHarness(overrides = {}) {
     isImagesLoading: vi.fn(() => false),
     isOverlayOpen: vi.fn(() => overrides.overlayOpen === true),
     markOverlayDeferredRefresh: vi.fn(),
+    hasPendingGridImages: vi.fn(() => overrides.pendingGridImages === true),
   };
   const wsStore = {
     isUploadInProgress: false,
@@ -803,6 +804,7 @@ function makeCoalescingHarness(overrides = {}) {
     isImagesLoading: vi.fn(() => false),
     isOverlayOpen: vi.fn(() => overrides.overlayOpen === true),
     markOverlayDeferredRefresh: vi.fn(),
+    hasPendingGridImages: vi.fn(() => overrides.pendingGridImages === true),
   };
   const wsStore = {
     isUploadInProgress: false,
@@ -1108,7 +1110,7 @@ describe("useGridRealtimeSync - a rotate's pixels changed", () => {
       origin_client_id: MY_ID,
       picture_ids: [11, 12],
       change_kind: "updated",
-      fields: ["pixels"],
+      fields: ["orientation", "pixels"],
     });
     expect(res.action).toBe("targeted");
     expect(res.reason).toBe("card-content-rotate");
@@ -1128,7 +1130,7 @@ describe("useGridRealtimeSync - a rotate's pixels changed", () => {
       origin_client_id: OTHER_ID,
       picture_ids: [13],
       change_kind: "updated",
-      fields: ["pixels"],
+      fields: ["orientation", "pixels"],
     });
     expect(h.grid.applyRotatedCards).toHaveBeenCalledWith([13]);
   });
@@ -1141,7 +1143,7 @@ describe("useGridRealtimeSync - a rotate's pixels changed", () => {
       origin_client_id: OTHER_ID,
       picture_ids: [14],
       change_kind: "updated",
-      fields: ["pixels"],
+      fields: ["orientation", "pixels"],
     });
     expect(h.reload).not.toHaveBeenCalled();
     expect(h.wsStore.addSortChangedExternalIds).not.toHaveBeenCalled();
@@ -1149,8 +1151,7 @@ describe("useGridRealtimeSync - a rotate's pixels changed", () => {
 
   // The applier is fields-only, so unlike the metadata refresh its `detections`
   // sibling takes, it has nothing to keep off the frozen filmstrip. Deferring it
-  // left the card behind the lightbox painting the pre-rotate bitmap and queued
-  // a whole-grid refetch for close to repair it.
+  // queued a whole-grid refetch for every lightbox close after a rotate.
   it("repaints the card under an open overlay instead of deferring", () => {
     const h = makeHarness({ overlayOpen: true });
     const res = h.sync.handleMessage({
@@ -1159,12 +1160,88 @@ describe("useGridRealtimeSync - a rotate's pixels changed", () => {
       origin_client_id: OTHER_ID,
       picture_ids: [16],
       change_kind: "updated",
-      fields: ["pixels"],
+      fields: ["orientation", "pixels"],
     });
     expect(res.reason).toBe("card-content-rotate");
     expect(h.grid.applyRotatedCards).toHaveBeenCalledWith([16]);
     expect(h.grid.markOverlayDeferredRefresh).not.toHaveBeenCalled();
     expect(h.reload).not.toHaveBeenCalled();
+  });
+
+  // ...but not when a fetch has already parked a whole list for close.
+  // `closeOverlay` assigns `pendingGridImages` wholesale and clears the
+  // deferral flags with it, so an in-place write made now is discarded with
+  // nothing queued to repair it. Defer instead and let close refetch.
+  it("defers under an open overlay when a grid snapshot is waiting for close", () => {
+    const h = makeHarness({ overlayOpen: true, pendingGridImages: true });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [17],
+      change_kind: "updated",
+      fields: ["orientation", "pixels"],
+    });
+    expect(res.reason).toBe("card-content-rotate-pending-snapshot-deferred");
+    expect(h.grid.applyRotatedCards).not.toHaveBeenCalled();
+    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  // ROTATE_MAX_IDS is 200 and MAX_TARGETED_UPDATE is 50. That cap is written
+  // for the per-id `refreshGridImage` loop - "one /metadata + thumbnail fetch
+  // each" - and the applier is one batched thumbnails POST instead, so it does
+  // not belong on this path. Escalating sent the tab that ISSUED the rotate
+  // into a whole-library reload of a change it had already applied.
+  it("does not escalate a bulk turn to a grid reload", () => {
+    const h = makeHarness();
+    const ids = Array.from({ length: 80 }, (_, i) => 100 + i);
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: MY_ID,
+      picture_ids: ids,
+      change_kind: "updated",
+      fields: ["orientation", "pixels"],
+    });
+    expect(res.reason).toBe("card-content-rotate");
+    expect(h.grid.applyRotatedCards).toHaveBeenCalledWith(ids);
+    expect(h.reload).not.toHaveBeenCalled();
+    expect(h.grid.markOverlayDeferredRefresh).not.toHaveBeenCalled();
+  });
+
+  // A byte rewrite that turned nothing: the thumbnail regeneration task, and
+  // the layout move (`["file_path", "pixels"]` reaches the ordinary dispatch
+  // instead, since file_path is not card content). The card's bitmap still has
+  // to be re-read - the metadata endpoint carries no thumbnail URL - but this
+  // is background work rather than a gesture waiting to land, so under an open
+  // lightbox it keeps the ordinary deferral rather than running the applier's
+  // forced re-read and blocking decode once per batch for a whole import.
+  it("defers a non-turn byte rewrite under an open overlay", () => {
+    const h = makeHarness({ overlayOpen: true });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      picture_ids: [18, 19],
+      change_kind: "updated",
+      fields: ["pixels"],
+    });
+    expect(res.reason).toBe("card-content-bytes-overlay-deferred");
+    expect(h.grid.applyRotatedCards).not.toHaveBeenCalled();
+    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("still repaints a non-turn byte rewrite with no overlay open", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      picture_ids: [18, 19],
+      change_kind: "updated",
+      fields: ["pixels"],
+    });
+    expect(res.reason).toBe("card-content-bytes");
+    expect(h.grid.applyRotatedCards).toHaveBeenCalledWith([18, 19]);
+    expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
   });
 
   it("leaves the thumbnail alone for a change that did not touch the file", () => {

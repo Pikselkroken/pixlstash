@@ -58,7 +58,7 @@ const SERVER_COMPUTED_SORT_FIELDS = new Set([
 // needs one thing `detections` does not, handled at the branch below: the
 // thumbnail URL lives on the batch-thumbnail endpoint, not on /metadata, so a
 // card refresh alone repaints the pre-rotate bitmap.
-const CARD_CONTENT_FIELDS = new Set(["detections", "pixels"]);
+const CARD_CONTENT_FIELDS = new Set(["detections", "pixels", "orientation"]);
 
 // Stack membership. `stack_count` is the number of LIVE members a card's stack
 // badge renders, and it is the one facet neither of the branches above can
@@ -621,30 +621,60 @@ export function useGridRealtimeSync(deps) {
       fieldsAreCardContentOnly(fields) &&
       pictureIds.length
     ) {
-      if (pictureIds.length > MAX_TARGETED_UPDATE) {
-        return reloadOrDefer("card-content-refresh-too-large");
-      }
       // A `pixels` change rewrote the FILE, so the card's shape and its bitmap
       // both move - from two different reads, which have to land together or the
       // tile turns twice on screen. `applyRotatedCards` owns both, so it
       // REPLACES the metadata refresh below rather than following it.
       //
-      // It also runs UNDER an open overlay, where the refresh below defers.
-      // That is not an exception to §9.1 but the rule read correctly: the
-      // applier is FIELDS-ONLY (see ImageGrid.applyRotatedCards) - nothing is
-      // inserted, removed or reordered, because a turned photo does not move in
-      // the grid - so there is no restructuring to keep off the frozen
-      // filmstrip.
-      //
-      // What deferring it actually cost is the close: marking a deferred
-      // refresh queues a WHOLE-GRID refetch for `closeOverlay`, so every
-      // lightbox session containing a rotate paid one, to repair a card a
-      // fields-only write had already repaired. The card itself is behind the
-      // overlay and invisible until then - that is not the argument, and the
-      // filmstrip reads the frozen snapshot either way.
+      // NO `MAX_TARGETED_UPDATE` ESCALATION on this path. That cap is written
+      // for the per-id `refreshGridImage` loop below - "one /metadata +
+      // thumbnail fetch each" - and the applier is not that shape: one batched
+      // `POST /pictures/thumbnails` for the whole set. Escalating it sent the
+      // tab that ISSUED a 51-200 picture rotate (ROTATE_MAX_IDS is 200) into a
+      // whole-library reload of a change it had already applied optimistically,
+      // where before this branch existed its own echo was simply suppressed.
       if (fields.includes("pixels")) {
+        // A TURN specifically - `orientation` rides with `pixels` only for a
+        // rotate or its undo/redo. It runs under an open overlay rather than
+        // deferring: the applier is FIELDS-ONLY (see
+        // ImageGrid.applyRotatedCards), nothing is inserted, removed or
+        // reordered because a turned photo does not move in the grid, so there
+        // is no restructuring to keep off the frozen filmstrip - and deferring
+        // it queued a WHOLE-GRID refetch for `closeOverlay`, so every lightbox
+        // session containing a rotate paid one.
+        //
+        // The other three producers of `pixels` (the thumbnail regeneration
+        // task, the layout move route and its task) rewrite bytes without
+        // turning anything. They are background work, not a gesture waiting to
+        // land, and during an import they arrive in a steady stream - so they
+        // keep the ordinary deferral rather than running the applier's forced
+        // re-read and blocking decode under the open lightbox, once per batch.
+        if (fields.includes("orientation")) {
+          // ...unless a grid snapshot is already waiting for close. That branch
+          // of `closeOverlay` assigns `pendingGridImages` wholesale and clears
+          // the deferral flags, so it would discard this write and queue
+          // nothing to repair it. Mark the deferral too and let close refetch.
+          if (isOverlayOpen() && grid.hasPendingGridImages?.() === true) {
+            grid.markOverlayDeferredRefresh?.();
+            return {
+              action: TARGETED,
+              reason: "card-content-rotate-pending-snapshot-deferred",
+            };
+          }
+          void grid.applyRotatedCards?.(pictureIds);
+          return { action: TARGETED, reason: "card-content-rotate" };
+        }
+        if (deferWhileOverlayOpen()) {
+          return {
+            action: TARGETED,
+            reason: "card-content-bytes-overlay-deferred",
+          };
+        }
         void grid.applyRotatedCards?.(pictureIds);
-        return { action: TARGETED, reason: "card-content-rotate" };
+        return { action: TARGETED, reason: "card-content-bytes" };
+      }
+      if (pictureIds.length > MAX_TARGETED_UPDATE) {
+        return reloadOrDefer("card-content-refresh-too-large");
       }
       if (deferWhileOverlayOpen()) {
         // Only the GRID card refresh is deferred here. The open lightbox keeps
