@@ -561,6 +561,6 @@ watch(
 }
 
 .wfrun-error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 </style>

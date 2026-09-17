@@ -241,11 +241,10 @@ defineExpose({ focus });
 }
 
 /* Danger: destructive. `on-error`, not a hardcoded #fff. Both themes author
-   `error: #b54538` with `on-error: #f7f1ea`, the warm near-white, at 4.83:1;
-   main.js says "(same value in both themes)" on that very line. The comment
-   here previously claimed the pair flipped to the warm near-black in dark,
-   which was never true of `error` (it is true of `warning`, whose fill IS
-   brighter in dark). Recorded because a stale contrast note is the kind of
+   `error: #b0392b` with `on-error: #f7f1ea`, the warm near-white, at 5.40:1:
+   every status fill is one value in both themes. The comment here once
+   claimed the pair flipped to the warm near-black in dark, which was never
+   true of `error` (only `warning` takes a dark label). Recorded because a stale contrast note is the kind of
    thing that gets "corrected" by changing the value instead of the note. */
 .app-btn--danger {
   background-color: rgb(var(--v-theme-error));

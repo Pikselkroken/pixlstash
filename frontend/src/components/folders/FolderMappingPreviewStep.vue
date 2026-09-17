@@ -697,7 +697,7 @@ onUnmounted(() => {
 }
 
 .preview-step__fact-mark--yes {
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-surface-success));
 }
 
 .preview-step__actions-note {

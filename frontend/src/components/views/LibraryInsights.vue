@@ -268,7 +268,7 @@ onMounted(load);
 }
 
 .ins-state--error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .ins-lede {

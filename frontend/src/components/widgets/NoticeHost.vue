@@ -240,22 +240,22 @@ const hostEl = ref(null);
 .notice-card--info {
   --notice-status: rgb(var(--v-theme-surface-info));
   --notice-tint: rgba(var(--v-theme-info), 0.08);
-  border-color: rgba(var(--v-theme-info), 0.5);
+  border-color: rgba(var(--v-theme-surface-info), 0.5);
 }
 .notice-card--success {
-  --notice-status: rgb(var(--v-theme-success));
+  --notice-status: rgb(var(--v-theme-surface-success));
   --notice-tint: rgba(var(--v-theme-success), 0.08);
-  border-color: rgba(var(--v-theme-success), 0.5);
+  border-color: rgba(var(--v-theme-surface-success), 0.5);
 }
 .notice-card--warning {
-  --notice-status: rgb(var(--v-theme-warning));
+  --notice-status: rgb(var(--v-theme-surface-warning));
   --notice-tint: rgba(var(--v-theme-warning), 0.08);
-  border-color: rgba(var(--v-theme-warning), 0.5);
+  border-color: rgba(var(--v-theme-surface-warning), 0.5);
 }
 .notice-card--error {
-  --notice-status: rgb(var(--v-theme-error));
+  --notice-status: rgb(var(--v-theme-surface-error));
   --notice-tint: rgba(var(--v-theme-error), 0.08);
-  border-color: rgba(var(--v-theme-error), 0.5);
+  border-color: rgba(var(--v-theme-surface-error), 0.5);
 }
 
 .notice-glyph {

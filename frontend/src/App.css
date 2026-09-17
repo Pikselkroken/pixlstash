@@ -1134,7 +1134,7 @@ kbd {
    as one of the row rather than as a second kind of control. */
 .bar-btn--danger,
 .bar-btn--danger:hover:not(:disabled):not([aria-disabled="true"]) {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 .bar-btn--danger:hover:not(:disabled):not([aria-disabled="true"]) {
   background: rgba(var(--v-theme-error), 0.08);

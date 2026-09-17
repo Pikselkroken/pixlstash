@@ -1217,7 +1217,7 @@ async function submit() {
 /* "Offered, with a warning" - deliberately NOT --off: this row can still be
    chosen, so it must not take the opacity drop that says otherwise. */
 .remix-mode--caution {
-  border-color: rgba(var(--v-theme-warning), 0.5);
+  border-color: rgba(var(--v-theme-surface-warning), 0.5);
 }
 
 .remix-mode--caution.remix-mode--on {
@@ -1225,7 +1225,7 @@ async function submit() {
 }
 
 .remix-mode-icon {
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
   vertical-align: -2px;
 }
 
@@ -1405,7 +1405,7 @@ async function submit() {
   gap: var(--space-3);
   margin: 0;
   padding: var(--space-3) var(--space-4);
-  border: 1px solid rgba(var(--v-theme-warning), 0.5);
+  border: 1px solid rgba(var(--v-theme-surface-warning), 0.5);
   border-radius: var(--radius-md);
   background: rgba(var(--v-theme-warning), 0.08);
   font-size: var(--text-xs);
@@ -1416,7 +1416,7 @@ async function submit() {
 .remix-alert-icon {
   flex-shrink: 0;
   margin-top: var(--space-1);
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 /* ── Seed ──────────────────────────────────────────────────────────────── */
@@ -1458,7 +1458,7 @@ async function submit() {
   margin: 0;
   font-size: var(--text-sm);
   line-height: var(--leading-snug);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 </style>

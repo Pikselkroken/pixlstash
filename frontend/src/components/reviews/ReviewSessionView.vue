@@ -756,7 +756,7 @@ defineExpose({ handleKey });
   align-items: center;
   gap: 7px;
   font-size: var(--text-2xs);
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-dark-surface-warning));
   font-weight: var(--weight-semibold);
 }
 .rs-session-refresh {
@@ -765,10 +765,10 @@ defineExpose({ handleKey });
   gap: 3px;
   padding: 2px 8px;
   border: 1px solid
-    color-mix(in srgb, rgb(var(--v-theme-warning)) 55%, transparent);
+    color-mix(in srgb, rgb(var(--v-theme-dark-surface-warning)) 55%, transparent);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, rgb(var(--v-theme-warning)) 12%, transparent);
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-dark-surface-warning));
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
 }
@@ -820,10 +820,10 @@ defineExpose({ handleKey });
   border-radius: var(--radius-pill);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-dark-surface-warning));
   background: color-mix(in srgb, rgb(var(--v-theme-warning)) 12%, transparent);
   border: 1px solid
-    color-mix(in srgb, rgb(var(--v-theme-warning)) 45%, transparent);
+    color-mix(in srgb, rgb(var(--v-theme-dark-surface-warning)) 45%, transparent);
 }
 
 .rs-session-tally {
@@ -999,7 +999,7 @@ defineExpose({ handleKey });
   gap: var(--space-3);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
-  border: 1px solid color-mix(in srgb, rgb(var(--v-theme-warning)) 55%, transparent);
+  border: 1px solid color-mix(in srgb, rgb(var(--v-theme-dark-surface-warning)) 55%, transparent);
   background: color-mix(in srgb, rgb(var(--v-theme-warning)) 12%, transparent);
 }
 .rs-confirm-msg {
@@ -1024,8 +1024,8 @@ defineExpose({ handleKey });
   color: rgb(var(--v-theme-on-dark-surface));
 }
 .rs-confirm-btn--apply {
-  border-color: rgb(var(--v-theme-warning));
-  color: rgb(var(--v-theme-warning));
+  border-color: rgb(var(--v-theme-dark-surface-warning));
+  color: rgb(var(--v-theme-dark-surface-warning));
 }
 .rs-confirm-btn kbd {
   font-family: var(--font-mono, monospace);

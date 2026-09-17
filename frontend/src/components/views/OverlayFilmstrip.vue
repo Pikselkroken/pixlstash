@@ -73,7 +73,9 @@
             ]"
           >
             <Tooltip :text="item.problemTitle" activator="parent" />
-            <v-icon size="14" color="error">mdi-emoticon-sad-outline</v-icon>
+            <v-icon size="14" color="dark-surface-error"
+              >mdi-emoticon-sad-outline</v-icon
+            >
           </div>
         </button>
       </transition-group>

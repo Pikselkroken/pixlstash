@@ -170,7 +170,7 @@ const totalText = computed(() =>
 
 .scan-banner--warning .scan-banner__ico,
 .scan-banner--warning .scan-banner__meta {
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .scan-banner__line {

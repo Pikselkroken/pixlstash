@@ -324,7 +324,7 @@ const canRestore = computed(
             <template #activator="{ props: tipProps }">
               <v-chip
                 v-bind="tipProps"
-                color="error"
+                color="surface-error"
                 size="x-small"
                 variant="tonal"
                 class="ml-2"
@@ -345,7 +345,7 @@ const canRestore = computed(
            body, so the question is in view beside the YES / NO footer. -->
       <div v-if="missingDependencies" class="missing-deps-prompt">
         <div class="missing-deps-title">
-          <v-icon size="18" color="warning" class="mr-1"
+          <v-icon size="18" color="surface-warning" class="mr-1"
             >mdi-alert-circle-outline</v-icon
           >
           This restore needs to bring back some missing parents
@@ -658,7 +658,7 @@ const canRestore = computed(
 
 .restore-summary-card--danger {
   background: rgba(var(--v-theme-error), 0.12);
-  border: 1px solid rgba(var(--v-theme-error), 0.3);
+  border: 1px solid rgba(var(--v-theme-surface-error), 0.3);
 }
 
 .restore-summary-value {
@@ -716,7 +716,7 @@ const canRestore = computed(
 }
 
 .restore-diff-row--delete {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .diff-type {
@@ -759,7 +759,7 @@ const canRestore = computed(
 
 .restore-inline-error {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .restore-footer-error {
@@ -787,7 +787,7 @@ const canRestore = computed(
   align-items: center;
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
   margin-bottom: var(--space-2);
 }
 

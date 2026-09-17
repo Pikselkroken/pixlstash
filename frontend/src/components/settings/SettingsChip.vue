@@ -72,7 +72,7 @@ const emit = defineEmits(["remove"]);
 }
 
 .s-chip__remove:hover {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   background: var(--hover-wash);
 }
 </style>

@@ -266,7 +266,7 @@ watch(
 }
 
 .tagger-settings-error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   font-size: var(--text-xs);
 }
 
@@ -295,10 +295,10 @@ watch(
 }
 
 .lth-penalised {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .lth-boosted {
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-surface-success));
 }
 </style>

@@ -7,9 +7,11 @@ export function kindChipColor(kind) {
   const map = {
     MANUAL: "primary",
     DAILY: "secondary",
-    WEEKLY: "info",
-    MONTHLY: "success",
-    OPPORTUNISTIC: "warning",
+    // Tonal chips draw their label in this colour, so status hues take the
+    // `surface-*` foreground family rather than the fill.
+    WEEKLY: "surface-info",
+    MONTHLY: "surface-success",
+    OPPORTUNISTIC: "surface-warning",
   };
   return map[kind] ?? "default";
 }

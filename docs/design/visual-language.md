@@ -144,7 +144,8 @@ Keep measure (line length) under ~75 characters for any real paragraph.
 ## 4. Color
 
 Color lives in two Vuetify themes in `frontend/src/main.js`: `pixlStashLight` (the
-default) and `pixlStashDark`. They are the source of truth. **You consume them as
+default) and `pixlStashDark`. Their values come from the Claude Design system's
+`tokens/colors.css`, which is the source of truth: change it there first. **You consume them as
 `rgb(var(--v-theme-<token>))` and `rgba(var(--v-theme-<token>), <alpha>)`. You never
 write a hex literal in a component.** The audit found 38 distinct hardcoded hex values
 across components — that is the color drift, and every one of them maps to a token
@@ -171,7 +172,9 @@ below.
 | Primary action button | `primary` / `onPrimary` |
 | Secondary / tertiary action | `secondary` / `tertiary` |
 | Divider line | `divider` (subtle) / `border` (visible) |
-| Success / error / warning / info | `success` / `error` / `warning` / `info` (+ `on-*`, see below) |
+| Success / error / warning / info as a **fill** | `success` / `error` / `warning` / `info` (+ `on-*`, see below) |
+| The same four as **text, a glyph, a rail or a border** | `surface-success` / `-error` / `-warning` / `-info` |
+| Olive as a **foreground** (a selected option's glyph or label) | `selected-ink` |
 | The same four, **inside a `dark-surface`** | `dark-surface-success` / `-error` / `-warning` / `-info` |
 | `primary` as a foreground **inside a `dark-surface`** | `dark-surface-primary` |
 | Hover / selection wash | `--hover-wash` / `--active-wash` (in `style.css`) |
@@ -351,9 +354,18 @@ for the wrong one is the single most common color bug in this codebase.
 
 | The job | Reach for | Floor |
 |---|---|---|
-| Status hue as a **foreground / border / tint** on the theme's own canvas | `success` `error` `warning` `info` | 3:1 (UI) |
+| Status hue as a **fill or a tint** (background, meter, wash) | `success` `error` `warning` `info` | - |
+| Status hue as **text, a glyph, a rail or a border** on the theme's own canvas | `surface-<status>` | 4:1 |
 | Text or a glyph **on a SOLID status fill** | the matching `on-<status>` | 4.5:1 |
-| Status hue anywhere inside a **`dark-surface`** (lightbox, review overlay) | `dark-surface-<status>` | 3:1 |
+| Status hue anywhere inside a **`dark-surface`** (lightbox, review overlay, photo scrim) | `dark-surface-<status>` | 4.5:1 |
+
+The four fills are one value in both themes (`error` `#b0392b`, `warning` `#e8912f`
+with a near-black label, `success` `#2a7d3e`, `info` `#30558c`). That is why none of
+them can also be text: light `warning` is 2.46:1 on white and dark `info` 1.98:1 on
+`surface`. `surface-<status>` is the same hue deepened (light) or lifted (dark) until
+it reads as text (warning also turns a few degrees toward yellow, so it is never
+misread as the red beside it); it is the design system's `--surface-<status>`.
+`selected-ink` is the same idea for olive, and is what `--selected-ink` reads.
 
 **`on-<status>` means "on the solid fill" — literally.** It is authored against
 `rgb(var(--v-theme-<status>))` at full opacity. Put it on a translucent tint
@@ -373,9 +385,9 @@ with `on-primary`, `on-tertiary` and `on-secondary` — including light `--activ
 in a rule with no `<x>` background at all — is the tell.
 
 **`dark-surface` needs its own status set** because it stays dark in *both* themes,
-so a light-theme hue tuned for a near-white canvas is exactly wrong on it. The four
-`dark-surface-*` values are identical in both themes and measure 4.12:1 – 5.46:1
-there. This is why the light theme's status hues can be deepened at all.
+so neither theme's `surface-<status>` is right on it. The four `dark-surface-*` values
+are identical in both themes, sit within 3° of the fill hues, and measure 4.63:1 –
+7.01:1 there. `npm run audit:contrast` measures every pair.
 
 ### Contrast (proven, not eyeballed)
 WCAG floors: body text **≥ 4.5:1**, large text and meaningful UI **≥ 3:1**.
@@ -391,11 +403,8 @@ Findings to honour:
   white — the windows are disjoint. So they are for icons, borders, rails, ≥18px text,
   and ≥14px bold. Historically this rule was written about the amber accent alone
   (3.94:1 in light); it now covers the whole tier.
-- **The status hues on their own canvas** (light on `#faf9f7`, dark on `#1b1f24`):
-  `error` 4.62 / 4.50 · `warning` 3.09 / 5.32 · `success` 4.87 / 5.96 · `info`
-  4.90 / 5.30. All clear the 3:1 UI floor. Light `success` and `info` were Material
-  500s until 2026-07 and measured 2.64 / 2.97 — **below the floor** — which is the
-  reason they were deepened to `#2e7d32` and `#1a6ec4`.
+- **The status hues as text** are `surface-<status>`, never the fill; the pairs are
+  in `frontend/src/utils/contrastAudit.js` and gated by its test.
 - **A multi-segment meter steps its neutral to the extreme *away* from the canvas**,
   never to a mid-grey between the accent and the track. The range between the accent
   and the canvas is not wide enough for two 3:1 steps; the range *past* the accent is.
@@ -427,10 +436,9 @@ Findings to honour:
   drive a ghost, so it carries a 1px `outline` at 4.24 / 5.67 rather than relying on a
   colour step. A meter's own frame is a legitimate substitute for a fill boundary; a
   line *between two fills* is not.
-- **The eight `on-<status>` values, on their solid fill:** light `on-error` #ffffff
-  4.86 · `on-warning` #23211d 4.95 · `on-success` #ffffff 5.13 · `on-info` #ffffff
-  5.16; dark, all four `#1b1b1b`: `on-error` 4.68 · `on-warning` 5.53 · `on-success`
-  6.20 · `on-info` 5.51. All clear 4.5:1.
+- **The `on-<status>` values, on their solid fill, identical in both themes:**
+  `on-error` #f7f1ea 5.40 · `on-warning` #1b1b1b 6.99 · `on-success` #f7f1ea 4.57 ·
+  `on-info` #f7f1ea 6.68.
 
 **Author every `on-*` pair explicitly, and spell the key in kebab-case.** Vuetify
 emits one CSS variable per theme key *verbatim* — `--v-theme-<key>` — so a camelCase

@@ -165,7 +165,7 @@ async function deleteProject() {
 
 .project-editor-error {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .project-editor-spacer {

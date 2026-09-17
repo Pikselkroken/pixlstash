@@ -4712,7 +4712,7 @@ about the row not looking like the queue is superseded.
   else in its stack). At the measured 12% a mark is one tile in eight and
   becomes a warning field, and the soft cases are often legitimate. It reuses
   `StackBadge`'s icon slot, freed because the edge ticks already say "this is a
-  stack": `mdi-alert-outline` in `--v-theme-warning` over `--scrim-photo-strong`
+  stack": `mdi-alert-outline` in `--v-theme-dark-surface-warning` over `--scrim-photo-strong`
   with a 1px inset warning ring, no motion. Below 168px (the ladder's `small`
   rung) the dense rule INVERTS: an unflagged deck keeps its numeral and drops
   the icon, a flagged one keeps the icon and drops the numeral. Badge
