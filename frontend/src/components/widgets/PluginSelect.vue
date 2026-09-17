@@ -1,21 +1,24 @@
 <script setup>
 /**
- * Dropdown picking the active plugin of one capability, with a settings gear.
+ * Picks the active plugin of one capability, with a settings gear beside it.
  *
- * Exactly one plugin may be active for the capability, or none: the first
- * option is an explicit None. The gear configures the plugin currently chosen
- * and is disabled while None is. Under the row, one muted line says whether the
- * chosen plugin is loaded and what it does.
+ * A field-shaped button opens the app's one menu (`styles/context-menu.css`):
+ * an explicit None row, then a `menuitemradio` row per plugin. Each plugin row
+ * leads with a loaded / not-loaded icon and carries a tooltip with the plugin's
+ * description, so readiness and purpose can be read without choosing, which
+ * saves. The gear configures the chosen plugin and refuses while None is.
  *
- * Was a radio table (issue #1344): single selection took a row per plugin and
- * two columns of them made the Auto-tagging section the busiest in Settings.
+ * Was a radio table (issue #1344), then briefly a native <select>, whose popup
+ * cannot take the menu styling or a tooltip per option.
  */
-import { computed, nextTick, ref } from "vue";
+import { computed, ref } from "vue";
+import { VIcon, VMenu } from "vuetify/components";
 import { patchUserConfig } from "../../api/config";
 import TaggerPluginSettingsDialog from "./TaggerPluginSettingsDialog.vue";
 import { errorDetail } from "../../utils/apiError";
+import { onMenuKeydown } from "../../utils/menuKeyboard";
 import AppButton from "./AppButton.vue";
-import AppSelect from "./AppSelect.vue";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   /** Array of plugin objects from GET /taggers. */
@@ -40,6 +43,9 @@ const supportsFlag = computed(() =>
   props.kind === "tag" ? "supports_tags" : "supports_descriptions",
 );
 const activeKey = computed(() => `active_${props.kind}_plugin`);
+const fieldLabel = computed(() =>
+  props.kind === "tag" ? "Tag plugin" : "Description plugin",
+);
 
 const noneLabel = computed(() =>
   props.kind === "tag"
@@ -61,44 +67,64 @@ const activePluginInfo = computed(
 /** A plugin's name as shown: `display_name` is optional for a plugin to set. */
 const labelOf = (p) => p.display_name || p.name;
 
-/** "Loaded · what it does" for the chosen plugin; empty for None. */
-const hint = computed(() => {
-  const p = activePluginInfo.value;
-  if (!p) return "";
-  const status = p.is_loaded ? "Loaded" : "Not loaded";
-  return p.description ? `${status} · ${p.description}` : status;
-});
+const loadedText = (p) => (p.is_loaded ? "Loaded" : "Not loaded");
 
-// A native <select> speaks strings, so None travels as "" and maps to null. Each
-// label carries "not loaded" so readiness can be compared without choosing,
-// which saves.
-const options = computed(() => [
-  { value: "", label: noneLabel.value },
+/** What a plugin's row, and the field while it is chosen, say on hover. */
+function tooltipOf(p) {
+  const status = `${loadedText(p)}.`;
+  return p.description ? `${p.description} ${status}` : status;
+}
+
+/**
+ * The rows, None first. A saved plugin that is no longer installed gets a row
+ * of its own, so the field names it rather than going blank or claiming None.
+ */
+const rows = computed(() => [
+  { value: null, label: noneLabel.value, plugin: null },
   ...capablePlugins.value.map((p) => ({
     value: p.name,
-    label: p.is_loaded ? labelOf(p) : `${labelOf(p)} — not loaded`,
+    label: labelOf(p),
+    plugin: p,
   })),
-  // A saved plugin that is no longer installed: say so rather than leave the
-  // field blank, or show None when the setting is not None.
   ...(activePlugin.value && !activePluginInfo.value
     ? [
         {
           value: activePlugin.value,
           label: `${activePlugin.value} (not installed)`,
+          plugin: null,
         },
       ]
     : []),
 ]);
 
+const currentRow = computed(
+  () => rows.value.find((r) => r.value === activePlugin.value) ?? rows.value[0],
+);
+
+const triggerAriaLabel = computed(() => {
+  const p = currentRow.value.plugin;
+  const status = p ? `, ${loadedText(p).toLowerCase()}` : "";
+  return `${fieldLabel.value}: ${currentRow.value.label}${status}`;
+});
+
 function pluginParams(plugin) {
   return props.settings?.plugins?.[plugin.name]?.params ?? {};
 }
 
-// Also what puts the dropdown back after a failed save: the native <select> has
-// already moved, and toggling `disabled` re-renders AppSelect, which re-applies
-// its unchanged value.
+const menuOpen = ref(false);
+// The chosen row leaves with the menu and takes keyboard focus to <body>. The
+// field is refocused once the close transition ends: sooner, the leaving menu
+// takes it away again.
+let refocusTrigger = false;
+function onMenuAfterLeave() {
+  if (!refocusTrigger) return;
+  refocusTrigger = false;
+  rowEl.value?.querySelector(".ps-trigger")?.focus();
+}
+// The row, not the field: a template ref on the button inside VMenu's
+// activator slot came back null in the browser when the menu closed.
+const rowEl = ref(null);
 const settingActive = ref(false);
-const selectRef = ref(null);
 const activeError = ref("");
 
 const dialogPlugin = ref(null);
@@ -121,26 +147,24 @@ function openSettings() {
   dialogOpen.value = true;
 }
 
-async function setActive(value) {
-  const pluginName = value || null;
-  // Disabling the <select> for the save drops focus to <body>, stranding a
-  // keyboard user; put it back afterwards if it was there.
-  const hadFocus = selectRef.value?.$el.contains(document.activeElement);
+async function choose(value) {
+  menuOpen.value = false;
+  refocusTrigger = true;
+  if (value === activePlugin.value || settingActive.value) return;
   settingActive.value = true;
   activeError.value = "";
   try {
     await patchUserConfig({
-      tagger_settings: { [activeKey.value]: pluginName },
+      tagger_settings: { [activeKey.value]: value },
     });
     emit("update:settings", {
       ...props.settings,
-      [activeKey.value]: pluginName,
+      [activeKey.value]: value,
     });
   } catch (e) {
     activeError.value = errorDetail(e) || "Failed to update.";
   } finally {
     settingActive.value = false;
-    if (hadFocus) nextTick(() => selectRef.value?.focus());
   }
 }
 
@@ -164,17 +188,92 @@ function onParamsSaved({ name, params }) {
 
 <template>
   <div class="plugin-select">
-    <div v-if="capablePlugins.length" class="ps-row">
-      <AppSelect
-        ref="selectRef"
-        class="ps-field"
-        :model-value="activePlugin ?? ''"
-        :options="options"
-        :label="kind === 'tag' ? 'Tag plugin' : 'Description plugin'"
-        hide-label
-        :disabled="settingActive"
-        @update:model-value="setActive"
-      />
+    <div v-if="capablePlugins.length" ref="rowEl" class="ps-row">
+      <!-- A below-opening menu's min-width is capped at its activator's width,
+           so an oversized floor makes the menu exactly as wide as the field. -->
+      <VMenu
+        v-model="menuOpen"
+        location="bottom start"
+        :offset="4"
+        :min-width="10000"
+        @after-leave="onMenuAfterLeave"
+      >
+        <template #activator="{ props: menuProps }">
+          <button
+            v-bind="menuProps"
+            class="ps-trigger"
+            type="button"
+            :aria-label="triggerAriaLabel"
+            :aria-busy="settingActive ? 'true' : undefined"
+          >
+            <Tooltip
+              v-if="currentRow.plugin"
+              :text="tooltipOf(currentRow.plugin)"
+              activator="parent"
+            />
+            <VIcon
+              v-if="currentRow.plugin"
+              class="ps-loaded"
+              :class="{ 'ps-loaded--on': currentRow.plugin.is_loaded }"
+              aria-hidden="true"
+              >{{
+                currentRow.plugin.is_loaded
+                  ? "mdi-check-circle"
+                  : "mdi-circle-outline"
+              }}</VIcon
+            >
+            <span class="ps-trigger-label">{{ currentRow.label }}</span>
+            <VIcon class="ps-chevron" aria-hidden="true"
+              >mdi-chevron-down</VIcon
+            >
+          </button>
+        </template>
+
+        <div
+          class="ctx-menu"
+          role="menu"
+          :aria-label="fieldLabel"
+          tabindex="-1"
+          @keydown="onMenuKeydown"
+        >
+          <button
+            v-for="row in rows"
+            :key="String(row.value)"
+            class="ctx-item"
+            type="button"
+            role="menuitemradio"
+            :aria-checked="row.value === activePlugin ? 'true' : 'false'"
+            @click="choose(row.value)"
+          >
+            <Tooltip
+              v-if="row.plugin"
+              :text="tooltipOf(row.plugin)"
+              location="end"
+              activator="parent"
+            />
+            <!-- The leading slot is reserved on every row so the labels share
+                 a left edge; None and a missing plugin leave it empty. -->
+            <span class="ps-loaded-slot">
+              <VIcon
+                v-if="row.plugin"
+                class="ps-loaded"
+                :class="{ 'ps-loaded--on': row.plugin.is_loaded }"
+                role="img"
+                :aria-label="loadedText(row.plugin)"
+                >{{
+                  row.plugin.is_loaded
+                    ? "mdi-check-circle"
+                    : "mdi-circle-outline"
+                }}</VIcon
+              >
+            </span>
+            <span class="ctx-label-text">{{ row.label }}</span>
+            <VIcon v-if="row.value === activePlugin" class="ctx-check"
+              >mdi-check</VIcon
+            >
+          </button>
+        </div>
+      </VMenu>
       <AppButton
         variant="secondary"
         icon-only
@@ -190,8 +289,6 @@ function onParamsSaved({ name, params }) {
         {{ activePlugin }} is still selected.
       </template>
     </div>
-
-    <div class="ps-hint" aria-live="polite">{{ hint }}</div>
 
     <div v-if="activeError" class="ps-error" role="alert">
       {{ activeError }}
@@ -218,22 +315,62 @@ function onParamsSaved({ name, params }) {
   gap: var(--space-2);
 }
 
-/* min-width: 0 so a long option label cannot hold the row wider than its
-   Settings column: a <select>'s min-content is its widest option. */
-.ps-field {
+/* The field box AppSelect draws (`--control-h`, `--radius-sm`, input fill), as
+   a button, so it opens the app's menu rather than a native popup. min-width: 0
+   so a long name ellipsises instead of widening the Settings column. */
+.ps-trigger {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--space-4);
+  background: rgb(var(--v-theme-input-background));
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+  color: rgb(var(--v-theme-on-surface));
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ps-trigger-label {
   flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.ps-hint:empty {
-  display: none;
-}
-
-.ps-hint {
-  margin-top: var(--space-2);
-  font-size: var(--text-xs);
+.ps-chevron {
+  flex-shrink: 0;
+  font-size: var(--gutter-glyph);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-  overflow-wrap: anywhere;
+}
+
+/* The menu row's leading glyph box (`--gutter-glyph`). Not `.ctx-icon`: that
+   slot turns olive on the chosen row, and loaded is not the same fact as
+   chosen. */
+.ps-loaded-slot {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+}
+
+.ps-loaded {
+  flex-shrink: 0;
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+  font-size: var(--gutter-glyph);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.ps-loaded--on {
+  color: rgb(var(--v-theme-success));
 }
 
 .ps-error {

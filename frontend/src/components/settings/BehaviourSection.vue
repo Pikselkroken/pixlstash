@@ -430,9 +430,9 @@ watch(
 </template>
 
 <style scoped>
-/* min-width: a grid item's automatic minimum is its min-content, and a
-   <select>'s is its widest option, so without this a long plugin name widens
-   its own 1fr track and pushes the whole pane sideways. */
+/* min-width: a grid item's automatic minimum is its min-content, so without
+   this a long plugin name widens its own 1fr track and pushes the whole pane
+   sideways. */
 .tagger-col {
   min-width: 0;
 }

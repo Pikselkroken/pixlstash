@@ -14,6 +14,7 @@ vi.mock("vuetify/components", () => ({
       '<div v-if="modelValue"><slot /></div>',
   },
   VIcon: { template: "<i><slot /></i>" },
+  VMenu: { template: "<div><slot name='activator' :props='{}' /></div>" },
   VTooltip: {
     template: '<slot name="activator" :props="{}" :is-active="false" />',
   },
@@ -187,7 +188,7 @@ describe("a plugin's saved parameters survive reopening its dialog", () => {
   }
 
   const gear = (w) =>
-    w.get(".ps-row button");
+    w.get(".ps-row .app-btn");
   const form = (w) => w.findComponent({ name: "TaggerParametersUI" });
 
   it("shows the value you saved, not the one it opened with", async () => {
