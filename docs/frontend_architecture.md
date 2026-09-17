@@ -1443,6 +1443,15 @@ Load-bearing behaviours, each of which is a deliberate decision rather than an i
 - **The caution styling is not the disabled styling.** `.remix-mode--caution` takes a warning-toned border and an `mdi-alert-outline` glyph (status never rides on colour alone) with **no** opacity drop, because the row can still be chosen. `.remix-alert` text is `on-surface`, never `on-warning`: `on-<x>` is only correct on a solid `<x>` fill and measures ~1.4:1 over an 8% tint.
 - **Nothing fails silently.** The live region announces `unreachable` on resolve, both outcomes of "Check again" (the failure especially — nothing visible changes), and an Enter / Ctrl+Enter that the disabled Generate is blocking, naming the blocker.
 
+#### `WorkflowCard.vue`, `ChipRow.vue`, `InfoPopover.vue` (`widgets/`, v1.12 Workflows & Recipes)
+The uniform workflow card and its two parts, built ahead of the Workflows screen that will host them (not mounted anywhere yet). In this code a `workflow_recipe` / structural hash is a **variant**; a user's Recipe is a **saved recipe**.
+
+- **`WorkflowCard`** takes one `card` (shape documented at the top of `utils/workflowCard.js`), `expanded` and `panelId`; emits `toggle` (▸) and `run` (*Run it…* on a card with no pictures). **Every card is exactly `--wf-card-h` (252px)**: a `--wf-cover-h` (132px) 2fr/1fr cover, then four `--control-h-sm` rows (name, checkpoint, LoRAs, special facts) that clip rather than wrap. Both heights are component-local by design decision. Cover and meta are fixed-height `flex: none` boxes, so content cannot grow the card and a change to the sum shows as a wrong height. jsdom has no layout, so `WorkflowCard.test.js` resolves the stylesheet against the token sheet and asserts the sum and that row 4's right padding keeps it clear of ⓘ; the content cases (0 and 5 LoRAs, long names) were measured once in Chromium, not in CI.
+- **A stack** (`stackSize` ≥ 2) adds ▸ before the name and a layered count on the cover; its facts row reads "differs by". ▸ and ⓘ are real `AppButton`s at `tabindex="-1"`: the Workflows grid's roving cursor will own Tab.
+- **"+N" is not a control.** The card's `aria-label` (`cardAccessibleName`) carries every chip, saying "workflow LoRA" or "recipe LoRA slot" because the solid/dashed border is not announced, and ratings as "4.8 of 5".
+- **`ChipRow`** measures its chips from a hidden natural-width copy, shows as many as fit (`fitChipCount`, which always keeps one and ellipsizes it rather than showing a bare "+N"), and emits `overflow` with the hidden count. Chips are `--chip-h` (20px, a shared token) with a dashed, transparent, secondary-text treatment for a recipe slot (after the `.tag-chip--some` precedent).
+- **`InfoPopover`** is the app's first shared popover component: a `v-menu` holding a `.tbm` panel with `.tbm-caret`, `--stats-panel-w` wide, grouped Models, Differs by, Defaults and the saved-recipe count. The trigger comes from its `activator` slot.
+
 #### Shared shell pieces (issue #1301)
 Four pieces every screen builds on, to the design system's shell contract (`ui_kits/app/unified-shell.html`, rules 2, 3, 8 and 9). Reuse them; do not re-roll them.
 

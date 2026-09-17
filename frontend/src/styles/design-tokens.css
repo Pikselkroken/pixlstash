@@ -242,6 +242,11 @@
   --badge-size: 16px;      /* min height / min-width of a count pill (on-grid; was an ad-hoc 15px) */
   --badge-size-dot: 8px;   /* the no-count activity dot (on-grid; was an ad-hoc 7px) */
 
+  /* A model chip: the checkpoint and LoRA chips on a workflow card, in the
+     inspector and in the overlay's Recipe tab. One height so a row of them
+     sits inside a --control-h-sm row with room for its 1px border. */
+  --chip-h: 20px;
+
   /* The countdown drain hairline on a self-dismissing transient surface: the
      action receipt today, and the notice card is the obvious second consumer.
      It is a rendered height rather than padding, so it cannot borrow from the
