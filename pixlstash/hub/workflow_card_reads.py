@@ -29,6 +29,7 @@ from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_identity import WORKFLOW_KEY_VERSION
+from pixlstash.utils.sql_chunking import chunked
 
 logger = get_logger(__name__)
 
@@ -160,25 +161,28 @@ def variant_documents(
     A row whose document is corrupt is logged and left out rather than raising:
     the grid it feeds describes every other card correctly, and the alternative
     is one unreadable row taking the whole view down.
+
+    Chunked, because the caller sizes the list: a library with more variants
+    than SQLite's bound-parameter cap would otherwise fail at execution time
+    rather than answer slowly.
     """
-    if not structural_hashes:
-        return {}
-    placeholders = ",".join("?" * len(structural_hashes))
     documents = {}
-    for structural_hash, document in hub.fetchall(
-        "SELECT structural_hash, document FROM workflow_recipe_graph "
-        f"WHERE structural_hash IN ({placeholders})",
-        tuple(structural_hashes),
-    ):
-        try:
-            documents[structural_hash] = json.loads(document)
-        except json.JSONDecodeError as exc:
-            logger.error(
-                "Stored workflow document for variant %s is not valid JSON, so "
-                "its card is described without it: %s",
-                structural_hash,
-                exc,
-            )
+    for batch in chunked(sorted(set(structural_hashes))):
+        placeholders = ",".join("?" * len(batch))
+        for structural_hash, document in hub.fetchall(
+            "SELECT structural_hash, document FROM workflow_recipe_graph "
+            f"WHERE structural_hash IN ({placeholders})",
+            tuple(batch),
+        ):
+            try:
+                documents[structural_hash] = json.loads(document)
+            except json.JSONDecodeError as exc:
+                logger.error(
+                    "Stored workflow document for variant %s is not valid JSON, "
+                    "so its card is described without it: %s",
+                    structural_hash,
+                    exc,
+                )
     return documents
 
 
@@ -191,25 +195,28 @@ def instance_documents(
     filled in, so it is where a default is read from - and it carries the
     variant it ran, because a slot label is a label within one topology and the
     node ids differ between variants of a card.
+
+    Chunked for :func:`variant_documents`' reason, and more pressingly: this
+    list is one entry per distinct run of a card, which on a card somebody uses
+    every day is the largest caller-sized list in the whole read.
     """
-    if not instance_hashes:
-        return []
-    placeholders = ",".join("?" * len(instance_hashes))
     found = []
-    for structural_hash, document in hub.fetchall(
-        "SELECT structural_hash, document FROM workflow_recipe_instance "
-        f"WHERE library_uuid = ? AND instance_hash IN ({placeholders})",
-        (library_uuid, *instance_hashes),
-    ):
-        try:
-            found.append((structural_hash, json.loads(document)))
-        except json.JSONDecodeError as exc:
-            logger.error(
-                "Stored instance document of variant %s is not valid JSON, so "
-                "it does not contribute a default: %s",
-                structural_hash,
-                exc,
-            )
+    for batch in chunked(sorted(set(instance_hashes))):
+        placeholders = ",".join("?" * len(batch))
+        for structural_hash, document in hub.fetchall(
+            "SELECT structural_hash, document FROM workflow_recipe_instance "
+            f"WHERE library_uuid = ? AND instance_hash IN ({placeholders})",
+            (library_uuid, *batch),
+        ):
+            try:
+                found.append((structural_hash, json.loads(document)))
+            except json.JSONDecodeError as exc:
+                logger.error(
+                    "Stored instance document of variant %s is not valid JSON, "
+                    "so it does not contribute a default: %s",
+                    structural_hash,
+                    exc,
+                )
     return found
 
 

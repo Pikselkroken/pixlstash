@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 import tempfile
 import time
 from datetime import datetime
@@ -45,6 +46,7 @@ from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, ReferenceFolder
+from pixlstash.hub.workflow_card_reads import instance_documents, variant_documents
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
 from pixlstash.hub.workflows import PictureGhost, record_picture_ghosts
 from pixlstash.services.workflow_hash import WorkflowGraphError, asset_reference
@@ -55,6 +57,7 @@ from pixlstash.services import workflow_bindings, workflow_inbox
 from pixlstash.server import Server
 from pixlstash.tasks.ghost_cascade_task import GhostCascadeTask
 from pixlstash.tasks.task_type import TaskType
+from pixlstash.utils.sql_chunking import SQLITE_ID_CHUNK
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
@@ -3107,3 +3110,30 @@ def test_an_unknown_card_is_a_404_and_a_malformed_key_a_422(workflow_env):
         f"{API}/workflows/cards/not-a-digest/pictures",
     ):
         assert workflow_env.owner.get(path).status_code == 422, path
+
+
+def test_the_hub_card_reads_survive_a_list_longer_than_sqlites_cap(workflow_env):
+    """A card the owner runs every day has one instance per run, and that list
+    is sized by them rather than by the code.
+
+    **The limit is pinned to 999 for the duration**, because this build's
+    SQLite allows 250,000 bound parameters: without the pin an un-chunked read
+    passes here and fails on the older builds the chunker exists for, which is
+    an assertion that cannot go red on the machine that wrote it. Restored in a
+    ``finally`` — the hub connection outlives this test.
+
+    The hash that must come back goes in the FIRST chunk and the filler behind
+    it, so a read that returns only its last batch fails too.
+    """
+    filler = [_h(f"absent-{n}") for n in range(2 * SQLITE_ID_CHUNK)]
+    hub = workflow_env.server.hub
+    previous = hub.connection.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)
+    hub.connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
+    try:
+        found = instance_documents(
+            hub, workflow_env.server.vault.library_uuid, [BUSY_INSTANCE_ONE, *filler]
+        )
+        assert [structural for structural, _ in found] == [BUSY_RECIPE_A]
+        assert set(variant_documents(hub, [BUSY_RECIPE_B, *filler])) == {BUSY_RECIPE_B}
+    finally:
+        hub.connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, previous)
