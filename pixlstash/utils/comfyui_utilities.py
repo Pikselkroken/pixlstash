@@ -554,9 +554,11 @@ def check_comfy_workflow(value: Any) -> None:
     Stricter than :func:`is_comfy_workflow`, which only sniffs metadata: this
     guards what gets stored, so any JSON object must not pass.
 
-    - UI format: a ``links`` list and a non-empty ``nodes`` list whose every
-      node has an ``id`` and a non-empty string ``type``. ``links`` is what
-      tells it from other node-graph exports (React Flow, n8n).
+    - UI format: a non-empty ``nodes`` list whose every node has an ``id`` and
+      a non-empty string ``type``, beside a ``links`` list or, where the
+      schema-version-1 serialiser drops an empty ``links``, its ``state`` or
+      ``last_node_id``. Those tell it from other node-graph exports (React
+      Flow, n8n).
     - API format (bare, or wrapped as ``{"prompt": graph}``): at least one
       entry, and every entry other than PixlStash's own ``pixlstash_*`` keys a
       node with a non-empty string ``class_type`` and an ``inputs`` object.
@@ -570,16 +572,25 @@ def check_comfy_workflow(value: Any) -> None:
         nodes = value["nodes"]
         if not isinstance(nodes, list) or not nodes:
             raise NotAWorkflowError("not a ComfyUI workflow: it has no nodes")
-        if not isinstance(value.get("links"), list):
+        if not (
+            isinstance(value.get("links"), list)
+            or (
+                "links" not in value
+                and (
+                    isinstance(value.get("state"), dict)
+                    or isinstance(value.get("last_node_id"), int)
+                )
+            )
+        ):
             raise NotAWorkflowError("not a ComfyUI workflow: it has no links list")
         for index, node in enumerate(nodes, start=1):
-            if not (
-                isinstance(node, dict)
-                and node.get("id") is not None
-                and _is_name(node.get("type"))
-            ):
+            if not isinstance(node, dict) or node.get("id") is None:
                 raise NotAWorkflowError(
-                    f"not a ComfyUI workflow: node {index} has no id or type"
+                    f"not a ComfyUI workflow: entry {index} of its nodes has no id"
+                )
+            if not _is_name(node.get("type")):
+                raise NotAWorkflowError(
+                    f"not a ComfyUI workflow: node {_shown(node['id'])} has no type"
                 )
         return
     graph = value["prompt"] if isinstance(value.get("prompt"), dict) else value
@@ -601,13 +612,18 @@ def check_comfy_workflow(value: Any) -> None:
         raise NotAWorkflowError("not a ComfyUI workflow")
     if strays:
         raise NotAWorkflowError(
-            f"not a ComfyUI workflow: {strays[0]!r} is not a node with a "
+            f"not a ComfyUI workflow: {_shown(strays[0])} is not a node with a "
             "class_type and inputs"
         )
 
 
 def _is_name(value: Any) -> bool:
     return isinstance(value, str) and bool(value)
+
+
+def _shown(value: Any) -> str:
+    """*value* quoted for a message, cut short so a huge key cannot flood it."""
+    return repr(str(value)[:60])
 
 
 def find_comfy_workflow(metadata: dict) -> dict | None:

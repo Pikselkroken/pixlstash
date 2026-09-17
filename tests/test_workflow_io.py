@@ -26,7 +26,7 @@ from pixlstash.services.workflow_inputs import (
 )
 from pixlstash.services.workflow_hash import topology_hash
 from pixlstash.services.workflow_io import detect_workflow_io
-from pixlstash.utils.comfyui_utilities import check_comfy_workflow
+from pixlstash.utils.comfyui_utilities import NotAWorkflowError, check_comfy_workflow
 
 BUILT_IN = (
     pathlib.Path(comfyui_module.__file__).parent.parent
@@ -759,6 +759,8 @@ def test_an_unfileable_or_too_deep_import_is_handled(import_route):
         {"nodes": [], "links": []},
         {"nodes": [{"id": 1}], "links": []},
         {"nodes": [{"type": "SaveImage"}], "links": []},
+        {"nodes": [{"id": 1, "type": "SaveImage"}], "links": {}},
+        {"nodes": [{"id": 1, "type": "SaveImage"}], "links": None, "state": {}},
         {"nodes": ["SaveImage"], "links": []},
         # React Flow and n8n exports: nodes with an id and type, but no links.
         {"nodes": [{"id": "1", "type": "input"}], "edges": []},
@@ -782,7 +784,29 @@ def test_both_formats_are_accepted_with_pixlstash_keys_or_a_prompt_wrapper():
     check_comfy_workflow(graph)
     check_comfy_workflow({**graph, "pixlstash_output_nodes": ["6"]})
     check_comfy_workflow({"prompt": graph, "extra_data": {}})
-    check_comfy_workflow(_load(UI_FIXTURES / "image_z_image.json"))
+    # Schema version 1 leaves out an empty links list.
+    node = {"id": 1, "type": "SaveImage"}
+    check_comfy_workflow({"version": 1, "state": {"lastNodeId": 1}, "nodes": [node]})
+    check_comfy_workflow({"last_node_id": 1, "nodes": [node]})
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted(BUILT_IN.glob("*.json")) + sorted(UI_FIXTURES.glob("*.json")),
+    ids=lambda path: path.name,
+)
+def test_every_shipped_and_fixture_workflow_is_accepted(path):
+    check_comfy_workflow(_load(path))
+
+
+def test_a_refusal_names_the_node_id_and_cuts_a_long_key_short():
+    nodes = [{"id": 1, "type": "SaveImage"}, {"id": 7}]
+    with pytest.raises(NotAWorkflowError, match="node '7' has no type"):
+        check_comfy_workflow({"nodes": nodes, "links": []})
+    graph = {**_t2i_graph(), "x" * 5000: 1}
+    with pytest.raises(NotAWorkflowError) as refused:
+        check_comfy_workflow(graph)
+    assert len(str(refused.value)) < 200
 
 
 def test_deleting_a_workflow_removes_its_migration_backup(import_route):
