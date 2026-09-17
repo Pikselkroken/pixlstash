@@ -18,10 +18,11 @@ pictures across the whole stack, which is the whole-library disclosure class
 
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from pixlstash.hub.workflow_cards import effective_stack_keys, variant_hashes_for_keys
 from pixlstash.pixl_logging import get_logger
@@ -35,6 +36,22 @@ logger = get_logger(__name__)
 MAX_PROMPT_LENGTH = 20000
 MAX_NAME_LENGTH = 200
 MAX_LORAS = 64
+# Every free-form field a caller can write has a ceiling, the overrides map
+# included: it is a parameter form's answers, and the largest real one is a few
+# hundred bytes. Measured on the serialised form, because it is nesting rather
+# than any one value that would make it big.
+MAX_OVERRIDES_LENGTH = 20000
+# ComfyUI draws seeds up to 2**64 - 1, which is 20 digits.
+MAX_SEED_LENGTH = 64
+
+
+def _bounded_overrides(value: Optional[dict]) -> Optional[dict]:
+    """Refuse an overrides map too large to be a form's answers."""
+    if value is not None and len(json.dumps(value)) > MAX_OVERRIDES_LENGTH:
+        raise ValueError(
+            f"overrides is longer than {MAX_OVERRIDES_LENGTH} characters serialised."
+        )
+    return value
 
 
 class RecipeLora(BaseModel):
@@ -59,9 +76,11 @@ class SavedRecipePayload(BaseModel):
     negative: Optional[str] = Field(None, max_length=MAX_PROMPT_LENGTH)
     loras: list[RecipeLora] = Field(default_factory=list, max_length=MAX_LORAS)
     overrides: dict[str, Any] = Field(default_factory=dict)
-    seed: Optional[str] = None
+    seed: Optional[str] = Field(None, max_length=MAX_SEED_LENGTH)
     keep_seed: bool = False
     source_picture_id: Optional[int] = None
+
+    _check_overrides = field_validator("overrides")(_bounded_overrides)
 
 
 class SavedRecipeEdit(BaseModel):
@@ -76,9 +95,11 @@ class SavedRecipeEdit(BaseModel):
     negative: Optional[str] = Field(None, max_length=MAX_PROMPT_LENGTH)
     loras: Optional[list[RecipeLora]] = Field(None, max_length=MAX_LORAS)
     overrides: Optional[dict[str, Any]] = None
-    seed: Optional[str] = None
+    seed: Optional[str] = Field(None, max_length=MAX_SEED_LENGTH)
     keep_seed: Optional[bool] = None
     source_picture_id: Optional[int] = None
+
+    _check_overrides = field_validator("overrides")(_bounded_overrides)
 
 
 class SavedRecipeOut(BaseModel):
@@ -197,12 +218,20 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         fields = payload.model_dump()
         fields["loras"] = [lora.model_dump() for lora in payload.loras]
-        return saved_recipe_service.create_recipe(server.vault, fields)
+        try:
+            return saved_recipe_service.create_recipe(server.vault, fields)
+        except saved_recipe_service.UnknownSourcePicture as exc:
+            # A bad id in the body, not a fault: answered as a refusal rather
+            # than left to the vault's foreign key, which would be a 500.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.patch(
         "/recipes/{recipe_id}",
         summary="Edit a saved recipe",
-        description="Write the fields the request carries; the rest stand.",
+        description=(
+            "Write the fields the request carries; the rest stand. A null name "
+            "or prompt clears it to empty, which is what those columns hold."
+        ),
         response_model=SavedRecipeOut,
         responses={404: {"description": "No such recipe."}},
     )
@@ -211,7 +240,12 @@ def create_router(server) -> APIRouter:
         changes = payload.model_dump(exclude_unset=True)
         if "loras" in changes and payload.loras is not None:
             changes["loras"] = [lora.model_dump() for lora in payload.loras]
-        recipe = saved_recipe_service.update_recipe(server.vault, recipe_id, changes)
+        try:
+            recipe = saved_recipe_service.update_recipe(
+                server.vault, recipe_id, changes
+            )
+        except saved_recipe_service.UnknownSourcePicture as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         if recipe is None:
             raise HTTPException(status_code=404, detail="No such recipe.")
         return recipe

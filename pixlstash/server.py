@@ -25,6 +25,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
 from pillow_heif import register_heif_opener
@@ -1491,7 +1492,12 @@ class Server(
 
             return JSONResponse(
                 status_code=422,
-                content={"detail": detail},
+                # Encoded, not handed to JSONResponse raw: a validator that
+                # raises ValueError puts the exception OBJECT in the error's
+                # ``ctx`` (pydantic v2), which json.dumps cannot write, and the
+                # handler for a 422 would then itself fail with a 500. FastAPI's
+                # own default handler encodes for this reason.
+                content={"detail": jsonable_encoder(detail)},
                 headers=headers,
             )
 

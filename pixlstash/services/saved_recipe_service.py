@@ -38,6 +38,17 @@ from pixlstash.services.workflow_hash import normalized_filename
 
 logger = get_logger(__name__)
 
+
+class UnknownSourcePicture(Exception):
+    """The caller named a ``source_picture_id`` this library does not hold.
+
+    Raised rather than left to the vault's foreign key, which would surface as
+    an unhandled ``IntegrityError`` — a 500 and an ``Unhandled exception`` line
+    in the owner's log for what is an ordinary bad request. The route maps it
+    to a 422.
+    """
+
+
 # Every field a caller may set, and the only ones PATCH will write. Listed
 # rather than derived from the model so that adding a column does not silently
 # make it writable through the API.
@@ -100,6 +111,18 @@ def lora_names(entries: Iterable[Any]) -> frozenset[str]:
     return frozenset(names)
 
 
+def prompt_key(value: Optional[str]) -> str:
+    """The comparable form of a prompt: stripped, and NULL is the empty one.
+
+    Stripped because the two sides arrive by different routes — a recipe's
+    prompt is typed or copied into the Save dialog, a picture's is read out of
+    the graph — and a trailing newline is not a different look. Anything
+    stronger (case, whitespace inside, punctuation) would start crediting looks
+    the owner deliberately told apart, so the rule stops here.
+    """
+    return (value or "").strip()
+
+
 def serialize(recipe: SavedRecipe) -> dict:
     """One recipe as the API shape, with its two JSON columns parsed."""
     return {
@@ -149,7 +172,16 @@ def list_in_session(
 def credit_groups_in_session(
     session: Session, structural_hashes: list[str]
 ) -> list[tuple[Optional[str], Optional[str], int]]:
-    """Kept pictures of these variants, grouped by what credit matches on."""
+    """Kept pictures of these variants, grouped by what credit matches on.
+
+    **Only pictures that have been read for ComfyUI metadata.** A NULL
+    ``comfyui_loras`` is the "never checked" sentinel (``db_models/picture.py``)
+    and says nothing about what the picture loaded; counting it would fold every
+    un-extracted picture in the stack into the empty prompt with no LoRAs, which
+    is exactly the key of a recipe saved with neither, and credit it a library's
+    worth of pictures it never made. A picture that was read and loaded no LoRAs
+    holds ``"[]"`` and is counted.
+    """
     if not structural_hashes:
         return []
     rows = session.exec(
@@ -159,10 +191,21 @@ def credit_groups_in_session(
             func.count(Picture.id),
         )
         .where(Picture.workflow_structural_hash.in_(structural_hashes))
+        .where(Picture.comfyui_loras.is_not(None))
         .where(Picture.deleted.is_(False))
         .group_by(Picture.comfyui_positive_prompt, Picture.comfyui_loras)
     ).all()
     return [(prompt, loras, count) for prompt, loras, count in rows]
+
+
+def _require_source_picture(session: Session, picture_id: Optional[int]) -> None:
+    """Refuse a ``source_picture_id`` no picture in this vault answers to."""
+    if picture_id is None:
+        return
+    if session.get(Picture, picture_id) is None:
+        raise UnknownSourcePicture(
+            f"No picture {picture_id} in this library to save a recipe from."
+        )
 
 
 def create_in_session(session: Session, fields: dict) -> dict:
@@ -173,6 +216,7 @@ def create_in_session(session: Session, fields: dict) -> dict:
     recipes in one order: a per-workflow counter would hand two members the
     same position and leave the id to break a tie the owner did not choose.
     """
+    _require_source_picture(session, fields.get("source_picture_id"))
     highest = session.exec(select(func.max(SavedRecipe.position))).one()
     recipe = SavedRecipe(
         workflow_key=fields["workflow_key"],
@@ -202,15 +246,25 @@ def update_in_session(
     does not blank a prompt; ``workflow_key`` and ``position`` are not writable
     here, the first because a recipe does not move between workflows and the
     second because ordering is ``PUT /recipes/order``'s whole job.
+
+    Raises:
+        UnknownSourcePicture: The change names a picture this library lacks.
     """
     recipe = session.get(SavedRecipe, recipe_id)
     if recipe is None:
         return None
+    if "source_picture_id" in changes:
+        _require_source_picture(session, changes["source_picture_id"])
     for field in WRITABLE_FIELDS:
         if field not in changes:
             continue
         value = changes[field]
-        if field == "loras":
+        if field in ("name", "prompt"):
+            # NOT NULL columns. A caller sending an explicit null means "clear
+            # it", which is the empty string; writing the null itself would be
+            # an unhandled IntegrityError out of an ordinary request.
+            setattr(recipe, field, value or "")
+        elif field == "loras":
             recipe.loras = json.dumps(value or [])
         elif field == "overrides":
             recipe.overrides = json.dumps(value or {})
@@ -235,7 +289,15 @@ def delete_in_session(session: Session, recipe_id: int) -> bool:
 
 
 def reorder_in_session(session: Session, recipe_ids: list[int]) -> Optional[list[int]]:
-    """Write positions 0..n-1 over exactly these recipes, in this order.
+    """Re-position exactly these recipes into this order.
+
+    **The positions the rows already hold are dealt out again in the new
+    order**, rather than 0..n-1 being written over them. A tab shows one stack's
+    recipes and reorders that subset, so writing 0..n-1 would drop them on top
+    of positions other workflows' recipes already occupy: the unfiltered listing
+    would interleave the two, and the next save — which appends after the
+    highest position in the table — would land in the middle. Permuting leaves
+    every recipe outside the request exactly where it was.
 
     ``None`` when one of the ids does not exist: a partial reorder would leave
     the tab in an order the owner never chose and no error to say so.
@@ -248,7 +310,8 @@ def reorder_in_session(session: Session, recipe_ids: list[int]) -> Optional[list
     }
     if len(rows) != len(recipe_ids):
         return None
-    for position, recipe_id in enumerate(recipe_ids):
+    positions = sorted(row.position for row in rows.values())
+    for position, recipe_id in zip(positions, recipe_ids):
         recipe = rows[recipe_id]
         recipe.position = position
         session.add(recipe)
@@ -273,20 +336,27 @@ def credit_by_recipe(
     """
     matched: dict[tuple[str, frozenset[str]], int] = {}
     for prompt, loras, count in groups:
-        # A picture whose ``comfyui_loras`` is NULL has never been read for
-        # ComfyUI metadata, and one holding "[]" was read and loaded none. Both
-        # match a recipe with no LoRAs: the second says so, and the first is a
-        # picture the extraction pass has not reached, which credit reports as
-        # it finds it rather than guessing at.
+        # The group is already narrowed to pictures that were read, so "[]"
+        # here means a picture that loaded no LoRAs and matches a recipe with
+        # none.
         names = lora_names(
-            _decode(loras, [], field="comfyui_loras", recipe_id="(picture group)")
+            _decode(
+                loras,
+                [],
+                field="comfyui_loras",
+                recipe_id=f"the picture group with prompt {prompt_key(prompt)[:60]!r}",
+            )
         )
-        key = (prompt or "", names)
+        key = (prompt_key(prompt), names)
         matched[key] = matched.get(key, 0) + int(count)
 
     credit = {}
     for recipe in recipes:
-        key = (recipe.get("prompt") or "", lora_names(recipe.get("loras") or []))
+        key = (prompt_key(recipe.get("prompt")), lora_names(recipe.get("loras") or []))
+        # ``get``, never ``pop``: a group counts for EVERY recipe it matches.
+        # Two recipes differing only in a LoRA strength are the same look as far
+        # as a picture row can tell, and crediting whichever was read first
+        # would be a guess dressed as an answer.
         credit[recipe["id"]] = matched.get(key, 0)
     return credit
 

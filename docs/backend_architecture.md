@@ -3219,15 +3219,18 @@ saved recipe has to travel with a snapshot or a library move.
 **It belongs to the workflow it was saved from, and runs on that workflow's
 stack** (implementation plan D10). The row names one `workflow_key` and nothing
 else, so `GET /recipes?workflow_key=…` resolves the effective stack in the hub
-(`hub/workflow_cards.effective_stack_keys`: a manual assignment, then
-`workflow_unstacked`, then the automatic `core_hash` group) and lists every
-member's recipes — and an Unstack leaves each recipe with its own workflow
+(`hub/workflow_cards.effective_stack_keys`: an explicit `workflow_stack_member`
+row whatever its stack's kind, then `workflow_unstacked`, then the automatic
+`core_hash` group) and lists every member's recipes — and an Unstack leaves each recipe with its own workflow
 because there was never a stack id to break.
 
 **Credit is computed on read and there is no link table.** A recipe accounts for
 the stack's kept pictures whose `comfyui_positive_prompt` is the recipe's prompt
-and whose `comfyui_loras` names are the recipe's LoRA names, compared through
-`normalized_filename`. Seeds and strengths are ignored — no picture row stores a
+(stripped on both sides) and whose `comfyui_loras` names are the recipe's LoRA
+names, compared through `normalized_filename`. **Only pictures the extraction
+pass has read count**: a NULL `comfyui_loras` is the never-checked sentinel, and
+folding it in would credit every un-extracted picture in the stack to a recipe
+saved with no prompt and no LoRAs. Seeds and strengths are ignored — no picture row stores a
 strength, so strength-exact credit would match on a value that is not there. One
 grouped vault read per stack, matched in Python (`services/saved_recipe_service.py`),
 so the cost does not grow with the number of recipes in the tab.

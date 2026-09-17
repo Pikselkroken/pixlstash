@@ -45,6 +45,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, SavedRecipe
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
 from pixlstash.server import Server
+from pixlstash.services import saved_recipe_service
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
@@ -450,9 +451,18 @@ def test_an_unstacked_card_keeps_its_own_recipes_and_only_those(recipe_env):
     ).json()
     assert [row["id"] for row in listed] == [on_a["id"]]
 
+    # And the other way round, which is the half a test asking only about the
+    # excluded card cannot see: A left the group, so B's automatic stack must
+    # stop holding it. Reading CARD_A returns from the unstacked branch before
+    # the grouping query runs at all.
+    from_b = recipe_env.owner.get(
+        f"{API}/recipes", params={"workflow_key": CARD_B}
+    ).json()
+    assert [row["name"] for row in from_b] == ["On B"]
 
-def test_a_manual_stack_beats_the_automatic_grouping(recipe_env):
-    """A manual assignment is read first, so A stacks with C and not with B."""
+
+def test_a_stack_membership_row_beats_the_automatic_grouping(recipe_env):
+    """An explicit membership is read first, so A stacks with C and not with B."""
     on_a = _save(recipe_env.owner, CARD_A, name="On A")
     _save(recipe_env.owner, CARD_B, name="On B")
     on_c = _save(recipe_env.owner, CARD_C, name="On C")
@@ -464,6 +474,37 @@ def test_a_manual_stack_beats_the_automatic_grouping(recipe_env):
         conn.executemany(
             "INSERT INTO workflow_stack_member (stack_id, workflow_key, position) "
             "VALUES ('manual-1', ?, ?)",
+            ((CARD_A, 0), (CARD_C, 1)),
+        )
+
+    listed = recipe_env.owner.get(
+        f"{API}/recipes", params={"workflow_key": CARD_A}
+    ).json()
+    assert {row["id"] for row in listed} == {on_a["id"], on_c["id"]}
+
+    # B is left alone with its own: A is placed elsewhere, so the automatic
+    # group B is still in must not pick it back up. Only a read from B's side
+    # exercises that exclusion.
+    from_b = recipe_env.owner.get(
+        f"{API}/recipes", params={"workflow_key": CARD_B}
+    ).json()
+    assert [row["name"] for row in from_b] == ["On B"]
+
+
+def test_a_membership_row_is_obeyed_whatever_its_stacks_kind(recipe_env):
+    """An ``auto`` stack with rows is an arrangement somebody made, like a manual one."""
+    on_a = _save(recipe_env.owner, CARD_A, name="On A")
+    _save(recipe_env.owner, CARD_B, name="On B")
+    on_c = _save(recipe_env.owner, CARD_C, name="On C")
+    with recipe_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_stack (stack_id, kind, core_hash) "
+            "VALUES ('auto-1', 'auto', ?)",
+            (CORE_OTHER,),
+        )
+        conn.executemany(
+            "INSERT INTO workflow_stack_member (stack_id, workflow_key, position) "
+            "VALUES ('auto-1', ?, ?)",
             ((CARD_A, 0), (CARD_C, 1)),
         )
 
@@ -581,4 +622,195 @@ def test_the_unfiltered_list_reports_no_credit_rather_than_a_wrong_one(recipe_en
     says 0 rather than a number measured against the wrong population."""
     _save(recipe_env.owner, CARD_A, loras=_ada())
     listed = recipe_env.owner.get(f"{API}/recipes").json()
+    assert listed[0]["pictures"] == 0
+
+
+def test_two_recipes_of_the_same_look_are_both_credited(recipe_env):
+    """A group counts for every recipe it matches, not for the first one read.
+
+    Two recipes differing only in a LoRA strength are the same look as far as a
+    picture row can tell — nothing stores a strength — so crediting one of them
+    and not the other would be a guess the payload presents as an answer.
+    """
+    weak = _save(recipe_env.owner, CARD_A, name="Weak", loras=_ada(0.3))
+    strong = _save(recipe_env.owner, CARD_A, name="Strong", loras=_ada(0.9))
+    credit = {
+        row["id"]: row["pictures"]
+        for row in recipe_env.owner.get(
+            f"{API}/recipes", params={"workflow_key": CARD_A}
+        ).json()
+    }
+    assert credit == {weak["id"]: 2, strong["id"]: 2}
+
+
+def test_a_picture_never_read_for_metadata_is_credited_to_nobody(recipe_env):
+    """The over-count this rule exists to stop.
+
+    A picture the extraction pass has not reached has NULL prompt and NULL
+    ``comfyui_loras``. Folded in, it would key as "no prompt, no LoRAs" — which
+    is exactly a recipe saved with the defaults — and hand that recipe the whole
+    un-extracted half of the library.
+    """
+
+    def add(session):
+        for path in ("unread_one.png", "unread_two.png"):
+            session.add(
+                Picture(
+                    file_path=path,
+                    deleted=False,
+                    created_at=datetime(2026, 9, 3),
+                    workflow_structural_hash=VARIANT_A,
+                    workflow_hash_version="v1",
+                    comfyui_positive_prompt=None,
+                    comfyui_loras=None,
+                )
+            )
+        session.commit()
+
+    recipe_env.server.vault.db.run_task(add, priority=DBPriority.IMMEDIATE)
+    _save(recipe_env.owner, CARD_A, name="Empty", prompt="", loras=[])
+    listed = recipe_env.owner.get(
+        f"{API}/recipes", params={"workflow_key": CARD_A}
+    ).json()
+    assert listed[0]["pictures"] == 0
+
+
+def test_credit_survives_whitespace_around_the_prompt(recipe_env):
+    """A recipe saved from a picture must credit that picture.
+
+    The two prompts arrive by different routes — one typed into the Save
+    dialog, one read out of the graph — so a trailing newline is not a
+    different look, and a byte-exact match would read 0 against the very
+    picture the recipe was saved from.
+    """
+    _save(recipe_env.owner, CARD_A, prompt=f"  {PROMPT}\n", loras=_ada())
+    listed = recipe_env.owner.get(
+        f"{API}/recipes", params={"workflow_key": CARD_A}
+    ).json()
+    assert listed[0]["pictures"] == 2
+
+
+# ===========================================================================
+# Bad requests are refused, not crashed on
+# ===========================================================================
+
+
+def test_a_source_picture_this_library_does_not_hold_is_refused(recipe_env):
+    """422, not the vault's foreign key surfacing as a 500 in the owner's log."""
+    r = recipe_env.owner.post(
+        f"{API}/recipes", json={"workflow_key": CARD_A, "source_picture_id": 999999}
+    )
+    assert r.status_code == 422, r.text
+    assert recipe_env.owner.get(f"{API}/recipes").json() == []
+
+    saved = _save(recipe_env.owner, CARD_A)
+    r = recipe_env.owner.patch(
+        f"{API}/recipes/{saved['id']}", json={"source_picture_id": 999999}
+    )
+    assert r.status_code == 422, r.text
+
+    # And a real one is accepted, so the check is not simply refusing the field.
+    picture_id = recipe_env.owner.get(f"{API}/pictures").json()[0]["id"]
+    r = recipe_env.owner.patch(
+        f"{API}/recipes/{saved['id']}", json={"source_picture_id": picture_id}
+    )
+    assert r.status_code == 200 and r.json()["source_picture_id"] == picture_id
+
+
+def test_a_null_name_or_prompt_clears_it_rather_than_failing_the_write(recipe_env):
+    """Both columns are NOT NULL; a null in the body means "empty"."""
+    saved = _save(recipe_env.owner, CARD_A, name="Named", prompt="something")
+    r = recipe_env.owner.patch(
+        f"{API}/recipes/{saved['id']}", json={"name": None, "prompt": None}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "" and r.json()["prompt"] == ""
+
+
+def test_an_oversized_overrides_map_or_seed_is_refused(recipe_env):
+    """The ceiling the module claims: every free-form field has one."""
+    r = recipe_env.owner.post(
+        f"{API}/recipes",
+        json={"workflow_key": CARD_A, "overrides": {"k": "x" * 30000}},
+    )
+    assert r.status_code == 422, r.text
+    r = recipe_env.owner.post(
+        f"{API}/recipes", json={"workflow_key": CARD_A, "seed": "9" * 200}
+    )
+    assert r.status_code == 422, r.text
+    assert recipe_env.owner.get(f"{API}/recipes").json() == []
+
+
+def test_reordering_one_tab_leaves_every_other_recipe_where_it_was(recipe_env):
+    """A tab reorders its own stack's subset, and nothing else may move.
+
+    Writing 0..n-1 over a subset would drop those rows onto positions another
+    workflow's recipes already hold: the unfiltered listing would interleave the
+    two, and the next save — which appends after the highest position — would
+    land in the middle of them.
+    """
+    first_a = _save(recipe_env.owner, CARD_A, name="A1")
+    _save(recipe_env.owner, CARD_C, name="C1")
+    second_a = _save(recipe_env.owner, CARD_A, name="A2")
+
+    r = recipe_env.owner.put(
+        f"{API}/recipes/order",
+        json={"recipe_ids": [second_a["id"], first_a["id"]]},
+    )
+    assert r.status_code == 200, r.text
+
+    listed = recipe_env.owner.get(f"{API}/recipes").json()
+    assert [row["name"] for row in listed] == ["A2", "C1", "A1"], (
+        "the outsider moved, or the two reordered rows landed on its position"
+    )
+    positions = [row["position"] for row in listed]
+    assert len(set(positions)) == len(positions), f"positions collide: {positions}"
+
+    # The next save still lands last rather than in the middle of them.
+    appended = _save(recipe_env.owner, CARD_A, name="A3")
+    assert appended["position"] > max(positions)
+    assert [row["name"] for row in recipe_env.owner.get(f"{API}/recipes").json()] == [
+        "A2",
+        "C1",
+        "A1",
+        "A3",
+    ]
+
+
+def test_the_service_refuses_to_write_a_field_the_api_does_not_offer(recipe_env):
+    """``workflow_key`` and ``position`` are not editable, at the service too.
+
+    The route's payload model cannot carry either, so this is the guard behind
+    it: a recipe does not move between workflows, and ordering has its own
+    route.
+    """
+    saved = _save(recipe_env.owner, CARD_A, name="Named")
+    updated = saved_recipe_service.update_recipe(
+        recipe_env.server.vault,
+        saved["id"],
+        {"workflow_key": CARD_C, "position": 99, "name": "Renamed"},
+    )
+    assert updated["name"] == "Renamed"
+    assert updated["workflow_key"] == CARD_A
+    assert updated["position"] == saved["position"]
+
+
+def test_a_recipe_whose_stored_json_will_not_parse_still_lists(recipe_env):
+    """One damaged row must not take the whole tab down with it."""
+    saved = _save(recipe_env.owner, CARD_A, loras=_ada())
+
+    def damage(session):
+        recipe = session.get(SavedRecipe, saved["id"])
+        recipe.loras = "{not json"
+        recipe.overrides = "{not json"
+        session.add(recipe)
+        session.commit()
+
+    recipe_env.server.vault.db.run_task(damage, priority=DBPriority.IMMEDIATE)
+    listed = recipe_env.owner.get(
+        f"{API}/recipes", params={"workflow_key": CARD_A}
+    ).json()
+    assert listed[0]["loras"] == [] and listed[0]["overrides"] == {}
+    # It reads as a recipe with no LoRAs, which credits the pictures that loaded
+    # none — 0 here — rather than silently keeping its old credit.
     assert listed[0]["pictures"] == 0

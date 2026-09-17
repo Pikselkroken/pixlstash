@@ -393,12 +393,21 @@ def card_grouping(hub: HubDatabase) -> dict:
 def effective_stack_keys(hub: HubDatabase, key: str) -> list[str]:
     """The cards one card shares a stack with, itself included.
 
-    Resolved in the order the plan sets (§5.4) and never written down: a manual
-    assignment first, then the owner having taken this card OUT of its automatic
-    group, and only then the automatic group itself - every card whose topology
-    shares this one's ``core_hash`` under the rule THIS build applies. Cards
-    that have left the group by either of the first two routes are excluded from
-    it, which is what makes an Unstack stick through a ``CORE_VERSION`` bump.
+    Resolved in the order the plan sets (§5.4) and never written down: an
+    explicit ``workflow_stack_member`` row first, then the owner having taken
+    this card OUT of its automatic group, and only then the automatic group
+    itself - every card whose topology shares this one's ``core_hash`` under the
+    rule THIS build applies. Cards that have left the group by either of the
+    first two routes are excluded from it, which is what makes an Unstack stick
+    through a ``CORE_VERSION`` bump.
+
+    **A membership row wins whatever its stack's ``kind``.** An ``auto`` stack
+    only has rows once somebody has ordered or edited it, and at that point it
+    is as much the owner's arrangement as a ``manual`` one; reading the kind
+    here would put a card back in a grouping it was explicitly placed out of.
+    The lookup is ordered, because the table's primary key
+    ``(stack_id, workflow_key)`` does not stop a card holding two memberships
+    and an arbitrary answer would be an unreproducible stack.
 
     A card with no cache row yet, or one stamped with a superseded rule, is its
     own stack rather than joining a NULL bucket that would read as one enormous
@@ -409,7 +418,9 @@ def effective_stack_keys(hub: HubDatabase, key: str) -> list[str]:
         of it - a saved recipe still runs on the workflow it was saved from.
     """
     member = hub.fetchone(
-        "SELECT stack_id FROM workflow_stack_member WHERE workflow_key = ?", (key,)
+        "SELECT stack_id FROM workflow_stack_member WHERE workflow_key = ? "
+        "ORDER BY stack_id",
+        (key,),
     )
     if member is not None:
         rows = hub.fetchall(
