@@ -28,6 +28,7 @@
     </div>
     <div v-else class="app-select__wrap">
       <select
+        ref="fieldEl"
         class="app-select__field"
         :class="{ 'app-select__field--compact': compact }"
         :value="modelValue"
@@ -49,7 +50,7 @@
 </template>
 
 <script setup>
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { VIcon } from "vuetify/components";
 import FieldLabel from "./FieldLabel.vue";
 
@@ -67,6 +68,15 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["update:modelValue"]);
+
+const fieldEl = ref(null);
+
+/** Put the keyboard on the single-select field. */
+function focus() {
+  fieldEl.value?.focus();
+}
+
+defineExpose({ focus });
 
 const normalizedOptions = computed(() =>
   props.options.map((o) =>

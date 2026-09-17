@@ -68,6 +68,22 @@ async function choose(w, value) {
 }
 
 describe("PluginSelect options", () => {
+  it("fall back to the plugin's name when it sets no display name", () => {
+    const w = mountPicker("bare", "tag", [
+      { name: "bare", display_name: "", is_loaded: true },
+    ]);
+    expect(w.findAll("option")[1].text()).toBe("bare");
+    expect(gear(w).attributes("aria-label")).toBe("bare settings");
+  });
+
+  it("mark a plugin that is not loaded, so readiness shows without choosing", () => {
+    const labels = mountPicker(null)
+      .findAll("option")
+      .map((o) => o.text());
+    expect(labels[1]).toBe("WD14");
+    expect(labels[2]).toBe("PixlStash — not loaded");
+  });
+
   beforeEach(() => vi.clearAllMocks());
 
   it("is one dropdown, None first, then every capable plugin", () => {
@@ -155,6 +171,12 @@ describe("PluginSelect settings gear", () => {
     expect(dialog.props("plugin").name).toBe("wd14");
   });
 
+  it("refuses the press in its handler, not only through the dialog's v-if", async () => {
+    const w = mountPicker(null);
+    await gear(w).trigger("click");
+    expect(w.vm.dialogOpen).toBe(false);
+  });
+
   it("is disabled while None is chosen, and opens nothing", async () => {
     const w = mountPicker(null);
     // aria-disabled, so the tooltip saying why stays reachable.
@@ -192,11 +214,52 @@ describe("PluginSelect status line", () => {
   });
 
   it("is absent for None", () => {
-    expect(mountPicker(null).find(".ps-hint").exists()).toBe(false);
+    // Kept mounted, empty, so it stays a live region that can announce.
+    expect(mountPicker(null).get(".ps-hint").text()).toBe("");
+  });
+});
+
+describe("PluginSelect announces", () => {
+  it("the status line politely and a failed save as an alert", async () => {
+    patchUserConfig.mockRejectedValueOnce(new Error("boom"));
+    const w = mountPicker("wd14");
+    expect(w.get(".ps-hint").attributes("aria-live")).toBe("polite");
+    await choose(w, "pixlstash_tagger");
+    expect(w.get(".ps-error").attributes("role")).toBe("alert");
+  });
+});
+
+describe("PluginSelect keeps keyboard focus through a save", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("puts focus back on the dropdown once the select is re-enabled", async () => {
+    const w = mount(PluginSelect, {
+      attachTo: document.body,
+      props: {
+        plugins: PLUGINS.map((p) => ({ ...p, supports_tags: true })),
+        kind: "tag",
+        settings: { active_tag_plugin: "wd14" },
+      },
+      global: { stubs: { TaggerPluginSettingsDialog: true } },
+    });
+    select(w).element.focus();
+    // Not awaited: the save starts synchronously, and the blur has to land
+    // while it is in flight, as a browser's does when the select is disabled.
+    select(w).setValue("pixlstash_tagger");
+    select(w).element.blur();
+    expect(document.activeElement).not.toBe(select(w).element);
+    await flushPromises();
+    expect(document.activeElement).toBe(select(w).element);
+    w.unmount();
   });
 });
 
 describe("PluginSelect with no capable plugins", () => {
+  it("still names a plugin that is saved but gone", () => {
+    const w = mountPicker("gone", "tag", []);
+    expect(w.get(".ps-empty").text()).toContain("gone is still selected");
+  });
+
   it("shows the empty state rather than a lone None option", () => {
     const w = mountPicker(null, "tag", []);
     expect(w.find("select").exists()).toBe(false);

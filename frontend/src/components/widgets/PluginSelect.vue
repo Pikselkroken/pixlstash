@@ -10,7 +10,7 @@
  * Was a radio table (issue #1344): single selection took a row per plugin and
  * two columns of them made the Auto-tagging section the busiest in Settings.
  */
-import { computed, ref } from "vue";
+import { computed, nextTick, ref } from "vue";
 import { patchUserConfig } from "../../api/config";
 import TaggerPluginSettingsDialog from "./TaggerPluginSettingsDialog.vue";
 import { errorDetail } from "../../utils/apiError";
@@ -58,6 +58,9 @@ const activePluginInfo = computed(
   () => capablePlugins.value.find((p) => p.name === activePlugin.value) ?? null,
 );
 
+/** A plugin's name as shown: `display_name` is optional for a plugin to set. */
+const labelOf = (p) => p.display_name || p.name;
+
 /** "Loaded · what it does" for the chosen plugin; empty for None. */
 const hint = computed(() => {
   const p = activePluginInfo.value;
@@ -66,12 +69,14 @@ const hint = computed(() => {
   return p.description ? `${status} · ${p.description}` : status;
 });
 
-// A native <select> speaks strings, so None travels as "" and maps to null.
+// A native <select> speaks strings, so None travels as "" and maps to null. Each
+// label carries "not loaded" so readiness can be compared without choosing,
+// which saves.
 const options = computed(() => [
   { value: "", label: noneLabel.value },
   ...capablePlugins.value.map((p) => ({
     value: p.name,
-    label: p.display_name,
+    label: p.is_loaded ? labelOf(p) : `${labelOf(p)} — not loaded`,
   })),
   // A saved plugin that is no longer installed: say so rather than leave the
   // field blank, or show None when the setting is not None.
@@ -93,6 +98,7 @@ function pluginParams(plugin) {
 // already moved, and toggling `disabled` re-renders AppSelect, which re-applies
 // its unchanged value.
 const settingActive = ref(false);
+const selectRef = ref(null);
 const activeError = ref("");
 
 const dialogPlugin = ref(null);
@@ -102,21 +108,24 @@ const dialogOpen = ref(false);
 // or focus, so the reason in its tooltip could never be read.
 const gearTooltip = computed(() => {
   if (activePluginInfo.value) {
-    return `${activePluginInfo.value.display_name} settings`;
+    return `${labelOf(activePluginInfo.value)} settings`;
   }
   return activePlugin.value
     ? `${activePlugin.value} is not installed`
     : "Choose a plugin to configure it";
 });
 
-// With nothing chosen this sets no plugin, so the dialog stays unrendered.
 function openSettings() {
+  if (!activePluginInfo.value) return;
   dialogPlugin.value = activePluginInfo.value;
   dialogOpen.value = true;
 }
 
 async function setActive(value) {
   const pluginName = value || null;
+  // Disabling the <select> for the save drops focus to <body>, stranding a
+  // keyboard user; put it back afterwards if it was there.
+  const hadFocus = selectRef.value?.$el.contains(document.activeElement);
   settingActive.value = true;
   activeError.value = "";
   try {
@@ -131,6 +140,7 @@ async function setActive(value) {
     activeError.value = errorDetail(e) || "Failed to update.";
   } finally {
     settingActive.value = false;
+    if (hadFocus) nextTick(() => selectRef.value?.focus());
   }
 }
 
@@ -156,6 +166,7 @@ function onParamsSaved({ name, params }) {
   <div class="plugin-select">
     <div v-if="capablePlugins.length" class="ps-row">
       <AppSelect
+        ref="selectRef"
         class="ps-field"
         :model-value="activePlugin ?? ''"
         :options="options"
@@ -173,11 +184,18 @@ function onParamsSaved({ name, params }) {
         @click="openSettings"
       />
     </div>
-    <div v-else class="ps-empty">No {{ kind }} plugins registered.</div>
+    <div v-else class="ps-empty">
+      No {{ kind }} plugins registered.
+      <template v-if="activePlugin">
+        {{ activePlugin }} is still selected.
+      </template>
+    </div>
 
-    <div v-if="hint" class="ps-hint">{{ hint }}</div>
+    <div class="ps-hint" aria-live="polite">{{ hint }}</div>
 
-    <div v-if="activeError" class="ps-error">{{ activeError }}</div>
+    <div v-if="activeError" class="ps-error" role="alert">
+      {{ activeError }}
+    </div>
 
     <TaggerPluginSettingsDialog
       v-if="dialogPlugin"
@@ -205,6 +223,10 @@ function onParamsSaved({ name, params }) {
 .ps-field {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.ps-hint:empty {
+  display: none;
 }
 
 .ps-hint {

@@ -269,7 +269,7 @@ watch(
 </script>
 
 <template>
-  <div class="behaviour-pane">
+  <div>
     <SettingsSection
       title="Model Memory"
       desc="Keep models loaded in RAM/VRAM for faster processing. Turn off to unload models when idle and save memory."
