@@ -74,7 +74,7 @@ describe("AppInspector", () => {
   it("keeps the lightbox pane's content mounted, only hidden, while closed", async () => {
     // The overlay reaches into its panels as the pane opens (start editing the
     // description), so closing it must not throw their state away.
-    const wrapper = mountInspector({ lightbox: true, open: false });
+    const wrapper = mountInspector({ lightbox: true, open: false, tabs: [] });
     expect(wrapper.classes()).toContain("inspector--lightbox");
     const content = wrapper.find(".inspector-content");
     const probe = wrapper.find(".body-probe").element;
@@ -85,6 +85,7 @@ describe("AppInspector", () => {
     await wrapper.setProps({ open: true });
     // The same node, not a remount.
     expect(wrapper.find(".body-probe").element).toBe(probe);
+    expect(wrapper.attributes("aria-hidden")).toBeUndefined();
     expect(
       wrapper.find(".inspector-content").attributes("style") ?? "",
     ).not.toContain("display: none");

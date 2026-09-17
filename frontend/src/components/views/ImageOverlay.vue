@@ -861,7 +861,7 @@
         <AppInspector
           class="overlay-sidebar"
           :class="{ hidden: chromeHidden }"
-          label="Sidebar"
+          label="Picture details"
           lightbox
           :open="sidebarOpen"
         >

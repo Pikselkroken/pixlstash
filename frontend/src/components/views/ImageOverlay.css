@@ -589,8 +589,9 @@
 }
 
 /* Width, collapse and surface come from AppInspector; this places it over the
-   canvas, under the top bar. Two classes, so it outranks the inspector's own
-   `height: 100%` whichever stylesheet loads last. */
+   canvas, under the top bar. Three selector parts once Vue stamps this file's
+   scope id on the last one, so it outranks AppInspector's own `.inspector`
+   rule (and its `height: 100%`) regardless of stylesheet order. */
 .overlay-main > .overlay-sidebar {
   position: absolute;
   top: var(--topbar-height);
@@ -960,10 +961,12 @@
     grid-template-columns: 1fr;
   }
 
+  /* Reads `--sidebar-width` so the pane and the receipt that tracks its edge
+     cannot drift apart. */
   .overlay-main > .overlay-sidebar:not(.inspector--collapsed) {
-    width: 78%;
-    min-width: 78%;
-    max-width: 78%;
+    width: var(--sidebar-width);
+    min-width: var(--sidebar-width);
+    max-width: var(--sidebar-width);
   }
 
   .overlay-nav {

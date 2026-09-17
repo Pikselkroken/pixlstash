@@ -8,9 +8,9 @@
     <!-- The inspector: one component for every right-edge detail pane (shell
          contract rule 8). The grid's stats, the workflow shelf's inspector,
          the lightbox's picture pane and, as they are built, a model's detail
-         and the duplicates evidence pane are this box with different content. The box, the collapse, the
-         tab band and the key/value grid live here; a pane owns only what it
-         says. -->
+         and the duplicates evidence pane are this box with different
+         content. The box, the collapse, the tab band and the key/value grid
+         live here; a pane owns only what it says. -->
     <!-- The lightbox keeps its pane mounted while closed: the panels hold
          editing state and refs the overlay reaches into as it opens. -->
     <div v-if="open || lightbox" v-show="open" class="inspector-content">
@@ -58,6 +58,8 @@ defineProps({
   /**
    * The image overlay's pane: dark in both themes, and a fixed-height column
    * whose sections bound and scroll themselves instead of the pane scrolling.
+   * Its tab band is not re-inked for the dark surface yet: a lightbox pane
+   * that needs `tabs` has to add the on-dark tab colours first.
    */
   lightbox: { type: Boolean, default: false },
 });
@@ -79,9 +81,9 @@ const emit = defineEmits(["update:modelValue"]);
   border-left: 1px solid rgb(var(--v-theme-border));
   background: rgb(var(--v-theme-sidebar));
   transition:
-    width var(--dur-1) var(--ease-standard),
-    min-width var(--dur-1) var(--ease-standard),
-    max-width var(--dur-1) var(--ease-standard),
+    width var(--dur-2) var(--ease-standard),
+    min-width var(--dur-2) var(--ease-standard),
+    max-width var(--dur-2) var(--ease-standard),
     border-color var(--dur-1) var(--ease-standard);
   overflow: hidden;
 }

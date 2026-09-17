@@ -514,7 +514,7 @@ watch(
 
 .metadata-tab-btn:hover:not(.active) {
   color: rgb(var(--v-theme-on-dark-surface));
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 
 .metadata-tab-panel {
