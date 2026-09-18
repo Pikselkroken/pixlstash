@@ -153,7 +153,12 @@ class TestFindComfyWorkflowPromptFallback:
 
 
 # ===========================================================================
-# The negative prompt and the seed the Recipe tab prints (#1313)
+# What `extract_comfy_workflow_info` surfaces for the Recipe tab (#1313)
+#
+# The negative prompt itself is `extract_recipe_extras`' job, added and unit
+# tested by B5 (`tests/test_comfyui_recipe_preflight.py`). What is asserted here
+# is only what this branch added on top: that the workflow read SURFACES it, and
+# that the seed is carried as text so a 64-bit one survives a JS `Number`.
 # ===========================================================================
 
 _SAMPLER_GRAPH = {
@@ -170,27 +175,19 @@ _SAMPLER_GRAPH = {
 }
 
 
-def test_the_negative_branch_is_walked_as_well_as_the_positive():
-    info = extract_generation_info(_SAMPLER_GRAPH)
+def test_the_workflow_read_surfaces_both_prompts():
+    info = extract_comfy_workflow_info({"prompt": json.dumps(_SAMPLER_GRAPH)})
     assert info["positive_prompt"] == "a castle on a hill"
     assert info["negative_prompt"] == "blurry, watermark"
 
 
-def test_a_graph_with_no_negative_input_reports_none_not_an_empty_prompt():
-    """An upscale has no negative conditioning; "" would read as one set to
-    nothing."""
-    graph = {
-        "3": {"class_type": "KSampler", "inputs": {"positive": ["6", 0]}},
-        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "a castle"}},
-    }
-    assert extract_generation_info(graph)["negative_prompt"] is None
-
-
-def test_a_ui_format_graph_says_it_did_not_read_a_negative_prompt():
-    """The key is present so no caller trips over it, and it is honest."""
-    assert (
-        extract_generation_info({"nodes": [], "links": []})["negative_prompt"] is None
-    )
+def test_a_ui_only_workflow_surfaces_no_negative_prompt():
+    """`extract_recipe_extras` reads the API format only, so a UI graph has to
+    report None rather than reach it with the wrong shape."""
+    ui = {"nodes": [], "links": [], "last_node_id": 1}
+    info = extract_comfy_workflow_info({"workflow": json.dumps(ui)})
+    assert info["is_api_format"] is False
+    assert info["negative_prompt"] is None
 
 
 def test_the_seed_is_carried_as_text_so_a_64_bit_one_survives_javascript():

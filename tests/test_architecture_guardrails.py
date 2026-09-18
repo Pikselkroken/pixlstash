@@ -163,6 +163,7 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/workflow_library_service.py",  # vault-injection pattern; read-only wrappers around the session-level workflow counts
         "pixlstash/services/tag_scan_service.py",  # vault-injection pattern; sync near-neighbour tag scan
         "pixlstash/services/review_service.py",  # vault-injection pattern; orchestrates scan + review lifecycle
+        "pixlstash/services/saved_recipe_service.py",  # vault-injection pattern; thin wrappers around the *_in_session saved-recipe reads and writes
         "pixlstash/services/tag_health_service.py",  # vault-injection pattern; background cache rebuild dispatch
         "pixlstash/services/snapshot_service.py",  # vault-injection pattern; owns snapshot lifecycle
         # restore_service.py was decomposed into the restore/ package (plan §4.4);

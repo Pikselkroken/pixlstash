@@ -316,6 +316,76 @@ def forget_file(hub: HubDatabase, name: str) -> int:
         )
 
 
+def key_of_variant(hub: HubDatabase, structural_hash: str) -> Optional[str]:
+    """The card a filed variant is on, or ``None`` if it has none yet.
+
+    A read, never a derivation: a variant whose card has not been derived (or
+    was keyed by a superseded rule) has no card to report, and inventing one
+    here would hand out a key the hub does not hold.
+    """
+    row = hub.fetchone(
+        "SELECT workflow_key FROM workflow_variant "
+        "WHERE structural_hash = ? AND key_version = ?",
+        (structural_hash, WORKFLOW_KEY_VERSION),
+    )
+    return row["workflow_key"] if row else None
+
+
+def variants_on_key(hub: HubDatabase, key: str) -> list[str]:
+    """Every variant on one card, for the picture filter's ``IN``.
+
+    An empty list is a real answer - a card with no filed variant - and the
+    caller must keep it as a filter matching nothing rather than as no filter.
+    """
+    return [
+        row["structural_hash"]
+        for row in hub.fetchall(
+            "SELECT structural_hash FROM workflow_variant "
+            "WHERE workflow_key = ? AND key_version = ? ORDER BY structural_hash",
+            (key, WORKFLOW_KEY_VERSION),
+        )
+    ]
+
+
+def variants_in_stack(hub: HubDatabase, stack_id: str) -> list[str]:
+    """Every variant on every card in one stack.
+
+    *stack_id* is read two ways, in one query rather than one-then-the-other,
+    because a stack can be named either way:
+
+    - a **stored** stack (``workflow_stack``, manual or auto) has a row per
+      card in ``workflow_stack_member``;
+    - an automatic grouping that **has not been stored** is not a row at all -
+      it IS the set of cards sharing a ``core_hash`` (:func:`card_grouping`
+      computes it and writes nothing), so until it is materialised the only
+      thing that names it is that hash.
+
+    Nothing writes the stack tables yet, so today every answer comes from the
+    ``core_hash`` half; the membership half is here because the schema already
+    says a stack has its own id, and a filter that ignored it would answer a
+    stored stack with an empty grid the day one is written.
+
+    **Not consulted: ``workflow_unstacked``**, the owner taking a card out of
+    its automatic grouping. Nothing writes that table either, and the step that
+    does owns making every reader agree with it.
+
+    A value that names neither matches nothing.
+    """
+    return [
+        row["structural_hash"]
+        for row in hub.fetchall(
+            "SELECT DISTINCT v.structural_hash AS structural_hash "
+            "FROM workflow_variant v "
+            "LEFT JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
+            "AND c.core_version = ? "
+            "WHERE v.key_version = ? AND (c.core_hash = ? OR v.workflow_key IN ("
+            "SELECT workflow_key FROM workflow_stack_member WHERE stack_id = ?)) "
+            "ORDER BY v.structural_hash",
+            (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION, stack_id, stack_id),
+        )
+    ]
+
+
 def unidentified_variants(hub: HubDatabase, limit: int) -> list[str]:
     """Filed variants with no card, or with one keyed by a superseded rule."""
     return [
@@ -356,6 +426,15 @@ def card_grouping(hub: HubDatabase) -> dict:
 
     One grouped scan rather than a count per figure: five separate aggregates
     over the same table is five scans for numbers that have to agree anyway.
+
+    **This is the AUTOMATIC grouping, before the owner's decisions, and that is
+    deliberate**: the gate it reports for asks whether ``STRIP_LORAS_FOR_STACKS``
+    groups well, which is a question about the rule and not about what anybody
+    has since taken out of it. :func:`effective_stack_keys` answers the other
+    question - what one card's stack actually IS - and subtracts
+    ``workflow_stack_member`` and ``workflow_unstacked`` for that reason. The two
+    legitimately disagree once the owner has moved a card, and a reader comparing
+    them should expect it.
     """
     rows = hub.fetchall(
         "SELECT c.core_hash AS core_hash, v.topology_hash AS topology_hash, "
@@ -388,3 +467,107 @@ def card_grouping(hub: HubDatabase) -> dict:
         # rule. Zero once the backfill has drained.
         "ungrouped": len(ungrouped - grouped),
     }
+
+
+def effective_stack_keys(hub: HubDatabase, key: str) -> list[str]:
+    """The cards one card shares a stack with, itself included.
+
+    Resolved in the order the plan sets (§5.4) and never written down: an
+    explicit ``workflow_stack_member`` row first, then the owner having taken
+    this card OUT of its automatic group, and only then the automatic group
+    itself - every card whose topology shares this one's ``core_hash`` under the
+    rule THIS build applies. Cards that have left the group by either of the
+    first two routes are excluded from it, which is what makes an Unstack stick
+    through a ``CORE_VERSION`` bump.
+
+    **Only rows keyed by the rule THIS build applies** (``key_version``), like
+    every other reader but ``card_grouping``. A row from a superseded rule names
+    a card computed under different marks, and grouping by it would stack cards
+    this build does not believe in. The cost is a transient: mid-re-derivation a
+    card's stack shrinks to itself until the pass catches up, which reads as a
+    smaller stack rather than as a wrong one.
+
+    **A membership row wins whatever its stack's ``kind``.** An ``auto`` stack
+    only has rows once somebody has ordered or edited it, and at that point it
+    is as much the owner's arrangement as a ``manual`` one; reading the kind
+    here would put a card back in a grouping it was explicitly placed out of.
+    The lookup is ordered, because the table's primary key
+    ``(stack_id, workflow_key)`` does not stop a card holding two memberships
+    and an arbitrary answer would be an unreproducible stack.
+
+    A card with no cache row yet, or one stamped with a superseded rule, is its
+    own stack rather than joining a NULL bucket that would read as one enormous
+    stack holding every unfiled card.
+
+    Returns:
+        The keys, ``key`` always among them even when the hub has never heard
+        of it - a saved recipe still runs on the workflow it was saved from.
+    """
+    member = hub.fetchone(
+        "SELECT stack_id FROM workflow_stack_member WHERE workflow_key = ? "
+        "ORDER BY stack_id",
+        (key,),
+    )
+    if member is not None:
+        rows = hub.fetchall(
+            "SELECT workflow_key FROM workflow_stack_member WHERE stack_id = ? "
+            "ORDER BY position, workflow_key",
+            (member["stack_id"],),
+        )
+        return [row["workflow_key"] for row in rows]
+
+    unstacked = hub.fetchone(
+        "SELECT 1 FROM workflow_unstacked WHERE workflow_key = ?", (key,)
+    )
+    if unstacked is not None:
+        return [key]
+
+    rows = hub.fetchall(
+        "SELECT DISTINCT v.workflow_key AS workflow_key "
+        "FROM workflow_variant v "
+        "JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
+        "AND c.core_version = ? "
+        "WHERE v.key_version = ? AND c.core_hash IN ("
+        "  SELECT c2.core_hash FROM workflow_variant v2 "
+        "  JOIN workflow_topology_core c2 ON c2.topology_hash = v2.topology_hash "
+        "  AND c2.core_version = ? "
+        "  WHERE v2.workflow_key = ? AND v2.key_version = ?"
+        ") "
+        "AND v.workflow_key NOT IN (SELECT workflow_key FROM workflow_stack_member) "
+        "AND v.workflow_key NOT IN (SELECT workflow_key FROM workflow_unstacked) "
+        "ORDER BY v.workflow_key",
+        (
+            CORE_RULE_VERSION,
+            WORKFLOW_KEY_VERSION,
+            CORE_RULE_VERSION,
+            key,
+            WORKFLOW_KEY_VERSION,
+        ),
+    )
+    keys = [row["workflow_key"] for row in rows]
+    return keys if key in keys else [key, *keys]
+
+
+def variant_hashes_for_keys(hub: HubDatabase, keys: list[str]) -> list[str]:
+    """Every variant filed under these cards.
+
+    The structural hashes are what a vault read joins on: a picture carries one
+    (``picture.workflow_structural_hash``) and the hub says which card it is
+    part of, so "the pictures this stack made" is one ``IN`` over an indexed
+    column rather than a join across two databases.
+
+    Filtered on ``key_version`` for the reason
+    :func:`effective_stack_keys` is: a variant filed under a superseded rule
+    belongs to a card this build would not compute, and crediting its pictures
+    to this one would be crediting somebody else's.
+    """
+    if not keys:
+        return []
+    placeholders = ",".join("?" for _ in keys)
+    rows = hub.fetchall(
+        "SELECT structural_hash FROM workflow_variant "
+        f"WHERE key_version = ? AND workflow_key IN ({placeholders}) "
+        "ORDER BY structural_hash",
+        (WORKFLOW_KEY_VERSION, *keys),
+    )
+    return [row["structural_hash"] for row in rows]

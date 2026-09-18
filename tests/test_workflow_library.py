@@ -48,7 +48,11 @@ from pixlstash.hub.workflows import (
     record_picture_ghosts,
     recipes_for_topology,
 )
-from pixlstash.services.a1111_recipe import parse_infotext, reduce_a1111
+from pixlstash.services.a1111_recipe import (
+    _parse_fields,
+    parse_infotext,
+    reduce_a1111,
+)
 from pixlstash.services.workflow_hash import (
     HASH_VERSION,
     MissingSubgraphDefinitionError,
@@ -3232,6 +3236,51 @@ def test_a_seed_or_version_change_keeps_every_key():
 def test_the_seed_is_the_generations():
     recipe = reduce_a1111({"png": {"parameters": infotext()}})
     assert recipe.seed == "1234567890"
+
+
+def test_a_seed_int_would_refuse_is_no_seed():
+    """`str.isdigit()` is not "an integer", and a consumer converts this.
+
+    Both of these are `isdigit()`-true and raise in `int()`: a superscript
+    two, and a digit run past CPython's 4,300-character integer-string limit.
+    The field is documented as text-or-None-if-not-an-integer, and
+    `GET /comfyui/pictures/{id}/recipe` converts it, so a crafted `parameters`
+    chunk was a 500 for anyone holding a share token for that picture.
+    """
+    for seed in ("\u00b2", "1" * 4301):
+        assert seed.isdigit(), "the fixture must clear the old guard"
+        recipe = reduce_a1111(
+            {"png": {"parameters": infotext(fields=f"Steps: 20, Seed: {seed}")}}
+        )
+        assert recipe is not None, "the rest of the recipe still reads"
+        assert recipe.seed is None, seed
+    # The control: an ordinary seed still arrives, so the guard is not blanket.
+    kept = reduce_a1111({"png": {"parameters": infotext(fields="Steps: 20, Seed: 7")}})
+    assert kept.seed == "7"
+
+
+def test_the_fields_regex_is_linear_in_the_line():
+    """An unbounded key run before the literal `:` is quadratic.
+
+    This parser gained a request-path caller in v1.12 B5, so the cost of a
+    crafted line stopped being a background pass's problem. `xSteps:` clears
+    the cheap substring guard while yielding no `Steps` field, so the whole
+    line is handed to the regex. Quadratic, 4x per doubling, this pair differs by ~16x;
+    linear, they differ by ~4x. Absolute times are host-specific, so the
+    assertion is on the RATIO, which the shape sets.
+    """
+    import time
+
+    def cost(width):
+        line = "xSteps: 20," + "a" * (width - 11)
+        start = time.perf_counter()
+        _parse_fields(line)
+        return time.perf_counter() - start
+
+    # Warm the regex cache so the first call does not carry compilation.
+    cost(100)
+    ratio = cost(8_000) / max(cost(2_000), 1e-9)
+    assert ratio < 8, f"doubling twice cost {ratio:.1f}x; that is not linear"
 
 
 def test_a_prompt_or_parameter_edit_forks_the_instance_only():

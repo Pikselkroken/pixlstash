@@ -1732,6 +1732,30 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/workflows/{topology_hash}/variants"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/workflows/{topology_hash}/pictures"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/workflows/recipes/{structural_hash}/graph"): RoutePolicy(_OWNER),
+    # ── recipes.py (saved recipes, plan §5.5 / step B6) ─────────────────────
+    # OWNER_ONLY throughout, and a decision rather than a default. A saved
+    # recipe holds the owner's prompt and names the models they run, and the
+    # listing's credit counts kept pictures across a whole stack of workflows,
+    # which is the same whole-library disclosure the reads above are owner-only
+    # for. The writes are the owner editing their own library; nothing here is a
+    # host path or a host capability, so none of it climbs to the §16.3 tier.
+    ("GET", "/api/v1/recipes"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/recipes"): RoutePolicy(
+        _OWNER,
+        justification="Save a recipe; POST blocked for READ tokens; owner only",
+    ),
+    ("PUT", "/api/v1/recipes/order"): RoutePolicy(
+        _OWNER,
+        justification="Reorder saved recipes; PUT blocked for READ tokens; owner only",
+    ),
+    ("PATCH", "/api/v1/recipes/{recipe_id}"): RoutePolicy(
+        _OWNER,
+        justification="Edit a saved recipe; PATCH blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/recipes/{recipe_id}"): RoutePolicy(
+        _OWNER,
+        justification="Delete a saved recipe; DELETE blocked for READ tokens; owner only",
+    ),
     # ── test_hooks.py (mounted ONLY when enable_test_hooks=True) ─────────────
     # Conditionally mounted, but ALWAYS declared: the gate resolves declarations
     # against the routes actually mounted at startup, so an undeclared
