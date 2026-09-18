@@ -2,11 +2,17 @@
 
 **Computed per request, with no aggregate table.** The grid costs two vault
 queries - one ``GROUP BY workflow_structural_hash`` and one ``ROW_NUMBER()``
-window - plus a handful of primary-key reads in the hub, and everything else
-here is arithmetic over their results. An aggregate table would have to be
-invalidated by every rating, every import, every soft delete and every re-run
-of the card backfill, and would be a second source of truth for numbers the
-vault can already produce inside the frame budget.
+window - and a third only on a library where somebody has actually chosen a
+cover. Beside them are six hub reads, of which one (``card_index``) scans the
+variant table and the rest are small; everything else here is arithmetic over
+their results. An aggregate table would have to be invalidated by every rating,
+every import, every soft delete and every re-run of the card backfill, and
+would be a second source of truth for numbers the vault can already produce
+inside the frame budget.
+
+Measured on the owner's library (13k kept pictures, 629 variants, 245 cards):
+about 75 ms, of which roughly half is ``describe_differences`` reducing a graph
+per stacked card.
 
 Three orderings are decided here and nowhere else:
 
@@ -28,27 +34,34 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
+from math import inf
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_card_reads import (
     Card,
     StackRows,
+    asset_names,
     card_index,
     chosen_covers,
     default_overrides,
     instance_documents,
+    slot_marks,
     stack_rows,
     variant_documents,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.workflow_hash import WorkflowGraphError, is_link
-from pixlstash.services.workflow_identity import differs_by, topology_node_labels
+from pixlstash.services.workflow_hash import WorkflowGraphError
+from pixlstash.services.workflow_identity import (
+    RECIPE,
+    differs_by,
+    topology_node_labels,
+)
 from pixlstash.services.workflow_library_service import (
     CoverCandidate,
     VariantActivity,
     read_card_grid,
-    read_chosen_cover_ids,
+    read_chosen_covers,
     read_instance_hashes,
 )
 from pixlstash.services.workflow_parameters import FEATURED_NAMES
@@ -84,7 +97,35 @@ EDITED = "edited"
 # saved a recipe against is by definition not a one-off.
 ONE_OFF_PICTURES = 3
 
+# How many of a card's newest runs a default is read off. The mode over the
+# newest few hundred is the mode, and the read is one stored graph per run.
+DEFAULT_SAMPLE = 200
+
+# What a model slot's widget makes it, in the vocabulary `workflowCard.js`
+# reads (`kind === "checkpoint"` names the card's one headline model). A widget
+# this does not know keeps its own name rather than being called a checkpoint.
+_SLOT_KINDS = {
+    "ckpt_name": "checkpoint",
+    "unet_name": "unet",
+    "vae_name": "vae",
+    "clip_name": "clip",
+    "clip_name1": "clip",
+    "clip_name2": "clip",
+    "model_name": "upscale",
+    "style_model_name": "style",
+    "control_net_name": "controlnet",
+}
+
 _EPOCH = datetime.min
+
+
+@dataclass(frozen=True)
+class SlotModel:
+    """One model a card names: its file, and which slot it sits in."""
+
+    name: Optional[str]
+    kind: str
+    mark: Optional[str] = None
 
 
 @dataclass
@@ -97,9 +138,24 @@ class CardFigures:
     score_total: int = 0
     last_used: Optional[datetime] = None
     rank: float = 0.0
-    cover_picture_ids: list[int] = field(default_factory=list)
+    covers: list[CoverCandidate] = field(default_factory=list)
     stack_id: Optional[str] = None
+    stack_size: int = 1
+    member_keys: list[str] = field(default_factory=list)
     differs_by: list[str] = field(default_factory=list)
+    models: list[SlotModel] = field(default_factory=list)
+    loras: list[SlotModel] = field(default_factory=list)
+
+    @property
+    def rating(self) -> Optional[float]:
+        """The mean of the stars this card has, or ``None`` when it has none.
+
+        The PLAIN mean, deliberately, and not :attr:`rank`. The rank is
+        smoothed towards the library's average so that cards can be ordered
+        against each other; showing it as the card's rating would tell somebody
+        their never-rated workflow is rated 4.0.
+        """
+        return (self.score_total / self.rated) if self.rated else None
 
     @property
     def one_off(self) -> bool:
@@ -149,10 +205,18 @@ class Grid:
 
 
 def _cover_order(candidate: CoverCandidate) -> tuple:
-    """The window's ORDER BY, re-expressed so the per-card pick matches it."""
+    """The window's ORDER BY, re-expressed so the per-card pick matches it.
+
+    **NULL sorts below every value, including a negative one**, because that is
+    what ``nullslast`` on a descending column does and the two passes have to
+    agree. ``smart_score or 0.0`` would not: this repo writes ``-1.0`` into a
+    metric whose calculation failed (CLAUDE.md's own convention), so a picture
+    whose quality score failed would outrank an unscored one in SQL and lose to
+    it here, and a card's cover would depend on which pass last touched it.
+    """
     return (
-        candidate.score or 0,
-        candidate.smart_score or 0.0,
+        -inf if candidate.score is None else candidate.score,
+        -inf if candidate.smart_score is None else candidate.smart_score,
         candidate.used_at or _EPOCH,
         candidate.picture_id,
     )
@@ -184,7 +248,7 @@ def _figures(
                     figure.last_used = seen.last_used
             strip.extend(by_variant.get(structural_hash, ()))
         strip.sort(key=_cover_order, reverse=True)
-        figure.cover_picture_ids = [c.picture_id for c in strip[:COVER_DEPTH]]
+        figure.covers = strip[:COVER_DEPTH]
         figures.append(figure)
     return figures
 
@@ -335,15 +399,28 @@ def describe_differences(
             by_key[key].differs_by = chips
             union.extend(chip for chip in chips if chip not in union)
         stack.differs_by = union
+        # The grid draws ONE card per stack -- the cover, wearing the stack's
+        # size and the union of what its members differ by -- so the union has
+        # to land on the cover's own figure. The cover has no chips of its own:
+        # it is what the others are compared against.
+        cover_figure = by_key.get(stack.cover_key)
+        if cover_figure is not None:
+            cover_figure.differs_by = union
 
 
 def read_grid(hub: HubDatabase, vault) -> Grid:
-    """Everything ``GET /workflows/cards`` answers, in two vault queries."""
+    """Everything ``GET /workflows/cards`` answers. See the module docstring
+    for what it costs."""
     cards = card_index(hub)
     activity, candidates = read_card_grid(vault, COVER_DEPTH)
     figures = _figures(cards, activity, candidates)
     _rank(figures)
 
+    # Hidden cards and one-offs come out BEFORE the grouping, so a stack is
+    # counted as the owner sees it: hiding one member of a pair leaves the
+    # other standing alone, with `stack_size` 1. That is the grid telling the
+    # truth about what it drew rather than a stack being destroyed - the
+    # `workflow_stack_member` rows are untouched and unhiding restores it.
     hidden = sum(1 for figure in figures if figure.card.hidden)
     visible = [figure for figure in figures if not figure.card.hidden]
     one_offs = sum(1 for figure in visible if figure.one_off)
@@ -353,16 +430,91 @@ def read_grid(hub: HubDatabase, vault) -> Grid:
     # on the detail route, and it would otherwise show a cover the owner has
     # already replaced. The same single query either way.
     _apply_chosen_covers(hub, vault, figures)
-    stacks, _ = effective_stacks(visible, stack_rows(hub))
+    stacks, belongs = effective_stacks(visible, stack_rows(hub))
     describe_differences(hub, visible, stacks)
-    visible.sort(key=_rank_order)
+    for stack in stacks:
+        cover = by_key(visible).get(stack.cover_key)
+        if cover is not None:
+            cover.stack_size = len(stack.member_keys)
+            cover.member_keys = list(stack.member_keys)
+
+    # One card per stack, and it is the cover: `stack_size` is what makes a
+    # card a stack to its reader, so a grid that also listed the members would
+    # draw each of them twice. The members are still reachable - the cover
+    # carries their keys - and each opens on the detail route.
+    covered = {key for stack in stacks for key in stack.member_keys[1:]}
+    drawn = [figure for figure in visible if figure.card.workflow_key not in covered]
+    drawn.sort(key=_rank_order)
+    _describe_slots(hub, figures)
     return Grid(
-        cards=visible,
+        cards=drawn,
         stacks=stacks,
         one_offs=one_offs,
         hidden=hidden,
         figures=figures,
     )
+
+
+def _describe_slots(hub: HubDatabase, figures: list[CardFigures]) -> None:
+    """Fill in each card's models and LoRAs from the cached slot list.
+
+    Two hub reads for the whole grid and no document reduced: the slot list and
+    its marks are what B2 cached per topology precisely so a card read does not
+    have to re-derive them, and the readable filenames come from the one table
+    that holds them.
+
+    **A recipe LoRA is a slot, not a file.** It is drawn as an anonymous dashed
+    chip (`utils/workflowCard.js`), because which character LoRA happened to be
+    in it is the recipe's business and not the workflow's - so its name is left
+    off here rather than paired to a slot the hub cannot address (see
+    :func:`~pixlstash.hub.workflow_card_reads.asset_names`).
+    """
+    marks = slot_marks(hub, [figure.card.topology_hash for figure in figures])
+    names = asset_names(
+        hub,
+        [figure.card.variants[0] for figure in figures if figure.card.variants],
+    )
+    for figure in figures:
+        card = figure.card
+        by_widget: dict[str, list[str]] = {}
+        for widget, filename in names.get(
+            card.variants[0] if card.variants else "", ()
+        ):
+            by_widget.setdefault(widget, []).append(filename)
+        taken: Counter = Counter()
+
+        def next_name(widget: str) -> Optional[str]:
+            found = by_widget.get(widget, ())
+            index = taken[widget]
+            taken[widget] += 1
+            return found[index] if index < len(found) else None
+
+        for slot in card.slots:
+            widget = str(slot.get("widget") or "")
+            if slot.get("is_lora"):
+                mark = marks.get(
+                    (card.topology_hash, str(slot.get("label") or "")), RECIPE
+                )
+                # The name is consumed either way, so a structural LoRA and the
+                # recipe slot beside it do not both claim the first filename.
+                name = next_name(widget)
+                figure.loras.append(
+                    SlotModel(
+                        name=None if mark == RECIPE else name, kind="lora", mark=mark
+                    )
+                )
+            else:
+                figure.models.append(
+                    SlotModel(
+                        name=next_name(widget),
+                        kind=_SLOT_KINDS.get(widget, widget or "model"),
+                    )
+                )
+
+
+def by_key(figures: list[CardFigures]) -> dict[str, CardFigures]:
+    """``{workflow_key: figures}``, for the joins this module makes in memory."""
+    return {figure.card.workflow_key: figure for figure in figures}
 
 
 def _apply_chosen_covers(hub: HubDatabase, vault, figures: list[CardFigures]) -> None:
@@ -377,24 +529,31 @@ def _apply_chosen_covers(hub: HubDatabase, vault, figures: list[CardFigures]) ->
     chosen = chosen_covers(hub, library_uuid)
     if not chosen:
         return
-    ids = read_chosen_cover_ids(vault, sorted(set(chosen.values())))
+    pictures = read_chosen_covers(vault, sorted(set(chosen.values())))
     for figure in figures:
-        picture_id = ids.get(chosen.get(figure.card.workflow_key, ""))
-        if picture_id is None:
+        picked = pictures.get(chosen.get(figure.card.workflow_key, ""))
+        if picked is None:
             continue
-        strip = [picture_id] + [
-            other for other in figure.cover_picture_ids if other != picture_id
+        strip = [picked] + [
+            other for other in figure.covers if other.picture_id != picked.picture_id
         ]
-        figure.cover_picture_ids = strip[:COVER_DEPTH]
+        figure.covers = strip[:COVER_DEPTH]
 
 
 @dataclass(frozen=True)
 class Default:
-    """One parameter a card starts from, and where the value came from."""
+    """One parameter a card starts from, and where the value came from.
 
+    ``label`` is what a reader sees (``utils/workflowCard.js`` keys the ⓘ list
+    on it, so it is unique within a card); ``slot_label`` and ``input_name``
+    are the address ``workflow_default_override`` is keyed on and are what a
+    later write route edits.
+    """
+
+    label: str
     slot_label: str
     input_name: str
-    value: object
+    value: bool | int | float | str
     provenance: str
 
 
@@ -416,10 +575,14 @@ def card_defaults(hub: HubDatabase, vault, card: Card) -> list[Default]:
         return _overrides_only(overrides)
 
     provenance = FROM_BEST
-    instance_hashes = read_instance_hashes(vault, card.variants, BEST_SCORE)
+    instance_hashes = read_instance_hashes(
+        vault, card.variants, BEST_SCORE, DEFAULT_SAMPLE
+    )
     if not instance_hashes:
         provenance = FROM_ALL
-        instance_hashes = read_instance_hashes(vault, card.variants, None)
+        instance_hashes = read_instance_hashes(
+            vault, card.variants, None, DEFAULT_SAMPLE
+        )
     documents = instance_documents(hub, library_uuid, instance_hashes)
 
     labels = {}
@@ -447,29 +610,63 @@ def card_defaults(hub: HubDatabase, vault, card: Card) -> list[Default]:
             if label is None or not isinstance(node, dict):
                 continue
             for name, value in (node.get("inputs") or {}).items():
-                if name not in FEATURED_NAMES or is_link(value):
+                # The type check is also what rejects a connected input: an
+                # API-format link is a two-element list, so it never reaches
+                # the counter. No separate `is_link` guard, which would be a
+                # branch no input can take and no test could hold.
+                if name not in FEATURED_NAMES:
                     continue
                 if not isinstance(value, (bool, int, float, str)):
                     continue
                 seen.setdefault((label, name), Counter())[value] += 1
 
+    addresses = sorted(set(seen) | set(overrides))
+    labels = _labels(addresses)
     defaults = []
-    for address in sorted(set(seen) | set(overrides)):
+    for address in addresses:
         if address in overrides:
-            defaults.append(Default(*address, overrides[address], EDITED))
+            defaults.append(
+                Default(labels[address], *address, overrides[address], EDITED)
+            )
             continue
         counter = seen[address]
         # Most often, and on a tie the value that sorts first: a mode read off
         # a dict's insertion order would differ between two reads of the same
         # library, which is a card whose defaults move when nothing changed.
+        #
+        # The counter is keyed on the raw value, so `True` and `1` share a
+        # bucket (Python hashes them equal). Both render as the same control
+        # and a graph does not mix them on one input, so this is left alone
+        # rather than paid for with a type tag on every count.
         value = max(counter.items(), key=lambda item: (item[1], str(item[0])))[0]
-        defaults.append(Default(*address, value, provenance))
+        defaults.append(Default(labels[address], *address, value, provenance))
     return defaults
+
+
+def _labels(addresses: list[tuple[str, str]]) -> dict[tuple[str, str], str]:
+    """A unique, readable label per address: the input name, disambiguated.
+
+    ⓘ keys its list on the label, so two slots offering ``steps`` cannot both
+    be called "steps" - that is a duplicate `v-for` key and one row silently
+    replaces the other. A second one is numbered rather than named after its
+    slot label, which is a 64-character digest and means nothing to a reader.
+    """
+    seen: Counter = Counter()
+    labels = {}
+    for address in addresses:
+        input_name = address[1]
+        seen[input_name] += 1
+        labels[address] = (
+            input_name if seen[input_name] == 1 else f"{input_name} {seen[input_name]}"
+        )
+    return labels
 
 
 def _overrides_only(overrides: dict[tuple[str, str], str]) -> list[Default]:
     """A vault with no library uuid can still say what the owner set."""
+    addresses = sorted(overrides)
+    labels = _labels(addresses)
     return [
-        Default(slot_label, input_name, value, EDITED)
-        for (slot_label, input_name), value in sorted(overrides.items())
+        Default(labels[address], *address, overrides[address], EDITED)
+        for address in addresses
     ]

@@ -50,6 +50,7 @@ from pixlstash.hub.workflows import (
     topology_index,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.hub.workflow_card_reads import find_card
 from pixlstash.services.workflow_card_service import card_defaults, read_grid
 from pixlstash.services.workflow_library_service import (
@@ -179,83 +180,110 @@ class WorkflowGraph(BaseModel):
     runnable: bool = False
 
 
-class WorkflowCard(BaseModel):
-    """One card of the Workflows grid (v1.12 B3).
+class WorkflowSlotModel(BaseModel):
+    """One model a card names, in the slot it sits in.
 
-    A **card** is a workflow as a person means it: the topology, the non-LoRA
-    models and the LoRA slots marked structural, so swapping a character LoRA
-    stays the same card. ``variants`` counts the stored graphs it is made of;
-    they are the tier the older routes on this file call a recipe.
+    ``kind`` is the slot rather than the file (``checkpoint``, ``unet``,
+    ``vae``, ``clip``, ``lora``…), because that is what a card row shows: it
+    names the checkpoint only, and ⓘ lists the rest. ``mark`` is B1's own
+    vocabulary (``structural`` | ``recipe``) and is set on LoRA slots only.
 
-    ``rank`` is the Bayesian cover rank
-    (``services/workflow_card_service``), and the list is returned in it.
-    ``differs_by`` is empty unless the card sits in a stack, because a card on
-    its own has nothing to differ from.
+    ``name`` is ``None`` for a **recipe** LoRA, which is a slot rather than a
+    file — which character LoRA went in it is the recipe's business, not the
+    workflow's — and for a model whose name was forgotten.
     """
 
-    workflow_key: str
-    topology_hash: str
-    name: str | None = Field(
-        None, description="The owner's own name, if they gave one."
-    )
-    workflow_type: str | None = None
-    variants: int
-    pictures: int = 0
-    rated: int = 0
-    rank: float = 0.0
-    last_used: str | None = None
-    cover_picture_ids: list[int] = Field(default_factory=list)
-    imported: bool = Field(
-        False, description="A workflow file on this machine runs this card."
-    )
-    stack_id: str | None = None
-    differs_by: list[str] = Field(default_factory=list)
-
-
-class WorkflowStack(BaseModel):
-    """An effective stack: members in order, the first one the cover.
-
-    ``stack_id`` is the stored id for a manual stack and ``auto:<core hash>``
-    for the automatic grouping, which exists whether or not anybody has
-    reordered it. ``differs_by`` is the union of the members' chips, which is
-    what the stack's single tile shows.
-    """
-
-    stack_id: str
+    name: str | None = None
     kind: str
-    member_keys: list[str]
-    differs_by: list[str] = Field(default_factory=list)
-
-
-class WorkflowCards(BaseModel):
-    """``GET /workflows/cards``: the grid, its stacks and what it left out.
-
-    ``one_offs`` and ``hidden`` are counts rather than rows on purpose: both
-    sets are excluded from ``cards``, and the view offers them as a way back in
-    rather than as clutter.
-    """
-
-    cards: list[WorkflowCard]
-    stacks: list[WorkflowStack]
-    one_offs: int = 0
-    hidden: int = 0
+    mark: str | None = None
 
 
 class WorkflowDefault(BaseModel):
     """One parameter a card starts from.
 
-    Addressed by ``(slot_label, input_name)`` and never by node id: a node id
-    is renumbered by every re-serialisation and the card's variants do not
-    agree about them. ``provenance`` is ``best`` (the mode over the card's
-    pictures rated 4 stars and up), ``all`` (the same over every picture of the
-    card, when none is rated) or ``edited`` (the owner's own value, which
-    replaces both); a client renders ``best`` as "from your best pictures".
+    ``label`` is what a reader sees and is unique within a card.
+    ``slot_label`` and ``input_name`` are the address
+    ``workflow_default_override`` is keyed on — never a node id, which every
+    re-serialisation renumbers and which a card's variants disagree about.
+
+    ``provenance`` is ``best`` (the mode over the card's pictures rated 4 stars
+    and up), ``all`` (the same over every picture of the card, when none is
+    rated that highly) or ``edited`` (the owner's own value, which replaces
+    both); a client renders ``best`` as "from your best pictures".
     """
 
+    label: str
     slot_label: str
     input_name: str
-    value: object
+    value: bool | int | float | str
     provenance: str
+
+
+class WorkflowCard(BaseModel):
+    """One card of the Workflows grid (v1.12 B3).
+
+    A **card** is a workflow as a person means it: the topology, the non-LoRA
+    models and the LoRA slots marked structural, so swapping a character LoRA
+    stays the same card. The `workflow_recipe` / `structural_hash` tier is a
+    **variant**; a *saved recipe* is the look a person keeps.
+
+    **This shape is fixed by a shipped consumer**, `frontend/src/utils/
+    workflowCard.js`, and `docs/frontend_architecture.md` §"WorkflowCard.vue"
+    guarantees it needs no mapping layer — so the field names are snake_case
+    and `mark` carries B1's vocabulary rather than anything invented here.
+
+    ``stack_size`` of 2 or more is what makes a card a stack: the grid draws
+    one card per stack, the cover's, and ``member_keys`` names the rest so a
+    caller can open them. ``differs_by`` is then the union over the members.
+    """
+
+    key: str
+    name: str | None = Field(
+        None, description="The owner's own name, if they gave one."
+    )
+    type: str | None = None
+    imported: bool = Field(
+        False, description="A workflow file on this machine runs this card."
+    )
+    models: list[WorkflowSlotModel] = Field(default_factory=list)
+    loras: list[WorkflowSlotModel] = Field(default_factory=list)
+    differs_by: list[str] = Field(default_factory=list)
+    picture_count: int = 0
+    rating: float | None = Field(
+        None, description="Mean of the stars this card has; null when it has none."
+    )
+    covers: list[str] = Field(
+        default_factory=list, description="Thumbnail URLs, up to three, cover first."
+    )
+    stack_size: int = 1
+    saved_recipe_count: int = 0
+    defaults: list[WorkflowDefault] = Field(default_factory=list)
+    # Beyond the shared shape, and additive: a caller that only knows
+    # `workflowCard.js` ignores these and needs no translation for the rest.
+    topology_hash: str
+    variant_count: int = 0
+    member_keys: list[str] = Field(default_factory=list)
+    rank: float = Field(
+        0.0,
+        description=(
+            "The Bayesian cover rank the grid is ordered by. Not `rating`: "
+            "it is smoothed towards the library's mean so cards can be "
+            "ordered against each other, and is meaningless on its own."
+        ),
+    )
+
+
+class WorkflowCards(BaseModel):
+    """``GET /workflows/cards``: the grid, and what it left out.
+
+    ``one_offs`` and ``hidden`` are counts rather than rows on purpose: both
+    sets are excluded from ``cards``, and the view offers them as a way back in
+    rather than as clutter. Both still open on the detail route.
+    """
+
+    cards: list[WorkflowCard]
+    one_offs: int = 0
+    hidden: int = 0
 
 
 class WorkflowCardDetail(BaseModel):
@@ -265,7 +293,6 @@ class WorkflowCardDetail(BaseModel):
     notes: str | None = None
     hidden: bool = False
     variants: list[WorkflowVariant] = Field(default_factory=list)
-    defaults: list[WorkflowDefault] = Field(default_factory=list)
 
 
 def _require_hash(value: str, name: str) -> str:
@@ -288,22 +315,62 @@ def _assets(rows) -> list[WorkflowAsset]:
     ]
 
 
-def _card(figure) -> "WorkflowCard":
-    """Render one card's figures, whatever list it came out of."""
+def _cover_urls(covers) -> list[str]:
+    """Thumbnail URLs for a card's cover strip, cache-busted per bitmap.
+
+    The same URL and the same cache key the grid's own tiles use
+    (``routes/pictures/_thumbnails.py``), so a cover the browser already holds
+    is not fetched twice and a regenerated bitmap is not served stale.
+    """
+    urls = []
+    for cover in covers:
+        version = ImageUtils.thumbnail_cache_version(
+            cover.thumbnail_width, cover.thumbnail_height, cover.orientation
+        )
+        urls.append(f"/pictures/thumbnails/{cover.picture_id}.webp?v={version}")
+    return urls
+
+
+def _slot_models(slots) -> list[WorkflowSlotModel]:
+    return [
+        WorkflowSlotModel(name=slot.name, kind=slot.kind, mark=slot.mark)
+        for slot in slots
+    ]
+
+
+def _card(figure, defaults=()) -> WorkflowCard:
+    """Render one card's figures in the shape ``workflowCard.js`` documents."""
     return WorkflowCard(
-        workflow_key=figure.card.workflow_key,
-        topology_hash=figure.card.topology_hash,
+        key=figure.card.workflow_key,
         name=figure.card.name,
-        workflow_type=figure.card.workflow_type,
-        variants=len(figure.card.variants),
-        pictures=figure.pictures,
-        rated=figure.rated,
-        rank=figure.rank,
-        last_used=_iso(figure.last_used),
-        cover_picture_ids=figure.cover_picture_ids,
+        type=figure.card.workflow_type,
         imported=figure.card.imported,
-        stack_id=figure.stack_id,
+        models=_slot_models(figure.models),
+        loras=_slot_models(figure.loras),
         differs_by=figure.differs_by,
+        picture_count=figure.pictures,
+        rating=figure.rating,
+        covers=_cover_urls(figure.covers),
+        stack_size=figure.stack_size,
+        # No table yet (a later step), so the count is honestly zero rather
+        # than absent: ⓘ always draws the row.
+        saved_recipe_count=0,
+        defaults=[
+            WorkflowDefault(
+                label=default.label,
+                slot_label=default.slot_label,
+                input_name=default.input_name,
+                value=default.value,
+                provenance=default.provenance,
+            )
+            for default in defaults
+        ],
+        topology_hash=figure.card.topology_hash,
+        variant_count=len(figure.card.variants),
+        rank=figure.rank,
+        member_keys=[
+            key for key in figure.member_keys if key != figure.card.workflow_key
+        ],
     )
 
 
@@ -508,19 +575,23 @@ def create_router(server) -> APIRouter:
     # ── The cards (v1.12 B3) ────────────────────────────────────────────────
     # Under `/workflows/cards` rather than on `/workflows` itself, because the
     # shipped topology list keeps working until F1b swaps the route. The detail
-    # and picture routes sit under the same prefix rather than at
-    # `/workflows/{workflow_key}`: `/workflows/{topology_hash}/pictures` is
-    # already mounted, and a second route of that shape would never be reached
-    # by FastAPI's matcher while still reading, in the source and in the route
-    # table, as though it were. B9 moves the prefix, not the shape.
+    # and picture routes take the same prefix rather than `/workflows/{key}`:
+    # `/workflows/{key}/pictures` would be permanently shadowed by the
+    # `{topology_hash}/pictures` route above it, and splitting the three across
+    # two prefixes to save one segment on the one that would have fitted reads
+    # worse than keeping them together. B9 moves the prefix, not the shape.
+    #
+    # The payload is `frontend/src/utils/workflowCard.js`'s documented card,
+    # which is already merged and already has components reading it; see the
+    # `WorkflowCard` model.
 
     @router.get(
         "/workflows/cards",
         summary="The Workflows grid",
         description=(
-            "Every workflow card this machine holds, in cover-rank order, with "
-            "its effective stacks. Hidden cards and one-offs are counted rather "
-            "than listed."
+            "Every workflow card this machine holds, in cover-rank order, one "
+            "card per stack. Hidden cards and one-offs are counted rather than "
+            "listed."
         ),
         response_model=WorkflowCards,
     )
@@ -529,15 +600,6 @@ def create_router(server) -> APIRouter:
         grid = read_grid(_hub(), server.vault)
         return WorkflowCards(
             cards=[_card(figure) for figure in grid.cards],
-            stacks=[
-                WorkflowStack(
-                    stack_id=stack.stack_id,
-                    kind=stack.kind,
-                    member_keys=stack.member_keys,
-                    differs_by=stack.differs_by,
-                )
-                for stack in grid.stacks
-            ],
             one_offs=grid.one_offs,
             hidden=grid.hidden,
         )
@@ -563,19 +625,10 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Unknown workflow card.")
         card = figure.card
         return WorkflowCardDetail(
-            card=_card(figure),
+            card=_card(figure, card_defaults(hub, server.vault, card)),
             notes=card.notes,
             hidden=card.hidden,
             variants=_card_variants(hub, server.vault, card),
-            defaults=[
-                WorkflowDefault(
-                    slot_label=default.slot_label,
-                    input_name=default.input_name,
-                    value=default.value,
-                    provenance=default.provenance,
-                )
-                for default in card_defaults(hub, server.vault, card)
-            ],
         )
 
     @router.get(
@@ -592,7 +645,7 @@ def create_router(server) -> APIRouter:
         request: Request,
         workflow_key: str,
         limit: int = Query(
-            MAX_SAMPLE_PICTURES // 2,
+            6,
             ge=1,
             le=MAX_SAMPLE_PICTURES,
             description="How many ids to return, newest first.",

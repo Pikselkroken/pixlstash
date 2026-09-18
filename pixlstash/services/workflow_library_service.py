@@ -237,7 +237,12 @@ class CoverCandidate:
 
     The keys travel with the row because the top three of a CARD are picked in
     memory out of the top three of each of its variants, and that second pick
-    has to order by exactly what the window ordered by.
+    has to order by exactly what the window ordered by -- including how each
+    key treats NULL, which is the part that is easy to get subtly wrong.
+
+    The three bitmap fields are here for the cache-buster in the thumbnail URL
+    (``ImageUtils.thumbnail_cache_version``), so the covers can be served as
+    URLs without a second read per card.
     """
 
     structural_hash: str
@@ -245,6 +250,9 @@ class CoverCandidate:
     score: Optional[int]
     smart_score: Optional[float]
     used_at: Optional[datetime]
+    thumbnail_width: Optional[int] = None
+    thumbnail_height: Optional[int] = None
+    orientation: Optional[int] = None
 
 
 def variant_activity(session: Session) -> dict[str, VariantActivity]:
@@ -303,6 +311,9 @@ def variant_cover_candidates(
             Picture.score.label("score"),
             Picture.smart_score.label("smart_score"),
             _USED_AT.label("used_at"),
+            Picture.thumbnail_width.label("thumbnail_width"),
+            Picture.thumbnail_height.label("thumbnail_height"),
+            Picture.orientation.label("orientation"),
             func.row_number()
             .over(partition_by=Picture.workflow_structural_hash, order_by=ordering)
             .label("rank"),
@@ -318,6 +329,9 @@ def variant_cover_candidates(
             ranked.c.score,
             ranked.c.smart_score,
             ranked.c.used_at,
+            ranked.c.thumbnail_width,
+            ranked.c.thumbnail_height,
+            ranked.c.orientation,
         ).where(ranked.c.rank <= per_variant)
     ).all()
     return [CoverCandidate(*row) for row in rows]
@@ -345,49 +359,75 @@ def variant_picture_ids(
     )
 
 
-def picture_ids_by_pixel_sha(session: Session, pixel_shas: list[str]) -> dict[str, int]:
+def cover_pictures_by_pixel_sha(
+    session: Session, pixel_shas: list[str]
+) -> dict[str, CoverCandidate]:
     """Resolve the owner's chosen covers, which are stored by content.
 
     A ``pixel_sha`` with no kept picture behind it is simply absent: the cover
     was destroyed or binned, and the card falls back to its computed one rather
-    than showing a hole.
+    than showing a hole. The rows come back as :class:`CoverCandidate` with no
+    ``structural_hash`` -- a chosen cover belongs to the card, not to one of its
+    variants -- so the caller can build its URL the same way as any other.
     """
     if not pixel_shas:
         return {}
     rows = session.exec(
-        select(Picture.pixel_sha, Picture.id)
+        select(
+            Picture.pixel_sha,
+            Picture.id,
+            Picture.score,
+            Picture.smart_score,
+            _USED_AT,
+            Picture.thumbnail_width,
+            Picture.thumbnail_height,
+            Picture.orientation,
+        )
         .where(Picture.pixel_sha.in_(pixel_shas))
         .where(Picture.deleted.is_(False))
         .order_by(Picture.id)
     ).all()
-    return {pixel_sha: picture_id for pixel_sha, picture_id in rows}
+    return {row[0]: CoverCandidate("", *row[1:]) for row in rows}
 
 
 def instance_hashes_for_variants(
-    session: Session, structural_hashes: list[str], minimum_score: Optional[int]
+    session: Session,
+    structural_hashes: list[str],
+    minimum_score: Optional[int],
+    limit: int,
 ) -> list[str]:
-    """Distinct instance hashes of a card's kept pictures.
+    """The most recent distinct instance hashes of a card's kept pictures.
+
+    **Capped, and the cap is the point of the argument existing.** An instance
+    keys on every parameter value, the seed included, so a card the owner has
+    run forty thousand times has forty thousand of these -- and the caller
+    reads and parses one stored graph per hash. The mode of a parameter over
+    the newest few hundred runs is the same answer as the mode over all of
+    them, for a bounded read.
 
     Args:
         structural_hashes: The card's variants.
         minimum_score: Keep only pictures rated at least this, or ``None`` for
             every kept picture. The defaults read is "the best pictures, and
             failing that all of them", which is this function twice.
+        limit: How many distinct hashes to take, newest first.
     """
     if not structural_hashes:
         return []
     query = (
-        select(Picture.workflow_instance_hash)
+        select(Picture.workflow_instance_hash, func.max(_USED_AT).label("used_at"))
         .where(Picture.workflow_structural_hash.in_(structural_hashes))
         .where(Picture.workflow_instance_hash.is_not(None))
         .where(Picture.deleted.is_(False))
-        .distinct()
+        .group_by(Picture.workflow_instance_hash)
+        .order_by(nullslast(func.max(_USED_AT).desc()))
+        .limit(limit)
     )
     if minimum_score is not None:
         query = query.where(Picture.score.is_not(None)).where(
             Picture.score >= minimum_score
         )
-    return list(session.exec(query).all())
+    return [instance_hash for instance_hash, _ in session.exec(query).all()]
 
 
 def read_card_grid(
@@ -401,9 +441,9 @@ def read_card_grid(
     return vault.db.run_immediate_read_task(_read)
 
 
-def read_chosen_cover_ids(vault, pixel_shas: list[str]) -> dict[str, int]:
-    """Picture ids for the covers the owner picked, by content."""
-    return vault.db.run_immediate_read_task(picture_ids_by_pixel_sha, pixel_shas)
+def read_chosen_covers(vault, pixel_shas: list[str]) -> dict[str, CoverCandidate]:
+    """The pictures the owner picked as covers, by content."""
+    return vault.db.run_immediate_read_task(cover_pictures_by_pixel_sha, pixel_shas)
 
 
 def read_card_picture_ids(vault, structural_hashes: list[str], limit: int) -> list[int]:
@@ -414,9 +454,9 @@ def read_card_picture_ids(vault, structural_hashes: list[str], limit: int) -> li
 
 
 def read_instance_hashes(
-    vault, structural_hashes: list[str], minimum_score: Optional[int]
+    vault, structural_hashes: list[str], minimum_score: Optional[int], limit: int
 ) -> list[str]:
     """The instances a card's pictures ran, optionally only its best."""
     return vault.db.run_immediate_read_task(
-        instance_hashes_for_variants, structural_hashes, minimum_score
+        instance_hashes_for_variants, structural_hashes, minimum_score, limit
     )

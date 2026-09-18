@@ -464,8 +464,8 @@ and a `409` means the set changed and nothing was forgotten.
 | `GET /api/v1/workflows/{topology_hash}/variants` | One row's expansion | `[WorkflowVariant]` |
 | `GET /api/v1/workflows/{topology_hash}/pictures?limit=` | Ids for the inspector's tiles, newest first | `[int]` |
 | `GET /api/v1/workflows/recipes/{structural_hash}/graph` | One recipe's stored graph | `{structural_hash, document, runnable}` |
-| `GET /api/v1/workflows/cards` | The card grid, in cover-rank order | `{cards: [WorkflowCard], stacks: [WorkflowStack], one_offs, hidden}` |
-| `GET /api/v1/workflows/cards/{workflow_key}` | One card opened | `{card, notes, hidden, variants: [WorkflowVariant], defaults: [WorkflowDefault]}` |
+| `GET /api/v1/workflows/cards` | The card grid, in cover-rank order, one card per stack | `{cards: [WorkflowCard], one_offs, hidden}` |
+| `GET /api/v1/workflows/cards/{workflow_key}` | One card opened | `{card, notes, hidden, variants: [WorkflowVariant]}` |
 | `GET /api/v1/workflows/cards/{workflow_key}/pictures?limit=` | Ids for one card's pictures, newest first | `[int]` |
 
 Five things the two sides have agreed and neither may drift from:
@@ -521,28 +521,48 @@ a narrowing parameter and a policy to check it against.
 
 **The cards (v1.12 B3) sit beside the topology list, not on top of it.** The
 shipped Workflows shelf reads `GET /workflows` and keeps working until F1b
-swaps the route; B9 then moves the grid onto `/workflows` itself. Four things
+swaps the route; B9 then moves the grid onto `/workflows` itself. Five things
 the two sides have agreed:
 
-1. **A card is not a topology and not a variant.** `workflow_key` is the
-   topology plus the non-LoRA models plus the LoRA slots marked *structural*
+1. **The card's shape is `frontend/src/utils/workflowCard.js`, and the backend
+   serves that document.** It was merged before this route existed and
+   `frontend_architecture.md` promises it needs no mapping layer, so the field
+   names are the ones written down there — `key`, `name`, `type`, `imported`,
+   `models`, `loras`, `differs_by`, `picture_count`, `rating`, `covers`,
+   `stack_size`, `saved_recipe_count`, `defaults` — and `mark` carries B1's own
+   `structural` | `recipe` vocabulary rather than a translation of it, which is
+   how the solid/dashed meaning would get inverted. The route adds
+   `topology_hash`, `variant_count`, `member_keys` and `rank` beside them;
+   a caller that only knows the document ignores those and still needs no
+   mapping.
+2. **A card is not a topology and not a variant.** `key` is the topology plus
+   the non-LoRA models plus the LoRA slots marked *structural*
    (`services/workflow_identity.py`), so adding a character LoRA keeps the same
-   card. In this API and in the code the `workflow_recipe` /
-   `structural_hash` tier is a **variant**; a *saved recipe* is the look a
-   person keeps, and it has no route yet.
-2. **Nothing is precomputed.** `cards` is two vault queries — one `GROUP BY
-   workflow_structural_hash` and one `ROW_NUMBER()` window — joined in memory
-   to the hub's card rows. There is no aggregate table, so no client may assume
-   a figure is stable across a rating or an import.
-3. **`cards` is what the grid draws.** Hidden cards and one-offs (fewer than
-   three pictures, never rated, never imported) are excluded and returned as
-   the counts `hidden` and `one_offs`. Both still open by key on the detail
-   route: hiding is a decision about the grid, not a deletion.
-4. **`stacks` is the effective grouping, and `stack_id` is not always stored.**
-   A manual assignment wins, then an unstacking, then the automatic group by
-   `core_hash`, whose id is `auto:<core hash>` and which exists whether or not
-   anybody has reordered it. A stack's `differs_by` is the union of its
-   members' chips; a card outside a stack has none.
+   card. In this API and in the code the `workflow_recipe` / `structural_hash`
+   tier is a **variant**; a *saved recipe* is the look a person keeps, and it
+   has no table yet — `saved_recipe_count` is therefore always `0`.
+3. **`rating` and `rank` are different numbers and neither substitutes for the
+   other.** `rating` is the plain mean of the stars a card has and is `null`
+   when it has none; `rank` is the Bayesian mean the grid is *ordered* by,
+   smoothed towards the library's own mean rating, and is meaningless shown on
+   its own. A card nobody rated has `rating: null` and a `rank` near the
+   library average, which is the point of having both.
+4. **The grid draws one card per stack.** `stack_size` ≥ 2 makes a card a
+   stack; the card drawn is the cover, `member_keys` names the rest, and
+   `differs_by` is the union over the members. The order is a manual
+   assignment, then an unstacking, then the automatic group by `core_hash`; a
+   stored member row is filed under the core hash it was written against, so a
+   card that has since left its group simply is not found in it and takes
+   cover-rank order like a newcomer.
+5. **Nothing is precomputed, and `cards` is not everything.** The grid is two
+   vault queries — one `GROUP BY workflow_structural_hash` and one
+   `ROW_NUMBER()` window, plus one more only when the owner has chosen a cover
+   — joined in memory to the hub's card rows, with no aggregate table, so no
+   client may assume a figure is stable across a rating or an import. Hidden
+   cards and one-offs (fewer than three pictures, never rated, never imported)
+   are excluded and returned as the counts `hidden` and `one_offs`; both still
+   open by key on the detail route, because hiding is a decision about the grid
+   rather than a deletion.
 
 **A saved workflow's picture inputs (#1305)** are the one write the view makes,
 and they live on the ComfyUI routes because they belong to the file, not to a

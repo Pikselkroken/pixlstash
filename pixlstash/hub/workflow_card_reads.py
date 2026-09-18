@@ -53,6 +53,7 @@ class Card:
     hidden: bool = False
     imported: bool = False
     variants: list[str] = field(default_factory=list)
+    slots: list[dict] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -81,7 +82,8 @@ def card_index(hub: HubDatabase) -> list[Card]:
     rows = hub.fetchall(
         "SELECT v.workflow_key AS workflow_key, v.topology_hash AS topology_hash, "
         "v.structural_hash AS structural_hash, c.core_hash AS core_hash, "
-        "c.workflow_type AS workflow_type, a.name AS name, a.notes AS notes, "
+        "c.workflow_type AS workflow_type, c.slots AS slots, "
+        "a.name AS name, a.notes AS notes, "
         "a.hidden AS hidden, f.workflow_key IS NOT NULL AS imported "
         "FROM workflow_variant v "
         "LEFT JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
@@ -101,6 +103,7 @@ def card_index(hub: HubDatabase) -> list[Card]:
                 topology_hash=row["topology_hash"],
                 core_hash=row["core_hash"],
                 workflow_type=row["workflow_type"],
+                slots=_slots(row["slots"], row["workflow_key"]),
                 name=row["name"],
                 notes=row["notes"],
                 hidden=bool(row["hidden"]),
@@ -108,6 +111,81 @@ def card_index(hub: HubDatabase) -> list[Card]:
             )
         card.variants.append(row["structural_hash"])
     return list(cards.values())
+
+
+def _slots(raw: Optional[str], workflow_key: str) -> list[dict]:
+    """The topology's cached slot list, or an empty one with a reason logged.
+
+    ``workflow_topology_core.slots`` is written by the B2 backfill, so it is
+    absent for a card the backfill has not reached and JSON by construction
+    once it has. A card whose slots will not parse is described without its
+    models rather than taking the grid down.
+    """
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.error(
+            "Cached slot list for card %s is not valid JSON, so it is "
+            "described with no models: %s",
+            workflow_key,
+            exc,
+        )
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def slot_marks(
+    hub: HubDatabase, topology_hashes: list[str]
+) -> dict[tuple[str, str], str]:
+    """``{(topology_hash, slot_label): mark}`` for every LoRA slot named.
+
+    A slot with no row is one the backfill has not frozen yet; the caller reads
+    that as ``recipe``, which is the direction the guess itself errs in.
+    """
+    marks = {}
+    for batch in chunked(sorted(set(topology_hashes))):
+        placeholders = ",".join("?" * len(batch))
+        for topology_hash, slot_label, mark in hub.fetchall(
+            "SELECT topology_hash, slot_label, mark FROM workflow_slot_mark "
+            f"WHERE topology_hash IN ({placeholders})",
+            tuple(batch),
+        ):
+            marks[(topology_hash, slot_label)] = mark
+    return marks
+
+
+def asset_names(
+    hub: HubDatabase, structural_hashes: list[str]
+) -> dict[str, list[tuple[str, str]]]:
+    """``{structural_hash: [(widget_name, normalized_filename)]}``, sorted.
+
+    **Keyed by widget and not by slot**, because that is how the hub stores a
+    readable name: ``workflow_recipe_asset`` names the widget a file was given
+    to, never the node. A topology naming the same widget on two loaders (two
+    ``LoraLoader`` nodes, two ``lora_name`` values) therefore hands back two
+    names for one widget and cannot say which loader each sat on; the caller
+    pairs them in this sorted order, so the answer is deterministic and, where
+    a widget appears once, exact.
+
+    Resolving that properly means reducing the stored document per card, which
+    is a Weisfeiler-Leman refinement apiece and would roughly double the grid's
+    cost. It is worth doing when something depends on it: a *recipe* LoRA is
+    drawn as an anonymous slot rather than by name, so today nothing does.
+    """
+    names: dict[str, list[tuple[str, str]]] = {}
+    for batch in chunked(sorted(set(structural_hashes))):
+        placeholders = ",".join("?" * len(batch))
+        for structural_hash, widget, filename in hub.fetchall(
+            "SELECT structural_hash, widget_name, normalized_filename "
+            "FROM workflow_recipe_asset "
+            f"WHERE structural_hash IN ({placeholders}) "
+            "ORDER BY widget_name, normalized_filename",
+            tuple(batch),
+        ):
+            names.setdefault(structural_hash, []).append((widget, filename))
+    return names
 
 
 def find_card(hub: HubDatabase, workflow_key: str) -> Optional[Card]:
