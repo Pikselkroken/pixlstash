@@ -157,7 +157,13 @@
               recipe.isApiFormat ? "API Workflow JSON" : "Workflow JSON"
             }}</span>
             <span class="recipe-summary-actions">
+              <!-- Copy only for the editor's format. The Metadata panel this
+                   box came from guarded it the same way: an API graph is not
+                   what the ComfyUI editor opens, so offering to copy one for
+                   pasting back is offering something that does not work.
+                   Download stays either way - the file is worth keeping. -->
               <button
+                v-if="!recipe.isApiFormat"
                 class="recipe-sec-act"
                 type="button"
                 @click.stop="copyWorkflow"
@@ -267,16 +273,34 @@ function isAdapter(model) {
 const settingRows = computed(() => {
   const recipe = props.recipe;
   if (!recipe) return [];
-  const byLabel = new Map();
+
+  // Grouped by the BARE name, because the backend qualifies a label with its
+  // node when two nodes set the same thing to different values ("steps
+  // (Hires Fix)"). Looking `steps` up literally found nothing on exactly those
+  // graphs, so a hires-fix or refiner picture - the shape most worth reading -
+  // showed no Steps and no CFG at all.
+  const byBase = new Map();
   for (const row of recipe.settings || []) {
-    if (!byLabel.has(row.label)) byLabel.set(row.label, row);
+    const base = String(row.label).split(" (")[0];
+    if (!byBase.has(base)) byBase.set(base, []);
+    byBase.get(base).push(row);
   }
-  const value = (label) => byLabel.get(label)?.value;
-  const note = (...labels) =>
-    labels
-      .map((label) => byLabel.get(label)?.node)
-      .filter(Boolean)
-      .join(" · ") || null;
+  /** Every row for the first of *names* that the graph set. */
+  const rowsFor = (...names) => {
+    for (const name of names) {
+      const rows = byBase.get(name);
+      if (rows?.length) return rows;
+    }
+    return [];
+  };
+  /** "Steps", or "Steps (Hires Fix)" when the backend qualified it. */
+  const labelled = (row, nice) => {
+    const qualifier = String(row.label).slice(String(row.label).indexOf(" ("));
+    return String(row.label).includes(" (") ? `${nice}${qualifier}` : nice;
+  };
+  const sameNode = (rows, node) =>
+    rows.find((row) => row.node === node) ??
+    (rows.length === 1 ? rows[0] : null);
 
   const rows = [];
   const push = (label, text, extra = {}) => {
@@ -284,19 +308,35 @@ const settingRows = computed(() => {
     rows.push({ label, value: text, ...extra });
   };
 
-  push("Steps", format(value("steps")), { note: note("steps") });
-  push("CFG", format(value("cfg") ?? value("guidance")), {
-    note: note("cfg", "guidance"),
-  });
-  push("Sampler", join(value("sampler_name"), value("scheduler")), {
-    note: note("sampler_name", "scheduler"),
-  });
-  push("Denoise", format(value("denoise")), { note: note("denoise") });
-  const size =
-    value("width") != null && value("height") != null
-      ? `${format(value("width"))}×${format(value("height"))}`
-      : null;
-  push("Size", size, { note: note("width", "height") });
+  for (const row of rowsFor("steps")) {
+    push(labelled(row, "Steps"), format(row.value), { note: row.node });
+  }
+  for (const row of rowsFor("cfg", "guidance")) {
+    push(labelled(row, "CFG"), format(row.value), { note: row.node });
+  }
+  // Sampler and Size are each two settings written as one value, paired within
+  // the node that set them so a second sampler cannot borrow the first's
+  // scheduler.
+  const schedulers = rowsFor("scheduler");
+  for (const row of rowsFor("sampler_name")) {
+    const scheduler = sameNode(schedulers, row.node);
+    push(labelled(row, "Sampler"), join(row.value, scheduler?.value), {
+      note: row.node,
+    });
+  }
+  for (const row of rowsFor("denoise")) {
+    push(labelled(row, "Denoise"), format(row.value), { note: row.node });
+  }
+  const heights = rowsFor("height");
+  for (const row of rowsFor("width")) {
+    const height = sameNode(heights, row.node);
+    if (!height) continue;
+    push(
+      labelled(row, "Size"),
+      `${format(row.value)}\u00d7${format(height.value)}`,
+      { note: row.node },
+    );
+  }
 
   // Always shown: "no negative prompt" and "no seed" are both worth reading.
   rows.push({

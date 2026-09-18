@@ -1285,25 +1285,20 @@ const sidebarOpen = ref(true);
 // band rather than stacking a Recipe section under Tags: Info is everything the
 // pane showed before, Recipe is everything about how the picture was made.
 //
-// The choice is remembered as the lightbox walks the filmstrip - somebody
-// reading recipes wants the next picture's recipe, not its description - and
-// the tab stays present on a picture with no recipe rather than appearing and
-// disappearing under the cursor. It is disabled there instead, with the reason
-// as its tooltip, which is the same shape the design gives an A1111 picture's
-// Run… button.
+// The choice is remembered as the lightbox walks the filmstrip: somebody
+// reading recipes wants the next picture's recipe, not its description.
+//
+// **Never disabled, on a picture with no recipe either.** The design gives an
+// A1111 picture "the same Recipe tab", and a disabled tab is a dead control: a
+// disabled button fires no pointer events, so the tooltip explaining why would
+// never open for a mouse. The panel says it in a sentence instead, which is
+// also what stops the tab appearing and disappearing under the cursor as the
+// reader walks the filmstrip.
 const sidebarTab = ref("info");
-const sidebarTabs = computed(() => [
+const sidebarTabs = [
   { value: "info", label: "Info", icon: "mdi-information-outline" },
-  {
-    value: "recipe",
-    label: "Recipe",
-    icon: "mdi-bookmark-outline",
-    disabled: !comfyMetadata.value,
-    tooltip: comfyMetadata.value
-      ? ""
-      : "This picture carries no ComfyUI workflow, so it has no recipe",
-  },
-]);
+  { value: "recipe", label: "Recipe", icon: "mdi-bookmark-outline" },
+];
 
 const chromeHidden = ref(false);
 const chromeRevealTimestamp = ref(0);
@@ -3840,6 +3835,12 @@ function dedupeDetections(items) {
 
 async function fetchComfyWorkflow(imageId) {
   if (!imageId || !backendUrl.value) return;
+  // Cleared before the request, not after it. This component is not rebuilt as
+  // the lightbox walks the filmstrip, so leaving the last picture's recipe in
+  // place means the Recipe tab reads picture N-1's prompt, models and seed
+  // under picture N until the response lands - and, for a picture with no
+  // workflow, until a 404 that never replaces it.
+  comfyMetadata.value = null;
   const requestId = (comfyWorkflowRequestId += 1);
   const requestedImageId = imageId;
   try {
@@ -4446,15 +4447,6 @@ function preloadAdjacentImages() {
 
 const comfyMetadata = ref(null);
 
-// A picture with no recipe cannot leave the reader on a disabled tab. Declared
-// here rather than beside `sidebarTab`: a watcher reads its source once when it
-// is created, and `comfyMetadata` is below that point.
-watch(
-  () => !!comfyMetadata.value,
-  (hasRecipe) => {
-    if (!hasRecipe && sidebarTab.value === "recipe") sidebarTab.value = "info";
-  },
-);
 const facesCollapsed = ref(false);
 
 watch(

@@ -447,6 +447,45 @@ preview, the run and the ghosting. Five points where the wiring is load-bearing:
   optimistic local copy of a count only the server can compute, and an undo has
   no local grid op at all.
 
+### 2.2b The picture-workflow read, and what the Recipe tab is fed (v1.12, #1313)
+
+`GET /api/v1/comfyui/pictures/{picture_id}/workflow` is the **cheap** read of one
+picture's ComfyUI metadata: one file read, no network. The lightbox fetches it
+once per picture as the reader walks the filmstrip, which is why the Recipe tab
+uses it rather than `GET /comfyui/pictures/{id}/recipe` — that one pre-flights
+against the owner's ComfyUI (`_read_object_info`) on every call.
+
+| Field | Source | Served to |
+|---|---|---|
+| `workflow`, `is_api_format`, `summary` | the UI chunk when there is one (what Copy/Download hands back to ComfyUI) | anyone who may see the picture |
+| `models`, `loras`, `positive_prompt`, `negative_prompt`, `seed`, `seed_text` | the **executed** `prompt` chunk (§"Two chunks, one of them executable") | anyone who may see the picture |
+| `model_slots[].name` / `.widget` / `.strength` | the reduced executed graph | anyone who may see the picture |
+| `model_slots[].model_id` / `.verified` | the owner's model shelf | **fully-unscoped owner only** |
+| `settings` | `workflow_parameters.describe_parameters` | anyone who may see the picture |
+| `inputs` (the resolution lock) | `generation_input` | **fully-unscoped owner only** |
+| `topology_hash` | `picture.workflow_topology_hash` | anyone who may see the picture |
+
+Two rules neither side may drift from:
+
+1. **`seed_text` is what a client prints, never `seed`.** ComfyUI draws seeds up
+   to `2**64 - 1`; a JavaScript `Number` loses digits above `2**53`, so
+   rendering `seed` shows the wrong seed for about half of real ones. `seed`
+   stays a number for the callers that had it.
+2. **A repeated setting is qualified by its node.** When two nodes set the same
+   field to different values (a hires-fix pass), `settings[].label` reads
+   `steps (Hires Fix)` rather than `steps`, so a client must match on the bare
+   name and render the qualifier — matching the label literally silently drops
+   both rows.
+
+**This read overlaps `GET /comfyui/pictures/{id}/recipe` (v1.12 B5) and the two
+are not yet reconciled.** That route carries the same prompt, negative prompt,
+settings and strengths from a different implementation (`extract_recipe_extras`,
+a `{field: value}` dict over a shorter field list) plus `workflow_key` and an
+A1111 branch this one does not have — so an A1111 picture has a recipe `/recipe`
+can read and this route 404s on. Collapsing them means giving `/recipe` a mode
+that skips the pre-flight; until then, treat `/recipe` as the authority for
+anything replayed and this one as the lightbox's cheap read.
+
 ### 2.3 The `/workflows` contract (v1.11)
 
 The Workflows view's read side (implementation plan §F1/§F2). Four GETs, no

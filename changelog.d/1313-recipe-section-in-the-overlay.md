@@ -13,5 +13,6 @@
   now taken from the graph ComfyUI actually ran, not from the editor's copy of
   it. Where the two disagreed — most often when the prompt is built by a
   wildcard or style node — the picture could show a completely unrelated prompt,
-  and sometimes no models or seed at all. Pictures already in your library are
-  re-read once in the background to correct what was stored.
+  and sometimes no models or seed at all. This corrects pictures as they are
+  imported or rescanned; pictures already in your library keep what was stored
+  for them until they are read again.

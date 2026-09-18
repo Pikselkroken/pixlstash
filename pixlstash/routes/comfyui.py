@@ -1609,12 +1609,19 @@ class ComfyUIPictureWorkflowResponse(BaseModel):
     # callers that had it; JavaScript cannot hold a 64-bit one without losing
     # digits, so the tab reads this.
     seed_text: Optional[str] = None
+    # Served to any token that may see the picture. It is a content address of
+    # the graph, derived from the file the caller is already being served, so it
+    # discloses nothing about the library that the `workflow` above does not -
+    # but it IS a stable cross-picture join key, so two scoped tokens can tell
+    # their pictures came from one workflow. That is a property of the pictures
+    # they hold, not of anything else in the library, which is why it is here
+    # rather than behind the owner check the shelf rows are behind.
+    topology_hash: Optional[str] = None
     # The Recipe tab (#1313). `models` above stays the flat name list it has
     # always been; these carry the strengths and the shelf rows beside it.
     model_slots: list[ComfyUIRecipeModelSlot] = []
     settings: list[ComfyUIRecipeSetting] = []
     inputs: list[ComfyUIRecipeInput] = []
-    topology_hash: Optional[str] = None
 
 
 class ComfyUIPreflightResponse(BaseModel):
