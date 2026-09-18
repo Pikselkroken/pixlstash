@@ -120,4 +120,49 @@ describe("ChipRow", () => {
     expect(chips[0].classes()).not.toContain("chip-row__chip--dashed");
     expect(chips[1].classes()).toContain("chip-row__chip--dashed");
   });
+
+  it("drops the fill on a fact chip and keeps it on a model chip", () => {
+    const wrapper = mount(ChipRow, {
+      props: {
+        items: [{ label: "realvis" }, { label: "txt2img", fact: true }],
+      },
+    });
+    const chips = wrapper.findAll(".chip-row > .chip-row__chip");
+    expect(chips[0].classes()).not.toContain("chip-row__chip--fact");
+    expect(chips[1].classes()).toContain("chip-row__chip--fact");
+  });
+
+  it("gives the measuring copy the same glyph as the chip it stands for", () => {
+    // The probe is what decides how many chips fit. A glyph drawn only on the
+    // visible chip measures every chip short and the row overflows.
+    const wrapper = mount(ChipRow, {
+      props: { items: [{ label: "lightning", icon: "layers" }] },
+    });
+    expect(
+      wrapper.find(".chip-row > .chip-row__chip .chip-row__icon").text(),
+    ).toBe("mdi-layers");
+    expect(wrapper.find(".chip-row__measure .chip-row__icon").text()).toBe(
+      "mdi-layers",
+    );
+  });
+
+  it("outlines every chip and fills only the ones that name a model", () => {
+    // jsdom applies no scoped CSS, so the three variants are read off the sheet.
+    const css = readFileSync("src/components/widgets/ChipRow.vue", "utf8")
+      .split("<style scoped>")[1]
+      .replace(/\/\*[\s\S]*?\*\//g, "");
+    const rule = (selector) =>
+      css.split("}").find((r) => r.split("{")[0].trim() === selector);
+
+    const base = rule(".chip-row__chip,\n.chip-row__more");
+    expect(base).toContain("border: 1px solid rgb(var(--v-theme-border))");
+    expect(base).toContain("background: rgb(var(--v-theme-input-background))");
+    for (const unfilled of [
+      ".chip-row__chip--dashed",
+      ".chip-row__chip--fact",
+      ".chip-row__more",
+    ]) {
+      expect(rule(unfilled), unfilled).toContain("background: transparent");
+    }
+  });
 });

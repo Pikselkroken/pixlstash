@@ -11,7 +11,7 @@
 //     models: [{ name, kind, mark? }],  // every non-LoRA slot: checkpoint,
 //                                       // unet, vae, clip… `kind` is the slot
 //     loras:  [{ name, mark }],         // "structural" = in the workflow
-//                                       // (a wash chip), "recipe" = a slot
+//                                       // (a filled chip), "recipe" = a slot
 //                                       // the recipe fills (dashed)
 //     differs_by: [string],             // a stack: the union over its members
 //     picture_count, rating,            // rating 1-5; 0 or null is unrated
@@ -59,11 +59,12 @@ export function checkpointModel(card) {
   );
 }
 
-/** The LoRA row: a wash chip per workflow LoRA, a dashed one per recipe slot. */
+/** The LoRA row: a filled chip per workflow LoRA, a dashed one per recipe slot. */
 export function loraChips(card) {
   return (card.loras ?? []).map((lora, i) => ({
     key: `lora-${i}`,
     label: lora.mark === RECIPE ? "recipe LoRA" : lora.name,
+    icon: lora.mark === RECIPE ? "plus" : "layers",
     dashed: lora.mark === RECIPE,
   }));
 }
@@ -80,7 +81,7 @@ export function factChips(card) {
         card.type,
         card.imported ? "imported" : null,
       ].filter(Boolean);
-  return labels.map((label, i) => ({ key: `fact-${i}`, label }));
+  return labels.map((label, i) => ({ key: `fact-${i}`, label, fact: true }));
 }
 
 /** "4.9 of 5", or null when nothing is rated (0 or missing). */

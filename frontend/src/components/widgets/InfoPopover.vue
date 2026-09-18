@@ -184,17 +184,18 @@ const models = computed(() => [
   gap: var(--space-2);
 }
 
-/* Tag sm: inside a panel there is room for the comfortable size. */
+/* The same fact chip the card's fourth row draws (ChipRow's `fact`), so the
+   three the card could show and the rest it clipped read as one list. */
 .info-popover__chip {
   display: inline-flex;
   align-items: center;
   box-sizing: border-box;
-  height: var(--control-h-sm);
-  padding: 0 var(--space-3);
+  height: var(--tag-h-xs);
+  padding: 0 var(--space-2);
+  border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, rgb(var(--v-theme-on-panel)) 10%, transparent);
-  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
-  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-on-panel));
+  font-size: var(--text-2xs);
   line-height: var(--leading-snug);
 }
 
@@ -212,6 +213,7 @@ const models = computed(() => [
 
 .info-popover__kv dd {
   margin: 0;
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
 }
 </style>
