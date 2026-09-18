@@ -56,6 +56,22 @@ const shown = (wrapper) =>
 const moreChip = (wrapper) =>
   own(wrapper).find((el) => el.classList.contains("chip-row__more"));
 
+/**
+ * Every rule in a component's scoped stylesheet whose selector list is one of
+ * `selectors`, as its raw declarations. Selectors are compared with whitespace
+ * collapsed, so a Prettier reflow reports nothing; returning ALL of them (not
+ * the first) is what lets a caller insist a selector is declared only once.
+ */
+function rules(file, selectors) {
+  const wanted = [selectors].flat().map((s) => s.replace(/\s+/g, " ").trim());
+  return readFileSync(file, "utf8")
+    .split("<style scoped>")[1]
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("}")
+    .filter((r) => wanted.includes(r.split("{")[0].replace(/\s+/g, " ").trim()))
+    .map((r) => r.split("{")[1] ?? "");
+}
+
 describe("ChipRow", () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -100,12 +116,7 @@ describe("ChipRow", () => {
   it("clips the row rather than wrapping it", () => {
     // jsdom lays nothing out, so this one is read off the stylesheet: without
     // it the clipped chips are simply drawn over the rest of the card.
-    const css = readFileSync("src/components/widgets/ChipRow.vue", "utf8")
-      .split("<style scoped>")[1]
-      .replace(/\/\*[\s\S]*?\*\//g, "");
-    const row = css
-      .split("}")
-      .find((r) => r.split("{")[0].trim() === ".chip-row");
+    const [row] = rules("src/components/widgets/ChipRow.vue", ".chip-row");
     expect(row).toContain("overflow: hidden");
     expect(row).toContain("white-space: nowrap");
   });
@@ -147,14 +158,18 @@ describe("ChipRow", () => {
   });
 
   it("outlines every chip and fills only the ones that name a model", () => {
-    // jsdom applies no scoped CSS, so the three variants are read off the sheet.
-    const css = readFileSync("src/components/widgets/ChipRow.vue", "utf8")
-      .split("<style scoped>")[1]
-      .replace(/\/\*[\s\S]*?\*\//g, "");
-    const rule = (selector) =>
-      css.split("}").find((r) => r.split("{")[0].trim() === selector);
+    // jsdom applies no scoped CSS and does not resolve var(), so the variants are
+    // read off the sheet. A source grep that takes the FIRST matching rule proves
+    // nothing about the cascade - appending a second rule for the same selector
+    // reverts the chip and the grep never notices - so `only` asserts each
+    // selector is declared exactly once and reads that one rule.
+    const only = (selector) => {
+      const matches = rules("src/components/widgets/ChipRow.vue", selector);
+      expect(matches, selector).toHaveLength(1);
+      return matches[0];
+    };
 
-    const base = rule(".chip-row__chip,\n.chip-row__more");
+    const base = only(".chip-row__chip, .chip-row__more");
     expect(base).toContain("border: 1px solid rgb(var(--v-theme-border))");
     expect(base).toContain("background: rgb(var(--v-theme-input-background))");
     for (const unfilled of [
@@ -162,7 +177,41 @@ describe("ChipRow", () => {
       ".chip-row__chip--fact",
       ".chip-row__more",
     ]) {
-      expect(rule(unfilled), unfilled).toContain("background: transparent");
+      expect(only(unfilled), unfilled).toContain("background: transparent");
     }
+  });
+
+  it("draws the same fact chip ⓘ draws, so one list reads as one list", () => {
+    // The popover wraps its chips and the row clips its own, so InfoPopover
+    // cannot mount a ChipRow and spells the chip a second time. Nothing but this
+    // keeps the two copies agreeing; the comments in both files claim they do.
+    const card = rules("src/components/widgets/ChipRow.vue", [
+      ".chip-row__chip, .chip-row__more",
+      ".chip-row__chip--fact",
+    ]).join("");
+    const popover = rules(
+      "src/components/widgets/InfoPopover.vue",
+      ".info-popover__chip",
+    ).join("");
+
+    expect(popover).toContain("height: var(--tag-h-xs)");
+    expect(popover).toContain("padding: 0 var(--space-2)");
+    expect(popover).toContain("font-size: var(--text-2xs)");
+    expect(popover).toContain("border-radius: var(--radius-sm)");
+    expect(popover).toContain("border: 1px solid rgb(var(--v-theme-border))");
+    // Unfilled, like the card's fact chip and unlike its model chip.
+    expect(popover).not.toContain("background:");
+    for (const declaration of [
+      "height: var(--tag-h-xs)",
+      "padding: 0 var(--space-2)",
+      "font-size: var(--text-2xs)",
+      "border-radius: var(--radius-sm)",
+      "border: 1px solid rgb(var(--v-theme-border))",
+    ]) {
+      expect(card, declaration).toContain(declaration);
+    }
+    expect(
+      rules("src/components/widgets/ChipRow.vue", ".chip-row__chip--fact"),
+    ).toEqual([expect.stringContaining("background: transparent")]);
   });
 });

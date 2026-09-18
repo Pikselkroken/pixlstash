@@ -184,8 +184,11 @@ const models = computed(() => [
   gap: var(--space-2);
 }
 
-/* The same fact chip the card's fourth row draws (ChipRow's `fact`), so the
-   three the card could show and the rest it clipped read as one list. */
+/* The card's fact chip, spelled a second time: the popover WRAPS its chips and
+   a ChipRow clips to one line, so it cannot mount one. `ChipRow.test.js` holds
+   the two copies to the same geometry - the chips the card showed and the ones
+   it clipped are one list, and must not drift apart in two files.
+   `on-panel`, not `on-surface`: this chip sits on the menu surface. */
 .info-popover__chip {
   display: inline-flex;
   align-items: center;

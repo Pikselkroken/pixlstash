@@ -18,7 +18,7 @@
 
     <!-- Every chip at its natural width, so a chip hidden by the last fit can
          still be measured when the row grows again. It carries the icon too:
-         a probe without one measures every chip 14px short. -->
+         a probe without one measures every glyphed chip 16px short. -->
     <div ref="measureEl" class="chip-row__measure" aria-hidden="true">
       <span
         v-for="(item, i) in items"
@@ -41,13 +41,26 @@
 // stack panel's List "Differs by" column when F2 builds it.
 //
 // The chip is the design's `.uchip`: a bordered control-tier chip on the input
-// surface, --tag-h-xs tall, --text-2xs, with a muted 12px glyph saying what kind
-// of thing it names. Three variants, all from the design: `dashed` is a slot the
-// recipe fills rather than a model the workflow carries; `fact` drops the fill
-// because a fact is not a model; "+N" is a fact chip with a muted count.
+// surface, --tag-h-xs tall, --text-2xs, with a muted glyph. The glyph separates
+// the three KINDS OF THING a row can name - `cube-outline` a model, `layers` a
+// LoRA, `plus` a slot - and says nothing finer: `checkpointModel` falls back to
+// the first model of any kind, so a card whose graph has no checkpoint draws the
+// model glyph over a unet, exactly as ⓘ already lists it. Three variants, all
+// from the design: `dashed` is a slot the recipe fills rather than a model the
+// workflow carries; `fact` drops the fill because a fact is not a model; "+N" is
+// a fact chip with a muted count.
 //
-// The design draws the chip 20px tall. We keep --tag-h-xs (18) rather than
-// mint a fourth chip height for 2px nobody sees.
+// Approximated against the design, all in the app's favour: 18px tall where it
+// draws 20 (--tag-h-xs, rather than a fourth chip height for 2px), --space-2
+// padding and icon gap where it draws 6px and 3px (the spacing scale, and the
+// token the design manual names for icon-to-label), and the glyph box 12px with
+// the glyph at the inherited 11px, because `v-icon`'s numeric size sets the box
+// and not the font.
+//
+// In the LIGHT theme `input-background` and `surface` are both #ffffff, so the
+// fill does not separate a model chip from a fact chip there and the outline and
+// the glyph carry it alone. That is the design's own light palette, not a
+// mapping choice made here.
 
 import {
   computed,
@@ -133,7 +146,7 @@ defineExpose({ measure });
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--space-2);
   box-sizing: border-box;
   height: var(--tag-h-xs);
   padding: 0 var(--space-2);
