@@ -63,7 +63,18 @@ logger = get_logger(__name__)
 
 # A1111's own infotext grammar (modules/infotext_utils.py): ``Key: value`` pairs
 # separated by commas, a value optionally a JSON-quoted string.
-_PARAM_RE = re.compile(r'\s*(\w[\w \-/]+):\s*("(?:\\.|[^\\"])+"|[^,]*)(?:,|$)')
+#
+# **The key's run is bounded, and that is what makes this linear.** An
+# unbounded ``[\w \-/]+`` before the literal ``:`` backtracks over every
+# length of every run that has no colon after it, which is quadratic in the
+# line: measured on this module's own ceiling, 8,000 characters of
+# ``"xSteps: 20," + "a" * 7989`` cost 0.14 s and 32,000 cost 2.34 s. Bounded at
+# 63, the same inputs cost 0.0024 s and 0.011 s - linear, and no longer a
+# multiplier on anything. A1111's longest real key is around 19 characters
+# (``Denoising strength``, ``ADetailer model 2nd``), so nothing genuine is near
+# the bound; a key longer than it reads as prose rather than as a field, which
+# is the right answer for a line that is not A1111's.
+_PARAM_RE = re.compile(r'\s*(\w[\w \-/]{0,62}):\s*("(?:\\.|[^\\"])+"|[^,]*)(?:,|$)')
 
 # ``<lora:name:weight>``; ``lyco`` is the LyCORIS extension's spelling of it.
 _EXTRA_NETWORK_RE = re.compile(r"<(lora|lyco):([^:>]+)((?::[^>]*)?)>", re.IGNORECASE)
@@ -80,15 +91,21 @@ _MODEL_FIELD_RE = re.compile(
     re.IGNORECASE,
 )
 
-# The regex above is quadratic on a long line with no pairs in it: measured,
-# 19,000 characters costs 0.82 s and 10,000 costs 0.22 s, against 0.02 s for a
-# realistic ADetailer-heavy 3,000. Migration 0119 re-opens every picture that
-# has no keys, so the ceiling is set where a real line never reaches it.
+# A ceiling on the line handed to the regex. It was set when that regex was
+# quadratic, on an extrapolation that undercounted (8,000 characters measured
+# 0.14 s here, not the ~0.04 s the old comment's datapoints suggest); the
+# bounded key run above has since made the cost linear, so this is now a bound
+# on absurdity rather than the thing holding the line. Migration 0119 re-opens
+# every picture that has no keys, so it is set where a real line never reaches
+# it.
 # ponytail: a longer genuine line is read as no A1111 data; raise if one shows.
 _MAX_FIELDS_LINE = 8_000
 
-# How many lines from the end are searched for that fields line. See
-# `parse_infotext`: the count multiplies the per-line cost above.
+# How many lines from the end are searched for that fields line. Belt and
+# braces, not the cost control it was: with a linear regex the whole search is
+# linear in the text. It stays because a future change to the grammar above
+# should not be able to reintroduce a multiplier silently. See `parse_infotext`
+# for why the tail is where the fields line is.
 _MAX_FIELDS_LINES = 32
 
 _VOLATILE_FIELDS = frozenset(
@@ -120,7 +137,12 @@ class A1111Recipe:
     Attributes:
         nodes: The graph, ready for ``graph_key`` and the hub writer.
         seed: The ``Seed`` field as text, or ``None`` when it is absent or not
-            an integer. Text for the reason ``generation.seed`` is.
+            an integer. Text for the reason ``generation.seed`` is - but an
+            integer ``int()`` itself accepts, which ``str.isdigit()`` alone
+            does not promise: it is true of ``"\u00b2"`` and of a 4,301-digit
+            run, both of which ``int()`` refuses (CPython's integer-string
+            limit). A caller converting the text would have turned a crafted
+            ``parameters`` chunk into a 500.
     """
 
     nodes: dict[str, ReducedNode]
@@ -156,14 +178,15 @@ def parse_infotext(text: str) -> Optional[tuple[str, str, dict[str, str]]]:
     if text.lstrip().startswith("{"):
         return None
     lines = text.strip().split("\n")
-    # Only the tail is searched. `_parse_fields` is quadratic up to its own
-    # 8,000-character ceiling, so a line count is a multiplier on it: a crafted
-    # chunk of thousands of near-ceiling lines that each hold "Steps:" without
-    # yielding a `Steps` field is minutes of CPU. That was a background pass's
-    # problem when this had one caller; it is a request handler's now
-    # (`GET /comfyui/pictures/{id}/recipe`), reachable with a share token. The
-    # grammar loses nothing: A1111 escapes newlines, so its fields line IS the
-    # last, and the search below exists only for a tool that appended a few.
+    # Only the tail is searched. The grammar loses nothing by it: A1111 escapes
+    # newlines, so its fields line IS the last, and this backwards search
+    # exists only for a tool that re-saved the file and appended a few of its
+    # own. It is a second bound rather than the cost control it was - the
+    # regex above is linear now - kept so that a change to the grammar cannot
+    # quietly turn a line count back into a multiplier. This module gained a
+    # request-path caller in v1.12 B5 (`GET /comfyui/pictures/{id}/recipe`,
+    # reachable with a share token), which is what makes that worth a bound at
+    # all; it had only a background pass before.
     # ponytail: a genuine fields line further back than this reads as no A1111
     # data; raise the bound if one shows up.
     for index in range(len(lines) - 1, max(len(lines) - _MAX_FIELDS_LINES, 0) - 1, -1):
@@ -309,8 +332,26 @@ def reduce_a1111(metadata: Optional[dict]) -> Optional[A1111Recipe]:
             assets.update(ckpt_assets)
         nodes["hires"] = _node("A1111HiresFix", widgets, assets, {"samples": "sampler"})
 
-    seed = fields.get("Seed", "").strip()
-    return A1111Recipe(nodes=nodes, seed=seed if seed.isdigit() else None)
+    return A1111Recipe(nodes=nodes, seed=_integer_text(fields.get("Seed")))
+
+
+def _integer_text(value: Optional[str]) -> Optional[str]:
+    """*value* if it is an integer ``int()`` accepts, else ``None``.
+
+    ``str.isdigit()`` is not that test. It is true of ``"\u00b2"`` and of a
+    digit run past CPython's 4,300-character integer-string limit, and both
+    raise in ``int()`` - so a consumer that converts the text got a 500 out of
+    a crafted ``parameters`` chunk. Asking ``int()`` itself is the only way to
+    promise what the field's docstring promises.
+    """
+    text = (value or "").strip()
+    try:
+        int(text)
+    except ValueError:
+        if text:
+            logger.debug("Dropped A1111 seed %r: it is not an integer.", text[:32])
+        return None
+    return text
 
 
 def _widgets(fields: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any]]:

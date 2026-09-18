@@ -394,6 +394,14 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
     # library - the exact "no results means the filter was ignored" reading the
     # contract tells clients is wrong. An empty value matches nothing, like any
     # other card no picture was made with.
+    # Popped whatever happens: `Picture.find` now declares this name, so a
+    # client sending `?workflow_structural_hashes=abc` would otherwise reach
+    # `PredicateFilter` as a bare string and 500 on its `List[str]`. It could
+    # never widen anything - it only adds an IN, and the resolution below
+    # overwrites it whenever a real filter resolves - but a reachable 500 is
+    # its own bug. (Four sibling filters here are unpopped in the same way and
+    # are the same class; this closes the one the change adds.)
+    query_params.pop("workflow_structural_hashes", None)
     key = query_params.pop("workflow_key", None)
     stack_id = query_params.pop("workflow_stack", None)
     if key is None and stack_id is None:

@@ -60,7 +60,16 @@ _SEED_FIELDS = {"seed", "noise_seed"}
 # Flux2-Klein templates among them) put the step count on a scheduler node, the
 # sampler name on a `KSamplerSelect` and the CFG on a `CFGGuider`, so reading
 # only the sampler reports one field out of five for PixlStash's own workflows.
-_SETTING_FIELDS = ("steps", "cfg", "sampler_name", "scheduler", "denoise")
+# Typed, because the value's *kind* is not the field's type: `steps: "twenty"`
+# and `sampler_name: 12345` are not settings, and reporting them puts a graph's
+# author in charge of what a client's formatter is handed.
+_SETTING_FIELDS = {
+    "steps": int,
+    "cfg": float,
+    "sampler_name": str,
+    "scheduler": str,
+    "denoise": float,
+}
 # Nodes that carry a raw STRING value (positive-prompt primitive wired into subgraphs)
 _PRIMITIVE_STRING_CLASSES = {
     "PrimitiveStringMultiline",
@@ -380,8 +389,12 @@ def _follow_prompt_api(
         text = inputs.get("text")
         return _resolve_text_api(text, workflow, depth + 1)
 
-    # Follow conditioning passthrough nodes upstream
-    for key in ("conditioning", side):
+    # Follow conditioning passthrough nodes upstream, **the caller's side
+    # first**: a node carrying both a generic `conditioning` and a named
+    # `positive`/`negative` is followed on the side this walk started on, or
+    # the negative chain arrives at the positive prompt - the exact failure
+    # `side` exists to prevent, which trying the generic key first reinstated.
+    for key in (side, "conditioning"):
         ref = inputs.get(key)
         if _is_api_ref(ref):
             result = _follow_prompt_api(str(ref[0]), workflow, depth + 1, side)
@@ -526,10 +539,10 @@ def extract_recipe_extras(workflow: dict) -> dict:
                     negative_prompt = _follow_prompt_api(
                         str(ref[0]), workflow, side="negative"
                     )
-            for field in _SETTING_FIELDS:
+            for field, kind in _SETTING_FIELDS.items():
                 if field in settings:
                     continue
-                value = _finite_setting(inputs.get(field))
+                value = _typed_setting(inputs.get(field), kind)
                 if value is not None:
                     settings[field] = value
     except Exception:
@@ -538,23 +551,40 @@ def extract_recipe_extras(workflow: dict) -> dict:
     return {"negative_prompt": negative_prompt, "settings": settings}
 
 
-def _finite_setting(value: Any) -> Any:
-    """*value* if it is a reportable setting, else ``None``.
+def _typed_setting(value: Any, kind: type) -> Any:
+    """*value* as *kind* if it is a reportable setting of that field, else ``None``.
 
-    **A non-finite float is refused, and that is not tidiness.** The graph is
-    attacker-authorable file metadata and ``json.loads`` accepts the
-    ``Infinity`` and ``NaN`` literals, while the response is rendered with
-    ``allow_nan=False`` - so a crafted ``prompt`` chunk would turn this read
-    into a 500 for anyone holding a share token for the picture.
+    The field's type, not the value's kind. A graph is attacker-authorable file
+    metadata, so `steps: "twenty"` and `sampler_name: 12345` both arrive as
+    plausible-looking JSON and neither is a setting; a number field written as
+    text is refused rather than passed on for a client to parse.
+
+    **A non-finite float is refused, and that is not tidiness.** ``json.loads``
+    accepts the ``Infinity`` and ``NaN`` literals while the response renders
+    with ``allow_nan=False``, so a crafted ``prompt`` chunk would turn this
+    read into a 500 for anyone holding a share token for the picture. An
+    integer past the range of a float is refused on the same ground: it
+    overflows the conversion rather than the renderer.
 
     A wired input (``[node_id, slot]``) has no value until the graph runs, and
     a bool is not a setting any of these fields declares.
     """
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
-    if isinstance(value, float) and not math.isfinite(value):
+    if kind is str:
+        return value if isinstance(value, str) else None
+    if isinstance(value, str):
         return None
-    return value
+    try:
+        typed = kind(value)
+    except (OverflowError, ValueError):
+        return None
+    # Only a float can be non-finite, and `math.isfinite` itself OVERFLOWS on
+    # an integer too large for a float - which would have been raised out of
+    # here and cost the whole settings block, not just the one field.
+    if isinstance(typed, float) and not math.isfinite(typed):
+        return None
+    return typed
 
 
 def _parse_metadata_value(value: Any) -> Any:

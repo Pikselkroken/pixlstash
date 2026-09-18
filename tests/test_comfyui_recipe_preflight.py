@@ -686,6 +686,67 @@ class TestRecipeExtras:
             "settings": {},
         }
 
+    def test_each_field_is_taken_at_its_own_type(self):
+        """The value's kind is not the field's type.
+
+        A graph is attacker-authorable, so a number field written as text and a
+        text field written as a number both arrive looking plausible. Neither
+        is a setting, and passing them on puts the graph's author in charge of
+        what a client's formatter receives.
+        """
+        graph = {
+            "3": {
+                "class_type": "KSampler",
+                "inputs": {
+                    "steps": "twenty",
+                    "sampler_name": 12345,
+                    "scheduler": ["9", 0],
+                    "cfg": 7,
+                    "denoise": 1,
+                },
+            }
+        }
+        # Only the two number fields, and both as numbers.
+        assert extract_recipe_extras(graph)["settings"] == {"cfg": 7.0, "denoise": 1.0}
+
+    def test_an_integer_too_large_for_a_float_costs_one_field_not_the_block(self):
+        """`math.isfinite` OVERFLOWS on such an int, so the guard must not call it.
+
+        Raised out of the loop it would have cost every other setting as well.
+        """
+        graph = {
+            "3": {
+                "class_type": "KSampler",
+                "inputs": {"steps": 10**400, "cfg": 7.5, "denoise": 10**400},
+            }
+        }
+        settings = extract_recipe_extras(graph)["settings"]
+        assert settings["cfg"] == 7.5
+        assert "denoise" not in settings, "a float field cannot hold it"
+        assert settings["steps"] == 10**400, "an int field can, and renders"
+        json.dumps(settings, allow_nan=False)
+
+    def test_the_walk_does_not_cross_sides_at_a_node_carrying_both(self):
+        """A node with a generic `conditioning` AND a named side input.
+
+        Trying the generic key first sends the negative chain to the positive
+        prompt - the exact failure the side parameter exists to prevent, and
+        one that a graph shaped like a ControlNet applier produces.
+        """
+        graph = {
+            "1": {
+                "class_type": "KSampler",
+                "inputs": {"positive": ["2", 0], "negative": ["X", 0]},
+            },
+            "X": {
+                "class_type": "ControlNetApply",
+                "inputs": {"conditioning": ["2", 0], "negative": ["3", 0]},
+            },
+            "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "POSITIVE"}},
+            "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "NEGATIVE"}},
+        }
+        assert extract_recipe_extras(graph)["negative_prompt"] == "NEGATIVE"
+
     def test_a_node_spelling_its_digest_twice_is_still_one_slot(self):
         graph = {
             "1": {

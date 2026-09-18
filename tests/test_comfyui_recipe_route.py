@@ -880,10 +880,13 @@ class TestRecipeReadsTheWholeRecipe:
         # No node is named: the reduction's ids are in no graph, and there is
         # no replay to send one back to.
         assert [s["node_id"] for s in body["lora_slots"]] == [None]
+        # A value that is wholly a number is reported as one, so `steps` is a
+        # number on BOTH branches rather than a string on this one; anything
+        # else stays the text A1111 wrote.
         assert body["settings"] == {
-            "steps": "25",
+            "steps": 25,
             "sampler": "Euler a",
-            "cfg_scale": "7",
+            "cfg_scale": 7,
             "size": "512x768",
         }
         # The consent fields are about what would execute, and nothing would.
@@ -972,6 +975,19 @@ class TestPictureListWorkflowFilters:
 
         # Only the card the stack names, though both cards share a core hash.
         assert self._ids(client, "?workflow_stack=stack-one") == {alpha}
+
+    def test_the_resolved_parameter_name_is_not_reachable_from_the_query(self, env):
+        """`Picture.find` declares it now, so a client must not be able to send it.
+
+        Unpopped it reaches `PredicateFilter` as a bare string and 500s on its
+        `List[str]`. It could never widen anything - it only adds an IN - but a
+        reachable 500 is its own bug.
+        """
+        server, client, pic_id = env
+
+        r = client.get(f"{API}/pictures?workflow_structural_hashes=abc")
+        assert r.status_code == 200, r.text
+        assert pic_id in {p["id"] for p in r.json()}, "and it filtered nothing"
 
     def test_an_empty_parameter_is_a_filter_not_the_absence_of_one(self, env):
         """`?workflow_key=` names no card, so it must not answer with everything."""

@@ -1164,9 +1164,50 @@ def _a1111_strengths(value) -> dict:
     """
     try:
         weight = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        # Debug, not a warning: an absent weight, a bare `<lora:name>` and the
+        # comma-joined double use are all ordinary A1111 input, so this fires
+        # on the common case and says nothing is wrong. Logged all the same,
+        # because a silently dropped field is how a parsing change hides.
+        logger.debug("No A1111 LoRA strength from %r: %s", value, exc)
         return {}
     return {"model": weight} if math.isfinite(weight) else {}
+
+
+def _a1111_setting(value: str):
+    """An A1111 field value, as a number where it is wholly one.
+
+    A1111 writes every field as text, so ``Steps: 20`` would arrive as
+    ``"20"`` while the ComfyUI branch reports ``20`` - and ``steps`` is a key
+    both branches carry, so that is precisely where a client reaches for a
+    number and finds a string. Coerced here rather than left to the client.
+
+    Only a value that is *entirely* a number is converted: ``512x768`` and
+    ``Euler a`` stay the text they are, which is why the contract describes
+    this block as name/value pairs and not as a typed shape.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return value
+    if not math.isfinite(number):
+        return value
+    return int(number) if number.is_integer() and "." not in str(value) else number
+
+
+def _int_or_none(value) -> int | None:
+    """*value* as an ``int``, or ``None`` where it is not one."""
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "[comfyui] Reporting no seed for an A1111 picture: %r is not an "
+            "integer (%s). The reduction should already have refused it, so "
+            "this means the two disagree.",
+            value,
+            exc,
+        )
+        return None
 
 
 def _a1111_recipe_payload(recipe: A1111Recipe) -> dict:
@@ -1203,10 +1244,14 @@ def _a1111_recipe_payload(recipe: A1111Recipe) -> dict:
         "summary": "A1111 parameters",
         "positive_prompt": widgets.get("positive", {}).get("text") or None,
         "negative_prompt": widgets.get("negative", {}).get("text") or None,
-        "seed": int(recipe.seed) if recipe.seed else None,
+        # `_integer_text` has already refused anything `int()` would, so this
+        # cannot raise; belt and braces so the two cannot drift apart, since
+        # the version of this that trusted `str.isdigit()` was a 500 on a
+        # crafted `parameters` chunk.
+        "seed": _int_or_none(recipe.seed),
         "models": [checkpoint] if checkpoint else [],
         "loras": [w["lora_name"] for _, w in loras],
-        "settings": {k: v for k, v in sampler.items() if v is not None},
+        "settings": {k: _a1111_setting(v) for k, v in sampler.items() if v is not None},
         # The same shape the ComfyUI branch reports, with no node named: the
         # reduction's own ids ("lora_0") are not in any graph, and `node_id` is
         # what a client sends back as `lora_node_id` to swap a slot in a
@@ -3010,20 +3055,26 @@ def create_router(server) -> APIRouter:
             "settings": extras["settings"],
             # The card this picture's variant is on, in a form the owner-only
             # card routes can be asked about. An opaque digest: no filename, no
-            # prompt, no count, and the graph it digests is one this same token
+            # prompt, no pixels, and the graph it digests is one this same token
             # can already read whole from the `/workflow` sibling.
             #
-            # **It is NOT purely a function of this file, and saying so would
-            # be false.** `workflow_key` folds in which LoRA slots this
-            # topology marks structural, and that mark was frozen from the
-            # filename of whichever picture of that topology was filed FIRST in
-            # this library (`hub/schema.py`, `workflow_slot_mark`). So a holder
-            # of two pictures that differ only in a LoRA learns one bit the
-            # files alone do not give them: whether that slot counts as part of
-            # the workflow. One bit, per topology, about a classification a
-            # published rule makes from a filename - not the filename, not any
-            # picture they cannot see, and nothing about the rest of the
-            # library. That is the exposure, stated rather than denied.
+            # **It is NOT purely a function of this file.** `workflow_key` folds
+            # in which LoRA slots this topology marks structural, and that mark
+            # was frozen from the filename of whichever picture of that topology
+            # was filed FIRST in this library (`hub/schema.py`,
+            # `workflow_slot_mark`, `INSERT OR IGNORE`).
+            #
+            # **And the mark set is recoverable, not merely hinted at.** A
+            # holder has the graph, so they can compute the key for every
+            # assignment of marks to its LoRA slots and match the one they were
+            # given; the slot set is tiny, so 2^n over it recovers the whole
+            # set exactly. What that discloses is one bit PER LORA SLOT of this
+            # topology - whether the first-filed picture's file in that slot
+            # looked like a speed LoRA under a published regex - and that
+            # picture may be one the token cannot otherwise see. A
+            # filename-derived classification, never a filename, a prompt or a
+            # picture; low severity, and the honest bound rather than the
+            # flattering one. Returning this owner-only would close it.
             "workflow_key": _picture_workflow_key(server, pic_id),
             "seed": gen_info["seed"],
             "models": gen_info["models"],
