@@ -151,10 +151,10 @@
              the JSON are both things people actually do with it, so it is kept
              from the Metadata panel's old ComfyUI box - collapsed, so it does
              not crowd the reading above it. -->
-        <details v-if="recipe.workflow" class="recipe-details">
+        <details class="recipe-details" @toggle="onWorkflowToggle">
           <summary class="recipe-summary">
             <span class="recipe-summary-title">{{
-              recipe.isApiFormat ? "API Workflow JSON" : "Workflow JSON"
+              graph && graph.isApiFormat ? "API Workflow JSON" : "Workflow JSON"
             }}</span>
             <span class="recipe-summary-actions">
               <!-- Copy only for the editor's format. The Metadata panel this
@@ -163,7 +163,7 @@
                    pasting back is offering something that does not work.
                    Download stays either way - the file is worth keeping. -->
               <button
-                v-if="!recipe.isApiFormat"
+                v-if="graph && !graph.isApiFormat"
                 class="recipe-sec-act"
                 type="button"
                 @click.stop="copyWorkflow"
@@ -172,6 +172,7 @@
                 Copy
               </button>
               <button
+                v-if="graph"
                 class="recipe-sec-act"
                 type="button"
                 @click.stop="downloadWorkflow"
@@ -181,7 +182,12 @@
               </button>
             </span>
           </summary>
+          <p v-if="graphState === 'loading'" class="recipe-empty">Reading…</p>
+          <p v-else-if="graphState === 'none'" class="recipe-empty">
+            This picture carries no graph that ComfyUI can open.
+          </p>
           <textarea
+            v-else
             class="recipe-textarea"
             readonly
             :value="workflowJson"
@@ -227,15 +233,18 @@
  * overridden setting (the workflow defaults read), and Run… as the Run popup.
  * Generate variants is the replay the app ships today and stands in its place.
  */
-import { computed, reactive, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import { getPictureWorkflow } from "../../api/comfyui";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { copyText } from "../../utils/clipboard";
 
 const props = defineProps({
   recipe: { type: Object, default: null },
+  /** The open picture, for the lazy workflow-graph read. */
+  pictureId: { type: [Number, String], default: null },
   canGenerateVariants: { type: Boolean, default: false },
 });
 
@@ -270,72 +279,68 @@ function isAdapter(model) {
  * entirely; Seed and Negative are the exception and say "none", because their
  * absence is a fact about the recipe worth reading.
  */
+/**
+ * The design's Settings block, from the one settings reading the app has.
+ *
+ * `extract_recipe_extras` returns `{field: value}` - the FIRST node naming a
+ * field wins, which its own docstring owns as "what this graph says" rather
+ * than "the settings of the pass that made this picture". A1111 pictures come
+ * back through the same field with A1111's own names, so the rows are rendered
+ * from whatever keys arrive, in a preferred order, rather than branching on the
+ * source.
+ */
+const SETTING_LABELS = {
+  steps: "Steps",
+  cfg: "CFG",
+  cfg_scale: "CFG",
+  guidance: "Guidance",
+  sampler_name: "Sampler",
+  sampler: "Sampler",
+  scheduler: "Scheduler",
+  denoise: "Denoise",
+  size: "Size",
+};
+
+// Drawn in this order when present; anything else follows, in the order the
+// backend listed it, so a field nobody has mapped is still shown.
+const SETTING_ORDER = [
+  "steps",
+  "cfg",
+  "cfg_scale",
+  "guidance",
+  "sampler_name",
+  "sampler",
+  "scheduler",
+  "denoise",
+];
+
 const settingRows = computed(() => {
   const recipe = props.recipe;
   if (!recipe) return [];
-
-  // Grouped by the BARE name, because the backend qualifies a label with its
-  // node when two nodes set the same thing to different values ("steps
-  // (Hires Fix)"). Looking `steps` up literally found nothing on exactly those
-  // graphs, so a hires-fix or refiner picture - the shape most worth reading -
-  // showed no Steps and no CFG at all.
-  const byBase = new Map();
-  for (const row of recipe.settings || []) {
-    const base = String(row.label).split(" (")[0];
-    if (!byBase.has(base)) byBase.set(base, []);
-    byBase.get(base).push(row);
-  }
-  /** Every row for the first of *names* that the graph set. */
-  const rowsFor = (...names) => {
-    for (const name of names) {
-      const rows = byBase.get(name);
-      if (rows?.length) return rows;
-    }
-    return [];
-  };
-  /** "Steps", or "Steps (Hires Fix)" when the backend qualified it. */
-  const labelled = (row, nice) => {
-    const qualifier = String(row.label).slice(String(row.label).indexOf(" ("));
-    return String(row.label).includes(" (") ? `${nice}${qualifier}` : nice;
-  };
-  const sameNode = (rows, node) =>
-    rows.find((row) => row.node === node) ??
-    (rows.length === 1 ? rows[0] : null);
+  const settings = { ...(recipe.settings || {}) };
 
   const rows = [];
-  const push = (label, text, extra = {}) => {
+  const push = (label, text) => {
     if (text === null || text === undefined || text === "") return;
-    rows.push({ label, value: text, ...extra });
+    rows.push({ label, value: text });
   };
 
-  for (const row of rowsFor("steps")) {
-    push(labelled(row, "Steps"), format(row.value), { note: row.node });
+  for (const field of SETTING_ORDER) {
+    if (!(field in settings)) continue;
+    push(SETTING_LABELS[field] || field, format(settings[field]));
+    delete settings[field];
   }
-  for (const row of rowsFor("cfg", "guidance")) {
-    push(labelled(row, "CFG"), format(row.value), { note: row.node });
+  // Two settings written as one value, the way the design draws it and the way
+  // ComfyUI users say it. A1111 already sends `size` as one string.
+  const width = settings.width;
+  const height = settings.height;
+  delete settings.width;
+  delete settings.height;
+  if (width != null && height != null) {
+    push("Size", `${format(width)}\u00d7${format(height)}`);
   }
-  // Sampler and Size are each two settings written as one value, paired within
-  // the node that set them so a second sampler cannot borrow the first's
-  // scheduler.
-  const schedulers = rowsFor("scheduler");
-  for (const row of rowsFor("sampler_name")) {
-    const scheduler = sameNode(schedulers, row.node);
-    push(labelled(row, "Sampler"), join(row.value, scheduler?.value), {
-      note: row.node,
-    });
-  }
-  for (const row of rowsFor("denoise")) {
-    push(labelled(row, "Denoise"), format(row.value), { note: row.node });
-  }
-  const heights = rowsFor("height");
-  for (const row of rowsFor("width")) {
-    const height = sameNode(heights, row.node);
-    if (!height) continue;
-    push(
-      labelled(row, "Size"),
-      `${format(row.value)}\u00d7${format(height.value)}`,
-      { note: row.node },
-    );
+  for (const [field, value] of Object.entries(settings)) {
+    push(SETTING_LABELS[field] || field, format(value));
   }
 
   // Always shown: "no negative prompt" and "no seed" are both worth reading.
@@ -353,13 +358,6 @@ const settingRows = computed(() => {
   });
   return rows;
 });
-
-function join(left, right) {
-  const parts = [left, right].filter(
-    (part) => part !== null && part !== undefined && part !== "",
-  );
-  return parts.length ? parts.map(format).join(" · ") : null;
-}
 
 function format(value) {
   if (value === null || value === undefined) return null;
@@ -423,7 +421,44 @@ function openWorkflowsView() {
   });
 }
 
-const workflowJson = computed(() => stringify(props.recipe?.workflow));
+// ── The graph's bytes, read only when the box is opened ────────────────────
+//
+// The recipe read answers what the picture was made with; the editor's graph is
+// a separate route because it is the one thing here that is large, and shipping
+// it on every filmstrip step for a box that is collapsed would be the expensive
+// half of a cheap read.
+const graph = ref(null);
+const graphState = ref("idle"); // idle | loading | ready | none
+
+watch(
+  () => props.pictureId,
+  () => {
+    graph.value = null;
+    graphState.value = "idle";
+  },
+);
+
+async function onWorkflowToggle(event) {
+  if (!event.target.open || graphState.value !== "idle") return;
+  if (!props.pictureId) return;
+  graphState.value = "loading";
+  try {
+    const data = await getPictureWorkflow(props.pictureId);
+    graph.value = {
+      workflow: data?.workflow,
+      isApiFormat: data?.is_api_format,
+    };
+    graphState.value = data?.workflow ? "ready" : "none";
+  } catch (e) {
+    // A 404 is the honest "this file carries no graph to open".
+    if (e?.response?.status !== 404) {
+      console.error("Failed to read the workflow graph:", e);
+    }
+    graphState.value = "none";
+  }
+}
+
+const workflowJson = computed(() => stringify(graph.value?.workflow));
 
 function stringify(value) {
   try {

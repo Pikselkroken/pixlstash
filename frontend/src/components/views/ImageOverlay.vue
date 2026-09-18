@@ -992,6 +992,7 @@
           <OverlayRecipePanel
             v-if="sidebarTab === 'recipe'"
             :recipe="comfyMetadata"
+            :picture-id="image?.id ?? null"
             :can-generate-variants="
               comfyuiConfigured && !isReadOnly && !!image?.id
             "
@@ -1089,6 +1090,7 @@ import {
   getLoraInsertion,
   listWorkflows,
   runImageToImage,
+  getPictureRecipe,
   getPictureWorkflow,
 } from "../../api/comfyui";
 import { listProjects } from "../../api/projects";
@@ -3844,34 +3846,33 @@ async function fetchComfyWorkflow(imageId) {
   const requestId = (comfyWorkflowRequestId += 1);
   const requestedImageId = imageId;
   try {
-    const data = await getPictureWorkflow(imageId, {
-      baseUrl: backendUrl.value,
-    });
+    const data = await getPictureRecipe(imageId, { preflight: false });
     if (comfyWorkflowRequestId !== requestId) return;
     if (!image.value || image.value.id !== requestedImageId) return;
-    comfyMetadata.value = data
-      ? {
-          workflow: data.workflow,
-          isApiFormat: data.is_api_format,
-          summary: data.summary,
-          positive_prompt: data.positive_prompt || null,
-          negativePrompt: data.negative_prompt || null,
-          // The seed as text: a 64-bit one loses digits as a JS number.
-          seedText: data.seed_text || null,
-          // The Recipe section's own fields (#1313). `model_slots` carries the
-          // strengths and the shelf rows that the flat `models` name list
-          // cannot; `inputs` is the resolution lock.
-          modelSlots: data.model_slots || [],
-          settings: data.settings || [],
-          inputs: data.inputs || [],
-          topologyHash: data.topology_hash || null,
-        }
-      : null;
+    // `reason: "no_prompt_chunk"` is the recipe read's honest "this picture was
+    // not generated", not an error - and unlike the workflow read it is a 200,
+    // so the Recipe tab's empty state comes from here rather than from a 404.
+    comfyMetadata.value =
+      data && data.reason !== "no_prompt_chunk"
+        ? {
+            source: data.source || "comfyui",
+            summary: data.summary,
+            positive_prompt: data.positive_prompt || null,
+            negativePrompt: data.negative_prompt || null,
+            // The seed as text: a 64-bit one loses digits as a JS number.
+            seedText: data.seed_text || null,
+            // `model_slots` carries the strengths and the shelf rows that the
+            // flat `models` name list cannot; `inputs` is the resolution lock.
+            modelSlots: data.model_slots || [],
+            settings: data.settings || {},
+            inputs: data.inputs || [],
+            topologyHash: data.topology_hash || null,
+          }
+        : null;
   } catch (e) {
-    // 404 is expected when no ComfyUI workflow is embedded
-    if (e?.response?.status !== 404) {
-      console.error("Failed to fetch ComfyUI workflow:", e);
-    }
+    // The recipe read answers 200 for a picture with no recipe, so a 404 here
+    // means the picture or its file is gone, which is worth a line.
+    console.error("Failed to fetch the picture's recipe:", e);
     if (comfyWorkflowRequestId !== requestId) return;
     comfyMetadata.value = null;
   }

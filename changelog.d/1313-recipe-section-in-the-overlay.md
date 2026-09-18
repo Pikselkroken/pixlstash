@@ -16,3 +16,7 @@
   and sometimes no models or seed at all. This corrects pictures as they are
   imported or rescanned; pictures already in your library keep what was stored
   for them until they are read again.
+- Everything PixlStash knows about how a picture was made now comes from one
+  place, so the viewer's Recipe tab and the Generate variants dialog can no
+  longer disagree about the same picture. Pictures from Stable Diffusion web UI
+  (A1111 and its forks) get the Recipe tab too, which they did not before.

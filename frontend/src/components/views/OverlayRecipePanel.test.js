@@ -1,7 +1,7 @@
 // The lightbox's Recipe section (#1313): what it draws, and where it sends you.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mount } from "@vue/test-utils";
+import { mount, flushPromises } from "@vue/test-utils";
 
 // Mocked rather than given a real router: the panel is mounted alone, and a
 // real one would have to carry every app route to resolve two names.
@@ -18,6 +18,8 @@ vi.mock("../../api/pictures", () => ({
 }));
 const copyText = vi.hoisted(() => vi.fn(async () => true));
 vi.mock("../../utils/clipboard", () => ({ copyText }));
+const getPictureWorkflow = vi.hoisted(() => vi.fn());
+vi.mock("../../api/comfyui", () => ({ getPictureWorkflow }));
 
 import OverlayRecipePanel from "./OverlayRecipePanel.vue";
 
@@ -25,7 +27,6 @@ const RECIPE = {
   summary: "API Workflow · 12 nodes",
   isApiFormat: true,
   positive_prompt: "a castle on a hill",
-  workflow: { 4: { class_type: "CheckpointLoaderSimple" } },
   topologyHash: "f00d",
   modelSlots: [
     {
@@ -52,14 +53,16 @@ const RECIPE = {
   ],
   negativePrompt: "blurry, watermark",
   seedText: "18446744073709551615",
-  settings: [
-    { label: "steps", value: 20, node: "KSampler" },
-    { label: "cfg", value: 2, node: "KSampler" },
-    { label: "sampler_name", value: "euler", node: "KSampler" },
-    { label: "scheduler", value: "sgm_uniform", node: "KSampler" },
-    { label: "width", value: 832, node: "EmptyLatentImage" },
-    { label: "height", value: 1216, node: "EmptyLatentImage" },
-  ],
+  // One settings reading for the whole app: `extract_recipe_extras`' dict,
+  // which the Remix dialog reads too.
+  settings: {
+    steps: 20,
+    cfg: 2,
+    sampler_name: "euler",
+    scheduler: "sgm_uniform",
+    width: 832,
+    height: 1216,
+  },
   inputs: [
     {
       node_ref: "7",
@@ -78,7 +81,7 @@ const RECIPE = {
 
 function render(props = {}) {
   return mount(OverlayRecipePanel, {
-    props: { recipe: RECIPE, ...props },
+    props: { recipe: RECIPE, pictureId: 7, ...props },
     global: {
       stubs: {
         "v-icon": true,
@@ -101,10 +104,26 @@ function settingsOf(wrapper) {
     .map((row) => [row.find("dt").text(), row.find("dd").text()]);
 }
 
+const GRAPH = { 4: { class_type: "CheckpointLoaderSimple" } };
+
 beforeEach(() => {
   nav.push.mockClear();
   copyText.mockClear();
+  getPictureWorkflow.mockReset();
+  getPictureWorkflow.mockResolvedValue({
+    workflow: GRAPH,
+    is_api_format: false,
+  });
 });
+
+/** Open the workflow box and let its lazy read land. */
+async function openGraph(wrapper) {
+  const box = wrapper.find(".recipe-details");
+  box.element.open = true;
+  await box.trigger("toggle");
+  await flushPromises();
+  return box;
+}
 
 describe("OverlayRecipePanel", () => {
   it("says so, rather than drawing an empty tab, with no recipe", () => {
@@ -148,40 +167,38 @@ describe("OverlayRecipePanel", () => {
   });
 
   // The v1.12 design drops the raw graph; it is kept because pasting a
-  // workflow into ComfyUI and saving the JSON are both real uses of it.
-  it("still offers the workflow JSON, and downloads it in either format", () => {
-    const box = render().find(".recipe-details");
-    expect(box.exists()).toBe(true);
+  // workflow into ComfyUI and saving the JSON are both real uses of it. It is
+  // fetched only when the box is opened: it is the one large thing here, and
+  // the recipe read runs on every filmstrip step.
+  it("reads the graph only when the box is opened", async () => {
+    const wrapper = render();
+    expect(getPictureWorkflow).not.toHaveBeenCalled();
+    const box = await openGraph(wrapper);
+    expect(getPictureWorkflow).toHaveBeenCalledWith(7);
     expect(box.find("textarea").element.value).toBe(
-      JSON.stringify(RECIPE.workflow, null, 2),
+      JSON.stringify(GRAPH, null, 2),
     );
-    expect(
-      box.findAll(".recipe-sec-act").map((b) => b.text().trim()),
-    ).toContain("Download");
   });
 
   // An API graph is not what the ComfyUI editor opens, so copying one to paste
   // back offers something that cannot work. The Metadata panel this box came
   // from guarded it the same way.
   it("offers Copy for the editor's format only", async () => {
-    const editorFormat = render({
-      recipe: { ...RECIPE, isApiFormat: false },
-    });
+    const editorFormat = await openGraph(render());
     const copy = editorFormat
-      .find(".recipe-details")
       .findAll(".recipe-sec-act")
       .find((b) => b.text().includes("Copy"));
     expect(copy).toBeDefined();
     await copy.trigger("click");
-    expect(copyText).toHaveBeenCalledWith(
-      JSON.stringify(RECIPE.workflow, null, 2),
-    );
+    expect(copyText).toHaveBeenCalledWith(JSON.stringify(GRAPH, null, 2));
 
-    // RECIPE is API-format, so the same box offers no Copy at all.
-    const apiFormat = render();
+    getPictureWorkflow.mockResolvedValue({
+      workflow: GRAPH,
+      is_api_format: true,
+    });
+    const apiFormat = await openGraph(render());
     expect(
       apiFormat
-        .find(".recipe-details")
         .findAll(".recipe-sec-act")
         .some((b) => b.text().includes("Copy")),
     ).toBe(false);
@@ -214,75 +231,45 @@ describe("OverlayRecipePanel", () => {
   });
 
   it("writes the settings the way the design draws them", () => {
-    // Sampler and Size are each two graph settings written as one value, and
-    // Seed and Negative are rows of the same grid rather than sections.
+    // Sampler in the design's order, Size built from width and height, and
+    // Seed and Negative as rows of the same grid rather than sections.
     expect(settingsOf(render())).toEqual([
       ["Steps", "20"],
       ["CFG", "2"],
-      ["Sampler", "euler · sgm_uniform"],
-      ["Size", "832×1216"],
-      ["Seed", "18446744073709551615"],
-      ["Negative", "blurry, watermark"],
-    ]);
-  });
-
-  // The seam the two sides drifted across: `picture_recipe_service._settings`
-  // qualifies a label with its node when two nodes disagree, and this panel used
-  // to look the bare name up, so a hires-fix graph showed no Steps and no CFG.
-  // These are the labels that service actually emits for such a graph - copied
-  // from its output, not invented here.
-  it("keeps both samplers' settings on a hires-fix graph", () => {
-    const rows = settingsOf(
-      render({
-        recipe: {
-          ...RECIPE,
-          settings: [
-            { label: "steps (KSampler)", value: 20, node: "KSampler" },
-            { label: "cfg (KSampler)", value: 7.0, node: "KSampler" },
-            { label: "sampler_name", value: "euler", node: "KSampler" },
-            { label: "steps (Hires Fix)", value: 8, node: "Hires Fix" },
-            { label: "cfg (Hires Fix)", value: 5.0, node: "Hires Fix" },
-          ],
-        },
-      }),
-    );
-    expect(rows).toEqual([
-      ["Steps (KSampler)", "20"],
-      ["Steps (Hires Fix)", "8"],
-      ["CFG (KSampler)", "7"],
-      ["CFG (Hires Fix)", "5"],
       ["Sampler", "euler"],
+      ["Scheduler", "sgm_uniform"],
+      ["Size", "832×1216"],
       ["Seed", RECIPE.seedText],
       ["Negative", RECIPE.negativePrompt],
     ]);
   });
 
-  it("pairs a sampler with its own node's scheduler, not another's", () => {
+  // The same field carries A1111's own vocabulary for an A1111 picture, so the
+  // rows are rendered from whatever keys arrive rather than by branching on the
+  // source - which is the point of there being one settings contract.
+  it("renders an A1111 picture's settings through the same grid", () => {
     const rows = Object.fromEntries(
       settingsOf(
         render({
           recipe: {
             ...RECIPE,
-            settings: [
-              { label: "sampler_name (Base)", value: "euler", node: "Base" },
-              { label: "scheduler (Base)", value: "normal", node: "Base" },
-              {
-                label: "sampler_name (Refiner)",
-                value: "dpmpp_2m",
-                node: "Refiner",
-              },
-              {
-                label: "scheduler (Refiner)",
-                value: "karras",
-                node: "Refiner",
-              },
-            ],
+            source: "a1111",
+            settings: {
+              steps: 25,
+              sampler: "Euler a",
+              cfg_scale: 7,
+              size: "512x768",
+            },
           },
         }),
       ),
     );
-    expect(rows["Sampler (Base)"]).toBe("euler · normal");
-    expect(rows["Sampler (Refiner)"]).toBe("dpmpp_2m · karras");
+    expect(rows).toMatchObject({
+      Steps: "25",
+      CFG: "7",
+      Sampler: "Euler a",
+      Size: "512x768",
+    });
   });
 
   it("prints a 64-bit seed exactly, which a JS number cannot hold", () => {

@@ -10,9 +10,6 @@ Three things the picture's own ``workflow`` chunk does not say on its own:
   the other direction - one picture, which models - so the shelf's
   "12 verified" and this panel's badge can never disagree about what verified
   means;
-* **the settings**, the few widget values a person actually tunes, read through
-  :mod:`pixlstash.services.workflow_parameters` so the names match the run
-  panel's;
 * **the resolution lock**, the ``generation_input`` rows saying which picture
   each input of the run actually loaded. Only runs PixlStash submitted have
   them; a scanned import has none, and none is written by guesswork.
@@ -39,10 +36,6 @@ from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
     normalized_filename,
     reduce_api_graph,
-)
-from pixlstash.services.workflow_parameters import (
-    FEATURED_NAMES,
-    describe_parameters,
 )
 
 logger = get_logger(__name__)
@@ -93,12 +86,14 @@ def describe_recipe(
     §16 exists to close, and no lineage is worth reopening it.
 
     Returns:
-        ``{"model_slots": [...], "settings": [...], "inputs": [...]}``.
+        ``{"model_slots": [...], "inputs": [...]}``. The settings and the
+        prompts are :func:`~pixlstash.utils.comfyui_utilities.extract_recipe_extras`'s,
+        which the recipe route already calls: one reading of a graph's settings,
+        never a second with a vocabulary of its own.
     """
     slots = _model_slots(api_prompt, fallback_names)
     return {
         "model_slots": _resolve_against_shelf(hub, slots) if owner else slots,
-        "settings": _settings(api_prompt),
         "inputs": inputs if owner else [],
     }
 
@@ -228,67 +223,15 @@ def _resolve_against_shelf(hub, slots: list[dict]) -> list[dict]:
     return resolved
 
 
-def _settings(api_prompt: Optional[dict]) -> list[dict]:
-    """The sampler settings, as ``{"label", "value", "node"}`` rows.
-
-    The same few names the run panel pins by default
-    (:data:`~pixlstash.services.workflow_parameters.FEATURED_NAMES`), so a
-    person reading the recipe and a person about to run it see one vocabulary.
-    A primitive wired into one of them is labelled by what it drives, because
-    its own widget is called ``value``.
-    """
-    if not api_prompt:
-        return []
-    try:
-        parameters = describe_parameters(api_prompt)
-    except WorkflowGraphError as exc:
-        logger.warning(
-            "Not listing the settings of a picture recipe: %s. The section "
-            "shows no settings rather than a guess.",
-            exc,
-        )
-        return []
-    rows: list[dict] = []
-    seen: set[tuple[str, Any]] = set()
-    for parameter in parameters:
-        driven = sorted(FEATURED_NAMES.intersection(parameter.drives))
-        if parameter.name in FEATURED_NAMES:
-            label = parameter.name
-        elif driven:
-            label = ", ".join(driven)
-        else:
-            continue
-        key = (label, parameter.value)
-        if key in seen:
-            continue
-        seen.add(key)
-        rows.append(
-            {"label": label, "value": parameter.value, "node": parameter.node_title}
-        )
-    # A graph with two samplers can set `steps` twice. Two rows both reading
-    # "Steps" with different numbers is a screen that says the workflow is
-    # inconsistent rather than that it has two stages, so where a label survives
-    # the dedupe more than once it is qualified by the node it belongs to.
-    repeated = {
-        row["label"]
-        for row in rows
-        if sum(1 for r in rows if r["label"] == row["label"]) > 1
-    }
-    for row in rows:
-        if row["label"] in repeated and row["node"]:
-            row["label"] = f"{row['label']} ({row['node']})"
-    return rows
-
-
-def _node_order(node_ref: str) -> tuple:
+def _numeric(node_ref: str) -> tuple:
     """Sort key for a graph node id: numeric where it is a number.
 
     ``"10"`` after ``"7"``, and a subgraph path (``"75:61"``) segment by
-    segment. A segment that is not a number sorts after the ones that are,
-    rather than raising.
+    segment. ``isdecimal``, not ``isdigit``: the latter accepts superscripts
+    that ``int()`` then refuses.
     """
     return tuple(
-        (0, int(part), "") if part.isdigit() else (1, 0, part)
+        (0, int(part), "") if part.isdecimal() else (1, 0, part)
         for part in str(node_ref).split(":")
     )
 
@@ -308,7 +251,7 @@ def resolution_lock_in_session(session: Session, picture_id: int) -> list[dict]:
     # Ordered here rather than in SQL: a node ref is a graph id, and SQLite
     # would sort it as text, putting node 10 before node 7. A subgraph id
     # ("75:61") sorts by each segment for the same reason.
-    rows.sort(key=lambda pair: (_node_order(pair[0].node_ref), pair[0].position))
+    rows.sort(key=lambda pair: (_numeric(pair[0].node_ref), pair[0].position))
     return [
         {
             "node_ref": row.node_ref,

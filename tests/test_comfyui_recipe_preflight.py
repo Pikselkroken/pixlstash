@@ -665,7 +665,16 @@ class TestRecipeExtras:
             "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "blurry"}},
         }
         extras = extract_recipe_extras(graph)
-        assert extras["settings"] == {"steps": 20, "cfg": 3.5, "sampler_name": "euler"}
+        # `width` and `height` were already in this fixture and went unread
+        # until the Recipe tab needed a Size row (#1313); they come off the
+        # scheduler here, which is exactly the point the test is making.
+        assert extras["settings"] == {
+            "steps": 20,
+            "cfg": 3.5,
+            "sampler_name": "euler",
+            "width": 1024,
+            "height": 1024,
+        }
         # The guider is a sampler class, so the negative walk still starts.
         assert extras["negative_prompt"] == "blurry"
 

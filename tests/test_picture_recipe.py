@@ -19,9 +19,8 @@ import pytest
 
 from pixlstash.services.picture_recipe_service import (
     _model_slots,
-    _node_order,
+    _numeric,
     _resolve_against_shelf,
-    _settings,
 )
 
 DIGEST = "a" * 64
@@ -193,38 +192,6 @@ def test_an_unreadable_graph_lists_no_models_rather_than_guessing():
 
 
 # ===========================================================================
-# The settings
-# ===========================================================================
-
-
-def test_the_settings_are_the_sampler_names_the_run_panel_pins():
-    rows = {row["label"]: row["value"] for row in _settings(GRAPH)}
-    assert rows == {"steps": 20, "cfg": 7.0, "sampler_name": "euler"}
-
-
-def test_the_seed_is_not_a_setting():
-    """A generation is an instance plus a seed, so it is not one of these."""
-    assert "seed" not in {row["label"] for row in _settings(GRAPH)}
-
-
-def test_a_primitive_is_labelled_by_the_setting_it_drives():
-    """Its own widget is called ``value``, which names nothing to a reader."""
-    graph = {
-        "1": {"class_type": "PrimitiveInt", "inputs": {"value": 1024}},
-        "2": {
-            "class_type": "EmptyLatentImage",
-            "inputs": {"width": ["1", 0], "height": 512},
-        },
-    }
-    rows = {row["label"]: row["value"] for row in _settings(graph)}
-    assert rows == {"width": 1024, "height": 512}
-
-
-def test_a_file_with_no_api_prompt_has_no_settings():
-    assert _settings(None) == []
-
-
-# ===========================================================================
 # Which shelf model, and how certainly
 # ===========================================================================
 
@@ -288,38 +255,13 @@ def test_without_a_hub_no_slot_claims_a_shelf_row():
 
 
 # ===========================================================================
-# Ordering and labelling
+# Ordering
 # ===========================================================================
-
-
-def test_a_setting_two_nodes_disagree_about_is_qualified_by_its_node():
-    """Two rows both reading "Steps" with different numbers read as a broken
-    screen rather than as a two-stage workflow."""
-    graph = {
-        "1": {"class_type": "KSampler", "inputs": {"steps": 20}},
-        "2": {
-            "class_type": "KSampler",
-            "_meta": {"title": "Refiner"},
-            "inputs": {"steps": 8},
-        },
-    }
-    assert [row["label"] for row in _settings(graph)] == [
-        "steps (KSampler)",
-        "steps (Refiner)",
-    ]
-
-
-def test_a_setting_two_nodes_agree_about_is_one_unqualified_row():
-    graph = {
-        "1": {"class_type": "KSampler", "inputs": {"steps": 20}},
-        "2": {"class_type": "KSampler", "inputs": {"steps": 20}},
-    }
-    assert [row["label"] for row in _settings(graph)] == ["steps"]
 
 
 def test_a_node_id_orders_as_a_number_not_as_text():
     """Node 10 comes after node 7. A subgraph path orders segment by segment."""
-    assert sorted(["10", "7", "2", "75:61", "75:9"], key=_node_order) == [
+    assert sorted(["10", "7", "2", "75:61", "75:9"], key=_numeric) == [
         "2",
         "7",
         "10",

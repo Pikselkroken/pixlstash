@@ -1169,13 +1169,13 @@ def _bin(server, picture_id: int):
     server.vault.db.run_task(write)
 
 
-def test_the_recipe_read_carries_the_models_settings_and_workflow(env):
+def test_the_recipe_read_carries_the_models_settings_and_topology(env):
     server, client, pic_id = env
     _shelf_checkpoint(server)
     # Before the request, not after: see `_topology_hash`.
     topology = _topology_hash(server, pic_id)
 
-    r = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow")
+    r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false")
     assert r.status_code == 200, r.text
     body = r.json()
 
@@ -1185,9 +1185,12 @@ def test_the_recipe_read_carries_the_models_settings_and_workflow(env):
     # Matched by name, so it is a file called that and nothing stronger.
     assert slots["sd_xl_base_1.0.safetensors"]["verified"] is False
 
-    assert {row["label"]: row["value"] for row in body["settings"]} == {"steps": 20}
-    # The graph itself is still served, unchanged: Copy and Download read it.
-    assert body["workflow"]["4"]["class_type"] == "CheckpointLoaderSimple"
+    assert body["settings"] == {"steps": 20}
+    # The graph's bytes are the OTHER route's job now: one read says what the
+    # picture was made with, the other hands over what ComfyUI can open.
+    assert "workflow" not in body
+    graph = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow").json()
+    assert graph["workflow"]["4"]["class_type"] == "CheckpointLoaderSimple"
     # And the key the "Open in Workflows" link navigates by, which the scan
     # wrote when it filed this picture.
     assert body["topology_hash"] == topology
@@ -1203,7 +1206,7 @@ def test_the_resolution_lock_names_what_a_run_loaded_until_it_is_gone(env):
     input_id = _second_picture(client)
     _lock_input(server, pic_id, input_id, "d" * 64)
 
-    r = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow")
+    r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false")
     assert r.status_code == 200, r.text
     assert r.json()["inputs"] == [
         {
@@ -1217,7 +1220,7 @@ def test_the_resolution_lock_names_what_a_run_loaded_until_it_is_gone(env):
     # Deleting the source does not unmake what was made from it - but the grid
     # can no longer show it, so the id must not be offered as if it could.
     _bin(server, input_id)
-    r = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow")
+    r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false")
     assert r.status_code == 200, r.text
     row = r.json()["inputs"][0]
     assert row["input_picture_id"] is None and row["pixel_sha"] == "d" * 64
@@ -1248,7 +1251,7 @@ def test_a_scoped_token_is_served_the_graph_but_never_the_library(env):
 
     # The positive control: the credential is live and in scope for this route,
     # so what it does NOT get below is a refusal rather than a dead token.
-    r = scoped.get(f"{API}/comfyui/pictures/{pic_id}/workflow")
+    r = scoped.get(f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false")
     assert r.status_code == 200, r.text
     scoped_body = r.json()
     slot = scoped_body["model_slots"][0]
@@ -1262,6 +1265,39 @@ def test_a_scoped_token_is_served_the_graph_but_never_the_library(env):
 
     # The owner, on the same picture, does get both - over-blocking would be
     # its own regression.
-    owner_body = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow").json()
+    owner_body = client.get(
+        f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false"
+    ).json()
     assert owner_body["model_slots"][0]["model_id"] == _shelf_model_id(server)
     assert owner_body["inputs"][0]["input_picture_id"] == input_id
+
+
+def test_the_lightbox_read_asks_comfyui_nothing(env, monkeypatch):
+    """`?preflight=false` is the whole reason one read can serve both callers.
+
+    The Recipe tab re-reads on every filmstrip step, so a ComfyUI round-trip per
+    arrow-key is not affordable; the Remix dialog keeps the pre-flight because
+    it is about to run the thing. Asserted by making the call explode: if the
+    route still reaches for `/object_info`, this test says so.
+    """
+    _server, client, pic_id = env
+    asked = []
+
+    def boom(url):
+        asked.append(url)
+        raise AssertionError("the lightbox read must not ask ComfyUI anything")
+
+    monkeypatch.setattr(comfyui_module, "fetch_object_info", boom)
+
+    r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false")
+    assert r.status_code == 200, r.text
+    assert asked == []
+    # And it says so rather than implying the graph passed a check it skipped.
+    assert r.json()["preflight"]["checked"] is False
+
+    # The control: the default still asks, so the flag is doing the work and
+    # the Remix dialog's pre-flight has not been quietly switched off.
+    _comfyui_reachable(monkeypatch)
+    r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe")
+    assert r.status_code == 200, r.text
+    assert r.json()["preflight"]["checked"] is True

@@ -66,9 +66,17 @@ _SEED_FIELDS = {"seed", "noise_seed"}
 _SETTING_FIELDS = {
     "steps": int,
     "cfg": float,
+    # Flux and its kin have no CFG and carry a guidance scale instead, so a
+    # recipe block without it reports nothing for the setting that shaped the
+    # picture.
+    "guidance": float,
     "sampler_name": str,
     "scheduler": str,
     "denoise": float,
+    # The design's Settings block draws a Size row ("832x1216"), which is two
+    # settings written as one value.
+    "width": int,
+    "height": int,
 }
 # Nodes that carry a raw STRING value (positive-prompt primitive wired into subgraphs)
 _PRIMITIVE_STRING_CLASSES = {

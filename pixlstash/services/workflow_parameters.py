@@ -70,7 +70,7 @@ MODEL = "model"
 # The settings shown before "All N parameters", besides every model and seed. A
 # primitive counts when it drives one of these (Flux2-Klein sets its size so).
 # ponytail: a name list; per-class rules if custom packs name these differently.
-FEATURED_NAMES = frozenset(
+_FEATURED_NAMES = frozenset(
     {
         "steps",
         "cfg",
@@ -182,8 +182,8 @@ def default_pins(parameters: list[Parameter]) -> list[tuple[str, str]]:
         p.key
         for p in parameters
         if p.kind in (MODEL, SEED)
-        or p.name in FEATURED_NAMES
-        or FEATURED_NAMES.intersection(p.drives)
+        or p.name in _FEATURED_NAMES
+        or _FEATURED_NAMES.intersection(p.drives)
     ]
 
 

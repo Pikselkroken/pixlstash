@@ -5,7 +5,7 @@
 // /api/v1 prefix and the backend origin, injects the share token on same-origin
 // absolute URLs, and leaves foreign hosts alone.
 
-import { apiClient} from "../utils/apiClient";
+import { apiClient } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
 /**
@@ -31,9 +31,9 @@ export async function listWorkflows() {
  * @returns {Promise<Object>} the response body.
  */
 export async function deleteWorkflow(name) {
-  return unwrap(apiClient.delete(
-    comfyUrl(`/workflows/${encodeURIComponent(name)}`),
-  ));
+  return unwrap(
+    apiClient.delete(comfyUrl(`/workflows/${encodeURIComponent(name)}`)),
+  );
 }
 
 /**
@@ -52,9 +52,9 @@ export async function deleteWorkflow(name) {
  * @returns {Promise<{workflow: string, inputs: Array<Object>}>}
  */
 export async function getWorkflowInputs(name) {
-  return unwrap(apiClient.get(
-    comfyUrl(`/workflows/${encodeURIComponent(name)}/inputs`),
-  ));
+  return unwrap(
+    apiClient.get(comfyUrl(`/workflows/${encodeURIComponent(name)}/inputs`)),
+  );
 }
 
 /**
@@ -71,9 +71,11 @@ export async function getWorkflowInputs(name) {
  * @returns {Promise<{plan: Object|null, reason: string|null, has_lora_loader: boolean}>}
  */
 export async function getLoraInsertion(name) {
-  return unwrap(apiClient.get(
-    comfyUrl(`/workflows/${encodeURIComponent(name)}/lora-insertion`),
-  ));
+  return unwrap(
+    apiClient.get(
+      comfyUrl(`/workflows/${encodeURIComponent(name)}/lora-insertion`),
+    ),
+  );
 }
 
 /**
@@ -85,10 +87,11 @@ export async function getLoraInsertion(name) {
  * @returns {Promise<{workflow: string, inputs: Array<Object>}>} the stored setup.
  */
 export async function setWorkflowInputs(name, inputs) {
-  return unwrap(apiClient.put(
-    comfyUrl(`/workflows/${encodeURIComponent(name)}/inputs`),
-    { inputs },
-  ));
+  return unwrap(
+    apiClient.put(comfyUrl(`/workflows/${encodeURIComponent(name)}/inputs`), {
+      inputs,
+    }),
+  );
 }
 
 /**
@@ -107,10 +110,12 @@ export async function setWorkflowInputs(name, inputs) {
  *   prompts: Array<{picture_id: ?number, prompt_id: string}>}>}
  */
 export async function runWorkflow(name, body) {
-  return unwrap(apiClient.post(
-    comfyUrl(`/workflows/${encodeURIComponent(name)}/run`),
-    body,
-  ));
+  return unwrap(
+    apiClient.post(
+      comfyUrl(`/workflows/${encodeURIComponent(name)}/run`),
+      body,
+    ),
+  );
 }
 
 /**
@@ -127,15 +132,20 @@ export async function runWorkflow(name, body) {
  * @param {boolean} [body.keepBoth=false]
  * @returns {Promise<{name: string, matched: boolean, topology_hash: ?string}>}
  */
-export async function importWorkflow(
-  { name, workflow, overwrite = false, keepBoth = false },
-) {
-  return unwrap(apiClient.post(comfyUrl("/workflows/import"), {
-    name,
-    workflow,
-    overwrite,
-    keep_both: keepBoth,
-  }));
+export async function importWorkflow({
+  name,
+  workflow,
+  overwrite = false,
+  keepBoth = false,
+}) {
+  return unwrap(
+    apiClient.post(comfyUrl("/workflows/import"), {
+      name,
+      workflow,
+      overwrite,
+      keep_both: keepBoth,
+    }),
+  );
 }
 
 /**
@@ -165,9 +175,7 @@ export async function runImageToImage(body) {
  *   prompt, models and LoRAs.
  */
 export async function getPictureWorkflow(pictureId) {
-  return unwrap(apiClient.get(
-    comfyUrl(`/pictures/${pictureId}/workflow`),
-  ));
+  return unwrap(apiClient.get(comfyUrl(`/pictures/${pictureId}/workflow`)));
 }
 
 /**
@@ -197,10 +205,19 @@ export async function getPictureWorkflow(pictureId) {
  * @param {number|string} pictureId
  * @returns {Promise<Object>} the response body described above.
  */
-export async function getPictureRecipe(pictureId) {
-  return unwrap(apiClient.get(
-    comfyUrl(`/pictures/${pictureId}/recipe`),
-  ));
+export async function getPictureRecipe(pictureId, { preflight = true } = {}) {
+  const url = comfyUrl(`/pictures/${pictureId}/recipe`);
+  // `preflight: false` skips the backend's ComfyUI `/object_info` read, so the
+  // answer costs one file read and no network. The lightbox's Recipe tab asks
+  // that way because it re-reads on every filmstrip step; the Remix dialog
+  // keeps the pre-flight, because it is about to run the thing and needs to
+  // know whether it can. The default call passes no config at all, so it stays
+  // exactly the request it has always been.
+  return unwrap(
+    preflight
+      ? apiClient.get(url)
+      : apiClient.get(url, { params: { preflight: false } }),
+  );
 }
 
 /**
