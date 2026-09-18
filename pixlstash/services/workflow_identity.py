@@ -466,8 +466,36 @@ def differs_by(
     same loader. A wrong one invites hiding a workflow that really is
     different.
     """
-    cover_nodes = _reduce(cover_document)
-    member_nodes = _reduce(member_document)
+    return differs_by_reduced(
+        reduce_stored_document(cover_document),
+        reduce_stored_document(member_document),
+        upscale_factor=upscale_factor,
+    )
+
+
+def reduce_stored_document(document: dict) -> dict[str, ReducedNode]:
+    """A stored document's reduction, for a caller comparing one against many.
+
+    Raises:
+        WorkflowGraphError: The document is a raw graph rather than a stored
+            one, or holds no usable node.
+    """
+    return _reduce(document)
+
+
+def differs_by_reduced(
+    cover_nodes: dict[str, ReducedNode],
+    member_nodes: dict[str, ReducedNode],
+    *,
+    upscale_factor: Optional[float] = None,
+) -> list[str]:
+    """:func:`differs_by` over reductions the caller already holds.
+
+    Split out for the reason :func:`_slots` was: a stack compares every member
+    against ONE cover, so reducing that cover once per member is most of what
+    describing a stack costs, and it grows with the stack rather than with the
+    library.
+    """
     cover = _class_counts(cover_nodes)
     member = _class_counts(member_nodes)
     added, removed = member - cover, cover - member

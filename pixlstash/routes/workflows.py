@@ -36,6 +36,7 @@ import re
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from pixlstash.hub.workflow_card_reads import find_card
 from pixlstash.hub.workflows import (
     adapter_slots_by_topology,
     assets_by_topology,
@@ -50,8 +51,6 @@ from pixlstash.hub.workflows import (
     topology_index,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.hub.workflow_card_reads import find_card
 from pixlstash.services.workflow_card_service import card_defaults, read_grid
 from pixlstash.services.workflow_library_service import (
     read_card_picture_ids,
@@ -59,6 +58,7 @@ from pixlstash.services.workflow_library_service import (
     read_recipe_activity,
     read_topology_picture_ids,
 )
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 
 logger = get_logger(__name__)
 
@@ -331,6 +331,25 @@ def _cover_urls(covers) -> list[str]:
     return urls
 
 
+# What a card is called when the owner has not named it. The card's name row
+# is its only identifying text and the ⓘ panel puts it in an `aria-label`, so
+# this may not be null: `{{ card.name }}` renders empty and the label reads
+# "About null". The fallback is the workflow FILE that runs it, because that is
+# what a person calls their workflow and it is the one identifying string not
+# already on the card (the checkpoint has its own row, the type its own chip).
+UNNAMED_CARD = "Untitled workflow"
+
+
+def _display_name(card) -> str:
+    """The owner's name for a card, else the file that runs it, else a stand-in."""
+    if card.name:
+        return card.name
+    if card.file_name:
+        stem = card.file_name.rsplit("/", 1)[-1]
+        return stem[: -len(".json")] if stem.lower().endswith(".json") else stem
+    return UNNAMED_CARD
+
+
 def _slot_models(slots) -> list[WorkflowSlotModel]:
     return [
         WorkflowSlotModel(name=slot.name, kind=slot.kind, mark=slot.mark)
@@ -342,7 +361,7 @@ def _card(figure, defaults=()) -> WorkflowCard:
     """Render one card's figures in the shape ``workflowCard.js`` documents."""
     return WorkflowCard(
         key=figure.card.workflow_key,
-        name=figure.card.name,
+        name=_display_name(figure.card),
         type=figure.card.workflow_type,
         imported=figure.card.imported,
         models=_slot_models(figure.models),

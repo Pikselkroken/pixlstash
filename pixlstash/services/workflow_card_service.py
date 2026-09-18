@@ -3,16 +3,16 @@
 **Computed per request, with no aggregate table.** The grid costs two vault
 queries - one ``GROUP BY workflow_structural_hash`` and one ``ROW_NUMBER()``
 window - and a third only on a library where somebody has actually chosen a
-cover. Beside them are six hub reads, of which one (``card_index``) scans the
-variant table and the rest are small; everything else here is arithmetic over
-their results. An aggregate table would have to be invalidated by every rating,
+cover. Beside them are eight hub statements, of which one (``card_index``)
+scans the variant table and the rest are small; everything else here is
+arithmetic over their results. An aggregate table would have to be invalidated by every rating,
 every import, every soft delete and every re-run of the card backfill, and
 would be a second source of truth for numbers the vault can already produce
 inside the frame budget.
 
 Measured on the owner's library (13k kept pictures, 629 variants, 245 cards):
-about 75 ms, of which roughly half is ``describe_differences`` reducing a graph
-per stacked card.
+about 75 ms, of which the largest single part is ``describe_differences``
+reducing one graph per stacked card.
 
 Three orderings are decided here and nowhere else:
 
@@ -54,7 +54,8 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import WorkflowGraphError
 from pixlstash.services.workflow_identity import (
     RECIPE,
-    differs_by,
+    differs_by_reduced,
+    reduce_stored_document,
     topology_node_labels,
 )
 from pixlstash.services.workflow_library_service import (
@@ -373,11 +374,24 @@ def describe_differences(
         if by_key.get(key) and by_key[key].card.variants
     }
     documents = variant_documents(hub, list(wanted))
-    for_key = {
-        key: documents[structural_hash]
-        for structural_hash, key in wanted.items()
-        if structural_hash in documents
-    }
+    # Reduced ONCE per card rather than once per comparison. A stack compares
+    # every member against one cover, so re-reducing that cover per member is a
+    # cost that grows with the stack rather than with the library - and an
+    # automatic group is free to be large, since `STRIP_LORAS_FOR_STACKS` is
+    # deliberately generous about what stacks together.
+    for_key = {}
+    for structural_hash, key in wanted.items():
+        document = documents.get(structural_hash)
+        if document is None:
+            continue
+        try:
+            for_key[key] = reduce_stored_document(document)
+        except WorkflowGraphError as exc:
+            logger.info(
+                "Card %s will not reduce, so it shows no difference chips: %s",
+                key,
+                exc,
+            )
     for stack in stacks:
         cover = for_key.get(stack.cover_key)
         union: list[str] = []
@@ -386,7 +400,7 @@ def describe_differences(
             if cover is None or member is None:
                 continue
             try:
-                chips = differs_by(cover, member)
+                chips = differs_by_reduced(cover, member)
             except WorkflowGraphError as exc:
                 logger.info(
                     "Card %s cannot be compared with its stack cover %s, so it "
@@ -432,11 +446,19 @@ def read_grid(hub: HubDatabase, vault) -> Grid:
     _apply_chosen_covers(hub, vault, figures)
     stacks, belongs = effective_stacks(visible, stack_rows(hub))
     describe_differences(hub, visible, stacks)
+    # Every member, not only the cover. The grid draws the cover alone, so this
+    # costs it nothing - but a member opened on its own carries the difference
+    # chips it earned against that cover, and a card declaring `stack_size: 1`
+    # while carrying "other checkpoint" is telling its reader it differs from
+    # something the payload never names. `factChips` reads it exactly that way,
+    # showing those chips as plain facts with no "differs by" before them.
+    members = by_key(visible)
     for stack in stacks:
-        cover = by_key(visible).get(stack.cover_key)
-        if cover is not None:
-            cover.stack_size = len(stack.member_keys)
-            cover.member_keys = list(stack.member_keys)
+        for key in stack.member_keys:
+            member = members.get(key)
+            if member is not None:
+                member.stack_size = len(stack.member_keys)
+                member.member_keys = list(stack.member_keys)
 
     # One card per stack, and it is the cover: `stack_size` is what makes a
     # card a stack to its reader, so a grid that also listed the members would
@@ -531,7 +553,11 @@ def _apply_chosen_covers(hub: HubDatabase, vault, figures: list[CardFigures]) ->
         return
     pictures = read_chosen_covers(vault, sorted(set(chosen.values())))
     for figure in figures:
-        picked = pictures.get(chosen.get(figure.card.workflow_key, ""))
+        # By the key's own sha, and never by a default: `chosen.get(key, "")`
+        # would look an unchosen card up under the empty string, so one row
+        # written with an empty `pixel_sha` would cover every card at once.
+        pixel_sha = chosen.get(figure.card.workflow_key)
+        picked = pictures.get(pixel_sha) if pixel_sha else None
         if picked is None:
             continue
         strip = [picked] + [
@@ -563,6 +589,11 @@ def card_defaults(hub: HubDatabase, vault, card: Card) -> list[Default]:
     The mode over the instance documents of this card's pictures rated
     ``BEST_SCORE`` and up, falling back to every picture of the card when
     nothing is rated. An owner's override replaces the value and says so.
+
+    **Counted per distinct instance, not per picture.** Fifty pictures from one
+    same-seed batch ran one instance and vote once between them, which is the
+    intended reading: the mode is over settings a person chose, and choosing a
+    setting once and generating fifty times is still choosing it once.
 
     Addressed by ``(slot label, input name)`` and never by node id, which is
     what ``workflow_default_override`` is keyed on: node ids are renumbered by
@@ -630,9 +661,13 @@ def card_defaults(hub: HubDatabase, vault, card: Card) -> list[Default]:
             )
             continue
         counter = seen[address]
-        # Most often, and on a tie the value that sorts first: a mode read off
-        # a dict's insertion order would differ between two reads of the same
-        # library, which is a card whose defaults move when nothing changed.
+        # Most often, and on a tie the value whose text sorts LAST, which is
+        # what `max` over `(count, str(value))` picks: 30 over 20, but 9 over
+        # 30, because the tie-break is lexical rather than numeric. Any total
+        # order would do - what matters is that it is one, since a mode read
+        # off a dict's insertion order would differ between two reads of the
+        # same library, which is a card whose defaults move when nothing
+        # changed.
         #
         # The counter is keyed on the raw value, so `True` and `1` share a
         # bucket (Python hashes them equal). Both render as the same control

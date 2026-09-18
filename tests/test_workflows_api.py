@@ -50,6 +50,7 @@ from pixlstash.hub.workflow_card_reads import instance_documents, variant_docume
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
 from pixlstash.hub.workflows import PictureGhost, record_picture_ghosts
 from pixlstash.services.workflow_hash import WorkflowGraphError, asset_reference
+from pixlstash.services import workflow_card_service
 from pixlstash.services.workflow_identity import (
     WORKFLOW_KEY_VERSION,
     guess_mark,
@@ -150,6 +151,13 @@ _SEED_CORES = (
 BUSY_INSTANCE_ONE = _h("busyinstanceone")
 BUSY_INSTANCE_TWO = _h("busyinstancetwo")
 FORGOTTEN_INSTANCE = _h("forgotteninstance")
+# Three more runs of the same card, so the newest-N cap has something to
+# cut. The two middle ones repeat the oldest one's settings and the newest
+# one disagrees with all of them, which is what makes the cap, its limit
+# and its ORDER BY each observable on their own.
+FORGOTTEN_INSTANCE_B = _h("forgotteninstanceb")
+FORGOTTEN_INSTANCE_C = _h("forgotteninstancec")
+FORGOTTEN_INSTANCE_NEWEST = _h("forgotteninstancenewest")
 # The two instances only a SOFT-DELETED picture ran. Nothing may ever read
 # them: they exist so that dropping a `deleted` filter changes an answer.
 BINNED_INSTANCE = _h("binnedinstance")
@@ -238,6 +246,9 @@ _INSTANCE_DOCUMENTS = {
     BUSY_INSTANCE_ONE: (BUSY_RECIPE_A, {"steps": 30, "cfg": 7.0}),
     BUSY_INSTANCE_TWO: (BUSY_RECIPE_A, {"steps": 30, "cfg": 8.0}),
     FORGOTTEN_INSTANCE: (FORGOTTEN_RECIPE, {"steps": 20, "cfg": 5.0}),
+    FORGOTTEN_INSTANCE_B: (FORGOTTEN_RECIPE, {"steps": 20, "cfg": 5.0}),
+    FORGOTTEN_INSTANCE_C: (FORGOTTEN_RECIPE, {"steps": 20, "cfg": 5.0}),
+    FORGOTTEN_INSTANCE_NEWEST: (FORGOTTEN_RECIPE, {"steps": 77, "cfg": 7.7}),
     BINNED_INSTANCE: (BUSY_RECIPE_A, {"steps": 44, "cfg": 44.0}),
     FORGOTTEN_BINNED_INSTANCE: (FORGOTTEN_RECIPE, {"steps": 99, "cfg": 9.0}),
 }
@@ -330,6 +341,20 @@ _SEED_PICTURES = (
         0,
         None,
     ),
+    # Unrated and quality-scored: the commonest picture in a real library, and
+    # the only one that can tell `score or 0` from "NULL sorts last". Read as a
+    # zero it ties the two cleared zeros, wins on its smart score and takes the
+    # third cover slot, which is the in-memory strip disagreeing with the SQL
+    # window that chose the candidates.
+    (
+        "busy_unrated.png",
+        BUSY_TOPOLOGY,
+        BUSY_RECIPE_A,
+        False,
+        "2026-08-09T00:00:00Z",
+        None,
+        None,
+    ),
     # Soft-deleted, rated above everything kept on its card, and newest: it
     # would take the top of the cover strip and the top of the picture list.
     (
@@ -361,6 +386,37 @@ _SEED_PICTURES = (
         2,
         FORGOTTEN_INSTANCE,
     ),
+    # Three more runs of the forgotten card, unrated, newer than the first.
+    # Two repeat its settings and the newest disagrees, so the mode over ALL of
+    # them is 20 and the mode over the newest ONE is 77 -- which is what makes
+    # `DEFAULT_SAMPLE`, its `LIMIT` and its `ORDER BY` each visible.
+    (
+        "forgotten_b.png",
+        FORGOTTEN_TOPOLOGY,
+        FORGOTTEN_RECIPE,
+        False,
+        "2026-08-15T00:00:00Z",
+        None,
+        FORGOTTEN_INSTANCE_B,
+    ),
+    (
+        "forgotten_c.png",
+        FORGOTTEN_TOPOLOGY,
+        FORGOTTEN_RECIPE,
+        False,
+        "2026-08-16T00:00:00Z",
+        None,
+        FORGOTTEN_INSTANCE_C,
+    ),
+    (
+        "forgotten_newest.png",
+        FORGOTTEN_TOPOLOGY,
+        FORGOTTEN_RECIPE,
+        False,
+        "2026-08-17T00:00:00Z",
+        None,
+        FORGOTTEN_INSTANCE_NEWEST,
+    ),
     # Soft-deleted and rated 5: the only thing on its card that would qualify
     # as a "best picture", so a dropped filter flips that card's provenance.
     (
@@ -377,14 +433,21 @@ _SEED_PICTURES = (
     ("photograph.jpg", None, None, False, "2026-08-15T00:00:00Z", None, None),
 )
 
-# Smart scores, and the pair here is the whole point of the field being in the
-# fixture at all. ``busy_three`` carries **-1.0**, which is this repo's "the
-# calculation failed" sentinel (CLAUDE.md: "always set metrics to -1.0 if
-# calculation fails"); ``busy_four`` carries none, because nobody has scored it.
-# Both are rated 0, so the smart score is what separates them -- and a failed
-# metric has to sort BELOW nothing at all, the way ``NULLS LAST`` sorts it in
-# the window that picks the cover. Reading a missing score as 0.0 flips them.
-_SMART_SCORES = {"busy_three.png": -1.0}
+# Smart scores, and both entries are load-bearing.
+#
+# ``busy_three`` carries **-1.0**, this repo's "the calculation failed" sentinel
+# (CLAUDE.md: "always set metrics to -1.0 if calculation fails"), and
+# ``busy_four`` carries none. Both are rated 0, so the smart score is what
+# separates them -- and a failed metric has to sort BELOW nothing at all, the
+# way ``NULLS LAST`` sorts it in the window that picks the cover. Reading a
+# missing score as 0.0 flips them.
+#
+# ``busy_unrated`` is the same argument one column to the left: it is the only
+# kept picture on a drawn card whose **star rating** is NULL, so it is what
+# tells ``-inf`` from ``score or 0`` on that half of the comparator. Its smart
+# score is high enough that reading its NULL rating as a zero would carry it
+# past the two cleared zeros and into the cover strip.
+_SMART_SCORES = {"busy_three.png": -1.0, "busy_unrated.png": 0.9}
 
 # The one picture the pass has NOT reached. Seeded separately because it is the
 # only row with a NULL `workflow_hash_version`, which is the whole difference
@@ -773,7 +836,7 @@ def test_the_list_is_one_row_per_topology_not_per_recipe(workflow_env):
 
 def test_a_row_counts_the_kept_pictures_and_names_when_they_were_made(workflow_env):
     rows = _by_hash(workflow_env.owner.get(f"{API}/workflows").json())
-    assert rows[BUSY_TOPOLOGY]["pictures"] == 4
+    assert rows[BUSY_TOPOLOGY]["pictures"] == 5
     assert rows[BUSY_TOPOLOGY]["last_used"].startswith("2026-08-13")
 
 
@@ -795,7 +858,7 @@ def test_forgotten_model_names_leave_the_row_intact_and_the_assets_empty(
     row = rows[FORGOTTEN_TOPOLOGY]
     assert row["assets"] == []
     assert row["node_count"] == 38
-    assert row["pictures"] == 1
+    assert row["pictures"] == 4
 
 
 def test_forgotten_names_are_counted_so_the_row_can_say_how_many(workflow_env):
@@ -1012,8 +1075,8 @@ def test_the_scan_block_says_which_empty_state_the_list_is_in(workflow_env):
     scan = workflow_env.owner.get(f"{API}/workflows").json()["scan"]
     # Six kept pictures, one of them not yet read. The binned picture is in
     # neither figure: it is not kept.
-    assert scan["pictures"] == 7
-    assert scan["scanned"] == 6
+    assert scan["pictures"] == 11
+    assert scan["scanned"] == 10
 
 
 # ===========================================================================
@@ -1027,7 +1090,7 @@ def test_variants_add_up_to_the_row_above_them(workflow_env):
     ).json()
     by_hash = {row["structural_hash"]: row for row in variants}
     assert set(by_hash) == {BUSY_RECIPE_A, BUSY_RECIPE_B}
-    assert by_hash[BUSY_RECIPE_A]["pictures"] == 2
+    assert by_hash[BUSY_RECIPE_A]["pictures"] == 3
     assert by_hash[BUSY_RECIPE_B]["pictures"] == 2
     row = _by_hash(workflow_env.owner.get(f"{API}/workflows").json())[BUSY_TOPOLOGY]
     assert sum(v["pictures"] for v in variants) == row["pictures"]
@@ -1075,14 +1138,14 @@ def test_picture_ids_are_newest_first_and_exclude_the_scrapheap(workflow_env):
     them would pass with the sort reversed.
     """
     ids = workflow_env.owner.get(f"{API}/workflows/{BUSY_TOPOLOGY}/pictures").json()
-    assert len(ids) == 4
+    assert len(ids) == 5
     dated = {
         row["file_path"]: row["id"]
         for row in workflow_env.owner.get(f"{API}/pictures", params={"id": ids}).json()
     }
-    # busy_four (2026-08-13) is the newest of the four, busy_one the oldest.
+    # busy_four (2026-08-13) is the newest of the five, busy_unrated the oldest.
     assert ids[0] == dated["busy_four.png"]
-    assert ids[-1] == dated["busy_one.png"]
+    assert ids[-1] == dated["busy_unrated.png"]
 
     binned = workflow_env.owner.get(
         f"{API}/workflows/{BINNED_TOPOLOGY}/pictures"
@@ -2991,6 +3054,71 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
     assert card["loras"] == [{"name": None, "kind": "lora", "mark": "recipe"}]
 
 
+def test_a_card_is_never_nameless(workflow_env):
+    """`name` may not be null, and most cards have no name of their own.
+
+    It is written only on an explicit rename, so null is the dominant case
+    rather than an edge -- and it is the card's only identifying text row,
+    while the ⓘ panel puts it straight into an ``aria-label``. Served as null
+    the row renders empty and the label reads "About null".
+
+    The fallback is the workflow file that runs the card, without its
+    extension; a card with neither a name nor a file gets a stand-in.
+    """
+    cards = _by_key(_cards(workflow_env.owner))
+    # BUSY has no name and no file: the stand-in, not an empty string.
+    assert cards[BUSY_CARD]["name"] == "Untitled workflow"
+    # The hidden card has both a name and a file, and the owner's name wins.
+    assert _detail(workflow_env.owner, HIDDEN_CARD)["card"]["name"] == (
+        "A workflow I hid"
+    )
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_file "
+            "(workflow_name, topology_hash, structural_hash, workflow_key) "
+            "VALUES ('Flux2 portrait.json', ?, ?, ?)",
+            (BUSY_TOPOLOGY, BUSY_RECIPE_A, BUSY_CARD),
+        )
+    named = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    assert named["name"] == "Flux2 portrait"
+
+
+def test_a_stack_member_opened_alone_still_says_it_is_in_a_stack(workflow_env):
+    """Its difference chips only mean something beside the size that explains them.
+
+    `factChips` branches on `stack_size`: at 1 it drops the "differs by" label
+    and renders the chips as plain facts, so "other checkpoint" arrives as a
+    statement about a cover the payload never names. The member therefore
+    carries the stack it is in, not the stack it covers.
+    """
+    member = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]
+    assert member["differs_by"], "the member has nothing to explain"
+    assert member["stack_size"] == 2
+    assert member["member_keys"] == [BUSY_CARD]
+    # And the cover names it back, so the two agree about the same stack.
+    cover = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    assert cover["stack_size"] == 2
+    assert cover["member_keys"] == [FORGOTTEN_CARD]
+
+
+def test_a_card_outside_a_stack_carries_no_difference_chips(workflow_env):
+    """The other direction: chips and size never disagree.
+
+    Unstacking FORGOTTEN leaves both cards standing alone, and a lone card has
+    nothing to differ from -- so neither may keep chips earned against a cover
+    that is no longer beside it.
+    """
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_unstacked (workflow_key) VALUES (?)",
+            (FORGOTTEN_CARD,),
+        )
+    for key in (BUSY_CARD, FORGOTTEN_CARD):
+        card = _detail(workflow_env.owner, key)["card"]
+        assert card["stack_size"] == 1, key
+        assert card["differs_by"] == [], key
+
+
 def test_the_grid_is_one_card_per_key_not_one_per_variant(workflow_env):
     """A card is the unit, and BUSY's two variants are one card, not two.
 
@@ -3016,10 +3144,10 @@ def test_a_card_adds_up_every_variants_kept_pictures_and_ratings(workflow_env):
     would move every figure on this line.
     """
     card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
-    assert card["picture_count"] == 4
+    assert card["picture_count"] == 5
     assert card["rating"] == pytest.approx(4.5)
     forgotten = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]
-    assert forgotten["picture_count"] == 1
+    assert forgotten["picture_count"] == 4
     assert forgotten["rating"] == pytest.approx(2.0)
 
 
@@ -3059,10 +3187,18 @@ def test_the_cover_rank_orders_the_grid_by_the_bayesian_mean(workflow_env):
 def test_the_cover_strip_is_the_cards_best_three_across_its_variants(workflow_env):
     """Best first, both variants, exactly three, and as thumbnail URLs.
 
-    Three assertions in one because they are one behaviour. The order pins two
-    things that are easy to get subtly wrong: a cleared 0 sorts **above** an
-    unrated picture (NULL is last, not zero), and the strip stops at three
-    however many the card has. The soft-deleted 5 would head this list.
+    One behaviour, so one test. The order pins both halves of the comparator's
+    NULL rule, and the fixture carries a picture for each:
+
+    * ``busy_unrated`` has **no star rating** and a good smart score. NULL sorts
+      last, so it stays out of the strip; read as a zero it would tie the two
+      cleared zeros, win on its smart score and take the third slot.
+    * ``busy_three`` has a cleared **0** and the ``-1.0`` failed-metric
+      sentinel, and it takes that third slot ahead of ``busy_four``, which has
+      the same 0 and no smart score at all.
+
+    The soft-deleted 5 would head this list, and the strip stops at three
+    however many the card has.
     """
     card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
     ids = _picture_ids_by_path(workflow_env.server)
@@ -3117,6 +3253,41 @@ def test_an_owner_chosen_cover_leads_the_strip(workflow_env):
         session.commit()
 
     workflow_env.server.vault.db.run_task(bin_it, priority=DBPriority.IMMEDIATE)
+    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    assert card["covers"] == [
+        f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
+        f"/pictures/thumbnails/{ids['busy_two.png']}.webp?v=0",
+        f"/pictures/thumbnails/{ids['busy_three.png']}.webp?v=0",
+    ]
+
+
+def test_an_empty_chosen_cover_covers_nothing_rather_than_everything(
+    workflow_env,
+):
+    """A blank ``pixel_sha`` must name no picture, not every card's picture.
+
+    ``workflow_cover.pixel_sha`` is ``NOT NULL`` but an empty string satisfies
+    that, and looking a card up with ``chosen.get(key, "")`` would give every
+    card WITHOUT a chosen cover the same empty key -- so one blank row plus one
+    picture stored with a blank sha would hand that picture to the whole grid
+    as its cover. Nothing writes these rows yet, which is exactly why it is
+    worth pinning before something does.
+    """
+    ids = _picture_ids_by_path(workflow_env.server)
+
+    def stamp(session):
+        picture = session.get(Picture, ids["forgotten.png"])
+        picture.pixel_sha = ""
+        session.add(picture)
+        session.commit()
+
+    workflow_env.server.vault.db.run_task(stamp, priority=DBPriority.IMMEDIATE)
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_cover (library_uuid, workflow_key, pixel_sha) "
+            "VALUES (?, ?, '')",
+            (workflow_env.server.vault.library_uuid, HIDDEN_CARD),
+        )
     card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
     assert card["covers"] == [
         f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
@@ -3300,6 +3471,28 @@ def test_defaults_fall_back_to_every_picture_when_none_is_rated_four(
     assert defaults[address]["provenance"] == "all"
 
 
+def test_defaults_read_the_newest_runs_and_stop_at_the_cap(workflow_env, monkeypatch):
+    """The cap, its size and its direction, each observable on its own.
+
+    An instance keys on every parameter value including the seed, so a card
+    somebody runs daily has one per picture and the read parses one stored
+    graph apiece. The cap is what bounds that, and it has to cut from the
+    NEWEST end: a card's defaults are meant to converge on what its owner does
+    now, and a cap taken off the oldest runs drifts backwards forever.
+
+    The forgotten card ran 20 steps three times and then 77 once, most
+    recently. Over every run the mode is 20; over the newest run alone it is
+    77. So a cap that does not cut, a limit that is not applied, and an order
+    that is reversed each answer 20 where this asserts 77 -- and the sibling
+    test above, which reads the same card uncapped, asserts the 20.
+    """
+    monkeypatch.setattr(workflow_card_service, "DEFAULT_SAMPLE", 1)
+    defaults = _defaults(workflow_env.owner, FORGOTTEN_CARD)
+    address = (_slot_label(FORGOTTEN_RECIPE, "4"), "steps")
+    assert defaults[address]["value"] == 77
+    assert defaults[address]["provenance"] == "all"
+
+
 def test_an_owner_override_replaces_a_default_and_says_it_was_edited(
     workflow_env,
 ):
@@ -3330,7 +3523,7 @@ def test_the_card_detail_lists_its_own_variants_and_not_its_topologys(
     body = _detail(workflow_env.owner, BUSY_CARD)
     by_hash = {variant["structural_hash"]: variant for variant in body["variants"]}
     assert set(by_hash) == {BUSY_RECIPE_A, BUSY_RECIPE_B}
-    assert by_hash[BUSY_RECIPE_A]["pictures"] == 2
+    assert by_hash[BUSY_RECIPE_A]["pictures"] == 3
     assert {asset["name"] for asset in by_hash[BUSY_RECIPE_A]["assets"]} == {
         "realvisxl.safetensors",
         "add_detail.safetensors",
@@ -3348,6 +3541,7 @@ def test_card_pictures_are_every_variants_newest_kept_pictures(workflow_env):
         ids["busy_three.png"],
         ids["busy_two.png"],
         ids["busy_one.png"],
+        ids["busy_unrated.png"],
     ]
     limited = workflow_env.owner.get(
         f"{API}/workflows/cards/{BUSY_CARD}/pictures?limit=1"

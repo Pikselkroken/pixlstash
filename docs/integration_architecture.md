@@ -535,6 +535,15 @@ the two sides have agreed:
    `topology_hash`, `variant_count`, `member_keys` and `rank` beside them;
    a caller that only knows the document ignores those and still needs no
    mapping.
+
+   **`name` is never null**, and that is part of the contract rather than a
+   convenience. `workflow_attr.name` is written only on an explicit rename, so
+   most cards have none — and the card's name row is its only identifying text
+   while `InfoPopover` puts it straight into an `aria-label`, so a null renders
+   an empty row and the label "About null". The server resolves it: the owner's
+   name, else the workflow file that runs the card (without its extension),
+   else `Untitled workflow`. The fallback deliberately does not repeat the
+   checkpoint or the type, which have a row and a chip of their own.
 2. **A card is not a topology and not a variant.** `key` is the topology plus
    the non-LoRA models plus the LoRA slots marked *structural*
    (`services/workflow_identity.py`), so adding a character LoRA keeps the same
@@ -548,12 +557,20 @@ the two sides have agreed:
    its own. A card nobody rated has `rating: null` and a `rank` near the
    library average, which is the point of having both.
 4. **The grid draws one card per stack.** `stack_size` ≥ 2 makes a card a
-   stack; the card drawn is the cover, `member_keys` names the rest, and
-   `differs_by` is the union over the members. The order is a manual
+   stack; the card drawn is the cover, `member_keys` names the rest, and the
+   cover's `differs_by` is the union over the members. The order is a manual
    assignment, then an unstacking, then the automatic group by `core_hash`; a
    stored member row is filed under the core hash it was written against, so a
    card that has since left its group simply is not found in it and takes
    cover-rank order like a newcomer.
+
+   **Every member carries the stack, not only the cover.** A member opened on
+   its own reports the same `stack_size` and `member_keys`, because it also
+   carries the `differs_by` it earned against that cover — and `factChips`
+   branches on `stack_size`, dropping the "differs by" label at 1 and rendering
+   those chips as plain facts about a cover the payload would never name.
+   Chips and size are therefore always consistent: a card outside a stack has
+   `stack_size: 1` and no chips at all.
 5. **Nothing is precomputed, and `cards` is not everything.** The grid is two
    vault queries — one `GROUP BY workflow_structural_hash` and one
    `ROW_NUMBER()` window, plus one more only when the owner has chosen a cover

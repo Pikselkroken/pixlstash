@@ -38,6 +38,10 @@ logger = get_logger(__name__)
 class Card:
     """One card as the hub knows it, before any picture has been counted.
 
+    ``file_name`` is the workflow file on this machine that runs this card,
+    the alphabetically first where there are several, so a card names itself
+    the same way on two reads of an unchanged hub.
+
     ``core_hash`` is ``None`` while the backfill has not reached this card's
     topology, or has reached it under a superseded rule. Such a card stacks
     with nothing rather than falling into a NULL bucket that would read as one
@@ -52,6 +56,7 @@ class Card:
     notes: Optional[str] = None
     hidden: bool = False
     imported: bool = False
+    file_name: Optional[str] = None
     variants: list[str] = field(default_factory=list)
     slots: list[dict] = field(default_factory=list)
 
@@ -84,12 +89,14 @@ def card_index(hub: HubDatabase) -> list[Card]:
         "v.structural_hash AS structural_hash, c.core_hash AS core_hash, "
         "c.workflow_type AS workflow_type, c.slots AS slots, "
         "a.name AS name, a.notes AS notes, "
-        "a.hidden AS hidden, f.workflow_key IS NOT NULL AS imported "
+        "a.hidden AS hidden, f.workflow_key IS NOT NULL AS imported, "
+        "f.workflow_name AS file_name "
         "FROM workflow_variant v "
         "LEFT JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
         "AND c.core_version = ? "
         "LEFT JOIN workflow_attr a ON a.workflow_key = v.workflow_key "
-        "LEFT JOIN (SELECT DISTINCT workflow_key FROM workflow_file) f "
+        "LEFT JOIN (SELECT workflow_key, MIN(workflow_name) AS workflow_name "
+        "FROM workflow_file GROUP BY workflow_key) f "
         "ON f.workflow_key = v.workflow_key "
         "WHERE v.key_version = ? ORDER BY v.workflow_key, v.structural_hash",
         (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION),
@@ -108,6 +115,7 @@ def card_index(hub: HubDatabase) -> list[Card]:
                 notes=row["notes"],
                 hidden=bool(row["hidden"]),
                 imported=bool(row["imported"]),
+                file_name=row["file_name"],
             )
         card.variants.append(row["structural_hash"])
     return list(cards.values())
