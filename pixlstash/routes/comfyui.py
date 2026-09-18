@@ -1404,8 +1404,13 @@ class ComfyUIPictureWorkflowResponse(BaseModel):
     models: list[str] = []
     loras: list[str] = []
     positive_prompt: Optional[str] = None
+    negative_prompt: Optional[str] = None
     seed: Optional[int] = None
-    # The Recipe section (#1313). `models` above stays the flat name list it has
+    # The seed the Recipe tab prints. `seed` above stays a number for the
+    # callers that had it; JavaScript cannot hold a 64-bit one without losing
+    # digits, so the tab reads this.
+    seed_text: Optional[str] = None
+    # The Recipe tab (#1313). `models` above stays the flat name list it has
     # always been; these carry the strengths and the shelf rows beside it.
     model_slots: list[ComfyUIRecipeModelSlot] = []
     settings: list[ComfyUIRecipeSetting] = []

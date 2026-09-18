@@ -50,9 +50,15 @@ const RECIPE = {
       verified: false,
     },
   ],
+  negativePrompt: "blurry, watermark",
+  seedText: "18446744073709551615",
   settings: [
     { label: "steps", value: 20, node: "KSampler" },
+    { label: "cfg", value: 2, node: "KSampler" },
     { label: "sampler_name", value: "euler", node: "KSampler" },
+    { label: "scheduler", value: "sgm_uniform", node: "KSampler" },
+    { label: "width", value: 832, node: "EmptyLatentImage" },
+    { label: "height", value: 1216, node: "EmptyLatentImage" },
   ],
   inputs: [
     {
@@ -73,8 +79,26 @@ const RECIPE = {
 function render(props = {}) {
   return mount(OverlayRecipePanel, {
     props: { recipe: RECIPE, ...props },
-    global: { stubs: { "v-icon": true, Tooltip: true } },
+    global: {
+      stubs: {
+        "v-icon": true,
+        Tooltip: true,
+        // Bound, not merely declared: a stub that swallows `disabled` would
+        // make the assertion below pass however the panel behaved.
+        AppButton: {
+          props: ["disabled"],
+          template: "<button :disabled=\"disabled\"><slot/></button>",
+        },
+      },
+    },
   });
+}
+
+/** The Settings grid as `{label: value}`, in the order it is drawn. */
+function settingsOf(wrapper) {
+  return wrapper
+    .findAll(".recipe-kv-item")
+    .map((row) => [row.find("dt").text(), row.find("dd").text()]);
 }
 
 beforeEach(() => {
@@ -83,12 +107,13 @@ beforeEach(() => {
 });
 
 describe("OverlayRecipePanel", () => {
-  it("draws nothing at all for a picture with no recipe", () => {
+  it("says so, rather than drawing an empty tab, with no recipe", () => {
     const wrapper = mount(OverlayRecipePanel, {
       props: { recipe: null },
-      global: { stubs: { "v-icon": true, Tooltip: true } },
+      global: { stubs: { "v-icon": true, Tooltip: true, AppButton: true } },
     });
-    expect(wrapper.find(".sidebar-section--recipe").exists()).toBe(false);
+    expect(wrapper.find(".recipe-empty").exists()).toBe(true);
+    expect(wrapper.find(".recipe-chip").exists()).toBe(false);
   });
 
   it("names every model and the strength each LoRA was loaded at", () => {
@@ -113,10 +138,26 @@ describe("OverlayRecipePanel", () => {
     expect(badged).toEqual([false, true, false]);
   });
 
-  it("copies the workflow JSON, not a description of it", async () => {
+  it("copies the prompt from the Prompt heading", async () => {
     const wrapper = render();
-    const copy = wrapper
-      .findAll(".recipe-action")
+    const promptHeading = wrapper
+      .findAll(".recipe-sec")
+      .find((sec) => sec.text().startsWith("Prompt"));
+    await promptHeading.find(".recipe-sec-act").trigger("click");
+    expect(copyText).toHaveBeenCalledWith(RECIPE.positive_prompt);
+  });
+
+  // The v1.12 design drops the raw graph; it is kept because pasting a
+  // workflow into ComfyUI and saving the JSON are both real uses of it.
+  it("still offers the workflow JSON with Copy and Download", async () => {
+    const wrapper = render();
+    const box = wrapper.find(".recipe-details");
+    expect(box.exists()).toBe(true);
+    expect(box.find("textarea").element.value).toBe(
+      JSON.stringify(RECIPE.workflow, null, 2),
+    );
+    const copy = box
+      .findAll(".recipe-sec-act")
       .find((b) => b.text().includes("Copy"));
     await copy.trigger("click");
     expect(copyText).toHaveBeenCalledWith(
@@ -141,7 +182,7 @@ describe("OverlayRecipePanel", () => {
   it("opens the Workflows view on this picture's workflow", async () => {
     const wrapper = render();
     const open = wrapper
-      .findAll(".recipe-action")
+      .findAll(".recipe-sec-act")
       .find((b) => b.text().includes("Open"));
     await open.trigger("click");
     expect(nav.push).toHaveBeenCalledWith({
@@ -150,22 +191,41 @@ describe("OverlayRecipePanel", () => {
     });
   });
 
-  it("writes the settings in the reader's words, not the graph's", () => {
-    const rows = render().findAll(".recipe-setting");
-    expect(rows.map((r) => r.find("dt").text())).toEqual(["Steps", "Sampler"]);
-    expect(rows.map((r) => r.find("dd").text())).toEqual(["20", "euler"]);
+  it("writes the settings the way the design draws them", () => {
+    // Sampler and Size are each two graph settings written as one value, and
+    // Seed and Negative are rows of the same grid rather than sections.
+    expect(settingsOf(render())).toEqual([
+      ["Steps", "20"],
+      ["CFG", "2"],
+      ["Sampler", "euler · sgm_uniform"],
+      ["Size", "832×1216"],
+      ["Seed", "18446744073709551615"],
+      ["Negative", "blurry, watermark"],
+    ]);
   });
 
-  it("keeps the node qualifier on a setting a graph sets twice", () => {
-    // The backend writes `steps (Refiner)` when two samplers disagree; the
-    // label map must apply to the head rather than miss the whole string.
-    const wrapper = render({
-      recipe: {
-        ...RECIPE,
-        settings: [{ label: "steps (Refiner)", value: 8, node: "Refiner" }],
-      },
-    });
-    expect(wrapper.find(".recipe-setting dt").text()).toBe("Steps (Refiner)");
+  it("prints a 64-bit seed exactly, which a JS number cannot hold", () => {
+    // 18446744073709551615 parsed as a Number renders 18446744073709552000.
+    const seed = settingsOf(render()).find(([label]) => label === "Seed")[1];
+    expect(seed).toBe(RECIPE.seedText);
+  });
+
+  it("says none for a seed or a negative prompt the recipe does not have", () => {
+    const rows = Object.fromEntries(
+      settingsOf(
+        render({ recipe: { ...RECIPE, seedText: null, negativePrompt: null } }),
+      ),
+    );
+    expect(rows.Seed).toBe("none");
+    expect(rows.Negative).toBe("none");
+  });
+
+  it("leaves out a setting the graph never set", () => {
+    const labels = settingsOf(
+      render({ recipe: { ...RECIPE, settings: [] } }),
+    ).map(([label]) => label);
+    // Only the two that always speak, because their absence is itself a fact.
+    expect(labels).toEqual(["Seed", "Negative"]);
   });
 
   it("shows a thumbnail per run input, and marks one that has left", () => {
@@ -188,13 +248,20 @@ describe("OverlayRecipePanel", () => {
     expect(tile.classes()).toContain("recipe-input--gone");
   });
 
-  // Named for what it checks. Whether the recipe is actually *replayable* is
-  // the Remix dialog's own pre-flight; this prop only carries whether ComfyUI
-  // is configured and the viewer may act at all.
-  it("offers Generate variants only when the caller says it may", async () => {
-    expect(render().find(".recipe-action--primary").exists()).toBe(false);
+  // The design keeps the run button visible and disabled rather than removing
+  // it, with the reason as its tooltip - the same shape it gives an A1111
+  // picture, whose recipe cannot be replayed either.
+  it("keeps the run button visible but disabled when it cannot run", () => {
+    const button = render().find(".recipe-run");
+    expect(button.exists()).toBe(true);
+    expect(button.attributes("disabled")).toBeDefined();
+  });
+
+  it("asks for a run when it can", async () => {
     const wrapper = render({ canGenerateVariants: true });
-    await wrapper.find(".recipe-action--primary").trigger("click");
+    const button = wrapper.find(".recipe-run");
+    expect(button.attributes("disabled")).toBeUndefined();
+    await button.trigger("click");
     expect(wrapper.emitted("generate-variants")).toHaveLength(1);
   });
 });

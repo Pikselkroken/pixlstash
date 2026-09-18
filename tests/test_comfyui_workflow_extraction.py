@@ -150,3 +150,57 @@ class TestFindComfyWorkflowPromptFallback:
         # is_comfy_workflow.
         metadata = {"png": {"prompt": json.dumps({"text": "a cat", "steps": 20})}}
         assert find_comfy_workflow(metadata) is None
+
+
+# ===========================================================================
+# The negative prompt and the seed the Recipe tab prints (#1313)
+# ===========================================================================
+
+_SAMPLER_GRAPH = {
+    "3": {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": 18446744073709551615,
+            "positive": ["6", 0],
+            "negative": ["7", 0],
+        },
+    },
+    "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "a castle on a hill"}},
+    "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "blurry, watermark"}},
+}
+
+
+def test_the_negative_branch_is_walked_as_well_as_the_positive():
+    info = extract_generation_info(_SAMPLER_GRAPH)
+    assert info["positive_prompt"] == "a castle on a hill"
+    assert info["negative_prompt"] == "blurry, watermark"
+
+
+def test_a_graph_with_no_negative_input_reports_none_not_an_empty_prompt():
+    """An upscale has no negative conditioning; "" would read as one set to
+    nothing."""
+    graph = {
+        "3": {"class_type": "KSampler", "inputs": {"positive": ["6", 0]}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "a castle"}},
+    }
+    assert extract_generation_info(graph)["negative_prompt"] is None
+
+
+def test_a_ui_format_graph_says_it_did_not_read_a_negative_prompt():
+    """The key is present so no caller trips over it, and it is honest."""
+    assert (
+        extract_generation_info({"nodes": [], "links": []})["negative_prompt"] is None
+    )
+
+
+def test_the_seed_is_carried_as_text_so_a_64_bit_one_survives_javascript():
+    """`2**64-1` through a JS Number comes back 18446744073709552000."""
+    info = extract_comfy_workflow_info({"prompt": json.dumps(_SAMPLER_GRAPH)})
+    assert info["seed_text"] == "18446744073709551615"
+    assert int(info["seed_text"]) == info["seed"]
+
+
+def test_a_graph_with_no_seed_has_no_seed_text_rather_than_the_string_none():
+    graph = {"9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "x"}}}
+    info = extract_comfy_workflow_info({"prompt": json.dumps(graph)})
+    assert info["seed"] is None and info["seed_text"] is None

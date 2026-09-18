@@ -311,6 +311,10 @@ def _extract_generation_info_ui(workflow: dict) -> dict:
         "models": models,
         "loras": loras,
         "positive_prompt": positive_prompt,
+        # A UI graph's conditioning walk is not followed down the negative
+        # branch: the API `prompt` chunk is what a recipe is read from, and
+        # claiming None here is honest rather than half-read.
+        "negative_prompt": None,
         "seed": seed,
     }
 
@@ -382,6 +386,7 @@ def _extract_generation_info_api(workflow: dict) -> dict:
     models: list[str] = []
     loras: list[str] = []
     positive_prompt: str | None = None
+    negative_prompt: str | None = None
     seed: int | None = None
 
     for node in workflow.values():
@@ -410,6 +415,13 @@ def _extract_generation_info_api(workflow: dict) -> dict:
                 ref = inputs.get("positive")
                 if _is_api_ref(ref):
                     positive_prompt = _follow_positive_api(str(ref[0]), workflow)
+            # The same walk, down the other conditioning branch. A graph with no
+            # negative input (an upscale, a Flux guider) simply has none, which
+            # is reported as None rather than as an empty prompt.
+            if negative_prompt is None:
+                ref = inputs.get("negative")
+                if _is_api_ref(ref):
+                    negative_prompt = _follow_positive_api(str(ref[0]), workflow)
             if seed is None and class_type in _SEED_CLASSES:
                 for field in _SEED_FIELDS:
                     val = inputs.get(field)
@@ -428,6 +440,7 @@ def _extract_generation_info_api(workflow: dict) -> dict:
         "models": models,
         "loras": loras,
         "positive_prompt": positive_prompt,
+        "negative_prompt": negative_prompt,
         "seed": seed,
     }
 
@@ -467,7 +480,13 @@ def extract_generation_info(workflow: dict) -> dict:
         return _extract_generation_info_api(workflow)
     except Exception:
         logger.warning("Failed to extract generation info from workflow", exc_info=True)
-        return {"models": [], "loras": [], "positive_prompt": None, "seed": None}
+        return {
+            "models": [],
+            "loras": [],
+            "positive_prompt": None,
+            "negative_prompt": None,
+            "seed": None,
+        }
 
 
 def _parse_metadata_value(value: Any) -> Any:
@@ -884,5 +903,11 @@ def extract_comfy_workflow_info(metadata: dict) -> dict | None:
         "models": gen_info["models"],
         "loras": gen_info["loras"],
         "positive_prompt": gen_info["positive_prompt"],
+        "negative_prompt": gen_info["negative_prompt"],
         "seed": gen_info["seed"],
+        # The seed as text as well as a number. ComfyUI draws seeds up to
+        # 2**64-1 and JavaScript's Number loses precision above 2**53, so a
+        # panel rendering `seed` would print the wrong digits for about half of
+        # real seeds. `generation.seed` is TEXT in the vault for this reason.
+        "seed_text": None if gen_info["seed"] is None else str(gen_info["seed"]),
     }
