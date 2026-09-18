@@ -449,8 +449,8 @@ preview, the run and the ghosting. Five points where the wiring is load-bearing:
 
 ### 2.3 The `/workflows` contract (v1.11)
 
-The Workflows view's read side (implementation plan §F1/§F2). Four GETs, no
-mutators: naming a workflow is a later step, and running one is the run route further down this section. Forgetting ghosts
+The Workflows view's read side (implementation plan §F1/§F2, plus the v1.12
+card grid). Seven GETs, no mutators: naming a workflow is a later step, and running one is the run route further down this section. Forgetting ghosts
 is not here either: it is two purges beside the retention setting,
 `DELETE /server-config/ghost-retention/ghosts` and
 `.../model-ghosts?expected=N`, whose counts `GET /server-config/ghost-retention`
@@ -464,6 +464,9 @@ and a `409` means the set changed and nothing was forgotten.
 | `GET /api/v1/workflows/{topology_hash}/variants` | One row's expansion | `[WorkflowVariant]` |
 | `GET /api/v1/workflows/{topology_hash}/pictures?limit=` | Ids for the inspector's tiles, newest first | `[int]` |
 | `GET /api/v1/workflows/recipes/{structural_hash}/graph` | One recipe's stored graph | `{structural_hash, document, runnable}` |
+| `GET /api/v1/workflows/cards` | The card grid, in cover-rank order, one card per stack | `{cards: [WorkflowCard], one_offs, hidden}` |
+| `GET /api/v1/workflows/cards/{workflow_key}` | One card opened | `{card, notes, hidden, variants: [WorkflowVariant]}` |
+| `GET /api/v1/workflows/cards/{workflow_key}/pictures?limit=` | Ids for one card's pictures, newest first | `[int]` |
 
 Five things the two sides have agreed and neither may drift from:
 
@@ -515,6 +518,74 @@ read across every non-deleted picture in the vault, so a scoped token holding
 them would learn the size of the whole library one workflow at a time. There is
 therefore no scoped/narrowed variant of these routes, and adding one means adding
 a narrowing parameter and a policy to check it against.
+
+**The cards (v1.12 B3) sit beside the topology list, not on top of it.** The
+shipped Workflows shelf reads `GET /workflows` and keeps working until F1b
+swaps the route; B9 then moves the grid onto `/workflows` itself. Five things
+the two sides have agreed:
+
+1. **The card's shape is `frontend/src/utils/workflowCard.js`, and the backend
+   serves that document.** It was merged before this route existed and
+   `frontend_architecture.md` promises it needs no mapping layer, so the field
+   names are the ones written down there — `key`, `name`, `type`, `imported`,
+   `models`, `loras`, `differs_by`, `picture_count`, `rating`, `covers`,
+   `stack_size`, `saved_recipe_count`, `defaults` — and `mark` carries B1's own
+   `structural` | `recipe` vocabulary rather than a translation of it, which is
+   how the solid/dashed meaning would get inverted. The route adds
+   `topology_hash`, `variant_count`, `member_keys` and `rank` beside them;
+   a caller that only knows the document ignores those and still needs no
+   mapping.
+
+   **`name` is never null**, and that is part of the contract rather than a
+   convenience. `workflow_attr.name` is written only on an explicit rename, so
+   most cards have none — and the card's name row is its only identifying text
+   while `InfoPopover` puts it straight into an `aria-label`, so a null renders
+   an empty row and the label "About null". The server resolves it: the owner's
+   name, else the workflow file that runs the card (without its extension),
+   else `Untitled workflow`. The fallback deliberately does not repeat the
+   checkpoint or the type, which have a row and a chip of their own.
+2. **A card is not a topology and not a variant.** `key` is the topology plus
+   the non-LoRA models plus the LoRA slots marked *structural*
+   (`services/workflow_identity.py`), so adding a character LoRA keeps the same
+   card. In this API and in the code the `workflow_recipe` / `structural_hash`
+   tier is a **variant**; a *saved recipe* is the look a person keeps, and B6's
+   `saved_recipe` table keys those on the same card key, so
+   `saved_recipe_count` is a real count rather than a placeholder.
+3. **`rating` and `rank` are different numbers and neither substitutes for the
+   other.** `rating` is the plain mean of the stars a card has and is `null`
+   when it has none; `rank` is the Bayesian mean the grid is *ordered* by,
+   smoothed towards the library's own mean rating, and is meaningless shown on
+   its own. A card nobody rated has `rating: null` and a `rank` near the
+   library average, which is the point of having both.
+4. **The grid draws one card per stack.** `stack_size` ≥ 2 makes a card a
+   stack; the card drawn is the cover, `member_keys` names the rest, and the
+   cover's `differs_by` is the union over the members. The order is a manual
+   assignment, then an unstacking, then the automatic group by `core_hash`; a
+   stored member row is filed under the core hash it was written against, so a
+   card that has since left its group simply is not found in it and takes
+   cover-rank order like a newcomer.
+
+   **Every member carries the stack, not only the cover.** A member opened on
+   its own reports the same `stack_size` and `member_keys`, because it also
+   carries the `differs_by` it earned against that cover — and `factChips`
+   branches on `stack_size`, dropping the "differs by" label at 1 and rendering
+   those chips as plain facts about a cover the payload would never name.
+   Chips and size are therefore always consistent: a card outside a stack has
+   `stack_size: 1` and no chips at all.
+5. **Nothing is precomputed, and `cards` is not everything.** The grid is three
+   vault queries in one session — one `GROUP BY workflow_structural_hash`, one
+   `ROW_NUMBER()` window and one `GROUP BY workflow_key` over the saved recipes,
+   plus a fourth only when the owner has chosen a cover — joined in memory to
+   the hub's card rows, with no aggregate table, so no client may assume a
+   figure is stable across a rating or an import. Hidden cards and one-offs are
+   excluded and returned as the counts `hidden` and `one_offs`; both still open
+   by key on the detail route, because hiding is a decision about the grid
+   rather than a deletion.
+
+   **A one-off is all four of**: fewer than three pictures, never rated, never
+   imported as a file, and with no saved recipe on it. The fourth clause is
+   B6's: saving a look is the plainest statement that somebody means to run a
+   workflow again, so a card carrying one is never folded into the count.
 
 **A saved workflow's picture inputs (#1305)** are the one write the view makes,
 and they live on the ComfyUI routes because they belong to the file, not to a
@@ -653,9 +724,6 @@ library**; a client that treats "no results" as "filter ignored" would be
 reading it backwards. The key itself comes from a card read, or from
 `GET /api/v1/comfyui/pictures/{id}/recipe` (§11.2), which reports the card the
 picture's own variant is on.
-
----
-
 
 ---
 

@@ -183,6 +183,24 @@ def list_in_session(
     return [serialize(row) for row in rows]
 
 
+def counts_by_workflow_key(session: Session) -> dict[str, int]:
+    """How many saved recipes each card holds, for the whole library at once.
+
+    One ``GROUP BY`` rather than a read per card: the Workflows grid needs the
+    number on every card it draws, and asking per card would be an N+1 over the
+    one table this module owns. Keys with no recipe are absent rather than
+    present with a zero, so the caller reads a missing key as none.
+
+    Served by ``ix_savedrecipe_workflow_key``.
+    """
+    rows = session.exec(
+        select(SavedRecipe.workflow_key, func.count(SavedRecipe.id)).group_by(
+            SavedRecipe.workflow_key
+        )
+    ).all()
+    return {workflow_key: count for workflow_key, count in rows}
+
+
 def credit_groups_in_session(
     session: Session, structural_hashes: list[str]
 ) -> list[tuple[Optional[str], Optional[str], int]]:

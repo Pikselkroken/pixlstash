@@ -172,7 +172,15 @@ def slots(document: dict) -> list[Slot]:
         WorkflowGraphError: The document holds no usable node, or is a raw
             graph rather than a stored document.
     """
-    nodes = _reduce(document)
+    return _slots(_reduce(document))
+
+
+def _slots(nodes: dict[str, ReducedNode]) -> list[Slot]:
+    """:func:`slots` over an already-reduced document.
+
+    Split out because ``differs_by`` needs both, and reducing the same document
+    twice per comparison was a third of the card grid's cost.
+    """
     labels = node_labels(drop_widgets(nodes), rounds=None)
     found = []
     for node_id, node in nodes.items():
@@ -232,6 +240,25 @@ def _reference(value: object) -> Optional[str]:
     if isinstance(value, str) and value.startswith(ASSET_REFERENCE_PREFIX):
         return value
     return None
+
+
+def topology_node_labels(document: dict) -> dict[str, str]:
+    """Each node's slot label within its topology: ``{node_id: label}``.
+
+    The same label :class:`Slot` carries, without the ``/widget`` suffix, so it
+    addresses a whole node rather than one of its model widgets. That is the
+    address ``workflow_default_override`` uses - a node id is whatever the file
+    that was serialised last happened to call it, and the same workflow rebuilt
+    from scratch renumbers every one of them.
+
+    Refined until stable (``rounds=None``), exactly as :func:`slots` refines,
+    so the two agree about which node a label names.
+
+    Raises:
+        WorkflowGraphError: The document holds no usable node, or is a raw
+            graph rather than a stored document.
+    """
+    return node_labels(drop_widgets(_reduce(document)), rounds=None)
 
 
 def guess_mark(normalized_filename: str) -> str:
@@ -439,8 +466,36 @@ def differs_by(
     same loader. A wrong one invites hiding a workflow that really is
     different.
     """
-    cover_nodes = _reduce(cover_document)
-    member_nodes = _reduce(member_document)
+    return differs_by_reduced(
+        reduce_stored_document(cover_document),
+        reduce_stored_document(member_document),
+        upscale_factor=upscale_factor,
+    )
+
+
+def reduce_stored_document(document: dict) -> dict[str, ReducedNode]:
+    """A stored document's reduction, for a caller comparing one against many.
+
+    Raises:
+        WorkflowGraphError: The document is a raw graph rather than a stored
+            one, or holds no usable node.
+    """
+    return _reduce(document)
+
+
+def differs_by_reduced(
+    cover_nodes: dict[str, ReducedNode],
+    member_nodes: dict[str, ReducedNode],
+    *,
+    upscale_factor: Optional[float] = None,
+) -> list[str]:
+    """:func:`differs_by` over reductions the caller already holds.
+
+    Split out for the reason :func:`_slots` was: a stack compares every member
+    against ONE cover, so reducing that cover once per member is most of what
+    describing a stack costs, and it grows with the stack rather than with the
+    library.
+    """
     cover = _class_counts(cover_nodes)
     member = _class_counts(member_nodes)
     added, removed = member - cover, cover - member
@@ -467,8 +522,8 @@ def differs_by(
         elif minus:
             chips.append(f"− {label}")
 
-    cover_slots = _slots_outside(cover_document, cover_nodes, chipped)
-    member_slots = _slots_outside(member_document, member_nodes, chipped)
+    cover_slots = _slots_outside(cover_nodes, chipped)
+    member_slots = _slots_outside(member_nodes, chipped)
     models_differ = _assets(cover_slots, lora=False) != _assets(
         member_slots, lora=False
     )
@@ -517,10 +572,10 @@ def _nodes_differing(
 
 
 def _slots_outside(
-    document: dict, nodes: dict[str, ReducedNode], groups: Collection[str]
+    nodes: dict[str, ReducedNode], groups: Collection[str]
 ) -> list[Slot]:
     node_group = node_groups(nodes)
-    return [s for s in slots(document) if node_group[s.node_id] not in groups]
+    return [s for s in _slots(nodes) if node_group[s.node_id] not in groups]
 
 
 def _class_counts(nodes: dict[str, ReducedNode]) -> Counter:

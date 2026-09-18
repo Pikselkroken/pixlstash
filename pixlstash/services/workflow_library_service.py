@@ -17,10 +17,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import case, func, or_
+from sqlalchemy import and_, case, func, nullslast, or_
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture
+from pixlstash.services.saved_recipe_service import counts_by_workflow_key
 
 
 @dataclass(frozen=True)
@@ -195,3 +196,277 @@ def read_recipe_activity(
 def read_topology_picture_ids(vault, topology_hash: str, limit: int) -> list[int]:
     """The inspector's tile ids for one topology."""
     return vault.db.run_immediate_read_task(topology_picture_ids, topology_hash, limit)
+
+
+# ---------------------------------------------------------------------------
+# The card grid's vault side (v1.12 B3).
+#
+# Everything below is grouped by ``workflow_structural_hash`` - the VARIANT -
+# and never by card, because the vault does not know what a card is: the
+# variant-to-card map lives in the hub and the two are joined in memory
+# (``services/workflow_card_service``). That is what keeps this at two queries
+# for the whole grid, and what lets a card gain a variant without the vault
+# learning anything new.
+# ---------------------------------------------------------------------------
+
+# Rated means a star the owner actually put there. ``score`` is NULL for a
+# picture nobody has rated and 0 for one explicitly cleared, and neither is a
+# rating: counting either would drag every card's Bayesian mean towards zero in
+# proportion to how much of the library is simply unrated.
+_IS_RATED = and_(Picture.score.is_not(None), Picture.score > 0)
+
+
+@dataclass(frozen=True)
+class VariantActivity:
+    """What a vault knows about one variant, as the card rank is made of it.
+
+    ``score_total`` is Σ of the ratings that exist, over ``rated`` pictures, so
+    the two divide into a mean the prior can be mixed into. ``pictures`` counts
+    every kept picture whether rated or not, because that is the card's size
+    and the rank's tie-break.
+    """
+
+    pictures: int
+    rated: int
+    score_total: int
+    last_used: Optional[datetime]
+
+
+@dataclass(frozen=True)
+class CoverCandidate:
+    """One picture in the running to be a card's cover, with its sort keys.
+
+    The keys travel with the row because the top three of a CARD are picked in
+    memory out of the top three of each of its variants, and that second pick
+    has to order by exactly what the window ordered by -- including how each
+    key treats NULL, which is the part that is easy to get subtly wrong.
+
+    The three bitmap fields are here for the cache-buster in the thumbnail URL
+    (``ImageUtils.thumbnail_cache_version``), so the covers can be served as
+    URLs without a second read per card.
+    """
+
+    structural_hash: str
+    picture_id: int
+    score: Optional[int]
+    smart_score: Optional[float]
+    used_at: Optional[datetime]
+    thumbnail_width: Optional[int] = None
+    thumbnail_height: Optional[int] = None
+    orientation: Optional[int] = None
+
+
+def variant_activity(session: Session) -> dict[str, VariantActivity]:
+    """One ``GROUP BY workflow_structural_hash`` over every kept picture.
+
+    Served by ``ix_picture_workflow_structural_hash``. **Unscoped, like
+    :func:`topology_activity`**, and served only to owner routes for the same
+    reason: it reads every non-deleted picture in the vault, so a scoped token
+    holding the result would learn the size of the whole library one workflow
+    at a time.
+    """
+    column = Picture.workflow_structural_hash
+    rows = session.exec(
+        select(
+            column,
+            func.count(Picture.id),
+            func.sum(case((_IS_RATED, 1), else_=0)),
+            func.sum(case((_IS_RATED, Picture.score), else_=0)),
+            func.max(_USED_AT),
+        )
+        .where(column.is_not(None))
+        .where(Picture.deleted.is_(False))
+        .group_by(column)
+    ).all()
+    return {
+        key: VariantActivity(
+            pictures=pictures,
+            rated=int(rated or 0),
+            score_total=int(score_total or 0),
+            last_used=last_used,
+        )
+        for key, pictures, rated, score_total, last_used in rows
+    }
+
+
+def variant_cover_candidates(
+    session: Session, per_variant: int
+) -> list[CoverCandidate]:
+    """The best few kept pictures of every variant, from one window pass.
+
+    ``ROW_NUMBER() OVER (PARTITION BY workflow_structural_hash ...)`` rather
+    than a query per card: the top *n* of a card is always a subset of the
+    union of the top *n* of its variants, so one pass over the picture table
+    answers the whole grid and the per-card pick is a sort of a handful of rows.
+    """
+    ordering = (
+        nullslast(Picture.score.desc()),
+        nullslast(Picture.smart_score.desc()),
+        nullslast(_USED_AT.desc()),
+        Picture.id.desc(),
+    )
+    ranked = (
+        select(
+            Picture.workflow_structural_hash.label("structural_hash"),
+            Picture.id.label("picture_id"),
+            Picture.score.label("score"),
+            Picture.smart_score.label("smart_score"),
+            _USED_AT.label("used_at"),
+            Picture.thumbnail_width.label("thumbnail_width"),
+            Picture.thumbnail_height.label("thumbnail_height"),
+            Picture.orientation.label("orientation"),
+            func.row_number()
+            .over(partition_by=Picture.workflow_structural_hash, order_by=ordering)
+            .label("rank"),
+        )
+        .where(Picture.workflow_structural_hash.is_not(None))
+        .where(Picture.deleted.is_(False))
+        .subquery()
+    )
+    rows = session.exec(
+        select(
+            ranked.c.structural_hash,
+            ranked.c.picture_id,
+            ranked.c.score,
+            ranked.c.smart_score,
+            ranked.c.used_at,
+            ranked.c.thumbnail_width,
+            ranked.c.thumbnail_height,
+            ranked.c.orientation,
+        ).where(ranked.c.rank <= per_variant)
+    ).all()
+    return [CoverCandidate(*row) for row in rows]
+
+
+def variant_picture_ids(
+    session: Session, structural_hashes: list[str], limit: int
+) -> list[int]:
+    """The newest kept pictures of one card, newest first.
+
+    Narrowed by the card's variants rather than grouped vault-wide, for the
+    reason :func:`recipe_activity` is: the caller already knows which variants
+    it is opening.
+    """
+    if not structural_hashes:
+        return []
+    return list(
+        session.exec(
+            select(Picture.id)
+            .where(Picture.workflow_structural_hash.in_(structural_hashes))
+            .where(Picture.deleted.is_(False))
+            .order_by(nullslast(_USED_AT.desc()), Picture.id.desc())
+            .limit(limit)
+        ).all()
+    )
+
+
+def cover_pictures_by_pixel_sha(
+    session: Session, pixel_shas: list[str]
+) -> dict[str, CoverCandidate]:
+    """Resolve the owner's chosen covers, which are stored by content.
+
+    A ``pixel_sha`` with no kept picture behind it is simply absent: the cover
+    was destroyed or binned, and the card falls back to its computed one rather
+    than showing a hole. The rows come back as :class:`CoverCandidate` with no
+    ``structural_hash`` -- a chosen cover belongs to the card, not to one of its
+    variants -- so the caller can build its URL the same way as any other.
+    """
+    if not pixel_shas:
+        return {}
+    rows = session.exec(
+        select(
+            Picture.pixel_sha,
+            Picture.id,
+            Picture.score,
+            Picture.smart_score,
+            _USED_AT,
+            Picture.thumbnail_width,
+            Picture.thumbnail_height,
+            Picture.orientation,
+        )
+        .where(Picture.pixel_sha.in_(pixel_shas))
+        .where(Picture.deleted.is_(False))
+        .order_by(Picture.id)
+    ).all()
+    return {row[0]: CoverCandidate("", *row[1:]) for row in rows}
+
+
+def instance_hashes_for_variants(
+    session: Session,
+    structural_hashes: list[str],
+    minimum_score: Optional[int],
+    limit: int,
+) -> list[str]:
+    """The most recent distinct instance hashes of a card's kept pictures.
+
+    **Capped, and the cap is the point of the argument existing.** An instance
+    keys on every parameter value, the seed included, so a card the owner has
+    run forty thousand times has forty thousand of these -- and the caller
+    reads and parses one stored graph per hash. The mode of a parameter over
+    the newest few hundred runs is the same answer as the mode over all of
+    them, for a bounded read.
+
+    Args:
+        structural_hashes: The card's variants.
+        minimum_score: Keep only pictures rated at least this, or ``None`` for
+            every kept picture. The defaults read is "the best pictures, and
+            failing that all of them", which is this function twice.
+        limit: How many distinct hashes to take, newest first.
+    """
+    if not structural_hashes:
+        return []
+    query = (
+        select(Picture.workflow_instance_hash, func.max(_USED_AT).label("used_at"))
+        .where(Picture.workflow_structural_hash.in_(structural_hashes))
+        .where(Picture.workflow_instance_hash.is_not(None))
+        .where(Picture.deleted.is_(False))
+        .group_by(Picture.workflow_instance_hash)
+        .order_by(nullslast(func.max(_USED_AT).desc()))
+        .limit(limit)
+    )
+    if minimum_score is not None:
+        query = query.where(Picture.score.is_not(None)).where(
+            Picture.score >= minimum_score
+        )
+    return [instance_hash for instance_hash, _ in session.exec(query).all()]
+
+
+def read_card_grid(
+    vault, cover_depth: int
+) -> tuple[dict[str, VariantActivity], list[CoverCandidate], dict[str, int]]:
+    """The grid's whole vault side in one session.
+
+    Three statements, one task: the per-variant counts, the cover candidates
+    and how many saved recipes each card holds. They share a session because
+    the round trip is the expensive part, not the third `GROUP BY`.
+    """
+
+    def _read(session: Session):
+        return (
+            variant_activity(session),
+            variant_cover_candidates(session, cover_depth),
+            counts_by_workflow_key(session),
+        )
+
+    return vault.db.run_immediate_read_task(_read)
+
+
+def read_chosen_covers(vault, pixel_shas: list[str]) -> dict[str, CoverCandidate]:
+    """The pictures the owner picked as covers, by content."""
+    return vault.db.run_immediate_read_task(cover_pictures_by_pixel_sha, pixel_shas)
+
+
+def read_card_picture_ids(vault, structural_hashes: list[str], limit: int) -> list[int]:
+    """The card's newest kept pictures."""
+    return vault.db.run_immediate_read_task(
+        variant_picture_ids, structural_hashes, limit
+    )
+
+
+def read_instance_hashes(
+    vault, structural_hashes: list[str], minimum_score: Optional[int], limit: int
+) -> list[str]:
+    """The instances a card's pictures ran, optionally only its best."""
+    return vault.db.run_immediate_read_task(
+        instance_hashes_for_variants, structural_hashes, minimum_score, limit
+    )

@@ -247,6 +247,14 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/users/me/shared-resource-ids",
         "/api/v1/users/me/token",
         "/api/v1/workflows",
+        # Already refused at runtime by the `/api/v1/workflows/` prefix below,
+        # and listed here anyway: the rule this frozenset is checked against is
+        # arithmetic over the registry (every untemplated owner-class GET), not
+        # "every one a prefix does not already happen to catch". An exception
+        # for prefix-covered paths would put the judgement back in, and the
+        # next such route would be a review's job to notice rather than the
+        # build's.
+        "/api/v1/workflows/cards",
     }
 )
 

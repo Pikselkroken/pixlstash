@@ -1732,6 +1732,16 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/workflows/{topology_hash}/variants"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/workflows/{topology_hash}/pictures"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/workflows/recipes/{structural_hash}/graph"): RoutePolicy(_OWNER),
+    # The card routes (v1.12 B3). Same tier and the same reason: the grid is
+    # `variant_activity` and a `ROW_NUMBER()` window over every non-deleted
+    # picture in the vault, so it hands out whole-library counts AND the
+    # picture ids of every card's cover strip; the detail adds the parameter
+    # values the owner's best pictures were made with, read out of stored
+    # instance documents. Nothing here is a host path or a host capability, and
+    # nothing here mutates.
+    ("GET", "/api/v1/workflows/cards"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/workflows/cards/{workflow_key}"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/workflows/cards/{workflow_key}/pictures"): RoutePolicy(_OWNER),
     # ── recipes.py (saved recipes, plan §5.5 / step B6) ─────────────────────
     # OWNER_ONLY throughout, and a decision rather than a default. A saved
     # recipe holds the owner's prompt and names the models they run, and the
