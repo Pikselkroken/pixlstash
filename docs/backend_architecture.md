@@ -3224,6 +3224,15 @@ row whatever its stack's kind, then `workflow_unstacked`, then the automatic
 `core_hash` group) and lists every member's recipes — and an Unstack leaves each recipe with its own workflow
 because there was never a stack id to break.
 
+**A re-keying is the one thing a saved recipe does not survive.** It names its
+workflow by `workflow_key`, so a `WORKFLOW_KEY_VERSION` bump or a flipped slot
+mark re-keys the card and leaves the recipe addressed by a key no variant
+carries — invisible in its own workflow's tab, with nothing to say where it
+went. Unlike every hub row, a saved recipe is authored and cannot be re-derived,
+so **whoever bumps that version re-keys `saved_recipe` in the same change**; the
+old key is recoverable because the new one is derived from the same stored
+documents. There is no such bump yet.
+
 **Credit is computed on read and there is no link table.** A recipe accounts for
 the stack's kept pictures whose `comfyui_positive_prompt` is the recipe's prompt
 (stripped on both sides) and whose `comfyui_loras` names are the recipe's LoRA

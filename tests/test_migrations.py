@@ -1152,7 +1152,7 @@ def test_0121_creates_saved_recipe_on_a_fresh_and_on_an_existing_vault():
     A fresh vault gets ``saved_recipe`` from the baseline's ``create_all()``, so
     the migration must find it already there and do nothing; a vault upgraded
     from before B6 has no such table and the migration has to create it. The
-    The same run covers both, and the shape is asserted **twice**: once against
+    same run covers both, and the shape is asserted **twice**: once against
     the table the baseline built from the model and once against the one the
     migration created, because those are two definitions of one table that
     nothing else holds together. The picture the foreign key points at is left

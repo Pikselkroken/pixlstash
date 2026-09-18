@@ -356,6 +356,15 @@ def card_grouping(hub: HubDatabase) -> dict:
 
     One grouped scan rather than a count per figure: five separate aggregates
     over the same table is five scans for numbers that have to agree anyway.
+
+    **This is the AUTOMATIC grouping, before the owner's decisions, and that is
+    deliberate**: the gate it reports for asks whether ``STRIP_LORAS_FOR_STACKS``
+    groups well, which is a question about the rule and not about what anybody
+    has since taken out of it. :func:`effective_stack_keys` answers the other
+    question - what one card's stack actually IS - and subtracts
+    ``workflow_stack_member`` and ``workflow_unstacked`` for that reason. The two
+    legitimately disagree once the owner has moved a card, and a reader comparing
+    them should expect it.
     """
     rows = hub.fetchall(
         "SELECT c.core_hash AS core_hash, v.topology_hash AS topology_hash, "
@@ -401,6 +410,13 @@ def effective_stack_keys(hub: HubDatabase, key: str) -> list[str]:
     first two routes are excluded from it, which is what makes an Unstack stick
     through a ``CORE_VERSION`` bump.
 
+    **Only rows keyed by the rule THIS build applies** (``key_version``), like
+    every other reader but ``card_grouping``. A row from a superseded rule names
+    a card computed under different marks, and grouping by it would stack cards
+    this build does not believe in. The cost is a transient: mid-re-derivation a
+    card's stack shrinks to itself until the pass catches up, which reads as a
+    smaller stack rather than as a wrong one.
+
     **A membership row wins whatever its stack's ``kind``.** An ``auto`` stack
     only has rows once somebody has ordered or edited it, and at that point it
     is as much the owner's arrangement as a ``manual`` one; reading the kind
@@ -441,16 +457,22 @@ def effective_stack_keys(hub: HubDatabase, key: str) -> list[str]:
         "FROM workflow_variant v "
         "JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
         "AND c.core_version = ? "
-        "WHERE c.core_hash IN ("
+        "WHERE v.key_version = ? AND c.core_hash IN ("
         "  SELECT c2.core_hash FROM workflow_variant v2 "
         "  JOIN workflow_topology_core c2 ON c2.topology_hash = v2.topology_hash "
         "  AND c2.core_version = ? "
-        "  WHERE v2.workflow_key = ?"
+        "  WHERE v2.workflow_key = ? AND v2.key_version = ?"
         ") "
         "AND v.workflow_key NOT IN (SELECT workflow_key FROM workflow_stack_member) "
         "AND v.workflow_key NOT IN (SELECT workflow_key FROM workflow_unstacked) "
         "ORDER BY v.workflow_key",
-        (CORE_RULE_VERSION, CORE_RULE_VERSION, key),
+        (
+            CORE_RULE_VERSION,
+            WORKFLOW_KEY_VERSION,
+            CORE_RULE_VERSION,
+            key,
+            WORKFLOW_KEY_VERSION,
+        ),
     )
     keys = [row["workflow_key"] for row in rows]
     return keys if key in keys else [key, *keys]
@@ -463,13 +485,19 @@ def variant_hashes_for_keys(hub: HubDatabase, keys: list[str]) -> list[str]:
     (``picture.workflow_structural_hash``) and the hub says which card it is
     part of, so "the pictures this stack made" is one ``IN`` over an indexed
     column rather than a join across two databases.
+
+    Filtered on ``key_version`` for the reason
+    :func:`effective_stack_keys` is: a variant filed under a superseded rule
+    belongs to a card this build would not compute, and crediting its pictures
+    to this one would be crediting somebody else's.
     """
     if not keys:
         return []
     placeholders = ",".join("?" for _ in keys)
     rows = hub.fetchall(
         "SELECT structural_hash FROM workflow_variant "
-        f"WHERE workflow_key IN ({placeholders}) ORDER BY structural_hash",
-        tuple(keys),
+        f"WHERE key_version = ? AND workflow_key IN ({placeholders}) "
+        "ORDER BY structural_hash",
+        (WORKFLOW_KEY_VERSION, *keys),
     )
     return [row["structural_hash"] for row in rows]

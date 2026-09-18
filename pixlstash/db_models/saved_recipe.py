@@ -18,6 +18,19 @@ regrouping, an Unstack and a ``CORE_VERSION`` bump. The stack's Recipes tab
 lists every member's recipes and each one stays with its own workflow when the
 stack is broken up; nothing here names a stack.
 
+**What it does NOT survive is a re-keying**, and that is a debt rather than a
+property: a ``WORKFLOW_KEY_VERSION`` bump, or a slot mark flipped from
+``recipe`` to ``structural``, computes a different key for the same workflow,
+and these rows are not migrated with it. The recipe is then addressed by a key
+no variant carries, so its workflow's tab does not list it and nothing says
+where it went. It is worse here than for a hub row because a saved recipe is
+**authored**: the hub's rows come back if the pictures are re-filed and this one
+cannot be rebuilt from anything. **Whoever bumps that version owns re-keying
+this table in the same change** - the old key is recoverable, since the
+derivation that produces the new one runs off the same stored documents. There
+is no such bump yet (``WORKFLOW_KEY_VERSION`` is still ``v1``), which is why
+this is a note and not a migration.
+
 **Credit is computed on read and there is no link table.** Which pictures a
 recipe accounts for is a question about prompts and LoRA names, which the
 picture rows already answer (``services/saved_recipe_service.py``). A stored

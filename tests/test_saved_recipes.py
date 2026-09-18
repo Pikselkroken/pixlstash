@@ -814,3 +814,213 @@ def test_a_recipe_whose_stored_json_will_not_parse_still_lists(recipe_env):
     # It reads as a recipe with no LoRAs, which credits the pictures that loaded
     # none — 0 here — rather than silently keeping its old credit.
     assert listed[0]["pictures"] == 0
+
+
+def test_a_picture_read_with_no_prompt_matches_a_recipe_with_no_prompt(recipe_env):
+    """The other half of the sentinel, decided rather than left to fall out.
+
+    A prompt-free graph is ordinary — an upscale, a ``ConditioningZeroOut``,
+    two samplers that disagree — and a picture the pass HAS read and found no
+    prompt in really was made by this stack with that look. Excluding it would
+    make a recipe saved on an upscale workflow read 0 for ever; the stack is
+    what bounds the answer.
+    """
+
+    def add(session):
+        session.add(
+            Picture(
+                file_path="a_promptless.png",
+                deleted=False,
+                created_at=datetime(2026, 9, 4),
+                workflow_structural_hash=VARIANT_A,
+                workflow_hash_version="v1",
+                comfyui_positive_prompt=None,
+                comfyui_loras=json.dumps([]),
+            )
+        )
+        session.commit()
+
+    recipe_env.server.vault.db.run_task(add, priority=DBPriority.IMMEDIATE)
+    _save(recipe_env.owner, CARD_A, name="Upscale", prompt="", loras=[])
+    listed = recipe_env.owner.get(
+        f"{API}/recipes", params={"workflow_key": CARD_A}
+    ).json()
+    assert listed[0]["pictures"] == 1
+
+
+def test_stacking_the_same_lora_twice_is_a_different_look(recipe_env):
+    """Duplicates are kept, because the picture side keeps them.
+
+    ``comfyui_loras`` holds one entry per loader node, so a graph that loads one
+    file twice says so. A recipe that stacks it twice must not credit the
+    pictures that loaded it once.
+    """
+
+    def add(session):
+        session.add(
+            Picture(
+                file_path="a_stacked.png",
+                deleted=False,
+                created_at=datetime(2026, 9, 5),
+                workflow_structural_hash=VARIANT_A,
+                workflow_hash_version="v1",
+                comfyui_positive_prompt=PROMPT,
+                comfyui_loras=json.dumps([ADA, ADA]),
+            )
+        )
+        session.commit()
+
+    recipe_env.server.vault.db.run_task(add, priority=DBPriority.IMMEDIATE)
+    once = _save(recipe_env.owner, CARD_A, name="Once", loras=_ada())
+    twice = _save(
+        recipe_env.owner,
+        CARD_A,
+        name="Twice",
+        loras=[
+            {"filename": ADA, "strength": 1.0},
+            {"filename": f"characters/{ADA}", "strength": 0.2},
+        ],
+    )
+    credit = {
+        row["id"]: row["pictures"]
+        for row in recipe_env.owner.get(
+            f"{API}/recipes", params={"workflow_key": CARD_A}
+        ).json()
+    }
+    assert credit == {once["id"]: 2, twice["id"]: 1}
+
+
+def test_reordering_a_subset_of_one_tab_moves_only_the_rows_it_names(recipe_env):
+    """Permuting means the rows left out keep their place, wherever that is."""
+    first = _save(recipe_env.owner, CARD_A, name="A1")
+    middle = _save(recipe_env.owner, CARD_A, name="A2")
+    last = _save(recipe_env.owner, CARD_A, name="A3")
+
+    r = recipe_env.owner.put(
+        f"{API}/recipes/order", json={"recipe_ids": [last["id"], first["id"]]}
+    )
+    assert r.status_code == 200, r.text
+    # Two rows were named and two rows moved; A2 keeps the position it had, which
+    # leaves it between them.
+    assert [row["name"] for row in recipe_env.owner.get(f"{API}/recipes").json()] == [
+        "A3",
+        "A2",
+        "A1",
+    ]
+    assert middle["position"] == 1
+
+
+def test_one_request_may_order_recipes_of_different_workflows(recipe_env):
+    """A stack's tab does exactly this: its rows belong to several members."""
+    on_a = _save(recipe_env.owner, CARD_A, name="On A")
+    on_b = _save(recipe_env.owner, CARD_B, name="On B")
+    r = recipe_env.owner.put(
+        f"{API}/recipes/order", json={"recipe_ids": [on_b["id"], on_a["id"]]}
+    )
+    assert r.status_code == 200, r.text
+    listed = recipe_env.owner.get(f"{API}/recipes", params={"workflow_key": CARD_A})
+    assert [row["name"] for row in listed.json()] == ["On B", "On A"]
+
+
+def test_an_id_list_too_long_to_bind_is_refused_as_a_bad_request(recipe_env):
+    """A database limit must not reach the caller as a 500."""
+    saved = _save(recipe_env.owner, CARD_A)
+    r = recipe_env.owner.put(
+        f"{API}/recipes/order",
+        json={"recipe_ids": list(range(1, 100002))},
+    )
+    assert r.status_code == 422, r.status_code
+    # The order that exists is untouched, and an ordinary request still works.
+    r = recipe_env.owner.put(f"{API}/recipes/order", json={"recipe_ids": [saved["id"]]})
+    assert r.status_code == 200, r.text
+
+
+def test_a_variant_keyed_by_a_superseded_rule_neither_stacks_nor_credits(recipe_env):
+    """Rows from an older ``key_version`` are another build's cards.
+
+    A ``WORKFLOW_KEY_VERSION`` bump or a flipped slot mark re-keys a variant, and
+    the hub holds both rows until the pass drains. Grouping by the stale one
+    would stack cards this build does not compute, and counting its pictures
+    would credit them to whoever happens to hold the old key — so both reads
+    filter, like every other reader of ``workflow_variant`` but the grouping
+    report.
+
+    Two stale rows, because there are two queries: one gives card D a place in
+    A's automatic stack, the other hangs a second variant off card B.
+    """
+    stale_topology = _h("topo-d")
+    stale_variant = _h("variant-d")
+    stale_card = _h("card-d")
+    b_old_variant = _h("variant-b-old")
+    with recipe_env.server.hub.transaction() as conn:
+        for topology, structural in (
+            (stale_topology, stale_variant),
+            (TOPO_B, b_old_variant),
+        ):
+            if topology == stale_topology:
+                conn.execute(
+                    "INSERT INTO workflow_topology "
+                    "(topology_hash, hash_version, node_count, first_seen_at) "
+                    "VALUES (?, 'v1', 12, '2026-09-01T00:00:00Z')",
+                    (topology,),
+                )
+                conn.execute(
+                    "INSERT INTO workflow_topology_core "
+                    "(topology_hash, core_hash, core_version, workflow_type, slots) "
+                    "VALUES (?, ?, ?, 'txt2img', '[]')",
+                    (topology, CORE_SHARED, CORE_RULE_VERSION),
+                )
+            conn.execute(
+                "INSERT INTO workflow_recipe "
+                "(structural_hash, topology_hash, hash_version, node_count, "
+                "first_seen_at) VALUES (?, ?, 'v1', 12, '2026-09-01T00:00:00Z')",
+                (structural, topology),
+            )
+        conn.execute(
+            "INSERT INTO workflow_variant "
+            "(structural_hash, topology_hash, workflow_key, key_version) "
+            "VALUES (?, ?, ?, 'v0')",
+            (stale_variant, stale_topology, stale_card),
+        )
+        conn.execute(
+            "INSERT INTO workflow_variant "
+            "(structural_hash, topology_hash, workflow_key, key_version) "
+            "VALUES (?, ?, ?, 'v0')",
+            (b_old_variant, TOPO_B, CARD_B),
+        )
+
+    def add(session):
+        for path, structural in (
+            ("d_match.png", stale_variant),
+            ("b_old_match.png", b_old_variant),
+        ):
+            session.add(
+                Picture(
+                    file_path=path,
+                    deleted=False,
+                    created_at=datetime(2026, 9, 6),
+                    workflow_structural_hash=structural,
+                    workflow_hash_version="v1",
+                    comfyui_positive_prompt=PROMPT,
+                    comfyui_loras=json.dumps([ADA]),
+                )
+            )
+        session.commit()
+
+    recipe_env.server.vault.db.run_task(add, priority=DBPriority.IMMEDIATE)
+    on_a = _save(recipe_env.owner, CARD_A, name="On A", loras=_ada())
+    on_b = _save(recipe_env.owner, CARD_B, name="On B", loras=_ada())
+    _save(recipe_env.owner, stale_card, name="On the stale card", loras=_ada())
+
+    listed = recipe_env.owner.get(
+        f"{API}/recipes", params={"workflow_key": CARD_A}
+    ).json()
+    assert {row["id"] for row in listed} == {on_a["id"], on_b["id"]}, (
+        "a card known only under a superseded key rule joined the stack"
+    )
+    # Still the two pictures of the current variants: the stale variant's
+    # picture belongs to a card this build does not compute.
+    assert {row["id"]: row["pictures"] for row in listed} == {
+        on_a["id"]: 2,
+        on_b["id"]: 2,
+    }

@@ -1492,6 +1492,10 @@ class Server(
 
             return JSONResponse(
                 status_code=422,
+                # NOTE for validator authors: whatever a validator puts in its
+                # ValueError text reaches the caller in this body, so it must
+                # not carry a host path, a credential or the input value.
+                #
                 # Encoded, not handed to JSONResponse raw: a validator that
                 # raises ValueError puts the exception OBJECT in the error's
                 # ``ctx`` (pydantic v2), which json.dumps cannot write, and the

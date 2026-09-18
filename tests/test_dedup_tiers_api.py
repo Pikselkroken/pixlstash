@@ -1541,6 +1541,41 @@ def test_an_undo_of_a_shared_gesture_reverses_both_verdict_kinds():
         _teardown(temp_dir, server)
 
 
+def test_a_duplicate_signature_is_refused_as_a_bad_request_not_a_crash():
+    """The batch's own validator must reach the caller as a 422.
+
+    ``VerdictBatchRequestModel.unique_signatures`` raises a bare ``ValueError``,
+    which pydantic hands to the app's ``RequestValidationError`` handler with the
+    exception OBJECT in the error's ``ctx``. Serialising that raw is a
+    ``TypeError`` INSIDE the handler, so a 422 came back as a 500 with no detail
+    — a live bug against a shipped release, not a hypothetical. The handler
+    encodes first (``server.py``); this is the assertion that says why, on the
+    endpoint that has the validator.
+    """
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        _add_exact_groups(server, count=1)
+        _rescan(server)
+        signature = sorted(_signatures(client))[0]
+
+        response = client.post(
+            BATCH_VERDICTS_URL,
+            json={
+                "actions": [
+                    {"verdict": "stacked", "signature": signature},
+                    {"verdict": "stacked", "signature": signature},
+                ],
+            },
+        )
+
+        assert response.status_code == 422, f"{response.status_code}: {response.text}"
+        assert "signature twice" in response.text
+        # Refused whole: the duplicate did not apply the first copy on its way out.
+        assert _verdict_row(server, signature) is None
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_a_failed_atomic_verdict_batch_rolls_back_every_action():
     """A refusal after a valid first action leaves no verdict or undo fragment."""
     temp_dir, client, server, _ids, _token, _set_id = _env()

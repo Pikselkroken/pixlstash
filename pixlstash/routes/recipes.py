@@ -43,6 +43,11 @@ MAX_LORAS = 64
 MAX_OVERRIDES_LENGTH = 20000
 # ComfyUI draws seeds up to 2**64 - 1, which is 20 digits.
 MAX_SEED_LENGTH = 64
+# One tab's worth of recipes, and the same ceiling the verdict batch in
+# ``routes/dedup.py`` uses. Unbounded, the whole list goes into one ``IN`` and a
+# long enough one exhausts SQLite's host parameters — a database limit surfacing
+# as a 500, which is the class the unknown-source-picture check above closes.
+MAX_REORDER_IDS = 500
 
 
 def _bounded_overrides(value: Optional[dict]) -> Optional[dict]:
@@ -129,7 +134,7 @@ class SavedRecipeOut(BaseModel):
 class RecipeOrder(BaseModel):
     """The complete ordered list of the recipes one tab is showing."""
 
-    recipe_ids: list[int]
+    recipe_ids: list[int] = Field(default_factory=list, max_length=MAX_REORDER_IDS)
 
 
 class RecipeOrderResult(BaseModel):
@@ -225,6 +230,31 @@ def create_router(server) -> APIRouter:
             # than left to the vault's foreign key, which would be a 500.
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    # Declared before the ``{recipe_id}`` routes below. Nothing collides today —
+    # there is no ``PUT /recipes/{recipe_id}`` — but FastAPI matches in
+    # declaration order, so a literal path that sits behind a templated sibling
+    # is a shadowing bug waiting for the next verb somebody adds.
+    @router.put(
+        "/recipes/order",
+        summary="Reorder saved recipes",
+        description=(
+            "Set the order of the recipes listed, by a complete ordered id "
+            "list. Refused whole if an id is unknown, so a half-applied order "
+            "is never left behind."
+        ),
+        response_model=RecipeOrderResult,
+        responses={404: {"description": "One of the recipes does not exist."}},
+    )
+    def reorder_recipes(request: Request, payload: RecipeOrder = Body(...)):
+        server.auth.ensure_secure_when_required(request)
+        recipe_ids = payload.recipe_ids
+        if len(set(recipe_ids)) != len(recipe_ids):
+            raise HTTPException(status_code=400, detail="recipe_ids must be unique")
+        ordered = saved_recipe_service.reorder_recipes(server.vault, recipe_ids)
+        if ordered is None:
+            raise HTTPException(status_code=404, detail="No such recipe.")
+        return {"recipe_ids": ordered}
+
     @router.patch(
         "/recipes/{recipe_id}",
         summary="Edit a saved recipe",
@@ -262,26 +292,5 @@ def create_router(server) -> APIRouter:
         if not saved_recipe_service.delete_recipe(server.vault, recipe_id):
             raise HTTPException(status_code=404, detail="No such recipe.")
         return {"deleted": recipe_id}
-
-    @router.put(
-        "/recipes/order",
-        summary="Reorder saved recipes",
-        description=(
-            "Set the order of the recipes listed, by a complete ordered id "
-            "list. Refused whole if an id is unknown, so a half-applied order "
-            "is never left behind."
-        ),
-        response_model=RecipeOrderResult,
-        responses={404: {"description": "One of the recipes does not exist."}},
-    )
-    def reorder_recipes(request: Request, payload: RecipeOrder = Body(...)):
-        server.auth.ensure_secure_when_required(request)
-        recipe_ids = payload.recipe_ids
-        if len(set(recipe_ids)) != len(recipe_ids):
-            raise HTTPException(status_code=400, detail="recipe_ids must be unique")
-        ordered = saved_recipe_service.reorder_recipes(server.vault, recipe_ids)
-        if ordered is None:
-            raise HTTPException(status_code=404, detail="No such recipe.")
-        return {"recipe_ids": ordered}
 
     return router

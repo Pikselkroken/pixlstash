@@ -64,14 +64,15 @@ WRITABLE_FIELDS = (
 )
 
 
-def _decode(value: Optional[str], default: Any, *, field: str, recipe_id: Any) -> Any:
+def _decode(value: Optional[str], default: Any, *, field: str, where: Any) -> Any:
     """Parse one stored JSON column, or log and fall back to *default*.
 
     A row is only ever written from validated payloads, so a decode failure
     means the column was edited outside the API or the file is damaged. The
     recipe still lists - losing the whole tab because one row's overrides will
-    not parse is the worse answer - but the reason is logged with the row and
-    the column, because nothing else would say which row went bad.
+    not parse is the worse answer - but the reason is logged with the column and
+    ``where`` (a recipe id, or the picture group being read), because nothing
+    else would say which row went bad.
     """
     if not value:
         return default
@@ -79,9 +80,9 @@ def _decode(value: Optional[str], default: Any, *, field: str, recipe_id: Any) -
         return json.loads(value)
     except (TypeError, ValueError) as exc:
         logger.warning(
-            "Saved recipe %s has unreadable %s (%r); serving %r instead: %s",
-            recipe_id,
+            "Unreadable %s on %s (%r); serving %r instead: %s",
             field,
+            where,
             value,
             default,
             exc,
@@ -89,16 +90,24 @@ def _decode(value: Optional[str], default: Any, *, field: str, recipe_id: Any) -
         return default
 
 
-def lora_names(entries: Iterable[Any]) -> frozenset[str]:
-    """The comparable name set of a LoRA list, from either side of the match.
+def lora_key(entries: Iterable[Any]) -> tuple[str, ...]:
+    """The comparable form of a LoRA list, from either side of the match.
 
     A picture's ``comfyui_loras`` holds filenames; a recipe's ``loras`` holds
     ``{"filename", "sha256", "strength"}`` objects. Both reduce to normalized
     basenames, and anything that is neither is dropped rather than compared as
     itself: a half-written entry must not make a recipe credit-match a picture
     it has nothing to do with.
+
+    **Sorted, and duplicates kept**, which is why this is not a set. The picture
+    side writes one entry per LoRA loader node
+    (``utils/comfyui_utilities.py``), so a graph that loads one file twice - a
+    stacked LoRA, and a materially different look - says so, and a recipe that
+    stacks the same file twice has to key the same way. Sorted because neither
+    side's order is meaningful: it follows node numbering on one side and the
+    dialog's rows on the other.
     """
-    names = set()
+    names = []
     for entry in entries or ():
         if isinstance(entry, str):
             filename = entry
@@ -107,8 +116,8 @@ def lora_names(entries: Iterable[Any]) -> frozenset[str]:
         else:
             continue
         if isinstance(filename, str) and filename:
-            names.add(normalized_filename(filename))
-    return frozenset(names)
+            names.append(normalized_filename(filename))
+    return tuple(sorted(names))
 
 
 def prompt_key(value: Optional[str]) -> str:
@@ -132,9 +141,14 @@ def serialize(recipe: SavedRecipe) -> dict:
         "workflow_key": recipe.workflow_key,
         "prompt": recipe.prompt or "",
         "negative": recipe.negative,
-        "loras": _decode(recipe.loras, [], field="loras", recipe_id=recipe.id),
+        "loras": _decode(
+            recipe.loras, [], field="loras", where=f"saved recipe {recipe.id}"
+        ),
         "overrides": _decode(
-            recipe.overrides, {}, field="overrides", recipe_id=recipe.id
+            recipe.overrides,
+            {},
+            field="overrides",
+            where=f"saved recipe {recipe.id}",
         ),
         "seed": recipe.seed,
         "keep_seed": bool(recipe.keep_seed),
@@ -301,6 +315,13 @@ def reorder_in_session(session: Session, recipe_ids: list[int]) -> Optional[list
 
     ``None`` when one of the ids does not exist: a partial reorder would leave
     the tab in an order the owner never chose and no error to say so.
+
+    Two consequences of permuting, both intended. A **subset** of one tab is
+    legal and moves only its own rows, so reordering ``[A3, A1]`` out of
+    ``A1 A2 A3`` leaves A2 sitting between them: the caller sent two rows and
+    two rows moved. And the route is **not workflow-scoped** - a request may
+    name recipes of different workflows, which is what a stack's tab does on
+    every reorder, since the recipes it lists belong to its several members.
     """
     rows = {
         row.id: row
@@ -334,17 +355,17 @@ def credit_by_recipe(
     in a LoRA strength are the same look as far as a picture row can tell, and
     silently crediting one of them would be a guess.
     """
-    matched: dict[tuple[str, frozenset[str]], int] = {}
+    matched: dict[tuple[str, tuple[str, ...]], int] = {}
     for prompt, loras, count in groups:
         # The group is already narrowed to pictures that were read, so "[]"
         # here means a picture that loaded no LoRAs and matches a recipe with
         # none.
-        names = lora_names(
+        names = lora_key(
             _decode(
                 loras,
                 [],
                 field="comfyui_loras",
-                recipe_id=f"the picture group with prompt {prompt_key(prompt)[:60]!r}",
+                where=f"the picture group with prompt {prompt_key(prompt)[:60]!r}",
             )
         )
         key = (prompt_key(prompt), names)
@@ -352,7 +373,7 @@ def credit_by_recipe(
 
     credit = {}
     for recipe in recipes:
-        key = (prompt_key(recipe.get("prompt")), lora_names(recipe.get("loras") or []))
+        key = (prompt_key(recipe.get("prompt")), lora_key(recipe.get("loras") or []))
         # ``get``, never ``pop``: a group counts for EVERY recipe it matches.
         # Two recipes differing only in a LoRA strength are the same look as far
         # as a picture row can tell, and crediting whichever was read first
