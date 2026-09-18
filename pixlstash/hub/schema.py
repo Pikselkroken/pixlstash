@@ -62,7 +62,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 1
+CURRENT_DATA_VERSION = 2
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -752,6 +752,211 @@ CREATE TABLE IF NOT EXISTS workflow_parameter_pins (
 )
 """
 
+# --------------------------------------------------------------------------
+# v1.12 Workflows & Recipes, step B2: the tables that key a WORKFLOW CARD.
+#
+# **Glossary, because "recipe" means two things.** The tables above call the
+# graph-bound-to-models tier ``workflow_recipe`` / ``structural_hash``; new code
+# calls that a **variant**. A **saved recipe** is the look a person keeps. The
+# tables above are append-only and keep their names, so the mapping from a
+# variant to the card it belongs to is a new table rather than a column added to
+# one of them.
+#
+# **Eight of these tables are created before anything writes them**, and that is
+# deliberate rather than speculative: they are the owner's own decisions about a
+# card (name, notes, pins, overrides, cover, stacks), the steps that write them
+# are the rest of this release, and a hub table is append-only - adding them
+# with their writers means a second guarded amendment of v2 per step for rows
+# whose shape is already decided here.
+#
+# A card is ``workflow_key`` (``services/workflow_identity.py``): the topology,
+# the non-LoRA models, and the LoRA slots marked *structural*. Everything the
+# owner can say about a workflow - its name, its pins, its overrides, which
+# stack it sits in - is keyed by that, so a new character LoRA does not hand
+# them a fresh, empty card.
+# --------------------------------------------------------------------------
+
+# Which card each stored variant belongs to. The backfill's output, and the one
+# table that has to be rewritten when a mark is flipped or a key rule changes -
+# hence ``key_version``, which is what makes a stale row findable rather than
+# silently wrong.
+#
+# **No timestamp column on any card table.** Deriving the same hub twice has to
+# write byte-identical rows, or "the backfill runs twice with identical rows" is
+# a claim no test can make; a wall-clock column would churn every row on every
+# re-derivation and hide a real difference in the noise. Nothing reads "when was
+# this derived" - and a step that wants it can add the column then.
+_V2_WORKFLOW_VARIANT = """
+CREATE TABLE IF NOT EXISTS workflow_variant (
+    structural_hash  TEXT PRIMARY KEY REFERENCES workflow_recipe(structural_hash),
+    topology_hash    TEXT NOT NULL,
+    workflow_key     TEXT NOT NULL,
+    key_version      TEXT NOT NULL
+)
+"""
+
+# Everything derivable from a topology alone, cached so the grid does not
+# re-reduce a document per card: the automatic stack key, the workflow type, and
+# the slot list every mark and override addresses.
+#
+# Per TOPOLOGY and not per variant, because a slot label is a Weisfeiler-Leman
+# label over the graph: it means the same thing for every variant of one
+# topology and nothing at all outside it. ``core_version`` stamps the rule that
+# produced ``core_hash`` so a changed rule re-groups visibly instead of mixing
+# two rules' stacks.
+#
+# ``slots`` is JSON: ``[{"label", "class_type", "widget", "is_lora"}, ...]``.
+# **No filename and no asset reference.** A model's readable name lives in
+# ``workflow_recipe_asset`` and nowhere else, so forgetting it stays one delete.
+_V2_WORKFLOW_TOPOLOGY_CORE = """
+CREATE TABLE IF NOT EXISTS workflow_topology_core (
+    topology_hash  TEXT PRIMARY KEY REFERENCES workflow_topology(topology_hash),
+    core_hash      TEXT NOT NULL,
+    core_version   TEXT NOT NULL,
+    workflow_type  TEXT,
+    slots          TEXT NOT NULL
+)
+"""
+
+# Whether a LoRA slot is part of the workflow (``structural``) or part of the
+# look (``recipe``).
+#
+# **Frozen the first time the slot is seen and never recomputed.**
+# ``workflow_identity.guess_mark`` reads a filename, so a later re-guess over a
+# differently-named LoRA in the same slot would silently re-key every card that
+# slot is in - cards the owner has by then named, pinned and stacked. The guess
+# is where a mark starts, not what it is.
+#
+# **Two consequences worth stating rather than discovering.** A card key is then
+# a function of what arrived first, so two machines that imported the same
+# pictures in a different order can put one variant on different cards; and a
+# mark outlives ``forget_asset_names``, which deletes the readable filename but
+# cannot delete a decision that keys the card. ``structural`` therefore still
+# says the forgotten file looked like a speed LoRA. That is a classification of
+# a name, not the name, and destroying it would silently re-key the card - but
+# it is a residue, and the owner-facing way to correct a wrong mark is a flip
+# (a later step), never a delete here.
+_V2_WORKFLOW_SLOT_MARK = """
+CREATE TABLE IF NOT EXISTS workflow_slot_mark (
+    topology_hash  TEXT NOT NULL,
+    slot_label     TEXT NOT NULL,
+    mark           TEXT NOT NULL CHECK (mark IN ('structural', 'recipe')),
+    PRIMARY KEY (topology_hash, slot_label)
+)
+"""
+
+# A workflow FILE - imported, or dropped in the watched folder - on the card its
+# pictures already made. ``structural_hash`` is NULL for a UI-format file: it
+# names its widget values by position, so it has a topology and no models, and
+# it becomes a card with no assets rather than no card at all.
+_V2_WORKFLOW_FILE = """
+CREATE TABLE IF NOT EXISTS workflow_file (
+    workflow_name    TEXT PRIMARY KEY,
+    topology_hash    TEXT NOT NULL,
+    structural_hash  TEXT,
+    workflow_key     TEXT NOT NULL
+)
+"""
+
+# What the owner says about a card. No row is the default: no name of their
+# own, no notes, not hidden.
+_V2_WORKFLOW_ATTR = """
+CREATE TABLE IF NOT EXISTS workflow_attr (
+    workflow_key  TEXT PRIMARY KEY,
+    name          TEXT,
+    notes         TEXT,
+    hidden        INTEGER NOT NULL DEFAULT 0
+)
+"""
+
+# A parameter the card starts from, and the pins its form shows first.
+#
+# **Addressed by (slot label, input name), never by node id.** A node id is
+# whatever the file that was serialised last happened to call it; the same
+# workflow rebuilt from scratch renumbers every one of them, and an override
+# keyed that way would follow the numbering rather than the slot.
+_V2_WORKFLOW_DEFAULT_OVERRIDE = """
+CREATE TABLE IF NOT EXISTS workflow_default_override (
+    workflow_key  TEXT NOT NULL,
+    slot_label    TEXT NOT NULL,
+    input_name    TEXT NOT NULL,
+    value         TEXT NOT NULL,
+    PRIMARY KEY (workflow_key, slot_label, input_name)
+)
+"""
+
+# Key-based pins, the card's answer to the file-keyed ``workflow_parameter_pins``
+# above. A row holding ``[]`` is somebody who unpinned everything, which is not
+# the same as never having pinned.
+_V2_WORKFLOW_KEY_PINS = """
+CREATE TABLE IF NOT EXISTS workflow_key_pins (
+    workflow_key  TEXT PRIMARY KEY,
+    pins          TEXT NOT NULL
+)
+"""
+
+# How each picture input of a card is filled, and which picture covers it.
+#
+# Keyed by ``(library_uuid, workflow_key)`` for the reason the ghost table is
+# keyed by library: a picture is a picture in ONE vault, and it is named by
+# ``pixel_sha`` because SQLite reuses a vault id the moment the next import
+# lands. A second library gets its own setup and is never handed a picture it
+# does not hold.
+_V2_WORKFLOW_KEY_PICTURE_INPUT = """
+CREATE TABLE IF NOT EXISTS workflow_key_picture_input (
+    library_uuid  TEXT NOT NULL,
+    workflow_key  TEXT NOT NULL,
+    slot_label    TEXT NOT NULL,
+    input_name    TEXT NOT NULL,
+    mode          TEXT NOT NULL CHECK (mode IN ('selection', 'picker', 'fixed')),
+    pixel_sha     TEXT,
+    CHECK (mode <> 'fixed' OR pixel_sha IS NOT NULL),
+    PRIMARY KEY (library_uuid, workflow_key, slot_label, input_name)
+)
+"""
+
+_V2_WORKFLOW_COVER = """
+CREATE TABLE IF NOT EXISTS workflow_cover (
+    library_uuid  TEXT NOT NULL,
+    workflow_key  TEXT NOT NULL,
+    pixel_sha     TEXT NOT NULL,
+    PRIMARY KEY (library_uuid, workflow_key)
+)
+"""
+
+# Stacks of cards. An ``auto`` stack is the automatic grouping by ``core_hash``
+# (cards that differ only in plumbing, post-processing or a checkpoint); a
+# ``manual`` one is the owner's own and names no core hash. ``position`` 0 is
+# the cover.
+#
+# ``workflow_unstacked`` is the owner taking a card out of its automatic stack.
+# A row here is a decision, so it survives a ``CORE_VERSION`` bump regrouping
+# everything around it - which is also why stack membership is keyed on the card
+# and not on the core hash.
+_V2_WORKFLOW_STACK = """
+CREATE TABLE IF NOT EXISTS workflow_stack (
+    stack_id   TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL CHECK (kind IN ('manual', 'auto')),
+    core_hash  TEXT,
+    CHECK (kind <> 'auto' OR core_hash IS NOT NULL)
+)
+"""
+
+_V2_WORKFLOW_STACK_MEMBER = """
+CREATE TABLE IF NOT EXISTS workflow_stack_member (
+    stack_id      TEXT NOT NULL REFERENCES workflow_stack(stack_id),
+    workflow_key  TEXT NOT NULL,
+    position      INTEGER NOT NULL,
+    PRIMARY KEY (stack_id, workflow_key)
+)
+"""
+
+_V2_WORKFLOW_UNSTACKED = """
+CREATE TABLE IF NOT EXISTS workflow_unstacked (
+    workflow_key  TEXT PRIMARY KEY
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -766,6 +971,13 @@ _V2_WORKFLOW_INDEXES = (
     # path, so it is not a lookup that may degrade into a scan.
     "CREATE INDEX IF NOT EXISTS ix_workflow_picture_ghost_instance "
     "ON workflow_picture_ghost(library_uuid, instance_hash)",
+    # "Which variants is this card made of" - every card read, since the
+    # variants are where the pictures and the assets hang. The only index B2
+    # adds: an index on a table nothing writes yet would be a write cost bought
+    # for a query that does not exist, so the stack and file lookups get theirs
+    # with the code that runs them.
+    "CREATE INDEX IF NOT EXISTS ix_workflow_variant_key "
+    "ON workflow_variant(workflow_key)",
 )
 
 _V2_WORKFLOW_TABLES = (
@@ -778,6 +990,21 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_PICTURE_GHOST,
     _V2_WORKFLOW_PICTURE_INPUT,
     _V2_WORKFLOW_PARAMETER_PINS,
+    # B2's card tables, in the same v2 and for the same reason: a build shipped
+    # before this change has CURRENT_SCHEMA_VERSION = 2 and would refuse a v3
+    # hub with HubSchemaTooNewError, locking the owner out of a downgrade.
+    _V2_WORKFLOW_VARIANT,
+    _V2_WORKFLOW_TOPOLOGY_CORE,
+    _V2_WORKFLOW_SLOT_MARK,
+    _V2_WORKFLOW_FILE,
+    _V2_WORKFLOW_ATTR,
+    _V2_WORKFLOW_DEFAULT_OVERRIDE,
+    _V2_WORKFLOW_KEY_PINS,
+    _V2_WORKFLOW_KEY_PICTURE_INPUT,
+    _V2_WORKFLOW_COVER,
+    _V2_WORKFLOW_STACK,
+    _V2_WORKFLOW_STACK_MEMBER,
+    _V2_WORKFLOW_UNSTACKED,
     *_V2_WORKFLOW_INDEXES,
 )
 
@@ -1136,6 +1363,41 @@ def read_schema_version(conn: sqlite3.Connection) -> int:
     return int(row[0]) if row else 0
 
 
+def _drop_blank_recipe_assets(conn: sqlite3.Connection) -> int:
+    """Delete the asset rows that name no model at all (#1416).
+
+    A shelf loader's widget is blank until its Browse button is clicked, and
+    the PixlStash CLIP loader's second encoder is blank on every SD and SDXL
+    graph. ``workflow_hash`` used to keep that blank as a topology asset, so
+    each one filed a ``workflow_recipe_asset`` row with an empty
+    ``normalized_filename``. It now keeps only a digest, but the rows already
+    written are unreachable: ``_model_ghost_names`` routes a ``*_sha256``
+    widget to the digest branch, where an empty value is not a digest and so is
+    never a ghost, so "forget model names not on the shelf" cannot clear them.
+
+    Deleting one loses nothing -- an empty name identifies nobody and resolves
+    to no shelf row -- and no hash moves and no stored document is rewritten,
+    exactly as forgetting a name does not. The ``asset:e3b0c442...`` reference
+    in the document stays, which is the same shape a forgotten name leaves.
+
+    Runs exactly once per hub (see :data:`CURRENT_DATA_VERSION`).
+
+    Args:
+        conn: An open hub connection, inside the caller's transaction.
+
+    Returns:
+        How many rows were deleted.
+    """
+    deleted = conn.execute(
+        "DELETE FROM workflow_recipe_asset WHERE normalized_filename = ''"
+    ).rowcount
+    if deleted:
+        logger.info(
+            "Hub data v2: dropped %d recipe asset row(s) naming no model.", deleted
+        )
+    return deleted
+
+
 def apply_migrations(conn: sqlite3.Connection) -> int:
     """Bring *conn* up to :data:`CURRENT_SCHEMA_VERSION` and return that version.
 
@@ -1219,6 +1481,8 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                 conn.execute("BEGIN IMMEDIATE")
                 if data_version < 1:
                     _backfill_component_roles(conn)
+                if data_version < 2:
+                    _drop_blank_recipe_assets(conn)
                 # No placeholder: PRAGMA takes no parameters, and the value is
                 # this module's own constant rather than anything from outside.
                 conn.execute(f"PRAGMA user_version = {CURRENT_DATA_VERSION:d}")

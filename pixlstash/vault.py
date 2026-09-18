@@ -341,6 +341,17 @@ class Vault:
             self._planner_work_finders[TaskType.CHECKPOINT_HASH] = (
                 MissingCheckpointHashFinder(hub=registered_hub)
             )
+            # The workflow-card backfill (§B2). Hub-only in the strongest sense:
+            # it reads stored documents and never a picture, so it keys the
+            # recipes of libraries that are not even attached, and the pictures
+            # a trimmed library no longer has still have their workflow.
+            from pixlstash.tasks.workflow_card_backfill_finder import (
+                WorkflowCardBackfillFinder,
+            )
+
+            self._planner_work_finders[TaskType.WORKFLOW_CARD_BACKFILL] = (
+                WorkflowCardBackfillFinder(hub=registered_hub)
+            )
             # And the workflow library's store is the hub too, so the ComfyUI
             # extraction can file a picture's graph where it outlives the
             # picture (§B3). Replaces the hubless finder work_finders() built:
@@ -1781,6 +1792,14 @@ class Vault:
                 finder = self._planner_work_finders.get(TaskType.CHECKPOINT_HASH)
                 total, missing = finder.progress() if finder is not None else (0, 0)
                 label = "checkpoints_hashed"
+            elif worker_type == TaskType.WORKFLOW_CARD_BACKFILL:
+                # Counted over the hub's recipes, not this library's pictures.
+                # Left in `planner_managed` below it would inherit the picture
+                # count and a hardcoded `missing = 0` - the "N / N, nothing
+                # remaining" row the two branches above exist to correct.
+                finder = self._planner_work_finders.get(TaskType.WORKFLOW_CARD_BACKFILL)
+                total, missing = finder.progress() if finder is not None else (0, 0)
+                label = "workflows_carded"
             elif worker_type == TaskType.ORIENTATION:
                 # Without its own count this row fell into `planner_managed`
                 # below - `missing = 0`, so it read "12,094 / 12,094, 0.00/s"

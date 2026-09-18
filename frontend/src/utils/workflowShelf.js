@@ -11,12 +11,28 @@
 // it loads and how big it is. That is the "not named" state from the design's
 // `States.dc.html`, and it is the ordinary case rather than the exception.
 
-/** Widget names whose value is the checkpoint or diffusion model. */
+/**
+ * Widget names whose value is the checkpoint or diffusion model.
+ *
+ * The mirror of `CHECKPOINT_WIDGETS` in
+ * `pixlstash/services/workflow_identity.py`, which answers the same question
+ * for the `other checkpoint` chip. The two must hold the same names or a
+ * workflow reads as having a base model on one side and a changed one on the
+ * other — the drift #1416 was. It is asserted, not agreed:
+ * `tests/test_architecture_guardrails.py::test_base_model_widgets_agree_across_the_stack`
+ * parses this literal, so keep it a plain list of string literals.
+ *
+ * `checkpoint_id` is the PixlStash shelf loader's, whose value is a shelf row
+ * id rather than a filename, so `modelStem` of it is a bare number until
+ * something resolves ids to names — exactly as that pack's `*_sha256` values
+ * already show as digests.
+ */
 const BASE_WIDGETS = new Set([
   "ckpt_name",
   "unet_name",
   "diffusion_model",
   "model_path",
+  "checkpoint_id",
 ]);
 
 /** File extensions that mean "a picture the graph loads", not a model. */

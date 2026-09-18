@@ -55,6 +55,14 @@ export const useWsStore = defineStore("ws", () => {
   // Signals the text read from the given pictures (OCR, `ocr_text`) changed.
   // The grid never shows that text, so only the open lightbox listens.
   const wsTextUpdate = ref({ key: 0, pictureIds: [] });
+  // Signals the given pictures were TURNED (`orientation`): an in-place rotate,
+  // or the undo/redo of one. The grid's card refresh for this is deferred while
+  // the lightbox is open (§9.1), and the overlay builds its `<img>` URL from
+  // `orientation`, which none of its other signals re-read - so without this the
+  // open lightbox kept showing the picture the wrong way up until it was closed
+  // and reopened. Deliberately narrower than `pixels`, which a thumbnail
+  // regeneration and a layout move also raise without turning anything.
+  const wsOrientationUpdate = ref({ key: 0, pictureIds: [] });
   const wsPluginProgress = ref({ key: 0, payload: null });
   const isUploadInProgress = ref(false);
 
@@ -120,6 +128,7 @@ export const useWsStore = defineStore("ws", () => {
     wsSmartScoreUpdate,
     wsDetectionUpdate,
     wsTextUpdate,
+    wsOrientationUpdate,
     wsPluginProgress,
     isUploadInProgress,
     clientId,

@@ -11,6 +11,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
+import { setActivePinia, createPinia } from "pinia";
 
 const getInsights = vi.fn();
 vi.mock("../../api/insights", () => ({
@@ -18,6 +19,7 @@ vi.mock("../../api/insights", () => ({
 }));
 
 import LibraryInsights from "./LibraryInsights.vue";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const globalOpts = { global: { stubs: { "v-icon": true } } };
 
@@ -61,6 +63,8 @@ async function mountScreen(body) {
 }
 
 beforeEach(() => {
+  // The bar's app-wide tail reads the sidebar and task stores.
+  setActivePinia(createPinia());
   getInsights.mockReset();
 });
 
@@ -222,5 +226,40 @@ describe("LibraryInsights - it only ever reads", () => {
       payload([CLEAR], { total_pictures: 0, folder_pictures: 0, folders: 0 }),
     );
     expect(wrapper.find(".ins-lede").text()).toContain("no pictures here yet");
+  });
+});
+
+// #1415: the screen replaces the grid and its toolbar, so without the app-wide
+// tail nothing here opens Settings or the right rail. Settings rides the same
+// `act` channel the findings' buttons use, which App.vue already routes.
+describe("LibraryInsights - the app-wide toolbar tail", () => {
+  it("asks for Settings on the act channel and toggles the rail itself", async () => {
+    const wrapper = await mountScreen(payload([TODO]));
+    const sidebar = useSidebarStore();
+
+    await wrapper
+      .find(".ins-toolbar button[aria-label='Settings']")
+      .trigger("click");
+    expect(wrapper.emitted("act")).toEqual([[{ kind: "settings" }]]);
+
+    sidebar.statsOpen = false;
+    await wrapper.find(".ins-toolbar .tb-stats-btn").trigger("click");
+    expect(sidebar.statsOpen).toBe(true);
+    await wrapper.find(".ins-toolbar .tb-stats-btn").trigger("click");
+    expect(sidebar.statsOpen).toBe(false);
+  });
+
+  it("puts the tail last in the bar, behind its separator", async () => {
+    const wrapper = await mountScreen(payload([TODO]));
+    const bar = wrapper.find(".ins-toolbar").element;
+    const separator = wrapper.find(".ins-toolbar .bar-separator").element;
+    const settings = wrapper.find(
+      ".ins-toolbar button[aria-label='Settings']",
+    ).element;
+
+    expect(separator.nextElementSibling).toBe(settings);
+    expect(
+      bar.lastElementChild.lastElementChild.classList.contains("tb-stats-btn"),
+    ).toBe(true);
   });
 });

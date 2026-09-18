@@ -1195,6 +1195,9 @@ const props = defineProps({
   detectionUpdate: { type: Object, default: () => ({}) },
   // Signals the OCR text of the named pictures changed (`ocr_text`).
   textUpdate: { type: Object, default: () => ({}) },
+  // Signals the named pictures were turned (`orientation`) - a rotate, or the
+  // undo/redo of one, from this tab or another.
+  orientationUpdate: { type: Object, default: () => ({}) },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
   dateFormat: { type: String, default: "locale" },
@@ -1221,6 +1224,7 @@ const {
   smartScoreUpdate,
   detectionUpdate,
   textUpdate,
+  orientationUpdate,
   hiddenTags,
   applyTagFilter,
   showStacks,
@@ -1447,6 +1451,13 @@ function setOverlayImageById(nextId) {
     const existingDescription = image.value?.description;
     const existingSmartScore = image.value?.smartScore;
     const existingScore = image.value?.score;
+    // Captured beside the three above rather than read inline below, which is
+    // correct only while the whole literal is evaluated before the assignment:
+    // split it - build `next` then patch it, hoist a branch - and an inline
+    // `image.value?.orientation` silently reads the value it is overwriting and
+    // the preservation becomes a no-op, which is #1419 again.
+    const existingOrientation = image.value?.orientation;
+    const existingPixelSha = image.value?.pixel_sha;
     image.value = {
       ...target,
       // Preserve the existing description when re-setting the same image from filmstrip
@@ -1468,11 +1479,19 @@ function setOverlayImageById(nextId) {
       // moved them, and `target` may be a row that read never reached (an
       // expanded stack member from the filmstrip); re-applying its old
       // orientation puts the pre-rotate `?v=` back on the <img>.
-      ...(isSameImage && image.value?.orientation != null
-        ? { orientation: image.value.orientation }
+      //
+      // `target` is usually the sequence FROZEN when the overlay opened, and
+      // this runs on every replacement of the `allImages` array - which is what
+      // `ImageGrid.applyRotatedCards` does right after a rotate. So the same
+      // clobber undid a turn that arrived over the socket: an undo turned the
+      // picture back and the grid's own repaint turned it forward again a
+      // moment later (#1419). Reading the snapshot rather than the array it is
+      // handed, it did that even for a correctly-rotated new record.
+      ...(isSameImage && existingOrientation != null
+        ? { orientation: existingOrientation }
         : {}),
-      ...(isSameImage && image.value?.pixel_sha != null
-        ? { pixel_sha: image.value.pixel_sha }
+      ...(isSameImage && existingPixelSha != null
+        ? { pixel_sha: existingPixelSha }
         : {}),
       tags: dedupeTagList(
         isSameImage ? (existingTags.length ? existingTags : targetTags) : [],
@@ -1524,6 +1543,7 @@ const lastDescriptionUpdateKey = ref(0);
 const lastSmartScoreUpdateKey = ref(0);
 const lastDetectionUpdateKey = ref(0);
 const lastTextUpdateKey = ref(0);
+const lastOrientationUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
 const comfyuiMenuOpen = ref(false);
 const pluginMenuOpen = ref(false);
@@ -1562,7 +1582,17 @@ const currentLockReason = computed(() =>
 // orientation and writes the next one, so two in flight over one picture race,
 // and one of the turns is silently lost. A chain gives both properties.
 let rotateQueue = Promise.resolve();
-const rotateMetadataInFlightImageIds = new Set();
+// How many byte-change metadata reads are in flight per picture id. A COUNT,
+// not a set of ids: the overlay's own rotate and the echo of that same rotate
+// arriving over the socket can both be reading one picture at once, and with a
+// bare set whichever finished first cleared the marker while the other was
+// still out - dropping the cold-open unpin guard the later read was there to
+// satisfy.
+const rotateMetadataInFlightByImageId = new Map();
+
+function isRotateMetadataInFlight(imageIdKey) {
+  return (rotateMetadataInFlightByImageId.get(imageIdKey) || 0) > 0;
+}
 
 /** Why the rotate controls are greyed, or `null` when they are live. */
 const rotateDisabledReason = computed(() =>
@@ -1592,6 +1622,56 @@ const rotateLeftTitle = computed(() => rotateTitle("left", "["));
 const rotateRightTitle = computed(() => rotateTitle("right", "]"));
 
 /**
+ * Re-read everything a rewrite of one picture's bytes invalidates.
+ *
+ * Shared by the rotate made HERE and by the `orientationUpdate` signal that carries
+ * one made anywhere else (an undo or redo, another tab), so the two can never
+ * disagree about what a turn costs:
+ *
+ *   * **metadata**, always. `orientation` moves and `mediaVersion` rebuilds the
+ *     `<img>`'s cache-buster; a rotate leaves the pixels exactly where they
+ *     were, so the orientation is the ONLY thing that can tell the browser the
+ *     file it decoded is now sideways. Counted in
+ *     `rotateMetadataInFlightByImageId` for the duration, so a cold-opened card
+ *     pinned at `orientation: null` unpins on the value this read brings back
+ *     rather than keeping the URL it was pinned to;
+ *   * the **face and detection boxes** and the **text**. The boxes are drawn in
+ *     the file's own coordinate space, which the turn just redefined, and the
+ *     server drops the text on a turn. Re-read rather than transformed here:
+ *     whatever the server now reports is what every other surface draws.
+ *
+ * Both callers KNOW a turn happened rather than inferring one - `runRotate`
+ * from the ids the server said it turned, the watcher from the event's
+ * `orientation` field. An earlier version compared the orientation before and
+ * after the metadata read instead, which was wrong three ways: the shared
+ * `metadataRequestId` can discard that read (leaving the lightbox stale with
+ * no retry), navigating away and back rebuilds `image.value` under it, and a
+ * NULL orientation - every video, and any row the backfill has not reached -
+ * read as "turned" and re-read everything for changes that turned nothing.
+ *
+ * @param {number|string} imageId - the picture that was turned.
+ * @returns {Promise<void>} settles once the metadata read has landed.
+ */
+async function refreshAfterTurn(imageId) {
+  const imageIdKey = String(imageId);
+  rotateMetadataInFlightByImageId.set(
+    imageIdKey,
+    (rotateMetadataInFlightByImageId.get(imageIdKey) || 0) + 1,
+  );
+  try {
+    await fetchOverlayMetadata(imageId);
+  } finally {
+    const left = (rotateMetadataInFlightByImageId.get(imageIdKey) || 1) - 1;
+    if (left > 0) rotateMetadataInFlightByImageId.set(imageIdKey, left);
+    else rotateMetadataInFlightByImageId.delete(imageIdKey);
+  }
+  if (String(image.value?.id) !== imageIdKey) return;
+  fetchFaceBboxes(imageId);
+  fetchDetections(imageId);
+  pictureText.refresh();
+}
+
+/**
  * One 90° step on one picture, plus the three refreshes it owes.
  *
  * They travel three different paths, which is why this is not a one-liner:
@@ -1599,10 +1679,9 @@ const rotateRightTitle = computed(() => rotateTitle("right", "]"));
  *   * the **operation log**, so the receipt narrates the step and offers undo.
  *     Anything the server refused rides that same pill as a second sentence -
  *     a separate notice would be the half the user dismisses;
- *   * the **overlay's own record**, so `orientation` moves and `mediaVersion`
- *     rebuilds the `<img>`'s cache-buster. A rotate leaves the pixels exactly
- *     where they were, so the orientation is the ONLY thing that can tell the
- *     browser the file it decoded is now sideways;
+ *   * the **overlay's own record** - metadata, boxes and text, which
+ *     {@link refreshAfterTurn} owns because a turn made elsewhere costs
+ *     exactly the same reads;
  *   * the **grid card behind us**, whose thumbnail URL carries a version only the
  *     server can recompute. `overlay-change` is the existing channel, and
  *     `fields.pixels` is what tells the grid this was a bitmap change rather
@@ -1625,21 +1704,7 @@ async function runRotate(imageId, direction) {
     // between render and click, or a container the client gate misread). The
     // receipt already says so, so there is nothing left to refresh.
     if (!rotated.includes(String(imageId))) return;
-    const imageIdKey = String(imageId);
-    rotateMetadataInFlightImageIds.add(imageIdKey);
-    try {
-      await fetchOverlayMetadata(imageId);
-    } finally {
-      rotateMetadataInFlightImageIds.delete(imageIdKey);
-    }
-    // The boxes are drawn in the file's own coordinate space, which the turn
-    // just redefined. Re-read rather than transform them here: whatever the
-    // server now reports is what the grid and every other surface will draw.
-    fetchFaceBboxes(imageId);
-    fetchDetections(imageId);
-    // The server drops the text on a turn, so this reads `pending` and the
-    // word boxes go until the new read lands.
-    if (String(image.value?.id) === imageIdKey) pictureText.refresh();
+    await refreshAfterTurn(imageId);
     emit("overlay-change", { imageId, fields: { pixels: true } });
   } catch (e) {
     console.error(`Rotate ${direction} failed for picture ${imageId}`, e);
@@ -3351,7 +3416,7 @@ watch(
     if (
       pinnedOrientation.value === null &&
       currentKnown !== null &&
-      (rotateMetadataInFlightImageIds.has(String(id)) ||
+      (isRotateMetadataInFlight(String(id)) ||
         (previousKnown !== null && currentKnown !== previousKnown))
     ) {
       pinnedOrientation.value = undefined;
@@ -4520,6 +4585,41 @@ watch(
       : [];
     if (!pictureIds.includes(String(image.value.id))) return;
     pictureText.refresh();
+  },
+);
+
+// The open picture was TURNED somewhere else: an undo or redo of a rotate
+// (Ctrl+Z, the receipt's Undo, the toolbar), or a rotate made in another tab.
+// Any of those leaves this overlay holding the pre-rotate `orientation`, which
+// is the only thing `fullImageSrc` has to tell the browser the file it already
+// decoded is now sideways - so the picture stayed the wrong way up until the
+// lightbox was closed and reopened.
+//
+// It re-reads through the same `refreshAfterTurn` a rotate made HERE does, so
+// the two origins cannot drift apart. The rotate made here receives its own
+// echo like any other and pays one extra round of requestId-deduped reads for
+// it; suppressing that would need a record of what this tab has already
+// applied, and the `restored` branch in useGridRealtimeSync documents why that
+// bookkeeping is the thing to avoid rather than the duplicate.
+//
+// Gated on the payload's ids, like the text watcher above and unlike the score
+// and detection ones. Their ungating is about two signals coalescing into one
+// watcher flush, which cannot happen to a socket-driven ref: `wsOrientationUpdate`
+// is written at most once per `ws.onmessage`, each message is its own
+// macrotask, and Vue drains the pre-flush queue on the microtask between them.
+watch(
+  () => orientationUpdate.value,
+  (payload) => {
+    if (!payload || typeof payload !== "object") return;
+    const nextKey = payload.key || 0;
+    if (!nextKey || nextKey === lastOrientationUpdateKey.value) return;
+    lastOrientationUpdateKey.value = nextKey;
+    if (!open.value || !image.value?.id) return;
+    const pictureIds = Array.isArray(payload.pictureIds)
+      ? payload.pictureIds.map((id) => String(id))
+      : [];
+    if (!pictureIds.includes(String(image.value.id))) return;
+    void refreshAfterTurn(image.value.id);
   },
 );
 

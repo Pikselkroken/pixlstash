@@ -522,6 +522,7 @@ const tmLabelMap = {
   snapshot_identity_scrub: "Snapshot cleanup",
   planner_managed: "Planner task",
   checkpoints_hashed: "Checkpoint Hash",
+  workflows_carded: "Workflow cards",
   text_score: "Text score",
   text_read: "Text in pictures",
   object_detection: "Object detection",

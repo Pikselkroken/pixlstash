@@ -2057,7 +2057,7 @@ The one deliberate exception is `api/imageUrls.test.js`, which is neither co-loc
 
 | `type` | Action |
 |--------|--------|
-| `pictures_changed` | Routed to `useGridRealtimeSync` (see below). If LIKENESS_GROUPS sort is active, emits `wsTagUpdate` instead. Also emits two overlay-only signals off `fields`: `wsSmartScoreUpdate` (field `smart_score`, or an absent/empty `fields` list) and `wsDetectionUpdate` (field `detections`). |
+| `pictures_changed` | Routed to `useGridRealtimeSync` (see below). If LIKENESS_GROUPS sort is active, emits `wsTagUpdate` instead. Also emits four overlay-only signals off `fields`: `wsSmartScoreUpdate` (field `smart_score`, or an absent/empty `fields` list), `wsDetectionUpdate` (field `detections`), `wsTextUpdate` (field `ocr_text`) and `wsOrientationUpdate` (field `orientation`). |
 | `picture_imported` | Routed to `useGridRealtimeSync` → slick insert, foreign-tab insert, or the "New pictures" pill. |
 | `characters_changed` | Immediate `refreshSidebar()`. |
 | `tags_changed` | Emits `wsTagUpdate` with the affected picture IDs **and an `external` flag** (`origin_client_id !== this tab`) so `ImageOverlay` can refresh tags for any origin, while `ImageGrid` only refreshes a tag-filtered grid in place for this tab's **own** edits; an external tag change (background tagging, another tab) raises the "View changed externally" pill instead of reshuffling the filtered view. |
@@ -2140,7 +2140,13 @@ While the lightbox overlay is open, the user's own in-overlay edits (and any oth
    - `ImageGrid`'s `wsTagUpdate` watcher (active only when a tag filter is set) sets `pendingOverlayGridRefresh` instead of running `scheduleWsTagFullRefresh()` while the overlay is open. This is the path that the original bug came through: a tag edit under an active tag filter (e.g. removing "malformed hand" from the only filtered view) used to fire a streaming refetch that dropped the de-tagged picture from the grid mid-view.
    - `useGridFetch`'s **streaming** fetch path (the default for filtered views) now bails to `pendingOverlayGridRefresh` while the overlay is open. The id-list / search modes already reached the shared `overlayOpen` guard that stores results in `pendingGridImages`; the streaming branch wrote `allGridImages` through its own return paths and had to be guarded explicitly.
 
-   - The deferral covers the **grid**, not the overlay's own content. A change to something the lightbox itself renders must therefore reach it through a dedicated signal, or it stays stale until the overlay is closed and reopened: `wsSmartScoreUpdate` (metadata panel score) and `wsDetectionUpdate` (object boxes, re-read from `/pictures/{id}/detections` — otherwise a Segment run started from the overlay context menu showed nothing until reopen) both exist for that reason. Each fires on any distinct signal key while a card is open, without gating on the payload's `picture_ids`, because signals written in one Vue flush coalesce to the last one, which may not name the open card.
+   - The deferral covers the **grid**, not the overlay's own content. A change to something the lightbox itself renders must therefore reach it through a dedicated signal, or it stays stale until the overlay is closed and reopened: `wsSmartScoreUpdate` (metadata panel score), `wsDetectionUpdate` (object boxes, re-read from `/pictures/{id}/detections` — otherwise a Segment run started from the overlay context menu showed nothing until reopen), `wsTextUpdate` (the text read from the picture) and `wsOrientationUpdate` (the picture was turned — see below) exist for that reason. The score and detection signals fire on any distinct signal key while a card is open, without gating on the payload's `picture_ids`, because two signals written in one Vue flush coalesce to the last one, which may not name the open card. The text and orientation signals ARE id-gated: that coalescing cannot happen to a ref written from the socket, since each `ws.onmessage` is its own macrotask and Vue drains the pre-flush queue on the microtask between them.
+
+   - **`wsOrientationUpdate` — the picture was turned (#1419).** A rotate made in the lightbox refreshes the lightbox itself (`ImageOverlay.refreshAfterTurn`). The **undo or redo** of that rotate has no such local hook — it arrives only as a `pictures_changed` frame — and neither does a rotate made in another tab, so the picture stayed the wrong way up until the lightbox was closed and reopened. `useUpdatesSocket` raises the signal and the overlay runs the SAME `refreshAfterTurn`, so a turn from any origin costs exactly the same reads: metadata (for `orientation`, which is what `fullImageSrc`'s `?v=o<n>` is built from), the face and detection boxes, and the text. **Keyed on `orientation`, not on `pixels`:** five producers stamp `pixels` and only two are turns (`integration_architecture.md` §8.3 has the table), and a background thumbnail batch must not re-read boxes or clear the viewer's word selection, which `pictureText.refresh()` does. Both callers KNOW a turn happened rather than inferring one — `runRotate` from the ids the server said it turned, the watcher from the field — because inferring it from a before/after metadata comparison breaks on a discarded read, on navigating away and back, and on a NULL orientation (every video).
+
+   - **A TURN's applier is the one card op that is NOT deferred.** `useGridRealtimeSync` runs `grid.applyRotatedCards()` under an open overlay for a turn rather than marking a deferred refresh, because that applier is fields-only — it writes the shape and the bitmap of cards already in the grid and never inserts, removes or reorders, a turned photo having nowhere to move to — so there is nothing to keep off the frozen filmstrip. What deferring it cost was the **close**: a marked deferral queues a whole-grid refetch for `closeOverlay`, so every lightbox session containing a rotate paid one. (The card itself is behind the overlay and invisible until then, and the filmstrip reads the frozen snapshot either way — neither is the argument.) **Three exceptions:** a non-turn `pixels` rewrite still defers (background work, a steady stream during an import, not a gesture waiting to land); a turn defers too when `pendingGridImages` is already parked for close, because that branch of `closeOverlay` assigns wholesale and would discard the write with nothing queued to repair it (`grid.hasPendingGridImages()`); and `detections` still defers, being a plain metadata refresh with no fields-only guarantee. `MAX_TARGETED_UPDATE` is checked only on the per-id `refreshGridImage` path it was written for — escalating the applier sent the tab that issued a 51–200 picture rotate into a whole-library reload of its own change.
+
+   - **A signal is not enough on its own: the re-seed has to stop clobbering it.** `applyRotatedCards` replaces the `allGridImages` array, and `ImageOverlay`'s `allImages` watcher re-seeds the open card through `setOverlayImageById`, which reads the sequence **frozen at open** — not the array it is handed, so a correctly-rotated record does not save it. A turn arriving over the socket therefore lands and is then undone by the grid's own repaint a moment later. **Two mechanisms stop it, and both came from the local-rotate side of the same bug:** `fetchOverlayMetadata` patches the frozen snapshot's `orientation` after a metadata read, and `setOverlayImageById` preserves `orientation` / `pixel_sha` across the re-seed for a row that patch cannot reach (an expanded stack member resolved from the filmstrip's own rows). They are redundant for a picture that is in the snapshot and are not redundant in general; `ImageOverlayRotate.test.js` pins each. **Any future overlay field that the server owns and a turn moves belongs in all three places** — the metadata merge's local-wins exception, the snapshot patch, and the re-seed.
 
 3. **On close, reconcile in place (no pill).** `ImageGrid.closeOverlay()` applies the deferred work directly: it swaps in any `pendingGridImages` and, when `pendingOverlayGridRefresh` / `pendingTagFilterRefresh` is set, runs `debouncedFetchAllGridImages()`. So the now-non-matching picture leaves the grid and any re-sort applies as a direct in-place refresh — never as a pill flashing on exit.
 
@@ -2259,7 +2265,10 @@ a screen the reader was not on, and the pair sat permanently at "Nothing to
 undo" or else offered to revert a library edit made elsewhere — a recovery
 control that never answers for what is in front of it, next to shelf actions
 that say in as many words that they cannot be undone. **`Ctrl+Z` declines here
-too** (`useGlobalKeydown`, the `.shelf` check beside the existing modal guard):
+too** (`useGlobalKeydown`, the `UNDO_BLIND_ROOTS` check beside the existing
+modal guard — `.shelf, .wfshelf, .mv, .ins`, every destination that replaces
+the grid and narrates nothing; the shelf was guarded alone until #1415 and the
+other three took the chord silently):
 the shelf mounts no `ActionReceipt` either, and `UndoControl` is the app's only
 renderer of the "Changed elsewhere" warning, so the chord would otherwise
 revert a library action with nothing on screen to say it happened — the same
@@ -4237,6 +4246,34 @@ is false for a READ session, the sidebar entries go inert rather than hidden, an
 a pasted `/workflows` URL is bounced to the library by the same watcher that
 bounces `/models` — a guard cannot do it, because the router's first navigation
 resolves before the session context is fetched.
+
+**And like the shelf its bar carries the shell chrome.** Replacing the grid
+replaces the grid's toolbar, so `.wfshelf-toolbar` ends in
+`[separator] [TbGlobalActions]`, with `TbGlobalActions` emitting `open-settings`
+up to `App.vue`. **A run outranks the inspector in the rail**
+(`WorkflowRunPanel` is the `v-if`, the inspector the `v-else-if`): starting one
+force-opens the rail from `useWorkflowRunStore.openFor`, and with the inspector
+first the rail opened onto "Pick a workflow" while the run was in progress.
+Without the tail nothing on this screen opened Settings or the right
+rail, and the rail is where `WorkflowInspector`'s content is shown
+(`AppInspector` gates it on `sidebarStore.statsOpen`), so the inspector was
+unreachable (#1415). The pair sits in its own `--space-3` cluster (`flex: 0 0 auto`, so the chrome
+is never what the edge eats), because the bar spaces its own controls wider and
+the whole point of every host mounting the same component is that the tail is
+identical in each; the separator is `TbGlobalActions`' own `separator` prop
+rather than a fourth hand-rolled copy. `.wfshelf-toolbar` now declares
+`container-type: inline-size; container-name: shelfbar toolbar` like the other
+hosts — the tokens were on the element with no container behind them — and the
+title gives first (`min-width: 0; flex-shrink: 6`) at the same size and ink as
+every other bar's identity pair, which `Toolbar.test.js` pins. It passes `rail-name="inspector"`: the
+toggle's tooltip is also its accessible name, and this rail is not the stats
+sidebar it is called in the views that have one. **Moves and Insights carried
+the same gap and were fixed with it** (#1415) — the population was three
+screens, not one; they take the tail's own `separator` prop at the end of their
+existing right-hand group. On Insights it emits Settings on the `act` channel
+App.vue already routes. `UndoControl` is left off for the
+model shelf's reason: nothing here writes to the operation log — and `Ctrl+Z`
+now declines on all three (`useGlobalKeydown`'s `UNDO_BLIND_ROOTS`).
 
 **The list opens at topology level.** One row is one graph, whatever it was
 bound to; the recipes filed under it are the same graph with different models and

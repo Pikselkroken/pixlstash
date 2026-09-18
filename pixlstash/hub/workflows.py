@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
+from pixlstash.hub import workflow_cards
 from pixlstash.hub.db import HubDatabase
 from pixlstash.services.model_folder_scanner import MODEL_SUFFIX as SHELF_MODEL_SUFFIX
 from pixlstash.pixl_logging import get_logger
@@ -205,6 +206,41 @@ def record_reduction(
                     instance_document,
                     now,
                 ),
+            )
+    # The card, from the rows just written. Here and not at the three callers -
+    # the import route, the watched inbox and the extraction task - because
+    # every one of them files a graph through this function, and a hook per
+    # caller is a hook the next caller forgets. Outside the transaction above:
+    # `hub.transaction` is not re-entrant, and this one is a whole transaction
+    # of its own.
+    #
+    # **Only for a recipe this hub had not seen**, which is the difference
+    # between a card derived once and a four-table join run once per PICTURE:
+    # a library is thousands of pictures over a handful of recipes, and the
+    # thousandth filing of one recipe has nothing to add. A recipe already here
+    # whose card is missing (filed by a build before this one, or refused at the
+    # time) is the backfill finder's, which sweeps for exactly that.
+    #
+    # Never fatal to the filing. A graph that will not reduce into a card is
+    # still a filed recipe, and the backfill finder retries it, so the picture's
+    # own ingest is not failed over a card it can do without.
+    if new_recipe:
+        try:
+            workflow_cards.record_identity(hub, keys.structural_hash)
+        except Exception as exc:
+            # Deliberately everything, with the type logged. The derivation
+            # indexes into a parsed document, so a malformed one raises
+            # KeyError or TypeError rather than WorkflowGraphError, and this
+            # runs inside the extraction task's ingest of a picture: a card is
+            # secondary to the filing, exactly as it is on the import route
+            # (`routes/comfyui.py._file_in_hub`), and the backfill finder is
+            # what retries it.
+            logger.warning(
+                "Recipe %s is filed but has no workflow card yet, deriving it "
+                "failed with %s: %s",
+                keys.structural_hash,
+                type(exc).__name__,
+                exc,
             )
     return keys
 

@@ -785,10 +785,19 @@ WORKFLOW_TABLES = ("workflow_topology", "workflow_recipe", "workflow_recipe_grap
 # one-row-per-recipe counts and a recipe names several assets, and because a
 # ghost is not a recipe row at all.
 WORKFLOW_WIPE_ORDER = (
+    # Children first: the hub enforces foreign keys, so a leftover row aborts
+    # the wipe rather than lingering. The card tables (v1.12 B2) are here for
+    # both reasons - `workflow_variant` references the recipe and
+    # `workflow_topology_core` the topology, and a slot mark left behind would
+    # be read as frozen by the next test in this module.
     "workflow_recipe_asset",
     "workflow_recipe_instance",
     "workflow_recipe_graph",
+    "workflow_variant",
+    "workflow_slot_mark",
+    "workflow_file",
     "workflow_recipe",
+    "workflow_topology_core",
     "workflow_topology",
     "workflow_picture_ghost",
 )
@@ -910,7 +919,7 @@ def test_the_stored_row_records_which_rule_keyed_it(hub):
     )
     # The literal the spec names, not the module's own constant: comparing a
     # written value against the thing that wrote it asserts nothing.
-    assert row["hash_version"] == "v1"
+    assert row["hash_version"] == "v2"
     assert row["node_count"] == len(TXT2IMG)
 
 

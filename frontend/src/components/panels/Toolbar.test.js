@@ -227,8 +227,17 @@ describe("Toolbar - the shell band's one box recipe", () => {
       "src/components/views/LibraryInsights.vue",
       ".ins-toolbar",
     );
+    // The three bars that gained the app-wide tail in #1415.
+    const workflows = blockOf(
+      "src/components/views/WorkflowShelf.vue",
+      ".wfshelf-toolbar",
+    );
+    const moves = blockOf(
+      "src/components/views/MovesReview.vue",
+      ".mv-toolbar",
+    );
 
-    for (const block of [grid, dq, shelf, insights]) {
+    for (const block of [grid, dq, shelf, insights, workflows, moves]) {
       expect(block).toContain("height: 36px");
       expect(block).toContain("box-sizing: border-box");
       // min-height + vertical padding is exactly the recipe that drifted.
@@ -261,6 +270,8 @@ describe("Toolbar - the shell band's one box recipe", () => {
     expect(rightInset(dq)).toBe(rightInset(grid));
     expect(rightInset(shelf)).toBe(rightInset(grid));
     expect(rightInset(insights)).toBe(rightInset(grid));
+    expect(rightInset(workflows)).toBe(rightInset(grid));
+    expect(rightInset(moves)).toBe(rightInset(grid));
 
     // Two of the three bars LEAD with an identity (the queue's count, the
     // shelf's title) and each carries a quieter count beneath it. They read as
@@ -303,6 +314,50 @@ describe("Toolbar - the shell band's one box recipe", () => {
     expect(decl(insTitle, "font-weight")).toBe(decl(qtitle, "font-weight"));
     expect(decl(insSub, "font-size")).toBe(decl(qsub, "font-size"));
     expect(decl(insSub, "color")).toBe(decl(qsub, "color"));
+
+    // The two bars that joined the loop above lead with an identity too, and
+    // were unguarded: the workflow library shipped its title at --text-lg and
+    // its count at a fourth ink, the same drift the shelf's --text-xl was
+    // (#1415).
+    const wfTitle = blockOf(
+      "src/components/views/WorkflowShelf.vue",
+      ".wfshelf-title",
+    );
+    const wfSub = blockOf(
+      "src/components/views/WorkflowShelf.vue",
+      ".wfshelf-sub",
+    );
+    const mvTitle = blockOf(
+      "src/components/views/MovesReview.vue",
+      ".mv-title",
+    );
+    const mvSub = blockOf("src/components/views/MovesReview.vue", ".mv-sub");
+
+    for (const [title, sub] of [
+      [wfTitle, wfSub],
+      [mvTitle, mvSub],
+    ]) {
+      expect(decl(title, "font-size")).toBe(decl(qtitle, "font-size"));
+      expect(decl(title, "font-weight")).toBe(decl(qtitle, "font-weight"));
+      expect(decl(sub, "font-size")).toBe(decl(qsub, "font-size"));
+      expect(decl(sub, "color")).toBe(decl(qsub, "color"));
+    }
+
+    // And the identity is also where each bar GIVES. Every member of these
+    // bars is `nowrap`, so a bar with no shrinking member pushes its surplus
+    // through the right edge, where the grid area's `overflow: hidden` clips
+    // it - and what sits at that edge is the app-wide tail, including the
+    // toggle that had just narrowed the column by opening the rail (#1415).
+    // `min-width: 0` is the half that actually lets a nowrap flex item shrink.
+    const wfTail = blockOf(
+      "src/components/views/WorkflowShelf.vue",
+      ".wfshelf-bar-tail",
+    );
+    for (const identity of [wfTitle, mvTitle]) {
+      expect(identity).toContain("min-width: 0");
+      expect(identity).toMatch(/flex-shrink: [1-9]/);
+    }
+    expect(wfTail).toContain("flex: 0 0 auto");
   });
 });
 

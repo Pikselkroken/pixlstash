@@ -38,6 +38,7 @@ class TaskType(str, Enum):
     MODEL_FOLDER_SCAN = "ModelFolderScanTask"
     LAYOUT_MOVE = "LayoutMoveTask"
     GHOST_CASCADE = "GhostCascadeTask"
+    WORKFLOW_CARD_BACKFILL = "WorkflowCardBackfillTask"
 
     @staticmethod
     def all():

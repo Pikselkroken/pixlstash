@@ -22,10 +22,19 @@ import { isTypingTarget } from "../utils/dom.js";
  *   dialog, which its own shortcut toggles.
  */
 /**
- * Coalescing key for the shelf's "no undo here" answer, so holding the chord
- * updates one card instead of stacking them (notice spec §9.1).
+ * Coalescing key for the "no undo here" answer, so holding the chord updates
+ * one card instead of stacking them (notice spec §9.1).
  */
 export const SHELF_NO_UNDO_KEY = "shelf-no-undo";
+
+/**
+ * The roots of every destination that replaces the grid and narrates nothing:
+ * no `ActionReceipt`, no `UndoControl`. One list rather than a check per
+ * screen, because the population is what the invariant is about - the model
+ * shelf was guarded alone and the other three were not, so the chord reverted
+ * a library action with nothing on screen to say it had happened (#1415).
+ */
+const UNDO_BLIND_ROOTS = ".shelf, .wfshelf, .mv, .ins";
 
 export function useGlobalKeydown({
   gridContainer,
@@ -54,18 +63,18 @@ export function useGlobalKeydown({
   }
 
   /**
-   * Is the model shelf the mounted destination?
+   * Is a destination that cannot narrate an undo the mounted one?
    *
-   * The shelf replaces the grid, and it is the one destination that neither
-   * writes the operation log nor mounts an `ActionReceipt` - and since it also
-   * dropped `UndoControl`, nothing on that screen can narrate an undo or carry
-   * the "Changed elsewhere" warning. Read off the same kind of DOM signal the
-   * lightbox check above uses, for the same reason: there is no shared
-   * which-view-is-up flag, and `.shelf` is v-if'd on the route.
+   * These four replace the grid and neither write the operation log nor mount
+   * an `ActionReceipt`; none mounts `UndoControl` either, which is also the
+   * app's only renderer of the "Changed elsewhere" warning. Read off the same
+   * kind of DOM signal the lightbox check above uses, for the same reason:
+   * there is no shared which-view-is-up flag, and each root is v-if'd on its
+   * route.
    */
-  function isModelShelfOpen() {
+  function isUndoBlindDestination() {
     if (typeof document === "undefined") return false;
-    return document.querySelector(".shelf") != null;
+    return document.querySelector(UNDO_BLIND_ROOTS) != null;
   }
 
   function handleGlobalKeydown(e) {
@@ -124,16 +133,19 @@ export function useGlobalKeydown({
     //     undo raises a receipt" invariant, so the shortcut declines rather than
     //     acting blind.
     //
-    // The MODEL SHELF declines rather than acts, for the same invariant
-    // arrived at from the other side: it mounts no receipt and (deliberately)
-    // no UndoControl, so the chord there would revert a library action taken
-    // on a screen the reader has left, with nothing on this one to say it
-    // happened - not even the "Changed elsewhere" warning, whose only renderer
-    // is the control the shelf does not have. It declines OUT LOUD: a chord
-    // that does nothing at all teaches nothing, and the next thing a reader
-    // does is press it again. The notice surface is app-wide and already
-    // renders over the shelf, so this costs no new chrome; the coalescing key
-    // is what keeps a repeated press one card rather than a wall.
+    // The GRID-REPLACING DESTINATIONS THAT NARRATE NOTHING decline rather than
+    // act, for the same invariant arrived at from the other side: they mount no
+    // receipt and (deliberately) no UndoControl, so the chord there would
+    // revert a library action taken on a screen the reader has left, with
+    // nothing on this one to say it happened - not even the "Changed
+    // elsewhere" warning, whose only renderer is the control they do not have.
+    // The model shelf was guarded on that reasoning and the workflow library,
+    // Moves and Insights were not, though the same is true of all four
+    // (`UNDO_BLIND_ROOTS`). They decline OUT LOUD: a chord that does nothing at
+    // all teaches nothing, and the next thing a reader does is press it again.
+    // The notice surface is app-wide and already renders over these screens, so
+    // this costs no new chrome; the coalescing key is what keeps a repeated
+    // press one card rather than a wall.
     //
     // The lightbox is NOT covered by that last guard and never was:
     // `isModalOverlayOpen()` looks for a Vuetify scrim, and `.image-overlay`
@@ -155,11 +167,11 @@ export function useGlobalKeydown({
       const wantsRedo = key === "y" || (key === "z" && e.shiftKey);
       if (wantsUndo || wantsRedo) {
         e.preventDefault();
-        if (isModelShelfOpen()) {
+        if (isUndoBlindDestination()) {
           noticeStore.push({
             level: "info",
             key: SHELF_NO_UNDO_KEY,
-            text: "Model shelf changes aren't undoable - undo and redo apply to library actions in the grid.",
+            text: "Changes on this screen aren't undoable - undo and redo apply to library actions in the grid.",
           });
         } else if (wantsUndo) {
           operationStore.undo();

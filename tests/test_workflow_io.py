@@ -15,6 +15,7 @@ from fastapi import HTTPException
 import pixlstash.routes.comfyui as comfyui_module
 import pixlstash.server as server_module
 from pixlstash.hub.db import HubDatabase
+from pixlstash.hub import workflow_cards
 from pixlstash.hub.workflows import topology_exists
 from pixlstash.services import workflow_bindings, workflow_inbox
 from pixlstash.services.workflow_inputs import (
@@ -24,7 +25,7 @@ from pixlstash.services.workflow_inputs import (
     resolve_input_modes,
     validate_requested_modes,
 )
-from pixlstash.services.workflow_hash import topology_hash
+from pixlstash.services.workflow_hash import structural_hash, topology_hash
 from pixlstash.services.workflow_io import detect_workflow_io
 from pixlstash.utils.comfyui_utilities import NotAWorkflowError, check_comfy_workflow
 
@@ -685,6 +686,33 @@ def test_import_stores_the_file_unchanged_and_files_it_in_the_library(import_rou
     assert topology_exists(hub, body["topology_hash"])
 
 
+def test_an_imported_file_lands_on_the_card_its_pictures_made(import_route):
+    """The filing hook (§B2): a file joins a card rather than starting one."""
+    call, _user_dir, _built_in, hub = import_route
+    graph = _t2i_graph()
+
+    call(name="flow", workflow=graph)
+
+    row = hub.fetchone("SELECT * FROM workflow_file WHERE workflow_name = 'flow.json'")
+    assert row["structural_hash"] == structural_hash(graph)
+    assert (
+        row["workflow_key"]
+        == hub.fetchone(
+            "SELECT workflow_key FROM workflow_variant WHERE structural_hash = ?",
+            (row["structural_hash"],),
+        )["workflow_key"]
+    )
+
+    # A UI-format file names its widgets by position, so it has no models and
+    # lands on a card with no assets rather than on no card at all.
+    body = call(name="ui", workflow=_load(UI_FIXTURES / "image_z_image.json"))
+    ui_row = hub.fetchone("SELECT * FROM workflow_file WHERE workflow_name = 'ui.json'")
+    assert ui_row["structural_hash"] is None
+    assert ui_row["workflow_key"] == workflow_cards.topology_only_key(
+        body["topology_hash"]
+    )
+
+
 def test_a_dropped_copy_matches_the_stored_workflow(import_route):
     call, user_dir, built_in, _hub = import_route
     graph = _t2i_graph()
@@ -877,7 +905,7 @@ def test_a_broken_inbox_file_is_left_and_the_rest_imported(import_route, caplog)
 
 
 def test_deleting_a_workflow_trashes_it_by_way_of_the_inbox(import_route):
-    call, user_dir, _built_in, _hub = import_route
+    call, user_dir, _built_in, hub = import_route
     graph = _t2i_graph()
     call(name="flow", workflow=graph)
     digest = workflow_inbox.content_hash(graph)
@@ -890,6 +918,9 @@ def test_deleting_a_workflow_trashes_it_by_way_of_the_inbox(import_route):
 
     assert call.delete("flow") == {"status": "success", "name": "flow.json"}
     assert not (user_dir / "flow.json").exists()
+    # The card stays - its pictures made it - but nothing claims a file to run.
+    assert hub.fetchall("SELECT workflow_name FROM workflow_file") == []
+    assert hub.fetchone("SELECT COUNT(*) AS n FROM workflow_variant")["n"] == 1
     assert _inbox_names(call) == []
     assert sorted(p.name for p in call.trash.iterdir()) == [
         f"copy.{digest}.json",

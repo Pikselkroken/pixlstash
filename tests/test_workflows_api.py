@@ -196,7 +196,11 @@ def _seed_hub(server) -> None:
         # row aborts the wipe rather than lingering.
         conn.execute("DELETE FROM workflow_recipe_asset")
         conn.execute("DELETE FROM workflow_recipe_graph")
+        conn.execute("DELETE FROM workflow_variant")
+        conn.execute("DELETE FROM workflow_slot_mark")
+        conn.execute("DELETE FROM workflow_file")
         conn.execute("DELETE FROM workflow_recipe")
+        conn.execute("DELETE FROM workflow_topology_core")
         conn.execute("DELETE FROM workflow_topology")
         conn.execute("DELETE FROM workflow_picture_ghost")
         conn.execute("DELETE FROM workflow_picture_input")
