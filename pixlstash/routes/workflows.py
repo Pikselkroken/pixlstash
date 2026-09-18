@@ -371,9 +371,7 @@ def _card(figure, defaults=()) -> WorkflowCard:
         rating=figure.rating,
         covers=_cover_urls(figure.covers),
         stack_size=figure.stack_size,
-        # No table yet (a later step), so the count is honestly zero rather
-        # than absent: ⓘ always draws the row.
-        saved_recipe_count=0,
+        saved_recipe_count=figure.saved_recipes,
         defaults=[
             WorkflowDefault(
                 label=default.label,

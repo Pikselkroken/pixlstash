@@ -1,8 +1,9 @@
 """Assembling a workflow CARD out of hub rows and vault counts (v1.12 B3).
 
-**Computed per request, with no aggregate table.** The grid costs two vault
-queries - one ``GROUP BY workflow_structural_hash`` and one ``ROW_NUMBER()``
-window - and a third only on a library where somebody has actually chosen a
+**Computed per request, with no aggregate table.** The grid costs three vault
+queries in one session - one ``GROUP BY workflow_structural_hash``, one
+``ROW_NUMBER()`` window and one ``GROUP BY workflow_key`` over the saved
+recipes - and a fourth only on a library where somebody has actually chosen a
 cover. Beside them are eight hub statements, of which one (``card_index``)
 scans the variant table and the rest are small; everything else here is
 arithmetic over their results. An aggregate table would have to be invalidated by every rating,
@@ -90,12 +91,10 @@ FROM_ALL = "all"
 EDITED = "edited"
 
 # A card nobody is going to look for: too few pictures to be a habit, never
-# rated, and never imported as a file of its own.
-#
-# ponytail: the design's fourth clause, "no saved recipe", is not tested here
-# because saved recipes have no table yet (they arrive with their own step).
-# When they do, this predicate is where the clause goes - a card the owner has
-# saved a recipe against is by definition not a one-off.
+# rated, never imported as a file of its own, and with no saved recipe on it.
+# All four clauses are the design's, and the fourth arrived with B6's
+# `saved_recipe` table - saving a look is the plainest statement that somebody
+# means to run this again, so a card carrying one is never folded away.
 ONE_OFF_PICTURES = 3
 
 # How many of a card's newest runs a default is read off. The mode over the
@@ -140,6 +139,7 @@ class CardFigures:
     last_used: Optional[datetime] = None
     rank: float = 0.0
     covers: list[CoverCandidate] = field(default_factory=list)
+    saved_recipes: int = 0
     stack_id: Optional[str] = None
     stack_size: int = 1
     member_keys: list[str] = field(default_factory=list)
@@ -160,11 +160,12 @@ class CardFigures:
 
     @property
     def one_off(self) -> bool:
-        """Too small, unrated and never imported: folded into a count."""
+        """Too small, unrated, never imported and never saved from."""
         return (
             self.pictures < ONE_OFF_PICTURES
             and self.rated == 0
             and not self.card.imported
+            and not self.saved_recipes
         )
 
 
@@ -227,6 +228,7 @@ def _figures(
     cards: list[Card],
     activity: dict[str, VariantActivity],
     candidates: list[CoverCandidate],
+    saved_recipes: dict[str, int],
 ) -> list[CardFigures]:
     """Fold each card's variants into one set of counts and one cover strip."""
     by_variant: dict[str, list[CoverCandidate]] = {}
@@ -235,7 +237,9 @@ def _figures(
 
     figures = []
     for card in cards:
-        figure = CardFigures(card=card)
+        figure = CardFigures(
+            card=card, saved_recipes=saved_recipes.get(card.workflow_key, 0)
+        )
         strip: list[CoverCandidate] = []
         for structural_hash in card.variants:
             seen = activity.get(structural_hash)
@@ -426,8 +430,8 @@ def read_grid(hub: HubDatabase, vault) -> Grid:
     """Everything ``GET /workflows/cards`` answers. See the module docstring
     for what it costs."""
     cards = card_index(hub)
-    activity, candidates = read_card_grid(vault, COVER_DEPTH)
-    figures = _figures(cards, activity, candidates)
+    activity, candidates, saved_recipes = read_card_grid(vault, COVER_DEPTH)
+    figures = _figures(cards, activity, candidates, saved_recipes)
     _rank(figures)
 
     # Hidden cards and one-offs come out BEFORE the grouping, so a stack is

@@ -15,6 +15,7 @@ from sqlalchemy import (
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
+from pixlstash.hub import workflow_cards
 from pixlstash.db_models import (
     Face,
     Picture,
@@ -336,6 +337,20 @@ class PictureListFilters:
         comfyui_lora: list[str] = Query(
             default=[], description="Filter by ComfyUI LoRA (repeatable)."
         ),
+        workflow_key: str | None = Query(
+            None,
+            description=(
+                "Only pictures made by this workflow card. Resolved to the "
+                "card's variants; a card with no variant matches nothing."
+            ),
+        ),
+        workflow_stack: str | None = Query(
+            None,
+            description=(
+                "Only pictures made by any card in this stack - a stored "
+                "stack id, or the core hash of an automatic stack."
+            ),
+        ),
         reference_folder_id: str | None = Query(
             None, description="Filter by reference-folder id."
         ),
@@ -350,6 +365,70 @@ class PictureListFilters:
         # request.query_params. This dependency exists purely to document and
         # validate the query surface in OpenAPI.
         pass
+
+
+def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
+    """``workflow_key`` / ``workflow_stack`` as the variants to match, or ``None``.
+
+    The cards are in the hub and the pictures are in the vault, so there is no
+    join to write: the card is resolved to its variants here and the listing
+    matches ``picture.workflow_structural_hash`` against them, the way the
+    ComfyUI LoRA filter matches a name against the picture's own column.
+
+    **An empty list is a filter, not the absence of one.** A card with no filed
+    variant - or a workflow the pictures of this library never ran - matches no
+    picture, and returning ``None`` for it would widen the grid to the whole
+    library instead. Given both, the two narrow each other, as every other pair
+    of filters on this route does.
+
+    Args:
+        server: The running server, for the hub.
+        query_params: The parsed query params; both keys are popped, so an
+            unresolved one cannot reach ``Picture.find(**query_params)``.
+
+    Returns:
+        The structural hashes to match, or ``None`` when neither param is set.
+    """
+    # Presence, not truthiness: `?workflow_key=` names no card, and dropping
+    # the filter for it would answer a request for one workflow with the whole
+    # library - the exact "no results means the filter was ignored" reading the
+    # contract tells clients is wrong. An empty value matches nothing, like any
+    # other card no picture was made with.
+    # Popped whatever happens: `Picture.find` now declares this name, so a
+    # client sending `?workflow_structural_hashes=abc` would otherwise reach
+    # `PredicateFilter` as a bare string and 500 on its `List[str]`. It could
+    # never widen anything - it only adds an IN, and the resolution below
+    # overwrites it whenever a real filter resolves - but a reachable 500 is
+    # its own bug. (Four sibling filters here are unpopped in the same way and
+    # are the same class; this closes the one the change adds.)
+    query_params.pop("workflow_structural_hashes", None)
+    key = query_params.pop("workflow_key", None)
+    stack_id = query_params.pop("workflow_stack", None)
+    if key is None and stack_id is None:
+        return None
+    hub = getattr(server, "hub", None)
+    matched: list[set[str]] = []
+    try:
+        if hub is None:
+            raise LookupError("no hub is attached to this server")
+        if key is not None:
+            matched.append(set(workflow_cards.variants_on_key(hub, key)))
+        if stack_id is not None:
+            matched.append(set(workflow_cards.variants_in_stack(hub, stack_id)))
+    except Exception as exc:
+        # Fail closed, both for a hub that is absent and for one that will not
+        # answer: a filter that cannot be resolved must not silently widen the
+        # grid to every picture in the library, and it must not 500 a listing
+        # the rest of which is perfectly answerable from the vault.
+        logger.warning(
+            "Could not resolve the workflow filter (key=%r, stack=%r): %s; "
+            "listing no pictures rather than every picture.",
+            key,
+            stack_id,
+            exc,
+        )
+        return []
+    return sorted(set.intersection(*matched))
 
 
 def select_pictures_for_listing(
@@ -539,6 +618,12 @@ def select_pictures_for_listing(
     face_filter = query_params.pop("face_filter", None)
     stack_state = query_params.pop("stack_state", None)
     impossible_sources = query_params.pop("impossible_sources", None)
+    workflow_structural_hashes = _resolve_workflow_filter(server, query_params)
+    if workflow_structural_hashes is not None:
+        # Back into ``query_params`` under the name ``Picture.find`` declares,
+        # so every ``**query_params`` site gets it; the branches that name each
+        # filter instead pass it explicitly.
+        query_params["workflow_structural_hashes"] = workflow_structural_hashes
     shared_only = bool(query_params.pop("shared_only", False))
     query_params.pop(
         "guest_session_id", None
@@ -700,6 +785,7 @@ def select_pictures_for_listing(
         hidden_tags_filter_value: list[str] | None = None,
         comfyui_models_filter_value: list[str] | None = None,
         comfyui_loras_filter_value: list[str] | None = None,
+        workflow_structural_hashes_value: list[str] | None = None,
         face_filter_value: str | None = None,
         stack_state_value: str | None = None,
         impossible_sources_value: list[str] | None = None,
@@ -746,6 +832,10 @@ def select_pictures_for_listing(
                 and not hidden_tags_filter_value
                 and not comfyui_models_filter_value
                 and not comfyui_loras_filter_value
+                # ``is None``, not falsiness: an empty list is a workflow
+                # filter that matches nothing, and treating it as "no filter"
+                # would widen this branch to every candidate picture.
+                and workflow_structural_hashes_value is None
                 and not face_filter_value
                 and not stack_state_value
                 and not impossible_sources_value
@@ -796,6 +886,7 @@ def select_pictures_for_listing(
             tags_confidence_below_filter=tags_confidence_below_filter_value,
             comfyui_models_filter=comfyui_models_filter_value,
             comfyui_loras_filter=comfyui_loras_filter_value,
+            workflow_structural_hashes=workflow_structural_hashes_value,
             face_filter=face_filter_value,
             stack_state=stack_state_value,
             impossible_sources=impossible_sources_value,
@@ -837,6 +928,7 @@ def select_pictures_for_listing(
             hidden_tags_filter_value=hidden_tags,
             comfyui_models_filter_value=query_params.get("comfyui_models_filter"),
             comfyui_loras_filter_value=query_params.get("comfyui_loras_filter"),
+            workflow_structural_hashes_value=workflow_structural_hashes,
             face_filter_value=face_filter,
             stack_state_value=stack_state,
             impossible_sources_value=impossible_sources,
@@ -960,6 +1052,7 @@ def select_pictures_for_listing(
                 hidden_tags_filter=hidden_tags,
                 comfyui_models_filter=query_params.get("comfyui_models_filter"),
                 comfyui_loras_filter=query_params.get("comfyui_loras_filter"),
+                workflow_structural_hashes=workflow_structural_hashes,
                 picture_ids=(
                     [int(i) for i in query_params["id"] if str(i).isdigit()]
                     if query_params.get("id")
@@ -998,6 +1091,7 @@ def select_pictures_for_listing(
             file_path_prefix=file_path_prefix,
             comfyui_models_filter=query_params.get("comfyui_models_filter"),
             comfyui_loras_filter=query_params.get("comfyui_loras_filter"),
+            workflow_structural_hashes=workflow_structural_hashes,
             picture_ids=(
                 [int(i) for i in query_params["id"] if str(i).isdigit()]
                 if query_params.get("id")

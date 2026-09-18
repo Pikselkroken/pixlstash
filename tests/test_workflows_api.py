@@ -46,6 +46,7 @@ from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, ReferenceFolder
+from pixlstash.db_models.saved_recipe import SavedRecipe
 from pixlstash.hub.workflow_card_reads import instance_documents, variant_documents
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
 from pixlstash.hub.workflows import PictureGhost, record_picture_ghosts
@@ -600,6 +601,12 @@ def _seed_pictures(server) -> None:
     """Replace the vault's pictures with the seeded set, in one queued task."""
 
     def write(session):
+        # The saved recipes go with them. They are keyed by `workflow_key`, not
+        # by picture, so nothing else in this wipe reaches them - and a recipe
+        # left behind changes the next test's one-off count and its cards'
+        # `saved_recipe_count`, which is the shared-module leak CLAUDE.md warns
+        # about: reset every global the module touches, not only the obvious one.
+        session.exec(delete(SavedRecipe))
         session.exec(delete(Picture))
         for (
             path,
@@ -3332,6 +3339,49 @@ def test_a_one_off_is_counted_and_an_imported_file_takes_it_out_of_the_count(
     payload = _cards(workflow_env.owner)
     assert payload["one_offs"] == 0
     assert _by_key(payload)[BINNED_CARD]["imported"] is True
+
+
+def _save_recipe(server, workflow_key, name="A look I kept"):
+    """Put one saved recipe on a card, the way `POST /recipes` would."""
+
+    def write(session):
+        session.add(SavedRecipe(name=name, workflow_key=workflow_key, prompt="a cat"))
+        session.commit()
+
+    server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+
+
+def test_a_card_counts_the_recipes_saved_on_it(workflow_env):
+    """``saved_recipe_count`` is the real number, not a placeholder.
+
+    ⓘ always draws the "Saved recipes" row, so a hardcoded zero does not read
+    as "not implemented yet" -- it reads as "you have saved none", which is a
+    different and wrong statement once B6's table exists.
+    """
+    assert _by_key(_cards(workflow_env.owner))[BUSY_CARD]["saved_recipe_count"] == 0
+    _save_recipe(workflow_env.server, BUSY_CARD)
+    _save_recipe(workflow_env.server, BUSY_CARD, name="And another")
+    cards = _by_key(_cards(workflow_env.owner))
+    assert cards[BUSY_CARD]["saved_recipe_count"] == 2
+    # Keyed by card, so a recipe on one does not leak onto its stack partner.
+    assert (
+        _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]["saved_recipe_count"] == 0
+    )
+
+
+def test_a_saved_recipe_takes_a_card_out_of_the_one_off_count(workflow_env):
+    """The fourth clause of the one-off rule, which B6's table made reachable.
+
+    BINNED has no kept picture, no rating and no file, so the grid folds it
+    into a count. Saving a look on it is the plainest statement that somebody
+    means to run it again, so it has to come back into the grid -- otherwise
+    the owner's own recipe sits on a card they can no longer see.
+    """
+    assert _cards(workflow_env.owner)["one_offs"] == 1
+    _save_recipe(workflow_env.server, BINNED_CARD)
+    payload = _cards(workflow_env.owner)
+    assert payload["one_offs"] == 0
+    assert _by_key(payload)[BINNED_CARD]["saved_recipe_count"] == 1
 
 
 def _stack_row(server, stack_id, kind, core_hash, members):

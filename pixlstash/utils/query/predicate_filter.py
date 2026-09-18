@@ -161,6 +161,13 @@ class PredicateFilter(BaseModel):
     resolution_bucket: Optional[str] = None
     comfyui_models_filter: Optional[List[str]] = None
     comfyui_loras_filter: Optional[List[str]] = None
+    # "The pictures made by this workflow": the variants of one card (or of
+    # every card in one stack), resolved from the hub BEFORE the query is
+    # built, because the cards live in the hub and the pictures live in the
+    # vault - there is no join to write. ``None`` is no filter; an empty list
+    # is a card with no filed variant and must match nothing, so every read of
+    # this field tests ``is not None`` rather than truthiness.
+    workflow_structural_hashes: Optional[List[str]] = None
     tags_filter: Optional[List[str]] = None
     tags_rejected_filter: Optional[List[str]] = None
     hidden_tags_filter: Optional[List[str]] = None
@@ -414,6 +421,13 @@ class PredicateFilter(BaseModel):
                         f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_loras) WHERE value = :clf_{i})"
                     ).bindparams(**{f"clf_{i}": m})
                 )
+        if self.workflow_structural_hashes is not None:
+            # ponytail: one expanding IN, unchunked. SQLite's parameter ceiling
+            # is 32,766 on the bundled builds, so a card would need that many
+            # variants to reach it; a temp table and a join if one ever does.
+            preds.append(
+                Picture.workflow_structural_hash.in_(self.workflow_structural_hashes)
+            )
 
         preds.extend(self.face_predicates())
 

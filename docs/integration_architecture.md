@@ -548,8 +548,9 @@ the two sides have agreed:
    the non-LoRA models plus the LoRA slots marked *structural*
    (`services/workflow_identity.py`), so adding a character LoRA keeps the same
    card. In this API and in the code the `workflow_recipe` / `structural_hash`
-   tier is a **variant**; a *saved recipe* is the look a person keeps, and it
-   has no table yet — `saved_recipe_count` is therefore always `0`.
+   tier is a **variant**; a *saved recipe* is the look a person keeps, and B6's
+   `saved_recipe` table keys those on the same card key, so
+   `saved_recipe_count` is a real count rather than a placeholder.
 3. **`rating` and `rank` are different numbers and neither substitutes for the
    other.** `rating` is the plain mean of the stars a card has and is `null`
    when it has none; `rank` is the Bayesian mean the grid is *ordered* by,
@@ -571,15 +572,20 @@ the two sides have agreed:
    those chips as plain facts about a cover the payload would never name.
    Chips and size are therefore always consistent: a card outside a stack has
    `stack_size: 1` and no chips at all.
-5. **Nothing is precomputed, and `cards` is not everything.** The grid is two
-   vault queries — one `GROUP BY workflow_structural_hash` and one
-   `ROW_NUMBER()` window, plus one more only when the owner has chosen a cover
-   — joined in memory to the hub's card rows, with no aggregate table, so no
-   client may assume a figure is stable across a rating or an import. Hidden
-   cards and one-offs (fewer than three pictures, never rated, never imported)
-   are excluded and returned as the counts `hidden` and `one_offs`; both still
-   open by key on the detail route, because hiding is a decision about the grid
+5. **Nothing is precomputed, and `cards` is not everything.** The grid is three
+   vault queries in one session — one `GROUP BY workflow_structural_hash`, one
+   `ROW_NUMBER()` window and one `GROUP BY workflow_key` over the saved recipes,
+   plus a fourth only when the owner has chosen a cover — joined in memory to
+   the hub's card rows, with no aggregate table, so no client may assume a
+   figure is stable across a rating or an import. Hidden cards and one-offs are
+   excluded and returned as the counts `hidden` and `one_offs`; both still open
+   by key on the detail route, because hiding is a decision about the grid
    rather than a deletion.
+
+   **A one-off is all four of**: fewer than three pictures, never rated, never
+   imported as a file, and with no saved recipe on it. The fourth clause is
+   B6's: saving a look is the plainest statement that somebody means to run a
+   workflow again, so a card carrying one is never folded into the count.
 
 **A saved workflow's picture inputs (#1305)** are the one write the view makes,
 and they live on the ComfyUI routes because they belong to the file, not to a
@@ -705,6 +711,19 @@ body.
 `GET /api/v1/comfyui/workflows` carries `has_selection_input` and `runnable`
 (a save node, in API format). The selection path offers a runnable workflow
 where `has_selection_input` is true, and the toolbar one where it is false.
+
+**The pictures a workflow made (v1.12 B5).** `GET /api/v1/pictures` takes
+`workflow_key=<card>` and `workflow_stack=<stored stack id, or the core hash of an automatic grouping>`, which is
+how a card or a stack opens onto its own grid without a route of its own: the
+server resolves the card to the variants that made its pictures and matches
+`picture.workflow_structural_hash` against them, so the client sends the key it
+was given and nothing else. Both narrow like every other filter on that route -
+given together they intersect, and they combine with tags, scores and the rest.
+**A card no picture was made with answers with an empty grid, never the whole
+library**; a client that treats "no results" as "filter ignored" would be
+reading it backwards. The key itself comes from a card read, or from
+`GET /api/v1/comfyui/pictures/{id}/recipe` (§11.2), which reports the card the
+picture's own variant is on.
 
 ---
 
@@ -1209,8 +1228,12 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
 
 - **Ask** `GET /api/v1/comfyui/pictures/{id}/recipe`. Answers whether the file carries a *replayable* recipe — the embedded API-format `prompt` chunk, never the UI `workflow` chunk — and pre-flights it against the user's ComfyUI:
   ```json
-  {"available": true, "reason": null, "summary": "API Workflow · 12 nodes",
-   "positive_prompt": "…", "seed": 12345, "models": ["…"], "loras": [],
+  {"available": true, "reason": null, "source": "comfyui",
+   "summary": "API Workflow · 12 nodes",
+   "positive_prompt": "…", "negative_prompt": "…", "seed": 12345,
+   "settings": {"steps": 25, "cfg": 7.5, "sampler_name": "euler",
+                "scheduler": "normal", "denoise": 1.0},
+   "workflow_key": "…", "models": ["…"], "loras": [],
    "node_count": 12,
    "node_classes": ["CheckpointLoaderSimple","CLIPTextEncode","KSampler","SaveImage"],
    "source_is_imported": true, "source_label": "Watched folder",
@@ -1223,10 +1246,15 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
   **Three distinct negative answers, and the SPA must not collapse them**, because they send the user to three different places:
   | Response | Meaning | UI |
   |---|---|---|
-  | `available:false`, `reason:"no_prompt_chunk"` | Ordinary photo, A1111 output, stripped metadata, or a UI-graph-only file | Recipe mode disabled: "No executable workflow embedded" |
+  | `available:false`, `reason:"no_prompt_chunk"` | Ordinary photo, stripped metadata, or a UI-graph-only file | Recipe mode disabled: "No executable workflow embedded" |
+  | `available:false`, `reason:"a1111"`, `source:"a1111"` | A1111 output: its recipe is readable (prompts, settings, LoRAs, seed) but is not a graph ComfyUI can be handed | Recipe mode disabled, the recipe still shown. A client that does not know this value falls through to the row above, which stays true |
   | `available:false`, `reason:"no_seed_input"` | The graph has no seed to change, so a re-run would be byte-identical (and would be deduped on `pixel_sha`, emitting no event — the user would see nothing at all) | Recipe mode disabled, with that reason |
   | `preflight.ok:false` | Checked, and this ComfyUI cannot run it | Recipe mode disabled, naming the missing node types / models / input images |
   | `preflight.checked:false` | ComfyUI was unreachable — **the check did not run; this is NOT a pass** | Recipe mode stays *selectable* but is **refused by default**: the run needs an explicit acknowledgement (below) |
+
+  **`settings`, `negative_prompt` and each `lora_slots[].strengths` are read from the picture's own file**, like `positive_prompt` beside them. `settings` holds whichever of `steps` / `cfg` / `sampler_name` / `scheduler` / `denoise` the graph names — read from any node, since split-sampler graphs spread them over a scheduler, a `KSamplerSelect` and a `CFGGuider` — so **treat every key as optional** and do not read the block as "the settings of the pass that made this picture": a graph that samples twice can report one pass's steps beside another's CFG. `strengths` is always numbers (`{"model": 0.8, "clip": 0.6}`), on both branches, and a key is absent rather than of another type when the graph wires it or the value cannot be rendered. Each settings key is reported **at its own type** — `steps` an int, `cfg` and `denoise` numbers, `sampler_name` and `scheduler` strings — and a value of the wrong type is absent rather than passed through, so `steps` is a number on both branches and never a string to be parsed. `workflow_key` is an opaque digest over a graph this token can already read from `/workflow`; it also encodes which LoRA slots the topology marks structural, a library-wide decision, which is one bit more than the file alone says — see the backend note. What a `workflow_key` *groups* is an owner-only question, answered by the card routes and never by this one.
+
+  On the `a1111` branch the values come from the infotext instead. a value that is wholly a number is reported as one (`steps`, `cfg_scale`), and anything else stays the text A1111 wrote (`size: "512x768"`, `sampler: "Euler a"`). `settings` then carries **A1111's own field names, as an open set** — `steps`, `sampler`, `cfg_scale`, `size` and whatever else that build wrote (`denoising_strength`, `clip_skip`, ADetailer and ControlNet fields) — so render it as a list of name/value pairs rather than reaching for named keys. `lora_slots[].node_id` and `.class_type` are `null` there: the reduction's ids name no node in any graph, and there is no replay to send one back to.
 
   `unchecked_fields > 0` means the check was partial (a field ComfyUI does not enumerate, or a `remote` combo it fills lazily) and must not read as a clean bill of health. It is **not** the same state as `checked:false` and must not be gated the same way.
 

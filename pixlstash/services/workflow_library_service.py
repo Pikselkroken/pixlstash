@@ -21,6 +21,7 @@ from sqlalchemy import and_, case, func, nullslast, or_
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture
+from pixlstash.services.saved_recipe_service import counts_by_workflow_key
 
 
 @dataclass(frozen=True)
@@ -432,11 +433,20 @@ def instance_hashes_for_variants(
 
 def read_card_grid(
     vault, cover_depth: int
-) -> tuple[dict[str, VariantActivity], list[CoverCandidate]]:
-    """The grid's whole vault side in one session: the counts and the covers."""
+) -> tuple[dict[str, VariantActivity], list[CoverCandidate], dict[str, int]]:
+    """The grid's whole vault side in one session.
+
+    Three statements, one task: the per-variant counts, the cover candidates
+    and how many saved recipes each card holds. They share a session because
+    the round trip is the expensive part, not the third `GROUP BY`.
+    """
 
     def _read(session: Session):
-        return variant_activity(session), variant_cover_candidates(session, cover_depth)
+        return (
+            variant_activity(session),
+            variant_cover_candidates(session, cover_depth),
+            counts_by_workflow_key(session),
+        )
 
     return vault.db.run_immediate_read_task(_read)
 
