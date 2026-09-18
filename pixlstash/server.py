@@ -25,6 +25,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
 from pillow_heif import register_heif_opener
@@ -112,6 +113,7 @@ from pixlstash.routes.tag_suggestions import (
     create_router as create_tag_suggestions_router,
 )
 from pixlstash.routes.operations import create_router as create_operations_router
+from pixlstash.routes.recipes import create_router as create_recipes_router
 from pixlstash.routes.reviews import create_router as create_reviews_router
 from pixlstash.routes.insights import create_router as create_insights_router
 from pixlstash.routes.moves import create_router as create_moves_router
@@ -1490,7 +1492,16 @@ class Server(
 
             return JSONResponse(
                 status_code=422,
-                content={"detail": detail},
+                # NOTE for validator authors: whatever a validator puts in its
+                # ValueError text reaches the caller in this body, so it must
+                # not carry a host path, a credential or the input value.
+                #
+                # Encoded, not handed to JSONResponse raw: a validator that
+                # raises ValueError puts the exception OBJECT in the error's
+                # ``ctx`` (pydantic v2), which json.dumps cannot write, and the
+                # handler for a 422 would then itself fail with a 500. FastAPI's
+                # own default handler encodes for this reason.
+                content={"detail": jsonable_encoder(detail)},
                 headers=headers,
             )
 
@@ -1906,6 +1917,14 @@ class Server(
         # reaches OpenAPI and the generated route table.
         self.api.include_router(
             create_workflows_router(self),
+            prefix=API_V1_PREFIX,
+            dependencies=gate,
+        )
+        # Saved recipes (implementation plan §5.5, step B6). Vault rows, read
+        # against the hub's stacks; the module declares its own tag for the
+        # reason above.
+        self.api.include_router(
+            create_recipes_router(self),
             prefix=API_V1_PREFIX,
             dependencies=gate,
         )

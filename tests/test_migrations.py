@@ -1094,6 +1094,109 @@ def test_0119_hands_back_only_pictures_that_carry_no_workflow():
         }
 
 
+def _has_table(conn, name: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+        ).fetchone()
+        is not None
+    )
+
+
+_SAVED_RECIPE_COLUMNS = {
+    "id",
+    "name",
+    "position",
+    "workflow_key",
+    "prompt",
+    "negative",
+    "loras",
+    "overrides",
+    "seed",
+    "keep_seed",
+    "source_picture_id",
+    "created_at",
+}
+
+
+def _assert_saved_recipe_shape(conn, built_by: str):
+    """The columns, the two indexes and the SET NULL, whichever built the table.
+
+    Called against BOTH the baseline's ``create_all()`` table and the
+    migration's, because those are two independent definitions of one table and
+    nothing else keeps them in step: a fresh vault would otherwise take its
+    shape from the model with no assertion on it at all, and the model losing
+    ``ondelete="SET NULL"`` would leave every test green while deleting a
+    picture a recipe points at started raising.
+    """
+    assert _has_table(conn, "saved_recipe"), f"no saved_recipe table from {built_by}"
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(saved_recipe)")}
+    assert columns == _SAVED_RECIPE_COLUMNS, built_by
+    indexes = {row[1] for row in conn.execute("PRAGMA index_list(saved_recipe)")}
+    assert {
+        "ix_saved_recipe_workflow_key",
+        "ix_saved_recipe_source_picture_id",
+    } <= indexes, f"{built_by}: indexes are {indexes}"
+    foreign_keys = {
+        (row[2], row[3], row[4], row[6])
+        for row in conn.execute("PRAGMA foreign_key_list(saved_recipe)")
+    }
+    assert foreign_keys == {("picture", "source_picture_id", "id", "SET NULL")}, (
+        f"{built_by}: foreign keys are {foreign_keys}"
+    )
+
+
+def test_0121_creates_saved_recipe_on_a_fresh_and_on_an_existing_vault():
+    """The table is there both ways round, and a row survives the upgrade.
+
+    A fresh vault gets ``saved_recipe`` from the baseline's ``create_all()``, so
+    the migration must find it already there and do nothing; a vault upgraded
+    from before B6 has no such table and the migration has to create it. The
+    same run covers both, and the shape is asserted **twice**: once against
+    the table the baseline built from the model and once against the one the
+    migration created, because those are two definitions of one table that
+    nothing else holds together. The picture the foreign key points at is left
+    in place so the SET NULL has something to be checked against.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            # Fresh: the baseline built it from the model, and the migration ran
+            # over a database that already had it.
+            _assert_saved_recipe_shape(conn, "the baseline's create_all()")
+            conn.execute("DROP TABLE saved_recipe")
+            _insert_minimal_row(conn, "picture", file_path="source.png")
+            conn.execute(
+                "UPDATE alembic_version SET version_num = '0120_add_picture_ocr_text'"
+            )
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            _assert_saved_recipe_shape(conn, "migration 0121")
+            # The source picture nulls itself rather than taking the recipe with
+            # it: deleting a picture does not unmake the look it taught.
+            picture_id = conn.execute("SELECT id FROM picture").fetchone()[0]
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute(
+                "INSERT INTO saved_recipe (name, position, workflow_key, prompt, "
+                "loras, overrides, keep_seed, source_picture_id) "
+                "VALUES ('a look', 0, 'a-key', 'a prompt', '[]', '{}', 0, ?)",
+                (picture_id,),
+            )
+            conn.execute("DELETE FROM picture WHERE id = ?", (picture_id,))
+            conn.commit()
+            assert conn.execute(
+                "SELECT source_picture_id FROM saved_recipe"
+            ).fetchone() == (None,)
+
+
 def test_the_migration_chain_has_exactly_one_head():
     """The v1.8.1 merge left two 0086 revisions; only one may be a head.
 
