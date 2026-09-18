@@ -992,7 +992,21 @@ def extract_comfy_workflow_info(metadata: dict) -> dict | None:
         summary_parts.append(f"{stats['link_count']} links")
     summary = " · ".join(summary_parts) or "Detected ComfyUI metadata"
 
-    gen_info = extract_generation_info(workflow)
+    # **The graph shown and the graph read are two different questions.**
+    # `find_comfy_workflow` prefers the UI `workflow` chunk, which is right for
+    # what is displayed, copied and pasted back into ComfyUI. It is the wrong
+    # source for what the picture was MADE with: the UI chunk is the editor's
+    # view, read here by mapping named inputs onto positional `widgets_values`
+    # and, failing that, taking the longest string in a node - so a graph whose
+    # encoder is fed by a custom prompt-builder reports that node's template
+    # instead of the prompt, and can miss the models and the seed entirely.
+    #
+    # The `prompt` chunk is the resolved graph the ComfyUI server actually
+    # executed, which is why `GET /comfyui/pictures/{id}/recipe` reads only that
+    # one. Facts come from it whenever the file has one; a UI-only file falls
+    # back to the editor's view, which is then genuinely all there is.
+    executed = find_comfy_api_prompt(metadata)
+    gen_info = extract_generation_info(executed if executed is not None else workflow)
 
     return {
         "workflow": workflow,
@@ -1001,8 +1015,8 @@ def extract_comfy_workflow_info(metadata: dict) -> dict | None:
         "models": gen_info["models"],
         "loras": gen_info["loras"],
         "positive_prompt": gen_info["positive_prompt"],
-        "negative_prompt": extract_recipe_extras(workflow)["negative_prompt"]
-        if api_format
+        "negative_prompt": extract_recipe_extras(executed)["negative_prompt"]
+        if executed is not None
         else None,
         "seed": gen_info["seed"],
         # The seed as text as well as a number. ComfyUI draws seeds up to

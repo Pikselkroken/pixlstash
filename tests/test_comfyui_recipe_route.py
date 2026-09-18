@@ -809,12 +809,26 @@ def _shelf_model_id(server) -> int:
 
 
 def _topology_hash(server, pic_id: int) -> str:
-    def read(session):
-        return session.get(Picture, pic_id).workflow_topology_hash
+    """The topology the scan filed for *pic_id*, waited for.
 
-    value = server.vault.db.run_task(read)
-    assert value, "the workflow scan has not filed this picture yet"
-    return value
+    Polled rather than read once, and read BEFORE the request that is asserted
+    against it. The extraction pass stamps this column in the background, so a
+    single read taken after the response compares two different moments: the
+    route honestly answered `null` for a picture not yet filed, and the column
+    was written while the assertion was being set up. That passed or failed on
+    how busy the machine was - it went red only when `tests/test_migrations.py`
+    ran first and slowed the scan down. `_variant_of` below waits for the same
+    pass for the same reason.
+    """
+    for _ in range(120):
+        pics = server.vault.db.run_immediate_read_task(
+            Picture.find, id=pic_id, select_fields=["id", "workflow_topology_hash"]
+        )
+        value = getattr(pics[0], "workflow_topology_hash", None) if pics else None
+        if value:
+            return value
+        time.sleep(0.5)
+    raise AssertionError(f"the workflow scan never filed picture {pic_id}")
 
 
 def _second_picture(client) -> int:
@@ -1158,6 +1172,8 @@ def _bin(server, picture_id: int):
 def test_the_recipe_read_carries_the_models_settings_and_workflow(env):
     server, client, pic_id = env
     _shelf_checkpoint(server)
+    # Before the request, not after: see `_topology_hash`.
+    topology = _topology_hash(server, pic_id)
 
     r = client.get(f"{API}/comfyui/pictures/{pic_id}/workflow")
     assert r.status_code == 200, r.text
@@ -1174,7 +1190,7 @@ def test_the_recipe_read_carries_the_models_settings_and_workflow(env):
     assert body["workflow"]["4"]["class_type"] == "CheckpointLoaderSimple"
     # And the key the "Open in Workflows" link navigates by, which the scan
     # wrote when it filed this picture.
-    assert body["topology_hash"] == _topology_hash(server, pic_id)
+    assert body["topology_hash"] == topology
     # An import is not lineage: nothing ran here, so no `generation_input` row
     # exists and none is invented.
     assert body["inputs"] == []

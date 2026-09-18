@@ -201,3 +201,129 @@ def test_a_graph_with_no_seed_has_no_seed_text_rather_than_the_string_none():
     graph = {"9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "x"}}}
     info = extract_comfy_workflow_info({"prompt": json.dumps(graph)})
     assert info["seed"] is None and info["seed_text"] is None
+
+
+# ===========================================================================
+# The facts come from the graph that RAN, not the editor's view
+#
+# Reported against the shipped Recipe tab: "the prompt has nothing to do with
+# reality, but Generate variants shows the correct one". Generate variants reads
+# `GET /comfyui/pictures/{id}/recipe`, which uses the API `prompt` chunk; this
+# read preferred the UI `workflow` chunk, whose text is recovered by mapping
+# named inputs onto positional `widgets_values` and, failing that, taking the
+# longest string in the node. A custom prompt-builder feeding the encoder is
+# enough to make the two disagree completely.
+# ===========================================================================
+
+_EXECUTED = {
+    "3": {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": 777,
+            "positive": ["6", 0],
+            "negative": ["7", 0],
+            "model": ["4", 0],
+        },
+    },
+    "4": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {"ckpt_name": "realvisXL_v5.safetensors"},
+    },
+    "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "a castle on a hill"}},
+    "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "blurry"}},
+}
+
+# The same graph as the editor stores it: the encoder's text arrives over a link
+# from a builder node, so the encoder's own widget is empty and the only string
+# to be found on the builder is its template.
+_EDITOR_VIEW = {
+    "last_node_id": 9,
+    "last_link_id": 5,
+    "nodes": [
+        {
+            "id": 3,
+            "type": "KSampler",
+            "inputs": [{"name": "positive", "link": 2, "type": "CONDITIONING"}],
+            "widgets_values": [777, "randomize", 25],
+        },
+        {
+            "id": 6,
+            "type": "CLIPTextEncode",
+            "inputs": [
+                {"name": "clip", "link": 4},
+                {"name": "text", "link": 5, "type": "STRING"},
+            ],
+            "widgets_values": [""],
+        },
+        {
+            "id": 9,
+            "type": "LoRACharacterPromptBuilder",
+            "inputs": [],
+            "widgets_values": ["wildcards_v3", "a template, not the prompt", "off"],
+        },
+    ],
+    "links": [[5, 9, 0, 6, 1, "STRING"], [2, 6, 0, 3, 1, "CONDITIONING"]],
+}
+
+_BOTH_CHUNKS = {
+    "png": {
+        "workflow": json.dumps(_EDITOR_VIEW),
+        "prompt": json.dumps(_EXECUTED),
+    }
+}
+
+
+def test_the_prompt_is_the_one_that_ran_not_the_editors_longest_string():
+    info = extract_comfy_workflow_info(_BOTH_CHUNKS)
+    assert info["positive_prompt"] == "a castle on a hill"
+    assert info["negative_prompt"] == "blurry"
+
+
+def test_the_models_and_seed_come_from_the_executed_graph_too():
+    """The same defect, and the reason the fix is not scoped to the prompt: the
+    editor's view surrenders these entirely."""
+    info = extract_comfy_workflow_info(_BOTH_CHUNKS)
+    assert info["models"] == ["realvisXL_v5.safetensors"]
+    assert info["seed"] == 777
+
+
+def test_the_graph_shown_is_still_the_editors_view():
+    """Copy and Download exist so a workflow can be pasted back into ComfyUI,
+    and the API graph is not what the editor opens."""
+    info = extract_comfy_workflow_info(_BOTH_CHUNKS)
+    assert info["is_api_format"] is False
+    assert info["workflow"] == _EDITOR_VIEW
+
+
+def test_a_file_with_only_an_editor_view_still_reads_what_it_can():
+    """No `prompt` chunk: the editor's view is genuinely all there is, so the
+    read falls back to it rather than reporting nothing.
+
+    Drawn with the text on the encoder's own widget, which is where the UI walk
+    is reliable - the point is that the fallback still runs, not that the
+    heuristic behind it is good.
+    """
+    ui_only = {
+        "last_node_id": 6,
+        "last_link_id": 2,
+        "nodes": [
+            {
+                "id": 3,
+                "type": "KSampler",
+                "inputs": [{"name": "positive", "link": 2, "type": "CONDITIONING"}],
+                "widgets_values": [4242, "randomize", 25],
+            },
+            {
+                "id": 6,
+                "type": "CLIPTextEncode",
+                "inputs": [{"name": "clip", "link": 1, "widget": {"name": "text"}}],
+                "widgets_values": ["a lighthouse in fog"],
+            },
+        ],
+        "links": [[2, 6, 0, 3, 1, "CONDITIONING"]],
+    }
+    info = extract_comfy_workflow_info({"png": {"workflow": json.dumps(ui_only)}})
+    assert info["workflow"] == ui_only
+    assert info["positive_prompt"] == "a lighthouse in fog"
+    # `extract_recipe_extras` reads the API format only, so there is none.
+    assert info["negative_prompt"] is None
