@@ -237,6 +237,25 @@ describe("WorkflowCard", () => {
     expect(wrapper.find(".wf-card__badge--start").text()).toContain("6");
   });
 
+  it("opens the stack from the layered count as well as from ▸", async () => {
+    const wrapper = mountCard(CROWDED, { panelId: "stack-panel" });
+    const badge = wrapper.find(".wf-card__badge--start");
+    // It is the mark that says there are cards underneath, so it is the first
+    // thing a reader aims at. A real button, but off the tab order and hidden
+    // from assistive tech: ▸ is the announced control, and hiding a second one
+    // is only honest while the two do exactly the same thing.
+    expect(badge.element.tagName).toBe("BUTTON");
+    expect(badge.attributes("tabindex")).toBe("-1");
+    expect(badge.attributes("aria-hidden")).toBe("true");
+    await badge.trigger("click");
+    expect(wrapper.emitted("toggle")).toHaveLength(1);
+  });
+
+  it("does not put a layered count on a card that is not a stack", () => {
+    const wrapper = mountCard(BARE);
+    expect(wrapper.find(".wf-card__badge--start").exists()).toBe(false);
+  });
+
   it("keeps the layered count on a stack with no pictures", () => {
     const wrapper = mountCard({ ...CROWDED, covers: [], picture_count: 0 });
     expect(wrapper.find(".wf-card__cover--empty").exists()).toBe(true);

@@ -1,4 +1,8 @@
-import { MODEL_SHELF_ROUTES, WORKFLOW_ROUTES } from "../router/routeNames";
+import {
+  MODEL_SHELF_ROUTES,
+  WORKFLOW_ROUTES,
+  WORKFLOWS_NEXT_ROUTE,
+} from "../router/routeNames";
 import { computed, nextTick, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { isReadOnly } from "../utils/apiClient";
@@ -416,6 +420,14 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     () => !isReadOnly.value && WORKFLOW_ROUTES.includes(route.name),
   );
 
+  // v1.12 F1a: the new Workflows grid, on its own temporary route with no
+  // sidebar entry, so the shipped shelf keeps working beside it until F1b
+  // swaps the two. Read-only for the shelf's reason — `/workflows/cards` is
+  // owner-only — and it is bounced by the same watcher below.
+  const isWorkflowsNextView = computed(
+    () => !isReadOnly.value && route.name === WORKFLOWS_NEXT_ROUTE,
+  );
+
   /** Open the workflow library. */
   function handleSelectWorkflows() {
     pushAppRoute({ name: "workflows" });
@@ -450,6 +462,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
         readOnly &&
         (MODEL_SHELF_ROUTES.includes(name) ||
           WORKFLOW_ROUTES.includes(name) ||
+          name === WORKFLOWS_NEXT_ROUTE ||
           name === "insights" ||
           name === "moves")
       )
@@ -564,6 +577,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     isInsightsView,
     isMovesView,
     isWorkflowsView,
+    isWorkflowsNextView,
     handleSelectModels,
     handleSelectInsights,
     handleSelectMoves,

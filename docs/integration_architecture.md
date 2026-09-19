@@ -596,9 +596,9 @@ the two sides have agreed:
    `stack_size`, `saved_recipe_count`, `defaults` — and `mark` carries B1's own
    `structural` | `recipe` vocabulary rather than a translation of it, which is
    how the solid/dashed meaning would get inverted. The route adds
-   `topology_hash`, `variant_count`, `member_keys` and `rank` beside them;
-   a caller that only knows the document ignores those and still needs no
-   mapping.
+   `topology_hash`, `variant_count`, `member_keys`, `rank` and `last_used`
+   beside them; a caller that only knows the document ignores those and still
+   needs no mapping.
 
    **`name` is never null**, and that is part of the contract rather than a
    convenience. `workflow_attr.name` is written only on an explicit rename, so
@@ -621,6 +621,15 @@ the two sides have agreed:
    smoothed towards the library's own mean rating, and is meaningless shown on
    its own. A card nobody rated has `rating: null` and a `rank` near the
    library average, which is the point of having both.
+
+   **`last_used` (v1.12 F1a) is the third of these and is nobody else's job.**
+   It is when a kept picture was last made by any variant of the card, in the
+   same ISO spelling `GET /workflows` already serves, and `null` when the card
+   has no kept pictures. The Workflows grid offers *Recently used* beside *Your
+   ratings* and *Picture count*, and nothing already on the card carries it:
+   `rank` is a rating and `covers` is an order, not a date. A client sorting by
+   it puts `null` BELOW every dated card — reading "never" as a date is how a
+   workflow with nothing to show would outrank every workflow made before 1970.
 4. **The grid draws one card per stack.** `stack_size` ≥ 2 makes a card a
    stack; the card drawn is the cover, `member_keys` names the rest, and the
    cover's `differs_by` is the union over the members. The order is a manual

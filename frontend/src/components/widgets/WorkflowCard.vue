@@ -42,13 +42,23 @@
       >
     </div>
 
-    <span
+    <!-- The layered count opens the stack too (#1402): it is the mark that
+         says there are more cards under this one, so it is where a reader
+         reaches first. A button, but `aria-hidden` and off the tab order like
+         the rest of the card's decoration — ▸ below is the announced control,
+         and hiding this one is only defensible while the two do exactly the
+         same thing. So no `.stop`: like ▸, the click also reaches the row
+         underneath and selects the card. -->
+    <button
       v-if="stack"
-      class="wf-card__badge wf-card__badge--start"
+      type="button"
+      class="wf-card__badge wf-card__badge--start wf-card__badge--button"
+      tabindex="-1"
       aria-hidden="true"
+      @click="emit('toggle')"
     >
       <v-icon size="12">mdi-layers</v-icon>{{ card.stack_size }}
-    </span>
+    </button>
 
     <!-- The visible rows are hidden from assistive tech: the card's own label
          already reads all of them, including what "+N" clipped. -->
@@ -239,6 +249,16 @@ const accessibleName = computed(() => cardAccessibleName(props.card));
 .wf-card__badge--start {
   left: var(--space-3);
   z-index: 1;
+}
+
+/* The badge family is inert decoration; this one is a control, so it takes
+   the clicks back and drops the button chrome that would otherwise paint a
+   second border over the pill. */
+.wf-card__badge--button {
+  border: 0;
+  font-family: inherit;
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 /* A pictureless stack's count sits top-left of the empty cover, so the

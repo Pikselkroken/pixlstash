@@ -89,6 +89,12 @@ const ReviewSessionsOverlay = defineAsyncComponent(
 const WorkflowShelf = defineAsyncComponent(
   () => import("./components/views/WorkflowShelf.vue"),
 );
+// v1.12 F1a: the new Workflows grid, reachable only by typing
+// `/workflows-next`. Async like the shelf, and for the same reason — nothing
+// that is not on screen belongs in the first chunk.
+const WorkflowsView = defineAsyncComponent(
+  () => import("./components/views/WorkflowsView.vue"),
+);
 // The workflow library's right rail. Async like the view it belongs to, and a
 // component of its own rather than a branch inside StatsSidebar: that panel
 // fetches on watchers, so a hidden-but-mounted copy would keep asking for
@@ -202,6 +208,7 @@ const {
   isInsightsView,
   isMovesView,
   isWorkflowsView,
+  isWorkflowsNextView,
   handleSelectModels,
   handleSelectInsights,
   handleSelectMoves,
@@ -796,6 +803,12 @@ defineExpose({
                    unmounted while it is open. -->
               <WorkflowShelf
                 v-else-if="isWorkflowsView"
+                @open-settings="openSettingsDialog"
+              />
+              <!-- The same slot, for the grid that replaces the shelf in F1b.
+                   It has no sidebar entry: `/workflows-next` is typed. -->
+              <WorkflowsView
+                v-else-if="isWorkflowsNextView"
                 @open-settings="openSettingsDialog"
               />
               <ImageGrid

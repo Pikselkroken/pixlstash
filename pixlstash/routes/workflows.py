@@ -293,6 +293,15 @@ class WorkflowCard(BaseModel):
     topology_hash: str
     variant_count: int = 0
     member_keys: list[str] = Field(default_factory=list)
+    last_used: str | None = Field(
+        None,
+        description=(
+            "When a kept picture was last made by any variant of this card, "
+            "as the same ISO string `/workflows` serves. Null when the card "
+            "has no kept pictures. The Workflows grid's *Recently used* sort "
+            "reads it; `rank` cannot stand in, being a rating."
+        ),
+    )
     rank: float = Field(
         0.0,
         description=(
@@ -618,6 +627,7 @@ def _card(figure, defaults=()) -> WorkflowCard:
         topology_hash=figure.card.topology_hash,
         variant_count=len(figure.card.variants),
         rank=figure.rank,
+        last_used=_iso(figure.last_used),
         member_keys=[
             key for key in figure.member_keys if key != figure.card.workflow_key
         ],

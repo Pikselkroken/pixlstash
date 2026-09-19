@@ -3087,6 +3087,25 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
     assert card["loras"] == [{"name": None, "kind": "lora", "mark": "recipe"}]
 
 
+def test_a_card_says_when_it_was_last_used_so_the_grid_can_sort_by_it(
+    workflow_env,
+):
+    """`last_used`, in the same ISO spelling `/workflows` already serves.
+
+    The Workflows grid (F1a) offers *Recently used* beside *Your ratings* and
+    *Picture count*, and nothing else on the card carries it: `rank` is a
+    smoothed rating and `covers` is an order, not a date. A card whose pictures
+    are all binned has no last use and must read null rather than an epoch,
+    which would sort it as the oldest workflow in the library instead of one
+    with nothing to date.
+    """
+    cards = _by_key(_cards(workflow_env.owner))
+    assert cards[BUSY_CARD]["last_used"].startswith("2026-08-13")
+    # BINNED is dropped from the grid (its pictures are all in the scrapheap),
+    # so its null is asserted where it is still served: its own detail route.
+    assert _detail(workflow_env.owner, BINNED_CARD)["card"]["last_used"] is None
+
+
 def test_a_card_is_never_nameless(workflow_env):
     """`name` may not be null, and most cards have no name of their own.
 

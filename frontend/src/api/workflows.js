@@ -71,3 +71,30 @@ export async function getWorkflowGraph(structuralHash) {
     ),
   );
 }
+
+/**
+ * The Workflows grid: one card per stack, plus what it left out (v1.12 B3).
+ *
+ * @returns {Promise<{cards: Array<Object>, one_offs: number, hidden: number}>}
+ */
+export async function listWorkflowCards() {
+  const body = await unwrap(apiClient.get("/workflows/cards"));
+  return {
+    cards: Array.isArray(body?.cards) ? body.cards : [],
+    one_offs: body?.one_offs ?? 0,
+    hidden: body?.hidden ?? 0,
+  };
+}
+
+/**
+ * One card opened — the only way to read a stack member, which the grid never
+ * lists: it draws the cover alone and names the rest in `member_keys`.
+ *
+ * @param {string} workflowKey
+ * @returns {Promise<{card: Object, notes: ?string, hidden: boolean, variants: Array<Object>}>}
+ */
+export async function getWorkflowCard(workflowKey) {
+  return unwrap(
+    apiClient.get(`/workflows/cards/${encodeURIComponent(workflowKey)}`),
+  );
+}

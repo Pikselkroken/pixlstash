@@ -58,6 +58,7 @@ import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
 import { useMovesStore } from "./useMovesStore";
 import { useWorkflowShelfStore } from "./useWorkflowShelfStore";
+import { useWorkflowsStore } from "./useWorkflowsStore";
 import { useWorkflowRunStore } from "./useWorkflowRunStore";
 
 /**
@@ -146,6 +147,30 @@ const STORES = [
       !s.loaded &&
       s.selectedHash === null &&
       Object.keys(s.samples).length === 0,
+  },
+  {
+    // v1.12 F1a, the Workflows GRID. Same reasoning as the shelf above and one
+    // more reason: a card's covers are thumbnail URLs of the ACTIVE library's
+    // pictures, and an open stack's members were read one owner-only detail
+    // request at a time. The sort key is kept - it is the user's own
+    // preference and names nothing.
+    name: "useWorkflowsStore",
+    use: useWorkflowsStore,
+    seed: (s) => {
+      s.cards = [{ key: "a".repeat(64), picture_count: 12, member_keys: [] }];
+      s.hidden = 3;
+      s.members = { ["a".repeat(64)]: [{ key: "a".repeat(64) }] };
+      s.openStackKey = "a".repeat(64);
+      s.selectedKeys = ["a".repeat(64)];
+      s.loaded = true;
+    },
+    isEmpty: (s) =>
+      s.cards.length === 0 &&
+      !s.loaded &&
+      s.hidden === 0 &&
+      s.openStackKey === null &&
+      s.selectedKeys.length === 0 &&
+      Object.keys(s.members).length === 0,
   },
   {
     // The run panel holds the grid's selection, which names pictures of the
