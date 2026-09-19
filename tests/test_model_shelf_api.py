@@ -1165,30 +1165,34 @@ def test_a_rescan_is_a_task_with_progress_a_denominator_and_one_scan_per_folder(
     assert r.status_code == 202, r.text
     task_id = r.json()["task_id"]
     assert task_id, r.text
-    assert started.wait(30), "the submitted task never reached the scanner"
+    try:
+        assert started.wait(30), "the submitted task never reached the scanner"
 
-    # The task runner owns it. Not a thread this route spawned and forgot.
-    assert ran_on[0].startswith("vault-task-runner"), ran_on
+        # The task runner owns it. Not a thread this route spawned and forgot.
+        assert ran_on[0].startswith("vault-task-runner"), ran_on
 
-    lane = shelf_env.owner.get(f"{API}/workers/progress").json()["workers"][
-        "ModelFolderScanTask"
-    ]
-    assert lane["running"] is True, lane
-    # The denominator is known before the first (potentially multi-GB) hash,
-    # which is the whole point of materialising the walk.
-    assert (lane["total"], lane["current"]) == (3, 0), lane
+        lane = shelf_env.owner.get(f"{API}/workers/progress").json()["workers"][
+            "ModelFolderScanTask"
+        ]
+        assert lane["running"] is True, lane
+        # The denominator is known before the first (potentially multi-GB) hash,
+        # which is the whole point of materialising the walk.
+        assert (lane["total"], lane["current"]) == (3, 0), lane
 
-    # One scan per folder: the second press is refused and told which task is
-    # already doing the work, rather than reading the same bytes again.
-    again = shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan")
-    assert again.status_code == 202, again.text
-    assert again.json() == {
-        "status": "already_running",
-        "id": folder_id,
-        "task_id": task_id,
-    }
+        # One scan per folder: the second press is refused and told which task is
+        # already doing the work, rather than reading the same bytes again.
+        again = shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan")
+        assert again.status_code == 202, again.text
+        assert again.json() == {
+            "status": "already_running",
+            "id": folder_id,
+            "task_id": task_id,
+        }
+    finally:
+        # Inside the try, so an assertion that fires still releases the held
+        # scan instead of parking a TaskRunner slot on release.wait(30).
+        release.set()
 
-    release.set()
     row = _await_scan(shelf_env, folder_id)
     assert row["scan_status"] == "completed", row
     assert row["scan_error"] is None, row
