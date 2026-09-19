@@ -790,7 +790,14 @@ absolute path instead - `which pixlstash-mcp` in a shell where PixlStash runs
 prints it.
 
 Tools: `search_pictures`, `list_pictures`, `get_picture`, `view_picture`,
-`list_tags`, `get_recipe`.
+`list_tags`, `list_sets`, `list_characters`, `list_projects`, `get_recipe`.
+`list_pictures` and `search_pictures` also narrow by `set_id`, `character_id`,
+`project_id` and `tags`.
+
+If the agent answers questions about your library from the shell instead of
+from these tools, it is probably not reaching the server. `pixlstash-mcp`
+writes a line to stderr at start-up when nothing is listening, which most
+clients show in their MCP server log.
 
 ## Troubleshooting
 

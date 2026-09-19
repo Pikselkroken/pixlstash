@@ -12,6 +12,7 @@ import http.server
 import io
 import json
 import re
+import socket
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -149,9 +150,19 @@ def test_protocol_handshake_and_tool_list():
         "get_picture",
         "view_picture",
         "list_tags",
+        "list_sets",
+        "list_characters",
+        "list_projects",
         "get_recipe",
     }
     assert all(t["annotations"]["readOnlyHint"] is True for t in tools)
+    # The handshake has to say what the server is for. Without `instructions`
+    # a client sees six names and reaches for `ls` instead, which cannot see
+    # tags, sets or recipes at all.
+    instructions = replies[0]["result"]["instructions"]
+    assert "PixlStash" in instructions
+    for mentioned in ("list_sets", "search_pictures", "get_recipe"):
+        assert mentioned in instructions
     assert replies[2]["error"]["code"] == -32601
     assert replies[3]["error"]["code"] == -32602
     assert replies[4]["error"]["code"] == -32602
@@ -216,6 +227,57 @@ def test_an_unreadable_config_falls_back_to_the_default_port(
     # And when the file is not there at all.
     monkeypatch.setattr(mcp_server, "SERVER_CONFIG_PATH", str(tmp_path / "absent.json"))
     assert mcp_server.configured_url() == f"http://127.0.0.1:{mcp_server.DEFAULT_PORT}"
+
+
+def test_a_closed_port_says_why_rather_than_connection_refused():
+    """The desktop app binds the configured port only for remote access.
+
+    "Connection refused" alone sends the owner hunting for a crashed server,
+    when the likelier cause is that the port is simply not being served.
+    """
+    # Bind and drop a port, so nothing is listening on an address that exists.
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        dead_port = probe.getsockname()[1]
+
+    fetch = mcp_server.http_fetch(f"http://127.0.0.1:{dead_port}", "example-token")
+    result = _call(fetch, "list_tags")
+    text = result["content"][0]["text"]
+
+    assert result["isError"] is True
+    assert f"Nothing is listening on http://127.0.0.1:{dead_port}" in text
+    assert "remote access" in text
+    assert "--url" in text
+    # The probe reports the same thing, so start-up says it before any tool.
+    assert mcp_server.warn_if_unreachable(fetch, "irrelevant") is False
+
+
+def test_a_non_refusal_keeps_its_own_reason():
+    """Only a refused connection gets the remote-access explanation."""
+    message = mcp_server.unreachable_message(
+        "http://127.0.0.1:9537", OSError("name resolution went wrong")
+    )
+    assert "name resolution went wrong" in message
+    assert "remote access" not in message
+
+
+def test_membership_filters_reach_the_listing_as_query_params():
+    seen = []
+
+    def fetch(path, params):
+        seen.append((path, dict(params)))
+        return 200, "application/json", b"[]"
+
+    _call(fetch, "list_pictures", set_id=7, character_id=3, project_id="UNASSIGNED")
+    path, params = seen[0]
+    assert path == "/pictures"
+    assert params["set_id"] == "7"
+    assert params["character_id"] == "3"
+    assert params["project_id"] == "UNASSIGNED"
+
+    # A filter that is not an id is refused rather than sent.
+    assert _call(fetch, "list_pictures", set_id={"a": 1})["isError"] is True
+    assert len(seen) == 1
 
 
 @contextmanager
@@ -357,7 +419,10 @@ def test_every_tool_path_resolves_to_a_mounted_route(env):
     _call(fetch, "list_pictures")
     for tool in PICTURE_TOOLS:
         _call(fetch, tool, picture_id=env.pic_a)
-    _call(fetch, "list_tags")
+    for tool in ("list_tags", "list_sets", "list_characters", "list_projects"):
+        _call(fetch, tool)
+    # Every tool is exercised, so a new one cannot skip this check by
+    # forgetting to be listed here.
     assert len(paths) == len(mcp_server.TOOLS)
 
     # Every GET path template the server mounts, via the same inventory the
@@ -405,6 +470,37 @@ def test_view_picture_returns_an_image(env):
     assert content[0]["type"] == "image"
     assert content[0]["mimeType"] == "image/webp"
     assert content[0]["data"]
+
+
+@pytest.mark.parametrize("tool", ["list_sets", "list_characters", "list_projects"])
+def test_the_collection_tools_answer_the_owner_with_a_list(env, tool):
+    """Each is wired to a route that exists and answers.
+
+    The READ middleware refuses a path that does not exist with the same 403 a
+    real refusal gets, so an owner token answering with a list is what tells a
+    working tool from a typo.
+    """
+    result = _call(env.owner, tool)
+    assert result["isError"] is False, result
+    assert isinstance(json.loads(result["content"][0]["text"]), list)
+
+
+def test_a_picture_scoped_token_sees_collections_only_where_its_scope_allows(env):
+    """Scope is the route's, not the client's, and it is not uniform.
+
+    A picture-scoped token still gets the set and character listings (narrowed
+    by `SCOPED_LIST`), but `/projects` refuses a picture-scoped token outright
+    by resource type. Pinned because the difference is the routes' decision and
+    the tools must pass it through rather than paper over it.
+    """
+    for tool in ("list_sets", "list_characters"):
+        result = _call(env.scoped, tool)
+        assert result["isError"] is False, result
+        assert isinstance(json.loads(result["content"][0]["text"]), list)
+
+    refused = _call(env.scoped, "list_projects")
+    assert refused["isError"] is True
+    assert "answered 403" in refused["content"][0]["text"]
 
 
 def test_list_tags_answers_a_scoped_token(env):

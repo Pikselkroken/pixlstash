@@ -51,6 +51,37 @@ PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", PROTOCOL_VERSION}
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 200
+TIMEOUT_SECONDS = 60
+
+# Returned from `initialize`. Without it a client knows only six tool names and
+# reaches for `ls` and `find` instead, which cannot see any of this: tags,
+# scores, characters, sets, projects and recipes live in PixlStash's database,
+# and the files on disk carry none of them.
+INSTRUCTIONS = """\
+PixlStash is this machine's picture library: the owner's images plus everything \
+recorded about them. Use these tools to answer any question about the owner's \
+pictures, tags, picture sets, characters, projects or how an image was \
+generated.
+
+Prefer them over the shell and the filesystem. Tags, scores, set and character \
+membership, project grouping and ComfyUI recipes exist only in PixlStash's \
+database - listing image files with ls or find cannot see any of it, and the \
+database is not meant to be read directly.
+
+Where to start:
+- "how many sets / characters / projects" -> list_sets, list_characters, \
+list_projects.
+- "pictures of X" or any question about content -> search_pictures, which \
+matches meaning rather than filename.
+- "pictures in that set / of that character" -> list_pictures with set_id, \
+character_id or project_id from the list tools.
+- One picture's tags and scores -> get_picture. To actually look at it -> \
+view_picture.
+- "how was this made" -> get_recipe.
+
+Everything is read-only; there is no tool here that changes the library. A \
+refusal means the API token is scoped to part of the library, not that the \
+data is missing."""
 
 # (path, params) -> (status, content type, body). The one seam between the
 # protocol and the network, so tests can route requests through a TestClient.
@@ -68,31 +99,52 @@ _TAGS = {
     "items": {"type": "string"},
     "description": "Only pictures carrying every one of these tags.",
 }
+_SET_ID = {
+    "type": "integer",
+    "description": "Only pictures in this picture set (see list_sets).",
+}
+_CHARACTER_ID = {
+    "type": "integer",
+    "description": "Only pictures of this character (see list_characters).",
+}
+_PROJECT_ID = {
+    "type": "string",
+    "description": "Only pictures in this project id (see list_projects), or "
+    "'UNASSIGNED' for those in none.",
+}
+# The membership filters every picture listing shares.
+_FILTERS = {
+    "tags": _TAGS,
+    "set_id": _SET_ID,
+    "character_id": _CHARACTER_ID,
+    "project_id": _PROJECT_ID,
+    "limit": _LIMIT,
+    "offset": _OFFSET,
+}
 
 TOOLS = [
     {
         "name": "search_pictures",
         "description": "Semantic text search over the library, best match "
-        "first. Returns picture metadata (id, tags, description, score...).",
+        "first: finds pictures by what they depict, not by filename. Returns "
+        "picture metadata (id, description, score, dimensions, file_path...); "
+        "call get_picture for a picture's tags.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "What to look for."},
-                "tags": _TAGS,
-                "limit": _LIMIT,
-                "offset": _OFFSET,
+                **_FILTERS,
             },
             "required": ["query"],
         },
     },
     {
         "name": "list_pictures",
-        "description": "List pictures, newest first, optionally only those "
-        "carrying the given tags. Returns picture metadata.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"tags": _TAGS, "limit": _LIMIT, "offset": _OFFSET},
-        },
+        "description": "List pictures, newest first, optionally narrowed to a "
+        "set, character, project or tags. Returns picture metadata. Use this "
+        "rather than listing image files: the library holds pictures the "
+        "filesystem does not show as a collection.",
+        "inputSchema": {"type": "object", "properties": dict(_FILTERS)},
     },
     {
         "name": "get_picture",
@@ -115,7 +167,28 @@ TOOLS = [
     },
     {
         "name": "list_tags",
-        "description": "Every tag in the library with how many pictures carry it.",
+        "description": "Every tag in the library with how many pictures carry "
+        "it. Tags live in PixlStash's database, not in the image files.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "list_sets",
+        "description": "Every picture set: the owner's named collections, with "
+        "id, name and how many pictures each holds. Answers 'how many sets are "
+        "there' and gives the set_id the picture tools filter by.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "list_characters",
+        "description": "Every character: the recurring subjects the owner "
+        "tracks, with id and name. Gives the character_id the picture tools "
+        "filter by.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "list_projects",
+        "description": "Every project: the owner's top-level groupings, with "
+        "id and name. Gives the project_id the picture tools filter by.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
@@ -163,6 +236,26 @@ class ToolError(Exception):
     """A tool call that failed in a way the agent should be told about."""
 
 
+def unreachable_message(base: str, reason) -> str:
+    """Why nothing answered, in terms the owner can act on.
+
+    "Connection refused" on its own sends people hunting for a crashed server.
+    The likelier cause on the desktop is that the port is simply not being
+    served: the app's own window runs on a private port it picks per launch,
+    and the *configured* port is bound only when remote access is switched on.
+    """
+    if not isinstance(reason, ConnectionRefusedError):
+        return f"Could not reach PixlStash at {base}: {reason}"
+    return (
+        f"Nothing is listening on {base}. Either PixlStash is not running, or "
+        "it is the desktop app with remote access switched off - the app "
+        "serves its own window on a private port that changes every launch, "
+        "and only binds the configured port when remote access is enabled in "
+        "its settings. Enable it, start the server, or point this server "
+        "somewhere else with --url or PIXLSTASH_URL."
+    )
+
+
 def http_fetch(base_url: str, token: str) -> Fetch:
     """Return a :data:`Fetch` that GETs *base_url* with *token* as Bearer."""
     base = base_url.rstrip("/")
@@ -175,7 +268,7 @@ def http_fetch(base_url: str, token: str) -> Fetch:
             url, headers={"Authorization": f"Bearer {token}"}, method="GET"
         )
         try:
-            with opener.open(request, timeout=60) as response:
+            with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
                 return (
                     response.status,
                     response.headers.get("Content-Type", ""),
@@ -186,8 +279,14 @@ def http_fetch(base_url: str, token: str) -> Fetch:
             return exc.code, exc.headers.get("Content-Type", ""), exc.read()
         except urllib.error.URLError as exc:
             logger.warning("[mcp] Could not reach %s%s: %s", base, path, exc)
+            raise ToolError(unreachable_message(base, exc.reason)) from exc
+        except TimeoutError as exc:
+            # Only the *send* is wrapped in URLError; a read timeout arrives
+            # bare. The first search loads the text encoder, which is the call
+            # most likely to sit here.
+            logger.warning("[mcp] %s timed out after %ss", path, TIMEOUT_SECONDS)
             raise ToolError(
-                f"Could not reach PixlStash at {base}: {exc.reason}"
+                f"PixlStash did not answer {path} within {TIMEOUT_SECONDS}s."
             ) from exc
 
     return fetch
@@ -216,6 +315,16 @@ def _paging(arguments: dict) -> dict:
         raise ToolError("tags must be a list of strings")
     if tags:
         params["tag"] = tags
+    # Membership filters. `GET /pictures` already takes all three, and a
+    # scoped token still only sees what its scope allows: these narrow the
+    # listing, they never widen it.
+    for key in ("set_id", "character_id", "project_id"):
+        value = arguments.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise ToolError(f"{key} must be an id")
+        params[key] = str(value)
     return params
 
 
@@ -260,6 +369,12 @@ def call_tool(fetch: Fetch, name: str, arguments: dict) -> list[dict]:
         ]
     if name == "list_tags":
         return _json_content(_get(fetch, "/tags")[1])
+    if name == "list_sets":
+        return _json_content(_get(fetch, "/picture_sets")[1])
+    if name == "list_characters":
+        return _json_content(_get(fetch, "/characters")[1])
+    if name == "list_projects":
+        return _json_content(_get(fetch, "/projects")[1])
     if name == "get_recipe":
         path = f"/comfyui/pictures/{_picture_id(arguments)}/recipe"
         return _json_content(_get(fetch, path)[1])
@@ -288,6 +403,7 @@ def handle_message(fetch: Fetch, message: dict) -> dict | None:
             else PROTOCOL_VERSION,
             "capabilities": {"tools": {}},
             "serverInfo": {"name": SERVER_NAME, "version": _version()},
+            "instructions": INSTRUCTIONS,
         }
     elif method == "ping":
         result = {}
@@ -407,8 +523,27 @@ def main(argv: list[str] | None = None) -> int:
     if not token:
         print("PIXLSTASH_TOKEN is not set; mint an API token first.", file=sys.stderr)
         return 1
-    serve(http_fetch(args.url, token))
+    fetch = http_fetch(args.url, token)
+    # Say so now, on stderr, rather than letting the first tool call be the
+    # first the owner hears of it: a client that starts this server at launch
+    # shows nothing until something is asked of it. Not fatal - PixlStash may
+    # simply start later, and exiting would have the client give up for good.
+    warn_if_unreachable(fetch, args.url)
+    serve(fetch)
     return 0
+
+
+def warn_if_unreachable(fetch: Fetch, url: str) -> bool:
+    """Probe the server once; return whether it answered."""
+    try:
+        fetch("/tags", {"limit": 1})
+    except ToolError as exc:
+        print(f"pixlstash-mcp: {exc}", file=sys.stderr)
+        return False
+    except Exception as exc:  # A probe must never stop the server starting.
+        logger.warning("[mcp] Start-up probe of %s failed: %s", url, exc)
+        return False
+    return True
 
 
 if __name__ == "__main__":
