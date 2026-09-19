@@ -60,6 +60,9 @@ _RECIPE_ROUTES = (
     ("PUT", "/api/v1/recipes/order"),
     ("PATCH", "/api/v1/recipes/{recipe_id}"),
     ("DELETE", "/api/v1/recipes/{recipe_id}"),
+    # Export (v1.12 B8): the one route here that hands back the prompt as a
+    # file, which is the single thing the workflow export exists to strip.
+    ("GET", "/api/v1/recipes/{recipe_id}/export"),
 )
 
 
@@ -316,6 +319,7 @@ def test_no_scoped_token_can_read_or_write_a_saved_recipe(recipe_env):
         ("PUT", f"{API}/recipes/order", {"recipe_ids": [saved["id"]]}),
         ("PATCH", f"{API}/recipes/{saved['id']}", {"name": "stolen"}),
         ("DELETE", f"{API}/recipes/{saved['id']}", None),
+        ("GET", f"{API}/recipes/{saved['id']}/export", None),
     )
     for method, path, body in calls:
         assert_real_route(recipe_env.server.api, method, path)
@@ -1024,3 +1028,95 @@ def test_a_variant_keyed_by_a_superseded_rule_neither_stacks_nor_credits(recipe_
         on_a["id"]: 2,
         on_b["id"]: 2,
     }
+
+
+# ===========================================================================
+# Export (v1.12 B8) — everything, and a list saying so
+# ===========================================================================
+
+
+def test_exporting_a_recipe_hands_back_everything_it_holds(recipe_env):
+    """A recipe export withholds nothing; `shares` is what the dialog lists.
+
+    The opposite of `GET /workflows/{key}/export`, and deliberately: a recipe
+    IS the prompt and the LoRA names, so one with those taken out would make
+    nothing. The contract is that the owner is told what they are agreeing to,
+    not that the file is scrubbed.
+    """
+    saved = _save(
+        recipe_env.owner,
+        CARD_A,
+        loras=_ada(0.8),
+        overrides={"sampler|steps": 30},
+        seed="12345",
+    )
+    r = recipe_env.owner.get(f"{API}/recipes/{saved['id']}/export")
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["recipe"]["prompt"] == PROMPT
+    assert payload["recipe"]["loras"][0]["filename"] == ADA
+    assert payload["recipe"]["loras"][0]["strength"] == 0.8
+    assert payload["recipe"]["overrides"] == {"sampler|steps": 30}
+    assert payload["recipe"]["seed"] == "12345"
+    assert payload["filename"].endswith(".json")
+    # Every one of those facts is named in `shares`, because the dialog shows
+    # that list and nothing else before the owner agrees to the file.
+    shares = " ".join(payload["shares"])
+    assert "the prompt you wrote" in shares
+    assert ADA in shares
+    assert "parameter setting" in shares
+    assert "seed" in shares
+
+
+def test_a_recipe_export_leaves_this_librarys_own_bookkeeping_out(recipe_env):
+    """The row id, its place in the tab and the source picture mean nothing elsewhere."""
+    saved = _save(recipe_env.owner, CARD_A, source_picture_id=None)
+    recipe = recipe_env.owner.get(f"{API}/recipes/{saved['id']}/export").json()[
+        "recipe"
+    ]
+    for local in ("id", "position", "source_picture_id", "pictures"):
+        assert local not in recipe, f"{local} is this library's bookkeeping"
+    # What a recipe genuinely needs to travel is still there.
+    assert recipe["workflow_key"] == CARD_A
+    assert recipe["keep_seed"] is False
+
+
+def test_a_recipe_export_says_when_it_carries_a_name_the_shelf_cannot_vouch_for(
+    recipe_env,
+):
+    """The forgotten-name guard on the recipe side: a warning, not a blank.
+
+    Implementation plan §5.7 asks BOTH exports to check. The workflow export
+    answers by blanking the name; a recipe cannot, because the name is the
+    recipe, so it answers by saying so in the list the owner reads first.
+    """
+    saved = _save(recipe_env.owner, CARD_A, loras=_ada())
+    shares = recipe_env.owner.get(f"{API}/recipes/{saved['id']}/export").json()[
+        "shares"
+    ]
+    assert any("no longer holds" in line and ADA in line for line in shares), shares
+
+    # Put the model on the shelf and the warning goes: the line is about what
+    # this machine holds, not about the recipe naming a LoRA at all.
+    with recipe_env.server.hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE filename = ?", (ADA,))
+        # `kind` and a digest are both NOT NULL for an adapter by CHECK
+        # constraint, so the shelf row is written the way a scan writes one.
+        conn.execute(
+            "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
+            "VALUES ('adapter', 'unknown', ?, ?, 'scanned')",
+            (ADA, _h("ada-digest")),
+        )
+    try:
+        shares = recipe_env.owner.get(f"{API}/recipes/{saved['id']}/export").json()[
+            "shares"
+        ]
+        assert not any("no longer holds" in line for line in shares), shares
+        assert any(ADA in line for line in shares), "the LoRA is still listed"
+    finally:
+        with recipe_env.server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE filename = ?", (ADA,))
+
+
+def test_exporting_a_recipe_that_does_not_exist_is_a_404(recipe_env):
+    assert recipe_env.owner.get(f"{API}/recipes/999999/export").status_code == 404

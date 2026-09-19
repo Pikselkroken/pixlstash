@@ -24,7 +24,7 @@ import math
 import random
 import re
 from copy import deepcopy
-from typing import Any
+from typing import Any, Optional
 
 import requests
 
@@ -999,7 +999,7 @@ def _inserted_loader(
 def insert_adapter(
     prompt_graph: dict,
     plan: dict,
-    adapter: dict,
+    adapter: Optional[dict],
     object_info: dict,
     digest_loader: bool = True,
 ) -> dict:
@@ -1014,7 +1014,13 @@ def insert_adapter(
     Args:
         prompt_graph: The graph to mutate in place.
         plan: The output of :func:`plan_lora_insertion` for this graph.
-        adapter: ``{"sha256", "filenames"}``, as for :func:`apply_adapter`.
+        adapter: ``{"sha256", "filenames"}``, as for :func:`apply_adapter`, or
+            ``None`` to add the loader **without choosing a LoRA**: ComfyUI's
+            own loader, wired in and left at its widget defaults exactly as
+            dropping the node in ComfyUI would leave it. That is what
+            ``POST /workflows/{key}/insert-lora-loader`` writes into a stored
+            file, so the workflow has a slot to swap from then on. No adapter
+            means no digest loader either - nothing has a digest to resolve.
         object_info: The map the plan was made with.
         digest_loader: Whether the ComfyUI-PixlStash loader may be used.
 
@@ -1026,9 +1032,15 @@ def insert_adapter(
             the graph has diverged from the plan.
     """
     clip = plan.get("clip")
-    loader, field, value = _inserted_loader(
-        adapter, object_info, clip is not None, digest_loader
-    )
+    if adapter is None:
+        loader = "LoraLoader" if clip is not None else "LoraLoaderModelOnly"
+        if loader not in object_info:
+            raise LookupError(f"This ComfyUI has no {loader} node.")
+        field = value = None
+    else:
+        loader, field, value = _inserted_loader(
+            adapter, object_info, clip is not None, digest_loader
+        )
     spec = object_info.get(loader) or {}
     outputs = spec.get("output") if isinstance(spec.get("output"), list) else []
     sources = {"MODEL": plan["model"], "CLIP": clip}
@@ -1064,7 +1076,8 @@ def insert_adapter(
         max((int(k) for k in prompt_graph if str(k).isdigit()), default=0) + 1
     )
     inputs = _widget_defaults(spec)
-    inputs[field] = value
+    if field is not None:
+        inputs[field] = value
     inputs["model"] = [plan["model"]["node_id"], plan["model"]["output"]]
     if clip:
         inputs["clip"] = [clip["node_id"], clip["output"]]

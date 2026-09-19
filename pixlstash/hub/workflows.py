@@ -322,6 +322,78 @@ def forget_asset_names(hub: HubDatabase, normalized_filename: str) -> int:
     return removed
 
 
+def _shelf_model_names(fetchall: Callable[[str], list]) -> set[str]:
+    """Every model filename the shelf holds, normalized (rule 5).
+
+    Both the recorded filename and every copy's basename, because a copy
+    renamed on disk is the same model. A tombstoned row counts: the shelf still
+    lists it, and re-adding its folder re-links it.
+    """
+    names = {
+        normalized_filename(row[0])
+        for row in fetchall("SELECT filename FROM model WHERE filename IS NOT NULL")
+    }
+    names.update(
+        normalized_filename(row[0])
+        for row in fetchall("SELECT relpath FROM model_file")
+    )
+    return names
+
+
+def _shelf_model_digests(fetchall: Callable[[str], list]) -> list[str]:
+    """Every digest the shelf holds, lowercased and sorted for a prefix search."""
+    return sorted(
+        row[0].lower()
+        for row in fetchall("SELECT sha256 FROM model WHERE sha256 IS NOT NULL")
+    )
+
+
+def unvouched_model_values(hub: HubDatabase) -> Callable[[str, str], bool]:
+    """Ask, of one widget's value, whether this machine can vouch for the model.
+
+    The question an **export** has to ask before it writes a filename into a
+    file somebody else will read. It is deliberately stricter than
+    :func:`model_ghost_names`, and for the opposite reason: a ghost is judged
+    in order to destroy a name forever, so an unjudgeable one has to be kept,
+    while here a wrong "vouched for" publishes a name the owner asked PixlStash
+    to forget and a wrong "unvouched" only leaves a widget blank in a file they
+    are giving away.
+
+    So the rule is *not on the shelf, not published*:
+
+    * a value :func:`model_ghost_names` already calls a ghost;
+    * any filename with a model extension that no shelf model is called -
+      which is what catches a **forgotten** name. Forgetting deletes the
+      ``workflow_recipe_asset`` rows, so the ghost set cannot see it any more,
+      but a picture's embedded graph still says it in full;
+    * a ``*_sha256`` widget holding a digest no shelf model's digest starts
+      with. Unlike the ghost screen this does not wait for every shelf model to
+      be hashed: a digest names a model on a public registry as surely as a
+      filename does, and the cost of being early here is a blank widget.
+
+    Returns:
+        ``unvouched(widget_name, value) -> bool``, closed over three reads of
+        the hub so a whole graph costs those three and no more.
+    """
+    ghosts = model_ghost_names(hub)
+    shelf_names = _shelf_model_names(hub.fetchall)
+    shelf_digests = _shelf_model_digests(hub.fetchall)
+
+    def unvouched(widget_name: str, value: str) -> bool:
+        if not isinstance(value, str) or not value:
+            return False
+        normalized = normalized_filename(value)
+        if value in ghosts or normalized in ghosts:
+            return True
+        if SHA256_FIELD_RE.search(widget_name or ""):
+            return bool(DIGEST_PREFIX_RE.match(value)) and not digests_with_prefix(
+                value, shelf_digests
+            )
+        return normalized.endswith(MODEL_EXTENSIONS) and normalized not in shelf_names
+
+    return unvouched
+
+
 def _model_ghost_names(fetchall: Callable[[str], list]) -> set[str]:
     """See :func:`model_ghost_names`; ``fetchall`` runs one read and returns rows.
 
@@ -339,18 +411,8 @@ def _model_ghost_names(fetchall: Callable[[str], list]) -> set[str]:
     blank) names no model and is never a ghost; a short hash is a ghost when no
     shelf digest starts with it.
     """
-    shelf_names = {
-        normalized_filename(row[0])
-        for row in fetchall("SELECT filename FROM model WHERE filename IS NOT NULL")
-    }
-    shelf_names.update(
-        normalized_filename(row[0])
-        for row in fetchall("SELECT relpath FROM model_file")
-    )
-    shelf_digests = sorted(
-        row[0].lower()
-        for row in fetchall("SELECT sha256 FROM model WHERE sha256 IS NOT NULL")
-    )
+    shelf_names = _shelf_model_names(fetchall)
+    shelf_digests = _shelf_model_digests(fetchall)
     judge_digests = not fetchall(
         "SELECT 1 FROM model WHERE sha256 IS NULL AND file_kind <> 'engine' LIMIT 1"
     )
