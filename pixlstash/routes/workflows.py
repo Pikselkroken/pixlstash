@@ -503,9 +503,16 @@ class SlotMarkResult(BaseModel):
     several successors and this is the biggest of them - the one holding most
     of the pictures the card had - because a client has to open one of them.
 
-    ``moved`` is ``{old key: [new key, ...]}`` over every card of that
-    topology, biggest successor first, and empty when the marks asked for were
-    already the marks in force.
+    ``moved`` is ``{old key: [key, ...]}`` over every card of that topology,
+    biggest first, and empty when the marks asked for were already the marks
+    in force.
+
+    **A key may list itself**, and a client must not read every entry as a
+    card that went away. A variant whose stored document will not parse keeps
+    the key it is on, so if a sibling moved, that card both moved and did not:
+    it is still open at its own URL and still holds its name, its pins and its
+    saved recipes. ``key`` is the one to follow; the list is what to check a
+    key against before deciding it is gone.
     """
 
     key: str
@@ -1131,7 +1138,26 @@ def create_router(server) -> APIRouter:
         # The migration `db_models/saved_recipe.py` says a re-keying owes this
         # table. A second database, so it cannot be in the hub's transaction;
         # it is the first thing after it, and it is logged.
-        rekeyed = saved_recipe_service.rekey_recipes(server.vault, moved)
+        try:
+            rekeyed = saved_recipe_service.rekey_recipes(server.vault, moved)
+        except Exception:
+            # The hub transaction has already committed, so the cards have
+            # moved and the recipes have not. Re-running the flip will not
+            # repair it - the marks are now the marks in force, so a second
+            # PUT re-keys nothing and returns an empty `moved` - which is
+            # exactly why the map goes in the log rather than only the count:
+            # it is the only record of which key each recipe set belongs on.
+            # Raised rather than answered 200, because a saved recipe is
+            # authored and silently stranding one is the failure
+            # `rekey_in_session` exists to close.
+            logger.exception(
+                "A slot-mark flip on topology %s re-keyed its cards but could "
+                "not move the saved recipes with them. The recipes are still "
+                "on their old keys; the cards moved as %r.",
+                card.topology_hash,
+                moved,
+            )
+            raise
         if rekeyed:
             logger.info(
                 "A slot-mark flip on topology %s moved %d saved recipe(s) onto "

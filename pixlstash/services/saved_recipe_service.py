@@ -209,10 +209,21 @@ def rekey_in_session(session: Session, moved: dict[str, list[str]]) -> int:
     and the alternatives (copying it to every successor, or dropping it) are
     both worse: one invents recipes the owner never saved, the other is the
     silent loss this function exists to close.
+
+    **A card that is still there keeps its recipes, whatever its siblings
+    did.** ``old_key in successors`` and not ``successors[0] == old_key``: a
+    variant whose document will not parse keeps the key it is on, so if a
+    sibling moved, that key is in *moved* with a successor that is not itself
+    while the card is still open at its own URL. The hub half of the flip
+    copies the owner's attributes to the new key and leaves the old key's rows
+    where they are; moving the recipes instead emptied the tab of a live card,
+    which is this function's own failure mode pointed the other way. It is
+    reachable through one Unstack - stacked, both halves share a core hash and
+    the list expands across them, so nothing shows.
     """
     moved_count = 0
     for old_key, successors in moved.items():
-        if not successors or successors[0] == old_key:
+        if not successors or old_key in successors:
             continue
         rows = session.exec(
             select(SavedRecipe).where(SavedRecipe.workflow_key == old_key)

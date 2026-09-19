@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import tempfile
@@ -69,7 +70,7 @@ from pixlstash.services.workflow_identity import (
 )
 from pixlstash.services.workflow_io import detect_workflow_io
 import pixlstash.routes.comfyui as comfyui_module
-from pixlstash.services import workflow_bindings, workflow_inbox
+from pixlstash.services import saved_recipe_service, workflow_bindings, workflow_inbox
 from pixlstash.server import Server
 from pixlstash.tasks.ghost_cascade_task import GhostCascadeTask
 from pixlstash.tasks.task_type import TaskType
@@ -4749,4 +4750,153 @@ def test_naming_one_parameter_twice_is_refused_rather_than_a_500(workflow_env):
             },
         ).status_code
         == 200
+    )
+
+
+def test_a_surviving_card_keeps_its_saved_recipes(workflow_env):
+    """A card a variant is still on must not have its recipes taken off it.
+
+    The sibling of `..._takes_the_saved_recipes_with_it`, and the direction
+    that was wrong. `rekey_in_session` skipped on `successors[0] == old_key`,
+    which is not the question "did this card go away": a variant whose
+    document will not parse keeps the key it is on, so when a sibling moves,
+    that key is in `moved` with a successor that is not itself - while the
+    card is still open at its own URL and still holds its name (the test above
+    asserts that half). Every recipe on it was moved to the sibling's new key.
+
+    The Unstack is what makes it visible rather than what causes it: stacked,
+    the two halves share a core hash and `GET /recipes` expands across the
+    stack, so the recipe answers on both keys and nothing looks wrong. One
+    Unstack - a gesture this step ships the route for - and the tab is empty.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_graph SET document = '{oops' "
+            "WHERE structural_hash = ?",
+            (FLIP_RECIPE_B,),
+        )
+    assert owner.post(f"{API}/workflows/{merged}/unstack").status_code == 200
+    r = owner.post(
+        f"{API}/recipes",
+        json={"workflow_key": merged, "name": "Stays put", "prompt": "a portrait"},
+    )
+    assert r.status_code == 201, r.text
+    recipe_id = r.json()["id"]
+
+    label = _flip_slot_label(FLIP_RECIPE_A)
+    r = owner.put(
+        f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
+    )
+    assert r.status_code == 200, r.text
+    # The card is still there: B could not be re-keyed onto anything.
+    assert owner.get(f"{API}/workflows/cards/{merged}").status_code == 200
+    listed = owner.get(f"{API}/recipes?workflow_key={merged}").json()
+    assert [row["id"] for row in listed] == [recipe_id], (
+        "the saved recipe left a card that is still there"
+    )
+    assert listed[0]["workflow_key"] == merged
+    # And it did not follow the half that moved.
+    moved_to = _flip_key(FLIP_RECIPE_A, [label])
+    assert owner.get(f"{API}/recipes?workflow_key={moved_to}").json() == []
+    # The response says so too: a card that both moved and did not is listed
+    # among its own successors rather than only among the keys it went to.
+    assert merged in r.json()["moved"][merged]
+
+
+def test_a_re_keying_that_cannot_move_the_recipes_says_which_keys_to_repair(
+    workflow_env, monkeypatch, caplog
+):
+    """The hub commits first, so the second write's failure needs a record.
+
+    Re-running the flip cannot repair it - the marks asked for are now the
+    marks in force, so a second PUT re-keys nothing and answers an empty
+    `moved` - which is why the log has to carry the map and not just a count.
+    Without it the only trace is recipes on keys no variant carries, with
+    nothing saying where they belong.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+
+    def _fails(vault, moved):
+        raise RuntimeError("the vault went away mid-flip")
+
+    monkeypatch.setattr(saved_recipe_service, "rekey_recipes", _fails)
+    label = _flip_slot_label(FLIP_RECIPE_A)
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError):
+            owner.put(
+                f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
+            )
+
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "could not move the saved recipes" in logged
+    assert merged in logged, "the log has to name the keys a repair would need"
+    # And the hub half did land, which is what makes the record necessary.
+    assert (
+        server.hub.fetchone(
+            "SELECT workflow_key FROM workflow_variant WHERE structural_hash = ?",
+            (FLIP_RECIPE_A,),
+        )["workflow_key"]
+        != merged
+    )
+
+
+def test_a_re_key_needs_an_open_library_and_says_so(workflow_env, monkeypatch):
+    """503 rather than an arbitrary merge winner and orphaned recipes.
+
+    The order matters as much as the code: a mark this workflow has no slot
+    for is a 422 whether or not a library is open, so the label check stays
+    ahead of this one. A caller who got told "no library" about a typo would
+    go looking in the wrong place.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    label = _flip_slot_label(FLIP_RECIPE_A)
+    merged = _seed_flip_fixture(server)
+    # The property's own backing attribute, because that is what "no library
+    # open" is: `Vault.library_uuid` reads `_library_uuid` and has no setter,
+    # so patching the name would only prove that a fake can be attached.
+    monkeypatch.setattr(server.vault, "_library_uuid", None)
+
+    assert (
+        owner.put(
+            f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
+        ).status_code
+        == 503
+    )
+    assert (
+        owner.put(
+            f"{API}/workflows/{merged}/slots",
+            json={"marks": {"no such slot": "recipe"}},
+        ).status_code
+        == 422
+    ), "a bad slot label must be named even when no library is open"
+    # Nothing was written: the card is still on the key it was on.
+    assert owner.get(f"{API}/workflows/cards/{merged}").status_code == 200
+
+
+def test_a_picture_input_needs_an_open_library_and_says_so(workflow_env, monkeypatch):
+    """The 503 `PUT /inputs` publishes in its own `responses=`.
+
+    The setup is stored per library because a `fixed` input names a picture by
+    content, so with none open there is no library column to write and the
+    route says that rather than inventing one.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    # The property's own backing attribute, because that is what "no library
+    # open" is: `Vault.library_uuid` reads `_library_uuid` and has no setter,
+    # so patching the name would only prove that a fake can be attached.
+    monkeypatch.setattr(server.vault, "_library_uuid", None)
+
+    assert (
+        owner.put(
+            f"{API}/workflows/{BUSY_CARD}/inputs",
+            json={
+                "inputs": [
+                    {"slot_label": "s", "input_name": "image", "mode": "selection"}
+                ]
+            },
+        ).status_code
+        == 503
     )

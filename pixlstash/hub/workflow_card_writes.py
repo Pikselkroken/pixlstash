@@ -201,12 +201,18 @@ def flip_slot_marks(
             is what an unscanned library looks like.
 
     Returns:
-        ``{old key: [new key, ...]}`` for every card that moved, biggest
-        successor first, and empty when the flip changed nothing. A list
-        because a split has several: a caller following the card somebody was
-        looking at takes the first, which is the one with most of its
-        pictures. A variant whose stored document will not reduce is logged
-        and left on the key it has.
+        ``{old key: [key, ...]}`` for every card whose variants did not all
+        stay put, biggest first, and empty when the flip changed nothing. A
+        list because a split has several: a caller following the card somebody
+        was looking at takes the first, which is the one with most of its
+        pictures.
+
+        **The old key is among its own successors when a variant is still on
+        it**, which is not a special case so much as the honest answer: a
+        variant whose stored document will not parse or will not reduce is
+        logged and left on the key it has, and if a sibling moved, that card
+        both moved and did not. A reader that treats every key in this mapping
+        as a card that went away will act on the half that is not true.
     """
     documents = {}
     for structural_hash, raw in hub.fetchall(
@@ -301,7 +307,17 @@ def _rekey_variants(
     # the biggest single variant of a small card is not the card that should
     # keep the name.
     pictures_per_old = _pictures_per_key(old_keys, variant_pictures)
-    pictures_per_new = _pictures_per_key(new_keys, variant_pictures)
+    # Where every variant sits AFTER the flip, which is what "the biggest half"
+    # has to be counted over. `new_keys` alone would answer 0 for a key that
+    # only a variant which could not be re-keyed is still on, and then send the
+    # caller to the smaller half of its own split.
+    pictures_per_new = _pictures_per_key(
+        {
+            structural_hash: new_keys.get(structural_hash, key)
+            for structural_hash, key in old_keys.items()
+        },
+        variant_pictures,
+    )
 
     # Smallest successor first, which only matters for a split: each copy of a
     # stack membership goes just behind the source and pushes the previous copy
@@ -341,8 +357,18 @@ def _rekey_variants(
         for table in _KEYED_TABLES:
             conn.execute(f"DELETE FROM {table} WHERE workflow_key = ?", (old_key,))
 
+    # A key a variant is still on is one of its own successors, whatever its
+    # siblings did. Without that, `surviving` and `moved` disagree about the
+    # same card: this pass correctly KEEPS the old key's attribute rows and
+    # COPIES them to the sibling's new key, while a reader of `moved` alone
+    # sees an old key whose successors are all elsewhere and concludes the card
+    # went away. `saved_recipe_service.rekey_in_session` read it that way and
+    # moved an authored recipe off a card that was still there.
     moved = {
-        old_key: sorted(news, key=lambda key: (-pictures_per_new.get(key, 0), key))
+        old_key: sorted(
+            news | ({old_key} if old_key in surviving else set()),
+            key=lambda key: (-pictures_per_new.get(key, 0), key),
+        )
         for old_key, news in successors.items()
         if news != {old_key}
     }

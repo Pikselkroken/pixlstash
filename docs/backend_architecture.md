@@ -3244,6 +3244,30 @@ will not parse or will not reduce keeps the key it is on, so its card survives
 the pass even when a sibling moved; and `workflow_file.workflow_key` is re-keyed
 with it, or an imported file stops saying it runs the card until the next import.
 
+**A card that survives that way is listed among its own successors**, and the
+`moved` mapping the flip returns says so rather than naming only the keys the
+siblings went to. It is the one place the hub half and the vault half can
+disagree about the same card: the carry-over correctly keeps the old key's rows
+*and* copies them onto the new one, so a reader of `moved` that treats every key
+in it as a card that went away acts on the half that is not true.
+`saved_recipe_service.rekey_in_session` read it that way and moved an **authored**
+saved recipe off a card that was still open at its own URL. Stacked it shows
+nothing — both halves share a `core_hash`, so `GET /recipes` expands across the
+group and answers on both keys — and one Unstack makes the tab empty. The
+recipes are a second database and cannot join the hub's transaction, so the
+route's own failure path logs the whole `moved` map at error level before it
+raises: re-running the flip cannot repair it, because the marks asked for are by
+then the marks in force and a second `PUT` re-keys nothing.
+
+**`_KEYED_TABLES` is the carry-over's definition of "the owner's decisions", and
+it is derived rather than remembered**: it is exactly the hub tables carrying a
+`workflow_key` column, less `workflow_variant` and `workflow_file`, which hold a
+*derived* key and are moved by their own `UPDATE` because a split must not
+duplicate a variant onto both halves.
+`test_a_mark_flip_carries_every_table_a_card_key_appears_in` reads that from
+`hub/schema.py`, so a new card table that nobody adds to the tuple fails the
+build instead of being dropped silently by the next flip.
+
 **A stack left with one member dissolves**, on every write that can leave one
 that way, because the read side already draws a group of one as a lone card and
 a row saying otherwise is a row the next reader believes
