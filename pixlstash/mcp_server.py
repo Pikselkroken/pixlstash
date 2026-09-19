@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.client
 import json
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.parse
@@ -31,12 +33,18 @@ import urllib.request
 from importlib.metadata import PackageNotFoundError, version as package_version
 from typing import Callable
 
+from platformdirs import user_config_dir
+
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
 
 API_PREFIX = "/api/v1"
 SERVER_NAME = "pixlstash"
+DEFAULT_PORT = 9537
+# `app.py`'s SERVER_CONFIG_PATH, spelled again rather than imported: importing
+# `pixlstash.app` to read one integer would build the whole FastAPI app.
+SERVER_CONFIG_PATH = os.path.join(user_config_dir(SERVER_NAME), "server-config.json")
 # The newest protocol revision this server speaks. A client asking for a
 # revision we know is answered with it; anything else gets ours.
 PROTOCOL_VERSION = "2025-06-18"
@@ -45,6 +53,52 @@ PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", PROTOCOL_VERSION}
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 200
+TIMEOUT_SECONDS = 60
+
+# Returned from `initialize`. Without it a client knows only six tool names and
+# reaches for `ls` and `find` instead, which cannot see any of this: tags,
+# scores, characters, sets, projects and recipes live in PixlStash's database,
+# and the files on disk carry none of them.
+INSTRUCTIONS = """\
+PixlStash is this machine's picture library: the owner's images plus everything \
+recorded about them. Use these tools to answer any question about the owner's \
+pictures, tags, picture sets, characters, projects or how an image was \
+generated.
+
+Prefer them over the shell and the filesystem. Tags, scores, set and character \
+membership, project grouping and ComfyUI recipes exist only in PixlStash's \
+database - listing image files with ls or find cannot see any of it.
+
+Do not read vault.db or hub.db with sqlite3, and do not query them through any \
+other tool. It looks like a shortcut and it gives wrong answers:
+
+- Some values are derived per request, not stored. A picture row carries a raw \
+project_id that the API re-derives from project membership before returning \
+it, so the stored column can name a project the picture is not really in. Set \
+locking and the visible tag set are computed the same way.
+- The schema is internal and moves with migrations; these tools are the \
+contract, the tables are not.
+- The file is live and single-writer while PixlStash runs. An outside reader \
+is not part of that design and can see a half-written state.
+- Reading the file bypasses the API token's scope, so it can expose parts of \
+the library the owner did not share.
+
+If a tool here cannot answer something, say so rather than going around it.
+
+Where to start:
+- "how many sets / characters / projects" -> list_sets, list_characters, \
+list_projects.
+- "pictures of X" or any question about content -> search_pictures, which \
+matches meaning rather than filename.
+- "pictures in that set / of that character" -> list_pictures with set_id, \
+character_id or project_id from the list tools.
+- One picture's tags and scores -> get_picture. To actually look at it -> \
+view_picture.
+- "how was this made" -> get_recipe.
+
+Everything is read-only; there is no tool here that changes the library. A \
+refusal means the API token is scoped to part of the library, not that the \
+data is missing."""
 
 # (path, params) -> (status, content type, body). The one seam between the
 # protocol and the network, so tests can route requests through a TestClient.
@@ -62,30 +116,65 @@ _TAGS = {
     "items": {"type": "string"},
     "description": "Only pictures carrying every one of these tags.",
 }
+_SET_ID = {
+    "type": "integer",
+    "description": "Only pictures in this picture set (see list_sets).",
+}
+_CHARACTER_ID = {
+    "type": "integer",
+    "description": "Only pictures of this character (see list_characters).",
+}
+_PROJECT_ID = {
+    "type": "string",
+    "description": "Only pictures in this project id (see list_projects), or "
+    "'UNASSIGNED' for those in none.",
+}
+# The membership filters every picture listing shares.
+_FILTERS = {
+    "tags": _TAGS,
+    "set_id": _SET_ID,
+    "character_id": _CHARACTER_ID,
+    "project_id": _PROJECT_ID,
+    "limit": _LIMIT,
+    "offset": _OFFSET,
+}
 
 TOOLS = [
     {
         "name": "search_pictures",
         "description": "Semantic text search over the library, best match "
-        "first. Returns picture metadata (id, tags, description, score...).",
+        "first: finds pictures by what they depict, not by filename. Returns "
+        "picture metadata (id, description, score, dimensions, file_path...); "
+        "call get_picture for a picture's tags.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "What to look for."},
-                "tags": _TAGS,
-                "limit": _LIMIT,
-                "offset": _OFFSET,
+                **_FILTERS,
             },
             "required": ["query"],
         },
     },
     {
         "name": "list_pictures",
-        "description": "List pictures, newest first, optionally only those "
-        "carrying the given tags. Returns picture metadata.",
+        "description": "List pictures, newest first, optionally narrowed to a "
+        "set, character, project or tags. Returns picture metadata. Use this "
+        "rather than listing image files: the library holds pictures the "
+        "filesystem does not show as a collection.",
+        "inputSchema": {"type": "object", "properties": dict(_FILTERS)},
+    },
+    {
+        "name": "count_pictures",
+        "description": "How many pictures match, without listing them. Answers "
+        "'how many pictures are there' in one call, and takes the same set, "
+        "character, project and tag filters as list_pictures.",
         "inputSchema": {
             "type": "object",
-            "properties": {"tags": _TAGS, "limit": _LIMIT, "offset": _OFFSET},
+            "properties": {
+                key: value
+                for key, value in _FILTERS.items()
+                if key not in ("limit", "offset")
+            },
         },
     },
     {
@@ -109,7 +198,28 @@ TOOLS = [
     },
     {
         "name": "list_tags",
-        "description": "Every tag in the library with how many pictures carry it.",
+        "description": "Every tag in the library with how many pictures carry "
+        "it. Tags live in PixlStash's database, not in the image files.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "list_sets",
+        "description": "Every picture set: the owner's named collections, with "
+        "id, name and how many pictures each holds. Answers 'how many sets are "
+        "there' and gives the set_id the picture tools filter by.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "list_characters",
+        "description": "Every character: the recurring subjects the owner "
+        "tracks, with id and name. Gives the character_id the picture tools "
+        "filter by.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "list_projects",
+        "description": "Every project: the owner's top-level groupings, with "
+        "id and name. Gives the project_id the picture tools filter by.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
@@ -140,7 +250,9 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _build_opener() -> urllib.request.OpenerDirector:
+def _build_opener(
+    context: ssl.SSLContext | None = None,
+) -> urllib.request.OpenerDirector:
     """An opener that reaches the named URL and nothing else.
 
     The token goes to the URL the owner named and nowhere else, which takes two
@@ -150,17 +262,52 @@ def _build_opener() -> urllib.request.OpenerDirector:
     consults ``no_proxy`` only), so a proxy set for the shell would receive the
     Authorization header.
     """
-    return urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
+    handlers: list = [_NoRedirect, urllib.request.ProxyHandler({})]
+    if context is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    return urllib.request.build_opener(*handlers)
 
 
 class ToolError(Exception):
     """A tool call that failed in a way the agent should be told about."""
 
 
-def http_fetch(base_url: str, token: str) -> Fetch:
+def unreachable_message(base: str, reason) -> str:
+    """Why nothing answered, in terms the owner can act on.
+
+    "Connection refused" on its own sends people hunting for a crashed server.
+    The likelier cause on the desktop is that the port is simply not being
+    served: the app's own window runs on a private port it picks per launch,
+    and the *configured* port is bound only when remote access is switched on.
+    """
+    if isinstance(reason, ssl.SSLError):
+        # urllib wraps the handshake in URLError, so this is where a TLS
+        # failure lands - not in an `except ssl.SSLError` around the request.
+        return (
+            f"Could not establish a secure connection to {base}: {reason}. "
+            "PixlStash generates its own certificate, so no system trust store "
+            "contains it. --server-config points at the server-config.json "
+            "naming that certificate; the desktop app keeps its own copy of "
+            "that file, separate from the platform default."
+        )
+    if not isinstance(reason, ConnectionRefusedError):
+        return f"Could not reach PixlStash at {base}: {reason}"
+    return (
+        f"Nothing is listening on {base}. Either PixlStash is not running, or "
+        "it is the desktop app with remote access switched off - the app "
+        "serves its own window on a private port that changes every launch, "
+        "and only binds the configured port when remote access is enabled in "
+        "its settings. Enable it, start the server, or point this server "
+        "somewhere else with --url or PIXLSTASH_URL."
+    )
+
+
+def http_fetch(
+    base_url: str, token: str, context: ssl.SSLContext | None = None
+) -> Fetch:
     """Return a :data:`Fetch` that GETs *base_url* with *token* as Bearer."""
     base = base_url.rstrip("/")
-    opener = _build_opener()
+    opener = _build_opener(context)
 
     def fetch(path: str, params: dict) -> tuple[int, str, bytes]:
         query = urllib.parse.urlencode(params, doseq=True)
@@ -169,7 +316,7 @@ def http_fetch(base_url: str, token: str) -> Fetch:
             url, headers={"Authorization": f"Bearer {token}"}, method="GET"
         )
         try:
-            with opener.open(request, timeout=60) as response:
+            with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
                 return (
                     response.status,
                     response.headers.get("Content-Type", ""),
@@ -180,8 +327,26 @@ def http_fetch(base_url: str, token: str) -> Fetch:
             return exc.code, exc.headers.get("Content-Type", ""), exc.read()
         except urllib.error.URLError as exc:
             logger.warning("[mcp] Could not reach %s%s: %s", base, path, exc)
+            raise ToolError(unreachable_message(base, exc.reason)) from exc
+        except http.client.RemoteDisconnected as exc:
+            # The server accepted the connection and then hung up without
+            # speaking HTTP. On this port that means one thing far more often
+            # than any other: it is serving TLS and we knocked in plain text.
+            logger.warning("[mcp] %s closed the connection on %s", base, path)
             raise ToolError(
-                f"Could not reach PixlStash at {base}: {exc.reason}"
+                f"{base} accepted the connection and closed it without "
+                "answering. That is what a TLS listener does when it is sent "
+                "plain HTTP, so PixlStash is probably serving https on this "
+                "port. Check `require_ssl` in its server-config.json, and "
+                "point this server at that file with --server-config."
+            ) from exc
+        except TimeoutError as exc:
+            # Only the *send* is wrapped in URLError; a read timeout arrives
+            # bare. The first search loads the text encoder, which is the call
+            # most likely to sit here.
+            logger.warning("[mcp] %s timed out after %ss", path, TIMEOUT_SECONDS)
+            raise ToolError(
+                f"PixlStash did not answer {path} within {TIMEOUT_SECONDS}s."
             ) from exc
 
     return fetch
@@ -210,6 +375,16 @@ def _paging(arguments: dict) -> dict:
         raise ToolError("tags must be a list of strings")
     if tags:
         params["tag"] = tags
+    # Membership filters. `GET /pictures` already takes all three, and a
+    # scoped token still only sees what its scope allows: these narrow the
+    # listing, they never widen it.
+    for key in ("set_id", "character_id", "project_id"):
+        value = arguments.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise ToolError(f"{key} must be an id")
+        params[key] = str(value)
     return params
 
 
@@ -252,8 +427,18 @@ def call_tool(fetch: Fetch, name: str, arguments: dict) -> list[dict]:
                 "mimeType": content_type.split(";")[0] or "image/webp",
             }
         ]
+    if name == "count_pictures":
+        # The paging keys are dropped from the schema but _paging still builds
+        # the filter params; the route ignores limit and offset.
+        return _json_content(_get(fetch, "/pictures/count", _paging(arguments))[1])
     if name == "list_tags":
         return _json_content(_get(fetch, "/tags")[1])
+    if name == "list_sets":
+        return _json_content(_get(fetch, "/picture_sets")[1])
+    if name == "list_characters":
+        return _json_content(_get(fetch, "/characters")[1])
+    if name == "list_projects":
+        return _json_content(_get(fetch, "/projects")[1])
     if name == "get_recipe":
         path = f"/comfyui/pictures/{_picture_id(arguments)}/recipe"
         return _json_content(_get(fetch, path)[1])
@@ -282,6 +467,7 @@ def handle_message(fetch: Fetch, message: dict) -> dict | None:
             else PROTOCOL_VERSION,
             "capabilities": {"tools": {}},
             "serverInfo": {"name": SERVER_NAME, "version": _version()},
+            "instructions": INSTRUCTIONS,
         }
     elif method == "ping":
         result = {}
@@ -349,6 +535,73 @@ def _version() -> str:
         return "unknown"
 
 
+def read_server_config(path: str | None = None) -> dict:
+    """The server's own ``server-config.json``, or ``{}`` if it cannot be read.
+
+    Which file this is decides everything below, and there is more than one on
+    a machine: a pip install uses the platform config dir, while the desktop
+    app keeps its own beside its Electron user data. Getting this wrong reads
+    somebody else's port and scheme, so the desktop shim passes its path
+    explicitly rather than letting us guess.
+    """
+    path = path or os.environ.get("PIXLSTASH_SERVER_CONFIG") or SERVER_CONFIG_PATH
+    try:
+        with open(path, encoding="utf-8") as handle:
+            config = json.load(handle)
+        if not isinstance(config, dict):
+            raise ValueError(f"expected an object, got {type(config).__name__}")
+        return config
+    except (OSError, ValueError) as exc:
+        logger.warning("[mcp] Could not read %s (%s); using defaults", path, exc)
+        return {}
+
+
+def configured_url(config: dict | None = None) -> str:
+    """Where the server is, from the config the server itself reads.
+
+    Both halves matter. The port, because the desktop shell serves its window
+    on an ephemeral one that changes every launch, so anything taken from a
+    browser is stale by the next start-up. And the scheme, because a TLS
+    listener answers a plain HTTP request by closing the connection, which
+    surfaces as "Remote end closed connection without response" and looks for
+    all the world like a crashed server.
+    """
+    config = read_server_config() if config is None else config
+    scheme = "https" if config.get("require_ssl") else "http"
+    try:
+        port = int(config.get("port", DEFAULT_PORT))
+    except (TypeError, ValueError):
+        logger.warning(
+            "[mcp] Ignoring unusable port %r; using %s",
+            config.get("port"),
+            DEFAULT_PORT,
+        )
+        port = DEFAULT_PORT
+    return f"{scheme}://127.0.0.1:{port}"
+
+
+def ssl_context_for(config: dict) -> ssl.SSLContext | None:
+    """Trust the server's own certificate, which is normally self-signed.
+
+    PixlStash generates its own certificate, so the system trust store will
+    never contain it. Pinning that one file keeps verification switched on -
+    including the hostname check, since the generated certificate carries
+    127.0.0.1 in its SANs - rather than reaching for the usual
+    ``check_hostname = False`` and accepting anything on the port.
+    """
+    if not config.get("require_ssl"):
+        return None
+    certfile = config.get("ssl_certfile")
+    if certfile and os.path.exists(certfile):
+        return ssl.create_default_context(cafile=certfile)
+    logger.warning(
+        "[mcp] require_ssl is set but %r is not readable; using the system "
+        "trust store, which will reject a self-signed certificate",
+        certfile,
+    )
+    return ssl.create_default_context()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pixlstash-mcp",
@@ -359,9 +612,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--url",
-        default=os.environ.get("PIXLSTASH_URL", "http://127.0.0.1:9537"),
-        help="Base URL of the PixlStash server (default: $PIXLSTASH_URL or "
-        "http://127.0.0.1:9537).",
+        # Resolved in main(), not here: it depends on --server-config, which
+        # argparse has not read yet while the defaults are being built.
+        default=None,
+        help="Base URL of the PixlStash server. Defaults to $PIXLSTASH_URL, "
+        "else the scheme and port in server-config.json, else "
+        f"http://127.0.0.1:{DEFAULT_PORT}.",
+    )
+    parser.add_argument(
+        "--server-config",
+        default=None,
+        help="PixlStash's server-config.json, which names the port, whether it "
+        "serves https, and its certificate. Defaults to "
+        f"$PIXLSTASH_SERVER_CONFIG, else {SERVER_CONFIG_PATH}. The desktop app "
+        "keeps its own copy elsewhere and its shim passes that path.",
     )
     return parser
 
@@ -376,8 +640,40 @@ def main(argv: list[str] | None = None) -> int:
     if not token:
         print("PIXLSTASH_TOKEN is not set; mint an API token first.", file=sys.stderr)
         return 1
-    serve(http_fetch(args.url, token))
+    # One config decides the port, the scheme and which certificate to trust,
+    # so it is read once and all three come from the same file.
+    config = read_server_config(args.server_config)
+    url = args.url or os.environ.get("PIXLSTASH_URL") or configured_url(config)
+    fetch = http_fetch(url, token, ssl_context_for(config))
+    # Say so now, on stderr, rather than letting the first tool call be the
+    # first the owner hears of it: a client that starts this server at launch
+    # shows nothing until something is asked of it. Not fatal - PixlStash may
+    # simply start later, and exiting would have the client give up for good.
+    warn_if_unreachable(fetch, url)
+    serve(fetch)
     return 0
+
+
+def warn_if_unreachable(fetch: Fetch, url: str) -> bool:
+    """Probe the server once; return whether it answered *usefully*.
+
+    Through ``_get``, not ``fetch``: ``fetch`` returns ``(401, ...)`` for an
+    HTTP error rather than raising, so a wrong or expired token - the commonest
+    misconfiguration after the port - would look like success and the owner
+    would first hear about it at the first tool call. ``/pictures/count``
+    rather than ``/tags`` because it is a cheap count, where ``/tags`` groups
+    over the whole tag table and first materialises every scope-allowed
+    picture id.
+    """
+    try:
+        _get(fetch, "/pictures/count")
+    except ToolError as exc:
+        print(f"pixlstash-mcp: {exc}", file=sys.stderr)
+        return False
+    except Exception as exc:  # A probe must never stop the server starting.
+        logger.warning("[mcp] Start-up probe of %s failed: %s", url, exc)
+        return False
+    return True
 
 
 if __name__ == "__main__":

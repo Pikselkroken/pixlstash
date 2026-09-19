@@ -46,6 +46,28 @@ export function shimPath(
   return join(process.env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'PixlStash', 'bin', 'pixlstash.cmd');
 }
 
+/**
+ * Where the MCP shim goes: beside the CLI one, so a single directory and a
+ * single Windows PATH entry serve both.
+ *
+ * An MCP client spawns `pixlstash-mcp` by name, with no shell and no login
+ * profile, so it has to be a real file on PATH. Installing the Python package
+ * into whatever interpreter the user happens to have is the wrong price for
+ * that: the desktop build already carries a working one, and this points at it.
+ */
+export function mcpShimPath(
+  home: string = homedir(),
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform !== 'win32') return join(home, '.local', 'bin', 'pixlstash-mcp');
+  return join(
+    process.env.LOCALAPPDATA || join(home, 'AppData', 'Local'),
+    'PixlStash',
+    'bin',
+    'pixlstash-mcp.cmd',
+  );
+}
+
 /** Single-quote *value* for `sh`, closing and reopening around any quote. */
 function shQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -85,6 +107,42 @@ export function shimScript(launcher: string, windowsHub?: string): string {
     'setlocal',
     'set "PIXLSTASH_CLI_COMMAND=pixlstash"',
     `${cmdQuote(launcher)} -m pixlstash.cli --hub ${cmdQuote(windowsHub)} %*`,
+    'exit /b %ERRORLEVEL%',
+    '',
+  ].join('\r\n');
+}
+
+/**
+ * The MCP shim's contents. *windowsPython* selects the `.cmd` form.
+ *
+ * Same split as {@link shimScript} and for the same reason, but the stakes are
+ * higher here: MCP is newline-delimited JSON-RPC over stdin and stdout, so a
+ * single stray byte on stdout corrupts the session. On Windows the launcher is
+ * linked for the GUI subsystem and owns no console at all, so the `.cmd` goes
+ * straight to the bundled interpreter. Elsewhere it goes through the launcher,
+ * because an AppImage's interpreter lives at a different random mount path
+ * every launch and only the launcher has a durable name; `runMcp` is what keeps
+ * that route quiet.
+ *
+ * No `--url`: `pixlstash.mcp_server` reads the configured port from
+ * `server-config.json` itself.
+ */
+export function mcpShimScript(
+  launcher: string,
+  serverConfig: string,
+  windowsPython?: string,
+): string {
+  if (windowsPython === undefined) {
+    return (
+      `#!/bin/sh\n# ${MARKER}\n` +
+      `exec ${shQuote(launcher)} mcp --server-config ${shQuote(serverConfig)} "$@"\n`
+    );
+  }
+  return [
+    '@echo off',
+    `REM ${MARKER}`,
+    'setlocal',
+    `${cmdQuote(windowsPython)} -m pixlstash.mcp_server --server-config ${cmdQuote(serverConfig)} %*`,
     'exit /b %ERRORLEVEL%',
     '',
   ].join('\r\n');
@@ -166,6 +224,40 @@ export function syncShim(
   path: string = shimPath(),
   windowsHub?: string,
 ): boolean {
+  return writeShim(enabled, path, shimScript(launcher, windowsHub), windowsHub === undefined);
+}
+
+/**
+ * The MCP shim, kept in step with *enabled* exactly as {@link syncShim} is.
+ *
+ * Tied to the same preference and the same directory: "put PixlStash's
+ * commands on PATH" is one intention, and a second toggle would be a second
+ * thing to explain for no gain.
+ *
+ * *windowsPython* selects the `.cmd` form - see {@link mcpShimScript}.
+ */
+export function syncMcpShim(
+  enabled: boolean,
+  launcher: string,
+  serverConfig: string,
+  path: string = mcpShimPath(),
+  windowsPython?: string,
+): boolean {
+  return writeShim(
+    enabled,
+    path,
+    mcpShimScript(launcher, serverConfig, windowsPython),
+    windowsPython === undefined,
+  );
+}
+
+/** Write, remove or refuse one shim file. Shared by both shims. */
+function writeShim(
+  enabled: boolean,
+  path: string,
+  script: string,
+  needsExecuteBit: boolean,
+): boolean {
   try {
     if (!enabled) {
       if (readFileSync(path, 'utf8').includes(MARKER)) rmSync(path);
@@ -176,9 +268,9 @@ export function syncShim(
       return false;
     }
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, shimScript(launcher, windowsHub));
+    writeFileSync(path, script);
     // Windows has no execute bit; the `.cmd` extension is what makes it runnable.
-    if (windowsHub === undefined) chmodSync(path, 0o755);
+    if (needsExecuteBit) chmodSync(path, 0o755);
     return true;
   } catch (e) {
     // ENOENT on the remove path is the normal "nothing to clean up" case; a
@@ -361,5 +453,16 @@ export function syncUserPath(enabled: boolean, dir: string, platform: NodeJS.Pla
  */
 export function parseCliArgs(argv: readonly string[]): string[] | null {
   const at = argv.indexOf('cli', 1);
+  return at === -1 ? null : argv.slice(at + 1);
+}
+
+/**
+ * The MCP arguments in *argv*, or null for a normal windowed launch.
+ *
+ * The `mcp` token is the boundary, exactly as `cli` is in {@link parseCliArgs},
+ * and searched from index 1 for the same reasons.
+ */
+export function parseMcpArgs(argv: readonly string[]): string[] | null {
+  const at = argv.indexOf('mcp', 1);
   return at === -1 ? null : argv.slice(at + 1);
 }

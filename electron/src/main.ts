@@ -77,10 +77,13 @@ import {
   cliCommandHint,
   launcherPath,
   parseCliArgs,
+  parseMcpArgs,
   shimBlocked,
   shimInstalled,
   shimPath,
   syncShim,
+  syncMcpShim,
+  mcpShimPath,
   syncUserPath,
 } from './cliShim';
 
@@ -542,6 +545,19 @@ function shimForwardsTo(): { launcher: string; windowsHub?: string } {
 }
 
 /**
+ * What the MCP shim forwards to: the same split, for the same reason.
+ *
+ * The MCP server takes no hub - it is an HTTP client of the running backend
+ * and finds its port in `server-config.json` - so Windows only needs the
+ * interpreter.
+ */
+function mcpShimForwardsTo(): { launcher: string; windowsPython?: string } {
+  return process.platform === 'win32'
+    ? { launcher: bundledInterpreter(), windowsPython: bundledInterpreter() }
+    : { launcher: launcherPath() };
+}
+
+/**
  * The command that reaches this CLI, or undefined when we cannot name one.
  *
  * Only a packaged install has a launcher a shell can run: unpackaged,
@@ -579,9 +595,27 @@ function applyShellCommand(): void {
   if (shimSupported()) {
     const { launcher, windowsHub } = shimForwardsTo();
     const installed = syncShim(shellCommand, launcher, shimPath(), windowsHub);
-    // Follows the shim rather than the preference, so a refused shim never
-    // leaves a directory on PATH that holds nothing.
-    const onPath = syncUserPath(installed, dirname(shimPath()));
+    // The MCP shim rides the same preference and the same directory. Its own
+    // success is deliberately not folded into `shimReachable`, which is about
+    // the CLI hint shown in Settings.
+    const mcp = mcpShimForwardsTo();
+    // Its own config path, not the platform default: the desktop keeps a
+    // separate server-config.json, and reading the wrong one gets the wrong
+    // port and the wrong scheme.
+    const mcpInstalled = syncMcpShim(
+      shellCommand,
+      mcp.launcher,
+      serverConfigPath(),
+      mcpShimPath(),
+      mcp.windowsPython,
+    );
+    // Follows the shims rather than the preference, so a refused shim never
+    // leaves a directory on PATH that holds nothing. Either of them is reason
+    // enough to keep the directory: `shimBlocked` is per file, so a user who
+    // already has their own `pixlstash` gets the CLI shim refused while the
+    // MCP one is written, and taking only the CLI's answer would strip the
+    // PATH entry for a file that had just landed in it.
+    const onPath = syncUserPath(installed || mcpInstalled, dirname(shimPath()));
     // Elsewhere the directory is on PATH by convention, so the file is the whole
     // answer; on Windows we put it there ourselves and have to have succeeded.
     shimReachable = installed && (process.platform !== 'win32' || onPath);
@@ -1838,10 +1872,45 @@ function runCli(args: string[]): void {
   child.on('exit', (code, signal) => app.exit(signal ? 1 : (code ?? 1)));
 }
 
+/**
+ * Run the read-only MCP server inside the bundled runtime, as `pixlstash-mcp`.
+ *
+ * The client owns this process's stdin and stdout: the protocol is
+ * newline-delimited JSON-RPC over that pipe, so **nothing else may write to
+ * stdout**. Hardware acceleration goes off for the same reason `runCli` does it
+ * - Chromium's GPU process otherwise prints driver-probe noise - except that
+ * here such a line does not merely look untidy, it corrupts the session.
+ *
+ * No single-instance lock and no window: this runs alongside a normally
+ * launched app, and there may be several at once if the user has more than one
+ * MCP client. It is a client of the backend over HTTP, so it needs nothing of
+ * the app but its interpreter.
+ */
+function runMcp(args: string[]): void {
+  app.disableHardwareAcceleration();
+  app.dock?.hide();
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (isDevBackend()) env.PYTHONPATH = devPythonPath(devRepoRoot(), process.env.PYTHONPATH);
+  const child = spawn(
+    isDevBackend() ? devInterpreter() : bundledInterpreter(),
+    ['-m', 'pixlstash.mcp_server', ...args],
+    { stdio: 'inherit', env },
+  );
+  child.on('error', (e) => {
+    // stderr, never stdout: the client is parsing stdout as JSON-RPC.
+    console.error(`Could not run the PixlStash MCP server: ${e.message}`);
+    app.exit(3);
+  });
+  child.on('exit', (code, signal) => app.exit(signal ? 1 : (code ?? 1)));
+}
+
 const cliArgs = parseCliArgs(process.argv);
-const gotLock = cliArgs === null && app.requestSingleInstanceLock();
+const mcpArgs = cliArgs === null ? parseMcpArgs(process.argv) : null;
+const gotLock = cliArgs === null && mcpArgs === null && app.requestSingleInstanceLock();
 if (cliArgs !== null) {
   runCli(cliArgs);
+} else if (mcpArgs !== null) {
+  runMcp(mcpArgs);
 } else if (!gotLock) {
   app.quit();
 } else {

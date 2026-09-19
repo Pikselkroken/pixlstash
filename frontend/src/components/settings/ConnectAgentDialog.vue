@@ -11,7 +11,6 @@
  */
 import { computed, ref, watch } from "vue";
 import { createToken } from "../../api/users";
-import { API_BASE_URL } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -22,21 +21,40 @@ const props = defineProps({
 
 const emit = defineEmits(["close", "created"]);
 
-// `--url` is the server root: pixlstash-mcp appends `/api/v1` itself, so
-// passing API_BASE_URL unchanged would send it to `/api/v1/api/v1/...`.
-// Computed, not read at setup: AccountSection mounts this dialog permanently
-// and it spends nearly all of its life closed.
-const serverUrl = computed(() => API_BASE_URL.replace(/\/api\/v1\/?$/, ""));
+// Whether this page is being served from the machine PixlStash runs on.
+//
+// It decides whether an address is emitted at all, and the two cases want
+// opposite things. On loopback, naming one is harmful: the desktop shell
+// serves its window from an ephemeral port that changes every launch, so a URL
+// taken from `window.location` is written into the client's config file and is
+// dead by the next start-up. `pixlstash-mcp` reads the port, scheme and
+// certificate from server-config.json instead, which stays right.
+//
+// Reached over the network, the opposite holds: there is no local
+// server-config.json to read, so the default would resolve to the *agent's*
+// own 127.0.0.1 and quietly find nothing. There the address is the only
+// correct answer, and this page's own origin is it.
+const LOOPBACK = ["localhost", "127.0.0.1", "[::1]", "::1"];
+const isLoopback = computed(() =>
+  LOOPBACK.includes(window.location.hostname.toLowerCase()),
+);
+const remoteUrl = computed(() =>
+  isLoopback.value ? "" : window.location.origin,
+);
 
 const loading = ref(false);
 const error = ref("");
 const token = ref("");
 const copied = ref("");
 
-const claudeCommand = computed(
-  () =>
-    `claude mcp add pixlstash -e PIXLSTASH_TOKEN=${token.value} -- pixlstash-mcp --url ${serverUrl.value}`,
-);
+// `-s user` is load-bearing. `claude mcp add` defaults to `-s local`, which
+// registers the server only inside the directory it was run from, so the agent
+// has no PixlStash tools anywhere else and answers questions about the library
+// from the filesystem instead. A picture library is not a per-project thing.
+const claudeCommand = computed(() => {
+  const url = remoteUrl.value ? ` --url ${remoteUrl.value}` : "";
+  return `claude mcp add -s user pixlstash -e PIXLSTASH_TOKEN=${token.value} -- pixlstash-mcp${url}`;
+});
 
 const configJson = computed(() =>
   JSON.stringify(
@@ -44,7 +62,7 @@ const configJson = computed(() =>
       mcpServers: {
         pixlstash: {
           command: "pixlstash-mcp",
-          args: ["--url", serverUrl.value],
+          ...(remoteUrl.value ? { args: ["--url", remoteUrl.value] } : {}),
           env: { PIXLSTASH_TOKEN: token.value },
         },
       },
@@ -118,9 +136,17 @@ async function copy(key, text) {
       <p class="cad-hint">
         The token is shown once and cannot be read back. Copy one of these now.
       </p>
+      <p v-if="remoteUrl" class="cad-warn">
+        You are viewing PixlStash over the network, so these name
+        <code>{{ remoteUrl }}</code> explicitly. The agent has to be able to
+        reach that address, and if PixlStash is serving https with its own
+        certificate, to trust it. Running the agent on the PixlStash machine
+        instead needs no address at all.
+      </p>
 
       <div class="cad-block">
         <span class="section-label">Claude Code</span>
+        <p class="cad-step">Run this once in a terminal. Any folder will do.</p>
         <div class="cad-row">
           <code class="cad-code">{{ claudeCommand }}</code>
           <AppButton
@@ -136,6 +162,22 @@ async function copy(key, text) {
 
       <div class="cad-block">
         <span class="section-label">Any other MCP client</span>
+        <p class="cad-step">
+          Goes in your client's MCP configuration file. In Claude Desktop that is
+          <strong>Settings → Developer → Edit Config</strong>. If that file
+          already lists servers, add the <code>"pixlstash"</code> entry inside
+          its existing <code>"mcpServers"</code> block rather than replacing
+          the file, or you will drop the servers already there.
+          <a
+            class="cad-link"
+            href="https://modelcontextprotocol.io/quickstart/user"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Where to find it
+            <v-icon size="x-small" aria-hidden="true">mdi-open-in-new</v-icon>
+          </a>
+        </p>
         <div class="cad-row">
           <code class="cad-code cad-code--json">{{ configJson }}</code>
           <AppButton
@@ -177,6 +219,26 @@ async function copy(key, text) {
   flex-direction: column;
   gap: var(--space-2);
 }
+/* What to actually do with the block below it. Without this the JSON is a
+   puzzle: it is obvious how to copy and not at all obvious where it goes. */
+.cad-step {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  opacity: 0.75;
+}
+.cad-step code {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+.cad-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: rgb(var(--v-theme-on-surface));
+  font-weight: var(--weight-medium);
+  text-decoration: underline;
+}
 .cad-row {
   display: flex;
   align-items: flex-start;
@@ -201,6 +263,17 @@ async function copy(key, text) {
 /* `--v-theme-error`, not the `--v-theme-surface-error` ShareDialog reaches
    for: only `dark-surface-error` is registered in main.js, so that one is an
    undefined var() and renders as no colour at all. */
+/* The remote case, which the copied blocks cannot solve on their own. */
+.cad-warn {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  opacity: 0.9;
+}
+.cad-warn code {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
 .cad-error {
   margin: 0;
   font-size: var(--text-sm);

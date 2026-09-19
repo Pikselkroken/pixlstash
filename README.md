@@ -771,15 +771,55 @@ installed.
   "mcpServers": {
     "pixlstash": {
       "command": "pixlstash-mcp",
-      "args": ["--url", "http://127.0.0.1:9537"],
       "env": { "PIXLSTASH_TOKEN": "<your read-only token>" }
     }
   }
 }
 ```
 
-Tools: `search_pictures`, `list_pictures`, `get_picture`, `view_picture`,
-`list_tags`, `get_recipe`.
+That goes in your MCP client's own configuration file. In Claude Desktop that
+is **Settings → Developer → Edit Config**; other clients document their own
+location. If the file already lists servers, add the `"pixlstash"` entry inside
+the existing `"mcpServers"` block rather than replacing the file, or you will
+drop the servers already there.
+
+No address is needed: `pixlstash-mcp` reads the port, the scheme and the
+certificate out of your `server-config.json`, the same file the server reads,
+so it keeps working if you change any of them. If you have **Require SSL** on,
+it connects over https and trusts PixlStash's own self-signed certificate.
+The desktop app keeps a separate `server-config.json`, and its shim passes that
+path with `--server-config`; point a hand-written config at it the same way. Pass `--url` (or set `PIXLSTASH_URL`) only to point it at
+a different machine. **Do not copy the address out of the desktop app's
+window** - that is an ephemeral port the desktop shell picks afresh on every
+launch, so it stops resolving the next time PixlStash starts.
+
+**Desktop app:** you do not need to install anything. Turn on **Shell command**
+in Settings and the app puts both `pixlstash` and `pixlstash-mcp` on your PATH,
+forwarding to the interpreter it already ships. Nothing is installed into any
+Python environment of your own.
+
+Running from a checkout instead, `pip install -e .` provides `pixlstash-mcp`
+in that virtualenv. If your MCP client then reports
+`Executable not found in $PATH: "pixlstash-mcp"`, it is not inheriting that
+environment; give it the absolute path, which `which pixlstash-mcp` prints in a
+shell where PixlStash runs.
+
+Tools: `search_pictures`, `list_pictures`, `count_pictures`, `get_picture`,
+`view_picture`, `list_tags`, `list_sets`, `list_characters`, `list_projects`,
+`get_recipe`.
+`list_pictures` and `search_pictures` also narrow by `set_id`, `character_id`,
+`project_id` and `tags`.
+
+If the agent answers questions about your library from the shell instead of
+from these tools, it is almost always one of two things:
+
+- **The server is registered for one directory only.** `claude mcp add`
+  defaults to `--scope local`, which registers it just for the directory you
+  ran it in; everywhere else the agent has no PixlStash tools at all. Use
+  `-s user`, as the **Connect AI agent** command does. `claude mcp list` run
+  from an unrelated folder tells you which you have.
+- **Nothing is listening.** `pixlstash-mcp` writes a line to stderr at
+  start-up in that case, which most clients show in their MCP server log.
 
 ## Troubleshooting
 

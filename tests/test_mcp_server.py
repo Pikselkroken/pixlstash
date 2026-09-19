@@ -11,7 +11,11 @@ missing.
 import http.server
 import io
 import json
+import datetime
+import ipaddress
 import re
+import socket
+import ssl
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -148,10 +152,26 @@ def test_protocol_handshake_and_tool_list():
         "list_pictures",
         "get_picture",
         "view_picture",
+        "count_pictures",
         "list_tags",
+        "list_sets",
+        "list_characters",
+        "list_projects",
         "get_recipe",
     }
     assert all(t["annotations"]["readOnlyHint"] is True for t in tools)
+    # The handshake has to say what the server is for. Without `instructions`
+    # a client sees six names and reaches for `ls` instead, which cannot see
+    # tags, sets or recipes at all.
+    instructions = replies[0]["result"]["instructions"]
+    assert "PixlStash" in instructions
+    for mentioned in ("list_sets", "search_pictures", "get_recipe"):
+        assert mentioned in instructions
+    # Naming the shortcut is the point. A general "prefer these tools" loses to
+    # a sqlite3 call that looks authoritative, so the instructions have to say
+    # which files not to open and give a reason that survives being argued with.
+    assert "vault.db" in instructions and "sqlite3" in instructions
+    assert "derived" in instructions
     assert replies[2]["error"]["code"] == -32601
     assert replies[3]["error"]["code"] == -32602
     assert replies[4]["error"]["code"] == -32602
@@ -173,6 +193,251 @@ def test_an_unknown_protocol_version_gets_ours():
         },
     )
     assert reply["result"]["protocolVersion"] == mcp_server.PROTOCOL_VERSION
+
+
+def test_https_is_taken_from_the_config_not_assumed(tmp_path, monkeypatch):
+    """A TLS listener sent plain HTTP just hangs up, which reads as a crash.
+
+    `require_ssl` decides the scheme. Getting it wrong is not a clean failure:
+    the connection is accepted and closed with no reply, which surfaces as
+    "Remote end closed connection without response".
+    """
+    config = tmp_path / "server-config.json"
+    config.write_text(json.dumps({"port": 9537, "require_ssl": True}), encoding="utf-8")
+    monkeypatch.setattr(mcp_server, "SERVER_CONFIG_PATH", str(config))
+    monkeypatch.delenv("PIXLSTASH_URL", raising=False)
+
+    assert mcp_server.configured_url() == "https://127.0.0.1:9537"
+    # The positive control: the same file without the flag stays on http.
+    config.write_text(json.dumps({"port": 9537}), encoding="utf-8")
+    assert mcp_server.configured_url() == "http://127.0.0.1:9537"
+
+
+def test_the_servers_own_certificate_is_trusted_and_still_verified(tmp_path):
+    """PixlStash signs its own certificate, so the system store never has it.
+
+    Pinning that one file keeps verification on, including the hostname check.
+    Turning verification off instead would accept anything on the port.
+    """
+    assert mcp_server.ssl_context_for({}) is None
+    assert mcp_server.ssl_context_for({"require_ssl": False}) is None
+
+    missing = mcp_server.ssl_context_for(
+        {"require_ssl": True, "ssl_certfile": str(tmp_path / "absent.pem")}
+    )
+    assert missing is not None and missing.verify_mode == ssl.CERT_REQUIRED
+
+    # A real self-signed certificate, trusted by name rather than by giving up.
+    certfile = tmp_path / "cert.pem"
+    certfile.write_text(_self_signed_pem(), encoding="utf-8")
+    context = mcp_server.ssl_context_for(
+        {"require_ssl": True, "ssl_certfile": str(certfile)}
+    )
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+    # get_ca_certs() lists only CA-flagged certificates, and a self-signed
+    # server certificate is not one; the store count is what says it loaded.
+    assert context.cert_store_stats()["x509"] >= 1
+
+
+def test_a_tls_listener_sent_plain_http_explains_itself():
+    """The exact failure the desktop hit: https on the port, http in the client."""
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+
+        def hang_up_on_plaintext():
+            conn, _ = server.accept()
+            # What a TLS listener does with a plaintext GET: no reply at all.
+            conn.recv(1024)
+            conn.close()
+
+        thread = threading.Thread(target=hang_up_on_plaintext, daemon=True)
+        thread.start()
+        fetch = mcp_server.http_fetch(f"http://127.0.0.1:{port}", "example-token")
+        result = _call(fetch, "list_tags")
+        thread.join(timeout=5)
+
+    assert result["isError"] is True
+    text = result["content"][0]["text"]
+    assert "closed it without answering" in text
+    assert "https" in text and "--server-config" in text
+
+
+def _self_signed_pem() -> str:
+    """A throwaway self-signed certificate, shaped like PixlStash's own."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "pixlstash-test")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime(2020, 1, 1))
+        .not_valid_after(datetime.datetime(2040, 1, 1))
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
+            ),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    return cert.public_bytes(serialization.Encoding.PEM).decode()
+
+
+def test_the_default_url_is_the_configured_port_not_a_guess(tmp_path, monkeypatch):
+    """The port the server is configured for, read from the file it reads.
+
+    The desktop shell serves its window from an ephemeral loopback port that
+    changes on every launch, so a URL taken from the browser is written into a
+    client's config file and is dead by the next start-up. Only
+    server-config.json is authoritative.
+    """
+    config = tmp_path / "server-config.json"
+    config.write_text(json.dumps({"port": 12345}), encoding="utf-8")
+    monkeypatch.setattr(mcp_server, "SERVER_CONFIG_PATH", str(config))
+    monkeypatch.delenv("PIXLSTASH_URL", raising=False)
+
+    assert mcp_server.configured_url() == "http://127.0.0.1:12345"
+
+    # --url is resolved in main(), because it depends on --server-config, which
+    # argparse has not read while the defaults are being built. Left unset it
+    # is None and the config answers.
+    assert mcp_server.build_parser().parse_args([]).url is None
+    assert (
+        mcp_server.build_parser().parse_args(["--url", "http://example.test"]).url
+        == "http://example.test"
+    )
+
+    # And the config a caller names is the one read, which is the whole point:
+    # the desktop app keeps its own, elsewhere.
+    other = tmp_path / "desktop-server-config.json"
+    other.write_text(json.dumps({"port": 9999, "require_ssl": True}), encoding="utf-8")
+    assert (
+        mcp_server.configured_url(mcp_server.read_server_config(str(other)))
+        == "https://127.0.0.1:9999"
+    )
+
+
+@pytest.mark.parametrize(
+    "contents", ["", "not json", json.dumps([]), json.dumps({"port": "nonsense"})]
+)
+def test_an_unreadable_config_falls_back_to_the_default_port(
+    tmp_path, monkeypatch, contents
+):
+    """A broken or absent config must not stop the server starting."""
+    config = tmp_path / "server-config.json"
+    config.write_text(contents, encoding="utf-8")
+    monkeypatch.setattr(mcp_server, "SERVER_CONFIG_PATH", str(config))
+
+    assert mcp_server.configured_url() == f"http://127.0.0.1:{mcp_server.DEFAULT_PORT}"
+
+    # And when the file is not there at all.
+    monkeypatch.setattr(mcp_server, "SERVER_CONFIG_PATH", str(tmp_path / "absent.json"))
+    assert mcp_server.configured_url() == f"http://127.0.0.1:{mcp_server.DEFAULT_PORT}"
+
+
+def test_a_closed_port_says_why_rather_than_connection_refused():
+    """The desktop app binds the configured port only for remote access.
+
+    "Connection refused" alone sends the owner hunting for a crashed server,
+    when the likelier cause is that the port is simply not being served.
+    """
+    # Bind and drop a port, so nothing is listening on an address that exists.
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        dead_port = probe.getsockname()[1]
+
+    fetch = mcp_server.http_fetch(f"http://127.0.0.1:{dead_port}", "example-token")
+    result = _call(fetch, "list_tags")
+    text = result["content"][0]["text"]
+
+    assert result["isError"] is True
+    assert f"Nothing is listening on http://127.0.0.1:{dead_port}" in text
+    assert "remote access" in text
+    assert "--url" in text
+    # The probe reports the same thing, so start-up says it before any tool.
+    assert mcp_server.warn_if_unreachable(fetch, "irrelevant") is False
+
+
+def test_an_untrusted_certificate_says_so_and_names_the_config():
+    """The TLS explanation has to live where the failure actually arrives.
+
+    urllib wraps the handshake in URLError, so an `except ssl.SSLError` around
+    the request never runs: reproduced against a local TLS listener, what comes
+    out is a URLError carrying the SSLError. The message therefore belongs in
+    `unreachable_message`, beside the refused-connection case.
+    """
+    message = mcp_server.unreachable_message(
+        "https://127.0.0.1:9537",
+        ssl.SSLCertVerificationError("certificate verify failed: self-signed"),
+    )
+    assert "secure connection" in message
+    assert "--server-config" in message
+    assert "self-signed" in message
+    # Not mistaken for the port being closed.
+    assert "Nothing is listening" not in message
+
+
+def test_the_start_up_probe_sees_a_rejected_token(monkeypatch):
+    """A 401 is an answer, and `fetch` returns it rather than raising.
+
+    Probing through `fetch` therefore called a dead token healthy and left the
+    owner to discover it at the first tool call. `_get` is what turns a
+    non-200 into a ToolError.
+    """
+    calls = []
+
+    def unauthorised(path, params):
+        calls.append(path)
+        return 401, "application/json", b'{"detail":"Invalid token"}'
+
+    assert (
+        mcp_server.warn_if_unreachable(unauthorised, "http://127.0.0.1:9537") is False
+    )
+    # And the cheap count route, not the tag GROUP BY, is what it asks for.
+    assert calls == ["/pictures/count"]
+
+    def healthy(path, params):
+        return 200, "application/json", b'{"count": 3}'
+
+    assert mcp_server.warn_if_unreachable(healthy, "http://127.0.0.1:9537") is True
+
+
+def test_a_non_refusal_keeps_its_own_reason():
+    """Only a refused connection gets the remote-access explanation."""
+    message = mcp_server.unreachable_message(
+        "http://127.0.0.1:9537", OSError("name resolution went wrong")
+    )
+    assert "name resolution went wrong" in message
+    assert "remote access" not in message
+
+
+def test_membership_filters_reach_the_listing_as_query_params():
+    seen = []
+
+    def fetch(path, params):
+        seen.append((path, dict(params)))
+        return 200, "application/json", b"[]"
+
+    _call(fetch, "list_pictures", set_id=7, character_id=3, project_id="UNASSIGNED")
+    path, params = seen[0]
+    assert path == "/pictures"
+    assert params["set_id"] == "7"
+    assert params["character_id"] == "3"
+    assert params["project_id"] == "UNASSIGNED"
+
+    # A filter that is not an id is refused rather than sent.
+    assert _call(fetch, "list_pictures", set_id={"a": 1})["isError"] is True
+    assert len(seen) == 1
 
 
 @contextmanager
@@ -277,7 +542,7 @@ def test_every_tool_request_is_a_get_through_http_fetch(monkeypatch):
         return Response()
 
     monkeypatch.setattr(
-        mcp_server, "_build_opener", lambda: SimpleNamespace(open=urlopen)
+        mcp_server, "_build_opener", lambda context=None: SimpleNamespace(open=urlopen)
     )
     fetch = mcp_server.http_fetch("http://127.0.0.1:9537/", "example-token")
     _call(fetch, "list_pictures", tags=["cat", "dog"], limit=5000)
@@ -314,7 +579,11 @@ def test_every_tool_path_resolves_to_a_mounted_route(env):
     _call(fetch, "list_pictures")
     for tool in PICTURE_TOOLS:
         _call(fetch, tool, picture_id=env.pic_a)
-    _call(fetch, "list_tags")
+    _call(fetch, "count_pictures")
+    for tool in ("list_tags", "list_sets", "list_characters", "list_projects"):
+        _call(fetch, tool)
+    # Every tool is exercised, so a new one cannot skip this check by
+    # forgetting to be listed here.
     assert len(paths) == len(mcp_server.TOOLS)
 
     # Every GET path template the server mounts, via the same inventory the
@@ -362,6 +631,37 @@ def test_view_picture_returns_an_image(env):
     assert content[0]["type"] == "image"
     assert content[0]["mimeType"] == "image/webp"
     assert content[0]["data"]
+
+
+@pytest.mark.parametrize("tool", ["list_sets", "list_characters", "list_projects"])
+def test_the_collection_tools_answer_the_owner_with_a_list(env, tool):
+    """Each is wired to a route that exists and answers.
+
+    The READ middleware refuses a path that does not exist with the same 403 a
+    real refusal gets, so an owner token answering with a list is what tells a
+    working tool from a typo.
+    """
+    result = _call(env.owner, tool)
+    assert result["isError"] is False, result
+    assert isinstance(json.loads(result["content"][0]["text"]), list)
+
+
+def test_a_picture_scoped_token_sees_collections_only_where_its_scope_allows(env):
+    """Scope is the route's, not the client's, and it is not uniform.
+
+    A picture-scoped token still gets the set and character listings (narrowed
+    by `SCOPED_LIST`), but `/projects` refuses a picture-scoped token outright
+    by resource type. Pinned because the difference is the routes' decision and
+    the tools must pass it through rather than paper over it.
+    """
+    for tool in ("list_sets", "list_characters"):
+        result = _call(env.scoped, tool)
+        assert result["isError"] is False, result
+        assert isinstance(json.loads(result["content"][0]["text"]), list)
+
+    refused = _call(env.scoped, "list_projects")
+    assert refused["isError"] is True
+    assert "answered 403" in refused["content"][0]["text"]
 
 
 def test_list_tags_answers_a_scoped_token(env):
