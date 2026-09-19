@@ -10,6 +10,11 @@ vi.mock("../api/modelShelf", () => ({
   listAdapters: (...args) => listAdapters(...args),
 }));
 
+// The read-only flag the insertion guard reads. Mocked rather than imported
+// so a suite can set it without a session.
+vi.mock("../utils/apiClient", () => ({ isReadOnly: { value: false } }));
+import { isReadOnly } from "../utils/apiClient";
+
 import { insertionSummary, slotKey, slotLabel, useLoraSwap } from "./useLoraSwap";
 
 const SHA = "a".repeat(64);
@@ -27,6 +32,7 @@ const flush = async () => {
 };
 
 beforeEach(() => {
+  isReadOnly.value = false;
   listAdapters.mockReset().mockResolvedValue([
     { sha256: SHA, display_name: "Subject v2", base_model: "Flux" },
     { sha256: "b".repeat(64), display_name: "Anime style" },
@@ -224,5 +230,33 @@ describe("adding a loader where there is none (#1376)", () => {
     const swap = useLoraSwap(ref([]), insertion);
     await flush();
     expect(swap.insertion.value.reason).toContain("The check failed");
+  });
+});
+
+// The insertion read is owner-only, so a share-link session must not make it:
+// the request can only 403, and an error where the honest answer is "this
+// graph has no LoRA loader" reads as a fault rather than a fact. The one
+// caller that guarded this was the lightbox's I2I menu, deleted in #1406, and
+// neither surviving caller had copied the guard - so it lives here now.
+describe("a read-only session", () => {
+  it("never asks where a loader would go", async () => {
+    const load = vi.fn().mockResolvedValue({ plan: { node_id: "9" } });
+    isReadOnly.value = true;
+    const { canInsert } = useLoraSwap(
+      ref([]),
+      ref({ key: "flux.json", load }),
+    );
+    await flush();
+    expect(load).not.toHaveBeenCalled();
+    expect(canInsert.value).toBe(false);
+    // And nothing was fetched off the shelf on the back of it either.
+    expect(listAdapters).not.toHaveBeenCalled();
+  });
+
+  it("still asks for an owner session, so the guard is the flag and not the wiring", async () => {
+    const load = vi.fn().mockResolvedValue({ plan: { node_id: "9" } });
+    useLoraSwap(ref([]), ref({ key: "flux.json", load }));
+    await flush();
+    expect(load).toHaveBeenCalledTimes(1);
   });
 });

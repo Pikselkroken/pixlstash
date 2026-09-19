@@ -1,5 +1,6 @@
 import { computed, ref, watch } from "vue";
 import { listAdapters } from "../api/modelShelf";
+import { isReadOnly } from "../utils/apiClient";
 import { errorDetail } from "../utils/apiError";
 
 // Swapping a LoRA from the model shelf into a run (#1310): the one
@@ -136,6 +137,11 @@ export function useLoraSwap(slots, insertionSource = ref(null)) {
   // ponytail: the whole shelf in one select; a search field if it grows unwieldy.
   let adaptersLoaded = false;
   async function loadAdapters() {
+    // The shelf is owner-only too (`GET /adapters`), so the same session
+    // guard that keeps `loadInsertion` quiet belongs here: this is the
+    // sibling call, four lines from the other one, and a 403 renders as an
+    // alert beside a control the reader cannot use anyway.
+    if (isReadOnly.value) return;
     if (adaptersLoaded) return;
     adaptersLoaded = true;
     adaptersError.value = "";
@@ -163,6 +169,13 @@ export function useLoraSwap(slots, insertionSource = ref(null)) {
     insertionLoading.value = false;
     const source = insertionSource.value;
     if ((slots.value || []).length || !source) return;
+    // Never asked by a share link: the insertion read is owner-only, so the
+    // request can only 403, and an error where the honest answer is "this
+    // graph has no LoRA loader" reads as a fault rather than a fact. The guard
+    // lives HERE and not in each caller because the one caller that had it was
+    // deleted with the lightbox's I2I menu (#1406) and neither survivor had
+    // copied it - so a per-caller guard is one the next caller forgets.
+    if (isReadOnly.value) return;
     insertionLoading.value = true;
     let result;
     try {

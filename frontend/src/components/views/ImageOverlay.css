@@ -277,8 +277,7 @@
   cursor: pointer;
 }
 
-.overlay-comfy-select,
-.overlay-comfy-textarea {
+.overlay-comfy-select {
   width: 100%;
   background: rgba(var(--v-theme-shadow), 0.45);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
@@ -286,24 +285,6 @@
   border-radius: var(--radius-md);
   padding: 6px var(--space-3);
   font-size: var(--text-2xs);
-}
-
-.overlay-comfy-textarea-wrap {
-  position: relative;
-}
-
-.overlay-comfy-help {
-  position: absolute;
-  left: 12px;
-  top: 10px;
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.5);
-  pointer-events: none;
-}
-
-.overlay-comfy-textarea {
-  resize: vertical;
-  min-height: 220px;
 }
 
 .overlay-comfy-actions {
@@ -329,42 +310,18 @@
   cursor: default;
 }
 
-.overlay-comfy-warning,
-.overlay-comfy-error,
-.overlay-comfy-success {
+/* A 20% TINT on the dark lightbox, not a solid status fill, so `on-warning` is
+   the wrong token here - it is authored for a solid fill and resolves to a
+   near-black that vanishes into the tint (1.4:1). The right foreground is the
+   surface's own; the hue comes from the dark-surface status set because the
+   lightbox is dark in both themes. 9.18:1. The error, success, note and status
+   variants went with the I2I menu (#1406); the Filters menu, which shares this
+   box, only ever used the warning. */
+.overlay-comfy-warning {
   border-radius: var(--radius-md);
   padding: 6px var(--space-3);
   font-size: var(--text-2xs);
-}
-
-/* These chips are a 20% TINT on the dark lightbox, not a solid status fill, so
-   `on-warning` / `on-error` are the wrong tokens here - they are authored for a
-   solid fill and resolve to a near-black that vanishes into the tint (1.4:1).
-   The right foreground is the surface's own, matching `.overlay-comfy-note` and
-   `.overlay-comfy-status` directly above; the hue comes from the dark-surface
-   status set because the lightbox is dark in both themes. 9.18:1 – 11.24:1. */
-.overlay-comfy-warning {
   background: rgba(var(--v-theme-dark-surface-warning), 0.2);
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-.overlay-comfy-note {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.65);
-}
-
-.overlay-comfy-status {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.75);
-}
-
-.overlay-comfy-error {
-  background: rgba(var(--v-theme-dark-surface-error), 0.2);
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-.overlay-comfy-success {
-  background: rgba(var(--v-theme-primary), 0.18);
   color: rgb(var(--v-theme-on-dark-surface));
 }
 

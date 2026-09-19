@@ -139,193 +139,6 @@
               </div>
             </div>
           </v-menu>
-          <div v-if="comfyuiConfigured" class="overlay-menu-anchor">
-            <button
-              class="overlay-icon-btn overlay-comfy-activator"
-              type="button"
-              aria-label="Edit with ComfyUI"
-              :class="{
-                hidden: chromeHidden,
-                'overlay-icon-btn--active': comfyuiMenuOpen,
-              }"
-            >
-              <Tooltip
-                text="Edit with ComfyUI"
-                activator="parent"
-                :describe="false"
-              />
-              <v-icon size="18">mdi-robot</v-icon>
-              <span class="overlay-comfy-activator-label">I2I</span>
-            </button>
-            <v-menu
-              v-model="comfyuiMenuOpen"
-              activator="parent"
-              :close-on-content-click="false"
-              location-strategy="connected"
-              location="bottom end"
-              origin="top end"
-              transition="scale-transition"
-            >
-              <div class="overlay-comfy-panel">
-                <div class="overlay-comfy-header">Edit with ComfyUI</div>
-                <div v-if="comfyuiWorkflowLoading" class="overlay-comfy-status">
-                  Loading workflows...
-                </div>
-                <div v-else class="overlay-comfy-body">
-                  <div v-if="comfyuiWorkflowError" class="overlay-comfy-error">
-                    {{ comfyuiWorkflowError }}
-                  </div>
-                  <div
-                    v-if="!validComfyWorkflows.length"
-                    class="overlay-comfy-warning"
-                  >
-                    No valid workflows found. A workflow needs a save node and a
-                    picture input set to Selection in Workflows.
-                  </div>
-                  <label class="overlay-comfy-field-label">Workflow</label>
-                  <select
-                    v-model="comfyuiSelectedWorkflow"
-                    class="overlay-comfy-select"
-                    :disabled="!validComfyWorkflows.length"
-                  >
-                    <option
-                      v-for="workflow in validComfyWorkflows"
-                      :key="workflow.name"
-                      :value="workflow.name"
-                    >
-                      {{ workflow.display_name || workflow.name }}
-                    </option>
-                  </select>
-                  <div
-                    v-if="invalidComfyWorkflows.length"
-                    class="overlay-comfy-note"
-                  >
-                    {{ invalidComfyWorkflows.length }} workflow(s) have no save
-                    node.
-                  </div>
-                  <template v-if="showComfyuiCaptionInput">
-                    <label class="overlay-comfy-field-label">Caption</label>
-                    <div class="overlay-comfy-textarea-wrap">
-                      <div
-                        v-if="showComfyuiCaptionHelp"
-                        class="overlay-comfy-help"
-                      >
-                        Add edit caption here
-                      </div>
-                      <textarea
-                        v-model="comfyuiCaption"
-                        class="overlay-comfy-textarea"
-                        rows="6"
-                        @input="comfyuiCaptionTouched = true"
-                        @focus="comfyuiCaptionFocused = true"
-                        @blur="comfyuiCaptionFocused = false"
-                      ></textarea>
-                    </div>
-                  </template>
-                  <!-- The LoRA goes into a loader the workflow already has
-                       (#1310), or into one PixlStash adds where it has none
-                       and can show where (#1376); otherwise it says why not.
-                       Only once a workflow is chosen: with none there is
-                       nothing to say about its loaders. -->
-                  <template v-if="selectedComfyWorkflow">
-                    <label
-                      class="overlay-comfy-field-label"
-                      for="overlay-comfy-lora"
-                    >
-                      LoRA
-                    </label>
-                    <div
-                      v-if="!comfyLoraSlots.length && !comfyCanInsert"
-                      class="overlay-comfy-note"
-                      role="status"
-                    >
-                      {{ comfyNoLoraText("This workflow") }}
-                    </div>
-                    <div
-                      v-else-if="adaptersError"
-                      class="overlay-comfy-error"
-                      role="alert"
-                    >
-                      {{ adaptersError }}
-                    </div>
-                    <template v-else>
-                      <select
-                        id="overlay-comfy-lora"
-                        v-model="comfyAdapterSha"
-                        class="overlay-comfy-select"
-                      >
-                        <option
-                          v-for="opt in comfyAdapterOptions"
-                          :key="opt.value"
-                          :value="opt.value"
-                        >
-                          {{ opt.label }}
-                        </option>
-                      </select>
-                      <!-- What adding the loader does, before the run does it. -->
-                      <div
-                        v-if="comfyCanInsert && comfyAdapterSha"
-                        class="overlay-comfy-note"
-                        role="status"
-                      >
-                        {{ comfyInsertionText }}
-                      </div>
-                      <!-- Which slot, when the workflow has more than one:
-                           swapping them all would load the chosen LoRA twice
-                           and lose the others. -->
-                      <template v-if="comfyLoraSlots.length > 1">
-                        <label
-                          class="overlay-comfy-field-label"
-                          for="overlay-comfy-lora-slot"
-                        >
-                          Into which loader
-                        </label>
-                        <select
-                          id="overlay-comfy-lora-slot"
-                          v-model="comfyLoraSlot"
-                          class="overlay-comfy-select"
-                        >
-                          <option
-                            v-for="opt in comfySlotOptions"
-                            :key="opt.value"
-                            :value="opt.value"
-                          >
-                            {{ opt.label }}
-                          </option>
-                        </select>
-                      </template>
-                    </template>
-                  </template>
-                  <label class="overlay-comfy-checkbox-row">
-                    <input v-model="stackI2IOutputs" type="checkbox" />
-                    <span>Stack new images with the originals</span>
-                  </label>
-                  <div class="overlay-comfy-actions">
-                    <button
-                      class="overlay-comfy-run"
-                      type="button"
-                      :disabled="!canRunComfyWorkflow"
-                      @click.stop="runComfyWorkflow"
-                    >
-                      <v-icon
-                        size="16"
-                        :class="{ 'mdi-spin': comfyuiRunLoading }"
-                      >
-                        {{ comfyuiRunLoading ? "mdi-loading" : "mdi-play" }}
-                      </v-icon>
-                      <span>{{ comfyuiRunLoading ? "Running" : "Run" }}</span>
-                    </button>
-                  </div>
-                  <div v-if="comfyuiRunError" class="overlay-comfy-error">
-                    {{ comfyuiRunError }}
-                  </div>
-                  <div v-if="comfyuiRunSuccess" class="overlay-comfy-success">
-                    {{ comfyuiRunSuccess }}
-                  </div>
-                </div>
-              </div>
-            </v-menu>
-          </div>
           <Tooltip
             v-if="image && !isReadOnly"
             :text="stackGroupingLockReason || ''"
@@ -996,7 +809,9 @@
             :can-generate-variants="
               comfyuiConfigured && !isReadOnly && !!image?.id
             "
+            :comfyui-configured="comfyuiConfigured"
             @generate-variants="emit('open-remix-dialog', image?.id)"
+            @use-as-input="emit('use-as-input', image?.id)"
           />
         </AppInspector>
 
@@ -1085,14 +900,7 @@ import {
   removeCharacterFacesByFaceId,
 } from "../../api/characters";
 import { listStackPictures } from "../../api/stacks";
-import { useLoraSwap } from "../../composables/useLoraSwap";
-import {
-  getLoraInsertion,
-  listWorkflows,
-  runImageToImage,
-  getPictureRecipe,
-  getPictureWorkflow,
-} from "../../api/comfyui";
+import { getPictureRecipe } from "../../api/comfyui";
 import { listProjects } from "../../api/projects";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
@@ -1210,7 +1018,6 @@ const props = defineProps({
   comfyuiProgressPercent: { type: Number, default: 0 },
   pluginProgress: { type: Object, default: null },
   pluginProgressPercent: { type: Number, default: 0 },
-  comfyuiClientId: { type: String, default: "" },
   comfyuiConfigured: { type: Boolean, default: false },
   guestScore: { type: Number, default: 0 },
 });
@@ -1236,7 +1043,6 @@ const {
   comfyuiProgressPercent,
   pluginProgress,
   pluginProgressPercent,
-  comfyuiClientId,
   comfyuiConfigured,
   guestScore,
 } = toRefs(props);
@@ -1512,21 +1318,19 @@ const emit = defineEmits([
   "overlay-change",
   "added-to-set",
   "set-project",
-  "comfyui-run",
   "run-plugin",
   "request-context-menu",
   "character-created",
   // The Recipe section's "Generate variants..." (#1313). The Remix dialog is
   // the grid's, so the lightbox asks for it rather than hosting a second one.
   "open-remix-dialog",
+  "use-as-input",
 ]);
 
 const descriptionPanelRef = ref(null);
 const isDescriptionEditing = computed(
   () => descriptionPanelRef.value?.isEditingDescription ?? false,
 );
-const imagePlaceholderLabel = "{{image_path}}";
-const captionPlaceholderLabel = "{{caption}}";
 const descriptionTeaser = computed(() => {
   const desc = image.value?.description || "";
   const trimmed = desc.trim();
@@ -1542,20 +1346,9 @@ const lastDetectionUpdateKey = ref(0);
 const lastTextUpdateKey = ref(0);
 const lastOrientationUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
-const comfyuiMenuOpen = ref(false);
 const pluginMenuOpen = ref(false);
 const starMenuOpen = ref(false);
 let menuWasOpenOnPointerDown = false;
-const comfyuiWorkflows = ref([]);
-const comfyuiWorkflowLoading = ref(false);
-const comfyuiWorkflowError = ref("");
-const comfyuiSelectedWorkflow = ref("");
-const comfyuiCaption = ref("");
-const comfyuiCaptionTouched = ref(false);
-const comfyuiCaptionFocused = ref(false);
-const comfyuiRunLoading = ref(false);
-const comfyuiRunError = ref("");
-const comfyuiRunSuccess = ref("");
 const overlaySelectedPluginName = ref("");
 const overlayPluginParameters = ref({});
 
@@ -1726,23 +1519,10 @@ function rotateCurrentImage(direction) {
 
 // Remembered "stack outputs with originals" prefs (persisted in localStorage).
 const genStackPrefs = useGenStackPrefsStore();
-const stackI2IOutputs = computed({
-  get: () => genStackPrefs.stackI2IOutputs,
-  set: (val) => genStackPrefs.setStackI2IOutputs(val),
-});
 const stackFilterOutputs = computed({
   get: () => genStackPrefs.stackFilterOutputs,
   set: (val) => genStackPrefs.setStackFilterOutputs(val),
 });
-
-// Auto-close timer for the I2I menu after a successful queue.
-let comfyuiCloseTimer = null;
-function clearComfyuiCloseTimer() {
-  if (comfyuiCloseTimer !== null) {
-    clearTimeout(comfyuiCloseTimer);
-    comfyuiCloseTimer = null;
-  }
-}
 const overlaySelectionMedia = computed(() => {
   const format = image.value ? getOverlayFormat(image.value) : "";
   const hasVideos = format ? isSupportedVideoFile(format) : false;
@@ -1776,106 +1556,6 @@ const activeOverlayPluginSchema = computed(() => {
   );
 });
 
-const COMFYUI_PROMPT_STORAGE_PREFIX = "pixlstash:comfyuiPrompt:";
-
-function getComfyuiPromptStorageKey() {
-  if (typeof window === "undefined") return "";
-  const workflow = String(comfyuiSelectedWorkflow.value || "default");
-  return `${COMFYUI_PROMPT_STORAGE_PREFIX}${workflow}`;
-}
-
-function loadComfyuiPromptFromSession() {
-  if (typeof window === "undefined") return null;
-  if (!showComfyuiCaptionInput.value) return null;
-  const key = getComfyuiPromptStorageKey();
-  if (!key) return null;
-  return window.sessionStorage?.getItem(key);
-}
-
-function persistComfyuiPromptToSession() {
-  if (typeof window === "undefined") return;
-  if (!showComfyuiCaptionInput.value) return;
-  const key = getComfyuiPromptStorageKey();
-  if (!key) return;
-  const value = comfyuiCaption.value || "";
-  window.sessionStorage?.setItem(key, value);
-}
-
-// What run_i2i accepts, not workflow_type: this menu still runs through it,
-// and only a workflow with an input the selection fills. Absent reads as
-// offered, which is the backend's own default for an unconfigured workflow.
-const takesImagePlaceholder = (workflow) =>
-  !workflow?.missing_placeholders?.includes(imagePlaceholderLabel);
-const offeredOnSelection = (workflow) =>
-  workflow?.has_selection_input !== false && takesImagePlaceholder(workflow);
-const validComfyWorkflows = computed(() =>
-  (comfyuiWorkflows.value || []).filter(
-    (workflow) => workflow?.valid && offeredOnSelection(workflow),
-  ),
-);
-// Counted on the placeholder alone: a workflow missing its save node is
-// reported here whatever its inputs are set to.
-const invalidComfyWorkflows = computed(() =>
-  (comfyuiWorkflows.value || []).filter(
-    (workflow) => !workflow?.valid && takesImagePlaceholder(workflow),
-  ),
-);
-const selectedComfyWorkflow = computed(() =>
-  (comfyuiWorkflows.value || []).find(
-    (workflow) => workflow?.name === comfyuiSelectedWorkflow.value,
-  ),
-);
-/** The chosen workflow's LoRA slots; empty means it has no LoRA loader. */
-const comfyLoraSlots = computed(
-  () => selectedComfyWorkflow.value?.lora_slots || [],
-);
-
-/**
- * Where a loader would go, when the chosen workflow has none. Not asked by a
- * share link: the read is owner-only, and a refusal is not news to them.
- */
-const comfyLoraInsertionSource = computed(() => {
-  if (isReadOnly.value) return null;
-  const name = selectedComfyWorkflow.value?.name;
-  return name ? { key: name, load: () => getLoraInsertion(name) } : null;
-});
-
-const {
-  adapterSha: comfyAdapterSha,
-  chosenSlot: comfyLoraSlot,
-  adaptersError,
-  adapterOptions: comfyAdapterOptions,
-  slotOptions: comfySlotOptions,
-  canInsert: comfyCanInsert,
-  insertionText: comfyInsertionText,
-  noLoaderText: comfyNoLoraText,
-  resetChoice: resetComfyLoraChoice,
-  body: comfyLoraBody,
-} = useLoraSwap(comfyLoraSlots, comfyLoraInsertionSource);
-
-const selectedComfyUsesCaption = computed(() => {
-  const missing = Array.isArray(
-    selectedComfyWorkflow.value?.missing_placeholders,
-  )
-    ? selectedComfyWorkflow.value.missing_placeholders
-    : [];
-  return !missing.includes(captionPlaceholderLabel);
-});
-const showComfyuiCaptionInput = computed(() => selectedComfyUsesCaption.value);
-const canRunComfyWorkflow = computed(() => {
-  return (
-    !!image.value?.id &&
-    !!comfyuiSelectedWorkflow.value &&
-    !comfyuiRunLoading.value
-  );
-});
-const showComfyuiCaptionHelp = computed(() => {
-  return (
-    showComfyuiCaptionInput.value &&
-    !comfyuiCaptionFocused.value &&
-    !comfyuiCaption.value
-  );
-});
 
 watch(open, (value) => {
   if (!value) {
@@ -1884,12 +1564,10 @@ watch(open, (value) => {
     // current grid, and so closed-overlay reads fall through to live allImages.
     frozenAllImages.value = null;
     pluginMenuOpen.value = false;
-    comfyuiMenuOpen.value = false;
     chromeHidden.value = false;
     chromeRevealTimestamp.value = 0;
     addToSetControlKey.value += 1;
     zoom.reset();
-    resetComfyState();
   } else {
     // Snapshot the grid sequence up front so prev/next stay stable for the
     // whole lifetime of the overlay regardless of edits or background refetches.
@@ -1897,60 +1575,8 @@ watch(open, (value) => {
     resetOverlayStackState();
     applyInitialExpandedStackState();
     pluginMenuOpen.value = false;
-    comfyuiMenuOpen.value = false;
     chromeRevealTimestamp.value = Date.now();
-    const stored = loadComfyuiPromptFromSession();
-    if (stored != null) {
-      comfyuiCaption.value = stored;
-      comfyuiCaptionTouched.value = Boolean(stored);
-    }
     fetchCharacters();
-    fetchComfyWorkflows();
-  }
-});
-
-watch(validComfyWorkflows, (workflows) => {
-  const list = Array.isArray(workflows) ? workflows : [];
-  if (!list.length) {
-    comfyuiSelectedWorkflow.value = "";
-    return;
-  }
-  const hasSelection = list.some(
-    (workflow) => workflow?.name === comfyuiSelectedWorkflow.value,
-  );
-  if (!hasSelection) {
-    comfyuiSelectedWorkflow.value = list[0].name;
-  }
-});
-
-watch([comfyuiSelectedWorkflow, selectedComfyUsesCaption], () => {
-  if (!selectedComfyUsesCaption.value) {
-    comfyuiCaption.value = "";
-    comfyuiCaptionTouched.value = false;
-    comfyuiCaptionFocused.value = false;
-    return;
-  }
-  const stored = loadComfyuiPromptFromSession();
-  if (stored != null) {
-    comfyuiCaption.value = stored;
-    comfyuiCaptionTouched.value = Boolean(stored);
-    comfyuiCaptionFocused.value = false;
-  } else if (!comfyuiCaptionTouched.value) {
-    comfyuiCaption.value = "";
-  }
-});
-
-watch(comfyuiCaption, () => {
-  persistComfyuiPromptToSession();
-});
-
-watch(comfyuiMenuOpen, (value) => {
-  if (value) {
-    // A freshly-opened menu must never inherit a pending close from a prior run.
-    clearComfyuiCloseTimer();
-    comfyuiRunError.value = "";
-    comfyuiRunSuccess.value = "";
-    comfyuiCaptionFocused.value = false;
   }
 });
 
@@ -1989,61 +1615,6 @@ watch(pluginMenuOpen, (isOpen) => {
   }
   overlayPluginParameters.value = {};
 });
-
-async function fetchComfyWorkflows() {
-  if (comfyuiWorkflowLoading.value) return;
-  comfyuiWorkflowLoading.value = true;
-  comfyuiWorkflowError.value = "";
-  try {
-    const body = await listWorkflows();
-    const workflows = body?.workflows;
-    comfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
-  } catch (err) {
-    comfyuiWorkflowError.value =
-      errorDetail(err) || err?.message || String(err);
-    comfyuiWorkflows.value = [];
-  } finally {
-    comfyuiWorkflowLoading.value = false;
-  }
-}
-
-async function runComfyWorkflow() {
-  if (!canRunComfyWorkflow.value) return;
-  comfyuiRunLoading.value = true;
-  comfyuiRunError.value = "";
-  comfyuiRunSuccess.value = "";
-  try {
-    const payload = {
-      picture_id: image.value.id,
-      workflow_name: comfyuiSelectedWorkflow.value,
-      caption: comfyuiCaption.value || "",
-      client_id: comfyuiClientId.value || undefined,
-      stack: stackI2IOutputs.value,
-      ...comfyLoraBody(),
-    };
-    const body = await runImageToImage(payload, {
-      baseUrl: backendUrl.value,
-    });
-    const promptCount = Array.isArray(body?.prompts) ? body.prompts.length : 0;
-    emit("comfyui-run", {
-      prompts: Array.isArray(body?.prompts) ? body.prompts : [],
-      pictureId: payload.picture_id ?? null,
-    });
-    comfyuiRunSuccess.value = promptCount
-      ? `Queued ${promptCount} run(s) in ComfyUI.`
-      : "Queued in ComfyUI.";
-    // Show the success message briefly, then close the menu.
-    clearComfyuiCloseTimer();
-    comfyuiCloseTimer = setTimeout(() => {
-      comfyuiCloseTimer = null;
-      comfyuiMenuOpen.value = false;
-    }, 1200);
-  } catch (err) {
-    comfyuiRunError.value = errorDetail(err) || err?.message || String(err);
-  } finally {
-    comfyuiRunLoading.value = false;
-  }
-}
 
 function runOverlayPlugin() {
   if (!image.value?.id || !overlaySelectedPluginName.value) return;
@@ -2512,15 +2083,6 @@ watch(showStacks, (value) => {
   }
 });
 
-watch(image, (newImage, oldImage) => {
-  if (newImage?.id === oldImage?.id) return;
-  comfyuiCaptionTouched.value = false;
-  comfyuiCaption.value = "";
-  // The chosen workflow survives paging to the next picture, so its slots do
-  // not change and nothing else would clear a LoRA picked for the last one.
-  resetComfyLoraChoice();
-});
-
 watch(open, (isOpen) => {
   if (!isOpen) {
     descriptionPanelRef.value?.cancelEditDescription();
@@ -2528,16 +2090,6 @@ watch(open, (isOpen) => {
     closeFallbackSaveDialog();
   }
 });
-
-function resetComfyState() {
-  comfyuiMenuOpen.value = false;
-  comfyuiRunLoading.value = false;
-  comfyuiRunError.value = "";
-  comfyuiRunSuccess.value = "";
-  comfyuiCaptionTouched.value = false;
-  comfyuiCaption.value = "";
-  resetComfyLoraChoice();
-}
 
 function setScore(n) {
   if (!image.value) return;
@@ -2735,16 +2287,6 @@ function handleKeydown(e) {
 
   handleUserActivity();
 
-  if (comfyuiCaptionFocused.value) {
-    if (e.key === "Escape") {
-      if (comfyuiMenuOpen.value) {
-        comfyuiMenuOpen.value = false;
-      }
-      e.preventDefault();
-    }
-    return;
-  }
-
   if (isDescriptionEditing.value || isAddingTag.value) {
     if (e.key === "Escape") {
       if (isDescriptionEditing.value) {
@@ -2757,15 +2299,12 @@ function handleKeydown(e) {
   }
 
   // Block shortcuts when any other editable element (e.g. plugin parameter inputs) has focus.
-  // Still allow ESC to close the plugin/comfyui menu if open.
+  // Still allow ESC to close the plugin menu if open.
   const target = e.target;
   if (isEditableElement(target)) {
     if (e.key === "Escape") {
       if (pluginMenuOpen.value) {
         pluginMenuOpen.value = false;
-        e.preventDefault();
-      } else if (comfyuiMenuOpen.value) {
-        comfyuiMenuOpen.value = false;
         e.preventDefault();
       } else if (target.tagName === "SELECT") {
         // Close the select dropdown on ESC, since it doesn't do that by default.
@@ -2794,8 +2333,6 @@ function handleKeydown(e) {
       clearDrawMode();
     } else if (pluginMenuOpen.value) {
       pluginMenuOpen.value = false;
-    } else if (comfyuiMenuOpen.value) {
-      comfyuiMenuOpen.value = false;
     } else {
       emit("close");
     }
@@ -3704,7 +3241,6 @@ onUnmounted(() => {
   window.removeEventListener("keydown", handleKeydown);
   document.removeEventListener("keydown", onCreatePersonKeydownCapture, true);
   window.removeEventListener("pointerdown", handleOverlayPointerDown, true);
-  clearComfyuiCloseTimer();
   if (overlayResizeObserver) {
     overlayResizeObserver.disconnect();
     overlayResizeObserver = null;
@@ -3856,6 +3392,11 @@ async function fetchComfyWorkflow(imageId) {
       data && data.reason !== "no_prompt_chunk"
         ? {
             source: data.source || "comfyui",
+            // Whether this recipe can be REPLAYED, which is not the same as
+            // whether it can be read: an A1111 picture answers here in full
+            // and is still not a graph ComfyUI could be handed.
+            available: data.available,
+            reason: data.reason || null,
             summary: data.summary,
             positive_prompt: data.positive_prompt || null,
             negativePrompt: data.negative_prompt || null,

@@ -197,19 +197,46 @@
 
       <!-- The footer the design pins at the bottom. It holds Run… and Save;
            Save needs saved recipes and Run… is the Run popup, neither of which
-           exists yet, so today this is the one replay the app already has. -->
+           exists yet, so today this is the one replay the app already has.
+           *Use as input for…* is beside it (#1406): it is what an A1111
+           picture, and any picture at all, can always do. -->
       <div class="recipe-foot">
-        <AppButton
-          variant="primary"
-          size="sm"
-          class="recipe-run"
-          :disabled="!canGenerateVariants"
-          @click="emit('generate-variants')"
-        >
-          <Tooltip :text="runTooltip" activator="parent" :describe="false" />
-          <v-icon size="16">mdi-play</v-icon>
-          Generate variants…
-        </AppButton>
+        <!-- The reason in prose as well as on the button. A tooltip is not a
+             sentence everyone gets: it needs a hover or a focus, and the
+             design asks for the reason to be readable without either. -->
+        <p v-if="runReason" :id="runReasonId" class="recipe-run-reason">
+          {{ runReason }}
+        </p>
+        <div class="recipe-foot-actions">
+          <!-- `aria-disabled`, not `disabled`: a natively-disabled button is
+               out of the tab order, so a keyboard reader could never reach the
+               reason `aria-describedby` points at. AppButton already inks both
+               spellings the same way. -->
+          <AppButton
+            variant="primary"
+            size="sm"
+            class="recipe-run"
+            block
+            :aria-disabled="runReason ? 'true' : undefined"
+            :aria-describedby="runReason ? runReasonId : undefined"
+            @click="onGenerateVariants"
+          >
+            <Tooltip :text="runTooltip" activator="parent" :describe="false" />
+            <v-icon size="16">mdi-play</v-icon>
+            Generate variants…
+          </AppButton>
+          <AppButton
+            v-if="canUseAsInput"
+            variant="secondary"
+            size="sm"
+            block
+            tooltip="Run a workflow with this picture as its input"
+            @click="emit('use-as-input')"
+          >
+            <v-icon size="16">mdi-image-plus</v-icon>
+            Use as input for…
+          </AppButton>
+        </div>
       </div>
     </template>
   </div>
@@ -233,12 +260,13 @@
  * overridden setting (the workflow defaults read), and Run… as the Run popup.
  * Generate variants is the replay the app ships today and stands in its place.
  */
-import { computed, reactive, ref, watch } from "vue";
+import { computed, reactive, ref, useId, watch } from "vue";
 import { useRouter } from "vue-router";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { getPictureWorkflow } from "../../api/comfyui";
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
 
 const props = defineProps({
@@ -246,9 +274,89 @@ const props = defineProps({
   /** The open picture, for the lazy workflow-graph read. */
   pictureId: { type: [Number, String], default: null },
   canGenerateVariants: { type: Boolean, default: false },
+  /**
+   * Whether this machine has a ComfyUI at all. Separate from
+   * `canGenerateVariants`, which folds in the session and the picture too: the
+   * refusals have to be told apart to be worth showing, and "not connected" is
+   * the wrong thing to say to a share-link reader on a machine that is.
+   */
+  comfyuiConfigured: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["generate-variants"]);
+const emit = defineEmits(["generate-variants", "use-as-input"]);
+
+const runReasonId = useId();
+
+/**
+ * Why this recipe cannot be run again, or null when it can.
+ *
+ * Three different "no"s, and they are not interchangeable to the person
+ * reading them: this machine has no ComfyUI to run anything on, this session
+ * may not run anything, or **this picture is not a thing ComfyUI can run** -
+ * which is the A1111 case the Recipe tab otherwise fills in completely. The
+ * graph reasons come from the recipe read's own `reason` so the words here
+ * cannot drift from the decision the server made.
+ */
+const RUN_REASONS = {
+  a1111:
+    "This picture was made in A1111 or Forge, so there is no ComfyUI graph " +
+    "here to run again. Use it as the input for a workflow instead.",
+  no_seed_input:
+    "This graph has no seed to change, so running it again would make the " +
+    "same picture.",
+  pixlstash_nodes:
+    "This graph calls back into PixlStash, so PixlStash will not replay it.",
+};
+
+const runReason = computed(() => {
+  if (!props.recipe) return null;
+  // Order matters, because these are ranked by what the reader can do about
+  // them. What the PICTURE is comes first: an A1111 picture is not runnable on
+  // any machine, in any session, so saying anything about this one would send
+  // the reader off to fix something that is not the problem.
+  if (props.recipe.source === "a1111") return RUN_REASONS.a1111;
+  // `=== false`, not falsy: a recipe that does not carry the field at all is
+  // not a refusal. Every payload the app produces carries it; a caller that
+  // does not is not told its picture is broken.
+  if (props.recipe.available === false) {
+    return (
+      RUN_REASONS[props.recipe.reason] ||
+      "This picture's recipe cannot be run again."
+    );
+  }
+  // Then the SESSION. A share link can read a recipe - the route is
+  // picture-scoped - so this is a real reader seeing a real recipe, and
+  // telling them ComfyUI is not connected would be false on a machine where
+  // it is, and would send them to a settings screen they cannot open.
+  if (isReadOnly.value) {
+    return "This is a read-only view of the picture, so nothing can be run from it.";
+  }
+  // Then the MACHINE.
+  if (!props.comfyuiConfigured) {
+    return "ComfyUI is not connected, so this recipe cannot be run from here.";
+  }
+  if (!props.canGenerateVariants) {
+    return "This recipe cannot be run from here.";
+  }
+  return null;
+});
+
+/**
+ * Whether to offer the picture as a workflow's input at all.
+ *
+ * Hidden rather than disabled, which is how both context menus treat the same
+ * action: it opens the run panel, and a run panel that can only say "this
+ * session is read-only" is not worth closing the lightbox for.
+ */
+const canUseAsInput = computed(
+  () => props.comfyuiConfigured && !isReadOnly.value,
+);
+
+function onGenerateVariants() {
+  // `aria-disabled` leaves the button clickable, so the refusal is here.
+  if (runReason.value) return;
+  emit("generate-variants");
+}
 
 const router = useRouter();
 /** Input rows whose thumbnail failed to load; see `shownAsPicture`. */
@@ -370,10 +478,8 @@ function formatStrength(strength) {
   return Number(strength).toFixed(2);
 }
 
-const runTooltip = computed(() =>
-  props.canGenerateVariants
-    ? "Run this recipe again with a fresh seed"
-    : "ComfyUI is not connected, so this recipe cannot be run from here",
+const runTooltip = computed(
+  () => runReason.value || "Run this recipe again with a fresh seed",
 );
 
 function modelTooltip(model) {
@@ -738,10 +844,29 @@ async function copyPrompt() {
 .recipe-foot {
   flex: none;
   display: flex;
+  /* A column now: the reason sits above the buttons, which stay in a row. */
+  flex-direction: column;
   gap: var(--space-3);
   padding-top: var(--space-4);
   margin-top: var(--space-4);
   border-top: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
+}
+
+/* Stacked, not side by side: the pane is --stats-panel-w (288px) and these two
+   labels are ~314px together, so a row wraps raggedly with the first button
+   stretched. The design's own footer holds "Run…" and "Save", which do fit. */
+.recipe-foot-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* The same secondary ink the rest of the pane's prose uses. */
+.recipe-run-reason {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
 }
 
 .recipe-run {

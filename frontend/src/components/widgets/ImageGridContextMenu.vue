@@ -167,7 +167,24 @@
             <v-icon class="ctx-icon">mdi-image-search-outline</v-icon>
             Reverse image search
           </button>
-          <!-- 4. Segment -->
+          <!-- 4. Use as input for a workflow (#1406). Acts on the overlay
+               picture and closes the lightbox, because the run panel it opens
+               is the rail the lightbox covers. -->
+          <button
+            v-if="comfyuiConfigured && contextImage?.id"
+            class="ctx-item"
+            role="menuitem"
+            :disabled="isReadOnly"
+            @click="delegateWith('use-as-input', contextImage?.id)"
+          >
+            <Tooltip
+              text="Run a workflow with this picture as its input"
+              activator="parent"
+            />
+            <v-icon class="ctx-icon">mdi-image-plus</v-icon>
+            Use as input for…
+          </button>
+          <!-- 5. Segment -->
           <button
             class="ctx-item"
             role="menuitem"
@@ -181,7 +198,7 @@
             <v-icon class="ctx-icon">mdi-shape-outline</v-icon>
             Segment
           </button>
-          <!-- 5. Restore from snapshot -->
+          <!-- 6. Restore from snapshot -->
           <div
             v-if="!isReadOnly && selectedImageIds.length >= 1"
             class="ctx-submenu-wrap"
@@ -229,7 +246,7 @@
             </div>
           </div>
           <div class="ctx-sep" role="separator" />
-          <!-- 6. Delete (soft-delete → scrapheap; NOT permanent) -->
+          <!-- 7. Delete (soft-delete → scrapheap; NOT permanent) -->
           <button
             class="ctx-item ctx-item--danger"
             role="menuitem"
@@ -491,8 +508,8 @@
           :disabled="!selectedImageIds.length || isReadOnly"
           @click="delegate('open-comfyui-panel')"
         >
-          <v-icon class="ctx-icon">mdi-robot</v-icon>
-          Edit with ComfyUI
+          <v-icon class="ctx-icon">mdi-image-plus</v-icon>
+          Use as input for…
         </button>
         <button
           class="ctx-item"
@@ -859,6 +876,7 @@ const emit = defineEmits([
   "open-plugin-panel",
   "open-comfyui-panel",
   "open-remix-dialog",
+  "use-as-input",
   "segment",
   "auto-tag",
   "generate-description",
