@@ -177,8 +177,8 @@ Decompose by domain first, then fan out. **Independent** sub-tasks run concurren
 
 ## Never query the live library with sqlite3
 
-**A question about what is *in* the owner's library — how many picture sets,
-which pictures carry a tag, what a picture's score is — is answered through the
+**A question about what is *in* the owner's library (how many picture sets,
+which pictures carry a tag, what a picture's score is) is answered through the
 `pixlstash` MCP server, never by opening `vault.db` or `hub.db`.** Reading the
 file is the obvious shortcut and it is wrong three ways: some values are
 derived per request rather than stored (a picture row's raw `project_id` is
@@ -188,7 +188,7 @@ is the contract, and the file is live and single-writer while the server runs.
 
 If the MCP server is not connected, say so and stop. Do not substitute a direct
 read; a plausible wrong number is worse than no number. Reading the schema or a
-migration as *source* is fine — that is code, not the live database.
+migration as *source* is fine: that is code, not the live database.
 
 ## Imports
 - Imports go at the top of the file. A local import inside a function is only acceptable to break a circular dependency, to keep a rarely-used heavy module out of start-up, or when the import is *clearly* optional.

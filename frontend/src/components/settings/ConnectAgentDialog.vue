@@ -140,7 +140,7 @@ async function copy(key, text) {
       <div class="cad-block">
         <span class="section-label">Any other MCP client</span>
         <p class="cad-step">
-          Goes in your client's MCP configuration file — in Claude Desktop,
+          Goes in your client's MCP configuration file. In Claude Desktop that is
           <strong>Settings → Developer → Edit Config</strong>. If that file
           already lists servers, add the <code>"pixlstash"</code> entry inside
           its existing <code>"mcpServers"</code> block rather than replacing

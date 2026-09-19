@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mcpShimPath, mcpShimScript, parseMcpArgs, syncMcpShim } from '../src/cliShim';
 
-describe('parseMcpArgs — deciding between a window and an MCP run', () => {
+describe('parseMcpArgs - deciding between a window and an MCP run', () => {
   it('a packaged launch with no arguments opens a window', () => {
     assert.equal(parseMcpArgs(['/opt/PixlStash/pixlstash']), null);
   });
@@ -38,7 +38,7 @@ describe('parseMcpArgs — deciding between a window and an MCP run', () => {
   });
 });
 
-describe('mcpShimScript — what the forwarder runs', () => {
+describe('mcpShimScript - what the forwarder runs', () => {
   it('goes through the launcher on unix, which is the durable name', () => {
     // An AppImage is mounted at a different random path every launch, so the
     // interpreter inside it cannot be named ahead of time; the .AppImage can.
@@ -67,7 +67,7 @@ describe('mcpShimScript — what the forwarder runs', () => {
   });
 });
 
-describe('syncMcpShim — installing and removing it', () => {
+describe('syncMcpShim - installing and removing it', () => {
   const shimIn = (dir: string) => join(dir, 'pixlstash-mcp');
 
   it('writes an executable forwarder and removes it again', () => {
@@ -109,7 +109,7 @@ describe('syncMcpShim — installing and removing it', () => {
   });
 });
 
-describe('mcpShimPath — where it goes', () => {
+describe('mcpShimPath - where it goes', () => {
   it('sits beside the CLI shim, so one PATH entry serves both', () => {
     assert.equal(mcpShimPath('/home/me', 'linux'), '/home/me/.local/bin/pixlstash-mcp');
   });

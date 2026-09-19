@@ -777,8 +777,8 @@ installed.
 }
 ```
 
-That goes in your MCP client's own configuration file — in Claude Desktop,
-**Settings → Developer → Edit Config**; other clients document their own
+That goes in your MCP client's own configuration file. In Claude Desktop that
+is **Settings → Developer → Edit Config**; other clients document their own
 location. If the file already lists servers, add the `"pixlstash"` entry inside
 the existing `"mcpServers"` block rather than replacing the file, or you will
 drop the servers already there.
