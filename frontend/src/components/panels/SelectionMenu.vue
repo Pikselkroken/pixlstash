@@ -236,8 +236,8 @@
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon">mdi-auto-fix</v-icon>
-        Edit with ComfyUI
+        <v-icon class="ctx-icon">mdi-image-plus</v-icon>
+        Use as input for…
       </button>
       <div class="ctx-sep" />
     </template>

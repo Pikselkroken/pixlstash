@@ -21,7 +21,6 @@
     :comfyuiProgressPercent="comfyuiProgressPercent"
     :pluginProgress="pluginProgress"
     :pluginProgressPercent="pluginProgressPercent"
-    :comfyuiClientId="comfyuiClientId"
     :comfyuiConfigured="filterStore.comfyuiConfigured"
     :guestScore="overlayGuestScore"
     @close="closeOverlay"
@@ -32,11 +31,11 @@
     @overlay-change="handleOverlayChange"
     @added-to-set="handleOverlayAddedToSet"
     @set-project="handleSetProjectForSelected"
-    @comfyui-run="handleComfyuiRun"
     @run-plugin="handlePluginRunRequest"
     @request-context-menu="handleOverlayContextMenuRequest"
     @character-created="emit('refresh-sidebar')"
     @open-remix-dialog="openRemixDialog"
+    @use-as-input="useOverlayPictureAsInput"
   />
   <ImageImporter
     ref="imageImporterRef"
@@ -171,6 +170,7 @@
       :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
       :lock-reason="overlayCtxLockReason"
       :context-image="overlayCtxImage"
+      :comfyui-configured="filterStore.comfyuiConfigured"
       @close="overlayCtxVisible = false"
       @save-picture="handleOverlaySave"
       @save-picture-as="handleOverlaySaveAs"
@@ -181,6 +181,7 @@
       @segment="openOverlaySegmentDialog"
       @delete-selected="handleOverlayDelete"
       @remove-from-group="handleOverlayScrapheapRestore"
+      @use-as-input="useOverlayPictureAsInput"
     />
 
     <!-- ── New person from the context menu (#645) ─────────────
@@ -7621,6 +7622,34 @@ function handleContextMenuOpenPluginPanel() {
 }
 
 function handleContextMenuOpenComfyuiPanel() {
+  workflowRunStore.openFor(FROM_SELECTION);
+}
+
+/**
+ * "Use as input for…" — put one picture into the run panel and open it (#1406).
+ *
+ * The run panel lives in the rail, which the lightbox covers, so the overlay
+ * is closed on the way.
+ */
+function useOverlayPictureAsInput(pictureId) {
+  const id = pictureId ?? overlayImageId.value;
+  if (id == null) return;
+  if (overlayOpen.value) closeOverlay();
+  // Narrowed to this picture, always.
+  //
+  // `handleImageContextMenu` keeps a selection the right-clicked picture is
+  // already part of, and that rule does NOT carry over here: it holds because
+  // the grid selection is on screen, so the user can see what a menu entry is
+  // about to act on. `openOverlay` never touches `selectedImageIds`, so in the
+  // lightbox that selection is invisible - and both ways in name one picture
+  // ("Run a workflow with THIS picture as its input", and the context menu's
+  // `contextImage.id`). Keeping 50 unseen pictures selected would hand the run
+  // panel all 50 from a control that promised one.
+  selectedImageIds.value = [id];
+  // In lockstep with the ids, as on every other selection path: left behind,
+  // this is the anchor a later shift-click ranges from, pointing at a picture
+  // no longer selected.
+  lastSelectedImageId.value = id;
   workflowRunStore.openFor(FROM_SELECTION);
 }
 

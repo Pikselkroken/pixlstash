@@ -12,7 +12,13 @@ vi.mock("vue-router", async () => {
   return { useRouter: () => ({ push: nav.push }) };
 });
 
-vi.mock("../../utils/apiClient", () => ({ API_BASE_URL: "/api/v1" }));
+// A real ref: the panel reads `isReadOnly` to tell a share-link reader's
+// refusal apart from an unconfigured machine's (#1406).
+const isReadOnly = vi.hoisted(() => ({ value: false }));
+vi.mock("../../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
+  isReadOnly,
+}));
 vi.mock("../../api/pictures", () => ({
   pictureThumbnailUrl: (id) => `/api/v1/pictures/thumbnails/${id}.webp`,
 }));
@@ -81,7 +87,14 @@ const RECIPE = {
 
 function render(props = {}) {
   return mount(OverlayRecipePanel, {
-    props: { recipe: RECIPE, pictureId: 7, ...props },
+    props: {
+      recipe: RECIPE,
+      pictureId: 7,
+      // The default is a working machine, so a test that says nothing about
+      // the machine is testing the picture, not the setup.
+      comfyuiConfigured: true,
+      ...props,
+    },
     global: {
       stubs: {
         "v-icon": true,
@@ -319,17 +332,184 @@ describe("OverlayRecipePanel", () => {
   // The design keeps the run button visible and disabled rather than removing
   // it, with the reason as its tooltip - the same shape it gives an A1111
   // picture, whose recipe cannot be replayed either.
+  //
+  // `aria-disabled` and NOT the native attribute (#1406): a natively-disabled
+  // button is out of the tab order, so a keyboard reader could never reach the
+  // reason `aria-describedby` points at.
   it("keeps the run button visible but disabled when it cannot run", () => {
-    const button = render().find(".recipe-run");
+    const wrapper = render();
+    const button = wrapper.find(".recipe-run");
     expect(button.exists()).toBe(true);
-    expect(button.attributes("disabled")).toBeDefined();
+    expect(button.attributes("aria-disabled")).toBe("true");
+    expect(button.attributes("disabled")).toBeUndefined();
+  });
+
+  it("says why it cannot run, in prose and as the button's description", () => {
+    const wrapper = render();
+    const reason = wrapper.find(".recipe-run-reason");
+    expect(reason.exists()).toBe(true);
+    expect(wrapper.find(".recipe-run").attributes("aria-describedby")).toBe(
+      reason.attributes("id"),
+    );
+  });
+
+  // The whole point of the four reasons is that they are NOT interchangeable:
+  // each sends the reader somewhere different, and three of them would be a
+  // lie in the other two's situations.
+  it("blames the machine only when the machine is the problem", () => {
+    const wrapper = render({ comfyuiConfigured: false });
+    expect(wrapper.find(".recipe-run-reason").text()).toContain(
+      "ComfyUI is not connected",
+    );
+  });
+
+  it("blames the session, not the machine, on a read-only view", () => {
+    // A share link CAN read a recipe - the route is picture-scoped - so this
+    // is a real reader looking at a real recipe on a machine that may well
+    // have ComfyUI running. Telling them it is not connected is false, and
+    // sends them to a settings screen they cannot open.
+    isReadOnly.value = true;
+    try {
+      const wrapper = render({ comfyuiConfigured: true });
+      const text = wrapper.find(".recipe-run-reason").text();
+      expect(text).toContain("read-only");
+      expect(text).not.toContain("ComfyUI is not connected");
+      expect(wrapper.find(".recipe-run").attributes("aria-disabled")).toBe(
+        "true",
+      );
+    } finally {
+      isReadOnly.value = false;
+    }
+  });
+
+  it("disables the input action for a read-only view, as the menus do", () => {
+    // Present but dead, which is what both context-menu copies of this action
+    // do (`:disabled="isReadOnly"`). Hiding it here and disabling it there
+    // would make one action behave two ways.
+    isReadOnly.value = true;
+    try {
+      const wrapper = render({ comfyuiConfigured: true });
+      const button = wrapper
+        .findAll("button")
+        .find((b) => b.text().includes("Use as input"));
+      expect(button).toBeDefined();
+      expect(button.attributes("aria-disabled")).toBe("true");
+    } finally {
+      isReadOnly.value = false;
+    }
+  });
+
+  it("does not act when the dead input action is clicked anyway", async () => {
+    isReadOnly.value = true;
+    try {
+      const wrapper = render({ comfyuiConfigured: true });
+      const button = wrapper
+        .findAll("button")
+        .find((b) => b.text().includes("Use as input"));
+      await button.trigger("click");
+      expect(wrapper.emitted("use-as-input")).toBeUndefined();
+    } finally {
+      isReadOnly.value = false;
+    }
+  });
+
+  it("describes each button by its own reason when the two differ", () => {
+    // A read-only reader looking at an A1111 picture is refused twice, for two
+    // different reasons: pointing both buttons at one sentence would describe
+    // one of them with the other's problem.
+    isReadOnly.value = true;
+    try {
+      const wrapper = render({
+        recipe: { ...RECIPE, source: "a1111", available: false },
+        comfyuiConfigured: true,
+      });
+      const run = wrapper.find(".recipe-run");
+      const input = wrapper
+        .findAll("button")
+        .find((b) => b.text().includes("Use as input"));
+      const runDesc = run.attributes("aria-describedby");
+      const inputDesc = input.attributes("aria-describedby");
+      expect(runDesc).toBeTruthy();
+      expect(inputDesc).toBeTruthy();
+      expect(inputDesc).not.toBe(runDesc);
+      expect(wrapper.find(`#${runDesc}`).text()).toContain("A1111 or Forge");
+      expect(wrapper.find(`#${inputDesc}`).text()).toContain("read-only");
+    } finally {
+      isReadOnly.value = false;
+    }
+  });
+
+  it("shares one sentence when the two refusals coincide", () => {
+    // Read-only, ordinary ComfyUI picture: both buttons are refused for the
+    // same reason, and it is printed once.
+    isReadOnly.value = true;
+    try {
+      const wrapper = render({ comfyuiConfigured: true });
+      const input = wrapper
+        .findAll("button")
+        .find((b) => b.text().includes("Use as input"));
+      expect(input.attributes("aria-describedby")).toBe(
+        wrapper.find(".recipe-run").attributes("aria-describedby"),
+      );
+      expect(wrapper.findAll(".recipe-run-reason")).toHaveLength(1);
+    } finally {
+      isReadOnly.value = false;
+    }
+  });
+
+  it("hides the input action with no ComfyUI to run anything on", () => {
+    const wrapper = render({ comfyuiConfigured: false });
+    expect(
+      wrapper.findAll("button").some((b) => b.text().includes("Use as input")),
+    ).toBe(false);
   });
 
   it("asks for a run when it can", async () => {
     const wrapper = render({ canGenerateVariants: true });
     const button = wrapper.find(".recipe-run");
-    expect(button.attributes("disabled")).toBeUndefined();
+    expect(button.attributes("aria-disabled")).toBeUndefined();
+    expect(wrapper.find(".recipe-run-reason").exists()).toBe(false);
     await button.trigger("click");
     expect(wrapper.emitted("generate-variants")).toHaveLength(1);
+  });
+
+  // An A1111 picture fills the whole tab and still cannot be replayed: there
+  // is no graph for ComfyUI to run. The reason has to say that rather than
+  // "ComfyUI is not connected", which would send the reader to the settings.
+  it("refuses an A1111 picture for its own reason, with ComfyUI connected", async () => {
+    const wrapper = render({
+      recipe: { ...RECIPE, source: "a1111", available: false, reason: "a1111" },
+      canGenerateVariants: true,
+    });
+    const button = wrapper.find(".recipe-run");
+    expect(button.attributes("aria-disabled")).toBe("true");
+    expect(wrapper.find(".recipe-run-reason").text()).toContain(
+      "A1111 or Forge",
+    );
+    await button.trigger("click");
+    expect(wrapper.emitted("generate-variants")).toBeUndefined();
+  });
+
+  it("names the graph's own reason when the server gave one", () => {
+    const wrapper = render({
+      recipe: { ...RECIPE, available: false, reason: "no_seed_input" },
+      canGenerateVariants: true,
+    });
+    expect(wrapper.find(".recipe-run-reason").text()).toContain(
+      "no seed to change",
+    );
+  });
+
+  it("offers the picture as a workflow's input, whatever Run… says", async () => {
+    const wrapper = render({
+      recipe: { ...RECIPE, source: "a1111", available: false, reason: "a1111" },
+      comfyuiConfigured: true,
+    });
+    const useAsInput = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Use as input for"));
+    expect(useAsInput).toBeDefined();
+    await useAsInput.trigger("click");
+    expect(wrapper.emitted("use-as-input")).toHaveLength(1);
   });
 });

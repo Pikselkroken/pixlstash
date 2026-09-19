@@ -341,7 +341,7 @@ shipped components had exactly that, and the fix would have broken them:
 | Site | Fill | Before | After the naive fix | Resolution |
 |---|---|---|---|---|
 | `ImageOverlay .overlay-comfy-warning` | `rgba(warning, .2)` on the lightbox | 11.38 / 12.99 | **1.41 / 1.33** | tint → `dark-surface-warning`, text → `on-dark-surface` (9.18 / 10.51) |
-| `ImageOverlay .overlay-comfy-error` | `rgba(error, .2)` on the lightbox | 12.92 / 13.89 | 12.92 / **1.24** | same (9.89 / 11.24) |
+| `ImageOverlay .overlay-comfy-error` | `rgba(error, .2)` on the lightbox | 12.92 / 13.89 | 12.92 / **1.24** | same (9.89 / 11.24); the class went with the lightbox's I2I menu in #1406, the rule did not |
 | `SideBar .sidebar-error-bubble` | `rgba(error, .8)` | 3.73 / 4.94 | 3.73 / **3.49** | fill made solid (4.86 / 4.68) |
 | `ProjectFiles .pf-file-delete:hover` | `rgba(error, .8)` | 3.59 / 4.94 | 3.59 / **3.49** | fill made solid (4.86 / 4.68) |
 
