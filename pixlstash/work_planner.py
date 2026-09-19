@@ -675,11 +675,17 @@ class WorkPlanner:
                 )
             return
         try:
+            # CUDA-only on purpose: the sample is `torch.cuda.utilization()`,
+            # an NVML reading with no equivalent on any other backend. So this
+            # is a missing *metric*, not a missing GPU, and the message has to
+            # say which - the old wording quoted `torch.cuda.is_available()`,
+            # which on a machine whose GPU is working fine reads as a fault.
             if not torch.cuda.is_available():
                 self._gpu_util_unavailable = True
                 logger.info(
                     "[PIPELINE_PASS] GPU-busy sampling unavailable, reporting n/a: "
-                    "torch.cuda.is_available() is False in the planner thread"
+                    "utilisation sampling needs NVML and this host has no CUDA "
+                    "device (any other accelerator is unaffected and still used)"
                 )
                 return
             utilization = float(torch.cuda.utilization())

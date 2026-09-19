@@ -23,9 +23,12 @@ simulates ROCm: CI's runners are CPU-only Linux, and a test that only ran on an
 Apple machine would guard nothing on the branch that has to stay green.
 """
 
+import contextlib
 import logging
+import sys
 import types
 
+import numpy as np
 import pytest
 
 import pixlstash.startup_checks as sc
@@ -58,7 +61,11 @@ from pixlstash.utils.accelerator import (
     onnx_execution_providers,
     resolve_device,
 )
-from pixlstash.utils.vram_utils import is_vram_oom, vram_limited_batch_cap
+from pixlstash.utils.vram_utils import (
+    empty_device_cache,
+    is_vram_oom,
+    vram_limited_batch_cap,
+)
 
 #: Metal's recommended working set on the 8 GB machine every figure in this
 #: change was measured on. Two thirds of physical RAM, which is the ratio the
@@ -612,3 +619,191 @@ def test_the_joycaption_warning_reaches_the_rendered_schema(monkeypatch):
     schema = jc.JoyCaptionPlugin().parameter_schema()
     precision = next(p for p in schema if p["name"] == "precision")
     assert "system RAM" in precision["description"]
+
+
+# ---------------------------------------------------------------------------
+# Spilling to the CPU: the recovery path has to run to the end
+# ---------------------------------------------------------------------------
+
+
+class _FakeTensor:
+    """A tensor that refuses to move to *failing_device* and is fine on the CPU.
+
+    The failure is raised by ``.to(device)`` rather than by the model, because
+    that is where a real device OOM lands: the batch is rejected at the moment
+    it is copied across, before any forward pass.
+    """
+
+    def __init__(self, count, failing_device, message):
+        self._count = count
+        self._failing_device = failing_device
+        self._message = message
+
+    def to(self, device):
+        if str(device) == self._failing_device:
+            raise RuntimeError(self._message)
+        return self
+
+    def half(self):
+        return self
+
+    def norm(self, dim=None, keepdim=False):
+        return self
+
+    def __truediv__(self, other):
+        return self
+
+    def cpu(self):
+        return self
+
+    def float(self):
+        return self
+
+    def numpy(self):
+        return np.ones((self._count, 4), dtype=np.float32)
+
+    def unsqueeze(self, _dim):
+        return self
+
+    def __getitem__(self, _index):
+        return np.ones(4, dtype=np.float32)
+
+
+class _FakeClipModel:
+    def encode_image(self, tensors):
+        return tensors
+
+    def float(self):
+        return self
+
+    def to(self, _device):
+        return self
+
+
+def _clip_service_on(device, message, monkeypatch):
+    """A ClipService pinned to *device*, with torch and the model faked out.
+
+    ``sys.modules["torch"]`` is substituted rather than the real one used: the
+    service imports torch function-locally, so this is the seam, and it keeps
+    the test off whatever accelerator the host running it actually has. A test
+    that needed a Mac would guard nothing on the branch that has to stay green.
+    """
+    from pixlstash.tagger_plugins import clip_service as clip_module
+
+    fake_torch = types.SimpleNamespace(
+        stack=lambda tensors: _FakeTensor(len(tensors), device, message),
+        no_grad=lambda: contextlib.nullcontext(),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    service = clip_module.ClipService.__new__(clip_module.ClipService)
+    service._device = device
+    service._model = _FakeClipModel()
+    service._preprocess = lambda image: _FakeTensor(1, device, message)
+    service.ensure_ready = lambda: None
+    return service
+
+
+@pytest.mark.parametrize(
+    "device, message",
+    [
+        (MPS, MPS_ALLOCATOR_OOM),
+        (CUDA, "CUDA out of memory. Tried to allocate 512.00 MiB"),
+    ],
+    ids=["mps", "cuda"],
+)
+def test_a_clip_batch_that_oomed_completes_on_the_cpu(device, message, monkeypatch):
+    """The recovery path has to reach its `return`, not raise on the way.
+
+    It raised. ``clip_service`` spills by calling
+    ``empty_device_cache(previous_device)`` - naming the device it is spilling
+    *from*, because by then it has already reassigned its own to ``"cpu"`` -
+    and the wrapper took no argument at all, so the flush raised ``TypeError``
+    from inside the ``except RuntimeError`` block. The ``except Exception``
+    clause beside it is a sibling and cannot catch that, so it escaped the
+    method with the model already moved and ``_device`` already reassigned:
+    the batch lost, and the service left half-spilled.
+
+    CUDA is parametrised in deliberately. This fallback worked there before the
+    accelerator refactor, so the bug was a regression on the primary platform
+    and not only a gap on the new one - which is exactly the case a Mac-only
+    test could not have caught.
+    """
+    service = _clip_service_on(device, message, monkeypatch)
+
+    result = service.encode_image_batch([object(), object()])
+
+    assert result is not None, "the CPU retry must produce embeddings"
+    assert result.shape == (2, 4)
+    assert service.device == CPU, "the service must be left on the CPU it spilled to"
+
+
+@pytest.mark.parametrize(
+    "device, message",
+    [
+        (MPS, MPS_ALLOCATOR_OOM),
+        (CUDA, "CUDA out of memory. Tried to allocate 512.00 MiB"),
+    ],
+    ids=["mps", "cuda"],
+)
+def test_a_face_crop_that_oomed_completes_on_the_cpu(device, message, monkeypatch):
+    """The sibling call site. It carried the identical defect, and a fix that
+    only touched the batch path would have left face embedding broken."""
+    service = _clip_service_on(device, message, monkeypatch)
+
+    results = service.encode_image_crops([object()], pic_desc="a picture")
+
+    assert len(results) == 1
+    assert results[0] is not None
+    assert service.device == CPU
+
+
+def test_the_cache_flush_accepts_the_device_being_spilled_from():
+    """The seam itself, stated once so the callers above cannot be the only
+    thing holding it: ``empty_device_cache`` takes the optional device that
+    every spill path passes it, and forwards it."""
+    # Naming a device this host does not have is the deterministic half: the
+    # flush skips every other accelerator and reports that it released nothing.
+    # The bare call is deliberately not asserted here - its answer depends on
+    # what the machine running the suite actually has, and a test whose result
+    # moves with the host is the thing this file exists to avoid.
+    assert empty_device_cache(MPS) is False
+    assert isinstance(empty_device_cache(CUDA), bool)
+
+
+def test_device_memory_telemetry_answers_on_unified_memory(monkeypatch):
+    """The settings screen's memory figure, which had no rung that answered here.
+
+    pynvml, then torch, then ``nvidia-smi`` - NVIDIA tooling end to end, so a
+    Mac fell through all three and the screen showed no device memory beside a
+    budget slider whose ceiling *was* Metal-derived. The torch rung is the one
+    that can answer for any accelerator, so it does.
+
+    "Total" is the recommended working set and "used" is this process's share
+    of it, which is the only honest reading on a pool shared with the OS.
+    """
+    from pixlstash.services.config_service import collect_vram_from_torch
+
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        _apple_torch(allocated=1319 * 1024**2),
+    )
+    payload: dict = {}
+
+    assert collect_vram_from_torch(payload) is True
+    assert payload["vram_total_gb"] == 5.33  # the 5461 MiB working set
+    assert payload["vram_used_gb"] == 1.29
+    assert 0 < payload["vram_percent"] < 100
+
+
+def test_device_memory_telemetry_is_silent_without_an_accelerator(monkeypatch):
+    """The control: a host with neither backend reports nothing rather than 0 GB,
+    so the caller falls through to its next rung instead of publishing a zero."""
+    from pixlstash.services.config_service import collect_vram_from_torch
+
+    monkeypatch.setitem(sys.modules, "torch", _apple_torch(mps=False))
+    payload: dict = {}
+
+    assert collect_vram_from_torch(payload) is False
+    assert payload == {}

@@ -13,6 +13,12 @@ from sqlmodel import select
 
 from pixlstash.db_models import ImportFolder
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.accelerator import (
+    CUDA,
+    MPS,
+    accelerator_total_memory_mb,
+    available_accelerator,
+)
 from pixlstash.utils.path_utils import LibraryRootsUnavailable
 
 if TYPE_CHECKING:
@@ -137,18 +143,35 @@ def _set_vram_payload(payload: dict, used_bytes: int, total_bytes: int) -> bool:
 
 
 def collect_vram_from_torch(payload: dict) -> bool:
-    """Populate *payload* with CUDA VRAM usage via PyTorch.
+    """Populate *payload* with device-memory usage via PyTorch.
+
+    The ladder around this (pynvml, then this, then ``nvidia-smi``) is NVIDIA
+    tooling end to end, so on a machine with a non-CUDA accelerator every rung
+    missed and the settings screen showed no device memory at all - while the
+    budget slider it sits next to had a Metal-derived ceiling on it. This rung
+    is the one that can answer for any accelerator torch knows about.
 
     Args:
         payload: Dict to update in-place with VRAM keys.
 
     Returns:
-        True if VRAM data was successfully collected, False otherwise.
+        True if device-memory data was successfully collected, False otherwise.
     """
     try:
         import torch
 
-        if not torch.cuda.is_available():
+        accelerator = available_accelerator(torch)
+        if accelerator == MPS:
+            # Unified memory: "total" is Metal's recommended working set, not a
+            # card's capacity, and "used" is what this process has taken from
+            # it. The percentage is therefore PixlStash's share of what it may
+            # claim, not the machine's memory pressure - which is the only
+            # honest reading available, since the pool is shared with the OS.
+            total_bytes = accelerator_total_memory_mb(MPS, torch_module=torch) * 1024**2
+            return _set_vram_payload(
+                payload, int(torch.mps.driver_allocated_memory() or 0), total_bytes
+            )
+        if accelerator != CUDA:
             return False
         total_bytes = 0
         used_bytes = 0

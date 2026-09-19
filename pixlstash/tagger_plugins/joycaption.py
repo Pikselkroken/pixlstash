@@ -439,6 +439,15 @@ class JoyCaptionService:
                     _proj.to(dtype=_vision_dtype)
 
             self._model = model
+            # CUDA or the CPU, and Metal is deliberately the CPU for now. The
+            # hold is on *memory*, not on capability: bitsandbytes does support
+            # mps, but ~8 GB of weights would come out of the machine's only
+            # RAM, and the quantised kernels are generic PyTorch ops there
+            # rather than tuned Metal ones. That is what `_precision_help()`
+            # warns about at the point the precision is chosen; the plugin
+            # stays selectable and simply runs where it is least likely to take
+            # the machine with it. Routing it to mps is a measurement someone
+            # has to make first, the way the tagger's 23.7x was made.
             self._model_device = (
                 torch.device("cpu")
                 if use_cpu

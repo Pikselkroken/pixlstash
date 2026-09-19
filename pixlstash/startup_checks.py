@@ -453,7 +453,6 @@ class StartupChecks:
                 f"{reason} while default_device is set to {device_value}.",
             )
             return
-        self._server_config["resolved_device"] = requested
 
         providers = []
         try:
@@ -547,11 +546,11 @@ class StartupChecks:
                 # against, so that is what is checked and what the note reports
                 # - deliberately described as a working set, not as free memory.
                 total_mb = float(accelerator_total_memory_mb(MPS, torch_module=torch))
+                if total_mb <= 0:
+                    raise RuntimeError("Metal reported no recommended working set size")
                 free_mb = total_mb - (
                     torch.mps.driver_allocated_memory() / float(1024**2)
                 )
-                if total_mb <= 0:
-                    raise RuntimeError("Metal reported no recommended working set size")
             else:
                 free_bytes, total_bytes = torch.cuda.mem_get_info()
                 free_mb = free_bytes / float(1024**2)

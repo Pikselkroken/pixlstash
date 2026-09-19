@@ -164,7 +164,7 @@ def is_vram_oom(error: BaseException) -> bool:
     return False
 
 
-def empty_device_cache() -> bool:
+def empty_device_cache(device=None) -> bool:
     """Flush the accelerator allocator's cache back to the driver.
 
     Kept as the name every recovery and teardown path in the codebase already
@@ -173,9 +173,17 @@ def empty_device_cache() -> bool:
     ``empty_cuda_cache`` and released CUDA's cache only, so on any other
     accelerator every caller's "free memory and retry" did nothing at all.
 
+    Args:
+        device: Flush only this accelerator's cache. ``None`` flushes whichever
+            one this host has, which is what every teardown path wants. A
+            spill-to-CPU path passes the device it is spilling *from*, because
+            by the time it flushes it has already reassigned its own device to
+            ``"cpu"`` and asking the host would flush the wrong allocator - or,
+            on a host with two, the wrong one of the two.
+
     Returns:
         ``True`` if a cache was flushed, ``False`` when torch is not loaded or
         the host has no accelerator (callers use this to skip their own cache
         bookkeeping).
     """
-    return empty_accelerator_cache()
+    return empty_accelerator_cache(device)

@@ -100,6 +100,11 @@ VALID_DEVICE_SETTINGS = frozenset({CPU, CUDA, MPS, "metal", "gpu", "auto"})
 _DEVICE_ALIASES = {"metal": MPS}
 
 #: Settings that name no particular device and are resolved against the host.
+#: ``""`` is here but deliberately **not** in :data:`VALID_DEVICE_SETTINGS`: a
+#: blank value reaching :func:`resolve_device` at runtime is a caller passing
+#: nothing, which the host answers, while a blank ``default_device`` in the
+#: config file is a mistake the validator should name rather than silently
+#: resolve. The two sets differ by exactly that one member, on purpose.
 #: ``gpu`` is one of them **on purpose**: it predates CUDA being named
 #: explicitly, and reading it as "cuda" is the same mistake this module exists
 #: to remove - on a Mac, ``default_device=gpu`` means the GPU the Mac has.
