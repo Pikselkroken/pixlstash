@@ -122,7 +122,11 @@ const STORES = [
     name: "useFolderMappingStore",
     use: useFolderMappingStore,
     seed: (s) => {
-      s.save({ taskId: "abc123", path: "/home/me/Pictures", label: "Pictures" });
+      s.save({
+        taskId: "abc123",
+        path: "/home/me/Pictures",
+        label: "Pictures",
+      });
     },
     isEmpty: (s) => s.pending === null,
   },
@@ -446,6 +450,7 @@ describe("the store matrix is complete", () => {
     "useGenStackPrefsStore.js": "localStorage view preference",
     "useGridStore.js": "grid layout and display toggles",
     "useNoticeStore.js": "transient toast queue",
+    "useWorkflowPrefsStore.js": "localStorage Grid | List preference",
     "useScrapheapRetentionStore.js":
       "server-level policy from server-config.json, identical for every " +
       "credential - no scope dimension, so nothing to leak between them",

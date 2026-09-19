@@ -676,9 +676,9 @@ the two sides have agreed:
    `stack_size`, `saved_recipe_count`, `defaults` — and `mark` carries B1's own
    `structural` | `recipe` vocabulary rather than a translation of it, which is
    how the solid/dashed meaning would get inverted. The route adds
-   `topology_hash`, `variant_count`, `member_keys`, `rank` and `last_used`
-   beside them; a caller that only knows the document ignores those and still
-   needs no mapping.
+   `topology_hash`, `variant_count`, `member_keys`, `stack_id`, `rank` and
+   `last_used` beside them; a caller that only knows the document ignores those
+   and still needs no mapping.
 
    **`name` is never null**, and that is part of the contract rather than a
    convenience. `workflow_attr.name` is written only on an explicit rename, so
@@ -725,6 +725,28 @@ the two sides have agreed:
    those chips as plain facts about a cover the payload would never name.
    Chips and size are therefore always consistent: a card outside a stack has
    `stack_size: 1` and no chips at all.
+
+   **`stack_id` (v1.12 F2) is what a client WRITES to the stack by.**
+   `PUT /workflows/stacks/{stack_id}/order` and
+   `POST /workflows/stacks/{stack_id}/unstack` take either a stored stack's id
+   or `auto:<core hash>` for an automatic grouping nobody has ordered yet, and
+   **nothing else on the card derives it**: `topology_hash` is not it, a core
+   hash being the topology with the recipe LoRAs taken out. Without the field a
+   client could draw a stack and not reorder one, which is exactly the state
+   F1a shipped in. Ordering an automatic group materialises its row and the
+   `auto:` id still answers, so an id read before the write is good after it.
+
+   **It is null in two cases, and a client must not tell them apart by
+   guessing.** A card in no stack has none. So does a card in a stack **this
+   listing drew only part of** — because `cards` drops hidden cards and
+   one-offs *before* grouping (point 4 above), while the order route validates
+   against the hub's membership, which still counts them. A client ordering the
+   members it was given would be refused with `keys must name every card in the
+   stack, and no other`, naming keys it was never told existed. Serving no id
+   is the honest answer: the write cannot be formed, so it is not offered. The
+   consequence is worth stating plainly — **hiding one member of a stack takes
+   the whole stack's reorder away** until it is unhidden, because the hub's
+   membership rows are deliberately left standing when a card is hidden.
 5. **Nothing is precomputed, and `cards` is not everything.** The grid is three
    vault queries in one session — one `GROUP BY workflow_structural_hash`, one
    `ROW_NUMBER()` window and one `GROUP BY workflow_key` over the saved recipes,

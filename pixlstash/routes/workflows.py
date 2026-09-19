@@ -362,6 +362,17 @@ class WorkflowCard(BaseModel):
     topology_hash: str
     variant_count: int = 0
     member_keys: list[str] = Field(default_factory=list)
+    stack_id: str | None = Field(
+        None,
+        description=(
+            "The stack this card sits in, or null when it stands alone. "
+            "Either a stored stack's id or `auto:<core hash>` for an "
+            "automatic grouping nobody has ordered yet - the two are what "
+            "`PUT /workflows/stacks/{stack_id}/order` and "
+            "`POST /workflows/stacks/{stack_id}/unstack` are addressed by, "
+            "and neither can be derived from anything else the card carries."
+        ),
+    )
     last_used: str | None = Field(
         None,
         description=(
@@ -937,6 +948,7 @@ def _card(figure, defaults=()) -> WorkflowCard:
         member_keys=[
             key for key in figure.member_keys if key != figure.card.workflow_key
         ],
+        stack_id=figure.stack_id,
     )
 
 

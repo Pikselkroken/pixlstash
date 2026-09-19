@@ -3035,6 +3035,10 @@ _CONTRACT_FIELDS = {
     "stack_size",
     "saved_recipe_count",
     "defaults",
+    # Not in the shared shape document, and here anyway: without it a client
+    # can draw a stack and address no write to it, and the null is a decision
+    # it has to be able to read (F2, #1405).
+    "stack_id",
 }
 
 
@@ -3551,6 +3555,78 @@ def test_cards_sharing_a_core_hash_stack_behind_the_higher_ranked(workflow_env):
     assert cards[BUSY_CARD]["stack_size"] == 2
     assert cards[BUSY_CARD]["member_keys"] == [FORGOTTEN_CARD]
     assert FORGOTTEN_CARD not in cards
+
+
+def test_a_card_carries_the_stack_id_its_reorder_is_addressed_by(workflow_env):
+    """Without it a client can draw a stack and not write to one (F2, #1405).
+
+    `PUT /workflows/stacks/{stack_id}/order` and its `unstack` sibling are the
+    only way to reorder or dissolve a stack, and the id they take is either a
+    stored stack's or `auto:<core hash>` -- neither of which is derivable from
+    anything else the card carries. `topology_hash` is not it: a core hash is
+    the topology with the recipe LoRAs taken out.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    cards = _by_key(_cards(owner))
+    # BUSY and FORGOTTEN share a core hash with no stack row behind them, so
+    # this is the automatic half: the id names the group rather than a row.
+    auto_id = cards[BUSY_CARD]["stack_id"]
+    assert auto_id and auto_id.startswith(AUTO_STACK_PREFIX)
+    # A card in no stack carries none. Read on the detail route because this
+    # library's grid is one stack and nothing else, so the listing has no
+    # unstacked card to read it off.
+    alone = _detail(owner, BINNED_CARD)["card"]
+    assert alone["stack_size"] == 1
+    assert alone["stack_id"] is None
+
+    # The id the payload gives is the id the route ACCEPTS, which is the whole
+    # point of carrying it and is not provable from the string's shape. The
+    # write is left standing: `fresh_library` re-seeds the hub before every
+    # test in this module, `workflow_stack` and `workflow_stack_member`
+    # included, so nothing this writes reaches the next one.
+    r = owner.put(
+        f"{API}/workflows/stacks/{auto_id}/order",
+        json={"keys": [FORGOTTEN_CARD, BUSY_CARD]},
+    )
+    assert r.status_code == 200, r.text
+    assert effective_stack_keys(server.hub, BUSY_CARD)[0] == FORGOTTEN_CARD
+    # Ordering an automatic group materialises its row and the id stands: a
+    # panel that re-read the grid must still be able to address it.
+    assert _by_key(_cards(owner))[FORGOTTEN_CARD]["stack_id"] == auto_id
+
+
+def test_a_partly_drawn_stack_carries_no_stack_id_to_reorder_it_by(workflow_env):
+    """The grid drops hidden cards and one-offs; the order route does not.
+
+    `PUT /workflows/stacks/{id}/order` validates the caller's list against the
+    hub's membership, which still counts what the listing left out -- so a
+    panel ordering the members it was given is refused with a sentence about
+    keys it was never told existed. Serving no id at all is the honest answer
+    while the panel can show only part of the stack, and it is what makes the
+    Workflows panel offer no reorder rather than one that always fails.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    stack_id = _by_key(_cards(owner))[BUSY_CARD]["stack_id"]
+    assert stack_id, "the drawn stack should start out addressable"
+
+    # HIDDEN joins the group BUSY and FORGOTTEN share. It is hidden, so the
+    # grid keeps drawing a stack of two -- and the hub now holds three.
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET core_hash = ? WHERE topology_hash = ?",
+            (SHARED_CORE, HIDDEN_TOPOLOGY),
+        )
+    drawn = _by_key(_cards(owner))[BUSY_CARD]
+    assert drawn["stack_size"] == 2
+    assert drawn["stack_id"] is None
+
+    # And the refusal this prevents is real: ordering what the grid drew is
+    # exactly the 400 the null exists to keep a client away from.
+    r = owner.put(
+        f"{API}/workflows/stacks/{stack_id}/order",
+        json={"keys": [drawn["key"], *drawn["member_keys"]]},
+    )
+    assert r.status_code == 400, r.text
 
 
 def test_a_stack_shows_the_union_of_its_members_difference_chips(workflow_env):
