@@ -83,13 +83,21 @@ _PICTURE_WIDGET_RE = re.compile(r"(^|_)(image|images|video|mask)(_|$)")
 # changed rather than falling back to "other models". The shelf loader names
 # its checkpoint by id, not by filename (#1416).
 #
-# **This is now the only copy.** The retired workflow shelf kept a
-# `BASE_WIDGETS` of its own for the Models column, and the two drifted in both
-# directions - `diffusion_model` and `model_path` only there, `checkpoint_id`
-# only here - so a workflow read as having a base model on one side and a
-# changed one on the other (#1416). A guardrail held them equal until F1b
-# (#1404) deleted the shelf: the Workflows grid reads the slot `kind` this
-# module derives, so there is no second list left to drift.
+# **The client's copy is gone; a server one is not.** The retired workflow
+# shelf kept a `BASE_WIDGETS` of its own for the Models column, and the two
+# drifted in both directions - `diffusion_model` and `model_path` only there,
+# `checkpoint_id` only here - so a workflow read as having a base model on one
+# side and a changed one on the other (#1416). A guardrail held them equal
+# until F1b (#1404) deleted the shelf.
+#
+# **`_SLOT_KINDS` in `workflow_card_service.py` still answers the same
+# question and already disagrees**, and it is the one a card is labelled from:
+# `unet_name` is `"unet"` there, never `"checkpoint"`, and `diffusion_model`,
+# `model_path` and `checkpoint_id` are absent altogether. So a Flux/SD3/Wan
+# graph is a base-model change to `differs_by` here and is NOT the card's
+# headline model there, which falls back to the first slot. Same drift, moved
+# from client-vs-server to server-vs-server, and nothing asserts it: the two
+# want reconciling behind one helper rather than a comment (#1404 review).
 CHECKPOINT_WIDGETS = frozenset(
     {
         "ckpt_name",

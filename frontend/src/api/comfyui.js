@@ -79,22 +79,6 @@ export async function getLoraInsertion(name) {
 }
 
 /**
- * Replace how every picture input of a saved workflow is filled.
- *
- * @param {string} name - the workflow's `name` as listed.
- * @param {Array<{node_id: string, mode: string, picture_id?: number}>} inputs -
- *   one entry per picture input.
- * @returns {Promise<{workflow: string, inputs: Array<Object>}>} the stored setup.
- */
-export async function setWorkflowInputs(name, inputs) {
-  return unwrap(
-    apiClient.put(comfyUrl(`/workflows/${encodeURIComponent(name)}/inputs`), {
-      inputs,
-    }),
-  );
-}
-
-/**
  * Run a saved workflow, filling each picture input by its mode.
  *
  * A workflow with a Selection input runs once per id in `picture_ids`; one

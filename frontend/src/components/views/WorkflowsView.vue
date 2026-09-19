@@ -77,6 +77,18 @@
 
     <p v-if="store.error" class="wfv-error" role="alert">{{ store.error }}</p>
 
+    <!-- A Recipe section's Open that named a workflow this grid does not list.
+         Said on screen and not only in the live region, because the reader
+         made a deliberate gesture and the screen otherwise looks as though it
+         ignored them. -->
+    <p v-if="linkMissed" class="wfv-note">
+      That workflow is not in this grid.
+      <template v-if="withheld"
+        >{{ withheld }} are being left out: {{ store.hidden }} hidden and
+        {{ store.oneOffs }} counted as one-offs.</template
+      >
+    </p>
+
     <!-- The §9 empty state: the shipped art, a Tiny5 `--text-2xl` headline and
          one `--text-sm` line, then the routes out as plain buttons. Not the
          bordered option rows `LibraryEmptyState` uses — that screen explains
@@ -281,6 +293,8 @@ const columns = ref(1);
 // outside a screen they cannot get back into.
 const cursorId = ref("");
 const announcement = ref("");
+// A `?topology=` link that named a workflow the grid does not list.
+const linkMissed = ref(false);
 const watchedFolder = ref(null);
 
 const panelId = "wfv-stack-panel";
@@ -464,13 +478,20 @@ const watchedPath = computed(
 // is a different card — so the FIRST in the sorted order is taken: it is the
 // one the reader would have found first anyway.
 //
-// **Only the cards the GRID lists**, which is one per stack. A stack groups by
-// `core_hash`, which strips post-processing, so a member can carry a topology
-// its cover does not, and a link naming that member's topology matches
-// nothing and is left alone rather than landing somewhere arbitrary. Closing
-// that gap needs a topology→card read the API does not have; the shelf had no
-// such gap because it listed every topology as a row of its own. F7 replaces
-// this link with the card's own *Show all N pictures* chip.
+// **It can only reach the cards the GRID lists, and that is not every card.**
+// `GET /workflows/cards` leaves out the hidden ones and the one-offs (under
+// three pictures, unrated, not imported, no saved recipe) — which is the
+// ordinary state of a workflow used once, and exactly when "what made this?"
+// is worth asking. A stack is one card here too, grouped by `core_hash`, which
+// strips post-processing, so a member can carry a topology its cover does not.
+// The shelf had no such gap, listing every topology as a row of its own, and
+// closing it needs a topology→card read the API does not have.
+//
+// So a miss SAYS SO rather than doing nothing. Dropping the reader at the top
+// of a grid that does not contain what they clicked, with no word about it, is
+// the silent failure this screen must not have; the subtitle already counts
+// what is being withheld, so the sentence has something true to point at. F7
+// replaces this link with the card's own *Show all N pictures* chip.
 //
 // Honoured once per value rather than on every `cards` change, because the
 // grid is refetched (a file is added, a LoRA slot is flipped) while the query
@@ -481,23 +502,40 @@ const watchedPath = computed(
 let honouredTopology = null;
 
 watch(
-  [() => route?.query?.topology, () => store.sortedCards],
+  [() => route.query?.topology, () => store.sortedCards],
   ([wanted]) => {
     if (!wanted) {
       honouredTopology = null;
       return;
     }
+    // A repeated `?topology=` makes this an array, which matches no card. It
+    // takes the same path as any other miss rather than a branch of its own.
     if (honouredTopology === wanted) return;
+    // Nothing to say until the grid has been read: "not here" is false while
+    // the answer is still on the wire.
+    if (!store.loaded) return;
+    honouredTopology = wanted;
     const card = store.sortedCards.find(
       (entry) => entry.topology_hash === wanted,
     );
-    if (!card) return;
-    honouredTopology = wanted;
+    if (!card) {
+      announcement.value = withheld.value
+        ? `That workflow is not in the grid. ${withheld.value} are being left out: ${store.hidden} hidden and ${store.oneOffs} counted as one-offs.`
+        : "That workflow is not in the grid.";
+      linkMissed.value = true;
+      return;
+    }
+    linkMissed.value = false;
     store.select(card.key);
     const at = flatRows.value.findIndex(
       (entry) => entry.id === `card:${card.key}`,
     );
-    if (at >= 0) nextTick(() => moveCursor(at));
+    // Not while the reader is inside a popover or the file dialog: the cards
+    // arrive asynchronously, so this can fire a second after the screen went
+    // interactive, and yanking focus out from under a gesture in progress is
+    // worse than landing at the top of the grid. `onKeyDown` guards on the
+    // same flag.
+    if (at >= 0 && !sortMenuOpen.value) nextTick(() => moveCursor(at));
   },
   { immediate: true },
 );
@@ -815,6 +853,15 @@ async function filesChosen(event) {
   margin: 0;
   padding: var(--space-3) var(--space-5);
   color: rgb(var(--v-theme-error));
+  font-size: var(--text-sm);
+}
+
+/* Not an error - the grid is behaving as designed and the reader simply asked
+   for something it does not draw - so the quiet ink rather than the error one. */
+.wfv-note {
+  margin: 0;
+  padding: var(--space-3) var(--space-5);
+  color: rgba(var(--v-theme-on-surface), 0.6);
   font-size: var(--text-sm);
 }
 

@@ -187,26 +187,23 @@ describe("useWindowFileImport", () => {
   });
 
   // F1b (#1404) retired the shelf, and the grid that replaced it has no drop
-  // handler — a workflow file is added through *Add…* instead. So the
-  // stand-aside went with it, and JSON dropped on the Workflows view is
-  // reported as unsupported like JSON dropped anywhere else, rather than being
-  // swallowed by a view that would do nothing with it.
-  it("reports workflow JSON dropped on the Workflows view as unsupported", async () => {
-    const view = document.createElement("div");
-    view.className = "wfv";
-    const row = document.createElement("span");
-    view.appendChild(row);
-    document.body.appendChild(view);
-    try {
-      await dropOn(row, "flow.json", "other.JSON");
-      expect(notices.notices.length).toBe(1);
-      expect(startLocalImport).not.toHaveBeenCalled();
-      // A picture dropped on the same view is still the importer's.
-      await dropOn(row, "flow.json", "holiday.jpg");
-      expect(startLocalImport).toHaveBeenCalledTimes(1);
-    } finally {
-      view.remove();
-    }
+  // handler — a workflow file is added through *Add…*. The stand-aside that
+  // let the shelf claim a JSON-only drop went with it, so there is no longer
+  // any element this listener treats specially: JSON is reported as
+  // unsupported wherever it lands.
+  //
+  // Deliberately NOT written as "dropped on `.wfv`". Nothing reads a class
+  // here any more, so a test that built one would pass whatever it was named
+  // — an assertion about generic handling wearing a view-specific title.
+  it("reports workflow JSON as unsupported wherever it is dropped", async () => {
+    await drop("flow.json");
+    expect(notices.notices.length).toBe(1);
+    expect(startLocalImport).not.toHaveBeenCalled();
+  });
+
+  it("still takes a picture dropped alongside a workflow file", async () => {
+    await drop("flow.json", "holiday.jpg");
+    expect(startLocalImport).toHaveBeenCalledTimes(1);
   });
 
   it("takes a model dropped on the image grid, which has no use for it", async () => {

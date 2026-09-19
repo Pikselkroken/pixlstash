@@ -1477,12 +1477,21 @@ watcher the model shelf uses. See §9.1b for the destination itself.
   stays put, and a second application would take focus off whatever the reader
   had moved to. `immediate`, because the store's cards outlive a route change
   and a second visit on the same link has nothing left for the watcher to see.
-  **It matches only the cards the grid lists**, one per stack: a stack groups
-  by `core_hash`, which strips post-processing, so a member can carry a
-  topology its cover does not and a link naming that one matches nothing and
-  is left alone. The shelf had no such gap, listing every topology as a row;
-  closing it needs a topology→card read the API does not have, and F7 replaces
-  the link with the card's own *Show all N pictures* chip.
+  **It can only reach the cards the grid lists, and that is not every card.**
+  `GET /workflows/cards` leaves out the hidden ones and the one-offs (under
+  three pictures, unrated, not imported, no saved recipe) — the ordinary state
+  of a workflow used once, which is exactly when the link is worth clicking.
+  A stack is one card here too, grouped by `core_hash`, so a member can carry
+  a topology its cover does not. The shelf had no such gap, listing every
+  topology as a row; closing it needs a topology→card read the API does not
+  have. **So a miss says so** — `.wfv-note` plus the live region, naming what
+  is being withheld — rather than dropping the reader at the top of a grid
+  that does not hold what they clicked, which is the silent failure this
+  screen must not have. It waits for `store.loaded`, because "not here" is
+  false while the answer is on the wire, and it does not move the cursor while
+  the Sort popover is open, because the cards land asynchronously and can
+  arrive mid-gesture. F7 replaces the link with the card's own *Show all N
+  pictures* chip.
 - **`--wf-columns` is computed, not `auto-fill`.** A `ResizeObserver` reads the
   grid's `clientWidth` and the count is `floor((width + gap) / (min + gap))`;
   the grid is then TOLD to draw that many columns. The cursor arithmetic, the
@@ -4557,10 +4566,30 @@ from the UI today and are not oversights**:
   the same `POST /comfyui/workflows/import`, so the capability is not lost,
   only the gesture. `useWindowFileImport` no longer has to stand aside for this
   screen.
+- **The way out to a workflow's pictures.** The shelf inspector's second tab
+  was Pictures, and its tiles opened one through `?overlay=<id>`; §F2 called
+  that tab "what stops the rail being terminal". `WorkflowTab` declares one
+  tab and `WorkflowCard`'s covers are not clickable, so a reader can see that
+  a workflow made 90 pictures and reach none of them. F7 wires the header
+  figure as the *Show all N pictures* chip. **This is the sharpest of the
+  losses here** — it is a route out of a screen, not a control on it.
+- **"Export the graph…" and "Copy its identity"**, the shelf row menu's two
+  verbs. Export is owed back by F6/B8, which has to write a *runnable* file
+  and therefore needs `GET /workflows/recipes/{structural_hash}/graph` to stop
+  answering `runnable: false`; the card payload has no filename, so neither
+  verb had anything to hang on in the grid.
 - **The base-model widget list on the client.** `utils/workflowShelf.js` kept a
   `BASE_WIDGETS` beside the server's `CHECKPOINT_WIDGETS` and the two drifted in
   both directions (#1416); a guardrail held them equal. The grid reads the slot
-  `kind` the server derives, so the second list — and the guardrail — are gone.
+  `kind` the server derives, so the client list — and the guardrail — are gone.
+  **The drift is not**: `_SLOT_KINDS` (`workflow_card_service.py`) answers the
+  same question on the server, already disagrees with `CHECKPOINT_WIDGETS`, and
+  is the one a card is labelled from. See `docs/backend_architecture.md`.
+- **The client calls only the shelf made**: `listWorkflows`,
+  `listWorkflowVariants`, `listWorkflowPictures` and `getWorkflowGraph`
+  (`api/workflows.js`) and `setWorkflowInputs` (`api/comfyui.js`) went with it
+  rather than being kept warm for a screen that does not exist. The routes
+  stay, so F5/F6/F7 re-add the lines they need against the shape they want.
 
 **It carries `?from=/workflows` with it, and that is how closing comes back.**
 The lightbox is mounted inside `ImageGrid`, which this destination replaces, so
