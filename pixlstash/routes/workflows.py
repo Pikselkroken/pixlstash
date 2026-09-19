@@ -50,7 +50,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from pixlstash.hub.workflow_card_reads import (
     asset_names,
@@ -403,8 +403,11 @@ MAX_PROMPT_LENGTH = 20000
 # and the pre-flight is a route a selection panel calls on every change: the
 # cost is (groups x this), and `picture_ids` admits 200 pictures, so a large
 # number here is thousands of synchronous file reads per keystroke-ish gesture.
-# ponytail: a constant; a per-card cache of "this picture carries no graph"
-# would let it grow if a card is ever found whose best five are all JPEGs.
+# `fetch_object_info` is not cached either, so a panel calling the pre-flight
+# per keystroke also hits ComfyUI once per call; both costs want the same fix.
+# ponytail: a constant; a per-request cache of "this picture carries no graph"
+# and of `object_info` would let it grow if a card is ever found whose best
+# five are all JPEGs.
 BEST_PICTURE_DEPTH = 5
 
 # How a saved recipe spells a parameter address in its free-form overrides map
@@ -1556,8 +1559,6 @@ def create_router(server) -> APIRouter:
             instances = instance_documents(hub, library_uuid, hashes)
             names = asset_names(hub, [h for h, _ in instances])
         return run_service.resolve_source(
-            hub,
-            library_uuid,
             card,
             file_document=file_document,
             picture_graph=picture_graph,
@@ -1644,6 +1645,22 @@ def create_router(server) -> APIRouter:
                     ),
                 )
             adapter = _shelf_adapter(hub, item.sha256)
+            if object_info is None and target.get("by") != "digest":
+                # A filename slot is resolved against what THIS ComfyUI lists,
+                # and with no `object_info` there is no list. Refused rather
+                # than skipped: the caller asked for LoRA X and consented to
+                # running uninspected, not to running with whatever LoRA the
+                # stored graph happened to name. A digest slot needs no list -
+                # that node resolves the file itself - so it falls through.
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "PixlStash could not reach ComfyUI, so it cannot tell "
+                        f"which file to write into LoRA slot {item.field} on "
+                        f"node {item.node_id}. Start ComfyUI, or run without "
+                        "the LoRA."
+                    ),
+                )
             try:
                 apply_adapter(graph, [target], adapter, object_info or {})
             except LookupError as exc:
@@ -1754,6 +1771,34 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Unknown saved recipe.")
         return recipe
 
+    def _revalidated(body: RunRequest, changes: dict) -> RunRequest:
+        """``body`` with *changes* applied, through the field constraints again.
+
+        NOT ``model_copy(update=…)``, which assigns without validating: the
+        values here come out of a stored row, so a saved seed above
+        ``MAX_SEED_64`` or an overrides map longer than ``MAX_DEFAULTS`` would
+        walk straight past the ceilings the request body declares.
+
+        Raises:
+            HTTPException: 422 when the merged body breaks one, naming the
+                recipe - the request was fine and the row is what is wrong.
+        """
+        try:
+            return RunRequest.model_validate({**body.model_dump(), **changes})
+        except ValidationError as exc:
+            logger.warning(
+                "Saved recipe %s merges into a body that will not validate: %s",
+                body.saved_recipe_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "This saved recipe holds a value this run cannot take: "
+                    f"{exc.errors()[0].get('msg', 'invalid value')}."
+                ),
+            ) from exc
+
     def _float_or_none(value) -> float | None:
         """A saved LoRA's strength as a number, or ``None`` when it is not one."""
         try:
@@ -1794,17 +1839,20 @@ def create_router(server) -> APIRouter:
                 RunValue(slot_label=slot_label, input_name=input_name, value=value)
             )
         given = {(v.slot_label, v.input_name) for v in body.values}
-        merged = body.model_copy(
-            update={
+        merged = _revalidated(
+            body,
+            {
                 "prompt": body.prompt if body.prompt is not None else stored["prompt"],
                 "negative": (
                     body.negative if body.negative is not None else stored["negative"]
                 ),
                 "values": [
-                    v for v in addressed if (v.slot_label, v.input_name) not in given
+                    v.model_dump()
+                    for v in addressed
+                    if (v.slot_label, v.input_name) not in given
                 ]
-                + body.values,
-            }
+                + [v.model_dump() for v in body.values],
+            },
         )
         # The seed, and ONLY when the caller left the choice open. A request
         # that says `seed_mode` meant it: the recipe filling in a mode nobody
@@ -1815,8 +1863,8 @@ def create_router(server) -> APIRouter:
         asked = "seed_mode" in (body.model_fields_set or set())
         if body.seed is None and not asked and stored["keep_seed"]:
             try:
-                merged = merged.model_copy(
-                    update={"seed": int(stored["seed"]), "seed_mode": "fixed"}
+                merged = _revalidated(
+                    merged, {"seed": int(stored["seed"]), "seed_mode": "fixed"}
                 )
             except (TypeError, ValueError):
                 logger.warning(
@@ -1850,7 +1898,7 @@ def create_router(server) -> APIRouter:
             return False
 
     def _groups_for(
-        hub, body: RunRequest, recipe_key: str | None
+        body: RunRequest, recipe_key: str | None
     ) -> list[tuple[str | None, list[int], list[run_service.Reason]]]:
         """``(workflow_key, picture_ids, reasons)`` per card this request runs.
 
@@ -1908,7 +1956,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400, detail="seed_mode 'fixed' needs a seed."
             )
-        groups = _groups_for(hub, body, recipe_key)
+        groups = _groups_for(body, recipe_key)
         if body.target:
             # One target replaces every group's card, keeping the pictures that
             # chose it: "run this stack member over what I selected".
@@ -1924,7 +1972,22 @@ def create_router(server) -> APIRouter:
                 picture_ids=picture_ids,
                 reasons=[r.as_dict() for r in reasons],
             )
-            if reasons or not workflow_key:
+            if not workflow_key:
+                # Every keyless group converges here, so the invariant lives
+                # here and not at each producer: `reasons` empty is the only
+                # thing that means a group would run, and one with no card
+                # cannot. Today every producer already attaches a reason (a
+                # picture on no card gets `a1111` or `no_runnable_source`, and
+                # `POST /recipes` refuses an empty `workflow_key` outright), so
+                # the fallback is the guard on the next one.
+                group.reasons = (
+                    reasons
+                    and [r.as_dict() for r in reasons]
+                    or [run_service.Reason(run_service.NO_RUNNABLE_SOURCE).as_dict()]
+                )
+                planned.append(group)
+                continue
+            if reasons:
                 planned.append(group)
                 continue
             card = find_card(hub, workflow_key)
@@ -1954,7 +2017,11 @@ def create_router(server) -> APIRouter:
             # slot, and an unreachable ComfyUI cannot resolve a filename slot,
             # which `apply_adapter` would report as a missing node class.
             found: list[run_service.Reason] = []
-            if body.loras and slots_in_graph and object_info is not None:
+            if body.loras and slots_in_graph:
+                # NOT gated on `object_info`: skipping the application when
+                # ComfyUI could not be asked is how a consented run silently
+                # kept the stored graph's LoRA instead of the one that was
+                # asked for. `_apply_loras` answers for that state itself.
                 found += _apply_loras(graph, body.loras, object_info)
             elif not body.loras and recipe_loras and slots_in_graph:
                 # "Run this saved look" has to place the look's own LoRAs. A
@@ -2174,17 +2241,19 @@ def create_router(server) -> APIRouter:
             seed_targets = detect_seed_targets(
                 graph, object_info or {}
             ) or collect_seed_inputs(graph)
+            # Hoisted out of the loop below: it is a WRITE task, idempotent,
+            # and `count` runs of one group all land in the one stack.
+            stack_id = (
+                stack_for_picture(server.vault, group.picture_ids[0])
+                if body.stack and group.picture_ids
+                else None
+            )
             for _ in range(body.count):
                 instance = deepcopy(graph)
                 if body.seed_mode == "fixed":
                     apply_seeds(instance, seed_targets, body.seed)
                 elif body.seed_mode == "new":
                     apply_seeds(instance, seed_targets, None)
-                stack_id = (
-                    stack_for_picture(server.vault, group.picture_ids[0])
-                    if body.stack and group.picture_ids
-                    else None
-                )
                 submitted = _submit_comfyui_prompt(
                     comfyui_url, instance, body.client_id
                 )

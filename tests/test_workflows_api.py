@@ -4985,6 +4985,12 @@ RUN_OBJECT_INFO = {
 RUN_ADAPTER_DIGEST = _h("add-detail-digest")
 RUN_ADAPTER_FILENAME = "other.safetensors"
 
+# The runnable card's picture has CONTENT, unlike the module's other fixtures.
+# A `fixed` picture input names its picture by `pixel_sha`, so without one the
+# "is it still here" read can only ever be asked about a picture that is not,
+# which is the half of that branch that needs no code to pass.
+RUN_PIXEL_SHA = _h("run-one-pixels")
+
 
 def _seed_runnable_card(server) -> int:
     """Add RUN_CARD, its variant, its instance and one picture on it.
@@ -5083,6 +5089,7 @@ def _seed_runnable_card(server) -> int:
             deleted=False,
             created_at=_stamp("2026-09-02T00:00:00Z"),
             score=5,
+            pixel_sha=RUN_PIXEL_SHA,
             workflow_topology_hash=RUN_TOPOLOGY,
             workflow_structural_hash=RUN_RECIPE,
             workflow_instance_hash=RUN_INSTANCE,
@@ -5644,6 +5651,34 @@ def test_a_lora_is_placed_in_its_own_slot_with_its_own_strengths(runnable):
     assert inputs["strength_clip"] == 0.2
 
 
+def test_a_fixed_picture_input_whose_picture_is_still_here_is_not_reported(
+    runnable,
+):
+    """The positive half, and it is the half that needs the code to be right.
+
+    A `fixed` input names its picture by content, so "is it still here" is a
+    lookup that has to come back with the sha. Asserting only the absent case
+    passes on a read that cannot return anything at all.
+    """
+    r = runnable.owner.put(
+        f"{API}/workflows/{RUN_CARD}/inputs",
+        json={
+            "inputs": [
+                {
+                    "slot_label": "load",
+                    "input_name": "image",
+                    "mode": "fixed",
+                    "pixel_sha": RUN_PIXEL_SHA,
+                }
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    assert "fixed_input_deleted" not in _reasons(payload), payload
+    assert payload["groups"][0]["reasons"] == [], payload
+
+
 def test_a_fixed_picture_input_that_has_been_deleted_is_reported(runnable):
     """The card's fixed input names a picture this library no longer holds."""
     r = runnable.owner.put(
@@ -6041,3 +6076,96 @@ def test_the_body_takes_no_inputs_field(runnable):
     assert r.status_code == 200, r.text
     schema = runnable.server.api.openapi()["components"]["schemas"]["RunRequest"]
     assert "inputs" not in schema["properties"], schema["properties"].keys()
+
+
+def test_consent_never_silently_swaps_the_lora_that_was_asked_for(runnable):
+    """`allow_unchecked` consents to running uninspected, not to another LoRA.
+
+    A filename slot is resolved against what THIS ComfyUI lists, and with no
+    `object_info` there is no list — so the run cannot honour the request and
+    must say so rather than quietly keep the stored graph's LoRA.
+    """
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
+    )
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_key": RUN_CARD,
+            "allow_unchecked": True,
+            "loras": [{"node_id": "2", "sha256": RUN_ADAPTER_DIGEST}],
+        },
+    )
+    assert r.status_code == 400, r.text
+    assert "which file to write into LoRA slot" in r.json()["detail"]
+    assert runnable.submitted == []
+
+    # The control: the same consent with no LoRA asked for still runs, so the
+    # refusal above is about the LoRA and not about the consent.
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_key": RUN_CARD, "allow_unchecked": True},
+    )
+    assert r.status_code == 200 and r.json()["status"] == "success", r.text
+    assert len(runnable.submitted) == 1
+    # ...and the graph still names what it always named, untouched.
+    assert (
+        runnable.submitted[0]["graph"]["2"]["inputs"]["lora_name"]
+        == "add_detail.safetensors"
+    )
+
+
+def test_a_saved_recipe_on_a_card_this_hub_lacks_carries_a_reason(runnable):
+    """`runs: 0` with an empty `reasons` would contradict the one response rule."""
+    r = runnable.owner.post(
+        f"{API}/recipes",
+        json={"name": "orphan", "workflow_key": _h("nosuchcard"), "prompt": "a cat"},
+    )
+    assert r.status_code in {200, 201}, r.text
+    payload = _preflight(runnable.owner, saved_recipe_id=r.json()["id"])
+    assert _reasons(payload) == {"no_runnable_source"}, payload
+    assert payload["ok"] is False
+
+
+def test_a_stored_value_a_run_cannot_take_is_named_rather_than_assigned(runnable):
+    """The merge re-validates: a row must not walk past the body's ceilings.
+
+    `model_copy(update=…)` assigns without validating, so a seed stored above
+    the 64-bit ceiling would reach ComfyUI as a number no sampler can take.
+    """
+    r = runnable.owner.post(
+        f"{API}/recipes",
+        json={
+            "name": "impossible seed",
+            "workflow_key": RUN_CARD,
+            "prompt": "a cat",
+            "seed": str(2**64),
+            "keep_seed": True,
+        },
+    )
+    assert r.status_code in {200, 201}, r.text
+    run = runnable.owner.post(
+        f"{API}/workflows/run", json={"saved_recipe_id": r.json()["id"]}
+    )
+    assert run.status_code == 422, run.text
+    assert "cannot take" in run.json()["detail"]
+    assert runnable.submitted == []
+
+
+def test_one_stack_holds_every_run_of_a_group(runnable):
+    """`stack: true` with `count: 3` is one stack, asked for once."""
+    stacked: list[int] = []
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "stack_for_picture",
+        lambda vault, picture_id: stacked.append(picture_id) or 7,
+    )
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [runnable.picture_id], "stack": True, "count": 3},
+    )
+    assert r.status_code == 200, r.text
+    assert len(runnable.submitted) == 3
+    # One write task, not one per run: it is idempotent, so a per-run call was
+    # two wasted writes rather than a wrong answer - but it was still two.
+    assert stacked == [runnable.picture_id], stacked

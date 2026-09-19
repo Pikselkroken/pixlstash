@@ -580,7 +580,11 @@ Six rules the client must not re-derive:
    blocks the batch and nothing is submitted. With it the runs go ahead **and
    the reason is still reported**, because the fact stays true. Consent reaches
    no other code: a missing model is a fact that *was* established, so a
-   consented batch missing one is still refused.
+   consented batch missing one is still refused. It does not reach a `loras`
+   entry either: a filename slot is resolved against what that ComfyUI lists,
+   so with nothing to resolve against the run is a 400 rather than one that
+   quietly keeps whatever LoRA the stored graph named. A digest slot needs no
+   list and goes through.
 6. **The two routes answer identically, including their errors.** A body that
    cannot be interpreted against this card is a `400`/`404`/`422` **on both** —
    two sources named, an unknown `saved_recipe_id`, a malformed key,

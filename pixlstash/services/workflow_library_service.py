@@ -527,14 +527,17 @@ def kept_pixel_shas(session: Session, pixel_shas: list[str]) -> set[str]:
     """
     if not pixel_shas:
         return set()
-    return {
-        sha
-        for (sha,) in session.exec(
+    # `set(...)` and NOT a `for (sha,) in ...` unpack: a one-column `select()`
+    # is a `SelectOfScalar`, so `exec().all()` hands back the values themselves
+    # and unpacking one raises. Every other single-column read in this module
+    # reads it this way.
+    return set(
+        session.exec(
             select(Picture.pixel_sha)
             .where(Picture.pixel_sha.in_(pixel_shas))
             .where(Picture.deleted.is_(False))
         ).all()
-    }
+    )
 
 
 def read_kept_pixel_shas(vault, pixel_shas: list[str]) -> set[str]:

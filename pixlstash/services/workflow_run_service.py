@@ -193,8 +193,6 @@ def resolve_references(
 
 
 def resolve_source(
-    hub,
-    library_uuid: Optional[str],
     card,
     *,
     file_document: Optional[dict] = None,
@@ -213,8 +211,8 @@ def resolve_source(
     3. The best ``workflow_recipe_instance.document``, references resolved.
     4. Nothing, which is :data:`NO_RUNNABLE_SOURCE`.
 
-    Every argument but the card is already-read data, so the caller owns the
-    I/O and its ordering and this stays a pure decision. A tier that is present
+    Every argument is already-read data, so the caller owns the I/O and its
+    ordering and this stays a pure decision. A tier that is present
     but unusable (a UI-format file) falls through to the next rather than
     failing the card: the owner's question is "can this run", and one export in
     the wrong format is not an answer to it.
@@ -236,7 +234,12 @@ def resolve_source(
             Source(sanitize_prompt_graph(picture_graph), FROM_PICTURE, picture_id),
             None,
         )
-    for structural_hash, document in instance_documents or []:
+    # The FIRST stored instance and no other: the caller hands them best-first,
+    # so this is an index rather than a search. Written as one because a `for`
+    # that always returns on its first pass reads as a loop that could do more.
+    best = (instance_documents or [None])[0]
+    if best is not None:
+        structural_hash, document = best
         graph, forgotten, seedless = resolve_references(
             document, (asset_names or {}).get(structural_hash, [])
         )
