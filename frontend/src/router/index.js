@@ -38,9 +38,12 @@ import App from "../App.vue";
 //   ?overlay=<pictureId>         → Open ImageOverlay for that picture
 //   ?from=<path>                 → Where closing that overlay goes, for the
 //                                  destinations that replace the grid the
-//                                  lightbox lives in (the workflow library's
-//                                  picture tiles). Absent, the close stays put
-//                                  and only drops ?overlay=.
+//                                  lightbox lives in. NOTHING SETS IT TODAY:
+//                                  the workflow shelf's picture tiles were its
+//                                  only producer and went with the shelf in
+//                                  F1b, so every close takes the absent
+//                                  branch - stay put, drop ?overlay= - until
+//                                  F7's "Show all N pictures" chip.
 //                                  (see utils/overlayRoute.js)
 //   ?review=board                → Open the tag-review overlay on the health board
 //   ?review=<reviewId>           → …on that review (open session or archived receipt)
