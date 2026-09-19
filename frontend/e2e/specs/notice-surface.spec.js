@@ -58,6 +58,28 @@ test.describe('notice surface', () => {
     await expect(notices.cards).toHaveCount(0)
   })
 
+  // Not a spec check: a guard on the page object. `clear()` is synchronous in
+  // the store but the TransitionGroup holds each leaving card for its leave
+  // transition, so a push straight afterwards leaves TWO cards in the DOM and
+  // `cards.first()` is the old one. It is visible, so `toBeVisible()` passes;
+  // it then detaches mid-measurement, and a detached element has an empty
+  // computed style. That is how `colorsOf` came back full of nulls and
+  // `composite` threw `Cannot read properties of null` from another file.
+  // Read single-shot here, exactly as `colorsOf` does - `toContainText` would
+  // retry until the right card arrived and prove nothing.
+  test('a card read straight after clear + push is the new one', async ({
+    notices,
+  }) => {
+    await notices.push({ level: 'error', text: 'OLD' })
+    await expect(notices.cards).toHaveCount(1)
+    await notices.clear()
+    await notices.push({ level: 'error', text: 'NEW' })
+    const text = await notices
+      .onlyCard()
+      .evaluate((el) => el.querySelector('.notice-message')?.textContent)
+    expect(text).toBe('NEW')
+  })
+
   // Spec §6: errors must not auto-dismiss; a failure the user has to act on
   // cannot vanish while they are reading it.
   test('an error never auto-dismisses while a success does', async ({

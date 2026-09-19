@@ -184,17 +184,21 @@ const models = computed(() => [
   gap: var(--space-2);
 }
 
-/* Tag sm: inside a panel there is room for the comfortable size. */
+/* The card's fact chip, spelled a second time: the popover WRAPS its chips and
+   a ChipRow clips to one line, so it cannot mount one. `ChipRow.test.js` holds
+   the two copies to the same geometry - the chips the card showed and the ones
+   it clipped are one list, and must not drift apart in two files.
+   `on-panel`, not `on-surface`: this chip sits on the menu surface. */
 .info-popover__chip {
   display: inline-flex;
   align-items: center;
   box-sizing: border-box;
-  height: var(--control-h-sm);
-  padding: 0 var(--space-3);
+  height: var(--tag-h-xs);
+  padding: 0 var(--space-2);
+  border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, rgb(var(--v-theme-on-panel)) 10%, transparent);
-  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
-  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-on-panel));
+  font-size: var(--text-2xs);
   line-height: var(--leading-snug);
 }
 
@@ -210,8 +214,11 @@ const models = computed(() => [
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
 }
 
+/* --text-sm against the dt's --text-xs: the app kit's own `.kv` pair
+   (`ui_kits/app/unified.css`), where the label recedes and the value is read. */
 .info-popover__kv dd {
   margin: 0;
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
 }
 </style>

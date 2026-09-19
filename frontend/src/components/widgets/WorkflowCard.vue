@@ -159,7 +159,9 @@ const hasPictures = computed(
 );
 const checkpointChips = computed(() => {
   const model = checkpointModel(props.card);
-  return model ? [{ key: "checkpoint", label: model.name }] : [];
+  return model
+    ? [{ key: "checkpoint", label: model.name, icon: "cube-outline" }]
+    : [];
 });
 const loras = computed(() => loraChips(props.card));
 const facts = computed(() => factChips(props.card));
@@ -264,20 +266,17 @@ const accessibleName = computed(() => cardAccessibleName(props.card));
   background: rgb(var(--v-theme-input-background));
 }
 
-/* A category, not a status, so the control tier's radius and the same Tag xs
-   the rows use. */
+/* The design's `.cpill`: an outlined pill, not a chip. The type is what this
+   card would make, said once over an empty cover - a standing label rather than
+   one of the row chips, which is why it is the only pill on the card. */
 .wf-card__type {
   display: inline-flex;
   align-items: center;
   box-sizing: border-box;
   height: var(--tag-h-xs);
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-sm);
-  background: color-mix(
-    in srgb,
-    rgb(var(--v-theme-on-surface)) 10%,
-    transparent
-  );
+  padding: 0 var(--space-3);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-pill);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   font-size: var(--text-2xs);
   line-height: var(--leading-snug);
@@ -328,8 +327,11 @@ const accessibleName = computed(() => cardAccessibleName(props.card));
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
+/* ▸ carries full ink where ⓘ recedes: opening a stack is the card's own
+   affordance, ⓘ is the same escape hatch on every card. */
 .wf-card__toggle {
   flex-shrink: 0;
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .wf-card__toggle :deep(.app-btn__icon) {

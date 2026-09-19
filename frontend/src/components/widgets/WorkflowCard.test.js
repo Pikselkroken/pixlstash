@@ -188,6 +188,26 @@ describe("WorkflowCard", () => {
     expect(wrapper.findAll(".wf-card > .wf-card__cover")).toHaveLength(1);
   });
 
+  it("says what each row's chips are with the design's glyphs", () => {
+    // The rows carry no labels, so the glyph is the only thing separating a
+    // checkpoint from a LoRA from a slot the recipe fills.
+    const rows = mountCard(CROWDED).findAll(".wf-card__meta > .wf-card__row");
+    const glyphs = (row) =>
+      row
+        .findAll(".chip-row > .chip-row__chip .chip-row__icon")
+        .map((i) => i.text());
+    expect(glyphs(rows[1])).toEqual(["mdi-cube-outline"]);
+    expect(glyphs(rows[2])).toEqual([
+      ...Array(4).fill("mdi-layers"),
+      "mdi-plus",
+    ]);
+    // A fact is not a model: no glyph, and no fill either.
+    expect(glyphs(rows[3])).toEqual([]);
+    for (const chip of rows[3].findAll(".chip-row > .chip-row__chip")) {
+      expect(chip.classes()).toContain("chip-row__chip--fact");
+    }
+  });
+
   it("says No LoRAs rather than leaving the row blank", () => {
     expect(mountCard(BARE).findAll(".wf-card__row")[2].text()).toBe("No LoRAs");
   });
