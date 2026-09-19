@@ -41,8 +41,10 @@
       </v-menu>
 
       <!-- "Add" is today's workflow import, unchanged: the file lands through
-           `POST /comfyui/workflows/import` exactly as a drop on the shipped
-           shelf does. -->
+           `POST /comfyui/workflows/import`, the route the retired shelf's own
+           drop target posted to. The gesture went with the shelf; this screen
+           has no drop handler, so `useWindowFileImport` no longer stands
+           aside for it. -->
       <AppBarButton icon="plus" @click="fileInput?.click()">Add…</AppBarButton>
       <input
         ref="fileInput"
