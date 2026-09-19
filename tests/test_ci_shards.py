@@ -404,7 +404,10 @@ def test_electron_apple_signing_requires_validated_release_tag():
     assert "validated_release_tag=false" in validation["run"]
     assert "validated_release_tag=true" in validation["run"]
     assert '"refs/tags/$RELEASE_TAG"' in validation["run"]
-    assert "scripts/check_release_tag.py" in validation["run"]
+    assert (
+        'python scripts/check_release_tag.py "$RELEASE_TAG" "$EXPECTED_VERSION"'
+        in validation["run"]
+    )
 
     unsigned = steps_by_name["Build unsigned Electron installers"]
     assert unsigned["if"] == (
@@ -1775,6 +1778,9 @@ def test_a_complete_map_warns_about_nothing():
         ("v1.12.0-nightly", "1.12.0", False),
         ("v1.12.0.post1", "1.12.0.post1", False),
         ("v1.12.0\n", "1.12.0", False),
+        ("v1.12.0", "1.12.O.dev.3", False),
+        ("v1.12.0", "1.12.0_DEV_2", False),
+        ("v1.12.0-dev.2", "1.12.0_DEV_2", False),
     ],
 )
 def test_release_tag_check_compares_normalised_versions(
@@ -1787,15 +1793,40 @@ def test_release_tag_check_compares_normalised_versions(
     pyproject version as raw strings, while the format check above it accepted
     either separator. The two spellings are the same PEP 440 version.
     """
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(REPO_ROOT / "scripts" / "check_release_tag.py"),
-            tag,
-            expected_version,
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert (result.returncode == 0) is accepted, result.stderr or result.stdout
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    try:
+        from check_release_tag import main
+    finally:
+        sys.path.pop(0)
+
+    assert (main([tag, expected_version]) == 0) is accepted
+
+
+def test_every_release_workflow_validates_the_tag_the_same_way():
+    """All three tag/version comparisons must route through the one checker.
+
+    The population is three, and converting two of them is worse than
+    converting none: with pyproject at 1.12.0.dev.3 a v1.12.0-dev.3 tag would
+    build and attach the Electron and Windows installers, then fail Publish
+    PyPI on the raw string comparison it still used, releasing installers with
+    no wheel. A partial release is harder to notice than a symmetric failure.
+    """
+    invocations = {
+        "electron.yml": (
+            'python scripts/check_release_tag.py "$RELEASE_TAG" "$EXPECTED_VERSION"'
+        ),
+        "windows-installer.yml": (
+            "python scripts/check_release_tag.py"
+            ' "$env:RELEASE_TAG" "$env:EXPECTED_VERSION"'
+        ),
+        "publish-pypi.yml": (
+            'python scripts/check_release_tag.py "$RELEASE_TAG" "$version"'
+        ),
+    }
+    for name, invocation in invocations.items():
+        text = (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+        assert invocation in text, f"{name} does not call the shared tag checker"
+        assert "packaging" in text, (
+            f"{name} must install packaging: check_release_tag.py imports it and "
+            "setup-python does not ship it"
+        )

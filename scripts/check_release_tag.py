@@ -11,6 +11,17 @@ release workflows used to compare the two as raw strings, which accepted the
 ``-dev`` spelling in the format check and then rejected it in the equality
 check: v1.12.0-dev.1 and v1.12.0-dev.2 both failed there with the tag and the
 version naming the same release.
+
+Both operands are shape-checked, not just the tag. A raw string comparison
+forced the pyproject version through the tag pattern transitively - it could
+only be equal to a tag that had already matched - and normalising the
+comparison drops that. The version string names the installer file and the
+Inno Setup ``PIXLSTASH_VERSION``, so an unvalidated one ships in artifact
+names while the wheel normalises it away.
+
+Requires ``packaging``. Every caller installs it explicitly: the one workflow
+that relied on it arriving with ``build`` would have started rejecting valid
+tags the moment the validation step moved ahead of the wheel build.
 """
 
 import re
@@ -18,12 +29,20 @@ import sys
 
 from packaging.version import InvalidVersion, Version
 
-# ``\A``/``\Z`` rather than ``^``/``$``: Python's ``$`` also matches before a
-# trailing newline, which would accept a tag the shell checks this replaced
-# rejected.
+# ``fullmatch`` and ``\A``/``\Z`` are each sufficient alone and kept together
+# deliberately: with a bare ``.match()`` the anchors are the only thing
+# stopping ``v1.12.0-anything`` from passing as a prefix, and Python's ``$``
+# would additionally accept a trailing newline that the shell checks this
+# replaced rejected.
 TAG_PATTERN = re.compile(
     r"\Av[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+|[.-]dev[.-]?[0-9]+)?\Z"
 )
+
+
+def _fail(message: str) -> int:
+    """Print ``message`` as a GitHub annotation and return the failure code."""
+    print(f"::error::{message}", file=sys.stderr)
+    return 1
 
 
 def main(argv: list[str]) -> int:
@@ -32,22 +51,17 @@ def main(argv: list[str]) -> int:
         print("usage: check_release_tag.py <tag> <expected-version>", file=sys.stderr)
         return 2
     tag, expected = argv
-    if not TAG_PATTERN.match(tag):
-        print(f"Release tag has an unsupported format: {tag}", file=sys.stderr)
-        return 1
+    if not TAG_PATTERN.fullmatch(tag):
+        return _fail(f"Release tag has an unsupported format: {tag}")
+    if not TAG_PATTERN.fullmatch(f"v{expected}"):
+        return _fail(f"pyproject version has an unsupported format: {expected}")
     try:
         if Version(tag[1:]) != Version(expected):
-            print(
-                f"Tag {tag} does not match pyproject version {expected}",
-                file=sys.stderr,
-            )
-            return 1
+            return _fail(f"Tag {tag} does not match pyproject version {expected}")
     except InvalidVersion as exc:
-        print(
-            f"Cannot compare tag {tag} with pyproject version {expected}: {exc}",
-            file=sys.stderr,
+        return _fail(
+            f"Cannot compare tag {tag} with pyproject version {expected}: {exc}"
         )
-        return 1
     return 0
 
 
