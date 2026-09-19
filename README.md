@@ -784,10 +784,16 @@ a different machine. **Do not copy the address out of the desktop app's
 window** - that is an ephemeral port the desktop shell picks afresh on every
 launch, so it stops resolving the next time PixlStash starts.
 
-If your MCP client reports `Executable not found in $PATH: "pixlstash-mcp"`,
-it is not inheriting the environment PixlStash is installed into. Give it the
-absolute path instead - `which pixlstash-mcp` in a shell where PixlStash runs
-prints it.
+**Desktop app:** you do not need to install anything. Turn on **Shell command**
+in Settings and the app puts both `pixlstash` and `pixlstash-mcp` on your PATH,
+forwarding to the interpreter it already ships. Nothing is installed into any
+Python environment of your own.
+
+Running from a checkout instead, `pip install -e .` provides `pixlstash-mcp`
+in that virtualenv. If your MCP client then reports
+`Executable not found in $PATH: "pixlstash-mcp"`, it is not inheriting that
+environment; give it the absolute path, which `which pixlstash-mcp` prints in a
+shell where PixlStash runs.
 
 Tools: `search_pictures`, `list_pictures`, `get_picture`, `view_picture`,
 `list_tags`, `list_sets`, `list_characters`, `list_projects`, `get_recipe`.
