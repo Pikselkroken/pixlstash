@@ -175,6 +175,49 @@ def test_an_unknown_protocol_version_gets_ours():
     assert reply["result"]["protocolVersion"] == mcp_server.PROTOCOL_VERSION
 
 
+def test_the_default_url_is_the_configured_port_not_a_guess(tmp_path, monkeypatch):
+    """The port the server is configured for, read from the file it reads.
+
+    The desktop shell serves its window from an ephemeral loopback port that
+    changes on every launch, so a URL taken from the browser is written into a
+    client's config file and is dead by the next start-up. Only
+    server-config.json is authoritative.
+    """
+    config = tmp_path / "server-config.json"
+    config.write_text(json.dumps({"port": 12345}), encoding="utf-8")
+    monkeypatch.setattr(mcp_server, "SERVER_CONFIG_PATH", str(config))
+    monkeypatch.delenv("PIXLSTASH_URL", raising=False)
+
+    assert mcp_server.configured_url() == "http://127.0.0.1:12345"
+    assert mcp_server.build_parser().parse_args([]).url == "http://127.0.0.1:12345"
+
+    # An explicit --url still wins, and so does the environment.
+    assert (
+        mcp_server.build_parser().parse_args(["--url", "http://example.test"]).url
+        == "http://example.test"
+    )
+    monkeypatch.setenv("PIXLSTASH_URL", "http://127.0.0.1:1")
+    assert mcp_server.build_parser().parse_args([]).url == "http://127.0.0.1:1"
+
+
+@pytest.mark.parametrize(
+    "contents", ["", "not json", json.dumps([]), json.dumps({"port": "nonsense"})]
+)
+def test_an_unreadable_config_falls_back_to_the_default_port(
+    tmp_path, monkeypatch, contents
+):
+    """A broken or absent config must not stop the server starting."""
+    config = tmp_path / "server-config.json"
+    config.write_text(contents, encoding="utf-8")
+    monkeypatch.setattr(mcp_server, "SERVER_CONFIG_PATH", str(config))
+
+    assert mcp_server.configured_url() == f"http://127.0.0.1:{mcp_server.DEFAULT_PORT}"
+
+    # And when the file is not there at all.
+    monkeypatch.setattr(mcp_server, "SERVER_CONFIG_PATH", str(tmp_path / "absent.json"))
+    assert mcp_server.configured_url() == f"http://127.0.0.1:{mcp_server.DEFAULT_PORT}"
+
+
 @contextmanager
 def _recording_server(status: int = 200, body: bytes = b"[]"):
     """A loopback HTTP server that records what actually reached it."""

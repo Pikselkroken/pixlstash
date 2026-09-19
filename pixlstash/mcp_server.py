@@ -31,12 +31,18 @@ import urllib.request
 from importlib.metadata import PackageNotFoundError, version as package_version
 from typing import Callable
 
+from platformdirs import user_config_dir
+
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
 
 API_PREFIX = "/api/v1"
 SERVER_NAME = "pixlstash"
+DEFAULT_PORT = 9537
+# `app.py`'s SERVER_CONFIG_PATH, spelled again rather than imported: importing
+# `pixlstash.app` to read one integer would build the whole FastAPI app.
+SERVER_CONFIG_PATH = os.path.join(user_config_dir(SERVER_NAME), "server-config.json")
 # The newest protocol revision this server speaks. A client asking for a
 # revision we know is answered with it; anything else gets ours.
 PROTOCOL_VERSION = "2025-06-18"
@@ -349,6 +355,30 @@ def _version() -> str:
         return "unknown"
 
 
+def configured_url() -> str:
+    """The base URL of the server, from the port it is configured to serve on.
+
+    Not from anything the browser saw. The desktop shell serves its window
+    from an **ephemeral** loopback port that the shell picks per launch
+    (``listeners.py``, ``_build_electron_configs``), so a URL copied out of the
+    window works until the app restarts and then points at nothing. The
+    configured port is the stable one, and it is in the file the server itself
+    reads, so the answer is the same one the server used.
+    """
+    try:
+        with open(SERVER_CONFIG_PATH, encoding="utf-8") as handle:
+            port = int(json.load(handle).get("port", DEFAULT_PORT))
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        logger.warning(
+            "[mcp] Could not read a port from %s (%s); using %s",
+            SERVER_CONFIG_PATH,
+            exc,
+            DEFAULT_PORT,
+        )
+        port = DEFAULT_PORT
+    return f"http://127.0.0.1:{port}"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pixlstash-mcp",
@@ -359,9 +389,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--url",
-        default=os.environ.get("PIXLSTASH_URL", "http://127.0.0.1:9537"),
-        help="Base URL of the PixlStash server (default: $PIXLSTASH_URL or "
-        "http://127.0.0.1:9537).",
+        default=os.environ.get("PIXLSTASH_URL") or configured_url(),
+        help="Base URL of the PixlStash server. Defaults to $PIXLSTASH_URL, "
+        "else loopback on the port in server-config.json, else "
+        f"http://127.0.0.1:{DEFAULT_PORT}.",
     )
     return parser
 

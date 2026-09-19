@@ -11,7 +11,6 @@
  */
 import { computed, ref, watch } from "vue";
 import { createToken } from "../../api/users";
-import { API_BASE_URL } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -22,12 +21,12 @@ const props = defineProps({
 
 const emit = defineEmits(["close", "created"]);
 
-// `--url` is the server root: pixlstash-mcp appends `/api/v1` itself, so
-// passing API_BASE_URL unchanged would send it to `/api/v1/api/v1/...`.
-// Computed, not read at setup: AccountSection mounts this dialog permanently
-// and it spends nearly all of its life closed.
-const serverUrl = computed(() => API_BASE_URL.replace(/\/api\/v1\/?$/, ""));
-
+// No `--url`, deliberately. The desktop shell serves this window from an
+// ephemeral loopback port that changes on every launch, so a URL derived from
+// `window.location` is baked into the client's config file and is wrong the
+// next time PixlStash starts. `pixlstash-mcp` reads the configured port out of
+// server-config.json itself, which is the stable answer and stays right when
+// the owner changes the port. `--url` remains for pointing it somewhere else.
 const loading = ref(false);
 const error = ref("");
 const token = ref("");
@@ -35,7 +34,7 @@ const copied = ref("");
 
 const claudeCommand = computed(
   () =>
-    `claude mcp add pixlstash -e PIXLSTASH_TOKEN=${token.value} -- pixlstash-mcp --url ${serverUrl.value}`,
+    `claude mcp add pixlstash -e PIXLSTASH_TOKEN=${token.value} -- pixlstash-mcp`,
 );
 
 const configJson = computed(() =>
@@ -44,7 +43,6 @@ const configJson = computed(() =>
       mcpServers: {
         pixlstash: {
           command: "pixlstash-mcp",
-          args: ["--url", serverUrl.value],
           env: { PIXLSTASH_TOKEN: token.value },
         },
       },

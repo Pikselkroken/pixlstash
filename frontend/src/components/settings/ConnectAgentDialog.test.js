@@ -2,9 +2,13 @@
 //
 // The two blocks are pasted verbatim into a client, so a wrong server URL or a
 // missing token is not a cosmetic bug: the agent simply never connects, and the
-// owner has no way to tell which half was wrong. The `/api/v1` strip is the
-// specific trap - API_BASE_URL carries the prefix and pixlstash-mcp appends its
-// own, so passing it through unchanged produces /api/v1/api/v1/... .
+// owner has no way to tell which half was wrong.
+//
+// The URL is the trap, and the fix was to stop emitting one. The desktop shell
+// serves its window from an ephemeral loopback port picked per launch, so a URL
+// taken from `window.location` is written into the client's config file and is
+// dead the next time PixlStash starts. `pixlstash-mcp` reads the configured
+// port itself. These tests pin that no address is baked in.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
@@ -21,8 +25,14 @@ vi.mock("vuetify/components", () => ({
   },
 }));
 
+// Deliberately an ephemeral desktop port, as `window.location` would give in
+// the Electron shell: nothing the dialog emits may contain it. The literal is
+// repeated inside the factory rather than referenced, because vi.mock is
+// hoisted above every const and would otherwise throw on first use - which is
+// exactly never, while the dialog imports nothing from this module.
+const EPHEMERAL = "61675";
 vi.mock("../../utils/apiClient", () => ({
-  API_BASE_URL: "http://127.0.0.1:9537/api/v1",
+  API_BASE_URL: "http://127.0.0.1:61675/api/v1",
 }));
 
 const createToken = vi.fn();
@@ -51,12 +61,17 @@ beforeEach(() => {
 });
 
 describe("the configuration handed to the agent", () => {
-  it("strips the API prefix, because pixlstash-mcp appends its own", async () => {
+  it("bakes in no address at all, least of all the window's own port", async () => {
     const wrapper = await mintedDialog();
     const text = wrapper.text();
 
-    expect(text).toContain("--url http://127.0.0.1:9537");
-    expect(text).not.toContain("9537/api/v1");
+    // The ephemeral port the window happens to be served from is the exact
+    // value that used to end up in the client's config file.
+    expect(text).not.toContain(EPHEMERAL);
+    expect(text).not.toContain("--url");
+    expect(text).not.toContain("/api/v1");
+    // Positive control: the command is still there to be wrong.
+    expect(text).toContain("claude mcp add pixlstash");
   });
 
   it("carries the minted token in both blocks", async () => {

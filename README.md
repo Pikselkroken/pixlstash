@@ -771,12 +771,23 @@ installed.
   "mcpServers": {
     "pixlstash": {
       "command": "pixlstash-mcp",
-      "args": ["--url", "http://127.0.0.1:9537"],
       "env": { "PIXLSTASH_TOKEN": "<your read-only token>" }
     }
   }
 }
 ```
+
+No address is needed: `pixlstash-mcp` reads the port out of your
+`server-config.json`, the same file the server reads, so it keeps working if
+you change the port. Pass `--url` (or set `PIXLSTASH_URL`) only to point it at
+a different machine. **Do not copy the address out of the desktop app's
+window** - that is an ephemeral port the desktop shell picks afresh on every
+launch, so it stops resolving the next time PixlStash starts.
+
+If your MCP client reports `Executable not found in $PATH: "pixlstash-mcp"`,
+it is not inheriting the environment PixlStash is installed into. Give it the
+absolute path instead - `which pixlstash-mcp` in a shell where PixlStash runs
+prints it.
 
 Tools: `search_pictures`, `list_pictures`, `get_picture`, `view_picture`,
 `list_tags`, `get_recipe`.
