@@ -602,16 +602,20 @@ function applyShellCommand(): void {
     // Its own config path, not the platform default: the desktop keeps a
     // separate server-config.json, and reading the wrong one gets the wrong
     // port and the wrong scheme.
-    syncMcpShim(
+    const mcpInstalled = syncMcpShim(
       shellCommand,
       mcp.launcher,
       serverConfigPath(),
       mcpShimPath(),
       mcp.windowsPython,
     );
-    // Follows the shim rather than the preference, so a refused shim never
-    // leaves a directory on PATH that holds nothing.
-    const onPath = syncUserPath(installed, dirname(shimPath()));
+    // Follows the shims rather than the preference, so a refused shim never
+    // leaves a directory on PATH that holds nothing. Either of them is reason
+    // enough to keep the directory: `shimBlocked` is per file, so a user who
+    // already has their own `pixlstash` gets the CLI shim refused while the
+    // MCP one is written, and taking only the CLI's answer would strip the
+    // PATH entry for a file that had just landed in it.
+    const onPath = syncUserPath(installed || mcpInstalled, dirname(shimPath()));
     // Elsewhere the directory is on PATH by convention, so the file is the whole
     // answer; on Windows we put it there ourselves and have to have succeeded.
     shimReachable = installed && (process.platform !== 'win32' || onPath);

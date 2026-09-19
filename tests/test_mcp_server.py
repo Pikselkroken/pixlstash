@@ -242,7 +242,6 @@ def test_the_servers_own_certificate_is_trusted_and_still_verified(tmp_path):
 
 def test_a_tls_listener_sent_plain_http_explains_itself():
     """The exact failure the desktop hit: https on the port, http in the client."""
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     with socket.socket() as server:
         server.bind(("127.0.0.1", 0))
         server.listen(1)
@@ -264,7 +263,6 @@ def test_a_tls_listener_sent_plain_http_explains_itself():
     text = result["content"][0]["text"]
     assert "closed it without answering" in text
     assert "https" in text and "--server-config" in text
-    assert context.verify_mode is not None  # keeps the import honest
 
 
 def _self_signed_pem() -> str:
@@ -368,6 +366,50 @@ def test_a_closed_port_says_why_rather_than_connection_refused():
     assert "--url" in text
     # The probe reports the same thing, so start-up says it before any tool.
     assert mcp_server.warn_if_unreachable(fetch, "irrelevant") is False
+
+
+def test_an_untrusted_certificate_says_so_and_names_the_config():
+    """The TLS explanation has to live where the failure actually arrives.
+
+    urllib wraps the handshake in URLError, so an `except ssl.SSLError` around
+    the request never runs: reproduced against a local TLS listener, what comes
+    out is a URLError carrying the SSLError. The message therefore belongs in
+    `unreachable_message`, beside the refused-connection case.
+    """
+    message = mcp_server.unreachable_message(
+        "https://127.0.0.1:9537",
+        ssl.SSLCertVerificationError("certificate verify failed: self-signed"),
+    )
+    assert "secure connection" in message
+    assert "--server-config" in message
+    assert "self-signed" in message
+    # Not mistaken for the port being closed.
+    assert "Nothing is listening" not in message
+
+
+def test_the_start_up_probe_sees_a_rejected_token(monkeypatch):
+    """A 401 is an answer, and `fetch` returns it rather than raising.
+
+    Probing through `fetch` therefore called a dead token healthy and left the
+    owner to discover it at the first tool call. `_get` is what turns a
+    non-200 into a ToolError.
+    """
+    calls = []
+
+    def unauthorised(path, params):
+        calls.append(path)
+        return 401, "application/json", b'{"detail":"Invalid token"}'
+
+    assert (
+        mcp_server.warn_if_unreachable(unauthorised, "http://127.0.0.1:9537") is False
+    )
+    # And the cheap count route, not the tag GROUP BY, is what it asks for.
+    assert calls == ["/pictures/count"]
+
+    def healthy(path, params):
+        return 200, "application/json", b'{"count": 3}'
+
+    assert mcp_server.warn_if_unreachable(healthy, "http://127.0.0.1:9537") is True
 
 
 def test_a_non_refusal_keeps_its_own_reason():

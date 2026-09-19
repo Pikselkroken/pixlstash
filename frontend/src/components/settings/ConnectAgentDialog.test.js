@@ -45,7 +45,10 @@ vi.mock("../../utils/clipboard", () => ({ copyText: vi.fn(async () => true) }));
 import ConnectAgentDialog from "./ConnectAgentDialog.vue";
 
 async function mintedDialog() {
-  const wrapper = mount(ConnectAgentDialog, { props: { open: true } });
+  const wrapper = mount(ConnectAgentDialog, {
+    props: { open: true },
+    global: { stubs: { "v-icon": true } },
+  });
   await wrapper.vm.$nextTick();
   // The dialog mints on an explicit press, never on open.
   expect(createToken).not.toHaveBeenCalled();
@@ -87,6 +90,31 @@ describe("the configuration handed to the agent", () => {
     expect(wrapper.find('a[href*="modelcontextprotocol.io"]').exists()).toBe(true);
   });
 
+  it("names the address when PixlStash is being viewed over the network", async () => {
+    // Reached over the LAN there is no local server-config.json for the agent
+    // to read, so the default would resolve to the agent's own 127.0.0.1 and
+    // find nothing. Here the origin is the only correct answer.
+    vi.stubGlobal("location", {
+      hostname: "192.0.2.10",
+      origin: "https://192.0.2.10:9537",
+    });
+    try {
+      const wrapper = await mintedDialog();
+      const text = wrapper.text();
+
+      expect(text).toContain("--url https://192.0.2.10:9537");
+      expect(wrapper.find(".cad-warn").exists()).toBe(true);
+      expect(text).toMatch(/reach that address/i);
+      const json = JSON.parse(wrapper.find(".cad-code--json").text());
+      expect(json.mcpServers.pixlstash.args).toEqual([
+        "--url",
+        "https://192.0.2.10:9537",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("registers the server for every directory, not just the current one", async () => {
     const wrapper = await mintedDialog();
 
@@ -116,7 +144,10 @@ describe("the configuration handed to the agent", () => {
 
   it("shows no token and an error when minting fails", async () => {
     createToken.mockRejectedValue(new Error("nope"));
-    const wrapper = mount(ConnectAgentDialog, { props: { open: true } });
+    const wrapper = mount(ConnectAgentDialog, {
+      props: { open: true },
+      global: { stubs: { "v-icon": true } },
+    });
     await wrapper.find(".app-dialog__footer button:last-child").trigger("click");
     await wrapper.vm.$nextTick();
     await wrapper.vm.$nextTick();

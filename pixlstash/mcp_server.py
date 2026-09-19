@@ -280,6 +280,16 @@ def unreachable_message(base: str, reason) -> str:
     served: the app's own window runs on a private port it picks per launch,
     and the *configured* port is bound only when remote access is switched on.
     """
+    if isinstance(reason, ssl.SSLError):
+        # urllib wraps the handshake in URLError, so this is where a TLS
+        # failure lands - not in an `except ssl.SSLError` around the request.
+        return (
+            f"Could not establish a secure connection to {base}: {reason}. "
+            "PixlStash generates its own certificate, so no system trust store "
+            "contains it. --server-config points at the server-config.json "
+            "naming that certificate; the desktop app keeps its own copy of "
+            "that file, separate from the platform default."
+        )
     if not isinstance(reason, ConnectionRefusedError):
         return f"Could not reach PixlStash at {base}: {reason}"
     return (
@@ -329,13 +339,6 @@ def http_fetch(
                 "plain HTTP, so PixlStash is probably serving https on this "
                 "port. Check `require_ssl` in its server-config.json, and "
                 "point this server at that file with --server-config."
-            ) from exc
-        except ssl.SSLError as exc:
-            logger.warning("[mcp] TLS failed against %s: %s", base, exc)
-            raise ToolError(
-                f"Could not establish a secure connection to {base}: {exc}. "
-                "PixlStash generates its own certificate; --server-config "
-                "points here at the file naming it."
             ) from exc
         except TimeoutError as exc:
             # Only the *send* is wrapped in URLError; a read timeout arrives
@@ -652,9 +655,18 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def warn_if_unreachable(fetch: Fetch, url: str) -> bool:
-    """Probe the server once; return whether it answered."""
+    """Probe the server once; return whether it answered *usefully*.
+
+    Through ``_get``, not ``fetch``: ``fetch`` returns ``(401, ...)`` for an
+    HTTP error rather than raising, so a wrong or expired token - the commonest
+    misconfiguration after the port - would look like success and the owner
+    would first hear about it at the first tool call. ``/pictures/count``
+    rather than ``/tags`` because it is a cheap count, where ``/tags`` groups
+    over the whole tag table and first materialises every scope-allowed
+    picture id.
+    """
     try:
-        fetch("/tags", {"limit": 1})
+        _get(fetch, "/pictures/count")
     except ToolError as exc:
         print(f"pixlstash-mcp: {exc}", file=sys.stderr)
         return False

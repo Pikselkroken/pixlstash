@@ -21,12 +21,27 @@ const props = defineProps({
 
 const emit = defineEmits(["close", "created"]);
 
-// No `--url`, deliberately. The desktop shell serves this window from an
-// ephemeral loopback port that changes on every launch, so a URL derived from
-// `window.location` is baked into the client's config file and is wrong the
-// next time PixlStash starts. `pixlstash-mcp` reads the configured port out of
-// server-config.json itself, which is the stable answer and stays right when
-// the owner changes the port. `--url` remains for pointing it somewhere else.
+// Whether this page is being served from the machine PixlStash runs on.
+//
+// It decides whether an address is emitted at all, and the two cases want
+// opposite things. On loopback, naming one is harmful: the desktop shell
+// serves its window from an ephemeral port that changes every launch, so a URL
+// taken from `window.location` is written into the client's config file and is
+// dead by the next start-up. `pixlstash-mcp` reads the port, scheme and
+// certificate from server-config.json instead, which stays right.
+//
+// Reached over the network, the opposite holds: there is no local
+// server-config.json to read, so the default would resolve to the *agent's*
+// own 127.0.0.1 and quietly find nothing. There the address is the only
+// correct answer, and this page's own origin is it.
+const LOOPBACK = ["localhost", "127.0.0.1", "[::1]", "::1"];
+const isLoopback = computed(() =>
+  LOOPBACK.includes(window.location.hostname.toLowerCase()),
+);
+const remoteUrl = computed(() =>
+  isLoopback.value ? "" : window.location.origin,
+);
+
 const loading = ref(false);
 const error = ref("");
 const token = ref("");
@@ -36,10 +51,10 @@ const copied = ref("");
 // registers the server only inside the directory it was run from, so the agent
 // has no PixlStash tools anywhere else and answers questions about the library
 // from the filesystem instead. A picture library is not a per-project thing.
-const claudeCommand = computed(
-  () =>
-    `claude mcp add -s user pixlstash -e PIXLSTASH_TOKEN=${token.value} -- pixlstash-mcp`,
-);
+const claudeCommand = computed(() => {
+  const url = remoteUrl.value ? ` --url ${remoteUrl.value}` : "";
+  return `claude mcp add -s user pixlstash -e PIXLSTASH_TOKEN=${token.value} -- pixlstash-mcp${url}`;
+});
 
 const configJson = computed(() =>
   JSON.stringify(
@@ -47,6 +62,7 @@ const configJson = computed(() =>
       mcpServers: {
         pixlstash: {
           command: "pixlstash-mcp",
+          ...(remoteUrl.value ? { args: ["--url", remoteUrl.value] } : {}),
           env: { PIXLSTASH_TOKEN: token.value },
         },
       },
@@ -119,6 +135,13 @@ async function copy(key, text) {
     <template v-else>
       <p class="cad-hint">
         The token is shown once and cannot be read back. Copy one of these now.
+      </p>
+      <p v-if="remoteUrl" class="cad-warn">
+        You are viewing PixlStash over the network, so these name
+        <code>{{ remoteUrl }}</code> explicitly. The agent has to be able to
+        reach that address, and if PixlStash is serving https with its own
+        certificate, to trust it. Running the agent on the PixlStash machine
+        instead needs no address at all.
       </p>
 
       <div class="cad-block">
@@ -240,6 +263,17 @@ async function copy(key, text) {
 /* `--v-theme-error`, not the `--v-theme-surface-error` ShareDialog reaches
    for: only `dark-surface-error` is registered in main.js, so that one is an
    undefined var() and renders as no colour at all. */
+/* The remote case, which the copied blocks cannot solve on their own. */
+.cad-warn {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  opacity: 0.9;
+}
+.cad-warn code {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
 .cad-error {
   margin: 0;
   font-size: var(--text-sm);
