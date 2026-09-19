@@ -18,6 +18,8 @@ rather than about the workflow (implementation plan §5.7):
 * ``_meta`` titles, stripped, because a person names nodes after what they are
   making;
 * picture loader filenames, blanked;
+* output paths, reset - ``filename_prefix`` is where a file lands on the
+  owner's disk, and a person names that folder after what is in it;
 * and any model name this machine cannot vouch for
   (:func:`pixlstash.hub.workflows.unvouched_model_values`).
 
@@ -40,7 +42,11 @@ from typing import Callable, Iterable
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import LORA_FILENAME_FIELD_RE
-from pixlstash.services.workflow_hash import SEED_FIELD_RE
+from pixlstash.services.workflow_hash import (
+    OUTPUT_PATH_RE,
+    OUTPUT_PREFIX_FIELD,
+    SEED_FIELD_RE,
+)
 from pixlstash.services.workflow_io import (
     detect_workflow_io,
     is_picture_loader,
@@ -58,6 +64,12 @@ BLANK = ""
 # What a nulled seed holds, for the same reason: a seed widget is an INT.
 NULLED_SEED = 0
 
+# What an output path is reset to. Not blank: ComfyUI writes to its output root
+# with no prefix at all, which is a file nobody can find rather than a refusal,
+# and the reducer already treats this widget as volatile
+# (:data:`~pixlstash.services.workflow_hash.OUTPUT_PREFIX_FIELD`).
+DEFAULT_OUTPUT_PREFIX = "PixlStash"
+
 # The widget names a text encoder can carry its prose in, as
 # ``workflow_bindings`` already reads them.
 _PROMPT_FIELDS = ("text", "prompt", "value")
@@ -71,6 +83,7 @@ SEEDS = "seeds"
 LORA_SLOTS = "LoRA slots that are part of the look"
 NODE_TITLES = "node titles"
 PICTURE_NAMES = "picture file names"
+OUTPUT_PATHS = "where the pictures were saved"
 MODEL_NAMES = "model names this machine does not hold"
 
 
@@ -140,6 +153,13 @@ def scrub_for_export(
             elif name in pictures:
                 inputs[widget] = BLANK
                 removed.add(PICTURE_NAMES)
+            elif name == OUTPUT_PREFIX_FIELD or OUTPUT_PATH_RE.match(name):
+                # "portraits/<a person's name>" is a perfectly ordinary prefix,
+                # and it says where on the owner's disk the run landed. The
+                # reducer calls this class volatile for the same reason.
+                if value != DEFAULT_OUTPUT_PREFIX:
+                    inputs[widget] = DEFAULT_OUTPUT_PREFIX
+                    removed.add(OUTPUT_PATHS)
             elif (
                 LORA_FILENAME_FIELD_RE.match(name)
                 and (str(node_id), name) not in keep_lora

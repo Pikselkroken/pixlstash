@@ -100,9 +100,15 @@ IMAGE_EXTENSIONS = (
 )
 
 # §Unknown-node defaults rule 2 and 3: a seed is volatile, an output path names
-# where a file lands rather than what it is.
+# where a file lands rather than what it is. Both are public because
+# ``services/workflow_export.py`` has to take the same two classes out of a file
+# that leaves this machine, and two spellings of "this is an output path" would
+# be two rules that could drift.
 SEED_FIELD_RE = re.compile(r"(^|_)(seed|noise_seed)$")
-_OUTPUT_PATH_RE = re.compile(r"^(output|save)_?(path|name)")
+OUTPUT_PATH_RE = re.compile(r"^(output|save)_?(path|name)")
+
+# The one output-path widget everybody spells the same and no pattern catches.
+OUTPUT_PREFIX_FIELD = "filename_prefix"
 
 # Inputs that carry what a person WROTE. The extension rules below are
 # name-blind by design (§Unknown-node defaults rule 4 and 5 exist because
@@ -303,9 +309,9 @@ def structural_widget_value(name: str, value: Any) -> Optional[str]:
     forever and shared, so a custom node putting a paragraph in a widget of
     either name must not reach them.
     """
-    if SEED_FIELD_RE.search(name) or name == "filename_prefix":
+    if SEED_FIELD_RE.search(name) or name == OUTPUT_PREFIX_FIELD:
         return None
-    if _OUTPUT_PATH_RE.match(name):
+    if OUTPUT_PATH_RE.match(name):
         return None
     if name == SHELF_ID_FIELD:
         # An API prompt written by a script rather than by ComfyUI's frontend
@@ -355,9 +361,9 @@ def instance_widget_value(name: str, value: Any) -> Any:
     drops them before bucketing, so they are absent from this key as well as
     from the stored document.
     """
-    if SEED_FIELD_RE.search(name) or name == "filename_prefix":
+    if SEED_FIELD_RE.search(name) or name == OUTPUT_PREFIX_FIELD:
         return None
-    if _OUTPUT_PATH_RE.match(name):
+    if OUTPUT_PATH_RE.match(name):
         return None
     return value
 
@@ -697,8 +703,8 @@ def _nested_assets_as_references(name: str, value: Any) -> Any:
             key: (
                 None
                 if SEED_FIELD_RE.search(str(key))
-                or str(key) == "filename_prefix"
-                or _OUTPUT_PATH_RE.match(str(key))
+                or str(key) == OUTPUT_PREFIX_FIELD
+                or OUTPUT_PATH_RE.match(str(key))
                 else _nested_assets_as_references(str(key), item)
             )
             for key, item in value.items()

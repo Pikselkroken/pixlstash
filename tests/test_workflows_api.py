@@ -6234,7 +6234,7 @@ def _embedded_export_graph(lora: str = FORGOTTEN_LORA) -> dict:
             "negative": ["6", 0],
         }
     )
-    graph["4"]["inputs"]["filename_prefix"] = "PixlStash"
+    graph["4"]["inputs"]["filename_prefix"] = "portraits/someone/2026-09"
     graph["5"] = {
         "class_type": "CLIPTextEncode",
         "inputs": {"text": EXPORT_PROMPT, "clip": ["2", 1]},
@@ -6290,6 +6290,9 @@ def test_an_export_carries_no_prompt_no_seed_no_title_and_no_picture_name(export
     assert graph["3"]["inputs"]["seed"] == 0
     assert "_meta" not in graph["5"]
     assert graph["7"]["inputs"]["image"] == ""
+    # Where the run landed on the owner's disk: a folder a person names after
+    # what is in it, so it is reset rather than carried out of the house.
+    assert graph["4"]["inputs"]["filename_prefix"] == "PixlStash"
     # The workflow itself survives: the checkpoint is on the shelf, the wiring
     # and the parameters are untouched. Over-blanking is its own regression —
     # an export nobody can run is not a safer export.
@@ -6346,6 +6349,7 @@ def test_an_export_names_the_categories_it_removed_and_never_the_values(exportab
         "picture file names",
         "prompts",
         "seeds",
+        "where the pictures were saved",
     }, payload["removed"]
 
 

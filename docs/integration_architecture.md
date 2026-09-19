@@ -629,14 +629,15 @@ Five rules the client must not re-derive:
 1. **The workflow export is scrubbed and the recipe export is not, and that is
    the whole difference between them.** The export blanks the prompt and
    caption targets, nulls seeds, empties every LoRA slot the owner has not
-   marked `structural`, strips `_meta` titles, blanks picture file names, and
-   drops any model name or digest the model shelf cannot vouch for. A recipe
+   marked `structural`, strips `_meta` titles, blanks picture file names,
+   resets output paths (`filename_prefix` names a folder on the owner's disk),
+   and drops any model name or digest the model shelf cannot vouch for. A recipe
    *is* the prompt and the LoRA names, so its export withholds nothing and
    says so in `shares` instead — which is the list the export dialog puts in
    front of the owner before they agree to it.
 2. **`removed` names categories, never values.** "prompts", "seeds", "LoRA
    slots that are part of the look", "node titles", "picture file names",
-   "model names this machine does not hold". A response repeating the prompt
+   "where the pictures were saved", "model names this machine does not hold". A response repeating the prompt
    it withheld would be the leak the scrub exists to stop, so a client wanting
    to tell the owner what came out renders these strings and has nothing else
    to render.
