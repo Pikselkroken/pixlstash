@@ -83,6 +83,21 @@ function mountGrid() {
     global: {
       config: {
         compilerOptions: { isCustomElement: (tag) => tag.startsWith("v-") },
+        // The line above is a COMPILER option and this template was compiled by
+        // Vite long before the test ran, so it cannot take effect: every
+        // Vuetify tag warns "Failed to resolve component" instead, once per
+        // mount. That says the mount is deliberately shallow, not that anything
+        // is wrong, so it is dropped - and only it.
+        //
+        // Worth dropping because this file is FAST: vitest forwards console
+        // output to the main process over rpc, and a write still in flight when
+        // a quick worker tears down reds the whole run with every test passing
+        // (`testing/setup.js`). This file was named in three of the five such
+        // errors that failed #1446's gate.
+        warnHandler(message, _instance, trace) {
+          if (message.startsWith("Failed to resolve component")) return;
+          console.warn(`[Vue warn]: ${message}${trace}`);
+        },
       },
     },
     props: { backendUrl: "/api/v1" },
@@ -91,6 +106,9 @@ function mountGrid() {
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  // `markEnd` logs every timed interaction in a dev build. Real behaviour,
+  // nothing here asserts it, and the rpc argument above applies.
+  vi.spyOn(console, "debug").mockImplementation(() => {});
 });
 
 describe("using the lightbox picture as a workflow's input", () => {

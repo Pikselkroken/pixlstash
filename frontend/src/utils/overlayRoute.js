@@ -11,9 +11,22 @@
 // the query keeps whatever else it carried and only `?overlay=` is dropped,
 // which is what the lightbox has always done.
 //
-// `from` comes out of the URL bar, so only a same-document absolute path is
-// honoured; anything else (a protocol, a protocol-relative host, a repeated
-// parameter arriving as an array) falls back to the plain close.
+// `from` comes out of the URL bar, so it is checked twice before it is used.
+// Its SHAPE must be a same-document absolute path - a protocol, a
+// protocol-relative host or a repeated parameter arriving as an array is not
+// one - and its TARGET must be a destination the router actually has, which
+// `isDestination` answers for the caller that owns a router.
+//
+// The second check is not redundant. The router's catch-all
+// (`{ path: "/:pathMatch(.*)*", redirect: "/" }`) matches everything, so
+// `?from=/nonsense` is shaped correctly, resolves to nothing, and would close
+// the lightbox onto the home view - All Pictures, the very place this exists to
+// stop the reader landing on - rather than falling back to the plain close.
+// `matched.length` cannot tell the two apart (the catch-all is a match, and
+// reports one); a real destination is one with a name, and the only unnamed
+// routes are the two redirects.
+//
+// A caller that passes no `isDestination` gets the shape check alone.
 //
 // `returnToOrigin` is false for the closes the grid makes on its own behalf - a
 // reverse-image search, a delete, "use as input" - because those close the
@@ -21,13 +34,18 @@
 // the shelf would put that result on a screen that has no grid. Only the
 // reader's own close (the X, Escape) goes back. Either way `from` is dropped: it
 // is one close's instruction, not a sticky property of the route.
-export function overlayCloseTarget(query, returnToOrigin = true) {
+export function overlayCloseTarget(
+  query,
+  returnToOrigin = true,
+  isDestination,
+) {
   const { overlay: _overlay, from, ...rest } = query || {};
   if (
     returnToOrigin &&
     typeof from === "string" &&
     from.startsWith("/") &&
-    !from.startsWith("//")
+    !from.startsWith("//") &&
+    (!isDestination || isDestination(from))
   ) {
     // Everything else in the query belonged to the route being LEFT, so it is
     // dropped - except the share token, which belongs to the session. Its rule

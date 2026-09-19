@@ -51,6 +51,27 @@ describe("overlayCloseTarget", () => {
     ).toEqual({ query: { review: "board" } });
   });
 
+  it("refuses a path the router has no destination for", () => {
+    // Shape is not enough: the catch-all redirects every unmatched path to the
+    // home view, so `?from=/nonsense` would close the lightbox onto All
+    // Pictures rather than leaving the reader where they are.
+    const isDestination = (path) => path === "/workflows";
+    expect(
+      overlayCloseTarget(
+        { overlay: "812", from: "/nonsense" },
+        true,
+        isDestination,
+      ),
+    ).toEqual({ query: {} });
+    expect(
+      overlayCloseTarget(
+        { overlay: "812", from: "/workflows" },
+        true,
+        isDestination,
+      ),
+    ).toEqual({ path: "/workflows", query: {} });
+  });
+
   it("refuses anything that is not a same-document absolute path", () => {
     // It arrives from the URL bar. vue-router would resolve a foreign one
     // against the route table and land on the catch-all, so this is a second

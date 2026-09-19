@@ -1,4 +1,9 @@
 <template>
+  <!-- `@close` is CALLED, not bound bare. `closeOverlay`'s first argument
+       decides whether the close returns to the view named by `?from=`, and a
+       bare binding would hand that decision to whatever a future `close` emit
+       happened to carry: a truthy payload would silently send the reader to
+       the shelf, a falsy one silently stop it, with nothing red anywhere. -->
   <ImageOverlay
     ref="imageOverlayRef"
     :open="overlayOpen"
@@ -23,7 +28,7 @@
     :pluginProgressPercent="pluginProgressPercent"
     :comfyuiConfigured="filterStore.comfyuiConfigured"
     :guestScore="overlayGuestScore"
-    @close="closeOverlay"
+    @close="closeOverlay()"
     @apply-score="applyScore"
     @set-guest-score="(img, n) => setGuestScore(img, n)"
     @add-tag="addTagToImage"
@@ -5667,10 +5672,33 @@ function moveOverlayTo(id) {
 //
 // `returnToOrigin` is what separates the reader closing the lightbox from this
 // component closing it to reveal its own work - see `closeOverlay`.
+// Does `?from=` name somewhere this app can actually go? The catch-all
+// redirects every unmatched path to the home view, so an unresolvable one would
+// close the lightbox onto All Pictures - the exact landing this change exists to
+// prevent - instead of falling back to the plain close. A named match is the
+// test: the only unnamed routes in the table are the two redirects.
+function _isOverlayReturnDestination(path) {
+  try {
+    return Boolean(_overlayRouter.resolve(path).name);
+  } catch (err) {
+    // A malformed path (a bad percent-escape) throws in the resolver rather
+    // than returning nothing. Say so: it means a link somewhere is building
+    // `?from=` wrongly, and the close quietly staying put would hide it.
+    console.warn("[overlay] ignoring an unusable ?from=", path, err);
+    return false;
+  }
+}
+
 function _removeOverlayRoute(returnToOrigin) {
   _overlayRoutePushPending = true;
   _overlayRouter
-    .replace(overlayCloseTarget(_overlayRoute.query, returnToOrigin))
+    .replace(
+      overlayCloseTarget(
+        _overlayRoute.query,
+        returnToOrigin,
+        _isOverlayReturnDestination,
+      ),
+    )
     .finally(() => {
       _overlayRoutePushPending = false;
     });

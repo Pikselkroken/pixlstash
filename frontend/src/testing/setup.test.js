@@ -1,11 +1,11 @@
 // The shared environment stubs, pinned where their absence is expensive.
 //
-// The canvas one is not a convenience: jsdom reporting a missing canvas is what
-// reds the gate, because vitest forwards that report over rpc and a write still
-// in flight at worker teardown becomes an unhandled `EnvironmentTeardownError`
-// and exit 1 with every test passing (#1446). Nothing else notices it, so
-// without this the stub could be dropped as dead tidying and the flake would
-// come back with the next fast test file.
+// The canvas one removes ~67 reports a run about a capability jsdom does not
+// have. Nothing asserts on them, so without a test here the stub reads as dead
+// tidying and gets dropped; the assertions below are what say it is deliberate.
+//
+// It is NOT the fix for the teardown flake (#1446) - see `setup.js` for what
+// that would take. It removes ~6% of the console traffic that flake rides on.
 
 import { describe, it, expect } from "vitest";
 
