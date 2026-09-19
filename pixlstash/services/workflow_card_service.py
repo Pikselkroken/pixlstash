@@ -122,11 +122,18 @@ _EPOCH = datetime.min
 
 @dataclass(frozen=True)
 class SlotModel:
-    """One model a card names: its file, and which slot it sits in."""
+    """One model a card names: its file, and which slot it sits in.
+
+    ``label`` is the slot's address - the same one ``PUT /workflows/{key}/
+    slots`` marks and ``workflow_default_override`` is keyed on. It travels
+    with the slot because a client that draws a LoRA's Workflow/Recipe switch
+    has nothing else to name the slot it just flipped.
+    """
 
     name: Optional[str]
     kind: str
     mark: Optional[str] = None
+    label: Optional[str] = None
 
 
 @dataclass
@@ -527,7 +534,10 @@ def _describe_slots(hub: HubDatabase, figures: list[CardFigures]) -> None:
                 name = next_name(widget)
                 figure.loras.append(
                     SlotModel(
-                        name=None if mark == RECIPE else name, kind="lora", mark=mark
+                        name=None if mark == RECIPE else name,
+                        kind="lora",
+                        mark=mark,
+                        label=str(slot.get("label") or "") or None,
                     )
                 )
             else:
@@ -535,6 +545,7 @@ def _describe_slots(hub: HubDatabase, figures: list[CardFigures]) -> None:
                     SlotModel(
                         name=next_name(widget),
                         kind=_SLOT_KINDS.get(widget, widget or "model"),
+                        label=str(slot.get("label") or "") or None,
                     )
                 )
 

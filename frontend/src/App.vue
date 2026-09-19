@@ -102,6 +102,13 @@ const WorkflowsView = defineAsyncComponent(
 const WorkflowInspector = defineAsyncComponent(
   () => import("./components/panels/WorkflowInspector.vue"),
 );
+// The Workflows grid's rail (v1.12 F3). A second component rather than a
+// branch in the one above it: that inspector reads the shipped shelf's store
+// and its file-keyed routes, and both keep serving `/workflows` until F1b
+// swaps the route and deletes the pair of them.
+const WorkflowTab = defineAsyncComponent(
+  () => import("./components/panels/WorkflowTab.vue"),
+);
 // The run panel takes the stats panel's place in the rail while it is open
 // (#1307), for the same reason the workflow inspector does.
 const WorkflowRunPanel = defineAsyncComponent(
@@ -864,6 +871,7 @@ defineExpose({
              while a run was in progress behind it. -->
         <WorkflowRunPanel v-if="workflowRunStore.open" />
         <WorkflowInspector v-else-if="isWorkflowsView" />
+        <WorkflowTab v-else-if="isWorkflowsNextView" />
         <StatsSidebar v-else ref="statsSidebarRef" />
       </div>
       <ReviewSessionsOverlay
