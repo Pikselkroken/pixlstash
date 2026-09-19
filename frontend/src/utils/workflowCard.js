@@ -8,17 +8,22 @@
 //
 //   {
 //     key, name, type, imported,
-//     models: [{ name, kind, mark? }],  // every non-LoRA slot: checkpoint,
+//     models: [{ name, kind, mark?, slot_label? }],
+//                                       // every non-LoRA slot: checkpoint,
 //                                       // unet, vae, clip… `kind` is the slot
-//     loras:  [{ name, mark }],         // "structural" = in the workflow
+//     loras:  [{ name, mark, slot_label? }],
+//                                       // "structural" = in the workflow
 //                                       // (a filled chip), "recipe" = a slot
-//                                       // the recipe fills (dashed)
+//                                       // the recipe fills (dashed).
+//                                       // `slot_label` is the address
+//                                       // `PUT /workflows/{key}/slots` marks
 //     differs_by: [string],             // a stack: the union over its members
 //     picture_count, rating,            // rating 1-5; 0 or null is unrated
 //     covers: [url],                    // up to 3, the cover first
 //     stack_size,                       // 2 or more makes the card a stack
 //     saved_recipe_count,
-//     defaults: [{ label, value }],
+//     defaults: [{ label, slot_label, input_name, value, provenance }],
+//                                       // `provenance` is best | all | edited
 //     // Read by the Workflows grid rather than by the card itself, and listed
 //     // here because this block is the shape's one description (F1a, #1402):
 //     rank,                             // the Bayesian cover rank the grid is

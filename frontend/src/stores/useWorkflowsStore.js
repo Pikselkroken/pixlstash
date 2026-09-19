@@ -199,6 +199,20 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     openStackKey.value = null;
   }
 
+  /**
+   * Forget the fetched stack members, keeping the selection and the cards.
+   *
+   * For the one gesture that invalidates them wholesale: marking a LoRA slot
+   * re-keys every card of the topology, so the cards cached under a cover key
+   * can name workflows the hub no longer has. `fetchCards` does not clear
+   * them — it only re-reads the grid, which lists covers — so an open stack
+   * would keep drawing its pre-flip members until the session reset.
+   */
+  function forgetMembers() {
+    members.value = {};
+    membersFailed.value = new Set();
+  }
+
   function toggleStack(coverKey) {
     if (openStackKey.value === coverKey) closeStack();
     else openStack(coverKey);
@@ -269,6 +283,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     fetchCards,
     openStack,
     closeStack,
+    forgetMembers,
     toggleStack,
     select,
     selectRange,
