@@ -398,7 +398,14 @@ MAX_PROMPT_LENGTH = 20000
 # How deep the runnable-source resolver looks for a picture or an instance to
 # run. The tiers want the card's BEST, and one candidate is not enough: the
 # best-rated picture may be a JPEG carrying no graph at all.
-BEST_PICTURE_DEPTH = 20
+#
+# Kept small because tier 2 OPENS each candidate to read its embedded metadata,
+# and the pre-flight is a route a selection panel calls on every change: the
+# cost is (groups x this), and `picture_ids` admits 200 pictures, so a large
+# number here is thousands of synchronous file reads per keystroke-ish gesture.
+# ponytail: a constant; a per-card cache of "this picture carries no graph"
+# would let it grow if a card is ever found whose best five are all JPEGs.
+BEST_PICTURE_DEPTH = 5
 
 # How a saved recipe spells a parameter address in its free-form overrides map
 # (``saved_recipe.overrides``, B6). A slot label never contains a slash and
@@ -638,8 +645,14 @@ class RunRequest(BaseModel):
     count: int = Field(1, ge=1, le=MAX_RUNS_PER_REQUEST)
     seed_mode: Literal["new", "keep", "fixed"] = "new"
     seed: int | None = Field(None, ge=0, le=MAX_SEED_64)
-    inputs: dict[str, int] = Field(default_factory=dict)
     destination: RunDestination | None = None
+    # NO `inputs` field. A card's picture-input setup is READ here - a fixed
+    # input whose picture has gone is `fixed_input_deleted` - but nothing
+    # FILLS one yet, because filling it means uploading pictures into
+    # ComfyUI's input folder, which is the whole i2i path the shipped
+    # `/comfyui/workflows/{name}/run` already owns. Taking the field and
+    # ignoring it would be worse than not offering it: a caller would send a
+    # picture and get a run that never read it.
 
     # A new run is a new picture, NOT a variant of the one it was made from
     # (v1.12 B7). The shipped run routes stack by default and this one does
@@ -1602,12 +1615,18 @@ def create_router(server) -> APIRouter:
 
     def _apply_loras(
         graph: dict, loras: list[RunLora], object_info: dict | None
-    ) -> None:
+    ) -> list[run_service.Reason]:
         """Fill each named slot with its shelf adapter, then its strengths.
 
         Each entry is applied to its own slot alone rather than to every slot
         the graph has, which is the whole difference between this and the
         shipped ``adapter_sha256``: a stacker's three slots are three LoRAs.
+
+        Returns the reasons that stop this card, empty when every slot was
+        written. **Naming a slot the graph does not have is still a 400**, and
+        that split is the module's rule: a request that cannot be interpreted
+        against this card is a request error, while a card that will not run is
+        a reason code.
         """
         hub = getattr(server, "hub", None)
         targets = {
@@ -1624,12 +1643,34 @@ def create_router(server) -> APIRouter:
                         f"{item.node_id}."
                     ),
                 )
+            adapter = _shelf_adapter(hub, item.sha256)
             try:
-                apply_adapter(
-                    graph, [target], _shelf_adapter(hub, item.sha256), object_info or {}
-                )
+                apply_adapter(graph, [target], adapter, object_info or {})
             except LookupError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                # The adapter is on the shelf and not on this ComfyUI, which is
+                # the same fact as any other model the graph names and must not
+                # be a different kind of answer: a dry run that 400s instead of
+                # reporting `missing_models` is not a dry run.
+                logger.info(
+                    "LoRA %s cannot be placed in slot %s %s: %s",
+                    item.sha256,
+                    item.node_id,
+                    item.field,
+                    exc,
+                )
+                return [
+                    run_service.Reason(
+                        run_service.MISSING_MODELS,
+                        {
+                            "models": [
+                                {
+                                    "file": (adapter.get("filenames") or [""])[-1],
+                                    "folder": "loras",
+                                }
+                            ]
+                        },
+                    )
+                ]
             inputs = (graph.get(item.node_id) or {}).get("inputs")
             if not isinstance(inputs, dict):
                 continue
@@ -1646,6 +1687,7 @@ def create_router(server) -> APIRouter:
             ):
                 if "strength_clip" in inputs:
                     inputs["strength_clip"] = item.strength_clip
+        return []
 
     def _fixed_input_reasons(hub, workflow_key: str) -> list[run_service.Reason]:
         """Every ``fixed`` picture input of this card whose picture has gone."""
@@ -1712,7 +1754,19 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Unknown saved recipe.")
         return recipe
 
-    def _with_recipe(body: RunRequest) -> tuple[RunRequest, str | None]:
+    def _float_or_none(value) -> float | None:
+        """A saved LoRA's strength as a number, or ``None`` when it is not one."""
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            logger.warning(
+                "Saved LoRA strength %r is not a number; slot left as is", value
+            )
+            return None
+
+    def _with_recipe(
+        body: RunRequest,
+    ) -> tuple[RunRequest, str | None, list[dict]]:
         """The body with a saved recipe's own look filled in underneath it.
 
         The row is what somebody pressed Save on, so it supplies the prompt,
@@ -1721,7 +1775,7 @@ def create_router(server) -> APIRouter:
         recipe with the owner's edits on top.
         """
         if body.saved_recipe_id is None:
-            return body, None
+            return body, None, []
         stored = run_service.saved_recipe_body(_saved_recipe(body))
         addressed = []
         for address, value in (stored["overrides"] or {}).items():
@@ -1752,17 +1806,14 @@ def create_router(server) -> APIRouter:
                 + body.values,
             }
         )
-        if not body.loras and stored["loras"]:
-            # A saved LoRA names a file and a strength but no slot, so it can
-            # only be placed once the graph is in hand; left for the panel to
-            # address rather than guessed at here.
-            logger.info(
-                "Saved recipe %s carries %d LoRAs, which the request did not "
-                "address to slots, so the graph's own are used.",
-                body.saved_recipe_id,
-                len(stored["loras"]),
-            )
-        if body.seed is None and stored["keep_seed"] and stored["seed"]:
+        # The seed, and ONLY when the caller left the choice open. A request
+        # that says `seed_mode` meant it: the recipe filling in a mode nobody
+        # asked for is the row winning over the gesture, which is the wrong way
+        # round and what this function's own contract says it does not do.
+        # `seed` is compared against None, never truthiness: a kept seed of 0 is
+        # a seed somebody kept.
+        asked = "seed_mode" in (body.model_fields_set or set())
+        if body.seed is None and not asked and stored["keep_seed"]:
             try:
                 merged = merged.model_copy(
                     update={"seed": int(stored["seed"]), "seed_mode": "fixed"}
@@ -1774,7 +1825,10 @@ def create_router(server) -> APIRouter:
                     body.saved_recipe_id,
                     stored["seed"],
                 )
-        return merged, stored["workflow_key"]
+        # The LoRAs go back with the body rather than into it: a saved one names
+        # a file and a strength but no slot, and a slot only exists once the
+        # graph has been resolved.
+        return merged, stored["workflow_key"], stored["loras"] if not body.loras else []
 
     def _is_a1111(picture_id: int) -> bool:
         """Whether this picture's recipe is A1111 infotext rather than a graph.
@@ -1844,12 +1898,16 @@ def create_router(server) -> APIRouter:
         """
         hub = _hub()
         _require_one_source(body)
-        body, recipe_key = _with_recipe(body)
+        body, recipe_key, recipe_loras = _with_recipe(body)
         user = _user(request)
         configured = bool(getattr(user, "comfyui_url", None))
         comfyui_url = _comfyui_url(user)
         object_info, object_info_error = _read_object_info(comfyui_url)
 
+        if body.seed_mode == "fixed" and body.seed is None:
+            raise HTTPException(
+                status_code=400, detail="seed_mode 'fixed' needs a seed."
+            )
         groups = _groups_for(hub, body, recipe_key)
         if body.target:
             # One target replaces every group's card, keeping the pictures that
@@ -1895,16 +1953,52 @@ def create_router(server) -> APIRouter:
             # LoRA slot at all is `no_lora_loader` rather than a 400 about one
             # slot, and an unreachable ComfyUI cannot resolve a filename slot,
             # which `apply_adapter` would report as a missing node class.
+            found: list[run_service.Reason] = []
             if body.loras and slots_in_graph and object_info is not None:
-                _apply_loras(graph, body.loras, object_info)
+                found += _apply_loras(graph, body.loras, object_info)
+            elif not body.loras and recipe_loras and slots_in_graph:
+                # "Run this saved look" has to place the look's own LoRAs. A
+                # saved one names a file and a strength but no slot, so they
+                # fill the graph's slots in order - which is exact for the one
+                # slot a card usually has, and is why the request's own
+                # addressed form exists for the rest.
+                found += _apply_loras(
+                    graph,
+                    [
+                        RunLora(
+                            node_id=str(target["node_id"]),
+                            field=str(target["field"]),
+                            sha256=str(saved.get("sha256") or ""),
+                            strength_model=_float_or_none(saved.get("strength")),
+                        )
+                        for target, saved in zip(slots_in_graph, recipe_loras)
+                        if saved.get("sha256")
+                    ],
+                    object_info,
+                )
+            if body.seed_mode == "keep" and source.seedless:
+                # There is nothing to keep: a stored instance document nulls its
+                # seeds by design, so every one of `count` runs would submit
+                # zero and produce the identical image. Refused rather than
+                # quietly re-read as "new", which would be answering a different
+                # question than the one asked.
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "This card is being run from its stored recipe, which "
+                        "keeps no seed, so there is none to keep. Use "
+                        "seed_mode 'new' or 'fixed'."
+                    ),
+                )
 
-            found, _preflight = run_service.judge(
+            judged, _preflight = run_service.judge(
                 graph,
                 object_info,
                 object_info_error,
                 wants_lora=bool(body.loras),
                 lora_slots=slots_in_graph,
             )
+            found += judged
             if object_info is None and not configured:
                 # The URL is the guessed default and nothing answered on it:
                 # "set your ComfyUI address" is the actionable half of that.
@@ -1916,16 +2010,26 @@ def create_router(server) -> APIRouter:
                 ]
             found += _fixed_input_reasons(hub, workflow_key)
             group.reasons = [r.as_dict() for r in found]
-            if found:
+            if run_service.blocks_group(found, allow_unchecked=body.allow_unchecked):
                 planned.append(group)
                 continue
+            if found:
+                # The only reasons that survive here are ones the owner has
+                # consented to, so say in the log what is being run blind.
+                logger.warning(
+                    "[workflows] Running card %s UNINSPECTED on the owner's "
+                    "explicit acknowledgement: %s",
+                    workflow_key,
+                    ", ".join(r.code for r in found),
+                )
             group.runs = body.count
             planned.append(group)
             submittable.append((graph, group))
 
         blocking = any(
             run_service.blocks_batch(
-                [run_service.Reason(r["code"]) for r in group.reasons]
+                [run_service.Reason(r["code"]) for r in group.reasons],
+                allow_unchecked=body.allow_unchecked,
             )
             for group in planned
         )
@@ -1963,7 +2067,11 @@ def create_router(server) -> APIRouter:
             "not run: comfyui_not_configured, comfyui_unreachable, ui_format, "
             "missing_nodes, missing_models, a1111, fixed_input_deleted, "
             "no_lora_loader, pixlstash_nodes, no_save_node, no_runnable_source. "
-            "An empty reasons list is the only thing that means it would run."
+            "A group runs when its reasons are empty - or when the only ones "
+            "left are an uninspectable ComfyUI the body said allow_unchecked "
+            "to. A body that cannot be interpreted against the card answers "
+            "400/404/422 here exactly as it does on the run, so the two never "
+            "disagree."
         ),
         response_model=RunPreflight,
     )
@@ -1971,7 +2079,10 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         plan = _plan(request, body)
         return RunPreflight(
-            ok=bool(plan.submittable) and all(not g.reasons for g in plan.groups),
+            # `ok` is "the run would submit everything this resolved to", which
+            # is not "no group has a reason": a group the owner consented to
+            # running unchecked carries its reason AND runs.
+            ok=bool(plan.submittable) and len(plan.submittable) == len(plan.groups),
             runs=sum(g.runs for g in plan.groups),
             groups=plan.groups,
         )
@@ -2000,30 +2111,64 @@ def create_router(server) -> APIRouter:
         if not plan.submittable:
             return RunResult(status="refused", runs=0, groups=groups, prompts=[])
 
+        # The consent rule is enforced in `_plan` and nowhere else, so the dry
+        # run and the run answer identically: without `allow_unchecked` an
+        # uninspectable ComfyUI blocks the batch and nothing reaches here.
         comfyui_url = plan.comfyui_url
-        object_info, object_info_error = plan.object_info, plan.object_info_error
-        if object_info is None and not body.allow_unchecked:
-            # Fail closed, exactly as the recipe replay does: an unreachable
-            # ComfyUI means nothing at all is known about the graph, and a
-            # pre-flight that could not run must never read as "ok".
-            logger.warning(
-                "[workflows] Refusing a run: the pre-flight could not run (%s) "
-                "and the request carried no allow_unchecked acknowledgement.",
-                object_info_error or "ComfyUI unreachable",
-            )
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "PixlStash could not reach ComfyUI to check this workflow, "
-                    "so it has not been inspected. Start ComfyUI and try again, "
-                    "or confirm you want to run it unchecked."
-                ),
-            )
+        object_info = plan.object_info
 
         destination = (
             body.destination.model_dump(exclude_none=True) if body.destination else None
         ) or None
         prompts: list[dict] = []
+        try:
+            _submit_every(
+                request, plan, body, comfyui_url, object_info, destination, prompts
+            )
+        except Exception as exc:
+            if not prompts:
+                raise
+            # Earlier runs are already queued in ComfyUI and importing, so they
+            # are returned for the client to follow rather than lost behind a
+            # 500. The same choice the shipped run route makes, and for the
+            # same reason: a prompt id nobody was told about is a generation
+            # the owner cannot find, cancel or attribute.
+            #
+            # `Exception` and not `HTTPException`: what the queued work costs
+            # does not depend on which layer failed, and a prompt lost to an
+            # unexpected error is lost just as thoroughly. Logged with the
+            # traceback, because swallowing the type is exactly how a real bug
+            # would hide here.
+            logger.exception(
+                "[workflows] Run stopped after %d of its submissions: %s",
+                len(prompts),
+                exc,
+            )
+            return RunResult(
+                status="partial",
+                runs=len(prompts),
+                groups=groups,
+                prompts=prompts,
+            )
+        return RunResult(
+            status="success", runs=len(prompts), groups=groups, prompts=prompts
+        )
+
+    def _submit_every(
+        request: Request,
+        plan: Plan,
+        body: RunRequest,
+        comfyui_url: str,
+        object_info: dict | None,
+        destination: dict | None,
+        prompts: list[dict],
+    ) -> None:
+        """Queue every planned run, appending each prompt id AS it is accepted.
+
+        ``prompts`` is the caller's list and is written to in place on purpose:
+        a failure half way through has already put work into ComfyUI's queue,
+        and the caller needs to know which.
+        """
         for graph, group in plan.submittable:
             output_node_ids = _extract_output_node_ids(graph, {})
             seed_targets = detect_seed_targets(
@@ -2032,11 +2177,6 @@ def create_router(server) -> APIRouter:
             for _ in range(body.count):
                 instance = deepcopy(graph)
                 if body.seed_mode == "fixed":
-                    if body.seed is None:
-                        raise HTTPException(
-                            status_code=400,
-                            detail="seed_mode 'fixed' needs a seed.",
-                        )
                     apply_seeds(instance, seed_targets, body.seed)
                 elif body.seed_mode == "new":
                     apply_seeds(instance, seed_targets, None)
@@ -2073,8 +2213,5 @@ def create_router(server) -> APIRouter:
                 prompts.append(
                     {"workflow_key": group.workflow_key, "prompt_id": prompt_id}
                 )
-        return RunResult(
-            status="success", runs=len(prompts), groups=groups, prompts=prompts
-        )
 
     return router

@@ -114,6 +114,9 @@ class Source:
     origin: str
     picture_id: Optional[int] = None
     forgotten: int = 0
+    # True when the seeds came out of a stored instance document, where they
+    # are null by design. Such a source has no seed to keep.
+    seedless: bool = False
 
 
 @dataclass
@@ -129,7 +132,7 @@ class Reason:
 
 def resolve_references(
     document: dict, names: list[tuple[str, str]]
-) -> tuple[dict, int]:
+) -> tuple[dict, int, bool]:
     """A stored instance document as a graph, with its asset references filled.
 
     ``workflow_recipe_instance.document`` names every model and image by
@@ -145,8 +148,11 @@ def resolve_references(
     and the honest one: the graph still says a model went there.
 
     Returns:
-        ``(graph, forgotten)`` - the filled graph and how many distinct
-        references could not be named.
+        ``(graph, forgotten, had_null_seed)`` - the filled graph, how many
+        distinct references could not be named, and whether any seed was stored
+        as null. The last one is what makes ``seed_mode: "keep"`` answerable:
+        there is no seed here to keep, and running anyway would submit zero for
+        every one of ``count`` runs.
     """
     known = {asset_reference(filename): filename for _, filename in names or []}
     forgotten: set[str] = set()
@@ -164,6 +170,7 @@ def resolve_references(
         return value
 
     graph = fill(document)
+    had_null_seed = False
     # Seeds and output paths are the generation's and are stored as null
     # (``workflow_hash.instance_document_from_reduction``). A null reaches
     # ComfyUI as a type error on a required widget, so the two are given a
@@ -181,7 +188,8 @@ def resolve_references(
                 inputs[name] = "PixlStash"
             elif "seed" in str(name) or name == "noise_seed":
                 inputs[name] = 0
-    return graph, len(forgotten)
+                had_null_seed = True
+    return graph, len(forgotten), had_null_seed
 
 
 def resolve_source(
@@ -229,11 +237,11 @@ def resolve_source(
             None,
         )
     for structural_hash, document in instance_documents or []:
-        graph, forgotten = resolve_references(
+        graph, forgotten, seedless = resolve_references(
             document, (asset_names or {}).get(structural_hash, [])
         )
         return Source(
-            sanitize_prompt_graph(graph), FROM_INSTANCE, None, forgotten
+            sanitize_prompt_graph(graph), FROM_INSTANCE, None, forgotten, seedless
         ), None
     # A UI-format file that was the ONLY tier is reported as what it is. The
     # fall-through above is still right - one export in the wrong format is not
@@ -305,19 +313,44 @@ def judge(
     return reasons, preflight
 
 
-def blocks_batch(reasons: list[Reason]) -> bool:
+def blocks_batch(reasons: list[Reason], *, allow_unchecked: bool = False) -> bool:
     """Whether one source's reasons stop the whole request rather than itself.
 
     A missing model is the brief's named case and the rule generalises the way
     the owner would expect: installing a file is a trip away from the keyboard,
     so queueing the rest of a mixed batch would leave them re-running the same
-    gesture afterwards to catch the ones that were skipped. An unreachable
-    ComfyUI blocks for the plainer reason that nothing can be submitted at all.
+    gesture afterwards to catch the ones that were skipped.
+
+    **An uninspectable ComfyUI blocks unless the owner has consented**, which is
+    the whole of the ``allow_unchecked`` rule: without it nothing at all is
+    known about the graph - not even which node classes this install has - so
+    the request fails closed. With it the run goes ahead and the reason is
+    still reported, because the fact remains true and the caller should see it.
+    Consent reaches no other code: a missing model is a fact that WAS
+    established, and there is nothing there to consent to.
     """
+    unchecked = (COMFYUI_UNREACHABLE, COMFYUI_NOT_CONFIGURED)
     return any(
-        reason.code in (MISSING_MODELS, COMFYUI_UNREACHABLE, COMFYUI_NOT_CONFIGURED)
+        reason.code == MISSING_MODELS
+        or (reason.code in unchecked and not allow_unchecked)
         for reason in reasons
     )
+
+
+def blocks_group(reasons: list[Reason], *, allow_unchecked: bool = False) -> bool:
+    """Whether these reasons stop this one card from running.
+
+    Every reason does, with the single exception consent creates: an
+    acknowledged uninspectable ComfyUI is reported and run anyway. Without that
+    exception ``allow_unchecked`` could never do anything, because the reason it
+    consents to would keep its own group out of the submission either way.
+    """
+    if allow_unchecked:
+        return any(
+            reason.code not in (COMFYUI_UNREACHABLE, COMFYUI_NOT_CONFIGURED)
+            for reason in reasons
+        )
+    return bool(reasons)
 
 
 def saved_recipe_body(recipe) -> dict:
