@@ -163,6 +163,11 @@ def test_protocol_handshake_and_tool_list():
     assert "PixlStash" in instructions
     for mentioned in ("list_sets", "search_pictures", "get_recipe"):
         assert mentioned in instructions
+    # Naming the shortcut is the point. A general "prefer these tools" loses to
+    # a sqlite3 call that looks authoritative, so the instructions have to say
+    # which files not to open and give a reason that survives being argued with.
+    assert "vault.db" in instructions and "sqlite3" in instructions
+    assert "derived" in instructions
     assert replies[2]["error"]["code"] == -32601
     assert replies[3]["error"]["code"] == -32602
     assert replies[4]["error"]["code"] == -32602

@@ -32,9 +32,13 @@ const error = ref("");
 const token = ref("");
 const copied = ref("");
 
+// `-s user` is load-bearing. `claude mcp add` defaults to `-s local`, which
+// registers the server only inside the directory it was run from, so the agent
+// has no PixlStash tools anywhere else and answers questions about the library
+// from the filesystem instead. A picture library is not a per-project thing.
 const claudeCommand = computed(
   () =>
-    `claude mcp add pixlstash -e PIXLSTASH_TOKEN=${token.value} -- pixlstash-mcp`,
+    `claude mcp add -s user pixlstash -e PIXLSTASH_TOKEN=${token.value} -- pixlstash-mcp`,
 );
 
 const configJson = computed(() =>

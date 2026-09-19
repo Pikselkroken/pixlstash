@@ -65,8 +65,23 @@ generated.
 
 Prefer them over the shell and the filesystem. Tags, scores, set and character \
 membership, project grouping and ComfyUI recipes exist only in PixlStash's \
-database - listing image files with ls or find cannot see any of it, and the \
-database is not meant to be read directly.
+database - listing image files with ls or find cannot see any of it.
+
+Do not read vault.db or hub.db with sqlite3, and do not query them through any \
+other tool. It looks like a shortcut and it gives wrong answers:
+
+- Some values are derived per request, not stored. A picture row carries a raw \
+project_id that the API re-derives from project membership before returning \
+it, so the stored column can name a project the picture is not really in. Set \
+locking and the visible tag set are computed the same way.
+- The schema is internal and moves with migrations; these tools are the \
+contract, the tables are not.
+- The file is live and single-writer while PixlStash runs. An outside reader \
+is not part of that design and can see a half-written state.
+- Reading the file bypasses the API token's scope, so it can expose parts of \
+the library the owner did not share.
+
+If a tool here cannot answer something, say so rather than going around it.
 
 Where to start:
 - "how many sets / characters / projects" -> list_sets, list_characters, \

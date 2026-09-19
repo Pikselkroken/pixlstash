@@ -71,7 +71,16 @@ describe("the configuration handed to the agent", () => {
     expect(text).not.toContain("--url");
     expect(text).not.toContain("/api/v1");
     // Positive control: the command is still there to be wrong.
-    expect(text).toContain("claude mcp add pixlstash");
+    expect(text).toContain("claude mcp add");
+  });
+
+  it("registers the server for every directory, not just the current one", async () => {
+    const wrapper = await mintedDialog();
+
+    // Without `-s user` the CLI defaults to `-s local` and the server exists
+    // only in the directory the command was run from. The agent then has no
+    // PixlStash tools anywhere else and falls back to reading files.
+    expect(wrapper.text()).toContain("claude mcp add -s user pixlstash");
   });
 
   it("carries the minted token in both blocks", async () => {

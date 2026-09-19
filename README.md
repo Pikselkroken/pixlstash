@@ -795,9 +795,15 @@ Tools: `search_pictures`, `list_pictures`, `get_picture`, `view_picture`,
 `project_id` and `tags`.
 
 If the agent answers questions about your library from the shell instead of
-from these tools, it is probably not reaching the server. `pixlstash-mcp`
-writes a line to stderr at start-up when nothing is listening, which most
-clients show in their MCP server log.
+from these tools, it is almost always one of two things:
+
+- **The server is registered for one directory only.** `claude mcp add`
+  defaults to `--scope local`, which registers it just for the directory you
+  ran it in; everywhere else the agent has no PixlStash tools at all. Use
+  `-s user`, as the **Connect AI agent** command does. `claude mcp list` run
+  from an unrelated folder tells you which you have.
+- **Nothing is listening.** `pixlstash-mcp` writes a line to stderr at
+  start-up in that case, which most clients show in their MCP server log.
 
 ## Troubleshooting
 
