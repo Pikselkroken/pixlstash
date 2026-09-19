@@ -110,9 +110,7 @@
                the menu's other rows (Add folder, ai-toolkit) stay usable while
                a file copies; only Add file refuses. -->
           <AppBarButton
-            v-bind="
-              withRef(menuProps, (el) => (addBtnRef = el))
-            "
+            v-bind="withRef(menuProps, (el) => (addBtnRef = el))"
             class="bar-btn--accent shelf-fold-680"
             :icon="adding ? '' : 'plus'"
             chevron
@@ -120,11 +118,14 @@
             aria-haspopup="menu"
             :aria-expanded="addMenuOpen"
             tooltip="Add models to the shelf"
-            ><v-icon v-if="adding" size="18" class="mdi-spin">mdi-loading</v-icon
+            ><v-icon v-if="adding" size="18" class="mdi-spin"
+              >mdi-loading</v-icon
             >Add</AppBarButton
           >
         </template>
-        <div class="ctx-menu shelf-menu" role="menu"
+        <div
+          class="ctx-menu shelf-menu"
+          role="menu"
           tabindex="-1"
           @keydown="onMenuKeydown"
         >
@@ -428,7 +429,9 @@
       @pick="onThumbnailPicked"
     >
       <template #footer-start>
-        <AppButton variant="ghost" @click="pickIconFile">Choose a file…</AppButton>
+        <AppButton variant="ghost" @click="pickIconFile"
+          >Choose a file…</AppButton
+        >
       </template>
     </PicturePicker>
 
@@ -459,10 +462,7 @@
            needs fixing, so the reader who has read it once gets to put it
            away. It comes back when the shelf is refetched, because a drive that
            is still unplugged is still worth saying once. -->
-      <p
-        v-if="offlineNote && !offlineDismissed"
-        class="shelf-banner"
-      >
+      <p v-if="offlineNote && !offlineDismissed" class="shelf-banner">
         <Tooltip :text="offlineMountPaths" activator="parent" />
         <v-icon size="16">mdi-power-plug-off-outline</v-icon>
         <span class="shelf-banner-text">{{ offlineNote }}</span>
@@ -707,9 +707,14 @@
                      disk - never the word "Unknown". -->
                 <Tooltip :text="DRIVE_KINDS[group.band.kind]?.label || ''">
                   <template #activator="{ props: tipProps }">
-                    <v-icon v-bind="tipProps" size="16" class="shelf-band-icon">{{
-                      DRIVE_KINDS[group.band.kind]?.icon || "mdi-harddisk"
-                    }}</v-icon>
+                    <v-icon
+                      v-bind="tipProps"
+                      size="16"
+                      class="shelf-band-icon"
+                      >{{
+                        DRIVE_KINDS[group.band.kind]?.icon || "mdi-harddisk"
+                      }}</v-icon
+                    >
                   </template>
                 </Tooltip>
                 <span class="shelf-band-name">{{ group.band.label }}</span>
@@ -1226,9 +1231,7 @@
                        title, which also names which of the two dates this is -
                        the column follows the sort, so the same cell holds
                        `Date added` on one shelf and `File date` on the next. -->
-                  <span
-                    role="gridcell"
-                    class="shelf-col shelf-col--date"
+                  <span role="gridcell" class="shelf-col shelf-col--date"
                     ><Tooltip :text="dateTitle(row)" activator="parent" />{{
                       dateCell(row)
                     }}</span
@@ -1274,8 +1277,7 @@
                       <span class="shelf-row-name">{{
                         memberLabel(member, row)
                       }}</span>
-                      <span
-                        class="shelf-row-file"
+                      <span class="shelf-row-file"
                         ><Tooltip
                           :text="copyPathsTitle(member.locations) || ''"
                           activator="parent"
@@ -1301,9 +1303,7 @@
                          was saved is the one thing that differs from step to
                          step, and answering it with the run's would print the
                          same stamp down the whole strip. -->
-                    <span
-                      role="gridcell"
-                      class="shelf-col shelf-col--date"
+                    <span role="gridcell" class="shelf-col shelf-col--date"
                       ><Tooltip
                         :text="dateTitle(member, true)"
                         activator="parent"
@@ -1386,7 +1386,10 @@
       origin="top start"
       :offset="2"
     >
-      <div v-if="folderMenuFolder" class="ctx-menu shelf-menu" role="menu"
+      <div
+        v-if="folderMenuFolder"
+        class="ctx-menu shelf-menu"
+        role="menu"
         tabindex="-1"
         @keydown="onMenuKeydown"
       >
@@ -3093,6 +3096,64 @@ function focusDrawnRow(key) {
     }
   }
 }
+
+// ── Arriving from a picture's Recipe section (#1313) ───────────────────────
+//
+// `?model=<id>` picks that model and puts the cursor on it, so a chip clicked
+// in the lightbox lands on the file the picture used rather than at the top of
+// a shelf of a couple of thousand rows. A model the shelf is not drawing - a
+// filter hides it, its group is collapsed, its stack is closed - is left alone
+// rather than forced into view: the row the link names is a fact, and what the
+// reader has filtered the shelf down to is a decision of theirs.
+//
+// Honoured once per value, because `drawnRows` recomputes on every filter,
+// sort and refresh while the query string stays put, and applying it twice
+// would take focus back off whatever the reader had moved to.
+let honouredModel = null;
+
+function honourModelQuery() {
+  const wanted = route?.query?.model;
+  if (!wanted) {
+    honouredModel = null;
+    return;
+  }
+  if (honouredModel === wanted) return;
+  const row = drawnRows.value.find(
+    (entry) => String(entry.id) === String(wanted),
+  );
+  if (!row) {
+    // The shelf has the model but is not drawing it: a filter excludes it, its
+    // group is collapsed, or it is a member of a closed stack. Say so instead
+    // of landing at the top of the list having visibly done nothing - and
+    // offer the one gesture that is certain to reveal it rather than guessing
+    // which of the three is in the way. The reader's filters are theirs; this
+    // does not clear them behind their back.
+    const known = store.rows.find(
+      (entry) => String(entry.id) === String(wanted),
+    );
+    if (!known) return; // not fetched yet, or not on this shelf at all
+    honouredModel = wanted;
+    useNoticeStore().push({
+      level: "info",
+      text: `${known.name || known.filename || "That model"} is on the shelf, but the current filters are hiding it.`,
+      action: { label: "Show everything", handler: () => store.resetFilters() },
+    });
+    return;
+  }
+  honouredModel = wanted;
+  focusedRowKey.value = row.key;
+  store.selectFromClick(row.id, {}, orderedRowIds.value);
+  nextTick(() => focusDrawnRow(row.key));
+}
+
+// Registered on mount rather than at setup. A watcher reads its source once
+// when it is created, and `drawnRows` reads `shownGroups`, which is declared
+// below this point - so a watcher created here would evaluate it inside its own
+// temporal dead zone. The rows are fetched asynchronously anyway, so nothing is
+// missed by waiting for the mount.
+onMounted(() => {
+  watch([() => route?.query?.model, drawnRows], honourModelQuery);
+});
 
 function onRowKeydown(row, event) {
   const drawn = drawnRows.value;

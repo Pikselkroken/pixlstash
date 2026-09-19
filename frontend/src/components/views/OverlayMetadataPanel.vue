@@ -10,234 +10,46 @@
       }}</v-icon>
     </div>
     <template v-if="!metadataCollapsed">
-      <div
-        v-if="
-          !metadataEntries.length &&
-          !comfyMetadata &&
-          !pictureInfoEntries.length
-        "
-        class="metadata-empty"
-      >
+      <div v-if="!pictureInfoEntries.length" class="metadata-empty">
         No metadata available
       </div>
-      <div v-else class="metadata-tabbox">
-        <div class="metadata-tab-strip">
-          <button
-            v-if="pictureInfoEntries.length"
-            class="metadata-tab-btn"
-            :class="{ active: metadataTab === 'info' }"
-            @click="metadataTab = 'info'"
-          >
-            {{ infoHeaderLabel }}
-          </button>
-          <button
-            v-if="comfyMetadata"
-            class="metadata-tab-btn"
-            :class="{ active: metadataTab === 'comfy' }"
-            @click="metadataTab = 'comfy'"
-          >
-            ComfyUI
-          </button>
-        </div>
-        <div
-          v-if="metadataTab === 'info' && pictureInfoEntries.length"
-          class="metadata-tab-panel"
-        >
-          <dl class="inspector-kv">
-            <div
-              v-for="entry in pictureInfoEntries"
-              :key="entry.label"
-              :class="[
-                'metadata-info-item',
-                entry.fullWidth && 'metadata-info-item--full-width',
-                entry.clickable && 'metadata-info-item--clickable',
-              ]"
-              :title="entry.fullWidth ? entry.value : undefined"
-              @click="entry.clickable ? openSourceFileLocation() : undefined"
-            >
-              <dt>{{ entry.label }}</dt>
-              <dd class="metadata-info-value">{{ entry.value }}</dd>
-            </div>
-          </dl>
-        </div>
-        <div
-          v-if="metadataTab === 'comfy' && comfyMetadata"
-          class="metadata-tab-panel metadata-comfy-panel"
-        >
-          <div class="metadata-comfy-subtitle">
-            {{ comfyMetadata.summary }}
-          </div>
+      <template v-else>
+        <div class="metadata-info-heading">{{ infoHeaderLabel }}</div>
+        <dl class="inspector-kv">
           <div
-            v-if="comfyMetadata.positive_prompt"
-            class="metadata-comfy-field-group"
+            v-for="entry in pictureInfoEntries"
+            :key="entry.label"
+            :class="[
+              'metadata-info-item',
+              entry.fullWidth && 'metadata-info-item--full-width',
+              entry.clickable && 'metadata-info-item--clickable',
+            ]"
+            :title="entry.fullWidth ? entry.value : undefined"
+            @click="entry.clickable ? openSourceFileLocation() : undefined"
           >
-            <div class="metadata-comfy-field-label">Prompt</div>
-            <textarea
-              class="metadata-comfy-textarea metadata-comfy-prompt"
-              readonly
-              :value="comfyMetadata.positive_prompt"
-            ></textarea>
+            <dt>{{ entry.label }}</dt>
+            <dd class="metadata-info-value">{{ entry.value }}</dd>
           </div>
-          <div
-            v-if="comfyMetadata.models?.length || comfyMetadata.loras?.length"
-            class="metadata-comfy-chips-block"
-          >
-            <div
-              v-if="comfyMetadata.models?.length"
-              class="metadata-comfy-field-group"
-            >
-              <div class="metadata-comfy-field-label">Models</div>
-              <div class="metadata-comfy-chip-row">
-                <span
-                  v-for="m in comfyMetadata.models"
-                  :key="m"
-                  class="metadata-comfy-chip"
-                  :title="m"
-                  >{{ m }}</span
-                >
-              </div>
-            </div>
-            <div
-              v-if="comfyMetadata.loras?.length"
-              class="metadata-comfy-field-group"
-            >
-              <div class="metadata-comfy-field-label">LoRAs</div>
-              <div class="metadata-comfy-chip-row">
-                <span
-                  v-for="l in comfyMetadata.loras"
-                  :key="l"
-                  class="metadata-comfy-chip"
-                  :title="l"
-                  >{{ l }}</span
-                >
-              </div>
-            </div>
-          </div>
-          <details v-if="comfyMetadata.workflow" class="metadata-comfy-details">
-            <summary class="metadata-comfy-summary">
-              <span class="metadata-comfy-summary-left">
-                <span class="metadata-comfy-summary-title">{{
-                  comfyMetadata.isApiFormat
-                    ? "API Workflow JSON"
-                    : "Workflow JSON"
-                }}</span>
-              </span>
-              <button
-                v-if="!comfyMetadata.isApiFormat"
-                class="metadata-comfy-workflow-action"
-                type="button"
-                @click.stop="copyMetadataValue(comfyMetadata.workflow)"
-              >
-                <v-icon size="14">mdi-content-copy</v-icon>
-                Copy
-              </button>
-              <button
-                class="metadata-comfy-workflow-action"
-                type="button"
-                @click.stop="downloadComfyWorkflow(comfyMetadata.workflow)"
-              >
-                <v-icon size="14">mdi-download</v-icon>
-                Download
-              </button>
-            </summary>
-            <textarea
-              class="metadata-comfy-textarea"
-              readonly
-              :value="stringifyMetadata(comfyMetadata.workflow)"
-            ></textarea>
-          </details>
-        </div>
-      </div>
+        </dl>
+      </template>
     </template>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch } from "vue";
+import { ref, computed } from "vue";
 import { isSupportedVideoFile, getOverlayFormat } from "../../utils/media.js";
 import { formatUserDate } from "../../utils/utils.js";
 import { openPictureLocation } from "../../api/pictures";
-import { copyText } from "../../utils/clipboard";
 import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
   image: { type: Object, default: null },
-  comfyMetadata: { type: Object, default: null },
   dateFormat: { type: String, default: "locale" },
   backendUrl: { type: String, default: () => API_BASE_URL },
   videoDuration: { type: Number, default: null },
 });
 
 const metadataCollapsed = ref(false);
-const metadataTab = ref("info");
-
-function parseMetadataValue(value) {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) return value;
-    if (
-      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-      (trimmed.startsWith("[") && trimmed.endsWith("]"))
-    ) {
-      try {
-        return JSON.parse(trimmed);
-      } catch {
-        return value;
-      }
-    }
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => parseMetadataValue(item));
-  }
-  if (value && typeof value === "object") {
-    const nested = {};
-    Object.entries(value).forEach(([k, v]) => {
-      nested[k] = parseMetadataValue(v);
-    });
-    return nested;
-  }
-  return value;
-}
-
-function buildMetadata(input) {
-  if (!input || typeof input !== "object") return {};
-  const output = {};
-  Object.entries(input).forEach(([key, value]) => {
-    output[key] = parseMetadataValue(value);
-  });
-  return output;
-}
-
-function stripComfyMetadata(input) {
-  if (!input || typeof input !== "object") return {};
-  const output = {};
-  Object.entries(input).forEach(([key, value]) => {
-    if (
-      key === "workflow" ||
-      key === "prompt" ||
-      key === "comfyui_workflow" ||
-      key === "comfyui_prompt"
-    ) {
-      return;
-    }
-    if (key === "png" && value && typeof value === "object") {
-      const { workflow, prompt, ...rest } = value;
-      if (Object.keys(rest).length) {
-        output[key] = rest;
-      }
-      return;
-    }
-    if (key === "comfyui" && value && typeof value === "object") {
-      const { workflow, prompt, ...rest } = value;
-      if (Object.keys(rest).length) {
-        output[key] = rest;
-      }
-      return;
-    }
-    output[key] = value;
-  });
-  return output;
-}
 
 function formatAspectRatio(width, height) {
   const gcd = (a, b) => (b === 0 ? a : gcd(b, a % b));
@@ -267,35 +79,6 @@ function formatDuration(seconds) {
   return `${minutes}:${padded(secs)}`;
 }
 
-function stringifyMetadata(value) {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function isPrimitiveValue(value) {
-  return (
-    value === null ||
-    value === undefined ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  );
-}
-
-async function copyMetadataValue(value) {
-  const text = isPrimitiveValue(value)
-    ? String(value)
-    : stringifyMetadata(value);
-  if (!text) return;
-  const copied = await copyText(text);
-  if (!copied) {
-    console.warn("Failed to copy metadata value.");
-  }
-}
-
 async function openSourceFileLocation() {
   if (!props.image?.id) return;
   try {
@@ -306,28 +89,6 @@ async function openSourceFileLocation() {
     console.warn("Couldn't open the source file location", e);
   }
 }
-
-function downloadComfyWorkflow(workflow) {
-  if (!workflow) return;
-  const payload = stringifyMetadata(workflow);
-  const blob = new Blob([payload], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "comfyui_workflow.json";
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => {
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, 100);
-}
-
-const metadataEntries = computed(() => {
-  const base = buildMetadata(props.image?.metadata);
-  const entries = Object.entries(stripComfyMetadata(base));
-  return entries.map(([key, value]) => ({ key, value }));
-});
 
 const infoHeaderLabel = computed(() => {
   const format = props.image ? getOverlayFormat(props.image) : "";
@@ -444,14 +205,6 @@ const pictureInfoEntries = computed(() => {
   return entries;
 });
 
-watch(
-  [() => !!props.comfyMetadata, () => !!pictureInfoEntries.value?.length],
-  ([hasComfy, hasInfo]) => {
-    if (metadataTab.value === "comfy" && !hasComfy) metadataTab.value = "info";
-    if (metadataTab.value === "info" && !hasInfo && hasComfy)
-      metadataTab.value = "comfy";
-  },
-);
 </script>
 
 <style scoped>
@@ -478,50 +231,15 @@ watch(
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
-/* Info and ComfyUI are two tabs of one box: the inspector's tab band, one
-   level down, in the lightbox's dark-surface inks. */
-.metadata-tabbox {
-  display: flex;
-  flex-direction: column;
-}
-
-.metadata-tab-strip {
-  display: flex;
-  height: var(--toolbar-height);
-  border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
-}
-
-.metadata-tab-btn {
-  flex: 1;
-  padding: 0 var(--space-3);
-  border-bottom: 2px solid transparent;
+/* The label that used to be the Info tab's own button. The picture's recipe is
+   its own section now (#1313), so there is one list here and no tab band. */
+.metadata-info-heading {
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: var(--tracking-label);
   color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
-  transition:
-    color var(--dur-1) var(--ease-standard),
-    background var(--dur-1) var(--ease-standard),
-    border-color var(--dur-1) var(--ease-standard);
-  text-align: center;
-  white-space: nowrap;
-}
-
-/* Olive marks, words stay ink. The olive is the dark-surface one: the panel is
-   dark in both themes, so the per-theme --active-bar would be wrong in light. */
-.metadata-tab-btn.active {
-  color: rgb(var(--v-theme-on-dark-surface));
-  border-bottom-color: rgb(var(--v-theme-dark-surface-primary));
-}
-
-.metadata-tab-btn:hover:not(.active) {
-  color: rgb(var(--v-theme-on-dark-surface));
-  background: rgba(var(--v-theme-on-dark-surface), 0.16);
-}
-
-.metadata-tab-panel {
-  padding-top: var(--space-4);
+  margin-bottom: var(--space-3);
 }
 
 .metadata-info-item {
@@ -546,132 +264,4 @@ watch(
   text-overflow: ellipsis;
 }
 
-.metadata-comfy-subtitle {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-medium);
-  color: rgba(var(--v-theme-on-dark-surface), 0.65);
-}
-
-.metadata-comfy-details {
-  background: rgba(var(--v-theme-shadow), 0.25);
-  border-radius: var(--radius-md);
-  padding: var(--space-3) 10px; /* 10px horizontal has no token: between --space-3 (8px) and --space-4 (12px) */
-}
-
-.metadata-comfy-details summary {
-  cursor: pointer;
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.75);
-}
-
-.metadata-comfy-details summary::-webkit-details-marker {
-  display: none;
-}
-
-.metadata-comfy-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px; /* no token: 10px is between --space-3 (8px) and --space-4 (12px) */
-}
-
-.metadata-comfy-summary-left {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.metadata-comfy-summary-title {
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-weight: var(--weight-medium);
-}
-
-.metadata-comfy-workflow-action {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  color: rgba(var(--v-theme-on-dark-surface), 0.75);
-  font-size: var(--text-2xs);
-  padding: var(--space-1) var(--space-1);
-  border-radius: var(--radius-sm);
-}
-
-.metadata-comfy-workflow-action:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.16);
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-.metadata-comfy-textarea {
-  width: 100%;
-  max-width: 100%;
-  box-sizing: border-box;
-  min-height: 160px;
-  max-height: 280px;
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
-  background: rgba(var(--v-theme-shadow), 0.35);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  line-height: 1.4;
-  padding: var(--space-3);
-  resize: vertical;
-  overflow: auto;
-  white-space: pre;
-  word-break: normal;
-}
-
-.metadata-comfy-details:not([open]) .metadata-comfy-textarea {
-  display: none;
-}
-
-.metadata-comfy-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.metadata-comfy-field-label {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-
-.metadata-comfy-field-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.metadata-comfy-prompt {
-  min-height: 70px;
-  max-height: 160px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.metadata-comfy-chips-block {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.metadata-comfy-chip-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  align-items: center;
-}
-
-.metadata-comfy-chip {
-  display: inline-block;
-  font-size: var(--text-2xs);
-  background: rgba(var(--v-theme-on-dark-surface), 0.1);
-  color: rgba(var(--v-theme-on-dark-surface), 0.85);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2) 6px; /* 6px horizontal has no token: between --space-2 (4px) and --space-3 (8px) */
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 </style>

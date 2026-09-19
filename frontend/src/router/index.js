@@ -22,8 +22,10 @@ import App from "../App.vue";
 //   /insights                               → About your library (read-only findings)
 //   /moves                                  → Moves made outside PixlStash (reconciliation queue)
 //   /models                                 → Model shelf (adapters/checkpoints)
+//   /models?model=<id>                      → …opened on that model (a Recipe chip's link)
 //   /models/runs                            → ai-toolkit training runs, the shelf's second view
 //   /workflows                              → the workflow library (topologies)
+//   /workflows?topology=<hash>              → …opened on that workflow (the Recipe section's Open)
 //   /ref-folder/:id                         → Reference folder view (id = numeric)
 //   /import-folder/:id                      → Import folder view (id = numeric)
 //

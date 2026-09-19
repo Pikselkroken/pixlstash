@@ -332,9 +332,7 @@
           >
             <template #activator="{ props: setTipProps }">
               <AddToEntityControl
-                v-bind="
-                  withRef(setTipProps, (el) => (addToSetControlRef = el))
-                "
+                v-bind="withRef(setTipProps, (el) => (addToSetControlRef = el))"
                 type="set"
                 :key="addToSetControlKey"
                 :subject-ids="[image.id]"
@@ -432,7 +430,9 @@
                   n === 0 ? "No rating" : n
                 }}</span>
                 <v-icon
-                  v-if="(isReadOnly ? guestScore || 0 : image?.score || 0) === n"
+                  v-if="
+                    (isReadOnly ? guestScore || 0 : image?.score || 0) === n
+                  "
                   class="ctx-check"
                   >mdi-check</v-icon
                 >
@@ -557,7 +557,11 @@
             :aria-label="zoomButtonTitle"
             @click="toggleZoomSnap"
           >
-            <Tooltip :text="zoomButtonTitle" activator="parent" :describe="false" />
+            <Tooltip
+              :text="zoomButtonTitle"
+              activator="parent"
+              :describe="false"
+            />
             <v-icon>mdi-magnify</v-icon>
             <span class="zoom-btn-label">{{ zoomButtonLabel }}</span>
           </button>
@@ -866,113 +870,133 @@
         <!-- The shared inspector (shell contract rule 8), in its lightbox
              variant: dark in both themes, laid over the canvas. -->
         <AppInspector
+          v-model="sidebarTab"
           class="overlay-sidebar"
           :class="{ hidden: chromeHidden }"
           label="Picture details"
           lightbox
           :open="sidebarOpen"
+          :tabs="sidebarTabs"
         >
-          <OverlayDescriptionPanel
-            ref="descriptionPanelRef"
-            :image="image"
-            :locked="isCurrentLocked"
-            :lock-note="currentLockReason"
-            :text-state="pictureText.text.value.state"
-            :text-lines="pictureText.text.value.lines"
-            :active-tab="pictureText.activeTab.value"
-            :selected-words="pictureText.selectedWords.value"
-            :text-read-busy="pictureText.readAgainBusy.value"
-            @update-description="handleDescriptionUpdate"
-            @editing-finished="focusOverlayCanvas"
-            @pick-tab="pictureText.pickTab"
-            @select-word="pictureText.selectWord"
-            @clear-word-selection="pictureText.clearSelection"
-            @read-text-again="pictureText.readAgain"
-          />
+          <!-- `v-show`, never `v-if`: the panels hold editing state and the
+               refs the overlay reaches into for its keyboard shortcuts (T
+               opens the tag field, Escape cancels an edit), and unmounting the
+               Info group behind the Recipe tab would take those with it. -->
+          <div v-show="sidebarTab === 'info'" class="overlay-sidebar-group">
+            <OverlayDescriptionPanel
+              ref="descriptionPanelRef"
+              :image="image"
+              :locked="isCurrentLocked"
+              :lock-note="currentLockReason"
+              :text-state="pictureText.text.value.state"
+              :text-lines="pictureText.text.value.lines"
+              :active-tab="pictureText.activeTab.value"
+              :selected-words="pictureText.selectedWords.value"
+              :text-read-busy="pictureText.readAgainBusy.value"
+              @update-description="handleDescriptionUpdate"
+              @editing-finished="focusOverlayCanvas"
+              @pick-tab="pictureText.pickTab"
+              @select-word="pictureText.selectWord"
+              @clear-word-selection="pictureText.clearSelection"
+              @read-text-again="pictureText.readAgain"
+            />
 
-          <div class="sidebar-section sidebar-section--faces">
-            <div
-              class="section-header section-header--collapsible section-label section-label--on-dark"
-              @click="facesCollapsed = !facesCollapsed"
-            >
-              <span>Faces</span>
-              <v-icon size="16" style="opacity: 0.6">{{
-                facesCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
-              }}</v-icon>
-            </div>
-            <template v-if="!facesCollapsed">
-              <div v-if="faceAssignItems.length" class="face-assign-grid">
-                <div
-                  v-for="face in faceAssignItems"
-                  :key="face.faceKey"
-                  class="face-assign-card"
-                >
-                  <div class="face-assign-row">
-                    <div class="face-assign-thumb">
-                      <div
-                        class="face-assign-crop"
-                        :style="getFaceThumbStyle(face, face.faceIdx)"
-                      ></div>
-                    </div>
-                    <div class="face-assign-meta">
-                      <div
-                        class="face-assign-label"
-                        :style="{ color: faceBoxColor(face.faceIdx) }"
-                      >
-                        {{ face.label }}
+            <div class="sidebar-section sidebar-section--faces">
+              <div
+                class="section-header section-header--collapsible section-label section-label--on-dark"
+                @click="facesCollapsed = !facesCollapsed"
+              >
+                <span>Faces</span>
+                <v-icon size="16" style="opacity: 0.6">{{
+                  facesCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
+                }}</v-icon>
+              </div>
+              <template v-if="!facesCollapsed">
+                <div v-if="faceAssignItems.length" class="face-assign-grid">
+                  <div
+                    v-for="face in faceAssignItems"
+                    :key="face.faceKey"
+                    class="face-assign-card"
+                  >
+                    <div class="face-assign-row">
+                      <div class="face-assign-thumb">
+                        <div
+                          class="face-assign-crop"
+                          :style="getFaceThumbStyle(face, face.faceIdx)"
+                        ></div>
                       </div>
-                      <!-- A native <select> cannot carry the create row's
-                           highlight: macOS Chrome and Safari draw select
-                           popups as OS menus that ignore option colour. This
-                           is the same menu language as the rest of the app
-                           (AddToEntityControl's force-dark skin), in its
-                           single-select face mode. Face mode picks one person
-                           for one face, so it has no subject list to compute a
-                           tri-state across and passes an empty one. -->
-                      <div class="face-assign-person">
-                        <AddToEntityControl
-                          :ref="(el) => setFaceMenuRef(face.faceKey, el)"
-                          type="face"
-                          allow-create
-                          float-menu
-                          :subject-ids="[]"
-                          :force-dark="true"
-                          :face-id="face.id"
-                          :assigned-character-id="face.character_id"
-                          :assigned-character-name="faceAssignedName(face)"
-                          :readonly="isReadOnly"
-                          :disabled="!face.id || isReadOnly"
-                          @assign="handleFaceAssign(face, $event)"
-                          @unassign="unassignFaceCharacter(face)"
-                          @create="openCreatePersonForFace(face, $event)"
-                        />
+                      <div class="face-assign-meta">
+                        <div
+                          class="face-assign-label"
+                          :style="{ color: faceBoxColor(face.faceIdx) }"
+                        >
+                          {{ face.label }}
+                        </div>
+                        <!-- A native <select> cannot carry the create row's
+                             highlight: macOS Chrome and Safari draw select
+                             popups as OS menus that ignore option colour. This
+                             is the same menu language as the rest of the app
+                             (AddToEntityControl's force-dark skin), in its
+                             single-select face mode. Face mode picks one person
+                             for one face, so it has no subject list to compute a
+                             tri-state across and passes an empty one. -->
+                        <div class="face-assign-person">
+                          <AddToEntityControl
+                            :ref="(el) => setFaceMenuRef(face.faceKey, el)"
+                            type="face"
+                            allow-create
+                            float-menu
+                            :subject-ids="[]"
+                            :force-dark="true"
+                            :face-id="face.id"
+                            :assigned-character-id="face.character_id"
+                            :assigned-character-name="faceAssignedName(face)"
+                            :readonly="isReadOnly"
+                            :disabled="!face.id || isReadOnly"
+                            @assign="handleFaceAssign(face, $event)"
+                            @unassign="unassignFaceCharacter(face)"
+                            @create="openCreatePersonForFace(face, $event)"
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
-              </div>
-              <div v-else class="face-assign-empty">No faces detected</div>
-            </template>
+                <div v-else class="face-assign-empty">No faces detected</div>
+              </template>
+            </div>
+
+            <OverlayTagsPanel
+              ref="tagsPanelRef"
+              :image="image"
+              :hidden-tags="hiddenTags"
+              :apply-tag-filter="applyTagFilter"
+              :locked="isCurrentLocked"
+              :lock-note="currentLockReason"
+              @update-tags="handleTagsUpdate"
+              @overlay-change="(payload) => emit('overlay-change', payload)"
+              @add-tag="(imageId, tag) => emit('add-tag', imageId, tag)"
+              @request-metadata-refresh="fetchOverlayMetadata"
+            />
+
+            <OverlayMetadataPanel
+              :image="image"
+              :date-format="dateFormat"
+              :video-duration="videoMeta.duration"
+            />
           </div>
 
-          <OverlayTagsPanel
-            ref="tagsPanelRef"
-            :image="image"
-            :hidden-tags="hiddenTags"
-            :apply-tag-filter="applyTagFilter"
-            :locked="isCurrentLocked"
-            :lock-note="currentLockReason"
-            @update-tags="handleTagsUpdate"
-            @overlay-change="(payload) => emit('overlay-change', payload)"
-            @add-tag="(imageId, tag) => emit('add-tag', imageId, tag)"
-            @request-metadata-refresh="fetchOverlayMetadata"
-          />
-
-          <OverlayMetadataPanel
-            :image="image"
-            :comfy-metadata="comfyMetadata"
-            :date-format="dateFormat"
-            :video-duration="videoMeta.duration"
+          <!-- `v-if`, unlike the Info group above: the Recipe tab is read-only
+               and holds nothing worth preserving across a tab switch, so it
+               costs nothing to build on demand and nothing to throw away. -->
+          <OverlayRecipePanel
+            v-if="sidebarTab === 'recipe'"
+            :recipe="comfyMetadata"
+            :picture-id="image?.id ?? null"
+            :can-generate-variants="
+              comfyuiConfigured && !isReadOnly && !!image?.id
+            "
+            @generate-variants="emit('open-remix-dialog', image?.id)"
           />
         </AppInspector>
 
@@ -1040,7 +1064,11 @@ import {
   safeDownloadName,
   setInternalDragPayload,
 } from "../../utils/media.js";
-import { API_BASE_URL, appendShareToken, isReadOnly } from "../../utils/apiClient";
+import {
+  API_BASE_URL,
+  appendShareToken,
+  isReadOnly,
+} from "../../utils/apiClient";
 import {
   getPictureMetadata,
   listPictureFaces,
@@ -1062,6 +1090,7 @@ import {
   getLoraInsertion,
   listWorkflows,
   runImageToImage,
+  getPictureRecipe,
   getPictureWorkflow,
 } from "../../api/comfyui";
 import { listProjects } from "../../api/projects";
@@ -1078,6 +1107,7 @@ import CharacterEditor from "../editors/CharacterEditor.vue";
 import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";
 import OverlayFilmstrip from "./OverlayFilmstrip.vue";
 import OverlayMetadataPanel from "./OverlayMetadataPanel.vue";
+import OverlayRecipePanel from "./OverlayRecipePanel.vue";
 import OverlayTagsPanel from "./OverlayTagsPanel.vue";
 import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
 import OverlaySaveAsDialog from "../widgets/OverlaySaveAsDialog.vue";
@@ -1250,6 +1280,28 @@ function handleTagsUpdate(newTagsArray) {
   }
 }
 const sidebarOpen = ref(true);
+
+// ── Info | Recipe (#1313) ──────────────────────────────────────────────────
+//
+// The v1.12 design puts the sidebar's two subjects on the inspector's own tab
+// band rather than stacking a Recipe section under Tags: Info is everything the
+// pane showed before, Recipe is everything about how the picture was made.
+//
+// The choice is remembered as the lightbox walks the filmstrip: somebody
+// reading recipes wants the next picture's recipe, not its description.
+//
+// **Never disabled, on a picture with no recipe either.** The design gives an
+// A1111 picture "the same Recipe tab", and a disabled tab is a dead control: a
+// disabled button fires no pointer events, so the tooltip explaining why would
+// never open for a mouse. The panel says it in a sentence instead, which is
+// also what stops the tab appearing and disappearing under the cursor as the
+// reader walks the filmstrip.
+const sidebarTab = ref("info");
+const sidebarTabs = [
+  { value: "info", label: "Info", icon: "mdi-information-outline" },
+  { value: "recipe", label: "Recipe", icon: "mdi-bookmark-outline" },
+];
+
 const chromeHidden = ref(false);
 const chromeRevealTimestamp = ref(0);
 // The zoom family's shared core (Compare's model, adopted here): continuous
@@ -1464,6 +1516,9 @@ const emit = defineEmits([
   "run-plugin",
   "request-context-menu",
   "character-created",
+  // The Recipe section's "Generate variants..." (#1313). The Remix dialog is
+  // the grid's, so the lightbox asks for it rather than hosting a second one.
+  "open-remix-dialog",
 ]);
 
 const descriptionPanelRef = ref(null);
@@ -1541,7 +1596,10 @@ const rotateDisabledReason = computed(() =>
   image.value ? rotateBlockReason([image.value]) : null,
 );
 const canRotateCurrent = computed(
-  () => !isReadOnly.value && !isCurrentLocked.value && canRotateInPlace(image.value),
+  () =>
+    !isReadOnly.value &&
+    !isCurrentLocked.value &&
+    canRotateInPlace(image.value),
 );
 
 /**
@@ -2156,9 +2214,9 @@ function buildOverlayExpandedStackImages(stackId, fallbackItem, stackCount) {
     ordered.push(img);
   };
 
-  const orderedIds = sortStackMembers(
-    Array.from(imageById.values()),
-  ).map((img) => String(img.id));
+  const orderedIds = sortStackMembers(Array.from(imageById.values())).map(
+    (img) => String(img.id),
+  );
   for (const id of orderedIds) {
     addImage(imageById.get(String(id)));
   }
@@ -2552,7 +2610,8 @@ function showNextImage() {
  */
 function hasNativeCopyContext(target) {
   if (isTypingTarget(target)) return true;
-  const selection = typeof window === "undefined" ? null : window.getSelection?.();
+  const selection =
+    typeof window === "undefined" ? null : window.getSelection?.();
   return Boolean(selection && !selection.isCollapsed && selection.toString());
 }
 
@@ -2663,6 +2722,9 @@ function handleKeydown(e) {
       handleUserActivity();
       if (!isReadOnly.value) {
         sidebarOpen.value = true;
+        // The field it focuses is on Info, so a reader sitting on Recipe must
+        // be brought back to it rather than given an invisible cursor.
+        sidebarTab.value = "info";
         nextTick(() => tagsPanelRef.value?.beginAddTag());
       }
       return;
@@ -2770,6 +2832,7 @@ function handleKeydown(e) {
   } else if ((e.key === "t" || e.key === "T") && sidebarOpen.value) {
     if (!isReadOnly.value) {
       e.preventDefault();
+      sidebarTab.value = "info";
       tagsPanelRef.value?.beginAddTag();
     }
   } else if (["1", "2", "3", "4", "5"].includes(e.key)) {
@@ -3774,29 +3837,42 @@ function dedupeDetections(items) {
 
 async function fetchComfyWorkflow(imageId) {
   if (!imageId || !backendUrl.value) return;
+  // Cleared before the request, not after it. This component is not rebuilt as
+  // the lightbox walks the filmstrip, so leaving the last picture's recipe in
+  // place means the Recipe tab reads picture N-1's prompt, models and seed
+  // under picture N until the response lands - and, for a picture with no
+  // workflow, until a 404 that never replaces it.
+  comfyMetadata.value = null;
   const requestId = (comfyWorkflowRequestId += 1);
   const requestedImageId = imageId;
   try {
-    const data = await getPictureWorkflow(imageId, {
-      baseUrl: backendUrl.value,
-    });
+    const data = await getPictureRecipe(imageId, { preflight: false });
     if (comfyWorkflowRequestId !== requestId) return;
     if (!image.value || image.value.id !== requestedImageId) return;
-    comfyMetadata.value = data
-      ? {
-          workflow: data.workflow,
-          isApiFormat: data.is_api_format,
-          summary: data.summary,
-          positive_prompt: data.positive_prompt || null,
-          models: data.models || [],
-          loras: data.loras || [],
-        }
-      : null;
+    // `reason: "no_prompt_chunk"` is the recipe read's honest "this picture was
+    // not generated", not an error - and unlike the workflow read it is a 200,
+    // so the Recipe tab's empty state comes from here rather than from a 404.
+    comfyMetadata.value =
+      data && data.reason !== "no_prompt_chunk"
+        ? {
+            source: data.source || "comfyui",
+            summary: data.summary,
+            positive_prompt: data.positive_prompt || null,
+            negativePrompt: data.negative_prompt || null,
+            // The seed as text: a 64-bit one loses digits as a JS number.
+            seedText: data.seed_text || null,
+            // `model_slots` carries the strengths and the shelf rows that the
+            // flat `models` name list cannot; `inputs` is the resolution lock.
+            modelSlots: data.model_slots || [],
+            settings: data.settings || {},
+            inputs: data.inputs || [],
+            topologyHash: data.topology_hash || null,
+          }
+        : null;
   } catch (e) {
-    // 404 is expected when no ComfyUI workflow is embedded
-    if (e?.response?.status !== 404) {
-      console.error("Failed to fetch ComfyUI workflow:", e);
-    }
+    // The recipe read answers 200 for a picture with no recipe, so a 404 here
+    // means the picture or its file is gone, which is worth a line.
+    console.error("Failed to fetch the picture's recipe:", e);
     if (comfyWorkflowRequestId !== requestId) return;
     comfyMetadata.value = null;
   }
@@ -4371,6 +4447,7 @@ function preloadAdjacentImages() {
 }
 
 const comfyMetadata = ref(null);
+
 const facesCollapsed = ref(false);
 
 watch(
@@ -4638,8 +4715,7 @@ function mediaActionInfo(target = null) {
 }
 
 function mediaActionError(err, fallback = "Please try again.") {
-  return (
-    errorDetail(err) || err?.message || String(err || fallback) );
+  return errorDetail(err) || err?.message || String(err || fallback);
 }
 
 function triggerMediaDownload(blob, filename) {
@@ -4711,14 +4787,18 @@ async function saveMediaAs(target = null) {
     if (desktop?.beginMediaSaveAs && desktop?.completeMediaSaveAs) {
       const choice = await desktop.beginMediaSaveAs(info.filename);
       if (choice?.canceled) return false;
-      if (!choice?.saveId) throw new Error("The desktop save dialog did not return a save request.");
+      if (!choice?.saveId)
+        throw new Error(
+          "The desktop save dialog did not return a save request.",
+        );
       try {
         const blob = await fetchOriginalMedia(info);
         const result = await desktop.completeMediaSaveAs(
           choice.saveId,
           await blob.arrayBuffer(),
         );
-        if (!result?.saved) throw new Error("The desktop app did not write the file.");
+        if (!result?.saved)
+          throw new Error("The desktop app did not write the file.");
       } catch (err) {
         await desktop.cancelMediaSaveAs?.(choice.saveId);
         throw err;
@@ -4779,8 +4859,7 @@ function copyAvailability() {
   if (!desktopCapable && !browserCapable) {
     return {
       available: false,
-      reason:
-        "This browser cannot copy image pixels. Save the media instead.",
+      reason: "This browser cannot copy image pixels. Save the media instead.",
     };
   }
   const video = isSupportedVideoFile(getOverlayFormat(image.value));
@@ -4835,7 +4914,8 @@ async function renderMediaPng(target = null) {
     );
   }
   const blob = await canvasToBlob(canvas, "image/png");
-  if (!blob) throw new Error("This browser could not encode the pixels as PNG.");
+  if (!blob)
+    throw new Error("This browser could not encode the pixels as PNG.");
   return blob;
 }
 
@@ -4854,7 +4934,8 @@ async function copyMedia(target = null) {
       const result = await window.pixlstashDesktop.copyPngToClipboard(
         await png.arrayBuffer(),
       );
-      if (!result?.copied) throw new Error("The desktop clipboard rejected the image.");
+      if (!result?.copied)
+        throw new Error("The desktop clipboard rejected the image.");
     } else {
       // Pass the pending PNG promise to ClipboardItem and call write immediately;
       // this preserves the transient user activation required by some browsers.

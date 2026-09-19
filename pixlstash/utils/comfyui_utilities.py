@@ -66,9 +66,17 @@ _SEED_FIELDS = {"seed", "noise_seed"}
 _SETTING_FIELDS = {
     "steps": int,
     "cfg": float,
+    # Flux and its kin have no CFG and carry a guidance scale instead, so a
+    # recipe block without it reports nothing for the setting that shaped the
+    # picture.
+    "guidance": float,
     "sampler_name": str,
     "scheduler": str,
     "denoise": float,
+    # The design's Settings block draws a Size row ("832x1216"), which is two
+    # settings written as one value.
+    "width": int,
+    "height": int,
 }
 # Nodes that carry a raw STRING value (positive-prompt primitive wired into subgraphs)
 _PRIMITIVE_STRING_CLASSES = {
@@ -992,7 +1000,21 @@ def extract_comfy_workflow_info(metadata: dict) -> dict | None:
         summary_parts.append(f"{stats['link_count']} links")
     summary = " · ".join(summary_parts) or "Detected ComfyUI metadata"
 
-    gen_info = extract_generation_info(workflow)
+    # **The graph shown and the graph read are two different questions.**
+    # `find_comfy_workflow` prefers the UI `workflow` chunk, which is right for
+    # what is displayed, copied and pasted back into ComfyUI. It is the wrong
+    # source for what the picture was MADE with: the UI chunk is the editor's
+    # view, read here by mapping named inputs onto positional `widgets_values`
+    # and, failing that, taking the longest string in a node - so a graph whose
+    # encoder is fed by a custom prompt-builder reports that node's template
+    # instead of the prompt, and can miss the models and the seed entirely.
+    #
+    # The `prompt` chunk is the resolved graph the ComfyUI server actually
+    # executed, which is why `GET /comfyui/pictures/{id}/recipe` reads only that
+    # one. Facts come from it whenever the file has one; a UI-only file falls
+    # back to the editor's view, which is then genuinely all there is.
+    executed = find_comfy_api_prompt(metadata)
+    gen_info = extract_generation_info(executed if executed is not None else workflow)
 
     return {
         "workflow": workflow,
@@ -1001,5 +1023,13 @@ def extract_comfy_workflow_info(metadata: dict) -> dict | None:
         "models": gen_info["models"],
         "loras": gen_info["loras"],
         "positive_prompt": gen_info["positive_prompt"],
+        "negative_prompt": extract_recipe_extras(executed)["negative_prompt"]
+        if executed is not None
+        else None,
         "seed": gen_info["seed"],
+        # The seed as text as well as a number. ComfyUI draws seeds up to
+        # 2**64-1 and JavaScript's Number loses precision above 2**53, so a
+        # panel rendering `seed` would print the wrong digits for about half of
+        # real seeds. `generation.seed` is TEXT in the vault for this reason.
+        "seed_text": None if gen_info["seed"] is None else str(gen_info["seed"]),
     }

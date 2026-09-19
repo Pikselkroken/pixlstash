@@ -14,6 +14,16 @@
 //      signal, asserting the detections endpoint is actually re-read.
 
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
+
+// `AppInspector`'s tab band renders a `VIcon` imported from the Vuetify barrel
+// (#1313 gave the lightbox pane Info | Recipe tabs), and this suite mounts the
+// overlay without the Vuetify plugin. Stub the barrel, per
+// `testing/vuetifyStubs.js`: nothing here needs Vuetify's real behaviour.
+vi.mock("vuetify/components", async () => {
+  const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
+  return vuetifyComponentStubs();
+});
+
 import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
@@ -54,7 +64,6 @@ vi.mock("../../utils/apiClient", () => ({
   appendShareToken: (u) => u,
   isReadOnly: { value: false },
 }));
-
 
 // (1) Verbatim copy of App.vue's field gate for emitting the detections signal.
 // The backend always stamps a finished DetectionTask `fields: ["detections"]`

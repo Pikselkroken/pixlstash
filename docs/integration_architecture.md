@@ -447,6 +447,49 @@ preview, the run and the ghosting. Five points where the wiring is load-bearing:
   optimistic local copy of a count only the server can compute, and an undo has
   no local grid op at all.
 
+### 2.2b One recipe read, and one graph read (v1.12, #1313)
+
+Two routes, and the split is by **question**, not by caller:
+
+| Route | Answers | Costs |
+|---|---|---|
+| `GET /comfyui/pictures/{id}/recipe` | **What the picture was made with** — prompts, models with strengths, settings, seed, the shelf rows, the resolution lock, `workflow_key`, `topology_hash`. Reads the graph that *executed*, and answers for A1111 pictures through their infotext. | one file read; a ComfyUI `/object_info` read **only** when the pre-flight is asked for |
+| `GET /comfyui/pictures/{id}/workflow` | **The graph's bytes**, in the editor's format — what Copy, Download and paste-into-ComfyUI need. | one file read |
+
+`?preflight=false` on the recipe read skips the ComfyUI round-trip. The
+lightbox's Recipe tab asks that way, because it re-reads on every filmstrip step
+and a round-trip per arrow-key is not affordable; the Remix dialog keeps the
+default, because it is about to run the recipe and needs to know whether it can.
+`preflight.checked` is then `false`, which already means *the question was not
+asked* — never that the recipe passed. The tab fetches the graph route
+separately and **only when the workflow box is opened**: the graph is the one
+large thing here.
+
+Field-level rules neither side may drift from:
+
+1. **`seed_text` is what a client prints, never `seed`.** ComfyUI draws seeds up
+   to `2**64 - 1`; a JavaScript `Number` loses digits above `2**53`, so
+   rendering `seed` shows the wrong seed for about half of real ones. `seed`
+   stays a number for the callers that had it.
+2. **`model_slots[].model_id` / `.verified` and `inputs` are owner-only.** They
+   name rows of the owner's shelf and *other* pictures' ids and content hashes;
+   a picture-scoped token is refused those pictures on every other route, so it
+   gets the filename and the strength — which are in the graph it can already
+   read — and nothing about the library.
+3. **`settings` is one dict, from `extract_recipe_extras`.** ComfyUI keys are
+   `steps`, `cfg`, `guidance`, `sampler_name`, `scheduler`, `denoise`, `width`,
+   `height`; an A1111 picture sends A1111's own names through the same field, so
+   a client renders whatever keys arrive rather than branching on `source`.
+   **The first node naming a field wins**, which is iteration order, not
+   execution order: a graph that samples twice reports one pass's steps beside
+   another's CFG, and the block must not be read as "the settings of the pass
+   that made this picture".
+
+**`/workflow` carries no recipe fields.** It briefly did, in this branch, before
+B5 (#1397) landed the recipe read; serving the same facts twice from two
+implementations is how two vocabularies drift permanently apart, so the recipe
+half was moved onto `/recipe` and deleted here.
+
 ### 2.3 The `/workflows` contract (v1.11)
 
 The Workflows view's read side (implementation plan §F1/§F2, plus the v1.12

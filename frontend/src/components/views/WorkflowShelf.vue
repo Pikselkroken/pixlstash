@@ -593,7 +593,8 @@
 // only what can be read today. The Ghosts toggle beside Group / Sort / Show
 // narrows the list to what those purges would reach.
 
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -1150,6 +1151,36 @@ async function onFileDrop(event) {
   }
   store.select(landed);
 }
+
+// ── Arriving from a picture's Recipe section (#1313) ───────────────────────
+//
+// `?topology=<hash>` selects that workflow and puts the cursor on it, so the
+// link from the lightbox lands on the row rather than at the top of the list.
+// The Show filter is widened first when the row is filtered out, for the drop
+// handler's reason above: selecting a row nobody can see reads as the link
+// having done nothing at all.
+//
+// Honoured once per value rather than on every `rows` change, because the list
+// is refetched (a scan lands, a file is added) while the query string stays
+// put, and a second application would take focus back off whatever the reader
+// had moved to.
+const route = useRoute();
+let honouredTopology = null;
+
+watch([() => route?.query?.topology, () => store.rows], ([wanted]) => {
+  if (!wanted) {
+    honouredTopology = null;
+    return;
+  }
+  if (honouredTopology === wanted) return;
+  if (!store.rows.some((row) => row.topology_hash === wanted)) return;
+  honouredTopology = wanted;
+  if (!store.visibleRows.some((row) => row.topology_hash === wanted)) {
+    store.setView({ show: "all", ghosts: false });
+  }
+  store.select(wanted);
+  nextTick(() => focusRow(wanted));
+});
 
 onMounted(() => {
   store.fetchRows();

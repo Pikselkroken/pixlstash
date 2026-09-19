@@ -606,6 +606,18 @@
   pointer-events: none;
 }
 
+/* The Info tab's own column. The inspector's lightbox body is a fixed-height
+   flex column whose sections bound and scroll themselves, so the group has to
+   be that column rather than a plain wrapper, or Description loses the
+   `flex: 1 1 114px` that gives it its share of the height. */
+.overlay-sidebar-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 1;
+  min-height: 0;
+}
+
 .sidebar-section--description {
   flex: 1 1 114px;
   display: flex;

@@ -10,7 +10,7 @@ from copy import deepcopy
 from urllib.parse import quote
 
 import websockets
-from fastapi import APIRouter, Body, HTTPException, Request, WebSocket
+from fastapi import APIRouter, Body, HTTPException, Query, Request, WebSocket
 from fastapi.websockets import WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict
 from send2trash import TrashPermissionError, send2trash
@@ -62,6 +62,10 @@ from pixlstash.services.comfyui_recipe_service import (
 from pixlstash.services.model_shelf_service import (
     fetch_locations,
     fetch_model_by_hash,
+)
+from pixlstash.services.picture_recipe_service import (
+    describe_recipe,
+    resolution_lock_in_session,
 )
 from pixlstash.services.workflow_inputs import (
     FIXED,
@@ -1533,8 +1537,67 @@ class ComfyUIWorkflowImportResponse(BaseModel):
     topology_hash: Optional[str] = None
 
 
+class ComfyUIRecipeModelSlot(BaseModel):
+    """One model the graph loads, as the overlay's Recipe section shows it.
+
+    ``model_id`` and ``verified`` are absent for a scoped token: which shelf row
+    a file is, is a fact about the library rather than about this picture.
+    ``verified`` true means the graph named the file by its digest and exactly
+    one shelf model has it - the same tier the shelf's own picture counts use.
+    """
+
+    # No `extra="allow"` here, unlike its siblings in this module. This route
+    # varies its answer by credential, so the model is a disclosure boundary: a
+    # key some future version of the service starts returning must be declared
+    # here before it reaches anybody, rather than passing through unread.
+
+    name: str
+    widget: str
+    strength: Optional[float] = None
+    model_id: Optional[int] = None
+    verified: bool = False
+
+
+class ComfyUIRecipeSetting(BaseModel):
+    """One sampler setting of the recipe: ``steps``, ``cfg``, ``width``…"""
+
+    # No `extra="allow"` here, unlike its siblings in this module. This route
+    # varies its answer by credential, so the model is a disclosure boundary: a
+    # key some future version of the service starts returning must be declared
+    # here before it reaches anybody, rather than passing through unread.
+
+    label: str
+    value: Any = None
+    node: Optional[str] = None
+
+
+class ComfyUIRecipeInput(BaseModel):
+    """The resolution lock: which picture one input of the run loaded.
+
+    **Served to a fully-unscoped owner only** - a row names another picture's id
+    and its content hash, which a picture-scoped token is refused everywhere
+    else. ``input_picture_id`` is null once that picture has left this library,
+    which does not unmake what was made from it: ``pixel_sha`` still identifies
+    it.
+    """
+
+    # No `extra="allow"` here, unlike its siblings in this module. This route
+    # varies its answer by credential, so the model is a disclosure boundary: a
+    # key some future version of the service starts returning must be declared
+    # here before it reaches anybody, rather than passing through unread.
+
+    node_ref: str
+    position: int
+    pixel_sha: str
+    input_picture_id: Optional[int] = None
+
+
 class ComfyUIPictureWorkflowResponse(BaseModel):
-    """ComfyUI workflow info extracted from a picture's embedded metadata."""
+    """The displayable graph a picture carries.
+
+    Deliberately only that: what a picture was MADE with is the recipe read
+    (#1313), which reads the graph that executed and answers for A1111 pictures
+    too. This one serves the editor's format, for Copy, Download and paste."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -1544,6 +1607,7 @@ class ComfyUIPictureWorkflowResponse(BaseModel):
     models: list[str] = []
     loras: list[str] = []
     positive_prompt: Optional[str] = None
+    negative_prompt: Optional[str] = None
     seed: Optional[int] = None
 
 
@@ -1587,9 +1651,20 @@ class ComfyUIPictureRecipeResponse(BaseModel):
     positive_prompt: Optional[str] = None
     negative_prompt: Optional[str] = None
     seed: Optional[int] = None
-    # The sampler settings (steps, cfg, sampler, scheduler, denoise), or the
-    # A1111 fields. Read from the file, like the prompts beside it.
+    # The seed as text as well as a number: ComfyUI draws seeds up to 2**64-1
+    # and a JavaScript Number loses digits above 2**53, so a client rendering
+    # `seed` prints the wrong one for about half of real seeds.
+    seed_text: Optional[str] = None
+    # The sampler settings (steps, cfg, guidance, sampler, scheduler, denoise,
+    # width, height), or the A1111 fields. Read from the file, like the prompts
+    # beside it.
     settings: dict = {}
+    # Reconciled onto this read (#1313): everything about how a picture was made
+    # answers here, so the lightbox's Recipe tab needs one call and `/workflow`
+    # is asked only for the graph's bytes.
+    topology_hash: Optional[str] = None
+    model_slots: list[ComfyUIRecipeModelSlot] = []
+    inputs: list[ComfyUIRecipeInput] = []
     # The workflow card this picture's variant is on, None when the hub has
     # not filed or keyed it. An opaque digest of the graph's topology and
     # model slots; what it GROUPS is an owner-only question, asked elsewhere.
@@ -1613,6 +1688,43 @@ class ComfyUIPictureRecipeResponse(BaseModel):
     # Set only when lora_slots is empty: where a loader would be added (#1376).
     lora_insertion: Optional[ComfyUILoraInsertionResponse] = None
     preflight: Optional[ComfyUIPreflightResponse] = None
+
+
+def _recipe_extras(server, request, pic_id: int, graph: Optional[dict]) -> dict:
+    """The half of a picture's recipe that is about this LIBRARY, not the file.
+
+    Which shelf row each model is, which pictures a run actually loaded, the
+    seed as text and the topology the picture is filed under. Served from the
+    recipe read rather than from the workflow read (#1313): one read answers
+    "what was this made with", and a caller that wants the graph's bytes asks
+    the other route for them.
+
+    ``graph`` is the API graph, or ``None`` for an A1111 picture - whose models
+    are read from its infotext, so it gets the resolution lock, the seed text
+    and the topology without a graph to reduce.
+    """
+    owner = server.auth.is_unscoped_owner_request(request)
+    pics = server.vault.db.run_immediate_read_task(
+        Picture.find, id=pic_id, select_fields=["id", "workflow_topology_hash"]
+    )
+    topology = getattr(pics[0], "workflow_topology_hash", None) if pics else None
+    return {
+        **describe_recipe(
+            getattr(server, "hub", None),
+            graph,
+            ([], []),
+            # Not read at all for a caller who will not be served it: the rows
+            # name other pictures, and one nobody is going to see is one worth
+            # not fetching.
+            server.vault.db.run_immediate_read_task(
+                resolution_lock_in_session, picture_id=pic_id
+            )
+            if owner
+            else [],
+            owner=owner,
+        ),
+        "topology_hash": topology,
+    }
 
 
 def create_router(server) -> APIRouter:
@@ -2932,10 +3044,18 @@ def create_router(server) -> APIRouter:
 
     @router.get(
         "/comfyui/pictures/{picture_id}/workflow",
-        summary="Get ComfyUI workflow for a picture",
+        summary="Get the displayable ComfyUI workflow for a picture",
         description=(
-            "Extracts and returns the ComfyUI workflow embedded in a picture's "
-            "file metadata, if present."
+            "The graph a picture carries, for SHOWING: the UI `workflow` chunk "
+            "when the file has one, which is the format the ComfyUI editor "
+            "opens and the only one worth copying back into it. Falls back to "
+            "the `prompt` chunk for a file that carries nothing else (#628).\n\n"
+            "**This is not the recipe read.** What a picture was made with - "
+            "prompts, models with their strengths, settings, seed, the shelf "
+            "rows and the resolution lock - is "
+            "`GET /comfyui/pictures/{picture_id}/recipe`, which reads the graph "
+            "that actually executed and answers for A1111 pictures too. This "
+            "route exists for the bytes."
         ),
         response_model=ComfyUIPictureWorkflowResponse,
     )
@@ -2978,7 +3098,6 @@ def create_router(server) -> APIRouter:
                 status_code=404,
                 detail="No ComfyUI workflow found in picture metadata",
             )
-
         return workflow_info
 
     @router.get(
@@ -3000,7 +3119,21 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ComfyUIPictureRecipeResponse,
     )
-    def get_picture_comfyui_recipe(request: Request, picture_id: str):
+    def get_picture_comfyui_recipe(
+        request: Request,
+        picture_id: str,
+        preflight: bool = Query(
+            True,
+            description=(
+                "False skips the ComfyUI `/object_info` read, so the answer "
+                "costs one file read and no network. The lightbox's Recipe tab "
+                "uses it: it re-reads on every filmstrip step, and a round-trip "
+                "per arrow-key is not affordable. `preflight.checked` is then "
+                "false, which already means the question was not asked - never "
+                "that the recipe passed."
+            ),
+        ),
+    ):
         try:
             pic_id = int(picture_id)
         except (TypeError, ValueError):
@@ -3020,6 +3153,7 @@ def create_router(server) -> APIRouter:
                 "source_is_imported": source_is_imported,
                 "source_label": source_label,
                 "workflow_key": _picture_workflow_key(server, pic_id),
+                **_recipe_extras(server, request, pic_id, None),
             }
 
         user = server.auth.get_user_for_request(request)
@@ -3029,7 +3163,11 @@ def create_router(server) -> APIRouter:
         gen_info = extract_generation_info(graph)
         extras = extract_recipe_extras(graph)
         stats = summarize_comfy_workflow(graph)
-        object_info, object_info_error = _read_object_info(comfyui_url)
+        object_info, object_info_error = (
+            _read_object_info(comfyui_url)
+            if preflight
+            else (None, "the pre-flight was not asked for")
+        )
         preflight, seed_targets = _inspect_graph(graph, object_info, object_info_error)
         source_is_imported, source_label = _picture_source_origin(server, pic_id)
         # A graph that calls back into PixlStash cannot be replayed as "a
@@ -3076,7 +3214,12 @@ def create_router(server) -> APIRouter:
             # picture; low severity, and the honest bound rather than the
             # flattering one. Returning this owner-only would close it.
             "workflow_key": _picture_workflow_key(server, pic_id),
+            **_recipe_extras(server, request, pic_id, graph),
             "seed": gen_info["seed"],
+            # The seed as text as well as a number: ComfyUI draws seeds up to
+            # 2**64-1 and a JavaScript Number loses digits above 2**53, so a
+            # client rendering `seed` prints the wrong one about half the time.
+            "seed_text": (None if gen_info["seed"] is None else str(gen_info["seed"])),
             "models": gen_info["models"],
             "loras": gen_info["loras"],
             "node_count": stats["node_count"],

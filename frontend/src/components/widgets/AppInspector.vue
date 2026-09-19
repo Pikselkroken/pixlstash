@@ -58,8 +58,8 @@ defineProps({
   /**
    * The image overlay's pane: dark in both themes, and a fixed-height column
    * whose sections bound and scroll themselves instead of the pane scrolling.
-   * Its tab band is not re-inked for the dark surface yet: a lightbox pane
-   * that needs `tabs` has to add the on-dark tab colours first.
+   * Its tab band carries the on-dark inks below, added when the lightbox
+   * became the first pane here to need `tabs` (#1313).
    */
   lightbox: { type: Boolean, default: false },
 });
@@ -182,6 +182,29 @@ const emit = defineEmits(["update:modelValue"]);
 .inspector-tab:disabled {
   opacity: var(--opacity-disabled);
   cursor: default;
+}
+
+/* The lightbox's tab band. Inked separately because the pane is dark in BOTH
+   themes: `--active-bar` and `--active-text` are per-theme, so in light mode
+   they would paint a light-surface olive onto a dark surface. The dark-surface
+   olive is the one that belongs here, which is the same reasoning the picture
+   panels' own labels follow. */
+.inspector--lightbox .inspector-tabs {
+  border-bottom-color: rgba(var(--v-theme-on-dark-surface), 0.12);
+}
+
+.inspector--lightbox .inspector-tab {
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+
+.inspector--lightbox .inspector-tab:hover:not(:disabled) {
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.inspector--lightbox .inspector-tab--active {
+  color: rgb(var(--v-theme-on-dark-surface));
+  border-bottom-color: rgb(var(--v-theme-dark-surface-primary));
 }
 
 .inspector-body {
