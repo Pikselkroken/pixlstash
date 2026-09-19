@@ -4132,6 +4132,27 @@ def test_a_cards_overrides_pins_and_inputs_are_written_whole(workflow_env):
     )
     assert owner.get(f"{API}/workflows/cards/{BUSY_CARD}").json()["pins"] is None
 
+    # A row that is not a pin list reads as NO CHOICE, never as `[]`. Both
+    # halves matter: iterating a stored scalar used to raise out of the
+    # handler, which is a 500 on the panel the pins are drawn in; and
+    # answering `[]` would say "the owner unpinned everything" about a
+    # corrupt row, which puts a card's whole parameter list behind a
+    # collapsed disclosure and looks deliberate.
+    for corrupt in ("null", "5", '{"a": 1}', "not json"):
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO workflow_key_pins (workflow_key, pins) VALUES (?, ?) "
+                "ON CONFLICT(workflow_key) DO UPDATE SET pins = excluded.pins",
+                (BUSY_CARD, corrupt),
+            )
+        r = owner.get(f"{API}/workflows/cards/{BUSY_CARD}")
+        assert r.status_code == 200, f"{corrupt!r}: {r.text}"
+        assert r.json()["pins"] is None, corrupt
+    with hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM workflow_key_pins WHERE workflow_key = ?", (BUSY_CARD,)
+        )
+
     assert (
         owner.put(
             f"{API}/workflows/{BUSY_CARD}/inputs",

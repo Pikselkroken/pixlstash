@@ -338,10 +338,13 @@ def key_pins(hub: HubDatabase, workflow_key: str) -> Optional[list[tuple[str, st
     nobody has pinned on, so a client applies its own default pins, and ``[]``
     is somebody who unpinned everything.
 
-    A row whose JSON will not parse is reported as no choice rather than
-    raising: the pins decide which of a card's defaults show first, and a
-    panel that will not open is a worse answer than one showing the default
-    set. The hash is logged so the row can be found.
+    **An unreadable row answers ``None``, never ``[]``.** The two mean
+    different things to every caller, and reporting corruption as "the owner
+    unpinned everything" would put a card's whole parameter list behind a
+    collapsed disclosure and look deliberate. ``None`` is the state that
+    degrades to the client's defaults, which is what a card nobody has touched
+    already does. Everything rejected is logged with the key, because a silent
+    drop here is a pin the owner set and cannot see.
     """
     row = hub.fetchone(
         "SELECT pins FROM workflow_key_pins WHERE workflow_key = ?", (workflow_key,)
@@ -353,16 +356,35 @@ def key_pins(hub: HubDatabase, workflow_key: str) -> Optional[list[tuple[str, st
     except (TypeError, ValueError) as exc:
         logger.warning(
             "The pins of card %s will not parse, so the card reads as having "
-            "none and its default pins apply: %s",
+            "made no choice and its default pins apply: %s",
             workflow_key,
             exc,
         )
         return None
-    return [
-        (str(pin[0]), str(pin[1]))
-        for pin in stored
-        if isinstance(pin, (list, tuple)) and len(pin) == 2
-    ]
+    # Type-checked outside the try, because a stored `null`, number or object
+    # parses perfectly well and then is not a pin list: iterating it raised a
+    # TypeError out of the detail route, which is a 500 on the panel this
+    # function exists to keep openable.
+    if not isinstance(stored, list):
+        logger.warning(
+            "The pins of card %s parsed as %s rather than a list, so the card "
+            "reads as having made no choice and its default pins apply.",
+            workflow_key,
+            type(stored).__name__,
+        )
+        return None
+    pins = []
+    for pin in stored:
+        if isinstance(pin, (list, tuple)) and len(pin) == 2:
+            pins.append((str(pin[0]), str(pin[1])))
+        else:
+            logger.warning(
+                "A pin of card %s is %r rather than a (slot label, input name) "
+                "pair, so it is left out; that parameter will not be pinned.",
+                workflow_key,
+                pin,
+            )
+    return pins
 
 
 def keys_in_stack(hub: HubDatabase, stack_id: str) -> list[str]:

@@ -3042,11 +3042,12 @@ with `HubSchemaTooNewError`, locking the owner out of a downgrade.
 | `workflow_slot_mark` | `structural` or `recipe` per LoRA slot, **frozen the first time the slot is seen** |
 | `workflow_file` | A stored workflow file on its card, keyed by `workflow_name` as the older file-keyed tables are. `structural_hash` NULL for a UI-format file, which has only a topology and so becomes a card with no assets. Deleting the file drops the row and leaves the card, which its pictures made |
 | `workflow_attr`, `workflow_default_override`, `workflow_key_pins` | The owner's name, notes, hidden flag, parameter overrides and pins, keyed by `workflow_key`, with parameters addressed by **(slot label, input name)** rather than by node id — a node id is whatever the last serialisation called it |
-| `workflow_key_picture_input`, `workflow_cover` (no writer yet) | Input modes, Fixed pictures and the chosen cover, keyed by `(library_uuid, workflow_key)` and naming pictures by `pixel_sha`, for the ghost table's reason: a picture is a picture in one vault |
-| `workflow_stack`, `workflow_stack_member`, `workflow_unstacked` (no writer yet) | Stacks of cards (`position` 0 is the cover) and the owner taking a card out of its automatic one |
+| `workflow_key_picture_input` (written by `PUT /workflows/{key}/inputs`), `workflow_cover` (no writer yet) | Input modes, Fixed pictures and the chosen cover, keyed by `(library_uuid, workflow_key)` and naming pictures by `pixel_sha`, for the ghost table's reason: a picture is a picture in one vault |
+| `workflow_stack`, `workflow_stack_member`, `workflow_unstacked` (written by the stack routes, B4) | Stacks of cards (`position` 0 is the cover) and the owner taking a card out of its automatic one |
 
-**Eight of those tables have no writer in B2**, and are created ahead of the
-steps that fill them on purpose: their shape is decided here, they hold the
+**Eight of those tables had no writer in B2**, and were created ahead of the
+steps that fill them on purpose (B4 has since written most of them; the
+parenthesised notes above say which are still waiting): their shape is decided here, they hold the
 owner's own decisions about a card, and a hub table is append-only, so adding
 each with its writer means one more guarded amendment of v2 per step. Only
 `workflow_variant` gets an index in B2 — an index on a table nothing writes yet

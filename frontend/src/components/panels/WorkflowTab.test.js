@@ -112,6 +112,23 @@ const WIDTH = {
   provenance: "edited",
 };
 
+const SAMPLER = {
+  label: "sampler_name",
+  slot_label: "slot-a",
+  input_name: "sampler_name",
+  value: "euler",
+  provenance: "best",
+};
+
+/** The default row whose label is `name`, wherever the fold has put it. */
+function rowNamed(wrapper, name) {
+  const row = wrapper
+    .findAll(".wfdef")
+    .find((entry) => entry.find(".wfdef-name").text().startsWith(name));
+  if (!row) throw new Error(`no defaults row called ${name}`);
+  return row;
+}
+
 async function flush(wrapper) {
   await new Promise((resolve) => setTimeout(resolve, 0));
   await wrapper.vm.$nextTick();
@@ -150,14 +167,17 @@ beforeEach(() => {
 });
 
 describe("a default's provenance and reset", () => {
-  it("says where each value came from", async () => {
+  it("says where each value came from, on the row it belongs to", async () => {
     getWorkflowCard.mockResolvedValue(
       detail({ card: { defaults: [STEPS, CFG] } }),
     );
     const { wrapper } = await mountWith([KEY]);
-    const text = textOf(wrapper);
-    expect(text).toContain("from your best pictures");
-    expect(text).toContain("edited by you");
+    // Paired to the row, not counted across the panel: both sentences
+    // appearing SOMEWHERE is also true when the two labels are swapped.
+    expect(rowNamed(wrapper, "steps").text()).toContain(
+      "from your best pictures",
+    );
+    expect(rowNamed(wrapper, "cfg").text()).toContain("edited by you");
   });
 
   it("offers the reset only on a value the owner edited", async () => {
@@ -165,9 +185,12 @@ describe("a default's provenance and reset", () => {
       detail({ card: { defaults: [STEPS, CFG] } }),
     );
     const { wrapper } = await mountWith([KEY]);
-    // Two rows, one reset: the one whose provenance is `edited`.
-    expect(wrapper.findAll(".wfdef")).toHaveLength(2);
-    expect(wrapper.findAll(".wfdef-reset")).toHaveLength(1);
+    // WHICH row, not how many: one reset among two rows is equally true of
+    // the inverted condition.
+    expect(rowNamed(wrapper, "cfg").find(".wfdef-reset").exists()).toBe(true);
+    expect(rowNamed(wrapper, "steps").find(".wfdef-reset").exists()).toBe(
+      false,
+    );
   });
 
   it("resets one value by writing back every other edited one", async () => {
@@ -185,16 +208,19 @@ describe("a default's provenance and reset", () => {
 
   it("pins the parameters the design pins when the card has no choice", async () => {
     getWorkflowCard.mockResolvedValue(
-      detail({ card: { defaults: [STEPS, { ...CFG, label: "sampler_name", input_name: "sampler_name" }] } }),
+      detail({ card: { defaults: [STEPS, SAMPLER] } }),
     );
     const { wrapper } = await mountWith([KEY]);
-    // `steps` is pinned and shows above the disclosure; `sampler_name` is not.
+    // WHICH side of the fold each row is on. Counting pressed pins is
+    // equally true when the two lists are swapped, and that swap is the
+    // whole of what the pin does.
+    expect(rowNamed(wrapper, "steps").element.closest("details")).toBeNull();
+    expect(
+      rowNamed(wrapper, "sampler_name").element.closest("details"),
+    ).not.toBeNull();
     expect(wrapper.find("details.wftab-disclose summary").text()).toContain(
       "All 2 parameters",
     );
-    expect(
-      wrapper.findAll('.wfdef-pin[aria-pressed="true"]'),
-    ).toHaveLength(1);
   });
 
   it("keeps an empty pin list apart from no choice at all", async () => {
@@ -202,7 +228,37 @@ describe("a default's provenance and reset", () => {
       detail({ card: { defaults: [STEPS] }, pins: [] }),
     );
     const { wrapper } = await mountWith([KEY]);
-    expect(wrapper.findAll('.wfdef-pin[aria-pressed="true"]')).toHaveLength(0);
+    expect(wrapper.findAll('.wfdef [aria-pressed="true"]')).toHaveLength(0);
+    // Nothing pinned means nothing above the fold, so every row is inside
+    // it — the section must not simply be empty.
+    expect(rowNamed(wrapper, "steps").element.closest("details")).not.toBeNull();
+  });
+
+  it("pins one parameter without unpinning the rest", async () => {
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: { defaults: [STEPS, SAMPLER] } }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    // The pin is a WHOLE-SET write, exactly like the reset above: pinning
+    // `sampler_name` has to carry `steps` too, and the inverted predicate
+    // ("pin everything except this one") is invisible to a test that only
+    // counts pressed pins.
+    await rowNamed(wrapper, "sampler_name").find("button").trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowPins).toHaveBeenCalledWith(KEY, [
+      { slot_label: "slot-a", input_name: "steps" },
+      { slot_label: "slot-a", input_name: "sampler_name" },
+    ]);
+  });
+
+  it("unpins one parameter without pinning the rest", async () => {
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: { defaults: [STEPS, SAMPLER] } }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    await rowNamed(wrapper, "steps").find("button").trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowPins).toHaveBeenCalledWith(KEY, []);
   });
 });
 
@@ -232,12 +288,31 @@ describe("marking a LoRA slot", () => {
 
   it("writes nothing when the mark it was given is the mark it has", async () => {
     const { wrapper } = await mountWith([KEY]);
-    const workflow = wrapper
-      .findAll("button")
-      .find((button) => button.text() === "Workflow");
-    await workflow.trigger("click");
+    // Through the component's own handler, not through `Segmented`: that
+    // widget already refuses to emit for the active option, so a click on
+    // "Workflow" is silent whether or not this guard exists.
+    await wrapper.vm.flipMark(
+      { label: "l1", name: "lightning-8step", mark: "structural" },
+      "structural",
+    );
     await flush(wrapper);
     expect(setWorkflowSlots).not.toHaveBeenCalled();
+  });
+
+  it("refuses a slot the payload gave no address for", async () => {
+    // `slot_label` is nullable, and the mark is written BY label, so an
+    // enabled switch on a slot without one is a control that answers a
+    // click with nothing at all.
+    getWorkflowCard.mockResolvedValue(detail());
+    const { wrapper } = await mountWith([KEY], [
+      card({
+        loras: [{ name: "mystery", kind: "lora", mark: "structural" }],
+      }),
+    ]);
+    expect(wrapper.findComponent({ name: "Segmented" }).props("disabled")).toBe(
+      true,
+    );
+    expect(textOf(wrapper)).toContain("no recorded address");
   });
 });
 
@@ -273,6 +348,108 @@ describe("with several workflows selected", () => {
     await stack.trigger("click");
     await flush(wrapper);
     expect(stackWorkflows).toHaveBeenCalledWith([KEY, OTHER]);
+  });
+});
+
+describe("a write that comes back after the selection moved", () => {
+  it("does not write card A's notes onto card B", async () => {
+    // Blur is exactly when the selection moves: clicking another card blurs
+    // the textarea. A's PATCH must not land in a rail showing B.
+    getWorkflowCard.mockImplementation(async (key) =>
+      detail({
+        card: { key, defaults: [key === KEY ? STEPS : SAMPLER] },
+        notes: null,
+      }),
+    );
+    let settle;
+    patchWorkflowCard.mockReturnValue(
+      new Promise((resolve) => {
+        settle = () =>
+          resolve(detail({ card: { key: KEY, defaults: [STEPS] } }));
+      }),
+    );
+    const { wrapper, store } = await mountWith(
+      [KEY],
+      [card({ name: "Card A" }), card({ key: OTHER, name: "Card B" })],
+    );
+    await wrapper.find("textarea").setValue("a note for A");
+    await wrapper.find("textarea").trigger("blur");
+    store.selectedKeys = [OTHER];
+    await flush(wrapper);
+    settle();
+    await flush(wrapper);
+    expect(textOf(wrapper)).toContain("Card B");
+    expect(textOf(wrapper)).not.toContain("Card A");
+    // The detail carries the DEFAULTS as well as the notes, so A's answer
+    // landing here puts A's parameters under B's name. The header comes from
+    // the grid and would keep saying B either way.
+    expect(() => rowNamed(wrapper, "steps")).toThrow();
+    expect(rowNamed(wrapper, "sampler_name").exists()).toBe(true);
+    expect(wrapper.find("textarea").element.value).toBe("");
+  });
+
+  it("does not offer the notes box before this card's notes have arrived", async () => {
+    let settle;
+    getWorkflowCard.mockReturnValue(
+      new Promise((resolve) => {
+        settle = () => resolve(detail({ notes: "the real notes" }));
+      }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    // No box, so there is no stale draft to blur onto this card.
+    expect(wrapper.find("textarea").exists()).toBe(false);
+    settle();
+    await flush(wrapper);
+    expect(wrapper.find("textarea").element.value).toBe("the real notes");
+  });
+
+  it("runs one write at a time, so two cannot discard each other", async () => {
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: { defaults: [STEPS, CFG] } }),
+    );
+    setWorkflowPins.mockReturnValue(new Promise(() => {}));
+    const { wrapper } = await mountWith([KEY]);
+    await rowNamed(wrapper, "steps").find("button").trigger("click");
+    await rowNamed(wrapper, "cfg").find(".wfdef-reset").trigger("click");
+    await flush(wrapper);
+    // `detail` carries the defaults, the pins and the card together, so a
+    // second write in flight means the slower answer overwrites the faster
+    // one's change.
+    expect(setWorkflowDefaults).not.toHaveBeenCalled();
+  });
+});
+
+describe("the more menu and hiding", () => {
+  it("hides the card and can still unhide it once it has left the grid", async () => {
+    getWorkflowCard.mockResolvedValue(detail());
+    patchWorkflowCard.mockResolvedValue(detail({ hidden: true }));
+    // A hidden card is not in `GET /workflows/cards`, which is exactly the
+    // case that used to take the footer and its menu off screen.
+    listWorkflowCards.mockResolvedValue({ cards: [], one_offs: 0, hidden: 1 });
+    const { wrapper } = await mountWith([KEY]);
+    const hide = wrapper.findAll("button").find((b) => b.text() === "Hide");
+    await hide.trigger("click");
+    await flush(wrapper);
+    expect(patchWorkflowCard).toHaveBeenCalledWith(KEY, { hidden: true });
+    expect(
+      wrapper.findAll("button").find((b) => b.text() === "Unhide"),
+    ).toBeTruthy();
+  });
+
+  it("says how many of a multi-select hide actually went", async () => {
+    patchWorkflowCard
+      .mockResolvedValueOnce(detail())
+      .mockRejectedValueOnce(new Error("nope"));
+    const { wrapper } = await mountWith([KEY, OTHER], [card(), card({ key: OTHER })]);
+    const hide = wrapper.findAll("button").find((b) => b.text() === "Hide");
+    await hide.trigger("click");
+    await flush(wrapper);
+    // Both were attempted, the grid was re-read anyway, and the message is
+    // not "none of it worked".
+    expect(patchWorkflowCard).toHaveBeenCalledTimes(2);
+    expect(listWorkflowCards).toHaveBeenCalled();
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    expect(useNoticeStore().notices.at(-1).text).toContain("1 of 2");
   });
 });
 

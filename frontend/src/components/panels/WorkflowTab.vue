@@ -17,7 +17,7 @@
       <div class="inspector-section">
         <span class="section-label">Selected</span>
         <p class="wftab-title">
-          {{ groupedNumber(store.selectedKeys.length) }} workflows selected
+          {{ store.selectedKeys.length }} workflows selected
         </p>
         <div class="wftab-actions">
           <AppButton
@@ -67,21 +67,28 @@
             <div class="wftab-slot-line">
               <span class="wftab-chip" :class="{ 'wftab-chip--empty': !slot.name }">
                 <Tooltip v-if="slot.name" :text="slot.name" activator="parent" />
-                <v-icon size="13">mdi-layers-outline</v-icon>
+                <v-icon size="16">mdi-layers-outline</v-icon>
                 {{ slot.name || "recipe LoRA" }}
               </span>
               <!-- No strength in the card payload, so the box says "not
                    recorded" rather than inventing 1.00. -->
               <span class="wftab-strength num">—</span>
             </div>
+            <!-- Disabled without a `slot_label`: the field is nullable
+                 (`WorkflowSlotModel`), and the mark is written by label, so
+                 an enabled switch here would be a control that answers a
+                 click with nothing at all. -->
             <Segmented
               :options="MARK_OPTIONS"
               :model-value="slot.mark"
               full
-              :disabled="busy === `slot:${slot.label}`"
+              :disabled="!slot.label || Boolean(busy)"
               :aria-label="`Is ${slot.name || 'this recipe LoRA slot'} part of the workflow?`"
               @update:model-value="(mark) => flipMark(slot, mark)"
             />
+            <p v-if="!slot.label" class="wftab-note wftab-quiet">
+              This slot has no recorded address, so it cannot be marked.
+            </p>
           </div>
         </template>
         <p v-else class="wftab-note wftab-quiet">This workflow has no LoRA slot.</p>
@@ -91,7 +98,7 @@
         <span class="section-label">
           Defaults
           <span class="wftab-legend"
-            ><v-icon size="12">mdi-pin</v-icon> = shown in Run</span
+            ><v-icon size="14">mdi-pin</v-icon> = shown in Run</span
           >
         </span>
         <p v-if="detailPending" class="wftab-note wftab-quiet">
@@ -116,7 +123,7 @@
           <!-- The whole set, pinned rows included, because "All N" is a count
                of the card's parameters and not of what is left over. -->
           <details v-if="unpinnedDefaults.length" class="wftab-disclose">
-            <summary>All {{ groupedNumber(defaults.length) }} parameters</summary>
+            <summary>All {{ defaults.length }} parameters</summary>
             <WorkflowDefaultRow
               v-for="row in unpinnedDefaults"
               :key="row.label"
@@ -134,15 +141,27 @@
       </div>
 
       <div class="inspector-section">
+        <!-- The box is drawn only once THIS card's notes have arrived.
+             `notesDraft` holds the last card read, so a box shown while the
+             read is out is the previous workflow's text, and blurring it
+             writes that text onto this one. -->
         <details class="wftab-disclose">
           <summary>Notes</summary>
           <textarea
+            v-if="detail"
             v-model="notesDraft"
             class="wftab-notes"
             rows="4"
             aria-label="Notes about this workflow"
             @blur="saveNotes"
           ></textarea>
+          <p v-else class="wftab-note wftab-quiet">
+            {{
+              detailFailed
+                ? "Could not read this workflow's notes just now."
+                : "Reading its notes…"
+            }}
+          </p>
         </details>
         <details class="wftab-disclose">
           <summary>
@@ -236,7 +255,6 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useWorkflowRunStore } from "../../stores/useWorkflowRunStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
-import { groupedNumber } from "../../utils/workflowShelf";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
 import Segmented from "../widgets/Segmented.vue";
@@ -320,8 +338,11 @@ const parentStack = computed(() => {
 });
 
 const subtitle = computed(() => {
+  // Plain numbers, as `WorkflowsView`'s own subtitle writes them: the
+  // shelf's grouped spelling lives in `utils/workflowShelf`, which goes with
+  // the shelf in F1b, and this screen never used it.
   const count = card.value?.picture_count ?? 0;
-  const pictures = `${groupedNumber(count)} ${count === 1 ? "picture" : "pictures"}`;
+  const pictures = `${count} ${count === 1 ? "picture" : "pictures"}`;
   if (parentStack.value) {
     return `In the ${parentStack.value.name} stack · ${pictures}`;
   }
@@ -418,6 +439,32 @@ function fail(err, fallback) {
 }
 
 /**
+ * Start a write, or refuse because one is already out.
+ *
+ * `busy` is one token rather than one per control on purpose, and this is
+ * what makes that safe: two writes in flight at once clear each other's token
+ * and, since `defaults`, `pins` and the card itself all come back on the same
+ * `detail`, the slower answer discards the faster one's change.
+ */
+function claim(token) {
+  if (busy.value) return false;
+  busy.value = token;
+  return true;
+}
+
+/**
+ * Whether a write that has come back still belongs on screen.
+ *
+ * Every handler awaits, and the selection can move while it does — clicking
+ * another card is exactly what blurs the notes box and fires its save. An
+ * answer for the card that has gone must not be written into the rail
+ * showing the one that arrived.
+ */
+function stillOn(key) {
+  return selectedKey.value === key;
+}
+
+/**
  * Flip a LoRA slot between the workflow and the look.
  *
  * **This re-keys the card**, and can split it into several or merge it into
@@ -428,15 +475,20 @@ function fail(err, fallback) {
 async function flipMark(slot, mark) {
   const key = selectedKey.value;
   if (!key || !slot.label || slot.mark === mark) return;
-  busy.value = `slot:${slot.label}`;
+  if (!claim(`slot:${slot.label}`)) return;
   try {
     const moved = await setWorkflowSlots(key, { [slot.label]: mark });
     // Every card of the topology may have been re-keyed, so the cached stack
     // members are about workflows the hub no longer has.
     store.forgetMembers();
     await store.fetchCards();
-    store.select(moved.key);
-    await loadDetail(moved.key);
+    if (!stillOn(key)) return;
+    // `select` moves `selectedKey`, which the watcher below turns into the
+    // detail read. Calling `loadDetail` here as well fetched the same card
+    // twice; when the flip did not move it the watcher does not fire, so
+    // that case reads explicitly.
+    if (moved.key === key) await loadDetail(key);
+    else store.select(moved.key);
   } catch (err) {
     fail(err, "Could not change that LoRA slot.");
   } finally {
@@ -454,7 +506,7 @@ async function flipMark(slot, mark) {
 async function resetDefault(row) {
   const key = selectedKey.value;
   if (!key) return;
-  busy.value = `default:${row.label}`;
+  if (!claim(`default:${row.label}`)) return;
   try {
     const kept = defaults.value
       .filter(
@@ -470,7 +522,8 @@ async function resetDefault(row) {
         input_name: entry.input_name,
         value: entry.value,
       }));
-    detail.value = await setWorkflowDefaults(key, kept);
+    const body = await setWorkflowDefaults(key, kept);
+    if (stillOn(key)) detail.value = body;
   } catch (err) {
     fail(err, "Could not reset that value.");
   } finally {
@@ -482,7 +535,7 @@ async function resetDefault(row) {
 async function togglePin(row) {
   const key = selectedKey.value;
   if (!key) return;
-  busy.value = `default:${row.label}`;
+  if (!claim(`default:${row.label}`)) return;
   try {
     const pins = defaults.value
       .filter((entry) =>
@@ -496,7 +549,7 @@ async function togglePin(row) {
         input_name: entry.input_name,
       }));
     const body = await setWorkflowPins(key, pins);
-    detail.value = { ...detail.value, pins: body.pins ?? pins };
+    if (stillOn(key)) detail.value = { ...detail.value, pins: body.pins ?? pins };
   } catch (err) {
     fail(err, "Could not change that pin.");
   } finally {
@@ -506,11 +559,16 @@ async function togglePin(row) {
 
 async function saveNotes() {
   const key = selectedKey.value;
-  if (!key || notesDraft.value === (detail.value?.notes ?? "")) return;
+  // `detail` null is a card whose notes have not arrived; the box is not
+  // drawn then, and the draft belongs to whatever was read last.
+  if (!key || !detail.value || notesDraft.value === (detail.value.notes ?? "")) {
+    return;
+  }
   try {
-    detail.value = await patchWorkflowCard(key, {
+    const body = await patchWorkflowCard(key, {
       notes: notesDraft.value || null,
     });
+    if (stillOn(key)) detail.value = body;
   } catch (err) {
     fail(err, "Could not save those notes.");
   }
@@ -518,20 +576,30 @@ async function saveNotes() {
 
 async function toggleHidden() {
   const key = selectedKey.value;
-  if (!key) return;
+  if (!key || !detail.value) return;
   menuOpen.value = false;
+  const hiding = !detail.value.hidden;
+  if (!claim("hidden")) return;
   try {
-    detail.value = await patchWorkflowCard(key, { hidden: !detail.value?.hidden });
+    const body = await patchWorkflowCard(key, { hidden: hiding });
+    if (stillOn(key)) detail.value = body;
+    // A hidden card leaves the grid, so the rail would have nothing to draw
+    // were it not for the detail fallback in `card` — which is also what
+    // keeps Unhide reachable from here.
+    store.forgetMembers();
     await store.fetchCards();
   } catch (err) {
-    fail(err, "Could not hide that workflow.");
+    fail(err, hiding ? "Could not hide that workflow." : "Could not unhide it.");
+  } finally {
+    busy.value = "";
   }
 }
 
 async function stackSelected() {
-  busy.value = "stack";
+  if (!claim("stack")) return;
   try {
     await stackWorkflows([...store.selectedKeys]);
+    store.forgetMembers();
     await store.fetchCards();
     store.clearSelection();
   } catch (err) {
@@ -541,16 +609,36 @@ async function stackSelected() {
   }
 }
 
+/**
+ * Hide every selected workflow.
+ *
+ * `allSettled`, and the grid is re-read whatever happened: a loop that threw
+ * on the first refusal left the ones before it hidden on the server, still
+ * drawn in the grid, still selected, under one sentence saying none of it
+ * worked. The message names how many actually went.
+ */
 async function hideSelected() {
-  busy.value = "hide";
+  if (!claim("hide")) return;
+  const keys = [...store.selectedKeys];
   try {
-    for (const key of store.selectedKeys) {
-      await patchWorkflowCard(key, { hidden: true });
-    }
+    const results = await Promise.allSettled(
+      keys.map((key) => patchWorkflowCard(key, { hidden: true })),
+    );
+    const refused = results.filter((result) => result.status === "rejected");
+    store.forgetMembers();
     await store.fetchCards();
-    store.clearSelection();
-  } catch (err) {
-    fail(err, "Could not hide those workflows.");
+    if (!refused.length) {
+      store.clearSelection();
+      return;
+    }
+    console.warn("[workflows] some cards would not hide", refused[0].reason);
+    notices.push({
+      level: "error",
+      text:
+        refused.length === keys.length
+          ? "None of those workflows could be hidden."
+          : `${keys.length - refused.length} of ${keys.length} workflows were hidden; the rest could not be.`,
+    });
   } finally {
     busy.value = "";
   }
@@ -691,9 +779,11 @@ watch(selectedKey, (key) => loadDetail(key), { immediate: true });
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
+/* A local track, like the 96px label column above: wide enough for a
+   strength ("0.85") and no wider. Not a spacing token used as a width. */
 .wftab-strength {
   flex: none;
-  width: var(--space-9);
+  width: 56px;
   height: var(--control-h);
   display: inline-flex;
   align-items: center;

@@ -1613,15 +1613,45 @@ action, so it belongs in the footer and opens a popup (F5).
   route that replaces the set. The pin is the same shape. The detail route
   carries `pins`, and `null` (nobody has chosen) is not `[]` (everything
   unpinned): `null` applies the component's own `DEFAULT_PINS`, which is the
-  design's choice of steps, cfg, guidance, width and height.
+  design's choice of steps, cfg, guidance, width and height. `key_pins`
+  answers `null` for an unreadable row too, never `[]` — reporting corruption
+  as "the owner unpinned everything" would put a card's whole parameter list
+  behind a collapsed disclosure and look deliberate.
+- **One write at a time, and every answer is checked against the selection
+  before it is used.** `detail` carries the card, its defaults and its pins
+  together, so two writes in flight means the slower answer discards the
+  faster one's change; `claim()` refuses the second. And the selection moves
+  while a write is out — clicking another card is exactly what blurs the
+  notes box and fires its save — so `stillOn()` drops an answer for a card
+  that has gone. The notes box is drawn only once *this* card's detail has
+  arrived, because the draft otherwise holds the last card's text and blurring
+  it writes that onto this one.
 - **What is drawn but not writable yet, and why.** The checkpoint and VAE are
   fields rather than selects: no route changes a card's model file. A LoRA's
-  strength reads "—" because the card payload carries no strength. The ⋯ menu
-  holds Hide/Unhide alone — Duplicate, Open in ComfyUI, Export workflow and
-  Delete are in the plan's route table and are not in
-  `authz/registry.py`. The picture-input UI has not moved here either: the
-  key-based read that would list a card's picture inputs does not exist (only
-  `PUT /workflows/{key}/inputs` does), so there is nothing to render.
+  strength reads "—" because `_describe_slots` reads `asset_names`, which is
+  filenames, and `FEATURED_NAMES` excludes `strength_model`. The ⋯ menu holds
+  Hide/Unhide alone: Duplicate and Open in ComfyUI have no route at all;
+  *Export workflow* has to write a runnable ComfyUI file and the only graph
+  read that exists, `GET /workflows/recipes/{structural_hash}/graph`, answers
+  `runnable: false` by construction; *Delete* is only
+  `DELETE /comfyui/workflows/{name}`, keyed by filename, and the card payload
+  carries no filename. The **picture-input UI has not moved here**: what is
+  missing is not the stored overrides — `picture_inputs()` reads those and the
+  run pre-flight already calls it — but the list of picture inputs a card
+  *has*, which is derived from the graph and is served only by the file-keyed
+  `GET /comfyui/workflows/{name}/inputs`. Without it there is nothing to draw
+  a mode control against.
+- **The "N pictures" figure is plain text, not a link.** F7 wires the chip;
+  `GET /workflows/cards/{key}/pictures` exists, but the picture grid has no
+  client-side `workflow_key` filter yet, so a link would leave the rail and
+  land on an unfiltered library.
+- **One tab, and no way out to the pictures.** §F2's rule for the shipped
+  shelf's rail — "the second tab is always the way out to the pictures, which
+  is what stops the rail being terminal" — does not survive this design: round
+  2 draws **Recipes | Workflow** and no Pictures tab, and the way to a card's
+  pictures becomes the header figure above once F7 wires it. Until then this
+  rail is terminal, which is a known cost of shipping F3 before F7 rather than
+  an oversight.
 - **Run… with several selected stays on screen and refuses**: `aria-disabled`
   plus `aria-describedby` pointing at "Run one workflow at a time". A control
   that disappears teaches nobody why. The multi-selection also gets *Stack

@@ -1,18 +1,23 @@
 <template>
   <div class="wfdef">
-    <button
+    <!-- `AppButton icon-only` rather than a hand-rolled button: it is what
+         makes the tooltip the accessible NAME (docs/design/buttons.md). A
+         bare button holding a glyph and a `Tooltip` gets `aria-describedby`,
+         which is a description and not a name, so a screen reader announces
+         "button, pressed" and nothing else. -->
+    <AppButton
       class="wfdef-pin"
-      type="button"
+      size="sm"
+      variant="ghost"
+      icon-only
+      :icon-left="row.pinned ? 'pin' : 'pin-outline'"
+      :tooltip="
+        row.pinned ? `Unpin ${row.label}` : `Pin ${row.label} to the Run popup`
+      "
       :aria-pressed="row.pinned ? 'true' : 'false'"
       :disabled="busy"
       @click="emit('toggle-pin')"
-    >
-      <Tooltip
-        :text="row.pinned ? `Unpin ${row.label}` : `Pin ${row.label} to the Run popup`"
-        activator="parent"
-      />
-      <v-icon size="14">{{ row.pinned ? "mdi-pin" : "mdi-pin-outline" }}</v-icon>
-    </button>
+    />
     <span class="wfdef-name">
       {{ row.label }}
       <!-- Every value says where it came from, always: a row that only
@@ -22,19 +27,17 @@
     </span>
     <span class="wfdef-value">
       <span class="wfdef-text num">{{ row.value }}</span>
-      <button
+      <AppButton
         v-if="row.provenance === 'edited'"
         class="wfdef-reset"
-        type="button"
+        size="sm"
+        variant="ghost"
+        icon-only
+        icon-left="restore"
+        :tooltip="`Put ${row.label} back to what your pictures say`"
         :disabled="busy"
         @click="emit('reset')"
-      >
-        <Tooltip
-          :text="`Put ${row.label} back to what your pictures say`"
-          activator="parent"
-        />
-        <v-icon size="14">mdi-restore</v-icon>
-      </button>
+      />
     </span>
   </div>
 </template>
@@ -47,9 +50,7 @@
 // above "All N parameters" and once inside it — and a copy of it would be two
 // places for the reset to go wrong.
 
-import { VIcon } from "vuetify/components";
-
-import Tooltip from "../widgets/Tooltip.vue";
+import AppButton from "../widgets/AppButton.vue";
 
 /** What the server's three provenances are called on screen. */
 const PROVENANCE = {
@@ -69,25 +70,20 @@ const emit = defineEmits(["toggle-pin", "reset"]);
 </script>
 
 <style scoped>
+/* Local track widths, like the tab's own 96px label column: the pin is one
+   `--control-h-sm` control and the value column is the same 96px, and no
+   other pane pairs the three, so neither is a token. */
 .wfdef {
   display: grid;
-  grid-template-columns: 20px 1fr minmax(0, 96px);
+  grid-template-columns: var(--control-h-sm) 1fr minmax(0, 96px);
   align-items: center;
   gap: var(--space-2);
 }
 
+/* `--control-h-sm` is the WCAG 2.2 pointer floor the token ramp names, and
+   `AppButton size="sm"` is already that tall; this only squares it. */
 .wfdef-pin {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-  cursor: pointer;
+  width: var(--control-h-sm);
 }
 
 .wfdef-pin[aria-pressed="true"] {
@@ -128,13 +124,7 @@ const emit = defineEmits(["toggle-pin", "reset"]);
 }
 
 .wfdef-reset {
-  display: inline-flex;
   flex: none;
-  align-items: center;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-  cursor: pointer;
+  width: var(--control-h-sm);
 }
 </style>
