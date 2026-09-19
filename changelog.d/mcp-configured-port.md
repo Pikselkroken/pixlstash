@@ -15,8 +15,8 @@
   first time the agent asks a question. The desktop app only serves the
   configured port when remote access is switched on.
 - The MCP server gained `count_pictures`, `list_sets`, `list_characters` and
-  `list_projects`, and
-  the picture tools can now filter by set, character or project. It also tells
+  `list_projects`, and the picture tools can now filter by set, character or
+  project. It also tells
   the agent what it is for when it connects, and to ask PixlStash rather than
   reading the library's database file behind its back - which looks like a
   shortcut and quietly gives wrong answers.
