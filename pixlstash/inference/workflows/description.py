@@ -255,6 +255,13 @@ class DescriptionWorkflow:
 
         Returns:
             Estimated VRAM in MB, or ``0`` on non-CUDA devices.
+
+        ``!= "cuda"`` rather than ``not is_accelerated(...)`` is correct and not
+        an unswept CUDA spelling: every captioner loads on the CPU on any
+        accelerator but CUDA - Florence-2 by the documented hold in its
+        ``_init``, JoyCaption by its own ``cuda if available else cpu`` device
+        pick - so there is genuinely no device memory to charge there. Lift
+        this together with whichever of those holds is lifted, not before.
         """
         if self._engine.device != "cuda":
             return 0

@@ -10,6 +10,17 @@ from pathlib import Path
 from typing import Any
 
 from pixlstash.startup_permissions import mkdir_private
+from pixlstash.utils.accelerator import (
+    CUDA,
+    MPS,
+    VALID_DEVICE_SETTINGS,
+    accelerator_total_memory_mb,
+    available_accelerator,
+    is_accelerated,
+    device_display_name,
+    normalise_device,
+    resolve_device,
+)
 
 _UNSET: Any = object()
 _torch_mod: Any = _UNSET
@@ -139,9 +150,13 @@ class StartupChecks:
             outcome.hard_failures.append("Port must be an integer between 1 and 65535.")
 
         default_device = str(self._server_config.get("default_device", "cpu")).lower()
-        if default_device not in {"cpu", "cuda", "gpu", "auto"}:
+        if default_device not in VALID_DEVICE_SETTINGS:
+            # One frozenset, shared with the PIXLSTASH_DEFAULT_DEVICE override in
+            # server.py. They used to be two hand-maintained copies of the same
+            # list and drifted: a value one accepted, the other rejected.
             outcome.hard_failures.append(
-                "default_device must be one of: cpu, cuda, gpu, auto."
+                "default_device must be one of: "
+                f"{', '.join(sorted(VALID_DEVICE_SETTINGS))}."
             )
 
         samesite = str(self._server_config.get("cookie_samesite", "Lax"))
@@ -313,7 +328,12 @@ class StartupChecks:
                     "PixlStash will generate a self-signed certificate automatically."
                 )
 
-        if not shutil.which("nvidia-smi"):
+        # Only worth saying where nvidia-smi could have been there. It is an
+        # NVIDIA tool, so on a Mac its absence is not a missing dependency, it
+        # is the machine - and warning about it on every boot taught Apple
+        # Silicon owners that PixlStash's start-up warnings are noise to scroll
+        # past, which is the last thing this check wants to teach.
+        if available_accelerator() != MPS and not shutil.which("nvidia-smi"):
             outcome.warnings.append(
                 "Optional GPU utility missing: nvidia-smi (GPU telemetry may be reduced)."
             )
@@ -352,12 +372,25 @@ class StartupChecks:
         torch = _torch()
         ort = _ort()
 
-        device_value = str(self._server_config.get("default_device", "cpu")).lower()
-        if device_value == "gpu":
-            device_value = "cuda"
+        # This function is the real device gate, not InferenceEngine.create():
+        # forcing CPU here writes "cpu" into the config, which Server.build_vault
+        # turns into force_cpu=True, which pins the device before any engine-side
+        # probe runs. So a CUDA-only check here made every later accelerator
+        # change dead code - which is exactly what it did on Apple Silicon.
+        device_value = normalise_device(
+            self._server_config.get("default_device", "cpu")
+        )
 
         is_auto_mode = device_value == "auto"
-        is_explicit_gpu = device_value == "cuda"
+        # "gpu" is an explicit request for *an* accelerator, not for CUDA. It is
+        # host-resolved like "auto" but refuses like a named device: an owner who
+        # asked for the GPU should be told there is none, not quietly booted on
+        # the CPU.
+        is_explicit_gpu = device_value in {CUDA, MPS, "gpu"}
+        # The torch handle is passed down rather than re-found: _torch() is the
+        # cache the simulated-host fixtures seed, so probing through it is what
+        # lets a CPU-only runner verify the CUDA and ROCm paths.
+        requested = resolve_device(device_value, torch_module=torch)
 
         # PyTorch's ROCm build drives the AMD GPU through the CUDA API (torch.cuda.*
         # works, HIP masquerades as CUDA), so the checks below run unchanged; only
@@ -368,7 +401,15 @@ class StartupChecks:
             torch is not None
             and getattr(getattr(torch, "version", None), "hip", None) is not None
         )
-        accel_name = "ROCm" if is_rocm else "CUDA"
+        # Name what was *asked for*, not what resolution settled on. When a
+        # host-resolved setting finds nothing, `requested` is "cpu", and saying
+        # "CPU is unavailable; forcing CPU inference" is nonsense.
+        if is_rocm:
+            accel_name = "ROCm"
+        elif is_accelerated(requested):
+            accel_name = device_display_name(requested)
+        else:
+            accel_name = "GPU"
         accel_note = " (experimental, unverified)" if is_rocm else ""
 
         if device_value == "cpu":
@@ -384,25 +425,32 @@ class StartupChecks:
                 is_auto_mode,
                 is_explicit_gpu,
                 "PyTorch is unavailable; forcing CPU inference.",
-                "PyTorch is unavailable while default_device is set to cuda.",
+                "PyTorch is unavailable while default_device is set to "
+                f"{device_value}.",
             )
             return
 
-        try:
-            gpu_available = torch.cuda.is_available()
-        except Exception as exc:
-            # A broken ROCm/CUDA install (unsupported gfx arch, missing driver) can
-            # raise here rather than returning False; treat any error as "no GPU"
-            # and fall back to CPU cleanly instead of crashing startup.
-            gpu_available = False
-            outcome.notes.append(f"GPU availability probe failed ({exc}).")
+        # available_accelerator() wraps its own probes and answers "none" for a
+        # broken install rather than raising, which is what the bare
+        # torch.cuda.is_available() call here needed a try/except for.
+        detected = available_accelerator(torch)
+        gpu_available = detected is not None and requested == detected
         if not gpu_available:
+            if detected is not None:
+                # Asked for one accelerator, found another. Naming both is the
+                # difference between a fixable message and a mystery.
+                reason = (
+                    f"{accel_name} is unavailable (this host has "
+                    f"{device_display_name(detected)})"
+                )
+            else:
+                reason = f"{accel_name} is unavailable"
             self._handle_gpu_check_failure(
                 outcome,
                 is_auto_mode,
                 is_explicit_gpu,
-                f"{accel_name} is unavailable; forcing CPU inference.",
-                f"{accel_name} is unavailable while default_device is set to cuda.",
+                f"{reason}; forcing CPU inference.",
+                f"{reason} while default_device is set to {device_value}.",
             )
             return
 
@@ -430,6 +478,26 @@ class StartupChecks:
                 "AMD GPU (ROCm) is experimental and unverified. PyTorch will use the "
                 "GPU; the ONNX face-extraction and WD14 tagger models run on CPU."
             )
+        elif requested == MPS:
+            # CoreML is how ONNX Runtime reaches the same GPU torch reaches
+            # through MPS. Its absence is the exact analogue of a missing
+            # CUDAExecutionProvider: torch still uses the GPU, the ONNX models
+            # (WD14, InsightFace) do not.
+            if "CoreMLExecutionProvider" not in providers:
+                provider_list = ", ".join(providers) if providers else "none"
+                outcome.warnings.append(
+                    "ONNX CoreMLExecutionProvider unavailable "
+                    f"(available providers: {provider_list}; package: "
+                    f"{self._detect_onnxruntime_package()}). PyTorch will still "
+                    "use Metal for all non-ONNX inference; the WD14 tagger ONNX "
+                    "model will run on CPU. Fix with: pip install --upgrade "
+                    "onnxruntime."
+                )
+            else:
+                outcome.notes.append(
+                    "ONNX CoreMLExecutionProvider is available; the WD14 tagger "
+                    "will run on the GPU."
+                )
         elif "CUDAExecutionProvider" not in providers:
             provider_list = ", ".join(providers) if providers else "none"
             onnx_package = self._detect_onnxruntime_package()
@@ -470,16 +538,31 @@ class StartupChecks:
         self._server_config["min_free_vram_mb"] = min_free_vram_mb
 
         try:
-            free_bytes, total_bytes = torch.cuda.mem_get_info()
-            free_mb = free_bytes / float(1024**2)
-            total_mb = total_bytes / float(1024**2)
+            if requested == MPS:
+                # Unified memory has no "free VRAM" to read: the GPU shares one
+                # pool with the OS and every other process, and any instant
+                # reading of it is stale before it is used. Metal's recommended
+                # working set is the number the driver actually enforces
+                # against, so that is what is checked and what the note reports
+                # - deliberately described as a working set, not as free memory.
+                total_mb = float(accelerator_total_memory_mb(MPS, torch_module=torch))
+                if total_mb <= 0:
+                    raise RuntimeError("Metal reported no recommended working set size")
+                free_mb = total_mb - (
+                    torch.mps.driver_allocated_memory() / float(1024**2)
+                )
+            else:
+                free_bytes, total_bytes = torch.cuda.mem_get_info()
+                free_mb = free_bytes / float(1024**2)
+                total_mb = total_bytes / float(1024**2)
         except Exception as exc:
             self._handle_gpu_check_failure(
                 outcome,
                 is_auto_mode,
                 is_explicit_gpu,
-                f"Unable to read VRAM availability ({exc}); forcing CPU inference.",
-                f"Unable to read VRAM availability while default_device is set to cuda: {exc}",
+                f"Unable to read {accel_name} memory ({exc}); forcing CPU inference.",
+                f"Unable to read {accel_name} memory while default_device is set "
+                f"to {device_value}: {exc}",
             )
             return
 
@@ -489,18 +572,24 @@ class StartupChecks:
                 is_auto_mode,
                 is_explicit_gpu,
                 (
-                    f"Insufficient free VRAM ({free_mb:.0f} MB of {total_mb:.0f} MB; "
-                    f"requires >= {min_free_vram_mb:.0f} MB); forcing CPU inference."
+                    f"Insufficient free {accel_name} memory ({free_mb:.0f} MB of "
+                    f"{total_mb:.0f} MB; requires >= {min_free_vram_mb:.0f} MB); "
+                    "forcing CPU inference."
                 ),
                 (
-                    f"Insufficient free VRAM while default_device is set to cuda "
-                    f"({free_mb:.0f} MB of {total_mb:.0f} MB; requires >= {min_free_vram_mb:.0f} MB)."
+                    f"Insufficient free {accel_name} memory while default_device "
+                    f"is set to {device_value} ({free_mb:.0f} MB of "
+                    f"{total_mb:.0f} MB; requires >= {min_free_vram_mb:.0f} MB)."
                 ),
             )
             return
 
+        # "working set" rather than "free VRAM" on unified memory: the figure is
+        # what Metal recommends this process claim from a pool it shares with
+        # everything else, not memory that is free and nobody else's.
+        memory_label = "MB working set" if requested == MPS else "MB free VRAM"
         outcome.notes.append(
-            f"GPU check passed ({free_mb:.0f} MB free VRAM); "
+            f"GPU check passed ({free_mb:.0f} {memory_label}); "
             f"using {accel_name}{accel_note} inference."
         )
 

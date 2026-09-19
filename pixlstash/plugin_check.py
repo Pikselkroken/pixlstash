@@ -53,6 +53,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.plugin_install import PluginError
 from pixlstash.tagger_plugins.base import TaggerPlugin
 from pixlstash.tagger_plugins.registry import TaggerPluginManager
+from pixlstash.utils.accelerator import resolve_device
 
 logger = get_logger(__name__)
 
@@ -424,6 +425,10 @@ def _run_over_image(plugin: TaggerPlugin, image: str) -> tuple[Any | None, list[
 def _device() -> str:
     """Return the device the server would hand a plugin's ``setup()``.
 
+    Whatever accelerator this host has - the same answer
+    :meth:`InferenceEngine.create` reaches, so the checker cannot tell a plugin
+    author "cpu" while the server would have handed their plugin a GPU.
+
     Falls back to ``"cpu"`` if torch cannot be reached at all, which is not a
     guess about the machine so much as a way of getting out of torch's way: a
     plugin that needs a device needs torch too, and its own ``init()`` is
@@ -431,22 +436,9 @@ def _device() -> str:
     instead would replace that message with a traceback out of the checker,
     about a library the plugin author may not even import directly.
     """
-    # Local import: torch is seconds of start-up, and every other verb in this
-    # CLI - including `plugins test` without --image - runs without it.
-    try:
-        import torch
-
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    except Exception as exc:
-        # Deliberately not just ImportError. A torch that is installed but
-        # cannot load its shared libraries raises OSError here, and a partial
-        # install can raise almost anything; all of them mean the same thing to
-        # this function. Logged with the exception rather than swallowed, so
-        # the cause survives for whoever reads the log.
-        logger.warning(
-            "Could not ask torch which device to use (%s: %s); telling the "
-            "plugin 'cpu'. If it needs a GPU, this is why it did not get one.",
-            type(exc).__name__,
-            exc,
-        )
-        return "cpu"
+    # resolve_device imports torch lazily, for the same reason this function
+    # used to: torch is seconds of start-up and every other verb in this CLI -
+    # including `plugins test` without --image - runs without it. It also owns
+    # the "torch cannot be reached" case, logging the cause rather than
+    # swallowing it, so the fallback described above still holds.
+    return resolve_device()

@@ -101,11 +101,21 @@ def test_no_task_module_reaches_cuda_outside_the_insightface_init():
 
 
 def test_every_cuda_ort_session_site_is_built_from_the_budget():
-    """Lists the creation sites rather than trusting a grep: two CPU-only sites
-    need no cap, the OpenVINO site has no CUDA arena, and the two CUDA sites
-    must take their options from ``VramBudget.ort_cuda_provider_options``
-    (which `test_vram_batch_budget` proves carries ``gpu_mem_limit`` whenever
-    a budget is set)."""
+    """Lists the creation sites rather than trusting a grep: a CPU-only site
+    needs no cap, and every CUDA site must take its options from
+    ``VramBudget.ort_cuda_provider_options`` (which `test_vram_batch_budget`
+    proves carries ``gpu_mem_limit`` whenever a budget is set).
+
+    WD14 used to be three sites here - a CPU one, an OpenVINO one and a CUDA
+    one - written as an inline provider chain that knew about OpenVINO, CUDA
+    and ROCm and therefore fell through to the CPU on a host advertising
+    CoreML. It is now one site whose providers come from
+    ``accelerator.onnx_execution_providers``. The invariant did not move, but
+    the evidence for it did: the budget is no longer visible in the six lines
+    around the session, so it is checked where it now lives - the ladder is
+    what picks the providers, it is handed the budget's CUDA options, and it
+    puts them on the CUDA provider rather than losing them in the indirection.
+    """
     sites = []
     for path in sorted(PACKAGE.rglob("*.py")):
         lines = path.read_text().splitlines()
@@ -130,19 +140,43 @@ def test_every_cuda_ort_session_site_is_built_from_the_budget():
             return "cuda-budgeted"
         if "OpenVINO" in window:
             return "openvino"
+        if "providers=providers" in window:
+            # Handed a list the shared ladder built. Checked below, at the
+            # ladder, rather than guessed at from these six lines.
+            return "ladder"
         return "UNBOUNDED"
 
     kinds = {
         rel: sorted(classify(w) for _n, w in entries)
         for rel, entries in by_file.items()
     }
-    assert kinds["tagger_plugins/wd14.py"] == ["cpu", "cuda-budgeted", "openvino"], (
-        kinds
-    )
+    assert kinds["tagger_plugins/wd14.py"] == ["ladder"], kinds
     assert kinds["tasks/face_extraction_task.py"] == ["cpu", "cuda-budgeted"], kinds
     # And the CUDA FaceAnalysis site's options really come from the budget.
     face_source = (PACKAGE / "tasks" / "face_extraction_task.py").read_text()
     assert "engine.vram_budget.ort_cuda_provider_options(" in face_source
+
+    # WD14's one site, in three steps, because a shared ladder can drop the
+    # budget in a place no per-site window would show.
+    wd14_source = (PACKAGE / "tagger_plugins" / "wd14.py").read_text()
+    assert "providers = onnx_execution_providers(" in wd14_source, (
+        "WD14 must pick its providers through the shared ladder, not an inline "
+        "chain - an inline one has already fallen through to the CPU on a host "
+        "whose ONNX Runtime advertised a provider the chain did not name."
+    )
+    assert "cuda_options = self._vram_budget.ort_cuda_provider_options(" in wd14_source
+    assert "cuda_options=cuda_options" in wd14_source, (
+        "the budget's options have to reach the ladder, or WD14's arena is "
+        "unbounded with nothing at the session to show it"
+    )
+    # And the ladder puts them on the CUDA provider rather than swallowing them.
+    from pixlstash.utils.accelerator import onnx_execution_providers
+
+    built = onnx_execution_providers(
+        "cuda", ["CUDAExecutionProvider", "CPUExecutionProvider"], {"gpu_mem_limit": 7}
+    )
+    assert built[0][0] == "CUDAExecutionProvider"
+    assert built[0][1]["gpu_mem_limit"] == 7
 
 
 def test_the_wd14_session_says_so_when_it_did_not_get_the_accelerator(monkeypatch):

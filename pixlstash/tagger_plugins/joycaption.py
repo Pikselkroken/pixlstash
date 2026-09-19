@@ -13,6 +13,7 @@ from PIL import Image
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
+from pixlstash.utils.accelerator import is_apple_silicon, physical_memory_mb
 from pixlstash.utils.model_utils import from_pretrained_local_first
 from pixlstash.utils.service.caption_utils import sanitise_tag
 
@@ -438,6 +439,15 @@ class JoyCaptionService:
                     _proj.to(dtype=_vision_dtype)
 
             self._model = model
+            # CUDA or the CPU, and Metal is deliberately the CPU for now. The
+            # hold is on *memory*, not on capability: bitsandbytes does support
+            # mps, but ~8 GB of weights would come out of the machine's only
+            # RAM, and the quantised kernels are generic PyTorch ops there
+            # rather than tuned Metal ones. That is what `_precision_help()`
+            # warns about at the point the precision is chosen; the plugin
+            # stays selectable and simply runs where it is least likely to take
+            # the machine with it. Routing it to mps is a measurement someone
+            # has to make first, the way the tagger's 23.7x was made.
             self._model_device = (
                 torch.device("cpu")
                 if use_cpu
@@ -481,6 +491,44 @@ def _parse_suppress_tokens(value: Any) -> list[int]:
         return []
 
 
+def _precision_help() -> str:
+    """Return the ``precision`` parameter's help text for this machine.
+
+    Computed rather than a literal because the honest advice differs by memory
+    model, and the Auto-tagging screen renders this string directly. On a card
+    the guidance is a straight VRAM trade against a dedicated resource. On
+    Apple Silicon the memory being spent is the machine's only RAM, shared with
+    the OS and everything else running, so the same numbers mean something much
+    worse - which is worth saying where the choice is made rather than in a log
+    nobody reads.
+
+    NF4 and INT8 **do** work on Apple Silicon: bitsandbytes lists mps among its
+    supported devices and upstream marks both LLM.int8() and QLoRA 4-bit as
+    supported on macOS arm64. They run through device-agnostic PyTorch ops
+    rather than tuned Metal kernels, which upstream flags as possibly lacking
+    performance optimisation, and only the 8-bit *optimizers* are unimplemented
+    - a training feature this plugin never uses. An earlier version of this text
+    claimed bitsandbytes had no Metal backend at all and that NF4/INT8 would not
+    load; that was wrong, and the constraint that actually bites is memory.
+    """
+    base = (
+        "Quantisation precision. NF4/INT8 use bitsandbytes and require less "
+        "device memory; BF16/FP16 require more but are faster."
+    )
+    if not is_apple_silicon():
+        return base
+    ram_gb = physical_memory_mb() / 1024.0
+    machine = f"this {ram_gb:.0f} GB machine" if ram_gb > 0 else "this machine"
+    return (
+        base + "  WARNING: device memory is system RAM on "
+        f"{machine}, shared with the OS and everything else running. NF4 needs "
+        "~8 GB for the weights alone and BF16/FP16 need ~16 GB, so the larger "
+        "precisions are out of reach on most Macs and NF4 itself needs a 16 GB "
+        "machine or better. NF4/INT8 do run here, but through generic PyTorch "
+        "ops rather than tuned Metal kernels, so expect them to be slow."
+    )
+
+
 class JoyCaptionPlugin(TaggerPlugin):
     """TaggerPlugin for fancyfeast/llama-joycaption-beta-one-hf-llava.
 
@@ -505,7 +553,11 @@ class JoyCaptionPlugin(TaggerPlugin):
     display_name: str = "JoyCaption"
     description: str = (
         "LLaVA-style LLM captioner - generates detailed descriptions and "
-        "Danbooru tags. Requires ~8 GB VRAM (NF4). Requires bitsandbytes."
+        "Danbooru tags. HEAVY: needs ~8 GB of device memory for the weights "
+        "alone (NF4) plus ~0.5 GB per image, and the NF4/INT8 options need "
+        "bitsandbytes. On a shared-memory machine (Apple Silicon) that is "
+        "taken from the same RAM the OS and everything else is using, so an "
+        "8 GB machine cannot run it at all and a 16 GB one will be tight."
     )
     author: str = "Gaute Lindkvist <lindkvis@gmail.com>"
     license: str = "GPL-3.0-only"
@@ -568,10 +620,7 @@ class JoyCaptionPlugin(TaggerPlugin):
                 "label": "Precision",
                 "type": "select",
                 "default": "nf4",
-                "description": (
-                    "Quantisation precision. NF4/INT8 use bitsandbytes and "
-                    "require less VRAM; BF16/FP16 require more but are faster."
-                ),
+                "description": _precision_help(),
                 "options": [
                     {"value": "nf4", "label": "NF4 (~5 GB VRAM)"},
                     {"value": "int8", "label": "INT8 (~8 GB VRAM)"},
@@ -721,6 +770,18 @@ class JoyCaptionPlugin(TaggerPlugin):
             precision,
             already_loaded,
         )
+        if is_apple_silicon():
+            logger.warning(
+                "[JoyCaption] Apple Silicon: this model needs ~%d MB for its "
+                "weights plus ~%d MB per image, taken from system RAM rather "
+                "than a card (this machine has %d MB). Precision %r will run, "
+                "but bitsandbytes has no tuned Metal kernels, so expect it to "
+                "be slow as well as large.",
+                _BASE_VRAM_MB,
+                _PER_IMAGE_VRAM_MB,
+                physical_memory_mb(),
+                precision,
+            )
         self.service.ensure_ready(precision=precision)
         logger.info("[JoyCaption] init() complete - loaded=%s", self.is_loaded())
 

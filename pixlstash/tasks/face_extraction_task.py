@@ -31,7 +31,7 @@ from pixlstash.utils.insightface_model_utils import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
-from pixlstash.utils.vram_utils import empty_cuda_cache, is_vram_oom
+from pixlstash.utils.vram_utils import empty_device_cache, is_vram_oom
 
 # Suppress noisy FutureWarning from insightface's face_align.py about
 # SimilarityTransform.estimate being deprecated in scikit-image >= 0.26.
@@ -330,7 +330,7 @@ class FaceExtractionTask(BaseTask):
             cls._app_instances.clear()
 
         gc.collect()
-        empty_cuda_cache()
+        empty_device_cache()
         cls._trim_process_memory()
 
     @staticmethod
@@ -416,6 +416,24 @@ class FaceExtractionTask(BaseTask):
             logger.debug("Reusing global InsightFace app")
             return cls._global_insightface_app
 
+        # CUDA only, and Apple Silicon is deliberately NOT included. This looks
+        # like one more `torch.cuda.is_available()` to sweep up, and it was
+        # measured rather than assumed: `buffalo_l` under the CoreML provider
+        # (`MLProgram`, `CPUAndGPU`) does not merely run slowly, it **fails**.
+        # The detector is the blocker - `det_10g` has a dynamic input shape
+        # (`[1, 3, '?', '?']`) and CoreML raises
+        # "Invalid shape for output feature '_448'" on the first detect() call,
+        # so no face is ever found. A second, softer reason to stay away: the
+        # five sessions' compiled CoreML cache measured 652 MB, for a model pack
+        # a fraction of that on disk.
+        #
+        # Note the trap for whoever revisits this. InsightFace's
+        # `model.prepare(ctx_id)` calls `session.set_providers(['CPUExecutionProvider'])`
+        # for any `ctx_id < 0`, so building `FaceAnalysis` with CoreML providers
+        # and then preparing with `ctx_id=-1` silently discards them and runs
+        # the whole pack on the CPU. A benchmark written that way reports a
+        # CoreML speed-up that is not CoreML at all. Use `ctx_id=0` to keep the
+        # providers, which is what surfaced the failure above.
         use_cuda = not engine.force_cpu and torch.cuda.is_available()
         providers = (
             ["CUDAExecutionProvider", "CPUExecutionProvider"]

@@ -8,6 +8,7 @@ import sys
 from dataclasses import dataclass
 from typing import Optional
 
+from pixlstash.utils.accelerator import is_apple_silicon, physical_memory_mb
 from pixlstash.utils.vram_utils import query_total_vram_mb
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,14 @@ TRASH_NAME = "Recycle Bin" if sys.platform == "win32" else "Trash"
 # `max_vram_budget_gb`. This used to be the bound for every card, which meant
 # a 32 GB card was offered a 16 GB default it could never be set back to.
 MAX_VRAM_BUDGET_GB: float = 12.0
+
+#: Ceiling on the *default* device-memory budget on unified memory, in GB.
+#: Past this a larger default reserves memory the machine could spend
+#: elsewhere without buying throughput, because image concurrency is capped
+#: well below what 8 GB funds. The owner can still raise the budget by hand;
+#: this bounds only what PixlStash picks unasked. See
+#: :func:`default_max_vram_gb`.
+APPLE_SILICON_MAX_DEFAULT_BUDGET_GB: float = 8.0
 
 
 @dataclass(frozen=True)
@@ -406,11 +415,49 @@ def describe_storage_device(path: str) -> Optional[StorageDevice]:
 
 
 def default_max_vram_gb() -> float:
-    """Return default VRAM budget in GB: max(4GB, 50% of total VRAM).
+    """Return the default device-memory budget in GB.
 
-    Card-aware so a large card is not starved: 16GB on a 32GB card, 6GB on
-    12GB, 4GB on 8GB. Falls back to 6GB when VRAM cannot be detected.
+    Two memory models, two rules, because "half the total" does not mean the
+    same thing on a card as it does on unified memory.
+
+    **On a card**: ``max(4GB, 50 % of total VRAM)``. Card-aware so a large card
+    is not starved: 16GB on a 32GB card, 6GB on 12GB, 4GB on 8GB. Falls back to
+    6GB when VRAM cannot be detected.
+
+    **On Apple Silicon**: ``min(physical RAM / 2, 8GB)`` - 4GB on an 8GB
+    machine, 8GB on 16GB and everything above it. Three things about that rule
+    are deliberate:
+
+    - It is argued from **physical RAM**, not from Metal's recommended working
+      set, because the memory the budget competes with is the OS, the browser
+      and everything else the owner is running - all of which spend out of the
+      same pool. Sizing against the working set instead would answer a
+      narrower question than the one being asked.
+    - The **8GB cap** exists because past that point the budget stops buying
+      throughput: image concurrency is capped well below what 8GB funds
+      (``_MAX_CONCURRENT_MPS``), so a larger default would only reserve memory
+      the machine could be spending on something else.
+    - The card path's ``max(4.0, ...)`` floor is **not** applied here. On a
+      card a 4GB floor is a floor on a dedicated resource; on unified memory it
+      would hand a genuinely small machine half its total RAM as a device
+      budget, which is the opposite of conservative. The cap wins, the floor
+      does not apply.
+
+    The result never exceeds :func:`max_vram_budget_gb` on Apple Silicon, so the
+    default is always a value the slider can actually show: that ceiling is
+    Metal's working set at roughly two thirds of RAM, and ``RAM/2`` is below
+    ``2*RAM/3`` for every machine size.
     """
+    if is_apple_silicon():
+        ram_mb = physical_memory_mb()
+        if ram_mb > 0:
+            return round(
+                min(ram_mb / 1024.0 / 2.0, APPLE_SILICON_MAX_DEFAULT_BUDGET_GB), 2
+            )
+        logger.warning(
+            "Physical RAM unreadable on Apple Silicon; falling back to the "
+            "accelerator-reported total for the default memory budget."
+        )
     total_gb = query_total_vram_mb() / 1024.0
     if total_gb <= 0:
         return 6.0
@@ -423,6 +470,11 @@ def max_vram_budget_gb() -> float:
     The TaskRunner already clamps a budget to the installed total, so the
     validator refusing less than that only ever refused a value the runtime
     would have honoured. Falls back to `MAX_VRAM_BUDGET_GB` without a card.
+
+    On Apple Silicon the ceiling is Metal's recommended working set, which is
+    already about two thirds of physical RAM. It is deliberately not physical
+    RAM: a budget above the working set is one the driver will not honour, and
+    asking for it buys swap rather than throughput.
     """
     total_gb = query_total_vram_mb() / 1024.0
     if total_gb <= 0:

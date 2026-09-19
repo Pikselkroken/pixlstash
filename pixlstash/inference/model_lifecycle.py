@@ -7,7 +7,7 @@ import threading
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.model_utils import trim_process_memory
-from pixlstash.utils.vram_utils import empty_cuda_cache
+from pixlstash.utils.vram_utils import empty_device_cache
 
 logger = get_logger(__name__)
 
@@ -104,7 +104,7 @@ class ModelLifecycleManager:
         except Exception as exc:
             logger.warning("Exception during aggressive unload: %s", exc)
 
-        empty_cuda_cache()
+        empty_device_cache()
         gc.collect()
         trim_process_memory()
 
@@ -146,6 +146,6 @@ class ModelLifecycleManager:
         except Exception as exc:
             logger.warning("Exception during safe idle unload: %s", exc)
 
-        empty_cuda_cache()
+        empty_device_cache()
         gc.collect()
         trim_process_memory()

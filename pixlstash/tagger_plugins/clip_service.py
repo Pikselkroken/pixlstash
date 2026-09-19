@@ -18,6 +18,9 @@ import numpy as np
 # server's import path - so importing them at module scope would make server
 # startup and every single test pay that cost before doing any work.
 
+from pixlstash.utils.accelerator import is_device_error, supports_fp16
+from pixlstash.utils.vram_utils import empty_device_cache, is_vram_oom
+
 logger = logging.getLogger(__name__)
 
 CLIP_MODEL_NAME = "ViT-B-32"
@@ -27,10 +30,10 @@ CLIP_MODEL_WEIGHTS = "laion2b_s34b_b79k"
 class ClipService:
     """Manages the OpenCLIP model for text and image embeddings.
 
-    Lazy-loads on first use and falls back to CPU on CUDA errors.
+    Lazy-loads on first use and falls back to CPU on device errors.
 
     Args:
-        device: Initial inference device (``"cuda"`` or ``"cpu"``).
+        device: Initial inference device (``"cuda"``, ``"mps"`` or ``"cpu"``).
     """
 
     def __init__(self, device: str) -> None:
@@ -74,7 +77,7 @@ class ClipService:
             CLIP_MODEL_NAME, pretrained=CLIP_MODEL_WEIGHTS
         )
         model = model.to(self._device)
-        if self._device == "cuda":
+        if supports_fp16(self._device):
             model = model.half()
         self._model = model
         self._preprocess = preprocess
@@ -82,7 +85,7 @@ class ClipService:
 
     @property
     def device(self) -> str:
-        """Current inference device (``"cuda"`` or ``"cpu"``)."""
+        """Current inference device (``"cuda"``, ``"mps"`` or ``"cpu"``)."""
         return self._device
 
     @property
@@ -141,25 +144,26 @@ class ClipService:
             if tensors is None or len(tensors) != len(images):
                 tensors = [self._preprocess(img) for img in images]
             tensors = torch.stack(tensors).to(self._device)
-            if self._device == "cuda":
+            if supports_fp16(self._device):
                 tensors = tensors.half()
             with torch.no_grad():
                 features = self._model.encode_image(tensors)
                 features = features / features.norm(dim=-1, keepdim=True)
             return features.cpu().float().numpy()
         except RuntimeError as exc:
-            if any(
-                kw in str(exc)
-                for kw in ("CUDA out of memory", "not compatible", "CUDA error")
-            ):
+            # The keyword list here was CUDA's vocabulary ("CUDA out of memory",
+            # "CUDA error"), which matches nothing an MPS failure says, so on
+            # Apple Silicon this retry never fired and the batch was lost.
+            if is_vram_oom(exc) or is_device_error(exc, self._device):
                 logger.warning(
-                    "ClipService.encode_image_batch: CUDA error, retrying on CPU: %s",
+                    "ClipService.encode_image_batch: %s error, retrying on CPU: %s",
+                    self._device,
                     exc,
                 )
                 self._model = self._model.float().to("cpu")
+                previous_device = self._device
                 self._device = "cpu"
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                empty_device_cache(previous_device)
                 try:
                     tensors = torch.stack([self._preprocess(img) for img in images]).to(
                         "cpu"
@@ -234,21 +238,18 @@ class ClipService:
                     features = self._model.encode_image(img_input).cpu().numpy()[0]
                 results.append(features)
             except RuntimeError as exc:
-                if any(
-                    kw in str(exc)
-                    for kw in ("CUDA out of memory", "not compatible", "CUDA error")
-                ):
+                if is_vram_oom(exc) or is_device_error(exc, self._device):
                     logger.warning(
-                        "ClipService CUDA error for '%s' index %d; retrying on CPU: %s",
+                        "ClipService %s error for '%s' index %d; retrying on CPU: %s",
+                        self._device,
                         pic_desc,
                         i,
                         exc,
                     )
-                    self._device = "cuda"  # will be overridden below
+                    previous_device = self._device
                     self._model = self._model.float().to("cpu")
                     self._device = "cpu"
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
+                    empty_device_cache(previous_device)
                     try:
                         img_input = self._preprocess(crop).unsqueeze(0).to("cpu")
                         with torch.no_grad():

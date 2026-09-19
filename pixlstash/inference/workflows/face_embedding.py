@@ -85,7 +85,15 @@ class FaceEmbeddingWorkflow:
         )
 
     def estimated_vram_mb(self) -> int:
-        """Flat VRAM estimate for face extraction (InsightFace model + inference)."""
+        """Flat VRAM estimate for face extraction (InsightFace model + inference).
+
+        ``!= "cuda"`` rather than ``not is_accelerated(...)`` here is correct
+        and not an unswept CUDA spelling: InsightFace runs on the CPU on every
+        accelerator but CUDA by the deliberate hold in
+        ``tasks/face_extraction_task.py`` (``buffalo_l``'s detector fails under
+        CoreML), so on those devices there is genuinely no device memory to
+        charge. Lift this the moment that hold is lifted, not before.
+        """
         if self._engine.device != "cuda":
             return 0
         return _INSIGHTFACE_VRAM_MB

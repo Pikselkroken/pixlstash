@@ -7,7 +7,6 @@
 
 import csv
 import os
-import platform
 import threading
 
 import numpy as np
@@ -18,6 +17,13 @@ from tqdm import tqdm
 from pixlstash.inference.vram_budget import ORT_ARENA_SHARE, VramBudget
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
+from pixlstash.utils.accelerator import (
+    CUDA,
+    coreml_cache_dir,
+    is_accelerated,
+    normalise_device,
+    onnx_execution_providers,
+)
 from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
 
 logger = get_logger(__name__)
@@ -192,14 +198,18 @@ class WD14Service:
             self._onnx_batch_capacity,
         )
 
-        if platform.system() == "Darwin":
-            worker_count = 0
-        else:
-            worker_count = min(
-                inference_batch_size,
-                os.cpu_count() // 2 or 1,
-                max(1, len(remaining_paths)),
-            )
+        # Worker count is derived from the work, not from the platform. This
+        # used to be an unconditional `worker_count = 0` on Darwin with no
+        # stated reason, which on the one platform whose GPU was about to be
+        # enabled meant every image was decoded on the calling thread. It also
+        # duplicated a fallback that already exists: `_run_dataloader` passes a
+        # timeout whenever workers are in play, so a stalled worker surfaces as
+        # a RuntimeError and is retried at num_workers=0 rather than hanging.
+        worker_count = min(
+            inference_batch_size,
+            os.cpu_count() // 2 or 1,
+            max(1, len(remaining_paths)),
+        )
 
         all_results: dict = {}
 
@@ -256,49 +266,62 @@ class WD14Service:
                 f"ONNX model not found: {onnx_path}. "
                 "Re-download with force_download=True."
             )
-        if self._device == "cpu":
-            logger.debug("Initialising WD14 tagger with CPUExecutionProvider")
-            self._ort_sess = ort.InferenceSession(
-                onnx_path, providers=["CPUExecutionProvider"]
-            )
-        else:
-            logger.debug("Initialising WD14 tagger with device: %s", self._device)
-            if "OpenVINOExecutionProvider" in ort.get_available_providers():
-                self._ort_sess = ort.InferenceSession(
-                    onnx_path,
-                    providers=["OpenVINOExecutionProvider"],
-                    provider_options=[{"device_type": "GPU", "precision": "FP32"}],
-                )
-            else:
-                # The share alone is a hard allocation failure below ~1.25 GB
-                # of budget: it loads the model and cannot run a single image.
-                # So it is floored by what this session's arena actually
-                # needs. The floor is the measured need plus ~10 %, and the
-                # share only clears that at the 2 GB default and again above
-                # ~24 GB - across 3-16 GB the share sits within a few per cent
-                # of the true need (at 8 GB, 3276 MiB against 3160) and the
-                # floor takes over to keep a margin. WD14 is therefore capped
-                # a little above 40 % of budget in that range: a ceiling, not
-                # a reservation, and an arena only grows to what a run asks
-                # for.
-                cuda_options = self._vram_budget.ort_cuda_provider_options(
-                    ORT_ARENA_SHARE["wd14"],
-                    min_limit_mb=self._vram_budget.wd14_arena_limit_mb(),
-                )
-                logger.debug("WD14 CUDA provider options: %s", cuda_options)
-                self._ort_sess = ort.InferenceSession(
-                    onnx_path,
-                    providers=(
-                        [("CUDAExecutionProvider", cuda_options)]
-                        if "CUDAExecutionProvider" in ort.get_available_providers()
-                        else [("ROCMExecutionProvider", {})]
-                        if "ROCMExecutionProvider" in ort.get_available_providers()
-                        else ["CPUExecutionProvider"]
-                    ),
-                )
+        logger.debug("Initialising WD14 tagger with device: %s", self._device)
+        # One ladder, in pixlstash.utils.accelerator, rather than a chain of
+        # provider tests here: this one knew about OpenVINO, CUDA and ROCm and
+        # so fell through to the CPU on a machine whose ONNX Runtime advertises
+        # CoreML. The options are computed unconditionally because they are
+        # cheap arithmetic, and ignored off CUDA.
+        #
+        # The share alone is a hard allocation failure below ~1.25 GB of
+        # budget: it loads the model and cannot run a single image. So it is
+        # floored by what this session's arena actually needs. The floor is the
+        # measured need plus ~10 %, and the share only clears that at the 2 GB
+        # default and again above ~24 GB - across 3-16 GB the share sits within
+        # a few per cent of the true need (at 8 GB, 3276 MiB against 3160) and
+        # the floor takes over to keep a margin. WD14 is therefore capped a
+        # little above 40 % of budget in that range: a ceiling, not a
+        # reservation, and an arena only grows to what a run asks for.
+        cuda_options = self._vram_budget.ort_cuda_provider_options(
+            ORT_ARENA_SHARE["wd14"],
+            min_limit_mb=self._vram_budget.wd14_arena_limit_mb(),
+        )
+        providers = onnx_execution_providers(
+            self._device,
+            ort.get_available_providers(),
+            cuda_options=cuda_options,
+            coreml_cache=self._coreml_cache(),
+        )
+        logger.debug("WD14 execution providers: %s", providers)
+        self._ort_sess = ort.InferenceSession(onnx_path, providers=providers)
         self._warn_if_the_session_fell_back_to_cpu()
         self._input_name = self._ort_sess.get_inputs()[0].name
         self._onnx_batch_capacity = self._resolve_batch_capacity()
+
+    def _coreml_cache(self) -> str | None:
+        """Directory CoreML compiles this model into, or ``None``.
+
+        Without it ONNX Runtime recompiles the model on every process start and
+        leaves the compiled bundle in a per-process temporary directory that
+        nothing cleans up. Best-effort: a cache that cannot be created is worth
+        a slower start, not a failed one, so the failure is logged and the
+        session is built uncached.
+
+        Returns:
+            Absolute path, or ``None`` when the directory could not be made.
+        """
+        cache_dir = coreml_cache_dir()
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            return cache_dir
+        except OSError as exc:
+            logger.warning(
+                "Could not create the CoreML model cache at %s (%s); the model "
+                "will be recompiled on every start-up.",
+                cache_dir,
+                exc,
+            )
+            return None
 
     def _warn_if_the_session_fell_back_to_cpu(self) -> None:
         """Say so when the session did not get the accelerator it asked for.
@@ -311,21 +334,26 @@ class WD14Service:
         (#1206 item 3b, live on a development box). ``get_providers()`` is the
         session's own answer, so it is the only one worth asking.
         """
-        if self._device == "cpu" or self._ort_sess is None:
+        if not is_accelerated(self._device) or self._ort_sess is None:
             return
         active = self._ort_sess.get_providers() or ["CPUExecutionProvider"]
         if active[0] != "CPUExecutionProvider":
             logger.debug("WD14 tagger session is running on %s", active[0])
             return
+        remedy = (
+            "pip uninstall -y onnxruntime && pip install onnxruntime-gpu"
+            if normalise_device(self._device) == CUDA
+            else "pip install --upgrade onnxruntime"
+        )
         logger.warning(
             "WD14 tagger asked onnxruntime for device %s, but the session "
             "loaded with %s: tagging will run on the CPU at a fraction of the "
             "speed. The usual cause is an execution provider this build "
             "advertises whose libraries are not installed (the CUDA provider "
-            "needs libcublasLt). Fix with: pip uninstall -y onnxruntime && "
-            "pip install onnxruntime-gpu",
+            "needs libcublasLt). Fix with: %s",
             self._device,
             active[0],
+            remedy,
         )
 
     def _resolve_batch_capacity(self) -> int:

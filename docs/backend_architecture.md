@@ -1467,7 +1467,87 @@ User plugin preferences are stored in a single `User.tagger_settings` JSON colum
 - Missing entries are filled with per-plugin defaults on every serialise; unknown plugin names are preserved on read for downgrade safety.
 - Written exclusively through `PATCH /users/me/config` (`tagger_settings` key); `user_settings_utils._apply_tagger_settings_patch` validates all plugin names and parameter names against the live registry.
 
-All models support CUDA and CPU. Models are lazily loaded on first `init()` call and can be unloaded after idle to free VRAM unless `keep_models_in_memory` is set.
+Models are lazily loaded on first `init()` call and can be unloaded after idle to free device memory unless `keep_models_in_memory` is set.
+
+#### Which accelerator a model runs on
+
+Every device decision routes through `pixlstash/utils/accelerator.py`, which is
+the single answer to "what is this machine's accelerator, and how do I use it".
+Before it, the question was spelled `torch.cuda.is_available()` in seventeen
+places, so "has a GPU" and "has CUDA" were the same sentence and an Apple
+Silicon Mac — whose GPU is real and roughly twenty times faster than its CPU at
+tagging — was told it had none. **No code path may infer "CPU" from "not
+CUDA".** A fourth backend is an entry in `_ACCELERATOR_PROBES` plus a dtype,
+cache and provider answer in the three functions that switch on the name.
+
+| Model | CUDA | Apple Silicon | Notes |
+|---|---|---|---|
+| `pixlstash_tagger` | fp16 | **MPS, fp16** | 23.7x over CPU. fp16 is tag-identical to fp32 and to CPU (max confidence drift 0.0019, no label moved >0.01) and costs ~45 % less device memory |
+| `wd14` | ONNX CUDA EP | **CoreML EP** | 3.4x. `ModelFormat: MLProgram` is mandatory — the provider's `NeuralNetwork` default fails on this model outright |
+| CLIP (`clip_service`) | fp16 | **MPS, fp32** | 1.8x. fp16 not adopted: embedding drift under cosine search is unmeasured |
+| SBERT (`sbert`) | inherits device | **MPS** | 2.1x, no code change — the device string passes straight through |
+| `florence2` | fp16 | **CPU (held)** | Verified correct on MPS (6/6 captions byte-identical) but only 1.15x: captioning is autoregressive, so dispatch overhead eats the gain. Held deliberately; see the comment at the load site |
+| `joycaption` | nf4 / fp16 | **CPU** | Blocked: its default `nf4` precision needs `bitsandbytes`, which has no MPS backend |
+| InsightFace (face pipeline) | ONNX CUDA EP | **CPU** | Blocked, measured: `det_10g` has a dynamic input shape and CoreML raises "Invalid shape for output feature `_448`" on the first detection |
+
+The safety nets are per-accelerator, not CUDA-only, and that matters more than
+the speed: a tagger that silently drops a batch is worse than a slow one. So
+the OOM classifier (`is_device_error`), the allocator cache flush
+(`empty_accelerator_cache`, reached through `vram_utils.empty_device_cache`)
+and the memory budget (`accelerator_total_memory_mb`) all answer per device.
+
+#### "VRAM" on unified memory
+
+On Apple Silicon there is no card and no separate pool — the GPU reads the same
+RAM as the OS and every other application — so every budget figure means *how
+much of one shared pool PixlStash may claim*. `accelerator_total_memory_mb`
+reports Metal's `recommendedMaxWorkingSetSize` (about two thirds of physical
+RAM) rather than a card's capacity, and `VramBudget` **defaults** MPS to that
+figure instead of to "unlimited": left alone, torch's MPS allocator hands out up
+to 1.7x the recommendation, which on an 8 GB machine is more memory than the
+machine has. `clamp_accelerator_memory` holds the allocator to the budget,
+which is what turns an over-large batch into a catchable `RuntimeError` that
+spills to the CPU instead of an uncatchable driver failure
+(`kIOGPUCommandBufferCallbackErrorOutOfMemory`). Image concurrency on MPS is
+capped at 8 rather than CUDA's 64 — MPS tagger throughput is flat from batch 1
+to 16, so a larger batch buys no speed and only spends shared RAM.
+
+The **default** budget is a separate question from the ceiling, and is answered
+from physical RAM rather than from Metal: `default_max_vram_gb()` returns
+`min(RAM / 2, 8 GB)` on Apple Silicon — 4 GB on an 8 GB machine, 8 GB on 16 GB
+and everything above. Physical RAM is the right denominator because the memory
+being budgeted is the machine's only memory, shared with the OS and everything
+else running; and the 8 GB cap exists because concurrency is capped well below
+what a larger budget would fund, so raising it would reserve memory without
+buying throughput. The card path's `max(4 GB, …)` floor is deliberately *not*
+applied to that answer — on a card a floor guards a dedicated resource, on
+unified memory it would hand a small machine half its total RAM. The ceiling the
+slider offers stays `max_vram_budget_gb()`, i.e. Metal's working set, so the
+owner can raise the budget but not past what the driver will honour.
+
+Batch sizing charges a **measured** memory model per device *and* per dtype.
+`PIXLSTASH_TAGGER_MPS_*` (450 MB + 240 MB/image, halving to 120 MB/image in
+fp16) come from fresh-process peak `driver_allocated_memory` at batch 8, and are
+kept beside the untouched CUDA pair (`700 + 90n`) rather than replacing it —
+neither was measured against the other's hardware. **WD14's figures are CUDA
+measurements reused unverified on the CoreML path**, where ORT's arena
+accounting is not comparable; the concurrency cap binds first on Apple Silicon,
+but a batch sized from them there is not sized from evidence.
+
+**JoyCaption stays selectable on Apple Silicon and says what it costs.** It
+bills ~8 GB for weights plus ~0.5 GB per image, taken from the same RAM the OS
+and everything else is using — so an 8 GB machine cannot run it at all and a
+16 GB one is tight. The warning is surfaced in the `precision` parameter's own
+help text (computed per host, so the Auto-tagging screen renders it where the
+choice is made) and in the plugin `description`, not only in a log line.
+
+Note what the constraint is *not*: bitsandbytes supports Apple Silicon.
+`supported_torch_devices` lists `mps`, and upstream marks both LLM.int8() and
+QLoRA 4-bit as supported on macOS arm64 — only the 8-bit *optimizers* are
+unimplemented, and those are a training feature nothing here uses. NF4 and INT8
+quantisation run on MPS through the device-agnostic `default` backend rather
+than tuned Metal kernels, so they work but may be slow. This paragraph
+originally asserted the opposite; the claim was never measured and was wrong.
 
 The `InferenceEngine` also exposes workflow accessor properties that wrap the tagger services:
 
