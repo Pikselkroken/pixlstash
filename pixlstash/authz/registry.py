@@ -1780,6 +1780,28 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Take one card out of its stack; POST blocked for READ tokens; owner only",
     ),
+    # The run route and its dry run (v1.12 B7). OWNER_ONLY, which is NARROWER
+    # than the PICTURE_SCOPED run routes in comfyui.py it will eventually
+    # replace, and deliberately so: those replay one named picture's own
+    # embedded graph, so a picture-scoped token asking to re-run a picture it
+    # holds is asking about its own object. This one runs a CARD, and a card is
+    # a whole-library identity - the graph it submits is resolved from the
+    # library's best picture or its stored instances whatever the caller was
+    # scoped to, the body names LoRAs by shelf digest, and the answer reports
+    # every card a selection groups into along with the model filenames it is
+    # missing. There is no per-object check that could describe any of that, so
+    # it is the owner's route or nobody's. The pre-flight carries exactly the
+    # same disclosure as the run and is declared identically rather than one
+    # tier down: a dry run that told a scoped token which models the library
+    # has would be the whole leak with none of the generation.
+    ("POST", "/api/v1/workflows/run"): RoutePolicy(
+        _OWNER,
+        justification="Run a workflow card; resolves a graph from the whole library; owner only",
+    ),
+    ("POST", "/api/v1/workflows/run/preflight"): RoutePolicy(
+        _OWNER,
+        justification="Dry run of the above; same disclosure, submits nothing; owner only",
+    ),
     ("POST", "/api/v1/workflows/stacks"): RoutePolicy(
         _OWNER,
         justification="Stack cards together; POST blocked for READ tokens; owner only",

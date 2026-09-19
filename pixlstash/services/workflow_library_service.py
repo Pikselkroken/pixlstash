@@ -22,6 +22,7 @@ from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture
 from pixlstash.services.saved_recipe_service import counts_by_workflow_key
+from pixlstash.stacking import get_or_create_stack_for_picture
 
 
 @dataclass(frozen=True)
@@ -480,3 +481,72 @@ def read_instance_hashes(
     return vault.db.run_immediate_read_task(
         instance_hashes_for_variants, structural_hashes, minimum_score, limit
     )
+
+
+def best_picture_ids(
+    session: Session, structural_hashes: list[str], limit: int
+) -> list[int]:
+    """The card's best kept pictures, best first.
+
+    The same order :func:`variant_cover_candidates` ranks by - rating, then the
+    smart score, then how recently it was used - narrowed to one card's
+    variants rather than run as a window pass over the whole table. "Best" is
+    what the run route wants: the picture whose embedded graph is most worth
+    re-running is the one the owner liked, not the one that happens to be
+    newest.
+    """
+    if not structural_hashes:
+        return []
+    return list(
+        session.exec(
+            select(Picture.id)
+            .where(Picture.workflow_structural_hash.in_(structural_hashes))
+            .where(Picture.deleted.is_(False))
+            .order_by(
+                nullslast(Picture.score.desc()),
+                nullslast(Picture.smart_score.desc()),
+                nullslast(_USED_AT.desc()),
+                Picture.id.desc(),
+            )
+            .limit(limit)
+        ).all()
+    )
+
+
+def read_best_picture_ids(vault, structural_hashes: list[str], limit: int) -> list[int]:
+    """The card's best kept pictures, in its own read task."""
+    return vault.db.run_immediate_read_task(best_picture_ids, structural_hashes, limit)
+
+
+def kept_pixel_shas(session: Session, pixel_shas: list[str]) -> set[str]:
+    """Which of these contents a kept picture still holds.
+
+    The read behind ``fixed_input_deleted``: a card's fixed picture input names
+    its picture by ``pixel_sha`` rather than by id, so the question "is it still
+    here" is a content lookup and not a row fetch.
+    """
+    if not pixel_shas:
+        return set()
+    return {
+        sha
+        for (sha,) in session.exec(
+            select(Picture.pixel_sha)
+            .where(Picture.pixel_sha.in_(pixel_shas))
+            .where(Picture.deleted.is_(False))
+        ).all()
+    }
+
+
+def read_kept_pixel_shas(vault, pixel_shas: list[str]) -> set[str]:
+    """Which of these contents a kept picture still holds, in its own task."""
+    return vault.db.run_immediate_read_task(kept_pixel_shas, pixel_shas)
+
+
+def stack_for_picture(vault, picture_id: int) -> Optional[int]:
+    """The stack this picture is in, created if it has none.
+
+    A write, and here rather than in ``pixlstash/stacking.py`` so a route never
+    reaches for ``vault.db`` itself (the guardrail in
+    ``tests/test_architecture_guardrails.py``).
+    """
+    return vault.db.run_task(get_or_create_stack_for_picture, picture_id)

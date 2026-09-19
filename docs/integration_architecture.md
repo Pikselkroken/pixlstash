@@ -527,6 +527,52 @@ raising a `workflows_changed` event (§8) on the way out:
 | `PUT /api/v1/workflows/stacks/{stack_id}/order` | Reorder, `keys[0]` the cover | `{keys}` (≥2) → `{stack_id, keys}`. Ordering an `auto:<core hash>` grouping is what materialises it |
 | `POST /api/v1/workflows/stacks/{stack_id}/unstack` | Dissolve a whole stack | — → `{stack_id: null, keys}` |
 
+Running a card (v1.12 B7), also `OWNER_ONLY` — which is **narrower** than the
+`PICTURE_SCOPED` run routes in `comfyui.py`, because a card is a whole-library
+identity rather than one caller's picture. Neither route raises
+`workflows_changed`: a run makes a picture, and the card it ran is unchanged.
+
+| Route | Purpose | Body → Response |
+|---|---|---|
+| `POST /api/v1/workflows/run/preflight` | What a run would do, doing none of it | The body below → `{ok, runs, groups: [RunGroup]}` |
+| `POST /api/v1/workflows/run` | Run it | The same body → `{status, runs, groups, prompts: [{workflow_key, prompt_id}]}`; `status: "refused"` with `prompts: []` when nothing was submittable |
+
+The body, identical on both: **exactly one source** — `picture_ids`,
+`saved_recipe_id` or `workflow_key` (400 otherwise) — plus an optional `target`
+workflow key that runs *that* card instead, which is how a stack's other member
+is chosen. Then `prompt`, `negative`, `loras: [{node_id, field, sha256,
+strength_model?, strength_clip?}]` (**one slot is a node AND a field**, so a
+stacker's `lora_name_1` and `lora_name_2` are two slots), `values:
+[{slot_label, input_name, value}]` addressed the way a card's defaults are,
+`count`, `seed_mode: "new" | "keep" | "fixed"` with `seed`, `inputs`,
+`destination: {set_id?, project_id?, character_id?}`, `stack` and
+`allow_unchecked`.
+
+Four rules the client must not re-derive:
+
+1. **With several pictures and no `target`, the server groups them by each
+   picture's recipe.** A selection spanning three cards is three groups, each
+   carrying the pictures that chose it — not one run of the first card over all
+   of them.
+2. **`reasons` empty is the only thing that means "this would run".** Each
+   entry is `{code, …payload}` from a closed set: `comfyui_not_configured`,
+   `comfyui_unreachable`, `ui_format`, `missing_nodes: {nodes}`,
+   `missing_models: {models: [{file, folder}]}`, `a1111`, `fixed_input_deleted`,
+   `no_lora_loader`, `pixlstash_nodes`, `no_save_node`, `no_runnable_source`.
+   A code and never a sentence: one batch mixes sources, and a panel grouping
+   "these four are missing the same model" cannot do it from prose.
+3. **A missing model blocks the whole batch**, mixed or not, and so does an
+   unreachable ComfyUI. Every group's `runs` goes to zero and nothing is
+   submitted — including the groups whose own `reasons` are empty.
+4. **A new run is NOT stacked with the picture it came from** unless the body
+   says `stack: true`. This is where it differs from `POST /comfyui/run_recipe`,
+   which stacks by default: that replays one picture's own graph, so the output
+   genuinely is another take of it, while this runs a card.
+
+**Edited defaults are overrides applied at run time and never written back into
+a graph.** The stored document is content-addressed, so rewriting it would
+change the identity of the very card being run.
+
 Two rules the writes add to the five below: **a stack left with one member
 dissolves** (the row goes, and the card stands on its own), and a
 `{stack_id}` is either a minted 32-hex id or `auto:` followed by a 64-hex core
