@@ -30,32 +30,14 @@ jobs:
           RELEASE_REF: ${{ github.ref }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          python - <<'PY'
-          import os
-          import pathlib
-          import re
-          import sys
-          import tomllib
-
-          release_ref = os.environ["RELEASE_REF"]
-          tag = os.environ["RELEASE_TAG"]
-          tag_pattern = re.compile(
-              r"^v[0-9]+\.[0-9]+\.[0-9]+"
-              r"(?:(?:a|b|rc)[0-9]+|[.-]dev[.-]?[0-9]+)?$"
-          )
-          if release_ref != f"refs/tags/{tag}" or not tag_pattern.fullmatch(tag):
-              print(f"::error::Ref {release_ref!r} is not an allowed release tag")
-              sys.exit(1)
-
-          pyproject = pathlib.Path("pyproject.toml")
-          data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-          expected = f"v{data['project']['version']}"
-          if tag != expected:
-              print(f"::error::Tag {tag} does not match project version {expected}")
-              sys.exit(1)
-
-          print(f"Tag/version check passed: {tag}")
-          PY
+          python -m pip install --upgrade pip packaging
+          [ "$RELEASE_REF" = "refs/tags/$RELEASE_TAG" ] || {
+            echo "::error::Ref '$RELEASE_REF' is not an allowed release tag" >&2
+            exit 1
+          }
+          version=$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])")
+          python scripts/check_release_tag.py "$RELEASE_TAG" "$version"
+          echo "Tag/version check passed: $RELEASE_TAG"
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
