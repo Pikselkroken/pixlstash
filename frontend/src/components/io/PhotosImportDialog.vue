@@ -540,6 +540,6 @@ watch(dialogOpen, (isOpen) => {
   text-transform: uppercase;
   letter-spacing: 0.03em;
   background: rgba(var(--v-theme-warning), 0.16);
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
 }
 </style>

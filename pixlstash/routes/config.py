@@ -14,7 +14,6 @@ from PIL import Image
 from pixlstash.database import DBPriority
 from pixlstash.db_models import User
 from pixlstash.hub.workflows import (
-    erase_picture_ghosts as hub_erase_picture_ghosts,
     forget_model_ghosts,
     model_ghost_names,
     picture_ghost_count,
@@ -1208,11 +1207,7 @@ def create_router(server) -> APIRouter:
                     f"{list(workflow_ghost_service.GHOST_RETENTION_CHOICES)}."
                 ),
             )
-        server._server_config[workflow_ghost_service.GHOST_RETENTION_KEY] = value
-        server.vault.set_ghost_retention(value)
-        config_path = getattr(server, "_server_config_path", None)
-        if config_path:
-            persist_server_config(config_path, server._server_config)
+        workflow_ghost_service.apply_ghost_retention(server, value)
         return _ghost_retention_payload()
 
     class GhostEraseResponse(BaseModel):
@@ -1241,7 +1236,9 @@ def create_router(server) -> APIRouter:
             )
         return {
             "status": "success",
-            "ghosts_erased": hub_erase_picture_ghosts(hub, library_uuid),
+            "ghosts_erased": workflow_ghost_service.erase_library_ghosts(
+                server.vault.db, hub, library_uuid
+            ),
         }
 
     class ModelGhostForgetResponse(BaseModel):

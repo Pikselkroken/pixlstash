@@ -959,6 +959,17 @@ class LibraryRegistry:
                 "DELETE FROM workflow_picture_ghost WHERE library_uuid = ?",
                 (library.uuid,),
             )
+            # And its instances, the prompts and parameters, for the same reason.
+            conn.execute(
+                "DELETE FROM workflow_recipe_instance WHERE library_uuid = ?",
+                (library.uuid,),
+            )
+            # And its workflow setups, whose Fixed inputs name its pictures by
+            # content hash.
+            conn.execute(
+                "DELETE FROM workflow_picture_input WHERE library_uuid = ?",
+                (library.uuid,),
+            )
             conn.execute("DELETE FROM library WHERE id = ?", (library.id,))
         logger.info("Forgot the registration for %s at %s", library.name, library.path)
 

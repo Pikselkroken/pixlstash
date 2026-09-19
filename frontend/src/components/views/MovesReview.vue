@@ -20,6 +20,10 @@
         >
           Look again
         </AppButton>
+        <!-- The app-wide tail, minus undo: this view replaces the grid and its
+             toolbar, so without it neither Settings nor the right rail has a
+             control on the screen (#1415). -->
+        <TbGlobalActions separator @open-settings="emit('open-settings')" />
       </div>
     </div>
 
@@ -231,10 +235,14 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
 import AppButton from "../widgets/AppButton.vue";
+import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { useMovesStore } from "../../stores/useMovesStore";
 import { errorDetail } from "../../utils/apiError";
+
+// Settings is App.vue's dialog; TbGlobalActions flips the sidebar store itself.
+const emit = defineEmits(["open-settings"]);
 
 const store = useMovesStore();
 const loading = computed(() => store.loading);
@@ -473,7 +481,7 @@ onMounted(() => {
 }
 
 .mv-state--error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .mv-lede {
@@ -494,11 +502,11 @@ onMounted(() => {
 }
 
 .mv-card--clear {
-  border-left: 3px solid rgb(var(--v-theme-success));
+  border-left: 3px solid rgb(var(--v-theme-surface-success));
 }
 
 .mv-card--warn {
-  border-left: 3px solid rgb(var(--v-theme-warning));
+  border-left: 3px solid rgb(var(--v-theme-surface-warning));
 }
 
 .mv-card-head {
@@ -601,12 +609,12 @@ onMounted(() => {
 
 .mv-etag--out {
   background: rgba(var(--v-theme-error), 0.12);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .mv-etag--in {
   background: rgba(var(--v-theme-success), 0.14);
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-surface-success));
 }
 
 .mv-etag-facet {

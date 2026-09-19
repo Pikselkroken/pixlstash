@@ -152,14 +152,14 @@ describe("an install with nothing in it", () => {
     expect(wrapper.emitted("choose-folder")).toHaveLength(1);
   });
 
-  it("asks for the workflows pane by name for ComfyUI", async () => {
+  it("asks for the compute pane by name for ComfyUI", async () => {
     // Not just "open settings": the ComfyUI URL lives on that pane, and an
     // unnamed tab lands on Appearance.
     const wrapper = await settleEmpty(mountGrid());
 
     await emptyState(wrapper).vm.$emit("connect-comfyui");
 
-    expect(wrapper.emitted("open-settings")[0]).toEqual(["workflows"]);
+    expect(wrapper.emitted("open-settings")[0]).toEqual(["compute"]);
   });
 
   it("passes chosen files up as a local import", async () => {

@@ -265,7 +265,7 @@ function formatCount(value) {
   padding: var(--space-3);
   border-radius: var(--radius-md);
   background: rgba(var(--v-theme-warning), 0.12);
-  border: 1px solid rgba(var(--v-theme-warning), 0.35);
+  border: 1px solid rgba(var(--v-theme-surface-warning), 0.35);
   font-size: var(--text-xs);
   line-height: var(--leading-body);
   color: rgb(var(--v-theme-on-surface));

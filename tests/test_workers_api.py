@@ -80,6 +80,33 @@ def test_an_active_dedup_scan_never_reports_terminal_task_progress(monkeypatch):
         gc.collect()
 
 
+def test_workflow_card_backfill_does_not_report_the_picture_library_as_its_progress(
+    monkeypatch,
+):
+    """The Workflow cards row is counted over the hub's recipes.
+
+    Same trap as the Checkpoint Hash row below: the generic `planner_managed`
+    branch leaves `total` at the picture count and `missing` at 0, so a pass
+    working through thousands of recipes reads as finished from the first
+    second. The sentinel picture count is what tells the two branches apart.
+    """
+    temp_dir, _client, server = _setup()
+    try:
+        monkeypatch.setattr(
+            server.vault, "_count_total_pictures", lambda _session: 4242
+        )
+        workers = server.vault.get_worker_progress()
+        snapshot = workers[TaskType.WORKFLOW_CARD_BACKFILL.value]
+        assert snapshot["label"] == "workflows_carded"
+        assert workers[TaskType.QUALITY.value]["total"] == 4242
+        # No hub registration in this fixture, so there are no recipes to count.
+        assert (snapshot["total"], snapshot["current"]) == (0, 0)
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_checkpoint_hash_does_not_report_the_picture_library_as_its_progress(
     monkeypatch,
 ):

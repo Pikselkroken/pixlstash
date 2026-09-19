@@ -1116,12 +1116,12 @@ function onDblClick(event) {
 /* The hue is on the glyph and the border; the text stays `on-surface`, because
    `on-<x>` is only ever correct on a solid `<x>` fill. */
 .gexp-state--error {
-  border-color: rgb(var(--v-theme-warning));
+  border-color: rgb(var(--v-theme-surface-warning));
   color: rgb(var(--v-theme-on-surface));
 }
 
 .gexp-state--error .v-icon {
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 /* The flag's sentence and its way to the Mixed stacks page. A line, not a
@@ -1140,7 +1140,7 @@ function onDblClick(event) {
 
 .gexp-flag .v-icon {
   flex-shrink: 0;
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 /* The verdict column: one action per line, never wrapping under the strip. */

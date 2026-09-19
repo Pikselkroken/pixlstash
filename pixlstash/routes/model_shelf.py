@@ -112,10 +112,12 @@ from pixlstash.services.model_shelf_service import (
     attached_hashes,
     fetch_attachments,
     fetch_capabilities,
+    fetch_companions,
     fetch_distinct_base_models,
     fetch_locations,
     fetch_model_by_hash,
     fetch_models,
+    fetch_picture_counts,
     forget_models,
     replace_attachments,
     update_models,
@@ -129,7 +131,7 @@ from pixlstash.utils.adapter_header import (
     FILE_VAE,
 )
 from pixlstash.utils.host_open import open_in_file_manager
-from pixlstash.utils.known_base_models import completions, fold
+from pixlstash.utils.known_base_models import completions, family_of, fold
 from pixlstash.utils.path_utils import path_is_within
 
 logger = get_logger(__name__)
@@ -294,6 +296,32 @@ class ModelResponse(BaseModel):
             "actually says."
         ),
     )
+    family: Optional[str] = Field(
+        default=None,
+        description=(
+            "The architecture family. From `base_model` when it folds to a "
+            "known base (`sdxl`, `flux1`, ...), otherwise what the header's "
+            "tensors show for a support file (`vae_4ch`, `vae_16ch`, `clip_l`, "
+            "`clip_g`, `t5_xxl`, ...). Null when neither says. Never a group: "
+            "one T5 serves several families."
+        ),
+    )
+    quant: Optional[str] = Field(
+        default=None,
+        description=(
+            "The header dtype holding most of the parameters (`f16`, `bf16`, "
+            "`f8_e4m3`, ...), or `mixed`. Read from the header, never from the "
+            "filename."
+        ),
+    )
+    weights_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Hash of the tensor names and shapes without their dtypes: two "
+            "rows sharing it are one model stored at different precisions. A "
+            "repack that adds tensors gets a different one."
+        ),
+    )
     trigger_words: Optional[str] = None
     provenance: str = Field(
         description="``external`` for anything found on disk; ``trained`` for a run we ran."
@@ -349,6 +377,22 @@ class ModelResponse(BaseModel):
             "draws as a generated mark rather than as a blank cell. A hash "
             "rather than a URL so several rows sharing a logo are visibly the "
             "same object and the browser caches one response for all of them."
+        ),
+    )
+    pictures_verified: int = Field(
+        default=0,
+        description=(
+            "Pictures in the active library, Scrapheap excluded, whose workflow "
+            "loaded this model by its sha256: that exact file."
+        ),
+    )
+    pictures_by_filename: int = Field(
+        default=0,
+        description=(
+            "Further pictures whose workflow names a file with this model's "
+            "filename. Unverified: a file of that name, not necessarily this "
+            "one. Never folded into `pictures_verified`, and a picture counted "
+            "there is not counted here."
         ),
     )
     locations: list[ModelLocation] = Field(
@@ -528,6 +572,79 @@ class ModelForgetResponse(BaseModel):
     )
 
 
+class ModelCompanionsRequest(BaseModel):
+    """Body of ``POST /models/companions``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ids: list[int] = Field(
+        min_length=1,
+        max_length=MAX_MODELS_PER_EDIT,
+        description="The models about to be deleted, by hub `model.id`.",
+    )
+
+
+class CompanionModel(BaseModel):
+    """One model named in a companions answer."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: int
+    name: str = Field(description="Display name, else filename.")
+
+
+class CompanionFile(CompanionModel):
+    """A support file a delete affects."""
+
+    file_size: Optional[int] = None
+    used_with: list[CompanionModel] = Field(
+        default_factory=list,
+        description="Base models staying on the shelf that ran with it.",
+    )
+
+
+class ModelCompanionsResponse(BaseModel):
+    """Body of ``POST /models/companions``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    orphaned: list[CompanionFile] = Field(
+        description=(
+            "Support files whose every user a recipe records is being deleted. "
+            "Not proof nothing needs them: a kept base model no recipe names "
+            "may (see `unrecorded`). The delete does not take them."
+        )
+    )
+    shared: list[CompanionFile] = Field(
+        description="Support files a model staying on the shelf still runs with."
+    )
+    unknown: list[CompanionFile] = Field(
+        description=(
+            "Support files a recipe named only by a filename two shelf rows "
+            "share, or beside a model digest the shelf cannot yet match "
+            "because a hash is pending. Never counted as orphaned."
+        )
+    )
+    in_use: list[CompanionFile] = Field(
+        description=(
+            "Support files being deleted that a model staying on the shelf "
+            "has run with."
+        )
+    )
+    no_evidence: list[int] = Field(
+        description=(
+            "Ids being deleted that no recipe names, so nothing can be said "
+            "about what they use."
+        )
+    )
+    unrecorded: int = Field(
+        description=(
+            "Base models staying on the shelf that no recipe names, any of "
+            "which could use an `orphaned` file."
+        )
+    )
+
+
 class ModelOpenLocationResponse(BaseModel):
     """Body of ``POST /models/{model_id}/open-location``."""
 
@@ -599,7 +716,9 @@ def _to_response(
     locations: dict[int, list[dict]],
     attachments: dict[str, list[dict]],
     capabilities: dict[int, list[str]],
+    picture_counts: dict[int, dict[str, int]],
 ) -> ModelResponse:
+    counts = picture_counts.get(int(row["id"]), {})
     return ModelResponse(
         id=int(row["id"]),
         sha256=row["sha256"],
@@ -609,6 +728,9 @@ def _to_response(
         filename=row["filename"],
         base_model=row["base_model"],
         base_model_folded=fold(row["base_model"]),
+        family=family_of(row["base_model"]) or row["family"],
+        quant=row["quant"],
+        weights_id=row["weights_id"],
         trigger_words=row["trigger_words"],
         provenance=row["provenance"],
         training_run_id=row["training_run_id"],
@@ -630,6 +752,8 @@ def _to_response(
             ModelAttachment(**att) for att in attachments.get(row["sha256"] or "", [])
         ],
         capabilities=capabilities.get(int(row["id"]), []),
+        pictures_verified=counts.get("verified", 0),
+        pictures_by_filename=counts.get("by_filename", 0),
     )
 
 
@@ -690,7 +814,11 @@ def create_router(server) -> APIRouter:
         locations = fetch_locations(server.hub)
         attachments = fetch_attachments(server.vault)
         capabilities = fetch_capabilities(server.hub)
-        return [_to_response(row, locations, attachments, capabilities) for row in rows]
+        picture_counts = fetch_picture_counts(server.hub, server.vault)
+        return [
+            _to_response(row, locations, attachments, capabilities, picture_counts)
+            for row in rows
+        ]
 
     @router.get(
         "/adapters",
@@ -799,6 +927,7 @@ def create_router(server) -> APIRouter:
             fetch_locations(server.hub, int(row["id"])),
             fetch_attachments(server.vault, sha256=sha256),
             fetch_capabilities(server.hub, int(row["id"])),
+            fetch_picture_counts(server.hub, server.vault),
         )
 
     @router.get(
@@ -1207,6 +1336,31 @@ def create_router(server) -> APIRouter:
             forgotten=forgotten,
             refused=[ForgetRefusal(**item) for item in refused],
         )
+
+    @router.post(
+        "/models/companions",
+        summary="What deleting models would leave behind",
+        description=(
+            "Given the models about to be deleted, which VAEs and text "
+            "encoders they ran with no recipe pairs with any kept model "
+            "(`orphaned`), which are still used by a model staying on the "
+            "shelf (`shared`), and which cannot be told apart from another "
+            "file of the same name (`unknown`). Also which of the deleted "
+            "support files a kept model still runs with (`in_use`).\n\n"
+            "The evidence is the recipes the hub has read from pictures, in "
+            "every library: models in one recipe ran together. **A model no "
+            "recipe names is reported under `no_evidence`**, never as unused. "
+            "Changes nothing."
+        ),
+        tags=["model_shelf"],
+        response_model=ModelCompanionsResponse,
+    )
+    def shelf_model_companions(
+        request: Request,
+        payload: ModelCompanionsRequest = Body(...),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        return ModelCompanionsResponse(**fetch_companions(server.hub, payload.ids))
 
     @router.post(
         "/models/{model_id}/open-location",

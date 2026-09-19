@@ -14,7 +14,7 @@
   },
   "76": {
     "inputs": {
-      "image": "{{image_path}}"
+      "image": "example.png"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -143,7 +143,7 @@
   },
   "75:74": {
     "inputs": {
-      "text": "{{caption}}",
+      "text": "",
       "clip": [
         "75:71",
         0

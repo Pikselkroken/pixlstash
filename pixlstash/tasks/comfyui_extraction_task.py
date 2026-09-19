@@ -6,13 +6,16 @@ from sqlalchemy.orm import load_only
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Picture
-from pixlstash.hub.workflows import record_api_graph
+from pixlstash.db_models import Generation, Picture
+from pixlstash.hub.workflows import record_api_graph, record_reduction
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.a1111_recipe import reduce_a1111
+from pixlstash.services.workflow_ghost_service import enqueue_ghost_cascade_in_session
 from pixlstash.services.workflow_hash import HASH_VERSION, WorkflowGraphError
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
 from pixlstash.utils.comfyui_utilities import (
     extract_comfy_workflow_info,
+    extract_generation_info,
     find_comfy_api_prompt,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -41,6 +44,13 @@ class ComfyUIExtractionTask(BaseTask):
     Without a hub (the CLI tools, most tests) the workflow columns are left
     alone, so a vault that later gains one is scanned then rather than being
     marked scanned with nothing recorded.
+
+    **And it records how the picture was made**: the instance row in the hub
+    (the parameters, per library) and the ``generation`` row in the vault (the
+    seed). Pictures filed before those existed come back through here once,
+    migration 0118 having cleared their scanned marker. That revisit **never
+    loses a key it already had**: a file that cannot be read now (an unplugged
+    drive, a stripped copy) keeps its hashes, and gets a generation with no seed.
     """
 
     BATCH_SIZE = 32
@@ -52,6 +62,7 @@ class ComfyUIExtractionTask(BaseTask):
         pictures: list[Picture],
         hub=None,
         on_hub_failure=None,
+        library_uuid=None,
     ):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
         super().__init__(
@@ -66,6 +77,7 @@ class ComfyUIExtractionTask(BaseTask):
         self._pictures = pictures or []
         self._hub = hub
         self._on_hub_failure = on_hub_failure
+        self._library_uuid = library_uuid
         self._stop_event = threading.Event()
 
     def on_cancel(self) -> None:
@@ -90,6 +102,7 @@ class ComfyUIExtractionTask(BaseTask):
                         Picture.id,
                         Picture.file_path,
                         Picture.comfyui_models,
+                        Picture.workflow_instance_hash,
                     )
                 )
             ).all()
@@ -107,7 +120,7 @@ class ComfyUIExtractionTask(BaseTask):
         # or been stripped replaces real stored models and LoRAs with the "[]"
         # sentinel. The extraction happened once; the revisit only adds keys.
         updates: list[tuple] = []
-        # (picture_id, topology_hash, structural_hash, instance_hash). Absent from
+        # (picture_id, topology_hash, structural_hash, instance_hash, seed). Absent from
         # this list when it was NOT scanned for a workflow -- no hub attached, or
         # a hub write that failed -- so `workflow_hash_version IS NULL` keeps
         # meaning "never scanned" and the finder hands it back later.
@@ -127,18 +140,19 @@ class ComfyUIExtractionTask(BaseTask):
             # Already extracted by a pre-B3 run: this visit is for the workflow
             # keys alone and must leave the ComfyUI columns exactly as they are.
             write_comfyui = pic.comfyui_models is None
+            revisit = pic.workflow_instance_hash is not None
 
             if not resolved or not os.path.exists(resolved):
                 # Write the sentinel so the finder never re-queues this picture.
                 updates.append((pic.id, None, "[]", "[]", False, write_comfyui))
-                self._record(workflow_updates, pic.id, None)
+                self._record(workflow_updates, pic.id, None, revisit)
                 checked += 1
                 continue
 
             if VideoUtils.is_video_file(resolved):
                 # Videos cannot contain ComfyUI metadata; mark as done.
                 updates.append((pic.id, None, "[]", "[]", False, write_comfyui))
-                self._record(workflow_updates, pic.id, None)
+                self._record(workflow_updates, pic.id, None, revisit)
                 checked += 1
                 continue
 
@@ -188,18 +202,16 @@ class ComfyUIExtractionTask(BaseTask):
             )
             # Same file read, same parsed chunks: the hub write is the only
             # extra work, and it is a no-op for a graph already filed.
-            self._record(workflow_updates, pic.id, embedded_metadata)
+            self._record(workflow_updates, pic.id, embedded_metadata, revisit)
             checked += 1
 
         if not updates:
             return {"checked": 0, "found_comfyui": 0, "found_workflow": 0}
 
-        scanned_workflows = {
-            pid: (topology, structural, instance)
-            for pid, topology, structural, instance in workflow_updates
-        }
+        scanned_workflows = {pid: keys for pid, *keys in workflow_updates}
 
         def persist(session: Session, rows: list[tuple]):
+            vanished: list[str] = []
             for (
                 pid,
                 pos_prompt,
@@ -210,6 +222,11 @@ class ComfyUIExtractionTask(BaseTask):
             ) in rows:
                 db_pic = session.get(Picture, pid)
                 if db_pic is None:
+                    # Destroyed while its file was being read. Its delete queued
+                    # the cascade already, but that may have run before the
+                    # instance row below was written, so it is queued again.
+                    if scanned_workflows.get(pid, (None,) * 4)[2]:
+                        vanished.append(scanned_workflows[pid][2])
                     continue
                 if write_comfyui:
                     if pos_prompt is not None:
@@ -223,21 +240,31 @@ class ComfyUIExtractionTask(BaseTask):
                     if clear_embedding:
                         db_pic.text_embedding = None
                 if pid in scanned_workflows:
-                    topology, structural, instance = scanned_workflows[pid]
-                    db_pic.workflow_topology_hash = topology
-                    db_pic.workflow_structural_hash = structural
-                    db_pic.workflow_instance_hash = instance
+                    topology, structural, instance, seed = scanned_workflows[pid]
+                    # Never replaced by NULL: nothing found this time is a fact
+                    # about the read, and the keys came from a read that worked.
+                    # Written for 0118's same-version revisit. A HASH_VERSION
+                    # bump must not rely on it: it would stamp old-rule keys
+                    # with the new version.
+                    if structural is not None or db_pic.workflow_instance_hash is None:
+                        db_pic.workflow_topology_hash = topology
+                        db_pic.workflow_structural_hash = structural
+                        db_pic.workflow_instance_hash = instance
                     # Set last: it is the marker that the other three are final.
                     db_pic.workflow_hash_version = HASH_VERSION
+                    if db_pic.workflow_instance_hash is not None:
+                        generation = session.get(Generation, pid)
+                        if generation is None:
+                            session.add(Generation(picture_id=pid, seed=seed))
+                        elif seed is not None:
+                            generation.seed = seed
                 session.add(db_pic)
             session.commit()
+            if vanished:
+                enqueue_ghost_cascade_in_session(session, vanished)
 
         self._db.run_task(persist, updates, priority=DBPriority.LOW)
-        found_workflow = sum(
-            1
-            for topology, _structural, _instance in scanned_workflows.values()
-            if topology
-        )
+        found_workflow = sum(1 for keys in scanned_workflows.values() if keys[0])
         logger.debug(
             "ComfyUIExtractionTask: checked=%s, found_comfyui=%s, found_workflow=%s",
             checked,
@@ -250,8 +277,10 @@ class ComfyUIExtractionTask(BaseTask):
             "found_workflow": found_workflow,
         }
 
-    def _record(self, workflow_updates: list, picture_id: int, embedded_metadata):
-        """File the picture's embedded API graph in the hub, if there is one.
+    def _record(
+        self, workflow_updates: list, picture_id: int, embedded_metadata, revisit: bool
+    ):
+        """File the picture's embedded API graph, or A1111 data, in the hub.
 
         The rule the two outcomes turn on: **a property of the picture marks it
         scanned; a failure of our own machinery does not.** No graph, an
@@ -261,26 +290,37 @@ class ComfyUIExtractionTask(BaseTask):
         written is neither, so the picture is left unmarked -- "this could not
         be filed" and "this picture has no workflow" must never be the same row.
 
-        Appends ``(picture_id, topology_hash, structural_hash, instance_hash)``
-        when the picture was scanned, and appends nothing when it was not.
+        Appends ``(picture_id, topology_hash, structural_hash, instance_hash,
+        seed)`` when the picture was scanned, and appends nothing when it was
+        not. The seed is text; see :class:`~pixlstash.db_models.Generation`.
 
         Args:
             workflow_updates: Accumulator for the batch's persist step.
             picture_id: The picture being scanned, for the log lines.
             embedded_metadata: What ``extract_embedded_metadata`` returned, or
                 ``None`` for a picture whose file was never opened.
+            revisit: The picture already carries keys; see
+                :func:`~pixlstash.hub.workflows.record_api_graph`.
         """
         if self._hub is None:
             return
         try:
             api_graph = find_comfy_api_prompt(embedded_metadata)
-            if api_graph is None:
-                # No executable `prompt` chunk: an imported JPEG, an A1111 PNG,
-                # or a file whose metadata was stripped. Normal, not a failure,
-                # and roughly a third of a real library.
-                workflow_updates.append((picture_id, None, None, None))
+            a1111 = None if api_graph else reduce_a1111(embedded_metadata)
+            if api_graph is None and a1111 is None:
+                # No executable `prompt` chunk and no A1111 generation data: an
+                # imported JPEG or a file whose metadata was stripped. Normal,
+                # not a failure, and roughly a third of a real library.
+                workflow_updates.append((picture_id, None, None, None, None))
                 return
-            keys = record_api_graph(self._hub, api_graph)
+            if a1111 is not None:
+                keys = record_reduction(
+                    self._hub, a1111.nodes, self._library_uuid, revisit=revisit
+                )
+            else:
+                keys = record_api_graph(
+                    self._hub, api_graph, self._library_uuid, revisit=revisit
+                )
         except WorkflowGraphError as exc:
             # A graph WAS embedded and the hash layer refused it -- malformed
             # `class_type`, non-mapping `inputs`, a cycle. That is permanent, so
@@ -294,17 +334,27 @@ class ComfyUIExtractionTask(BaseTask):
                 picture_id,
                 exc,
             )
-            workflow_updates.append((picture_id, None, None, None))
+            workflow_updates.append((picture_id, None, None, None, None))
             return
         except Exception as exc:
             self._stand_down(picture_id, exc)
             return
+        if a1111 is not None:
+            seed = a1111.seed
+        else:
+            seed = extract_generation_info(api_graph).get("seed")
+            seed = (
+                str(seed)
+                if isinstance(seed, int) and not isinstance(seed, bool)
+                else None
+            )
         workflow_updates.append(
             (
                 picture_id,
                 keys.topology_hash,
                 keys.structural_hash,
                 keys.instance_hash,
+                seed,
             )
         )
 

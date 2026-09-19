@@ -20,15 +20,13 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.media_files import SUPPORTED_MEDIA_EXTS
 
 logger = get_logger(__name__)
 
 # File extensions that should trigger a rescan when they change.
 _SIDECAR_EXTS: frozenset[str] = frozenset({".txt", ".caption"})
-_IMAGE_EXTS: frozenset[str] = frozenset(
-    {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif", ".avif"}
-)
-_WATCHED_EXTS: frozenset[str] = _SIDECAR_EXTS | _IMAGE_EXTS
+_WATCHED_EXTS: frozenset[str] = _SIDECAR_EXTS | SUPPORTED_MEDIA_EXTS
 
 # Top-level directories under the library root that PixlStash writes itself
 # (snapshots, the set/face thumbnail caches under tmp). A change there is never

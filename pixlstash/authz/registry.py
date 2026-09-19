@@ -533,6 +533,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # constraints would reject) and that is a data check, not a scope one.
     ("PATCH", "/api/v1/models"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/models/forget"): RoutePolicy(_OWNER),
+    # The question in front of Delete (#1314): which support files the models
+    # would leave with nothing to serve. Reads hub rows only and changes
+    # nothing, so it sits with the shelf reads rather than with the delete's
+    # §16.3 tier.
+    ("POST", "/api/v1/models/companions"): RoutePolicy(_OWNER),
     # The shelf's sixth verb, and the one route on this block that spawns a
     # process on the host's desktop. Same authority - and same red-line tier -
     # as POST /pictures/{id}/open-location: what it can do is bounded by what
@@ -822,6 +827,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/pictures/{id}/faces"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/{id}/{field}"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/{id}/anomaly_region"): RoutePolicy(_PIC, id_param="id"),
+    ("GET", "/api/v1/pictures/{id}/text"): RoutePolicy(_PIC, id_param="id"),
+    # Re-reads one picture's text: derived data only, nothing the owner wrote is
+    # touched. Same class as the other per-picture mutations; READ tokens are
+    # refused earlier by the middleware (POST not in READ_SAFE).
+    ("POST", "/api/v1/pictures/{id}/text/read"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/thumbnails/{id}.webp"): RoutePolicy(_PIC, id_param="id"),
     ("PATCH", "/api/v1/pictures/{id}"): RoutePolicy(_PIC, id_param="id"),
     ("POST", "/api/v1/pictures/{id}/face"): RoutePolicy(_PIC, id_param="id"),
@@ -1430,6 +1440,30 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Delete workflow; DELETE blocked for READ tokens; owner only",
     ),
+    ("GET", "/api/v1/comfyui/workflows/{workflow_name}/inputs"): RoutePolicy(
+        _OWNER,
+        justification="Workflow setup; names the Fixed pictures by id; owner only",
+    ),
+    ("PUT", "/api/v1/comfyui/workflows/{workflow_name}/inputs"): RoutePolicy(
+        _OWNER,
+        justification="Workflow setup; PUT blocked for READ tokens; owner only",
+    ),
+    ("GET", "/api/v1/comfyui/workflows/{workflow_name}/parameters"): RoutePolicy(
+        _OWNER,
+        justification="Workflow parameters; reaches the owner's ComfyUI; owner only",
+    ),
+    ("GET", "/api/v1/comfyui/workflows/{workflow_name}/lora-insertion"): RoutePolicy(
+        _OWNER,
+        justification="LoRA loader insertion; reaches the owner's ComfyUI; owner only",
+    ),
+    ("PUT", "/api/v1/comfyui/workflows/{workflow_name}/pins"): RoutePolicy(
+        _OWNER,
+        justification="Workflow pins; PUT blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/comfyui/workflows/{workflow_name}/run"): RoutePolicy(
+        _OWNER,
+        justification="Run a workflow; reads Fixed pictures across the library; owner only",
+    ),
     ("POST", "/api/v1/comfyui/abort"): RoutePolicy(
         _OWNER,
         justification="Abort generation; POST blocked for READ tokens; owner only",
@@ -1698,6 +1732,40 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/workflows/{topology_hash}/variants"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/workflows/{topology_hash}/pictures"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/workflows/recipes/{structural_hash}/graph"): RoutePolicy(_OWNER),
+    # The card routes (v1.12 B3). Same tier and the same reason: the grid is
+    # `variant_activity` and a `ROW_NUMBER()` window over every non-deleted
+    # picture in the vault, so it hands out whole-library counts AND the
+    # picture ids of every card's cover strip; the detail adds the parameter
+    # values the owner's best pictures were made with, read out of stored
+    # instance documents. Nothing here is a host path or a host capability, and
+    # nothing here mutates.
+    ("GET", "/api/v1/workflows/cards"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/workflows/cards/{workflow_key}"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/workflows/cards/{workflow_key}/pictures"): RoutePolicy(_OWNER),
+    # ── recipes.py (saved recipes, plan §5.5 / step B6) ─────────────────────
+    # OWNER_ONLY throughout, and a decision rather than a default. A saved
+    # recipe holds the owner's prompt and names the models they run, and the
+    # listing's credit counts kept pictures across a whole stack of workflows,
+    # which is the same whole-library disclosure the reads above are owner-only
+    # for. The writes are the owner editing their own library; nothing here is a
+    # host path or a host capability, so none of it climbs to the §16.3 tier.
+    ("GET", "/api/v1/recipes"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/recipes"): RoutePolicy(
+        _OWNER,
+        justification="Save a recipe; POST blocked for READ tokens; owner only",
+    ),
+    ("PUT", "/api/v1/recipes/order"): RoutePolicy(
+        _OWNER,
+        justification="Reorder saved recipes; PUT blocked for READ tokens; owner only",
+    ),
+    ("PATCH", "/api/v1/recipes/{recipe_id}"): RoutePolicy(
+        _OWNER,
+        justification="Edit a saved recipe; PATCH blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/recipes/{recipe_id}"): RoutePolicy(
+        _OWNER,
+        justification="Delete a saved recipe; DELETE blocked for READ tokens; owner only",
+    ),
     # ── test_hooks.py (mounted ONLY when enable_test_hooks=True) ─────────────
     # Conditionally mounted, but ALWAYS declared: the gate resolves declarations
     # against the routes actually mounted at startup, so an undeclared

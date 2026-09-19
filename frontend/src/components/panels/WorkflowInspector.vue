@@ -6,9 +6,116 @@
     :open="sidebarStore.statsOpen"
     :tabs="tabs"
   >
-    <p v-if="!row" class="wfins-empty">
+    <p v-if="!row && !file" class="wfins-empty">
       Pick a workflow to see what it is made of.
     </p>
+
+    <!-- A saved workflow file: the setup the Workflows view exists for (§F3).
+         It has no Pictures tab of its own yet, so this is the whole panel. -->
+    <template v-else-if="file">
+      <div class="inspector-section">
+        <span class="section-label">Selected</span>
+        <div class="wfins-field">
+          <div class="wfins-name wfins-name--named">
+            {{ file.display_name || file.name }}
+          </div>
+          <div class="wfins-mono">{{ fileLine }}</div>
+        </div>
+      </div>
+
+      <div class="inspector-section">
+        <span class="section-label">Pictures in</span>
+        <template v-if="inputsFailed">
+          <p class="wfins-quiet wfins-note">
+            Could not read this workflow's inputs just now.
+          </p>
+          <AppButton
+            size="sm"
+            class="wfins-action"
+            @click="store.loadInputs(file.name)"
+          >
+            Try again
+          </AppButton>
+        </template>
+        <p v-else-if="!setup" class="wfins-quiet wfins-note">
+          Reading its inputs…
+        </p>
+        <p v-else-if="!setup.inputs.length" class="wfins-quiet wfins-note">
+          This workflow takes no pictures.
+        </p>
+        <template v-else>
+          <div
+            v-for="input in setup.inputs"
+            :key="input.node_id"
+            class="wfins-input"
+          >
+            <!-- The graph's own title, which is often "Load Image" twice, so
+                 the node id beside it is what maps the input back to the
+                 graph. -->
+            <div class="wfins-input-head">
+              <span class="wfins-input-name">{{ input.title }}</span>
+              <span class="wfins-mono">#{{ input.node_id }}</span>
+            </div>
+            <Segmented
+              :options="MODE_OPTIONS"
+              :model-value="input.mode"
+              full
+              :aria-label="`How ${input.title} #${input.node_id} is filled`"
+              @update:model-value="(mode) => chooseMode(input, mode)"
+            />
+            <div v-if="input.mode === 'fixed'" class="wfins-fixed">
+              <img
+                v-if="input.picture_id"
+                class="wfins-fixed-thumb"
+                :src="thumbUrl(input.picture_id)"
+                :alt="`The picture fixed for ${input.title} #${input.node_id}`"
+              />
+              <span v-else class="wfins-fixed-thumb wfins-fixed-thumb--missing">
+                <v-icon size="18">mdi-image-off-outline</v-icon>
+              </span>
+              <span class="wfins-note wfins-fixed-text">{{
+                input.picture_missing
+                  ? "Its picture is no longer in this library."
+                  : "Used for every run."
+              }}</span>
+              <AppButton
+                size="sm"
+                :aria-label="`Change the picture for ${input.title} #${input.node_id}`"
+                @click="pickerFor = input"
+              >
+                Change
+              </AppButton>
+            </div>
+            <p class="wfins-quiet wfins-note">{{ MODE_NOTES[input.mode] }}</p>
+          </div>
+          <p v-if="!takesSelection" class="wfins-note">
+            No input takes the selection, so this workflow is offered from the
+            toolbar's Generate button, not on a selection.
+          </p>
+        </template>
+      </div>
+
+      <!-- A built-in workflow ships with the app and has nothing to delete. -->
+      <div v-if="file.source !== 'built-in'" class="inspector-section">
+        <AppButton
+          size="sm"
+          variant="danger"
+          icon-left="delete-outline"
+          class="wfins-action"
+          :disabled="deleting"
+          @click="deleteFile"
+        >
+          Delete workflow
+        </AppButton>
+      </div>
+
+      <PicturePicker
+        :open="pickerFor !== null"
+        :subtitle="pickerFor ? `for ${pickerFor.title} #${pickerFor.node_id}` : ''"
+        @close="pickerFor = null"
+        @pick="onPicked"
+      />
+    </template>
 
     <template v-else-if="tab === 'workflow'">
       <div class="inspector-section">
@@ -179,10 +286,14 @@
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
+import { deleteWorkflow } from "../../api/comfyui";
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { useConfirm } from "../../composables/useConfirm";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useWorkflowShelfStore } from "../../stores/useWorkflowShelfStore";
+import { errorDetail } from "../../utils/apiError";
 import { formatUserDay } from "../../utils/utils";
 import {
   baseModelName,
@@ -194,16 +305,55 @@ import {
 } from "../../utils/workflowShelf";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
+import PicturePicker from "../widgets/PicturePicker.vue";
+import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
+// The three ways a picture input is filled, in the design's words.
+const MODE_OPTIONS = [
+  { id: "selection", label: "Selection" },
+  { id: "picker", label: "Picker" },
+  { id: "fixed", label: "Fixed" },
+];
+
+const MODE_NOTES = {
+  selection:
+    "Filled by whatever is selected in the grid. One input may hold this, and it sets the run count.",
+  picker: "Asked each time the workflow runs.",
+  fixed:
+    "Chosen once, here. Shown but not editable when the workflow runs.",
+};
+
 const store = useWorkflowShelfStore();
+const notices = useNoticeStore();
 const sidebarStore = useSidebarStore();
 const userPrefs = useUserPrefsStore();
 const router = useRouter();
+const { confirm } = useConfirm();
 
 const tab = ref("workflow");
 
 const row = computed(() => store.selectedRow);
+const file = computed(() => store.selectedFileRow);
+const setup = computed(() =>
+  file.value ? store.inputs[file.value.name] || null : null,
+);
+const inputsFailed = computed(() =>
+  file.value ? store.inputsDidFail(file.value.name) : false,
+);
+const takesSelection = computed(() =>
+  (setup.value?.inputs || []).some((input) => input.mode === "selection"),
+);
+/** The input the picture picker is open for, or null. */
+const pickerFor = ref(null);
+
+const fileLine = computed(() => {
+  if (!file.value) return "";
+  const n = setup.value?.inputs.length;
+  const count =
+    n == null ? "" : `${n} ${n === 1 ? "picture" : "pictures"} in · `;
+  return `${count}${file.value.source === "built-in" ? "built in" : "yours"}`;
+});
 const descriptor = computed(() =>
   row.value ? workflowDescriptor(row.value) : "",
 );
@@ -235,7 +385,9 @@ const tabs = computed(() => [
     disabled: !hasPictures.value,
     tooltip: hasPictures.value
       ? ""
-      : "Nothing this workflow made is still in the library",
+      : file.value
+        ? "A saved workflow is not linked to the pictures it made yet"
+        : "Nothing this workflow made is still in the library",
   },
 ]);
 
@@ -292,6 +444,71 @@ const variantBars = computed(() => {
     }));
 });
 
+/**
+ * Choose how an input is filled. Fixed needs its picture first, so it opens the
+ * picker and changes nothing until one is chosen.
+ */
+async function chooseMode(input, mode) {
+  // Never disabled while a write is out, which would drop keyboard focus on
+  // every arrow step; the store queues the step instead. Fixed asks for a
+  // picture only when the input has none to go back to.
+  if (mode === "fixed" && !input.picture_id) {
+    pickerFor.value = input;
+    return;
+  }
+  const failed = await store.setInputMode(file.value.name, input.node_id, mode);
+  if (failed) notices.push({ level: "error", text: failed });
+}
+
+// The picker stays open when the write fails, so the choice can be retried
+// without finding the picture again.
+async function onPicked(picture) {
+  const input = pickerFor.value;
+  if (!input || !file.value) return;
+  const failed = await store.setInputMode(
+    file.value.name,
+    input.node_id,
+    "fixed",
+    picture.id,
+  );
+  if (failed) notices.push({ level: "error", text: failed });
+  else pickerFor.value = null;
+}
+
+const deleting = ref(false);
+
+/**
+ * Delete the selected saved workflow. The server writes it back to the
+ * workflows folder and moves that file to the system trash. The list is
+ * re-read on failure too: a 404 means it is already gone.
+ */
+async function deleteFile() {
+  const target = file.value;
+  if (!target) return;
+  const label = target.display_name || target.name;
+  const confirmed = await confirm({
+    title: "Delete workflow",
+    message: `Delete '${label}'? A copy goes to the system trash on the machine PixlStash runs on.`,
+    confirmLabel: "Delete",
+    danger: true,
+  });
+  if (!confirmed) return;
+  deleting.value = true;
+  try {
+    await deleteWorkflow(target.name);
+    await store.fetchFiles();
+  } catch (err) {
+    console.warn("[workflows] could not delete", target.name, err);
+    notices.push({
+      level: "error",
+      text: errorDetail(err) || `Could not delete '${label}'.`,
+    });
+    await store.fetchFiles();
+  } finally {
+    deleting.value = false;
+  }
+}
+
 function day(iso) {
   return iso ? formatUserDay(iso, userPrefs.dateFormat) : "";
 }
@@ -314,6 +531,18 @@ function openPicture(id) {
 // A workflow that has outlived its pictures cannot show the Pictures tab, and a
 // rail left on it would read as a fetch that failed. Selecting a new workflow
 // also asks for its tiles, which the store fetches once per workflow.
+// Read every time a file is selected: it can be replaced under the same name.
+watch(
+  () => file.value?.name,
+  (name) => {
+    pickerFor.value = null;
+    if (!name) return;
+    tab.value = "workflow";
+    store.loadInputs(name);
+  },
+  { immediate: true },
+);
+
 watch(
   () => row.value?.topology_hash,
   (hash) => {
@@ -336,6 +565,63 @@ watch(
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   font-style: italic;
+}
+
+.wfins-name--named {
+  font-style: normal;
+}
+
+.wfins-input {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.wfins-input + .wfins-input {
+  padding-top: var(--space-3);
+  border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
+.wfins-input-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.wfins-input-name {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wfins-fixed {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.wfins-fixed-thumb {
+  width: var(--space-8);
+  height: var(--space-8);
+  flex: none;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: rgba(var(--v-theme-on-surface), 0.06);
+}
+
+.wfins-fixed-thumb--missing {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.wfins-fixed-text {
+  flex: 1;
+  min-width: 0;
 }
 
 .wfins-mono {

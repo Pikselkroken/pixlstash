@@ -74,7 +74,7 @@ defineEmits([
 .selection-bar-overlay {
   position: absolute !important;
   left: 0;
-  top: var(--selbar-height, 48px);
+  top: calc(var(--selbar-height, 48px) + var(--filter-strip-h, 0px));
   width: 100%;
   z-index: var(--z-sticky);
   background: rgba(var(--v-theme-background), 0.95);

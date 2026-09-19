@@ -186,6 +186,27 @@ describe("useWindowFileImport", () => {
     expect(startLocalImport).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves workflow JSON dropped on the Workflows view to that view", async () => {
+    const view = document.createElement("div");
+    view.className = "wfshelf";
+    const row = document.createElement("span");
+    view.appendChild(row);
+    document.body.appendChild(view);
+    try {
+      await dropOn(row, "flow.json", "other.JSON");
+      expect(notices.notices).toEqual([]);
+      expect(startLocalImport).not.toHaveBeenCalled();
+      // A picture dropped on the same view is still the importer's.
+      await dropOn(row, "flow.json", "holiday.jpg");
+      expect(startLocalImport).toHaveBeenCalledTimes(1);
+      // And JSON anywhere else is still reported as unsupported.
+      await drop("flow.json");
+      expect(notices.notices.length).toBe(1);
+    } finally {
+      view.remove();
+    }
+  });
+
   it("takes a model dropped on the image grid, which has no use for it", async () => {
     const grid = document.createElement("div");
     grid.className = "image-grid";

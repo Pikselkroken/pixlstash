@@ -317,6 +317,7 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 | [pixlstash/stacking.py](../pixlstash/stacking.py) | Picture stacking (duplicates / variants). |
 | [pixlstash/image_loading_dataset_prepper.py](../pixlstash/image_loading_dataset_prepper.py) | Dataset preparation utilities for offline training scripts. |
 | [pixlstash/cli.py](../pixlstash/cli.py) | CLI entry point (`pixlstash-cli`). Two verb groups: `libraries` (list/create/attach/detach/relocate/backup/prepare-legacy-identity/rename) and `plugins` (install/test/list/remove). Only the `libraries` group opens the hub — see §8.1. |
+| [pixlstash/mcp_server.py](../pixlstash/mcp_server.py) | Read-only MCP server (`pixlstash-mcp`, stdio). An HTTP client of a running server: every tool is a fixed `GET` on an existing route, sent with the token in `PIXLSTASH_TOKEN`, so token scope is enforced by the auth middleware and the authz gate (§16), not here. No write tools, no routes of its own. |
 | [pixlstash/plugin_install.py](../pixlstash/plugin_install.py) | Backs `pixlstash-cli plugins available/install/list/remove`. Classifies a plugin source with `ast` (never by importing it), resolves the destination, and copies it; also lists what the plugins repository publishes. See §8.1. |
 | [pixlstash/plugin_check.py](../pixlstash/plugin_check.py) | Backs `pixlstash-cli plugins test`. The one plugin verb that *does* import, through the server's own loader, and the only place the parameter schema is checked against what the UI renders. See §8.1. |
 
@@ -424,14 +425,42 @@ CRUD for reference / import folders; filesystem browsing for picker dialogs.
 ### `comfyui.py`
 List workflows; execute a workflow against a picture; replay the workflow a picture carries.
 
-**Detection, not placeholders, classifies a workflow.** `GET /comfyui/workflows` takes `valid` and `workflow_type` from `detect_workflow_io` (`services/workflow_io.py`): a save node makes a workflow valid (the output collection's own rule: an explicit `pixlstash_output_nodes` choice, else `SAVE_NODE_CLASSES`), a picture input (a `*LoadImage*` class, case-insensitive, or a known loader such as `PixlStashPictureLoader`) makes it `i2i`. Each file is described once per `(path, mtime, size)`, so opening a menu does not re-reduce every graph. `missing_placeholders` is still reported, and the run routes still substitute placeholders until runs use detection (#1307). **Until then the ComfyUI menus choose workflows by `missing_placeholders`, not `workflow_type`**, because that is what the run routes accept: a caption-only workflow with a fixed reference `LoadImage` lists as `i2i` yet only `run_t2i` can run it. `run_i2i` refuses any workflow without `{{image_path}}`, since its output would be stacked onto a picture the graph never read.
+**Detection, not placeholders, classifies a workflow.** `GET /comfyui/workflows` takes `valid` and `workflow_type` from `detect_workflow_io` (`services/workflow_io.py`): a save node makes a workflow valid (the output collection's own rule: an explicit `pixlstash_output_nodes` choice, else `SAVE_NODE_CLASSES`), a picture input (a `*LoadImage*` class, case-insensitive, or a known loader such as `PixlStashPictureLoader`) makes it `i2i`. Each file is described once per `(path, mtime, size)`, so opening a menu does not re-reduce every graph.
+
+**A workflow is stored as imported, and a run fills it without tokens** (#1303, `services/workflow_bindings.py`). `POST /comfyui/workflows/import` writes the JSON unchanged, UI or API format. A document not shaped like either is a 400 and is not written: `check_comfy_workflow` (`utils/comfyui_utilities.py`), called first in `_store_workflow`, wants a non-empty `nodes` list whose every node has an `id` and a `type`, beside a `links` list (or, in a schema-version-1 file that dropped an empty one, `state` or `last_node_id`), or (bare or under `prompt`) at least one node and every non-`pixlstash_*` entry a node with a `class_type` and an `inputs` object. A copy of a stored workflow (same content, PixlStash's own `pixlstash_*` keys ignored, built-ins included) comes back `matched` under the stored name instead of being written twice; a name taken by different content is a 409 unless `overwrite` or `keep_both` (`name (2).json`). The graph is filed in the hub (`record_api_graph`, or `record_ui_graph` for the topology of a UI file), which is what puts a dropped file on the Workflows view row its pictures already made; `topology_hash` in the response names that row. What a run fills comes from `run_targets`: a file's `pixlstash_bindings` when it has them, otherwise detection on an API-format graph (exactly one picture input; exactly one positive prompt's text, one link upstream when a primitive feeds it — two of either is ambiguous and fills nothing, so a fixed style prompt combined with the subject is never overwritten). An empty caption leaves the prompt as the workflow has it. `fill` writes each path once from every role bound to it, so a template holding both tokens gets both values. `missing_placeholders` keeps its name and now means *no target for that role*, so the ComfyUI menus still choose by what the run routes accept; `run_i2i` refuses a workflow with no picture target and `run_t2i` one with. **Bindings exist only for files the old import dialog wrote.** Start-up (`Server.DEFAULT_MIGRATE_WORKFLOW_TOKENS`, off in the suite because the folder is machine-global) runs `migrate_workflow_folder` once per folder. **The `.placeholder-bindings-migrated` marker is taken exclusively before the pass**, creating the folder on a fresh install, so an as-is import made after that start is never given empty bindings and a second process starting at once leaves the files alone; a file that could not be read or written for a reason that may pass (locked, disk full) is named in the marker's `retry` list and only those are tried at the next start, while a file that is not valid JSON is logged and left. Temp files are `mkstemp` names, removed on failure. In the pass, a file with tokens gets each token's JSON path and node as a binding and a neutral value back (`example.png`, an empty prompt); a file with none gets `pixlstash_bindings: []`, because the dialog let a workflow take no picture or no caption and detection must not start filling those. Each rewritten file keeps its original beside it as `<name>.json.pre-bindings`, which is also the way back for an older build, whose run routes need the tokens. A token inside a longer string is bound with that string as its `template`, so a run still substitutes into it; the stored value loses the token, the binding is `recovered: false` and the list reports the workflow `flagged`. `_meta` is never read for tokens. Import runs `migrate_placeholders` too, so an old export is stored the way its siblings were and matches them. Detection is a known reach until #1305: a caption-only workflow with a fixed reference `LoadImage` imported as-is now fills that loader, where one the old dialog stored keeps its bindings and stays t2i.
+
+**The watched `workflows/` folder is an inbox** (#1304, `services/workflow_inbox.py`). It sits in the app's data directory beside `comfyui-workflows/`. A `.json` put there is stored through `_store_workflow`, the import route's own body, with `keep_both` as a drop has, then renamed `<stem>.<hash>.json`: `content_hash` is the first 16 hex of the sha256 of `workflow_bindings.canonical` over the migrated document, so it is the hash of the workflow as stored and a delete writes back the same name. The stem, less any hash, is the name it is stored under (or `stem (2).json` beside a different workflow; a copy matches the stored one whatever its name). A rename never replaces an existing file. Start-up (`Server.DEFAULT_WATCH_WORKFLOW_INBOX`, off in the suite because the folder is machine-global) runs `reconcile` after the placeholder migration and then starts `WorkflowInboxWatcher`, a watchdog observer that reconciles one second after the last `.json` event. `reconcile` is idempotent: an imported file matches its stored copy and already carries its name. It re-stores every inbox file on each pass (a match per file against every stored workflow), and editing a file in the inbox stores each saved version beside the last. The import route holds `INBOX_LOCK` too. A file that is not a JSON object, or not a workflow, is logged and left. **Removing a file never deletes a workflow.** `DELETE /comfyui/workflows/{name}` goes the other way: under `INBOX_LOCK`, which every reconcile also holds, it writes the stored workflow back to a name no file has yet (`<stem>.<hash>.json`, else `<stem> (2).<hash>.json`), sends every inbox file whose *contents* hash to that workflow to the system trash (never judged by name, so a file edited in place and not yet reconciled stays for the watcher) (`send2trash`), and only then removes the stored file, so a copy dropped under another name cannot import the workflow again and a trash that refuses is a 500 with the workflow kept. A stored file that is not a readable workflow is trashed as it is. Restoring a trashed file puts it back in the inbox, which imports it again. The Workflows list does not refresh on a watched import; it shows the workflow the next time it is fetched.
+
+**How each picture input is filled (#1305).** Every detected picture input of a saved workflow file has a mode: `selection` (the grid's selection fills it; at most one per workflow), `picker` (asked at run time) or `fixed` (one picture chosen at setup). `GET` / `PUT /comfyui/workflows/{workflow_name}/inputs` (both `OWNER_ONLY`) read and replace the setup; the resolution and validation rules live in `services/workflow_inputs.py`. The modes are stored in the hub's `workflow_picture_input`, beside the file and never in it. Inputs nothing stored names default to Picker, except that with nothing stored (or a stored Selection naming a node the file has lost) the input a run already fills with the picture (its migrated binding, or the one detected picture input; `workflow_bindings.run_targets`), else the lowest node id, is Selection. `PUT` names every input exactly once; a `fixed` entry sends a `picture_id` to choose a picture, or none to keep the one already stored, even one that has since left the library, so changing another input never drops it. An input that leaves Fixed keeps its picture too, and `GET` returns it as that input's `picture_id`, so stepping off Fixed with one arrow key and back costs nothing. Rows are keyed on the file's own spelling of its name (`_on_disk_name`), not the client's, so a case-insensitive filesystem cannot split one file's setup. `GET /comfyui/workflows` reports `has_selection_input` (a Selection input, and the overlay's ComfyUI menu and Remix's templates also still need a picture target `run_i2i` fills), and the selection pill, the overlay's ComfyUI menu and Remix's templates leave out a workflow without one. `run_i2i` refuses it as well. A workflow whose binding sits on a loader detection does not recognise has no detected input and stays offered on its binding. **`run_i2i` and `run_t2i` do not read the modes**: the overlay's ComfyUI menu and Remix templates still fill only the one target `run_targets` names. The run route below (#1307) is the one that fills inputs by mode, and a workflow with no Selection input runs from the toolbar through it.
+
+**A workflow's parameters (#1306).** `GET /comfyui/workflows/{workflow_name}/parameters` (`OWNER_ONLY`) describes every settable widget value of a saved API-format workflow as a form control, from `services/workflow_parameters.py`. Left out: connected inputs (a width wired from a primitive is set on the primitive), inputs a run fills (every detected picture input's picture field, from `workflow_io.picture_fields`, and the prompt `workflow_bindings.run_targets` names), credential names (matched anywhere, case-blind: `api_key`, `secret_key`, `hfToken`, `authorization`; a token count, `tokenizer` and `author` stay), and values that are not a number, string or boolean. Each is typed from the owner's ComfyUI `object_info`: `int` / `float` with the node's own `min`/`max`/`step`, `choice` or `model` (a `MODEL_FILENAME_FIELDS` field or a model-extension value) with ComfyUI's options, numbers included and none for a `remote` combo, `seed` for an `INT` carrying `control_after_generate`, `boolean` and `string` (`multiline`). A `PrimitiveInt`-style passthrough is a seed only when an input it feeds is one, decided as `detect_seed_targets` decides it (the consumer's `control_after_generate`, or the seed name rule when ComfyUI does not describe the consumer), since ComfyUI flags the primitive re-rollable even when it drives a width. **When ComfyUI cannot be reached the file's own values are still returned** with no range or options, `comfyui_error` says why, and each parameter's `typed` is false: its kind is guessed from the JSON value for display, and `apply_values` holds an untyped value to its broad type only (a `cfg` stored as `1` takes `1.5`). A file with nothing to set does not ask ComfyUI at all, so top-level `typed: false` with no error is not an outage. A UI-format file answers `readable: false` with no parameters and is not reduced, so a graph the UI reduction refuses reads the same: its widget values are an unnamed list. `pins` lists what the form shows before "All N parameters", in order, and `pinned` marks the same parameters: the stored pins (skipping any the file no longer has), or by default every model and seed plus `steps`, `cfg`, `guidance`, `sampler_name`, `scheduler`, `denoise`, `width` and `height`, or a primitive wired into one of those (Flux2-Klein sets its size that way). `PUT /comfyui/workflows/{workflow_name}/pins` (`OWNER_ONLY`) replaces them with `{pins: [{node_id, name}]}` (400 for a name that is not a parameter or appears twice; `[]` is a real choice) or forgets them with `pins: null`, under `workflow_inbox.INBOX_LOCK` so a concurrent delete cannot leave a row behind, and answers with just `{workflow, pins_saved, pins}` without asking ComfyUI. Values are returned exactly, so a seed above 2^53 survives the JSON; a browser has to keep it out of a plain number. `workflow_parameters.apply_values` checks values against the described type and range (and refuses NaN and infinities) and writes them into a copy of the graph, for the run (#1307). Pins live in the hub's `workflow_parameter_pins`, one row per file, beside it and never in it; deleting the file drops them.
+
+**Running a saved workflow (#1307).** `POST /comfyui/workflows/{workflow_name}/run` (`OWNER_ONLY`) is the run route that fills inputs by mode; `run_i2i` / `run_t2i` stay for the overlay's ComfyUI menu and Remix templates, and still fill only the one target `run_targets` names. It reads the file, refuses a UI-format one (it cannot be submitted) and one with no save node, resolves each picture input's mode with `resolve_input_modes`, and finds where each goes with `workflow_bindings.picture_target` (a binding on that node, else the loader's image field; 400 naming the node when there is neither). The selection (`picture_ids`) fills the Selection input and sets the run count, one prompt per picture with its output stacked on that picture; a workflow with no Selection input refuses a selection and runs once, into the view context. A file whose old binding sits on a loader detection misses has no detected input, and its binding takes the selection as `run_i2i` did. Picker inputs come from `pictures`, each named exactly once, and Fixed ones from the stored `pixel_sha`, resolved to the oldest kept copy (409 when none is left). **Every refusal happens before the first upload**, a binding that no longer matches included (the document is filled once with stand-in names first), so a bad request queues nothing. A ComfyUI failure partway through a batch is not a refusal: the runs already submitted are queued and importing, so the route answers 200 with `status: "partial"`, the `prompts` it started and the `error`, rather than an error that would hide them from the progress runner. `seed_mode` other than `random` / `fixed` / `keep` and a non-boolean `stack` are 400. A templated binding holding the picture and the caption is filled with both in one `fill` call, since two calls would each rebuild it from the template and drop the other value. A binding on an unrecognised loader is only used when no picture input is detected at all; beside detected inputs it is not filled. `values` go through `workflow_parameters.apply_values` against the untyped description, so types are checked here and ranges by ComfyUI's own `/prompt` validation; `seed_mode` `keep` leaves seeds as set, and otherwise seeds are handled as the template routes do. Uploads are named `pixlstash-<id>-<pixel_sha><ext>`, not by the file's name: ComfyUI's upload overwrites by name, so two pictures both called `image.png` in one batch would each have loaded whichever was uploaded last by the time the queue reached them. The id is in the name because `pixel_sha` hashes pixels, so two files can share it. Picker and Fixed pictures are uploaded once per request. A request starts at most `MAX_RUNS_PER_REQUEST` (200) runs, because they are submitted one after another inside it; more is a 400 naming the limit. A picture id that is not a kept picture is a 404 naming the ids. The Fixed lookup is `_oldest_kept_by_sha`, the same function the setup reads through, so setup and run resolve a duplicated picture to the same copy. `has_selection_input` in the list no longer requires a target `run_i2i` fills, and `runnable` says the run route can submit the file.
+
+**A LoRA from the shelf, put into a run (#1310).** `adapter_sha256` in the run body swaps one shelf adapter into **one** LoRA slot of the graph, named by `lora_node_id`. Slots are found by `detect_lora_targets` (`services/comfyui_recipe_service.py`) **by field name, not by class**: a `lora_name` input (and a stacker's numbered `lora_name_2`) is a filename slot whatever loader carries it (`LoraLoaderModelOnly`, `LoraLoaderGGUF`, the `LoRALoader` spelling, the third-party ones that copy the widget), and `adapter_sha256` / `lora_sha256` are the digest slots of the ComfyUI-PixlStash loaders, one per node however the pack spells it. A class allowlist would have to grow for each pack and would quietly refuse the rest; a wired slot (`[node_id, slot]`) is skipped, since overwriting it would drop the link. The known reach is a stacker holding its slots as dicts under its own key (rgthree's Power Lora Loader), which reads as no slot at all; #1376 refuses to insert a loader into such a graph rather than stack a second adapter on it. `apply_adapter` then writes the slot the way its own loader reads it - **the decision on #1310: patch what the graph already has, substitute nothing and add nothing**, so this works on any ComfyUI and needs the node pack only where the graph already uses it. A digest slot takes the shelf's `sha256` and that node resolves or fetches the file itself. A filename slot takes a name *this* ComfyUI lists: the shelf's names for the model (each copy's `relpath`, then its `filename`) are matched against the loader's own combo options from `object_info`, exactly first and then on the basename, because ComfyUI counts from its `loras` folder and the shelf from the folder it scanned. **That last match is by name, not by content, and cannot be anything else** - `object_info` lists no digests - so a different file of the same name on that machine is what gets loaded; the digest slot is the exact one. **One slot, not all of them, and a slot is a node and a field**: a graph chaining a style LoRA and a character LoRA would otherwise come back loading the chosen file twice with the other gone, and a stacker carries several LoRAs on one node, so `lora_node_id` alone would still swap every one of them. `_resolve_lora_swap` narrows by `lora_node_id` and `lora_field` (an empty string counts as not sent) and whatever is left must be exactly one slot; a 400 lists the slots otherwise, or names the node or field that matched nothing. The swap runs *after* `apply_values`, so the LoRA chosen for the run wins over a `lora_name` set in the parameter form. A UI-format file is refused as that, before the shelf is even asked - "no LoRA loader" would be false about a file that may have one - and a loader class this ComfyUI lacks is named as the missing node rather than as a file list it does not enumerate. `_apply_lora_swap` writes through `api_graph`, since the import dialog stores `{"prompt": graph}` and detection reads inside it; a slot the submitted instance turns out not to have is a **500**, never a run that quietly keeps the graph's own LoRA. Refusals, all before the first upload (the swap is applied once to a copy of the graph, as the bindings are filled once): **a graph with no LoRA loader at all without `insert_lora_loader: true`** (400; see the insertion below), a basename naming several of ComfyUI's files, a loader that does not enumerate them, and a model on the shelf but not on that ComfyUI (400 each); a ComfyUI that cannot be asked at all is a **502** on every route, a replay included, never a guess. `file_kind` is an **allow-list**: `adapter` and the unclassified `unknown`, which on this shelf is usually an adapter the header reader could not place; a checkpoint, VAE, text encoder or engine is a 400 naming the kind, a hash the shelf does not have a 404, and no hub a 503. **Every route that runs a workflow takes the swap**, through one resolver (`_resolve_lora_swap`) so they refuse the same things in the same words: the run panel's `POST /comfyui/workflows/{name}/run`, `run_i2i` (the overlay's "Edit with ComfyUI") and `run_recipe` (the overlay's "Generate variants", replaying the picture's own embedded graph). Each reports its slots where its caller already reads: `lora_slots` on `GET /comfyui/workflows/{workflow_name}/inputs`, on each row of `GET /comfyui/workflows` (cached with the rest of the file's description, so a menu needs no request per workflow) and on `GET /comfyui/pictures/{id}/recipe`. **The list's rows carry no `value`**: that route is `ANY_TOKEN` and open to share-link tokens, a slot's value is a LoRA filename or digest, and `/models/` and `/adapters/` keep exactly that inventory from those tokens. The owner-only inputs read and the picture-scoped recipe read (whose `/workflow` sibling already returns the whole graph to the same scope) carry the values. **In a replay the swap is applied before the pre-flight judges the graph**, which is the whole point of it there: a picture made with a LoRA that has since left this ComfyUI is exactly the one worth re-running with another, and pre-flighting the file it no longer uses would refuse it. `_read_object_info` / `_inspect_graph` exist for that ordering, so one `/object_info` read still serves the swap, the pre-flight and seed detection.
+
+**A LoRA loader added to a graph that has none (#1376).** `plan_lora_insertion` (`services/comfyui_recipe_service.py`) finds where it goes and `insert_adapter` carries it out, both behind `_resolve_lora_swap`, which hands a slotless graph to `_resolve_lora_insertion`. **The loader is spliced right after the model source**: the node handing out MODEL that takes no MODEL itself (a checkpoint, UNET or GGUF loader), and likewise for CLIP, which may be another node or none. Every input reading that exact output is rewired to the loader, so several readers of one MODEL and a model patch downstream (`ModelSamplingFlux`) all see the LoRA, and the VAE stays where it was. **Links are typed from `object_info`'s `output` lists, never from input names** (`ModelMergeSimple` reads `model1`): a missed reader would run that branch without the LoRA and say nothing, so a linked node this ComfyUI lacks refuses the plan rather than reading as untyped. Refused as a `LookupError` (400 on a run, `reason` on the reads): **a node that already loads a LoRA some way of its own**, decided at the class level rather than on widget spellings - its `class_type` mentions a LoRA, ComfyUI declares a LoRA-ish type on one of its inputs or outputs, or one of its values carries a `<lora:…>` prompt tag - since by then a swappable slot has been ruled out, so any such node is one that cannot be swapped and splicing in front of it would leave two adapters live (the spelling rule covered a wired `lora_name` and rgthree's `lora_N` dicts and missed `lora_1_name`, a prompt-tag loader and `lora_name: null`); a **second model chain of another kind** (`WANVIDEOMODEL` and the packs that mint their own), which a LoRA loader cannot patch and which the >1 refusal would not otherwise see, so a mixed graph is refused whole rather than run half-LoRA'd; a link whose source class **does not say what it hands on** (no `output` list, or one shorter than the link), for the same reason; a CLIP source that itself reads the model, where splicing in front of both would make a cycle; no model source, more than one model or text-encoder source (a refiner, a merge - which one the LoRA is for is the owner's call), and a UI-format file. **The loader** is `LoraLoader`, or `LoraLoaderModelOnly` when nothing reads a CLIP, when this ComfyUI lists the file by the same name match as a swap: it needs no node pack, and a picture made with it stays replayable by `run_recipe`, which refuses any graph carrying a `PixlStash*` node. Otherwise `PixlStashAdapterLoader` by digest when that pack is installed - **except on `run_recipe` itself** (`digest_loader=False`), whose variant would otherwise be one it refuses to replay - (it fetches the file itself), otherwise a 400 saying why the core loader could not. It gets the next free numeric node id, its widgets' own `object_info` defaults (strength 1.0; a combo's first option), and `_meta.title` "LoRA (added by PixlStash)". Its `model` / `clip` **inputs** are checked against `object_info` as well as its outputs, so a fork spelling them differently is refused here rather than by `POST /prompt` after the run is queued. **Only on `insert_lora_loader: true`**: adding a node is a bigger change than filling a slot, so a bare `adapter_sha256` stays the 400 it was, and naming a slot with it is a 400. The plan is made once on a copy before the first upload, like a swap, and `insert_adapter` checks every planned input still reads the planned source before it touches anything, so a diverged instance is a 500 and never a half-rewired run. The owner sees the splice first: `GET /comfyui/workflows/{workflow_name}/lora-insertion` (`OWNER_ONLY`, since it asks the owner's ComfyUI) answers `{workflow, has_lora_loader, plan, reason}`, and `GET /comfyui/pictures/{id}/recipe` carries `lora_insertion: {plan, reason}` when its `lora_slots` is empty, from the one `object_info` read its pre-flight already makes. `insert_lora_loader` without an `adapter_sha256` is a 400, not a LoRA-less 200. The plan carries `pixlstash_loader`, whether the digest loader *could* be the one inserted, since which it takes depends on an adapter not chosen yet and the owner is owed the worse case; the recipe read reports it `false`, because that route never inserts it. `has_lora_loader` is `null` for a UI-format file, which may have a loader nobody can read. The run recomputes the plan rather than accepting one from the client, so it is not proof the owner saw that exact splice (a file re-imported under the same name between preview and run gets the new one). Known reach: the splice is by type, so a model loader whose MODEL core `LoraLoader` cannot patch (Nunchaku, TensorRT) gets a loader that loads nothing; and insertion is refused by any missing node pack anywhere in the graph, however unrelated to the model. Nothing is written back to the stored file, and stacking a second adapter is not offered.
 
 **Two chunks, one of them executable.** A ComfyUI-generated PNG embeds *both* a `workflow` chunk (the UI node graph, for reopening in the editor) and a `prompt` chunk (the resolved API-format graph the server actually executed). Only the `prompt` chunk is submittable to `POST /prompt`.
 
-- `find_comfy_workflow` (`utils/comfyui_utilities.py`) reads the **UI** chunk and drives display only (`GET /comfyui/pictures/{id}/workflow`, the overlay's workflow inspector, the `ComfyUIExtractionTask` backfill). As a lowest-priority display fallback it also accepts the `prompt` chunk (issue #628): PixlStash-generated PNGs deliberately embed **nothing** in the `workflow` chunk — `_submit_comfyui_prompt` must not put the API graph there, because the ComfyUI frontend feeds that chunk to `loadGraphData` unguarded on drag-in — so ComfyUI's own `prompt` chunk is the only displayable graph such files carry. A genuine UI `workflow` chunk always wins over the fallback, and `is_comfy_workflow` filters out plain-text `prompt` values from other tools.
-- `find_comfy_api_prompt` reads the **`prompt`** chunk and is the only source for anything that runs. It has **no fallback to the UI graph and performs no UI→API conversion**: converting means re-resolving widget values, links, muted/bypassed nodes and subgraph expansion exactly as the ComfyUI frontend does, and a near-miss yields a graph that runs and silently generates something else. Absent an executable `prompt` chunk the honest answer is "no executable workflow embedded".
+- `find_comfy_workflow` (`utils/comfyui_utilities.py`) reads the **UI** chunk and chooses **what is displayed**: the graph `GET /comfyui/pictures/{id}/workflow` serves, the overlay's workflow inspector, and the Recipe tab's Copy/Download box — the editor's own format, which is what can be pasted back into ComfyUI. **It no longer decides what a picture was made with** (#1313): `extract_comfy_workflow_info` reads the prompt, models, LoRAs and seed from the `prompt` chunk whenever the file has one, falling back to the UI chunk only for a file that carries nothing else. Those facts are what the Recipe tab shows and what `ComfyUIExtractionTask` and the import path store in `comfyui_positive_prompt` / `comfyui_models` / `comfyui_loras`, so they now agree with `Generation.seed` and with `/recipe`, which always read the executed graph. Reading them off the UI chunk was a real defect, not a nicety: that chunk's text is recovered by mapping named inputs onto positional `widgets_values` and, failing that, by taking the longest string in the node, so a graph whose encoder is fed from a prompt-builder reported that node's template as the prompt and could report no models and no seed at all. As a lowest-priority display fallback it also accepts the `prompt` chunk (issue #628): PixlStash-generated PNGs deliberately embed **nothing** in the `workflow` chunk — `_submit_comfyui_prompt` must not put the API graph there, because the ComfyUI frontend feeds that chunk to `loadGraphData` unguarded on drag-in — so ComfyUI's own `prompt` chunk is the only displayable graph such files carry. A genuine UI `workflow` chunk always wins over the fallback, and `is_comfy_workflow` filters out plain-text `prompt` values from other tools.
+- `find_comfy_api_prompt` reads the **`prompt`** chunk. It is the only source for anything that runs, and since #1313 also the preferred source for anything *reported* about how a picture was made — which is why **one route answers that question**: `GET /comfyui/pictures/{id}/recipe`, with `?preflight=false` for callers that cannot afford its ComfyUI round-trip. `/workflow` serves the graph's bytes and nothing else; it briefly carried recipe fields of its own and they were moved here rather than left to drift. It has **no fallback to the UI graph and performs no UI→API conversion**: converting means re-resolving widget values, links, muted/bypassed nodes and subgraph expansion exactly as the ComfyUI frontend does, and a near-miss yields a graph that runs and silently generates something else. Absent an executable `prompt` chunk the honest answer is "no executable workflow embedded".
 
 **Remix routes (v1.9).** `GET /comfyui/pictures/{picture_id}/recipe` reports whether a picture carries a replayable recipe and pre-flights it against the user's ComfyUI (see `services/comfyui_recipe_service.py`, §10). `POST /comfyui/run_recipe` replays it with fresh or pinned seeds into the source's stack; it **re-extracts the graph from the file server-side on every call and never accepts a client-supplied graph**, so the authz gate's `PICTURE_SCOPED` declaration on the source picture is the complete access control for it. Both refuse honestly rather than silently no-op: a graph with no seed input would re-generate a byte-identical image that the importer dedupes on `pixel_sha` and emits no event for, so the user would see literally nothing happen.
+
+**The whole recipe, not only what replays it (v1.12 B5).** The same read also carries the **negative prompt** and the **settings** (`extract_recipe_extras`, `utils/comfyui_utilities.py`: steps, cfg, sampler_name, scheduler, denoise), each LoRA slot's **strengths** (`detect_lora_targets` now reports `strengths: {model, clip}`, picked out by the slot's own numeric suffix so a stacker's second slot gets the second strength beside it), and the **`workflow_key`** of the card the picture's variant is on (`workflow_cards.key_of_variant`, a hub read on `picture.workflow_structural_hash` — never a derivation, so an unfiled or unkeyed picture honestly has none). The negative prompt is found by the same conditioning walk as the positive one, parameterised by the side it started on: a node taking both (a combine, a ControlNet applier) must be followed on the caller's side or the negative chain arrives at the positive prompt. **The settings are read from any node that names one, not from the sampler**: the split-sampler graphs — the shipped `Flux2-Klein` templates among them — put the step count on a scheduler node, the sampler name on a `KSamplerSelect` and the CFG on a `CFGGuider`, so a sampler-only read reports one field out of five for PixlStash's own workflows. The first node naming a field wins, and that is **iteration order, not execution order**: a graph that samples twice can report one pass's steps beside another's CFG, so the block says what the graph says and must not be read as "the settings of the pass that made this picture".
+
+**A crafted value never reaches the response, and the fields are typed rather than merely finite.** `json.loads` accepts the `Infinity` and `NaN` literals while the response renders with `allow_nan=False`, so a `prompt` chunk carrying `"cfg": NaN` turned this read into a 500 for anyone holding a share token — the R3 threat model below, arriving through a field rather than a node class. `_typed_setting` takes each field at **its own** type (`steps` an int, `cfg`/`denoise` a float, `sampler_name`/`scheduler` a string), so `steps: "twenty"` and `sampler_name: 12345` are refused as well: the value's *kind* is not the field's type, and a graph's author must not be what decides which a client's formatter is handed. `_lora_strengths` and the A1111 branch's `_a1111_strengths` refuse non-finite weights on the same ground. **The A1111 seed had the same unexamined door and it was an `int()`, not a float**: `str.isdigit()` is true of `"²"` and of a digit run past CPython's 4,300-character integer limit, both of which `int()` refuses, so `reduce_a1111` now asks `int()` itself (`_integer_text`) and the route's conversion is defensive too, so the two cannot drift apart.
+
+**The infotext parser is linear, which is what makes it safe on a request path.** `_PARAM_RE`'s key run was unbounded before the literal `:`, so a line with no colon after a long run backtracked over every length: measured, 8,000 characters cost 0.14 s and 32,000 cost 2.34 s, and `_MAX_FIELDS_LINE` bounds a *line* rather than the total, so a window of such lines multiplied it. Bounding the key at 63 characters (A1111's longest real key is around 19 — `Denoising strength`, `ADetailer model 2nd`) costs the same inputs 0.0024 s and 0.011 s and parses real infotext identically. The line ceiling and the 32-line window stay as bounds on absurdity, not as the thing holding the line.
+
+**What `workflow_key` tells a share-token holder, stated rather than denied.** It is an opaque digest — no filename, no prompt, no pixels — over a graph that same token can already read whole from the `/workflow` sibling. It is **not** purely a function of that file: `workflow_key` folds in which LoRA slots the topology marks *structural*, and that mark was frozen from the filename of whichever picture of that topology was filed **first in this library** (`hub/schema.py`, `workflow_slot_mark`, `INSERT OR IGNORE`).
+
+**And the mark set is recoverable, not merely hinted at.** An earlier version of this note claimed "one bit per topology"; that bound was too tight and is corrected here, because a bound written more favourably than the code enforces is what a later reader relies on. The holder has the graph, so they can compute the key for every assignment of marks to its LoRA slots and match the one they were handed; the slot set is small, so a 2ⁿ sweep recovers the whole set exactly. The disclosure is therefore **one bit per LoRA slot of that topology** — whether the first-filed picture's file in that slot looked like a speed LoRA under a published regex — and that picture may be one the token cannot otherwise see. It is a filename-derived *classification*, never a filename, a prompt or a picture, so this stays low severity; returning `workflow_key` to the owner only would close it, and is the call to make if that is judged too much. What a key *groups* — the "workflow: 8" comparison, the saved-recipe match banner — is an owner-only question answered by the card routes, not by this one.
+
+**A picture with no graph but with A1111 infotext answers from that** (`reduce_a1111`, `services/a1111_recipe.py`), as `source: "a1111"` with `available: false` and `reason: "a1111"`: its recipe is readable but is not a graph any ComfyUI could be handed, so there is nothing to replay and nothing to pre-flight. The fields are read off the reduced nodes rather than by re-parsing the infotext, so this endpoint and the hub agree about what the picture's recipe is. `node_count` and `node_classes` stay at zero and empty on that branch on purpose: they exist for the consent decision — what would execute — and a count of the reduction the hub builds would be a number about PixlStash, not about the picture. A client that does not know the new `reason` falls through to "nothing to replay", which is true.
+
+**The picture list filters by card (v1.12 B5).** `GET /pictures?workflow_key=…` and `?workflow_stack=…` are resolved in `_resolve_workflow_filter` (`routes/pictures/_listing.py`) **before** the query is built — the cards are in the hub and the pictures are in the vault, so there is no join to write — into the variants that card holds, and `PredicateFilter.workflow_structural_hashes` matches `picture.workflow_structural_hash` against them, the way the ComfyUI LoRA filter matches a name against the picture's own column. A stack is named either by a stored `workflow_stack.stack_id` (`workflow_stack_member` holds its cards) or by the `core_hash` of an automatic grouping that has not been materialised — `card_grouping` computes that grouping and writes nothing — and `variants_in_stack` reads both in one query. Nothing writes the stack tables yet, so every answer today comes from the `core_hash` half; the membership half is there because the schema already gives a stack its own id, and a filter ignoring it would answer a stored stack with an empty grid the day one is written. `workflow_unstacked` is deliberately **not** consulted: nothing writes it either, and the step that does owns making its readers agree. **An empty resolution is a filter, not the absence of one**: a card no picture in this library was made with matches nothing, and every read of the field tests `is not None` rather than truthiness — the `find_unassigned` and smart-score-candidate branches included, which name each filter instead of splatting them.
 
 **The replayed graph is untrusted input (review finding R3, CWE-829).** It is authored by whoever made the image file, not by the owner, and PixlStash's premise is importing images from elsewhere: an attractive PNG from a model site can carry any API-format graph, and replaying it executes it on the owner's ComfyUI, bounded only by which node packs are installed. `sanitize_prompt_graph` is a **shape** filter (it drops non-node entries), not a capability filter, and there is deliberately no node-class allowlist — one would break every legitimate custom pack. The owner is therefore the trust anchor, and three controls make that a decision rather than an accident:
 
@@ -562,6 +591,7 @@ Public guest scoring and shared-link endpoints.
 | DELETE | /api/v1/model-stacks/{stack_id}/members/{model_id}                            | model_shelf     | Take one model out of a stack                               |
 | PATCH  | /api/v1/models                                                                | model_shelf     | Correct what the shelf records about one or more models     |
 | GET    | /api/v1/models/base-models                                                    | model_shelf     | Completion targets for the base-model field                 |
+| POST   | /api/v1/models/companions                                                     | model_shelf     | What deleting models would leave behind                     |
 | POST   | /api/v1/models/forget                                                         | model_shelf     | Forget models whose files are gone                          |
 | POST   | /api/v1/models/icons/clear                                                    | model_shelf     | Clear the icon on one or more models                        |
 | POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                          |
@@ -637,6 +667,8 @@ Public guest scoring and shared-link endpoints.
 | DELETE | /api/v1/pictures/{id}/tags                                                    | tags            | Clear all tags on picture                                   |
 | POST   | /api/v1/pictures/{id}/tags/remove_all                                         | tags            | Remove tag everywhere on picture                            |
 | DELETE | /api/v1/pictures/{id}/tags/{tag_id}                                           | tags            | Remove picture tag                                          |
+| GET    | /api/v1/pictures/{id}/text                                                    | pictures        | Get the text read out of a picture                          |
+| POST   | /api/v1/pictures/{id}/text/read                                               | pictures        | Read the text in a picture again                            |
 | GET    | /api/v1/pictures/{picture_id}/stack                                           | stacks          | Get picture's stack                                         |
 | GET    | /api/v1/projects                                                              | projects        | List all projects                                           |
 | POST   | /api/v1/projects                                                              | projects        | Create a project                                            |
@@ -654,6 +686,11 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/projects/{project_id}/summary                                         | projects        | Get project picture count                                   |
 | GET    | /api/v1/projects/{project_name}/characters/{character_name}                   | characters      | Get character by project name and character name            |
 | GET    | /api/v1/projects/{project_name}/picture_sets/{picture_set_name}               | picture_sets    | Get picture set by project name and set name                |
+| GET    | /api/v1/recipes                                                               | recipes         | List saved recipes                                          |
+| POST   | /api/v1/recipes                                                               | recipes         | Save a recipe                                               |
+| PUT    | /api/v1/recipes/order                                                         | recipes         | Reorder saved recipes                                       |
+| PATCH  | /api/v1/recipes/{recipe_id}                                                   | recipes         | Edit a saved recipe                                         |
+| DELETE | /api/v1/recipes/{recipe_id}                                                   | recipes         | Delete a saved recipe                                       |
 | POST   | /api/v1/reviews                                                               | reviews         | Create a review session for one tag                         |
 | GET    | /api/v1/reviews                                                               | reviews         | List review sessions                                        |
 | DELETE | /api/v1/reviews                                                               | reviews         | Bulk-delete review sessions by status (clear all archived)  |
@@ -704,6 +741,9 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/telemetry/install-id                                                  | telemetry       | Get the anonymous install ID                                |
 | POST   | /api/v1/telemetry/install-id/recreate                                         | telemetry       | Recreate the anonymous install ID                           |
 | GET    | /api/v1/workflows                                                             | workflows       | List workflows                                              |
+| GET    | /api/v1/workflows/cards                                                       | workflows       | The Workflows grid                                          |
+| GET    | /api/v1/workflows/cards/{workflow_key}                                        | workflows       | One workflow card                                           |
+| GET    | /api/v1/workflows/cards/{workflow_key}/pictures                               | workflows       | Pictures made with a card                                   |
 | GET    | /api/v1/workflows/recipes/{structural_hash}/graph                             | workflows       | A recipe's stored graph                                     |
 | GET    | /api/v1/workflows/{topology_hash}/pictures                                    | workflows       | Pictures made with a workflow                               |
 | GET    | /api/v1/workflows/{topology_hash}/variants                                    | workflows       | List a workflow's variants                                  |
@@ -724,6 +764,7 @@ All models live in [pixlstash/db_models/](../pixlstash/db_models/).
 Picture
   id, file_path, pixel_sha, format, width, height,
   created_at, imported_at, score, smart_score, text_score,
+  ocr_text, ocr_words (JSON; both left out of metadata_fields()),
   import_excluded, deleted, deleted_at, source_picture_id, stack_id,
   character_likeness, image_embedding (BLOB), text_embedding (BLOB),
   comfyui_models (JSON), comfyui_loras (JSON),
@@ -935,6 +976,7 @@ The write path has to tell the two apart. Blanking a description is how a pictur
 | `LIKENESS_PARAMETERS` | CPU | `MissingLikenessParametersFinder` | Per-character similarity params |
 | `SMART_SCORE` | GPU | `MissingSmartScoreFinder` | Anchor-based heuristic score. Takes a full `Vault` (not just `database`) so it can resolve the tagger's per-label acceptance thresholds for the anomaly penalty, and is therefore registered in `vault.py` rather than `WorkPlanner.work_finders()` — same reason as `GFS_SNAPSHOT` and `TAG_HEALTH_AUTO_REBUILD`. |
 | `TEXT_SCORE` | CPU | `MissingTextScoreFinder` | MSER-based text-in-image score |
+| `OCR` | GPU | `MissingOcrFinder` | Reads the text in pictures with `text_score >= OCR_MIN_TEXT_SCORE` (0.25) into `Picture.ocr_text` / `ocr_words` (#1197). Florence-2 `<OCR_WITH_REGION>` via `InferenceEngine.read_text`, sharing the captioning model; it boxes lines, and each word gets the share of its line's box its characters take. Run on the picture as displayed (EXIF applied), so boxes are fractions of the displayed picture. `""` marks read-with-nothing, and a picture whose file could not be opened; a batch the reader returns nothing for fails the task and writes nothing, so a model that is not loaded or ran out of memory leaves the pictures for a later sweep. Idle while `active_description_plugin` is unset. A failed task defers its pictures for the session (the `MissingCheckpointHashFinder` pattern), so a reader that cannot load is not handed the same batch every cycle. The probe reads `ix_picture_ocr_unread` (`ocr_text, deleted, text_score WHERE ocr_text IS NULL`), most text first so a batch holds pages of similar length. The VRAM gate is charged captioning's estimate times the three beams reading decodes with, and an out-of-memory error is re-raised to the runner's retry instead of falling back to CPU. Pictures are read at 1024 px on the long side, so body text on a large screenshot or photographed page can be too small to survive: such a picture is stored as read with nothing found and is not retried. `depends_on=[TEXT_SCORE, DESCRIPTION]`. `POST /pictures/{id}/text/read` submits an URGENT task directly and keeps the stored text until that read succeeds; a rotate (`apply_orientation`) clears them too. Completion emits `pictures_changed` with `fields: ["ocr_text"]`. |
 | `WATCH_FOLDERS` | CPU | `MissingWatchFolderImportFinder` | Ingest from watch folders |
 | `COMFYUI_EXTRACTION` | CPU | `MissingComfyUIExtractionFinder` | Parse ComfyUI metadata, and file the picture's workflow in the hub (see *The workflow scan rides the ComfyUI extraction* below) |
 | `SOURCE_FACE_LIKENESS` | GPU | `MissingSourceFaceLikenessCharacterFinder` | Face↔reference similarity |
@@ -947,6 +989,7 @@ The write path has to tell the two apart. Blanking a description is how a pictur
 | `SCRAPHEAP_RETENTION_PURGE` | CPU | `ScrapheapRetentionPurgeFinder` | Scrapheap auto-purge. Every 15 minutes, selects UNPROTECTED, UNLOCKED soft-deleted pictures whose deadline has passed and permanently destroys them through the ONE destruction path, `scrapheap_service.purge_scrapheap_pictures(..., include_protected=False)`. **Deadline = `max(deleted_at + scrapheap_retention_days, scrapheap_retention_reduced_at + 1 day)`** — the second term is a FLOOR measured from the last window *lowering*, not a per-picture extension, so after a reduction nothing is purgeable for a day regardless of age. (Measuring the grace from `deleted_at` would only help the `[days, days+1)` band, leaving `Never -> 30` free to wipe a long-lived scrapheap on the next sweep.) The deadline and the locked-set freeze are enforced **twice** — in the finder's candidate query and again by a `RetentionGuard` inside `build_purge_plan`, which re-derives them from the row's current `deleted_at` (the task runs at LOW priority, so a restore/re-delete in between is a real TOCTOU). Locked-set members (directly, or via a live stack sibling) are skipped and reported, never raised — on **every** path: `build_purge_plan` enforces the freeze unconditionally, so the manual `DELETE /pictures/scrapheap` cannot destroy one either, at either `include_protected` value (returned as `skipped_locked`). `POST /pictures/scrapheap/delete-preview` reports `locked_count` / `protected_count` / `unprotected_count` as three DISJOINT buckets summing to `total_count`, keyed on which action destroys the row — locked classified FIRST (the opposite of `auto_purge_exempt_reason`, where protected wins) because the preview answers "what will this button destroy?" and must lead with the binding blocker, while the badge answers "why is this kept?" and leads with the permanent reason. The candidate query evaluates the deadline in SQL — `deleted = TRUE AND deleted_at <= now - retention_days`, keyset-paginated on `(deleted_at, id)` so `ix_picture_deleted_at` is actually used (ordering by `id` instead made SQLite walk every scrapheap row via `ix_picture_deleted`: 1.23 ms/page vs 0.08 ms/page on a 200k library with a 20k scrapheap) — and returns early without scanning at all while `now < reduced_at + grace`, since no row can be due inside the floor. The lock lookup is chunked; the lock lookup is chunked to `LOCK_QUERY_CHUNK` ids so a large scrapheap cannot hit the 999-variable limit of SQLite < 3.32 and silently disable the sweep. The scrapheap listing applies the SAME two exemptions through the same helpers, exposing `purge_at` / `auto_purge_exempt` / `auto_purge_exempt_reason` (`"protected"` | `"locked"` | `null`; protected wins when both apply), so the countdown the UI renders can never disagree with what the sweep will do. Full restore and per-resource restore both re-stamp `deleted_at = now()` on restored scrapheap rows, so restoring an old snapshot cannot hand the sweep an already-expired deadline. Protected reference-folder originals (`allow_delete_file=False`) are exempt from any timer and are excluded from the candidate query — only the consent-gated manual delete-forever (`include_protected=true`) can destroy them. `scrapheap_retention_days=null` ("Never") disables the finder entirely, and a config save NEVER purges synchronously. **`null` is the DEFAULT (`scrapheap_service.DEFAULT_RETENTION_DAYS`): auto-purge is opt-in.** An unattended path that removes files from disk must be one the user switched on, so an install that has never saved a window — a fresh install, or one upgraded from a release without the setting — is never on the clock; an unparseable stored value also resolves to Never rather than to a window. The server-config key is written *only* by `apply_retention_config` (i.e. by an explicit PATCH), so "key absent" reliably means "never chosen" and an existing explicit choice, including an explicit `30`, survives the upgrade untouched. Because the default is Never (an infinite window), **turning auto-purge on is a *reduction*** and therefore earns both the grace floor and the `/impact` confirm — the switch-on is the one change that can expose an entire long-lived scrapheap at once. Registered in `vault.py`. |
 | `TAG_HEALTH_AUTO_REBUILD` | CPU | `TagHealthAutoRebuildFinder` | Checks `tag_health_service.is_stale` at most every 5 minutes (`AUTO_REBUILD_CHECK_INTERVAL_S`); when stale and no rebuild is running, dispatches through the same idempotent `start_rebuild` path `POST /tag_health/rebuild` uses. Closes the loop so `GET /tag_health`'s `stale` flag (new pictures / `TaggerRun`s / reviewed `TagSuggestion`s since the cache's `computed_at`) self-heals without a manual click. |
 | `GHOST_CASCADE` | CPU | `GhostCascadeFinder` | Picture ghosts (B4). Hub-attached vaults only. Every 10 s, drains `pending_ghost_cascade`, which the `picture` delete/re-hash triggers fill, through the covered-ghost cascade (see *Picture ghosts* below) |
+| `WORKFLOW_CARD_BACKFILL` | CPU | `WorkflowCardBackfillFinder` | Workflow cards (v1.12 B2). Hub-attached vaults only, and hub-only in the strongest sense: every input is a stored `workflow_recipe_graph.document`, so it reads no picture and keys the recipes of libraries that are not attached. Hands out variants with no card or with one keyed by a superseded `WORKFLOW_KEY_VERSION` / `CORE_VERSION`, which is the whole of the backfill's once-only-ness; a document that will not reduce is deferred for the life of the process, since it cannot change by itself, while a busy hub (`sqlite3.OperationalError`) leaves its batch eligible — deriving a card is cheap to retry, unlike the 24 GB read the checkpoint hasher this is modelled on defers for. LOW priority, 50 variants per task, and counted over the hub's recipes rather than the library's pictures (`workflows_carded`) so the row does not read as finished from the first second |
 | `CHECKPOINT_HASH` | CPU | `MissingCheckpointHashFinder` | Model shelf (v1.10). The **only finder that works on the hub rather than on the vault**, because a model folder is a fact about the machine: `ModelFolderScanner` (`services/model_folder_scanner.py`) registers a checkpoint the instant it sees it as a `model` row with `file_kind = 'checkpoint'` and `sha256` NULL — it may be 24 GB and the shelf must not stall behind it — and this fills the digest in, which is what `model.hashed_at` was always for. **A changed file at a known path forks onto a new `model` row rather than editing the old one in place.** A `model` row is per *content* and legitimately holds many `model_file` rows, so clearing `sha256` by id stripped the digest off copies in other folders that nobody had touched, and it was rejected outright by `CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)` when an adapter had been replaced by a checkpoint at that path, rolling the whole write batch back and aborting the scan before its missing and unreachable sweeps ran. The stored row is reused only when it is that path's sole location and its `file_kind` still matches, which is the case where the entry is the same and only the hash is stale. Adapters are not in this lane; they are hashed on sight by the scan, and `CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)` is what makes that a schema fact. The queue is `sha256 IS NULL` joined to a `model_file` row in state `present`, matching the partial index `ix_model_hash_queue`. **A `sha256 UNIQUE` collision is a MERGE inside the task, never a raise**: two rows legitimately reach one digest, because an unhashed checkpoint is identified by the location it was found at, so one file in two registered folders is two rows (as is the duplicate the move invariant's crash window is *designed* to leave). The lower id survives, **every `model_file` row the dropped id held is repointed at it**, and it fills any column only the dropped row had. That location move is what stops a checkpoint present at two paths being re-hashed and re-merged once per scan cycle forever. A row whose file cannot be read is deferred for the life of the process, or one broken path would make the planner submit a doomed task every cycle; a re-scan re-queues it. Registered in `vault.py` only when the vault was opened through a hub registration (`RegisteredVaultPath`), so a Vault built without a hub — CLI tools, most tests — simply does not have this lane. |
 
 **Re-processing**: setting a work column to `NULL` (e.g. via an Alembic migration) makes the corresponding finder pick the row up on the next pass — this is how data regenerations are triggered.
@@ -1300,7 +1343,7 @@ recorded as a `PluginLoadError` that **`GET /taggers/plugin-diagnostics`** retur
 than by association: the message is `str(exc)` from an exception raised by third-party code
 during import, so an `OSError` out of a plugin's module body carries whatever absolute path
 it was reaching for. Sanitising that text would be guesswork. The **Auto-tagging** settings
-section renders the list; `PluginsTable.vue` never could, since a failed plugin carries
+section renders the list; `PluginSelect.vue` never could, since a failed plugin carries
 neither capability flag.
 Registration also calls `plugin_schema()` once, because `GET /taggers`,
 `user_settings_utils` and `fill_defaults()` (on the library-open path, `server.py`) all
@@ -1536,9 +1579,15 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/scrapheap_service.py](../pixlstash/services/scrapheap_service.py) | **The single permanent-destruction path for scrapheap pictures** plus the retention policy maths. Both the manual `DELETE /pictures/scrapheap` handler and the scheduled `ScrapheapRetentionPurgeTask` call `purge_scrapheap_pictures`; there is deliberately no second destruction path. Also owns `compute_purge_at` / the reduction-grace rule, the `scrapheap_retention_*` server-config read/write, the delete-forever `confirm_token` store (`ScrapheapDeleteConfirmations`, §5), and the permanent-deletion ledger's only `True -> False` correction — bounded to the `path_sha`s the same purge wrote, so it can never retract an earlier purge's genuine deletion at a reused path.<br><br>**Selection, planning and deletion run in ONE DB-queue submission (`plan_and_purge_in_session`), and `purge_rows_in_session` re-checks `deleted` where it deletes.** The purge used to be four separate submissions — fetch the scrapheap rows, fetch the protected folder ids, look up the locks, then `DELETE ... WHERE id IN (...)` with no `deleted` predicate. Writes are serialised on a single DB worker thread, so a `POST /pictures/scrapheap/restore` submitted between those steps ran *between* them: the ids went live again and the final delete-by-id destroyed the rescued rows, removed their files from disk, and wrote `file_removed=True` ledger entries so even a snapshot restore dropped them. (The lock lookup was worse — it ran on the caller's thread via `run_immediate_read_task`, so a set locked afterwards was not seen at all.) The single task closes the window; the `deleted` re-check is the half that holds regardless of how the work is scheduled, and it also covers the automatic sweep. Ids that left the scrapheap get no ledger row, are not deleted, have their file removal dropped, and are logged + reported as `skipped_restored` — never silently discarded |
 | [services/import_dedup_service.py](../pixlstash/services/import_dedup_service.py) | **Content-hash matching for every import path, Scrapheap included.** Import dedup used to ask only "is there a LIVE picture with this `pixel_sha`?", `Picture.find` defaults `include_deleted=False` and the one-shot import called it that way, so **a scrapheaped picture was invisible to import dedup** and its file was re-imported as a brand-new second row while the original was still there. Harmless while the Scrapheap held a handful of pictures; predictable the moment a bulk "Keep cover only" cleanup puts hundreds there, all of them copies of files the user still has on disk.<br><br>`partition_by_pixel_sha_in_session` returns two **disjoint** maps, live matches and scrapheaped matches (a live row outranks a soft-deleted one for the same hash, because the content genuinely IS in the library). Both are skipped by the import; only the second is reported as its own outcome and offered for restore. **The widening is scoped to this query:** `Picture.find`'s `include_deleted` default is unchanged, so no listing, search, count, export or dedup query gains deleted rows. A permanently purged file is correctly NOT a match, delete-forever removes the row, so there is nothing to match and nothing to resurrect; the `deleted_file_log` ledger is deliberately not consulted here, since it exists to stop a *snapshot restore* resurrecting destroyed rows (§18.7), not to refuse the owner's own re-import of a file they still have |
 | [services/comfyui_recipe_service.py](../pixlstash/services/comfyui_recipe_service.py) | Remix recipe replay (§5 `comfyui.py`): fetches ComfyUI's `GET /object_info`, pre-flights an embedded API prompt graph against it (missing node classes / model filenames / input images, and whether anything writes an image), detects patchable seed inputs by ComfyUI's own `control_after_generate` flag rather than a class allowlist, and renders `POST /prompt`'s structured `node_errors` as one sentence. **The governing rule is that a check that could not run reports as *unchecked*, never as passing and never as missing** — a spurious "missing model" blocks a run that would have worked |
-| [services/workflow_hash.py](../pixlstash/services/workflow_hash.py) | **Content-addressed identity for a ComfyUI graph, in three tiers** (workflow library plan §3, hash spec §Node identity / §Subgraphs). `topology_hash` is node classes and named-input edges and nothing else; `structural_hash` adds the topology assets a node names (model and image filenames, and a ComfyUI-PixlStash loader's `*_sha256`) with every parameter and seed nulled; `instance_hash` is that recipe with one set of parameters, the prompt included and the seed excluded, and is stored on the picture rather than in the hub. `document_from_reduction` renders that same reduction back out as the graph that gets stored, so the document and the hash can never disagree about what was kept. **One walk serves all three**, because the backfill is a pass over every picture in every library. A link is `[node_id, slot]` with the id a **string**: a widget can legitimately hold a two-element list of numbers, and reading a resolution pair as a connection puts a bucket-P value into the topology, which the spec calls the unrecoverable direction. Measured, all 501,128 links across the owner's API graphs carry a string node id.<br><br>**No positional node ids are assigned, and that is the correction this module exists for.** The superseded rule relabelled by topological sort and tie-broke on `(class_type, input signature)` — a tie two twin `CLIPTextEncode` nodes do not break, so the "canonical" id fell through to JSON serialisation order and 12 of 40 real workflows re-keyed when nothing but the key order moved. Instead each node gets an order-invariant label by Weisfeiler-Leman refinement over its **sorted** neighbours, and the graph is emitted as a sorted multiset of node descriptors: genuine twins produce identical descriptors, so the automorphism stops mattering. Node ids are never read, which is also why an API-format subgraph needs no handling at all — a colon path (`75:61`) is an id. The accepted residual is that WL can over-group, which the spec calls the recoverable direction: a later `hash_version` splits recipes cleanly, whereas merging shattered ones requires guessing intent.<br><br>**The UI format is where subgraphs do matter**, and `reduce_ui_graph` inlines `definitions.subgraphs` before keying — recursively, because real files nest two deep. A subgraph instance is typed by a per-definition UUID, so keying it as one opaque node both under-counts the graph (17 nodes read as 8) and gives two people who built the same workflow different keys. An instance lists only the inputs it wires while the definition declares all of them, so the boundary is mapped by **name**, never by position (measured: 3 against 7, in a different order). A UUID-typed node with no definition raises rather than keying as a leaf, and a **bypassed** instance takes its whole contents with it — expanding one anyway leaves its inner nodes standing while every edge through it disappears, which is a key for a graph ComfyUI has never run. The two synthetic boundary nodes are installed *after* the definition's own node list, so a definition that serialises its IO nodes cannot overwrite them. Resolution refuses rather than degrades: a cycle or an over-long passthrough chain raises, because dropping the edge and returning a confident key is the silent-failure shape the house rules forbid |
+| [services/a1111_recipe.py](../pixlstash/services/a1111_recipe.py) | **A1111 generation data as a recipe** (#1312): parses a PNG's `parameters` chunk or a JPEG's or WebP's EXIF `UserComment` and classifies each field as structure, asset, parameter or volatile into a reduction `workflow_hash.graph_key` keys like a ComfyUI graph. Short model hashes are stored as written and resolved against the shelf when read |
+| [services/workflow_hash.py](../pixlstash/services/workflow_hash.py) | **Content-addressed identity for a ComfyUI graph, in three tiers** (workflow library plan §3, hash spec §Node identity / §Subgraphs). `topology_hash` is node classes and named-input edges and nothing else; `structural_hash` adds the topology assets a node names (model and image filenames, and the way a ComfyUI-PixlStash loader names its model: `*_sha256`, the numbered `*_sha256_N` a second slot on one node takes, and the checkpoint loader's `checkpoint_id`, which is a shelf row id because a checkpoint's digest is NULL until the hasher has read the file) with every parameter and seed nulled. **Each of those two is checked against what such a value can be, not only against the widget's name**: a digest widget keeps a digest (`DIGEST_PREFIX_RE`, the same rule `_model_ghost_names` judges them by) and a shelf id keeps `str.isdigit()` within 12 characters, the loader node's own contract. Both branches return above the newline and 255-byte prose guards and their values are kept forever and shared, so a blank widget — the ordinary state of an unpicked one, and of the CLIP loader's second encoder on every SD/SDXL graph — names no model instead of filing the digest of the empty string as one (#1416); `instance_hash` is that recipe with one set of parameters, the prompt included and the seed excluded, and is stored on the picture rather than in the hub. `document_from_reduction` renders that same reduction back out as the graph that gets stored, so the document and the hash can never disagree about what was kept. **One walk serves all three**, because the backfill is a pass over every picture in every library. A link is `[node_id, slot]` with the id a **string**: a widget can legitimately hold a two-element list of numbers, and reading a resolution pair as a connection puts a bucket-P value into the topology, which the spec calls the unrecoverable direction. Measured, all 501,128 links across the owner's API graphs carry a string node id.<br><br>**No positional node ids are assigned, and that is the correction this module exists for.** The superseded rule relabelled by topological sort and tie-broke on `(class_type, input signature)` — a tie two twin `CLIPTextEncode` nodes do not break, so the "canonical" id fell through to JSON serialisation order and 12 of 40 real workflows re-keyed when nothing but the key order moved. Instead each node gets an order-invariant label by Weisfeiler-Leman refinement over its **sorted** neighbours, and the graph is emitted as a sorted multiset of node descriptors: genuine twins produce identical descriptors, so the automorphism stops mattering. Node ids are never read, which is also why an API-format subgraph needs no handling at all — a colon path (`75:61`) is an id. The accepted residual is that WL can over-group, which the spec calls the recoverable direction: a later `hash_version` splits recipes cleanly, whereas merging shattered ones requires guessing intent.<br><br>**The UI format is where subgraphs do matter**, and `reduce_ui_graph` inlines `definitions.subgraphs` before keying — recursively, because real files nest two deep. A subgraph instance is typed by a per-definition UUID, so keying it as one opaque node both under-counts the graph (17 nodes read as 8) and gives two people who built the same workflow different keys. An instance lists only the inputs it wires while the definition declares all of them, so the boundary is mapped by **name**, never by position (measured: 3 against 7, in a different order). A UUID-typed node with no definition raises rather than keying as a leaf, and a **bypassed** instance takes its whole contents with it — expanding one anyway leaves its inner nodes standing while every edge through it disappears, which is a key for a graph ComfyUI has never run. The two synthetic boundary nodes are installed *after* the definition's own node list, so a definition that serialises its IO nodes cannot overwrite them. Resolution refuses rather than degrades: a cycle or an over-long passthrough chain raises, because dropping the edge and returning a confident key is the silent-failure shape the house rules forbid |
+| [services/workflow_identity.py](../pixlstash/services/workflow_identity.py) | **What a workflow card is, and which cards stack** (v1.12 Workflows & Recipes, step B1). **Glossary: the word "recipe" means two things.** In the hub tables `workflow_recipe` / `structural_hash` is the graph bound to model filenames; new code and docs call that tier a **variant** (the routes already say `/variants`). A **saved recipe** is the look a user keeps: prompt, recipe LoRAs with strengths, overrides. The tables are append-only and keep their names.<br><br>Pure functions over the **stored document** (asset references, never filenames), so a backfill needs the hub alone and a forgotten model name stays forgotten. `slots` lists every model slot a document names, each labelled by its loader's Weisfeiler-Leman label at topology tier (refined until a round splits no class, so a long LoRA chain is told apart) plus the widget name, with picture inputs (widgets named `image`, `video`, `mask`) left out. **A label only means something within one topology**: at full refinement it encodes the whole graph, so marks and parameter addresses keyed by label are keyed with the topology too. Every function refuses a raw graph (`WorkflowGraphError`) rather than reading it as having no models. `workflow_key` is the **card**: topology plus every non-LoRA slot plus the LoRA slots marked structural, so a different checkpoint is a different workflow and a character LoRA is not. **A LoRA slot is one by widget name, and both spellings carry the numbered form** (`lora_name_2`, `lora_sha256_2`): a digest slot missed there is not a LoRA slot, so it reaches the card key with no mark check and a character-LoRA swap in a stacker's second slot forks the workflow into a new card (#1416). `CHECKPOINT_WIDGETS` is kept identical to `BASE_WIDGETS` in `frontend/src/utils/workflowShelf.js`, asserted by `test_base_model_widgets_agree_across_the_stack`, because the two answer the same question and had drifted in both directions. `guess_mark` is the first-sight guess for a LoRA slot (whole words lightning/turbo/lcm/lightx2v/causvid/dmd/tcd/pcm, Hyper-SD, SDXL Flash, or a one- or two-digit step count means structural; precision over recall, because a wrong structural guess is frozen into the card key), which the caller freezes and never recomputes. `core_hash` is the **automatic stack**: the topology with plumbing (PreviewImage, Note, Reroute, Primitive*), post-processing (upscale, hires-fix sampler, face detailer and detectors) and, by default, LoRA loaders removed and the edges re-wired through them; the caller stores `CORE_VERSION` beside it. `workflow_type` reads txt2img/img2img/inpaint/outpaint/upscale from the classes. `differs_by` gives a member's chips against the cover; **"plumbing only" is returned only when every differing node is plumbing, the graphs are identical once plumbing is stepped through, with every asset, LoRAs included, on the same loader**. Two documents that are not the same graph never come back with no chip, and anything unclassified reads "N nodes differ" |
+| [services/workflow_inbox.py](../pixlstash/services/workflow_inbox.py) | **The watched `workflows/` folder** (§5 `comfyui.py`): `reconcile` imports each file through the import route's `_store_workflow` and renames it `<stem>.<content hash>.json`; `trash_workflow` writes a deleted workflow back and sends it to the system trash; `WorkflowInboxWatcher` reconciles on file events. |
 | [services/workflow_io.py](../pixlstash/services/workflow_io.py) | **What a workflow needs and produces, from the graph alone**: save nodes, picture inputs, and positive/negative prompts found by walking each guider's own `positive` / `negative` inputs upstream to the text encoder (a `ConditioningZeroOut` on the way means no prompt). Runs over `workflow_hash`'s reductions, so UI and API format both work and subgraphs are inlined. Reports, never writes: two save nodes, two picture inputs, or samplers that read different prompts are listed in `ambiguities`, and disagreeing samplers leave the prompts empty rather than guessed |
+| [services/workflow_parameters.py](../pixlstash/services/workflow_parameters.py) | **A saved workflow's settings as form controls** (#1306, §5 `comfyui.py`): every widget value of an API-format graph except connected inputs, inputs a run fills and credential-named fields, typed from ComfyUI's `object_info` (ranges, options, seeds) or, with ComfyUI unreachable, from the recorded value alone with no ranges. Also the default pins, pin validation, and `apply_values`, which checks values against that description and writes them into a copy of the graph. Never writes the file |
+| [services/picture_recipe_service.py](../pixlstash/services/picture_recipe_service.py) | **What the lightbox's Recipe section is told about one picture** (#1313), read-only. Reads the picture's embedded API `prompt` graph through `workflow_hash.reduce_api_graph` — the same reduction the hub files as `workflow_recipe_asset`, so the `(widget_name, normalized_filename)` pairs it matches on are the ones the shelf already indexes rather than a second, drifting normalisation — and hands back the model slots with the strength each was loaded at, the sampler settings (through `workflow_parameters.describe_parameters`, so the names match the run panel's) and the resolution lock.<br><br>**The verified tier is `fetch_picture_counts`'s, read in the other direction.** A `*_sha256` widget that names exactly one shelf digest is *that* file and wears the badge; a filename that names exactly one shelf row is a file called that and does not; a name two rows share resolves to neither. A shelf row is served to a fully-unscoped owner only — the filename and the strength are in the graph the route serves anyway, but which row of the owner's shelf a file is, is a fact about the library. **The resolution lock goes no further than the owner at all**, and the route does not even read it for anyone else: a `generation_input` row names ANOTHER picture's id and its `pixel_sha`, and a token scoped to this picture is refused that picture on every other route — serving it here would hand out an id the gate refuses plus a content hash answering "does this library hold this exact image?". `resolution_lock_in_session` is the §10.1 session function; the route opens the read. |
 | [services/workflow_library_service.py](../pixlstash/services/workflow_library_service.py) | **Vault-side reads over the workflow keys `picture` carries.** One function today, and the module exists so it has one home: `topology_activity` excludes soft-deleted pictures, because a workflow whose every picture sits in the Scrapheap has to read as "none kept" rather than as live. Nothing here joins to the hub — the hashes are content addresses, so a hash the attached hub has never seen is a workflow this machine does not have, reported as unknown rather than as an error |
+| [services/saved_recipe_service.py](../pixlstash/services/saved_recipe_service.py) | **Saved recipes: the vault side, and the credit nothing stores.** A saved recipe is the user's Recipe (prompt, LoRAs, overrides), not the hub's `workflow_recipe` variant. Credit matches the stack's kept pictures on prompt and normalized LoRA names — seeds and strengths ignored, because no picture row holds a strength — as one grouped read per stack matched in Python, so a tab of twenty recipes costs one query, not twenty |
 | [services/dedup_sweep_service.py](../pixlstash/services/dedup_sweep_service.py) | **Vault-wide near-duplicate sweep planner (read-only).** Promotes the client-side, selection-scoped "Stack groups" grid maneuver into a library-wide service. Streams the `PictureLikeness` edge table in keyset-paginated pages and folds each edge into a **union-find forest** (peak memory: two ints per picture, versus the `GET /pictures/likeness-groups` endpoint's full adjacency dict), accumulating each component's min/max likeness on its root so the weakest link of a transitive chain is known in one pass. A `SweepPolicy` parameter object (candidate threshold, the higher auto-resolve threshold, smart-score margin, group-size ceiling, cross-stack disposition, listing cap) splits every group into `auto_collapse` and `needs_review`, and every review group carries machine-readable reason codes.<br><br>**Non-destructive by construction:** every outcome is additive (`create_stack` / `add_to_stack` / `merge_stacks`), the module opens no write task, and a dry run mutates no row. Groups spanning several existing stacks — which the shipped client silently skips — are a first-class `merge_stacks` proposal naming the target stack and the stacks folded into it. Keeper selection reuses the shipped stack order (score → smart score → recency → id); the one deliberate divergence from `routes/stacks.py::_stack_order_key` is that it reads the **stored** `Picture.smart_score` (a vault-wide sweep cannot afford a live batch recompute), and a picture with no stored smart score is reported as an ambiguous keeper rather than ranked at zero |
 | [services/stack_detector.py](../pixlstash/services/stack_detector.py) | **Adapter-stack detection for the model shelf (shelf plan F5), read-only in its proposing half.** `propose_stacks` groups *loose* adapters whose names differ only by a training step or by a version token and writes nothing; `apply_stack` is the separate call the UI makes after the owner has seen that dry run — the third instance of the house rule that **detection proposes, it never applies**, after folder monitoring and the ai-toolkit run scan.<br><br>**A stack is a subject, not a training run.** Grouping is on the name with both the step and the version stripped (`split_model_version` in `utils/model_utils.py`), so `Foxglove` and `Foxglove_v2` — separate runs, one character LoRA — land behind one row. Groups come back as `step_group` (one version throughout) or `version_group` (two or more), and a `step_group`'s name keeps its version so a run of `portrait_mix_v2` checkpoints is still called that. **Prefix grouping** (`JimmyVehicle` beside `JimmyVehicle2`) is still absent, and the version rule is careful about it: only an explicit `v<digits>`, optionally with one decimal, counts, because a bare trailing digit could be part of the name and merging on it would invent a subject. That case needs per-group adjudication with counter-evidence — a design question, not missing code.<br><br>Four rules carry the weight and each is mutation-checked. **Grouped per folder**, never shelf-wide: two runs on different disks can share a name, and collapsing across them would invent a run and put one stack's members on two drives. **A group needs a stepped member or two versions**, or a shared name in one folder is a duplicate rather than a subject with a history — and distinctness is compared on the parsed `(major, minor)`, so `Foxglove` beside `Foxglove_v1` is one version and stays a duplicate. **The cover is recomputed server-side** from the filenames (newest version first, then within it the bare final, else the highest step), so a client cannot choose the face of a stack by reordering its request. That is a strict **superset** of `run_importer._cover_first`, which is left alone: it orders one ai-toolkit run, which is single-version by construction, so the two agree on every input it can see — but it is a second function now, not the same rule, and the docs say so rather than asserting a parity a reader would find broken. And **the `stack_id IS NULL` gate is re-read inside the write transaction**, so a row stacked between the dry run and the confirmation is dropped rather than torn out of the stack it already has — the shape the CSO review of `forget_models` established.<br><br>**`fuse` stacks the stacks, and `unstack` takes it back.** `apply_stack(..., fuse=True)` admits already-stacked models and absorbs their stacks **whole** — every member, including ones the caller did not name, because a stack is atomic and a remnant of one is not a stack — then deletes the emptied `adapter_stack` rows and inherits the first surviving name rather than blanking it. The race guard survives the flag: the widened predicate admits a row only from a stack *this call is absorbing*, never from a third that appeared in the gap, and it is still repeated on the UPDATE. **`MAX_MEMBERS_PER_STACK` lives on the service and is counted after the widening**, because the route can only count what it was sent — reported in review of #999 and reproduced at 300 members against a ceiling of 200 from a request naming two ids. `unstack` is the inverse and the shelf's first undo for this: it clears `stack_id`/`stack_position` and drops the row inside one transaction, touching **no file on disk**, and 404s on an unknown id before releasing anything. Its one consequence is stated rather than hidden — released members are loose again, so `propose_stacks` can re-offer them; unstacking undoes a grouping, it does not record a refusal.<br><br>**`set_cover` and `remove_member` curate a stack that already exists**, and both are the owner overruling the filenames. `set_cover` moves one member to `stack_position` 0 and renumbers the rest, which is the only way a cover is ever chosen by hand — `apply_stack` deliberately recomputes the order and ignores the one it was given. **The choice needs no column of its own**: nothing *renumbers* a stack once it is built (detection reads *loose* adapters only, and `run_importer`'s upsert `COALESCE`s an existing `stack_position`), so it survives a re-scan and a re-import — both asserted, the re-import in `tests/test_model_run_import.py`. What can still happen is a member's row *disappearing*: Forget and Delete both end at `model_shelf_service._purge`, and the checkpoint-hash task's duplicate merge deletes the losing row, none of which knows about stacks. That is what **`repair_stacks`** is for, and it is the single statement of the rule — renumber the survivors contiguously, dissolve a stack left with fewer than two members — called by `_purge` and by `remove_member` rather than written twice. It deliberately leaves an *empty* `adapter_stack` row alone: `run_importer` inserts the stack before its members, so deleting empty ones would race a live import into removing the row it is about to point at. `remove_member` releases one file from a run and renumbers the survivors, so removing the cover promotes the member behind it, and **dissolves the stack when it would be left with one member** — a one-member stack is a grouping the shelf draws as a plain row and nobody can see or undo. Both refuse a model that is not in the named stack (404) from inside the transaction, and neither touches a byte on disk |
 | [services/snapshot_service.py](../pixlstash/services/snapshot_service.py) | Snapshot creation (SQLite `VACUUM INTO` + JSON manifest + `Snapshot` row), listing, and GFS-style retention pruning (see §18) |
@@ -2637,6 +2686,73 @@ longer wants was a file manager and then a rescan.
   alone, which is the unlink half of `POST /model-moves` without the copy that
   justifies it.
 
+#### What a delete leaves behind: companions (#1314)
+
+`POST /api/v1/models/companions` answers the question in front of Delete that
+the shelf could not: **which VAEs and text encoders can go with this
+checkpoint.** Support files are most of a real shelf's disk, some serve several
+models, and nothing on disk says which.
+
+- **The evidence is co-occurrence in a recipe.** One `workflow_recipe` is one
+  graph that ran with exactly the files its `workflow_recipe_asset` rows name,
+  so a VAE and a checkpoint in one recipe are proven to work together. That
+  table already captures every loader by file extension rather than by node
+  class, so VAEs, encoders and custom loaders are all in it; nothing is scanned
+  again. Names resolve to shelf rows exactly as `fetch_picture_counts` resolves
+  them (`_recipe_asset_index`): a `*_sha256` widget is that model, any other
+  name is every row whose filename or copy has that basename. A third case
+  resolves to nothing and is counted as no evidence: the shelf loader's
+  `checkpoint_id` (#1416), whose value is a row id rather than a digest or a
+  filename.
+- **Every recipe on the hub counts, from every library, kept pictures or not.**
+  Scoping evidence to the active library would only ever drop evidence;
+  widening it can only make a file read as still needed, never offer one. A recipe whose
+  pictures were all deleted still proves the files ran together.
+- **Consumers are base models.** For a support file sharing a recipe with a
+  model being deleted, its consumers are every `checkpoint` or `unknown` row
+  across *all* its recipes. Adapters are excluded (a LoRA needs a base model,
+  not that base model's VAE, so counting it would keep A's VAE "in use" by A's
+  LoRA after A is gone) and `unknown` is included, because it may be a base
+  model the classifier missed and keeping a file is the answer to not knowing.
+  Every recorded consumer being deleted is **orphaned**; any kept consumer is
+  **shared** and named. **Orphaned is not "nothing uses it"**: a kept base
+  model no recipe names (downloaded and never used, or used only in graphs
+  whose pictures were never filed) may need the file, and the answer carries
+  `unrecorded`, the count of those, so the prompt can say so.
+- **`unknown` is never orphaned.** A support file a recipe reached only by a
+  basename two shelf rows share could be either of them, so it is reported as
+  unknown. So is one beside a `*_sha256` widget that matches no row while any
+  non-engine row still waits for its hash, the rule
+  `hub/workflows._model_ghost_names` already applies: the pending checkpoint may
+  be the model the digest names. A model being deleted that no recipe names is `no_evidence`: the
+  absence of a recipe is not evidence that nothing needs it, and its companions
+  are simply not examined.
+- **It offers, it never deletes.** The shelf's confirmation lists the answer;
+  an orphaned file stays on disk until the owner selects and deletes it. Every
+  path still ends at a person choosing a file.
+- **Not yet read:** ComfyUI's own history and saved workflows. Models used only in graphs that never produced a picture
+  PixlStash filed are invisible here, which the `no_evidence` answer says out
+  loud rather than hiding.
+
+`model.family`, `model.quant` and `model.weights_id` are the header half,
+written by the scanner from the header it already
+reads (`adapter_header.family_from_header`, `quant_from_header`,
+`weights_id_from_header`). None of them is a group. `family` is the
+architecture the tensors show for a support file (`vae_4ch`, `vae_16ch`,
+`clip_l`, `clip_g`, `t5_xxl`, `umt5_xxl`), read only from top-level tensors so a
+full checkpoint's baked-in VAE never files the checkpoint as one; the shelf
+serves the family of `base_model` instead whenever that folds, so a corrected
+base model is never contradicted by the column. `quant` is the dtype holding
+most of the **parameters** (not tensors), or `mixed`. `weights_id` hashes tensor
+names and shapes without dtypes, so clean casts of one model share it and a
+repack with scale tensors does not. Rows registered before the columns get them
+on the next scan: the unchanged-file fast path re-reads the header, never the
+bytes, for a row whose `weights_id` is NULL. `CheckpointHashTask._merge`
+carries them to the surviving row like the other scan-derived columns. Nothing
+reads them to decide a delete yet: `family` speaks two vocabularies (base-model
+families and tensor layouts), and joining a checkpoint's `flux1` to a
+`vae_16ch` needs a compatibility table this change does not invent.
+
 #### The unlink is authorised by exactly one committed row (#1017)
 
 `ModelMover`'s ordering — copy → verify → repoint and commit → **then** unlink —
@@ -2862,16 +2978,34 @@ thing on a later step, belongs beside the workflow file, and the name
 on the structural hash, because the same workflow rebuilt from scratch has
 different node ids and so different document *text* at the same identity.
 
-The **instance** tier has no table here, and that is deliberate now that ingest
-computes an instance hash. The hash is a value on a picture
-(`picture.workflow_instance_hash`): two pictures share an instance exactly when
-they share it, which is the whole of what v1.11 asks of the tier — "Covered
-only" needs an equivalence, not a row. A hub-side `recipe_instance` table is
-AI-toolkit Phase 2 and moved to v1.12 with the rest of it, so **nothing in this
-release stores an instance row anywhere**, and
-`test_no_hub_table_stores_an_instance` guards that rather than leaving it
-remembered. Its location is not in question when it does arrive, since §4 puts
-the whole family here.
+**The instance tier is `workflow_recipe_instance` (v1.12, #1311), and it is keyed
+by library.** A row is one instance hash with its `document`: the recipe's
+document with each parameter's value filled in, seeds and output paths still
+null, and every model or image filename in it (nested ones too) a reference, so
+no readable model name is kept there. Unlike the recipe, an instance *is* the
+prompt, so it follows the ghost table's rule rather than the recipe's:
+`(library_uuid, instance_hash)`, kept while a picture (Scrapheap included, since
+it can be restored) or a ghost in that library carries the hash, and destroyed by
+the covered-ghost cascade when neither does (*Picture ghosts* below). **It holds
+the prompt of every kept picture, not only of destroyed ones**, which is the
+2026-08-20 ruling: the prompt is already readable in the library the picture is
+in. Detaching a library keeps its rows, exactly as it keeps its ghosts;
+forgetting the registration deletes both. This narrows the
+2026-08-20 "hub-side with the recipe" ruling rather than reversing it: still hub,
+but a hub-global row could not be judged by any one vault's pictures.
+
+The picture-level half is in the vault (`db_models/generation.py`, migration
+`0118`): `generation` (one row per picture with a workflow, holding its seed as
+**text**, because ComfyUI seeds reach 2**64 - 1 and SQLite's INTEGER stops at
+2**63 - 1) and `generation_input` (the resolution lock: which picture each input
+of a run loaded, by `pixel_sha`). **Both cascade with their picture**: what
+outlives a destroyed picture is the ghost, under the retention the owner chose,
+and a second survivor here would bypass that setting. The instance is reached
+through `picture.workflow_instance_hash`, not copied onto `generation`, because
+that is the column the cascade triggers watch. **The issue's `recipe_asset` is
+`workflow_recipe_asset`**, unextended: the models companion plan asks the two to
+merge, and the resolution to a shelf model is computed at read time (below), so
+it heals when a model is added and nothing goes stale when one is removed.
 
 The counts, the tier collapse and the cross-library figure are in
 `pixlstash-workflow-extraction-measurement.md` and the library plan, which asks
@@ -2880,6 +3014,86 @@ the shipped implementation was run over the same libraries and lands on the same
 order of magnitude as the probe those documents were written from, and that all
 six of the hash spec's §Node identity invariants hold on real graphs drawn at
 random rather than only on fixtures.
+
+#### Cards: what a workflow is, and which cards stack (v1.12, B2)
+
+A `workflow_recipe` row is a **variant**; what a person means by "a workflow" is
+a **card**. `services/workflow_identity.py` (§10) computes both keys from a
+stored document and `hub/workflow_cards.py` stores them. **New tables only,
+amended into schema v2** for the reason the model shelf was: a build shipped
+before this change has `CURRENT_SCHEMA_VERSION = 2` and would refuse a v3 hub
+with `HubSchemaTooNewError`, locking the owner out of a downgrade.
+
+| Table | Holds |
+|---|---|
+| `workflow_variant` | Which card each stored variant belongs to, with the `key_version` that keyed it. **No timestamp column**, here or on the cache below: deriving the same hub twice has to write byte-identical rows, or "the backfill runs twice with identical rows" is a claim no test can make |
+| `workflow_topology_core` | Per topology: the automatic stack key (`core_hash` + `core_version`), the workflow type, and the slot list every mark and override addresses. **No filename and no asset reference.** The stamped version is `CORE_RULE_VERSION`, which is `CORE_VERSION` *plus the strip flag*: `core_hash` does not carry that flag inside its digest the way `workflow_key` carries `WORKFLOW_KEY_VERSION` inside its own, so a flip would otherwise change every core hash while the stamp still read current, and the hub would hold two rules' stacks at once |
+| `workflow_slot_mark` | `structural` or `recipe` per LoRA slot, **frozen the first time the slot is seen** |
+| `workflow_file` | A stored workflow file on its card, keyed by `workflow_name` as the older file-keyed tables are. `structural_hash` NULL for a UI-format file, which has only a topology and so becomes a card with no assets. Deleting the file drops the row and leaves the card, which its pictures made |
+| `workflow_attr`, `workflow_default_override`, `workflow_key_pins` (no writer yet) | The owner's name, notes, hidden flag, parameter overrides and pins, keyed by `workflow_key`, with parameters addressed by **(slot label, input name)** rather than by node id — a node id is whatever the last serialisation called it |
+| `workflow_key_picture_input`, `workflow_cover` (no writer yet) | Input modes, Fixed pictures and the chosen cover, keyed by `(library_uuid, workflow_key)` and naming pictures by `pixel_sha`, for the ghost table's reason: a picture is a picture in one vault |
+| `workflow_stack`, `workflow_stack_member`, `workflow_unstacked` (no writer yet) | Stacks of cards (`position` 0 is the cover) and the owner taking a card out of its automatic one |
+
+**Eight of those tables have no writer in B2**, and are created ahead of the
+steps that fill them on purpose: their shape is decided here, they hold the
+owner's own decisions about a card, and a hub table is append-only, so adding
+each with its writer means one more guarded amendment of v2 per step. Only
+`workflow_variant` gets an index in B2 — an index on a table nothing writes yet
+is a write cost bought for a query that does not exist.
+
+**Marks are frozen, never recomputed.** `guess_mark` reads a filename, so
+re-guessing as pictures arrive would silently re-key cards the owner has by then
+named, pinned and stacked. The name comes from `workflow_recipe_asset`, resolved
+against the document's opaque references; a reference resolving to nothing — a
+name that was forgotten, or was never filed — falls to `recipe` rather than to a
+guess, which is also the direction the guess errs in, since a wrong `structural`
+splits a card per LoRA. **No card row holds a readable name**, so "forget this
+model name" stays one row delete in `workflow_recipe_asset`.
+
+Two consequences follow from the freeze and are worth stating rather than
+discovering. A card key is a function of what arrived first, so two machines
+that imported the same pictures in a different order can put one variant on
+different cards — the alternative, re-guessing per filing, silently re-keys
+cards the owner has by then named, pinned and stacked. And a mark outlives
+`forget_asset_names`: the readable filename goes, the decision that keys the
+card stays, so `structural` still says the forgotten file looked like a speed
+LoRA. That is a classification rather than the name, and the owner-facing
+correction is a flip (a later step), never a delete.
+
+**The automatic grouping is a query, not rows.** Cards sharing a `core_hash` are
+one automatic stack and `workflow_cards.card_grouping` counts them — over rows
+stamped with the rule this build applies, so a grouping read mid-re-derivation
+reports cards whose cache has not caught up as `ungrouped` rather than mixing
+two rules or folding them into one enormous NULL bucket. The stack tables hold
+the owner's own decisions, so a rule bump regroups without destroying anything,
+and `STRIP_LORAS_FOR_STACKS` is the one line that decides whether "the same
+workflow plus a character LoRA" stacks. The report is logged once per drain
+(`WorkflowCardBackfillFinder.on_all_tasks_complete`), not once per batch.
+
+**The backfill is hub-only and needs no data-version counter.**
+`WorkflowCardBackfillFinder` hands out exactly the variants whose card is
+missing or keyed by a superseded rule, so the first pass drains the hub, a
+re-run finds nothing, and a later `WORKFLOW_KEY_VERSION` or `CORE_VERSION` bump
+re-fills the queue by itself. A `CURRENT_DATA_VERSION` step would be the wrong
+shape twice: it cannot see recipes filed after it ran, and it would be skipped
+on the one hub whose first pass was interrupted. Nothing here reads a picture,
+so a library that has since been trimmed still gets its cards, and a variant
+whose stored document will not reduce is deferred for the session rather than
+handed back every sweep.
+
+**Filing hooks where a graph is already filed.** `hub/workflows.record_reduction`
+derives the card after it writes the recipe rows, which covers the import route,
+the watched inbox and the ComfyUI extraction in one place rather than once per
+caller — **only for a recipe the hub had not seen**, because a library is
+thousands of pictures over a handful of recipes and the thousandth filing of one
+recipe has nothing to add; a recipe already here whose card is missing is the
+finder's; the import route additionally records the `workflow_file` row, because
+only it knows the name. A card that cannot be derived is logged and never fails
+the filing — `except Exception`, because the derivation indexes into a parsed
+document and a malformed one raises `KeyError` rather than `WorkflowGraphError`,
+and on the import route the card write has a handler of its own so a failed card
+cannot retract the `topology_hash` of a graph that *was* filed. The picture's
+ingest and the file's import do not depend on a card, and the backfill retries.
 
 #### The workflow scan rides the ComfyUI extraction (v1.11)
 
@@ -2934,6 +3148,60 @@ nothing behind it. `vault.py` re-registers the finder with the hub when there is
 one, which is where `CHECKPOINT_HASH` and `GFS_SNAPSHOT` are registered and for
 the same reason.
 
+**The same read records how the picture was made** (#1311): the instance row in
+the hub and a `generation` row with the seed in the vault. Migration `0118`
+fills them for pictures filed before the tables existed by clearing
+`workflow_hash_version` on every picture that carries an instance hash, so they
+come back through this task once. That **revisit** changes two rules. It never
+replaces a key with NULL: a file it cannot read now (an unplugged drive, a
+stripped copy) keeps its hashes and gets a generation with no seed, where nulling
+them would drop the picture out of its workflow and out of covering its ghosts.
+And it files a recipe's asset names only when the recipe itself is new to the hub,
+because a name missing under a recipe the hub already holds was forgotten on
+purpose. No `generation_input` rows are backfilled: a `LoadImage` names a file in
+ComfyUI's input folder and a Picture Loader names vault ids from whichever library
+it was built in, so neither identifies a picture and the lock would be invented.
+A picture destroyed while its file was being read has its hash queued for the
+cascade again, since its delete may have been drained before its instance row was
+written.
+
+**A picture from A1111 or a fork of it is filed the same way** (#1312). With no
+ComfyUI graph in the file, `services/a1111_recipe.py` reads the A1111 text — a
+PNG's `parameters` chunk, or a JPEG's or WebP's EXIF `UserComment`, which
+`ImageUtils._user_comment` decodes out of the Exif sub-IFD `getexif()` does not
+walk — and builds the graph it describes as a reduction, which
+`hub/workflows.record_reduction` files exactly as `record_api_graph` files a
+ComfyUI one. Every field is classified by name: **structure** is a node (a LoRA
+or embedding in use, hires fix, a refiner, an img2img source); **assets** are
+`Model`, `VAE`, `Refiner`, `Hires checkpoint`, LoRA and embedding names (given
+`.safetensors` when A1111 wrote none), any field named for a model (`Hires
+upscaler`, `ADetailer model`, Forge's `Module 1`), and the checkpoint and
+embedding hashes as `*_sha256` widgets; **volatile** is the seeds, `Version` and
+the hash summaries, `Lora hashes` included (A1111 hashes a `.safetensors` LoRA's
+tensor data, not the file, so it could never resolve); a credential-named field
+is dropped; **everything else is a parameter**, unknown fields included, and a
+parameter is not even *named* in the recipe, because A1111 omits a field that
+holds its default. `<lora:…>` tags are cut from every value, hires and ADetailer
+prompts included. Two known limits: a model named inside a compound value
+(ControlNet's `Model: … [hash]`) stays in the instance document, where forgetting
+the model does not reach it (#1375); and an embedding is a node only when `TI
+hashes` was written, so the same generation keys as two topologies depending on
+whether the owner had hash summaries switched on. The fields line is the last
+line that *parses*, not simply the last, and the **first** occurrence of a
+repeated key wins — A1111 quotes any value holding a comma, so a repeat means
+another tool shredded a compound value into pairs, and taking the last would let
+its `Model:` replace the checkpoint. **A short hash is kept
+as written and resolved when read** (`workflow_hash.digests_with_prefix`): one
+shelf digest starting with it is that model (verified), none or several leave the
+picture to the filename tier. Only 10, 12 and 64 digits are read as a digest, so a
+partial value in a ComfyUI widget still names nothing. The same resolution serves
+`fetch_companions`, where a short hash naming several models is as ambiguous as a
+shared filename. Resolving at scan time would give two pictures of
+one model different recipes depending on whether the model was on the shelf yet.
+A1111's 8-digit hash from 2022 is not a sha256 prefix and is dropped. Migration
+`0119` hands back every PNG, JPEG and WebP stamped scanned with no keys, so
+existing A1111 pictures are read once.
+
 **The rule the marker turns on: a property of the picture marks it scanned, a
 failure of our own machinery does not.** No graph, an unreadable file, a video
 and a graph the hash layer *refuses* are all facts about the picture that a
@@ -2954,8 +3222,9 @@ feature.** Every user-facing deletion — the Scrapheap, `purge_scrapheap_pictur
 away, and neither can reach `workflow_topology`, `workflow_recipe` or
 `workflow_recipe_graph`: they are in a different database and the reference runs
 the other way, as a content address rather than a foreign key. **`workflow_picture_ghost`
-is the one hub table that does NOT survive a purge**, because it is the one that
-holds identifying content rather than identity — see the next subsection. Without that,
+and `workflow_recipe_instance` are the hub tables that do NOT survive a purge**,
+because they hold identifying content rather than identity — see the next
+subsection. Without that,
 dehydrating a stack would destroy the graph its own rehydrate promise depends
 on. `tests/test_workflow_library.py::test_hub_rows_outlive_the_pictures_they_came_from`
 is the assertion, and it takes a picture through both steps — soft delete, then
@@ -2965,6 +3234,26 @@ the row destroyed — rather than only the second.
 `services/workflow_library_service.py` is the one place that query lives, for
 that reason: a workflow whose every picture sits in the Scrapheap has to read as
 "none kept", and counting the scrapheap in would make it read as live.
+
+**The model shelf counts pictures per model from the same keys**
+(`model_shelf_service.fetch_picture_counts`, `pictures_verified` and
+`pictures_by_filename` on every shelf row). Kept pictures per recipe from the
+vault, joined in Python to `workflow_recipe_asset`: a loader `*_sha256` equal to
+`model.sha256`, or an A1111 short hash only one `model.sha256` starts with, is
+**verified**, a filename equal to `model.filename` or a copy's
+basename is **by filename**, and a picture counted in the first is not counted in
+the second. Because it reads keys every scanned picture already has, it covers
+pictures imported before #1311 without waiting for the backfill. **A
+`checkpoint_id` counts in neither tier**: since #1416 it is an asset and keys
+the recipe, but the value is this shelf's row id rather than a digest or a
+filename, so neither resolver can match it and nothing false is claimed. Two
+consequences worth stating rather than discovering: a recipe filed on one
+machine names a different model on another's shelf, and `checkpoint_hash_task`
+deletes the losing row when two paths hash alike, so the id of a merged model
+changes under an already-filed recipe. Both argue for resolving the id to a
+digest at file time; that is a design decision of its own, not a third branch
+here, and until it is taken the id is the only identity the executed graph
+carries.
 
 **The read side is `routes/workflows.py`, and it joins nothing.** The Workflows
 view (implementation plan §F1/§F2) asks the hub which workflows exist and the
@@ -3017,6 +3306,43 @@ documents: every asset there is an `asset_reference`, so a reference with no
 (`hub/workflows.forgotten_asset_counts`, one `json_each` pass). On a topology it
 is the maximum over its recipes, for the reason `adapter_slots` is.
 
+#### Saved recipes (v1.12, B6)
+
+A **saved recipe** is the look somebody pressed Save on — prompt, LoRAs with
+strengths, overrides — and is not the hub's `workflow_recipe` row, which new code
+calls a *variant*. It is a **vault** row (`db_models/saved_recipe.py`, migration
+`0121_add_saved_recipe`) because it is authored rather than derived: the hub's
+workflow rows come back if the pictures are re-filed, a prompt does not, and a
+saved recipe has to travel with a snapshot or a library move.
+
+**It belongs to the workflow it was saved from, and runs on that workflow's
+stack** (implementation plan D10). The row names one `workflow_key` and nothing
+else, so `GET /recipes?workflow_key=…` resolves the effective stack in the hub
+(`hub/workflow_cards.effective_stack_keys`: an explicit `workflow_stack_member`
+row whatever its stack's kind, then `workflow_unstacked`, then the automatic
+`core_hash` group) and lists every member's recipes — and an Unstack leaves each recipe with its own workflow
+because there was never a stack id to break.
+
+**A re-keying is the one thing a saved recipe does not survive.** It names its
+workflow by `workflow_key`, so a `WORKFLOW_KEY_VERSION` bump or a flipped slot
+mark re-keys the card and leaves the recipe addressed by a key no variant
+carries — invisible in its own workflow's tab, with nothing to say where it
+went. Unlike every hub row, a saved recipe is authored and cannot be re-derived,
+so **whoever bumps that version re-keys `saved_recipe` in the same change**; the
+old key is recoverable because the new one is derived from the same stored
+documents. There is no such bump yet.
+
+**Credit is computed on read and there is no link table.** A recipe accounts for
+the stack's kept pictures whose `comfyui_positive_prompt` is the recipe's prompt
+(stripped on both sides) and whose `comfyui_loras` names are the recipe's LoRA
+names, compared through `normalized_filename`. **Only pictures the extraction
+pass has read count**: a NULL `comfyui_loras` is the never-checked sentinel, and
+folding it in would credit every un-extracted picture in the stack to a recipe
+saved with no prompt and no LoRAs. Seeds and strengths are ignored — no picture row stores a
+strength, so strength-exact credit would match on a value that is not there. One
+grouped vault read per stack, matched in Python (`services/saved_recipe_service.py`),
+so the cost does not grow with the number of recipes in the tab.
+
 #### Picture ghosts, and the purge that reaches them (v1.11, B4)
 
 A **ghost** is the thumbnail and the prompt of a picture that has been
@@ -3055,6 +3381,23 @@ is careful about. Every hub query here is scoped to one library.
 outlive a recipe that was never filed (an unwritable hub, or a graph the hash
 layer refused), and a reference that could abort the write would trade a privacy
 record for referential tidiness.
+
+**`workflow_picture_input` is the other library-keyed table**, for the same
+reason: it stores how each picture input of a saved workflow file is filled
+(§5 `comfyui.py`), keyed `(library_uuid, workflow_name, node_id)`. A Fixed input
+names its picture by `pixel_sha`, never by vault id, because the id is reused on
+the next import; a CHECK holds that a `fixed` row has one, and any other row may
+keep the picture it had. Forgetting a library deletes its rows with its ghosts.
+Keying the modes by library too costs a second library its own setup and never
+hands it a picture it does not hold. Rows naming a node the file no longer has
+are ignored rather than pruned; deleting the file drops its rows in every
+library.
+
+**`workflow_parameter_pins` is keyed by file alone**, `workflow_name` → a JSON
+list of `[node_id, name]` pairs (#1306). A pin names no picture, so it has no
+reason to differ between libraries. No row means the defaults apply; a row
+holding `[]` is a form with nothing pinned. An unreadable value is logged and
+read as no row.
 
 **Retention is a three-position setting, `workflow_ghost_retention`, default
 `covered`** (`services/workflow_ghost_service.py`, settled with the owner
@@ -3141,7 +3484,9 @@ on `picture`: a row deleted, or updated away from its `workflow_instance_hash`
 `pending_ghost_cascade`. `GhostCascadeFinder` (every 10 s, hub-attached vaults
 only) runs `drain_ghost_cascade`, which reads a batch and its surviving cover,
 calls `cascade_uncovered_ghosts` (`off` destroys every ghost for the hash,
-`covered` the uncovered ones, `on` none) and only then dequeues by `seq`, so a
+`covered` the uncovered ones, `on` none), then `destroy_uncovered_instances`
+(every `workflow_recipe_instance` row whose hash no picture row, Scrapheap
+included, and no remaining ghost carries, at every position) and only then dequeues by `seq`, so a
 crash repeats the batch and a hash re-queued mid-drain is not swallowed. Two
 cases no trigger sees queue explicitly: a purge that kept ghosts re-queues their
 hashes after writing them (a drain may have settled the hash before the ghost
@@ -3153,9 +3498,11 @@ until it is opened through a hub.
 up, not the whole hub; the restore requeue is bounded by the ghosts.
 
 **Erasing is its own request.** `DELETE /server-config/ghost-retention/ghosts`
-destroys the active library's ghosts (`hub/workflows.erase_picture_ghosts`), and
-`LibraryRegistry.forget` (a discarded first import) destroys that library's in
-the same transaction as its row. Detaching a library does not: detach keeps the
+destroys the active library's ghosts (`workflow_ghost_service.erase_library_ghosts`)
+and re-queues the erased ghosts' instance hashes (read before the erase), so an
+instance row only a ghost was keeping goes on the next drain. `LibraryRegistry.forget` (a discarded first
+import) destroys that library's ghosts and instance rows in the same transaction
+as its row. Detaching a library does not: detach keeps the
 registration so the same folder comes back with its uuid, and its vault still
 holds the pictures that cover those ghosts; attaching it again and erasing is
 the way to clear them. Only one library's ghosts are ever erased per request,
@@ -3186,12 +3533,17 @@ is a row delete with no stored graph rewritten. `hub/workflows.model_ghost_names
 is the set: every `.safetensors` name recipes keep that matches neither a
 `model.filename` nor a `model_file` basename, and every loader `*_sha256` value
 matching no `model.sha256` (a digest identifies a model on a public registry as
-well as its name does). A digest is judged only when it is 64 hex characters and
+well as its name does). **A `checkpoint_id` is never a ghost and can never be
+forgotten** (#1416): it names nobody, so there is nothing to purge, but the
+corollary is that a shelf row it points at which has since been merged away or
+forgotten leaves an asset value no purge reaches. Resolving ids is the same
+open decision §5's picture counts name. A digest is judged only when it is 64 hex characters and
 no non-`engine` shelf model is still waiting for its hash: an unhashed
 checkpoint's loader digest matches nothing until `MissingCheckpointHashFinder`
 reads it, and forgetting it then would forget a model on disk. Re-filing a
 recipe (a new import naming the same model) writes its names back; only a
-picture that still names the model can do that. Only what the shelf can hold is judged: the scanner
+picture that still names the model can do that, and the recipe backfill's
+revisit of a picture already filed does not. Only what the shelf can hold is judged: the scanner
 lists `.safetensors` alone, so a `.ckpt` or `.gguf` would always read as a ghost
 and its purge would forget the name of a model still on disk. A tombstoned model
 still counts as on the shelf, since the shelf still lists it; a model never
@@ -5044,6 +5396,16 @@ on painting the pre-rotate image for up to an hour. The token is now
 `"<W>x<H>o<orientation>"` for a rotated picture and unchanged for an unrotated
 one, so backfilling the mirror does not invalidate every thumbnail at once.
 
+**The event names the field: `fields: ["pixels"]`.** The forward rotate and the
+undo/redo restore both stamp it (`_crud.rotate_pictures` and
+`operation_log_service._emit`), for the reason §23's move does: the thumbnail URL
+and its cache token come from the batch-thumbnail endpoint, never from
+`GET /pictures/{id}/metadata`, so a client told only `updated` re-reads metadata
+it already has and goes on painting the pre-rotate bitmap. The client that
+*issued* the rotate refreshes itself, so the forward event is for everybody else
+— another tab, and the open lightbox, which rebuilds its `<img>` URL from
+`orientation` and had no other signal that would re-read it (#1419).
+
 **Authorization: `PICTURE_SCOPED` on `body_ids="picture_ids"`, the same tier and
 the same shape as `DELETE /pictures`.** It shipped `OWNER_ONLY` on the argument
 that an in-place write to the owner's original bytes is categorically different;
@@ -6135,6 +6497,32 @@ soft-deleted to the Scrapheap.
   a server `srv-…` batch, or graft its rows into an existing batch so one
   `Ctrl+Z` reversed more than the user did. Any new route taking a body
   `batch_id` calls that helper; a second local copy is how this one drifted.
+
+**Keep recipes only (#1315) is a mode of the same planner, not a second one.**
+`keep_recipes` on either route passes a `RecipeCheck` (hub, library, ghost
+retention) to `plan_in_session`, and a copy moves only when it could be made
+again after a purge. `_staying_reasons_in_session` gives every other copy the
+first reason it fails, in order: `no_recipe` (no `workflow_recipe_instance` row
+for this library: `hub/workflows.filed_instance_hashes`, or no `pixel_sha` to
+key a ghost), `model_missing` (a model ghost or a forgotten name in its recipe:
+`recipes_missing_a_model`; like model ghosts it judges `.safetensors` names and
+digests only, so a missing `.ckpt` is not caught), `no_thumbnail` (no thumbnail
+file, the same `find_thumbnail` the purge reads), `ghost_not_kept` (under `covered`, no live
+picture outside the moving set carries its instance hash; under `off`, always).
+Those copies stay live in their stack and **outside the metadata union**, which
+runs over the cover and the copies that leave: the union writes every tag and
+the best score onto every picture it is given, and a copy that stays is not the
+cover. Character loss is judged over the same set. A stack with none left to move is `nothing_reproducible`, a fifth
+disjoint bucket. It is still only a soft delete: the ghost is written by the
+purge under the setting in force then, so a later cover delete or setting change
+can still take it, which is the setting's documented contract.
+`keep_every_ghost` plans under `on` and, after a call that moved something, the
+route sets `workflow_ghost_retention: on` through the same
+`workflow_ghost_service.apply_ghost_retention` the PATCH uses. The pictures have
+already moved by then, so a failed save is logged and returned as
+`ghost_retention_saved: false` rather than a 500. The op type is
+`stack.keep_recipes_only`. Seeds are not required: a seedless graph is
+reproducible, and the purge re-reads the seed from the file.
 
 Both routes are `OWNER_ONLY` in `ROUTE_POLICIES` with no inline scope check
 (§16.1); the rationale and the both-direction test coverage

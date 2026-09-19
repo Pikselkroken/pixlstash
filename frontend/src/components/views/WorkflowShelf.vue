@@ -5,26 +5,35 @@
   <div
     ref="rootEl"
     class="wfshelf"
+    :class="{ 'wfshelf--drop': dropActive }"
     role="region"
     tabindex="-1"
     aria-label="Workflows"
     aria-describedby="wf-help"
+    @dragenter="onFileDragEnter"
+    @dragover="onFileDragOver"
+    @dragleave="onFileDragLeave"
+    @drop="onFileDrop"
   >
     <p id="wf-help" class="visually-hidden">
-      Every workflow PixlStash has found in the pictures it has read. One row is
+      Saved workflows come first: they are the files that run, and selecting one
+      shows in the inspector how each picture it takes is filled. Below them is
+      every workflow PixlStash has found in the pictures it has read. One row is
       one graph, however many models it was bound to; the variants under a row
       are the same graph with different models, and Right and Left open and
       close them. Group, Sort and Show choose the order, the bands and which
       rows are listed, and Ghosts keeps only workflows that still hold something
-      of a deleted picture or model. Nothing on this screen writes anything.
-      Right-click a row for what can be done with it. Escape clears the
-      selection.
+      of a deleted picture or model. Drop a workflow JSON file here to add it,
+      unchanged. The end of the toolbar carries Settings and the right sidebar's
+      toggle, which shows the selected workflow's details. Right-click a row for
+      what can be done with it. Escape clears the selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
          buttons' own names change, but a reader who is not on them hears
          nothing. -->
     <p class="visually-hidden" role="status">{{ announcement }}</p>
+    <p class="visually-hidden" role="status">{{ fileAnnouncement }}</p>
 
     <div class="wfshelf-toolbar shelfbar toolbar">
       <span class="wfshelf-title">Workflows</span>
@@ -168,15 +177,26 @@
         >Ghosts</AppBarButton
       >
       <span class="wfshelf-spacer"></span>
-    </div>
 
-    <div class="wfshelf-head" aria-hidden="true">
-      <span class="wfshelf-head-ident"></span>
-      <span class="wfshelf-head-cell wfshelf-col--name">Name</span>
-      <span class="wfshelf-head-cell wfshelf-col--num">Pictures</span>
-      <span class="wfshelf-head-cell wfshelf-col--num">Variants</span>
-      <span class="wfshelf-head-cell wfshelf-col--models">Models</span>
-      <span class="wfshelf-head-cell wfshelf-col--date">Last used</span>
+      <!-- The app-wide tail, minus undo, as the model shelf ends its bar:
+           [separator] [TbGlobalActions]. This view replaces the grid, and with
+           it the grid's toolbar, so without this pair nothing on the screen
+           opened Settings or the right rail - and the rail is where
+           WorkflowInspector's content is shown, so the inspector was
+           unreachable (#1415). No undo: nothing here writes to the operation
+           log.
+
+           The cluster is not decoration: TbGlobalActions is multi-root, so its
+           buttons would otherwise sit at this bar's wider gap and the pair
+           would be 4px wider here than in every other view, which is the one
+           thing mounting the SAME component is meant to prevent. -->
+      <span class="wfshelf-bar-tail">
+        <TbGlobalActions
+          separator
+          rail-name="inspector"
+          @open-settings="emit('open-settings')"
+        />
+      </span>
     </div>
 
     <div class="wfshelf-scroll">
@@ -186,6 +206,71 @@
         role="alert"
       >
         {{ store.error }}
+      </div>
+
+      <div v-if="store.filesError" class="wfshelf-note wfshelf-note--error">
+        {{ store.filesError }}
+      </div>
+
+      <!-- The saved workflow files, which are what runs (§F3). Their own band
+           above the graphs, not rows among them: a file has no pictures,
+           variants or last use until something made with it has been read. -->
+      <section
+        v-if="store.files.length"
+        class="wfshelf-files"
+        aria-labelledby="wf-files-label"
+      >
+        <h3 id="wf-files-label" class="wfshelf-group wfshelf-files-head">
+          <span class="wfshelf-group-label">Saved workflows</span>
+          <span class="wfshelf-spacer"></span>
+          <span class="wfshelf-group-count num">{{
+            workflowCount(store.files.length)
+          }}</span>
+        </h3>
+        <!-- A single-select list with one tab stop, on the graph list's own
+             keyboard model: Up and Down walk it, Enter or Space selects. -->
+        <ul
+          class="wfshelf-list"
+          role="listbox"
+          aria-labelledby="wf-files-label"
+        >
+          <li
+            v-for="file in store.files"
+            :key="file.name"
+            class="wfshelf-row wfshelf-file"
+            :class="{
+              'wfshelf-row--selected': store.selectedFile === file.name,
+            }"
+            role="option"
+            :aria-selected="store.selectedFile === file.name"
+            :tabindex="file.name === fileRovingKey ? 0 : -1"
+            :data-file-key="file.name"
+            @click="pickFile(file)"
+            @keydown="onFileKeydown(file, $event)"
+            @focus="fileRovingKey = file.name"
+          >
+            <span class="wfshelf-row-ident">
+              <v-icon size="16">mdi-file-cog-outline</v-icon>
+            </span>
+            <span class="wfshelf-col--name">
+              <span class="wfshelf-file-name">{{
+                file.display_name || file.name
+              }}</span>
+              <span class="wfshelf-row-sub">{{ fileLine(file) }}</span>
+            </span>
+          </li>
+        </ul>
+      </section>
+
+      <!-- Sticky inside the scroll rather than above it, so it heads the graphs
+           and not the saved workflows above them, which have no such columns. -->
+      <div class="wfshelf-head" aria-hidden="true">
+        <span class="wfshelf-head-ident"></span>
+        <span class="wfshelf-head-cell wfshelf-col--name">Name</span>
+        <span class="wfshelf-head-cell wfshelf-col--num">Pictures</span>
+        <span class="wfshelf-head-cell wfshelf-col--num">Variants</span>
+        <span class="wfshelf-head-cell wfshelf-col--models">Models</span>
+        <span class="wfshelf-head-cell wfshelf-col--date">Last used</span>
       </div>
 
       <!-- The four states of an empty list. Three of them are the first thing a
@@ -501,23 +586,28 @@
 // is opened and not before, and why the expansion is drawn as rows rather than
 // as a nested widget with a scroll of its own.
 //
-// **Nothing here writes.** Naming a workflow and running one are later steps,
-// and forgetting ghosts is a purge in Settings › Privacy; this is the view and
-// the inspector, and the row menu offers only what can be read today. The
-// Ghosts toggle beside Group / Sort / Show narrows the list to what those
-// purges would reach.
+// **Writes are the setup and the drop.** The saved workflows above the list are
+// set up in the inspector (§F3: how each picture input is filled), and dropping
+// a workflow file adds one. Naming a workflow is a later step, running one is the run panel,
+// and forgetting ghosts is a purge in Settings › Privacy; the row menu offers
+// only what can be read today. The Ghosts toggle beside Group / Sort / Show
+// narrows the list to what those purges would reach.
 
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import OptionRows from "../widgets/OptionRows.vue";
 import Segmented from "../widgets/Segmented.vue";
+import TbGlobalActions from "../panels/TbGlobalActions.vue";
+import { importWorkflow } from "../../api/comfyui";
 import { getWorkflowGraph, listWorkflowVariants } from "../../api/workflows";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useWorkflowShelfStore } from "../../stores/useWorkflowShelfStore";
+import { errorMessage } from "../../utils/apiError";
 import { copyText } from "../../utils/clipboard";
 import { formatUserDate, formatUserDay } from "../../utils/utils";
 import {
@@ -529,6 +619,9 @@ import {
   workflowDescriptor,
 } from "../../utils/workflowShelf";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
+
+// Settings is App.vue's dialog; TbGlobalActions flips the sidebar store itself.
+const emit = defineEmits(["open-settings"]);
 
 const store = useWorkflowShelfStore();
 const notices = useNoticeStore();
@@ -688,6 +781,63 @@ async function resolveExportHash() {
   if (known?.length) return known[0].structural_hash;
   const fetched = await listWorkflowVariants(row.topology_hash);
   return fetched.length ? fetched[0].structural_hash : null;
+}
+
+/** The saved workflow holding the band's one tab stop. */
+const fileRovingKey = ref(null);
+const fileAnnouncement = ref("");
+
+function pickFile(file) {
+  store.selectFile(file.name);
+  fileRovingKey.value = file.name;
+  fileAnnouncement.value = `${file.display_name || file.name} selected. Its picture inputs are in the inspector.`;
+}
+
+function onFileKeydown(file, event) {
+  const names = store.files.map((f) => f.name);
+  const index = names.indexOf(file.name);
+  let target = null;
+  if (event.key === "ArrowDown") target = names[index + 1];
+  else if (event.key === "ArrowUp") target = names[index - 1];
+  else if (event.key === "Home") target = names[0];
+  else if (event.key === "End") target = names[names.length - 1];
+  else if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    pickFile(file);
+    return;
+  } else if (event.key === "Escape") {
+    store.clearSelection();
+    return;
+  } else {
+    return;
+  }
+  event.preventDefault();
+  if (!target) return;
+  fileRovingKey.value = target;
+  // Matched by dataset rather than a selector: a file name can hold a quote,
+  // and `CSS.escape` is absent in the test environment.
+  [...(rootEl.value?.querySelectorAll("[data-file-key]") || [])]
+    .find((el) => el.dataset.fileKey === target)
+    ?.focus();
+}
+
+watch(
+  () => store.files,
+  (files) => {
+    if (!files.some((f) => f.name === fileRovingKey.value)) {
+      fileRovingKey.value = files[0]?.name ?? null;
+    }
+  },
+  { immediate: true },
+);
+
+/** A saved workflow's second line: what it takes, and where it is offered. */
+function fileLine(file) {
+  if (!file.valid) return "cannot run: no save node";
+  if (file.workflow_type !== "i2i") return "text to image";
+  return file.has_selection_input !== false
+    ? "image to image"
+    : "image to image · not offered on a selection";
 }
 
 function workflowCount(n) {
@@ -899,10 +1049,161 @@ watch(
   { immediate: true },
 );
 
-onMounted(() => store.fetchRows());
+/**
+ * Dropping workflow files. Only a drag carrying files is a drop target, so a
+ * text or row drag passes over the list untouched. `dragenter` and `dragleave`
+ * fire for every child crossed, hence a depth count rather than a boolean.
+ */
+const dropActive = ref(false);
+let dragDepth = 0;
+
+function carriesFiles(event) {
+  return Array.from(event.dataTransfer?.types || []).includes("Files");
+}
+
+function onFileDragEnter(event) {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  dragDepth += 1;
+  dropActive.value = true;
+}
+
+function onFileDragOver(event) {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "copy";
+}
+
+function onFileDragLeave(event) {
+  if (!carriesFiles(event)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) dropActive.value = false;
+}
+
+/** Larger than any real workflow; a bigger file is not read into memory. */
+const MAX_WORKFLOW_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Add the dropped workflow files. Only `.json` files are this view's: anything
+ * else in the same drop is the window-wide importer's (`useWindowFileImport`
+ * stands aside only for a drop of JSON alone), so it is left to that and not
+ * reported twice.
+ */
+async function onFileDrop(event) {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  dragDepth = 0;
+  dropActive.value = false;
+  const files = Array.from(event.dataTransfer.files || []).filter((file) =>
+    /\.json$/i.test(file.name),
+  );
+  let landed = null;
+  let added = false;
+  for (const file of files) {
+    const label = file.name;
+    if (file.size > MAX_WORKFLOW_BYTES) {
+      notices.push({
+        level: "error",
+        text: `${label} is too large to be a workflow.`,
+      });
+      continue;
+    }
+    let workflow;
+    try {
+      workflow = JSON.parse(await file.text());
+    } catch (err) {
+      console.warn(`[workflows] ${label} is not valid JSON`, err);
+      notices.push({ level: "error", text: `${label} is not valid JSON.` });
+      continue;
+    }
+    try {
+      const body = await importWorkflow({
+        name: file.name.replace(/\.json$/i, ""),
+        workflow,
+        keepBoth: true,
+      });
+      added = true;
+      landed = body?.topology_hash || landed;
+      notices.push({
+        level: "success",
+        text: body?.matched
+          ? `${label} is already here, as ${body.name}.`
+          : `Added ${body?.name || label}.`,
+      });
+    } catch (err) {
+      const reason = errorMessage(err, "import failed");
+      console.warn(`[workflows] could not import ${label}: ${reason}`, err);
+      notices.push({
+        level: "error",
+        text: `Could not add ${label}: ${reason}.`,
+      });
+    }
+  }
+  if (!added) return;
+  // A dropped file is a saved workflow too, so the band above gains it.
+  await Promise.all([store.fetchRows(), store.fetchFiles()]);
+  if (!landed) return;
+  // A new workflow has no pictures, so Show "In use" or Ghosts would hide the
+  // very row the notice just announced. Widen the list rather than select a
+  // row nobody can see.
+  if (!store.visibleRows.some((row) => row.topology_hash === landed)) {
+    store.setView({ show: "all", ghosts: false });
+  }
+  store.select(landed);
+}
+
+// ── Arriving from a picture's Recipe section (#1313) ───────────────────────
+//
+// `?topology=<hash>` selects that workflow and puts the cursor on it, so the
+// link from the lightbox lands on the row rather than at the top of the list.
+// The Show filter is widened first when the row is filtered out, for the drop
+// handler's reason above: selecting a row nobody can see reads as the link
+// having done nothing at all.
+//
+// Honoured once per value rather than on every `rows` change, because the list
+// is refetched (a scan lands, a file is added) while the query string stays
+// put, and a second application would take focus back off whatever the reader
+// had moved to.
+const route = useRoute();
+let honouredTopology = null;
+
+watch([() => route?.query?.topology, () => store.rows], ([wanted]) => {
+  if (!wanted) {
+    honouredTopology = null;
+    return;
+  }
+  if (honouredTopology === wanted) return;
+  if (!store.rows.some((row) => row.topology_hash === wanted)) return;
+  honouredTopology = wanted;
+  if (!store.visibleRows.some((row) => row.topology_hash === wanted)) {
+    store.setView({ show: "all", ghosts: false });
+  }
+  store.select(wanted);
+  nextTick(() => focusRow(wanted));
+});
+
+onMounted(() => {
+  store.fetchRows();
+  store.fetchFiles();
+});
 </script>
 
 <style scoped>
+/* The whole view is the drop target, marked the way a model-shelf band is: a
+   wash and a ring. Drawn on a layer above the toolbar and the rows, which are
+   opaque and would otherwise hide the ring along the top; an outline rather
+   than a shadow so it survives forced colours. */
+.wfshelf--drop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-floating);
+  pointer-events: none;
+  background: var(--active-wash);
+  outline: 2px solid var(--active-bar);
+  outline-offset: -2px;
+}
+
 .wfshelf {
   display: flex;
   flex-direction: column;
@@ -922,6 +1223,12 @@ onMounted(() => store.fetchRows());
   display: flex;
   align-items: center;
   gap: var(--space-4);
+  /* The names the shared chrome's own `@container` rules are written against.
+     Declared without them the tokens on the element were inert, and a control
+     mounted here would have degraded by no rule at all once the grid - the
+     only other `toolbar` container - unmounted. */
+  container-type: inline-size;
+  container-name: shelfbar toolbar;
   /* The shelf bar's own box recipe: a fixed 36 with the hairline INSIDE it and
      no vertical padding, so this bar and the model shelf's sit at the same
      height beside each other. `--bar-height` is 48 and would not. */
@@ -933,24 +1240,60 @@ onMounted(() => store.fetchRows());
   border-bottom: 1px solid rgb(var(--v-theme-divider));
 }
 
+/* Size and ink shared with every other view bar's identity pair
+   (Toolbar.test.js pins them together): a --text-lg heading does not sit in a
+   36px band, and the pair reads as one bar in two contexts only at one size.
+
+   It is also the bar's give. Every control here is `nowrap` at the flex
+   default `min-width: auto`, so without a shrinking member the surplus left
+   through the right edge and the clipped control was the tail - the toggle
+   that had just narrowed the column by opening the rail, and the one needed to
+   close it again. The title gives first and from the right, as the queue's
+   does. */
 .wfshelf-title {
-  font-size: var(--text-lg);
+  font-size: var(--text-md);
   font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  min-width: 0;
+  flex-shrink: 6;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .wfshelf-sub {
-  font-size: var(--text-sm);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-toolbar-text), 0.6);
+  white-space: nowrap;
+  min-width: 0;
+  flex-shrink: 4;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .wfshelf-spacer {
   flex: 1;
 }
 
+/* The app-wide tail's own gap, on `.shelf-bar-cluster`'s reason: this bar
+   spaces its controls at --space-4, and the tail must land at the --space-3
+   every other host lays it out at. */
+.wfshelf-bar-tail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  /* Never the member that gives: it is the app-wide chrome, and the control
+     that closes the rail must not be the one the edge eats. */
+  flex: 0 0 auto;
+}
+
 /* The column-name strip, standing above the list rather than inside it: a
    grouped list is one grid per band, and a visible heading row per band is
    exactly what this strip exists to avoid. */
 .wfshelf-head {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: rgb(var(--v-theme-background));
   display: flex;
   align-items: center;
   gap: var(--space-4);
@@ -1042,6 +1385,21 @@ onMounted(() => store.fetchRows());
    the same ink outline is drawn inside the row instead. */
 .wfshelf-row:focus-visible {
   outline-offset: calc(var(--focus-width) * -1);
+}
+
+.wfshelf-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wfshelf-files-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: rgb(var(--v-theme-toolbar));
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
 }
 
 .wfshelf-row--selected {
@@ -1174,7 +1532,7 @@ onMounted(() => store.fetchRows());
 }
 
 .wfshelf-note--error {
-  border-left: 3px solid rgb(var(--v-theme-error));
+  border-left: 3px solid rgb(var(--v-theme-surface-error));
   background: rgba(var(--v-theme-error), 0.08);
 }
 </style>

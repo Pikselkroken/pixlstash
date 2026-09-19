@@ -28,7 +28,7 @@
 }
 
 .overlay-shell.sidebar-open {
-  --sidebar-width: 320px;
+  --sidebar-width: var(--stats-panel-w);
 }
 
 .overlay-topbar {
@@ -588,27 +588,17 @@
   padding: 0 var(--space-2);
 }
 
-.overlay-sidebar {
+/* Width, collapse and surface come from AppInspector; this places it over the
+   canvas, under the top bar. Three selector parts once Vue stamps this file's
+   scope id on the last one, so it outranks AppInspector's own `.inspector`
+   rule (and its `height: 100%`) regardless of stylesheet order. */
+.overlay-main > .overlay-sidebar {
   position: absolute;
   top: var(--topbar-height);
   right: 0;
   bottom: 0;
-  width: var(--sidebar-width);
-  background: rgba(var(--v-theme-dark-surface), 0.6);
-  color: rgb(var(--v-theme-on-dark-surface));
-  transition: width 0.2s ease;
-  overflow: hidden;
-  padding: 0;
   height: calc(100% - var(--topbar-height));
   z-index: 4;
-}
-
-.overlay-sidebar.open {
-  width: 320px;
-  padding: 10px var(--space-4) 44px;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
 }
 
 .overlay-sidebar.hidden {
@@ -616,8 +606,16 @@
   pointer-events: none;
 }
 
-.sidebar-section {
-  margin-bottom: 6px;
+/* The Info tab's own column. The inspector's lightbox body is a fixed-height
+   flex column whose sections bound and scroll themselves, so the group has to
+   be that column rather than a plain wrapper, or Description loses the
+   `flex: 1 1 114px` that gives it its share of the height. */
+.overlay-sidebar-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 1;
+  min-height: 0;
 }
 
 .sidebar-section--description {
@@ -804,6 +802,76 @@
   z-index: var(--z-raised) !important;
 }
 
+/* ── Word boxes (Text tab, #1197) ──────────────────────────────────────────
+   A photo can be any colour, so every mark pairs a line with a contrasting
+   halo underneath: a dark halo under the olive selected ring, a light halo
+   under the dark dashed match outline and the hovered box, and a faint light
+   one under the faint resting line. The overlay is a dark surface in both
+   themes, so the ink comes from the `dark-surface` family, not the theme. The
+   alphas are the approved design's and live only here. */
+.picture-text-boxes {
+  position: absolute;
+  overflow: visible;
+  pointer-events: none;
+  z-index: var(--z-raised);
+}
+
+.picture-text-box {
+  cursor: pointer;
+  pointer-events: all;
+}
+
+.picture-text-box rect {
+  rx: var(--radius-sm);
+  fill: transparent;
+  stroke: transparent;
+  vector-effect: non-scaling-stroke;
+}
+
+.picture-text-box-halo {
+  stroke-width: 3px;
+}
+
+.picture-text-box-line {
+  stroke-width: 1px;
+}
+
+.picture-text-box .picture-text-box-line {
+  stroke: rgba(var(--v-theme-dark-surface), 0.13);
+}
+
+.picture-text-box .picture-text-box-halo {
+  stroke: rgba(var(--v-theme-on-dark-surface), 0.13);
+}
+
+.picture-text-box:hover .picture-text-box-line {
+  fill: rgba(var(--v-theme-dark-surface), 0.12);
+  stroke: rgba(var(--v-theme-dark-surface), 0.6);
+}
+
+.picture-text-box:hover .picture-text-box-halo,
+.picture-text-box--match .picture-text-box-halo {
+  stroke: rgba(var(--v-theme-on-dark-surface), 0.9);
+}
+
+.picture-text-box.picture-text-box--match .picture-text-box-line {
+  stroke: rgb(var(--v-theme-dark-surface));
+  stroke-dasharray: 3 2;
+  stroke-width: 1.25px;
+}
+
+.picture-text-box.picture-text-box--selected .picture-text-box-halo {
+  stroke: rgb(var(--v-theme-dark-surface));
+  stroke-width: 4px;
+}
+
+.picture-text-box.picture-text-box--selected .picture-text-box-line {
+  stroke: rgb(var(--v-theme-dark-surface-primary));
+  stroke-dasharray: none;
+  stroke-width: 2px;
+  fill: rgba(var(--v-theme-dark-surface-primary), 0.28);
+}
+
 .overlay-draw-layer {
   position: absolute;
   inset: 0;
@@ -905,16 +973,12 @@
     grid-template-columns: 1fr;
   }
 
-  .overlay-sidebar {
-    position: absolute;
-    top: var(--topbar-height);
-    right: 0;
-    height: calc(100% - var(--topbar-height));
-    width: 0;
-  }
-
-  .overlay-sidebar.open {
-    width: 78%;
+  /* Reads `--sidebar-width` so the pane and the receipt that tracks its edge
+     cannot drift apart. */
+  .overlay-main > .overlay-sidebar:not(.inspector--collapsed) {
+    width: var(--sidebar-width);
+    min-width: var(--sidebar-width);
+    max-width: var(--sidebar-width);
   }
 
   .overlay-nav {

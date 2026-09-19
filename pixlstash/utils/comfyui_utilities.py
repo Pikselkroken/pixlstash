@@ -7,6 +7,7 @@ picture tagger when building text embeddings from ComfyUI generation data.
 """
 
 import json
+import math
 from typing import Any
 
 from pixlstash.pixl_logging import get_logger
@@ -52,6 +53,31 @@ _SEED_CLASSES = {
 }
 # Input field names that hold seed values
 _SEED_FIELDS = {"seed", "noise_seed"}
+# The settings a recipe is read for. Named rather than "every scalar input",
+# because a node also carries its wiring and its pack's own extras, and a
+# settings block nobody can read is worse than a short one. Read from ANY node
+# that names one, not from the sampler: the split-sampler graphs (the shipped
+# Flux2-Klein templates among them) put the step count on a scheduler node, the
+# sampler name on a `KSamplerSelect` and the CFG on a `CFGGuider`, so reading
+# only the sampler reports one field out of five for PixlStash's own workflows.
+# Typed, because the value's *kind* is not the field's type: `steps: "twenty"`
+# and `sampler_name: 12345` are not settings, and reporting them puts a graph's
+# author in charge of what a client's formatter is handed.
+_SETTING_FIELDS = {
+    "steps": int,
+    "cfg": float,
+    # Flux and its kin have no CFG and carry a guidance scale instead, so a
+    # recipe block without it reports nothing for the setting that shaped the
+    # picture.
+    "guidance": float,
+    "sampler_name": str,
+    "scheduler": str,
+    "denoise": float,
+    # The design's Settings block draws a Size row ("832x1216"), which is two
+    # settings written as one value.
+    "width": int,
+    "height": int,
+}
 # Nodes that carry a raw STRING value (positive-prompt primitive wired into subgraphs)
 _PRIMITIVE_STRING_CLASSES = {
     "PrimitiveStringMultiline",
@@ -345,12 +371,20 @@ def _resolve_text_api(value: Any, workflow: dict, depth: int = 0) -> str | None:
     return None
 
 
-def _follow_positive_api(
+def _follow_prompt_api(
     node_id: str,
     workflow: dict,
     depth: int = 0,
+    side: str = "positive",
 ) -> str | None:
-    """Walk upstream conditioning links in API format to find prompt text."""
+    """Walk upstream conditioning links in API format to find prompt text.
+
+    ``side`` names the conditioning input a passthrough node is followed
+    through, so the same walk reaches the negative encoder: a node that takes
+    both (a ControlNet applier, a conditioning combine) has to be followed on
+    the side the caller started on, or the negative chain arrives at the
+    positive prompt.
+    """
     if depth > _MAX_FOLLOW_DEPTH:
         return None
     node = workflow.get(str(node_id))
@@ -363,11 +397,15 @@ def _follow_positive_api(
         text = inputs.get("text")
         return _resolve_text_api(text, workflow, depth + 1)
 
-    # Follow conditioning passthrough nodes upstream
-    for key in ("conditioning", "positive"):
+    # Follow conditioning passthrough nodes upstream, **the caller's side
+    # first**: a node carrying both a generic `conditioning` and a named
+    # `positive`/`negative` is followed on the side this walk started on, or
+    # the negative chain arrives at the positive prompt - the exact failure
+    # `side` exists to prevent, which trying the generic key first reinstated.
+    for key in (side, "conditioning"):
         ref = inputs.get(key)
         if _is_api_ref(ref):
-            result = _follow_positive_api(str(ref[0]), workflow, depth + 1)
+            result = _follow_prompt_api(str(ref[0]), workflow, depth + 1, side)
             if result is not None:
                 return result
     return None
@@ -409,7 +447,7 @@ def _extract_generation_info_api(workflow: dict) -> dict:
             if positive_prompt is None:
                 ref = inputs.get("positive")
                 if _is_api_ref(ref):
-                    positive_prompt = _follow_positive_api(str(ref[0]), workflow)
+                    positive_prompt = _follow_prompt_api(str(ref[0]), workflow)
             if seed is None and class_type in _SEED_CLASSES:
                 for field in _SEED_FIELDS:
                     val = inputs.get(field)
@@ -468,6 +506,93 @@ def extract_generation_info(workflow: dict) -> dict:
     except Exception:
         logger.warning("Failed to extract generation info from workflow", exc_info=True)
         return {"models": [], "loras": [], "positive_prompt": None, "seed": None}
+
+
+def extract_recipe_extras(workflow: dict) -> dict:
+    """The negative prompt and the sampler settings of an **API-format** graph.
+
+    Split from :func:`extract_generation_info` rather than folded into it
+    because only the API format is read here: the recipe endpoint works on the
+    embedded ``prompt`` chunk, and a UI graph reaching this would quietly
+    report no settings at all. A caller holding a UI graph gets the same empty
+    answer as one holding a graph with no sampler, which is honest for both.
+
+    Args:
+        workflow: The API-format graph.
+
+    Returns:
+        ``{"negative_prompt": str | None, "settings": {field: value}}``. The
+        first node that names a field wins, and that is **iteration order, not
+        execution order**: a graph that samples twice (a hires-fix pass) can
+        report the second pass's step count beside the first's CFG. Reading it
+        as "the settings of the pass that made the picture" is therefore wrong;
+        it is "what this graph says", which is what a recipe read can honestly
+        offer without walking the execution graph.
+    """
+    negative_prompt: str | None = None
+    settings: dict[str, Any] = {}
+    try:
+        for node in workflow.values():
+            if not isinstance(node, dict):
+                continue
+            inputs = node.get("inputs") or {}
+            if not isinstance(inputs, dict):
+                continue
+            if (
+                negative_prompt is None
+                and node.get("class_type", "") in _SAMPLER_CLASSES
+            ):
+                ref = inputs.get("negative")
+                if _is_api_ref(ref):
+                    negative_prompt = _follow_prompt_api(
+                        str(ref[0]), workflow, side="negative"
+                    )
+            for field, kind in _SETTING_FIELDS.items():
+                if field in settings:
+                    continue
+                value = _typed_setting(inputs.get(field), kind)
+                if value is not None:
+                    settings[field] = value
+    except Exception:
+        logger.warning("Failed to extract recipe extras from workflow", exc_info=True)
+        return {"negative_prompt": None, "settings": {}}
+    return {"negative_prompt": negative_prompt, "settings": settings}
+
+
+def _typed_setting(value: Any, kind: type) -> Any:
+    """*value* as *kind* if it is a reportable setting of that field, else ``None``.
+
+    The field's type, not the value's kind. A graph is attacker-authorable file
+    metadata, so `steps: "twenty"` and `sampler_name: 12345` both arrive as
+    plausible-looking JSON and neither is a setting; a number field written as
+    text is refused rather than passed on for a client to parse.
+
+    **A non-finite float is refused, and that is not tidiness.** ``json.loads``
+    accepts the ``Infinity`` and ``NaN`` literals while the response renders
+    with ``allow_nan=False``, so a crafted ``prompt`` chunk would turn this
+    read into a 500 for anyone holding a share token for the picture. An
+    integer past the range of a float is refused on the same ground: it
+    overflows the conversion rather than the renderer.
+
+    A wired input (``[node_id, slot]``) has no value until the graph runs, and
+    a bool is not a setting any of these fields declares.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    if kind is str:
+        return value if isinstance(value, str) else None
+    if isinstance(value, str):
+        return None
+    try:
+        typed = kind(value)
+    except (OverflowError, ValueError):
+        return None
+    # Only a float can be non-finite, and `math.isfinite` itself OVERFLOWS on
+    # an integer too large for a float - which would have been raised out of
+    # here and cost the whole settings block, not just the one field.
+    if isinstance(typed, float) and not math.isfinite(typed):
+        return None
+    return typed
 
 
 def _parse_metadata_value(value: Any) -> Any:
@@ -542,6 +667,88 @@ def is_comfy_workflow(value: Any) -> bool:
         and "inputs" in v
     )
     return api_node_count > 0 and api_node_count >= min(len(vals), 2)
+
+
+class NotAWorkflowError(ValueError):
+    """A document offered for import is not a ComfyUI workflow."""
+
+
+def check_comfy_workflow(value: Any) -> None:
+    """Refuse *value* unless it is shaped like a ComfyUI workflow file.
+
+    Stricter than :func:`is_comfy_workflow`, which only sniffs metadata: this
+    guards what gets stored, so any JSON object must not pass.
+
+    - UI format: a non-empty ``nodes`` list whose every node has an ``id`` and
+      a non-empty string ``type``, beside a ``links`` list or, where the
+      schema-version-1 serialiser drops an empty ``links``, its ``state`` or
+      ``last_node_id``. Those tell it from other node-graph exports (React
+      Flow, n8n).
+    - API format (bare, or wrapped as ``{"prompt": graph}``): at least one
+      entry, and every entry other than PixlStash's own ``pixlstash_*`` keys a
+      node with a non-empty string ``class_type`` and an ``inputs`` object.
+
+    Raises:
+        NotAWorkflowError: *value* is not a workflow; the message says why.
+    """
+    if not isinstance(value, dict):
+        raise NotAWorkflowError("not a ComfyUI workflow: not a JSON object")
+    if "nodes" in value:
+        nodes = value["nodes"]
+        if not isinstance(nodes, list) or not nodes:
+            raise NotAWorkflowError("not a ComfyUI workflow: it has no nodes")
+        if not (
+            isinstance(value.get("links"), list)
+            or (
+                "links" not in value
+                and (
+                    isinstance(value.get("state"), dict)
+                    or isinstance(value.get("last_node_id"), int)
+                )
+            )
+        ):
+            raise NotAWorkflowError("not a ComfyUI workflow: it has no links list")
+        for index, node in enumerate(nodes, start=1):
+            if not isinstance(node, dict) or node.get("id") is None:
+                raise NotAWorkflowError(
+                    f"not a ComfyUI workflow: entry {index} of its nodes has no id"
+                )
+            if not _is_name(node.get("type")):
+                raise NotAWorkflowError(
+                    f"not a ComfyUI workflow: node {_shown(node['id'])} has no type"
+                )
+        return
+    graph = value["prompt"] if isinstance(value.get("prompt"), dict) else value
+    entries = {
+        key: node
+        for key, node in graph.items()
+        if not str(key).startswith("pixlstash_")
+    }
+    strays = [
+        key
+        for key, node in entries.items()
+        if not (
+            isinstance(node, dict)
+            and _is_name(node.get("class_type"))
+            and isinstance(node.get("inputs"), dict)
+        )
+    ]
+    if not entries or len(strays) == len(entries):
+        raise NotAWorkflowError("not a ComfyUI workflow")
+    if strays:
+        raise NotAWorkflowError(
+            f"not a ComfyUI workflow: {_shown(strays[0])} is not a node with a "
+            "class_type and inputs"
+        )
+
+
+def _is_name(value: Any) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def _shown(value: Any) -> str:
+    """*value* quoted for a message, cut short so a huge key cannot flood it."""
+    return repr(str(value)[:60])
 
 
 def find_comfy_workflow(metadata: dict) -> dict | None:
@@ -793,7 +1000,21 @@ def extract_comfy_workflow_info(metadata: dict) -> dict | None:
         summary_parts.append(f"{stats['link_count']} links")
     summary = " · ".join(summary_parts) or "Detected ComfyUI metadata"
 
-    gen_info = extract_generation_info(workflow)
+    # **The graph shown and the graph read are two different questions.**
+    # `find_comfy_workflow` prefers the UI `workflow` chunk, which is right for
+    # what is displayed, copied and pasted back into ComfyUI. It is the wrong
+    # source for what the picture was MADE with: the UI chunk is the editor's
+    # view, read here by mapping named inputs onto positional `widgets_values`
+    # and, failing that, taking the longest string in a node - so a graph whose
+    # encoder is fed by a custom prompt-builder reports that node's template
+    # instead of the prompt, and can miss the models and the seed entirely.
+    #
+    # The `prompt` chunk is the resolved graph the ComfyUI server actually
+    # executed, which is why `GET /comfyui/pictures/{id}/recipe` reads only that
+    # one. Facts come from it whenever the file has one; a UI-only file falls
+    # back to the editor's view, which is then genuinely all there is.
+    executed = find_comfy_api_prompt(metadata)
+    gen_info = extract_generation_info(executed if executed is not None else workflow)
 
     return {
         "workflow": workflow,
@@ -802,5 +1023,13 @@ def extract_comfy_workflow_info(metadata: dict) -> dict | None:
         "models": gen_info["models"],
         "loras": gen_info["loras"],
         "positive_prompt": gen_info["positive_prompt"],
+        "negative_prompt": extract_recipe_extras(executed)["negative_prompt"]
+        if executed is not None
+        else None,
         "seed": gen_info["seed"],
+        # The seed as text as well as a number. ComfyUI draws seeds up to
+        # 2**64-1 and JavaScript's Number loses precision above 2**53, so a
+        # panel rendering `seed` would print the wrong digits for about half of
+        # real seeds. `generation.seed` is TEXT in the vault for this reason.
+        "seed_text": None if gen_info["seed"] is None else str(gen_info["seed"]),
     }

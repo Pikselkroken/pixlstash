@@ -159,22 +159,6 @@ def _extract_history_status_and_error(
     return status_str, (error_text or None)
 
 
-def _replace_placeholders(value, replacements: dict[str, str]):
-    if isinstance(value, str):
-        updated = value
-        for key, replacement in replacements.items():
-            if key in updated:
-                updated = updated.replace(key, replacement)
-        return updated
-    if isinstance(value, list):
-        return [_replace_placeholders(item, replacements) for item in value]
-    if isinstance(value, dict):
-        return {
-            key: _replace_placeholders(val, replacements) for key, val in value.items()
-        }
-    return value
-
-
 def _randomize_seeds(workflow: dict) -> None:
     """Replace seed values in sampler/noise nodes with a fresh random integer.
 
@@ -225,13 +209,19 @@ def _apply_filename_prefix(workflow: dict, prefix: str) -> bool:
     return updated
 
 
-def _upload_image_to_comfyui(base_url: str, file_path: str) -> str:
+def _upload_image_to_comfyui(
+    base_url: str, file_path: str, upload_name: str | None = None
+) -> str:
+    """Upload a picture to ComfyUI's input folder, returning the name to load it by.
+
+    ``upload_name`` names it there instead of the file's own name.
+    """
     mime_type, _ = mimetypes.guess_type(file_path)
     if not mime_type:
         mime_type = "application/octet-stream"
     with open(file_path, "rb") as handle:
         files = {
-            "image": (os.path.basename(file_path), handle, mime_type),
+            "image": (upload_name or os.path.basename(file_path), handle, mime_type),
         }
         data = {
             "type": "input",

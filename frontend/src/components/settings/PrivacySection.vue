@@ -442,7 +442,7 @@ watch(
 .pv__error {
   margin: var(--space-3) 0 0;
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .pv__note {

@@ -743,6 +743,44 @@ If a plugin copies substantial GPL backend code or depends directly on other
 GPL-only backend internals, different obligations may apply.
 
 
+## Connecting an AI agent (MCP)
+
+`pixlstash-mcp` is a read-only [MCP](https://modelcontextprotocol.io) server:
+an agent can search the library and read pictures, tags and ComfyUI recipes,
+and it has no tools that change anything. It talks to a running PixlStash
+server with an API token and sees exactly what that token sees.
+
+The quickest way in is **API Tokens → Connect AI agent** in your account
+settings: it mints a read-only token and hands back the finished configuration
+to paste, either a one-line `claude mcp add …` or the `mcpServers` block below.
+That token covers the whole library. To narrow it to one set, character or
+project, mint a **Read-only share** token with **New token** instead and put it
+in the configuration yourself.
+
+A full-access token also works, and you should not give it one: any agent that
+can read its own config file then has full owner control of PixlStash - not
+just read access to your pictures - because that token authorises writes,
+deletes and the local-only filesystem endpoints, and nothing here limits what
+else the agent does with it.
+
+`get_recipe` also asks your ComfyUI whether a recipe's nodes and models are
+installed.
+
+```json
+{
+  "mcpServers": {
+    "pixlstash": {
+      "command": "pixlstash-mcp",
+      "args": ["--url", "http://127.0.0.1:9537"],
+      "env": { "PIXLSTASH_TOKEN": "<your read-only token>" }
+    }
+  }
+}
+```
+
+Tools: `search_pictures`, `list_pictures`, `get_picture`, `view_picture`,
+`list_tags`, `get_recipe`.
+
 ## Troubleshooting
 
 - If the page does not load, confirm the server process is running.

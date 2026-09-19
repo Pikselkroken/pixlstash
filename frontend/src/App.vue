@@ -21,6 +21,7 @@ import { useFilterStore } from "./stores/useFilterStore";
 import { useGridStore } from "./stores/useGridStore";
 import { useSidebarStore } from "./stores/useSidebarStore";
 import { useUserPrefsStore } from "./stores/useUserPrefsStore";
+import { useWorkflowRunStore } from "./stores/useWorkflowRunStore";
 import { useFolderMappingStore } from "./stores/useFolderMappingStore";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
@@ -95,6 +96,11 @@ const WorkflowShelf = defineAsyncComponent(
 const WorkflowInspector = defineAsyncComponent(
   () => import("./components/panels/WorkflowInspector.vue"),
 );
+// The run panel takes the stats panel's place in the rail while it is open
+// (#1307), for the same reason the workflow inspector does.
+const WorkflowRunPanel = defineAsyncComponent(
+  () => import("./components/panels/WorkflowRunPanel.vue"),
+);
 
 // --- Stores ---
 const selectionStore = useSelectionStore();
@@ -102,6 +108,7 @@ const filterStore = useFilterStore();
 const gridStore = useGridStore();
 const sidebarStore = useSidebarStore();
 const userPrefsStore = useUserPrefsStore();
+const workflowRunStore = useWorkflowRunStore();
 const projectStore = useProjectStore();
 const wsStore = useWsStore();
 const reviewSessionsStore = useReviewSessionsStore();
@@ -779,12 +786,18 @@ defineExpose({
               <!-- Moves is a destination for the same reason Insights is: it
                    reports on the queue rather than showing the library, so it
                    replaces the grid instead of floating over it. -->
-              <MovesReview v-else-if="isMovesView" />
+              <MovesReview
+                v-else-if="isMovesView"
+                @open-settings="openSettingsDialog"
+              />
               <!-- The workflow library lists graphs the hub knows about rather
                    than pictures in this library, so like the shelf it replaces
                    the grid instead of floating over it, and the grid stays
                    unmounted while it is open. -->
-              <WorkflowShelf v-else-if="isWorkflowsView" />
+              <WorkflowShelf
+                v-else-if="isWorkflowsView"
+                @open-settings="openSettingsDialog"
+              />
               <ImageGrid
                 v-else
                 ref="gridContainer"
@@ -832,7 +845,12 @@ defineExpose({
         <!-- One rail, four uses (implementation plan §F2). On the workflow
              library it carries the selected workflow; everywhere else it is the
              statistics panel it has always been. -->
-        <WorkflowInspector v-if="isWorkflowsView" />
+        <!-- A run outranks the inspector, including on the workflow library:
+             starting one force-opens this rail (`useWorkflowRunStore.openFor`),
+             so with the inspector first the rail opened onto "Pick a workflow"
+             while a run was in progress behind it. -->
+        <WorkflowRunPanel v-if="workflowRunStore.open" />
+        <WorkflowInspector v-else-if="isWorkflowsView" />
         <StatsSidebar v-else ref="statsSidebarRef" />
       </div>
       <ReviewSessionsOverlay

@@ -803,3 +803,68 @@ class TestWriteCadence:
         scanner.scan_folder(folder_id, str(folder), "user")
 
         assert commits == [5], commits
+
+
+class TestHeaderFacts:
+    """``family``, ``quant`` and ``weights_id`` (#1314): header reads, never hashes."""
+
+    @staticmethod
+    def _vae(path, dtype="BF16"):
+        return _write_safetensors(
+            path,
+            {"decoder.conv_in.weight": {"dtype": dtype, "shape": [512, 16, 3, 3]}},
+        )
+
+    def test_a_new_file_is_registered_with_its_header_facts(
+        self, hub, scanner, tmp_path
+    ):
+        folder = tmp_path / "vae"
+        folder.mkdir()
+        self._vae(folder / "ae.safetensors")
+        folder_id = register_folder(hub, folder)
+
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        (row,) = models(hub, "vae").values()
+        assert (row["family"], row["quant"]) == ("vae_16ch", "bf16")
+        assert row["weights_id"]
+
+    def test_two_casts_of_one_model_share_a_weights_id(self, hub, scanner, tmp_path):
+        folder = tmp_path / "vae"
+        folder.mkdir()
+        self._vae(folder / "ae_bf16.safetensors")
+        self._vae(folder / "ae_fp8.safetensors", dtype="F8_E4M3")
+        folder_id = register_folder(hub, folder)
+
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        rows = list(models(hub, "vae").values())
+        assert len(rows) == 2
+        assert rows[0]["weights_id"] == rows[1]["weights_id"]
+        assert {row["quant"] for row in rows} == {"bf16", "f8_e4m3"}
+
+    def test_an_unchanged_row_from_before_the_columns_is_filled_without_a_hash(
+        self, hub, scanner, tmp_path, monkeypatch
+    ):
+        """The backfill: a rescan reads the header of a row that lacks the facts
+        and never re-reads its bytes, so an existing shelf gains them for the
+        price of a header per file."""
+        folder = tmp_path / "vae"
+        folder.mkdir()
+        self._vae(folder / "ae.safetensors")
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET family = NULL, quant = NULL, weights_id = NULL"
+            )
+
+        def no_hash(path):
+            raise AssertionError(f"an unchanged file was re-hashed: {path}")
+
+        monkeypatch.setattr(scanner_module, "sha256_file", no_hash)
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        (row,) = models(hub, "vae").values()
+        assert (row["family"], row["quant"]) == ("vae_16ch", "bf16")
+        assert row["weights_id"]

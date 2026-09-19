@@ -1,4 +1,4 @@
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { defineStore } from "pinia";
 
 const MAX_SEARCH_HISTORY = 8;
@@ -12,6 +12,13 @@ export const useSearchStore = defineStore("search", () => {
   // shortcut). The field watches this token rather than App holding a ref down
   // through ImageGrid → Toolbar.
   const searchFocusToken = ref(0);
+  // The result pill's "In text" switch: narrow a text search's results to the
+  // pictures whose text matched. Never persisted, and reset by every change of
+  // query (including a clear), so no later search is silently narrowed.
+  const textMatchesOnly = ref(false);
+  watch(searchQuery, () => {
+    textMatchesOnly.value = false;
+  });
 
   const isSearchActive = computed(() => !!searchQuery.value?.trim());
 
@@ -63,6 +70,7 @@ export const useSearchStore = defineStore("search", () => {
     searchHistory,
     isSearchHistoryOpen,
     searchFocusToken,
+    textMatchesOnly,
     isSearchActive,
     filteredSearchHistory,
     requestSearchFocus,

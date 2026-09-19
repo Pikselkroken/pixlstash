@@ -557,6 +557,70 @@ class TestUnknownIsFirstClass:
         ).fetchone() == (2,)
 
 
+class TestBlankRecipeAssetBackfill:
+    """Clearing the asset rows that name no model (#1416).
+
+    A shelf loader's widget is blank until Browse is clicked, and the PixlStash
+    CLIP loader's second encoder is blank on every SD and SDXL graph. Those
+    blanks used to be filed as topology assets, and the rows they left cannot
+    be reached by "forget model names not on the shelf": an empty value is not
+    a digest, so it is never a model ghost.
+    """
+
+    def _asset(self, hub, widget, name):
+        # Parents first: an asset row references its recipe, which references
+        # its topology.
+        hub.execute(
+            "INSERT OR IGNORE INTO workflow_topology "
+            "(topology_hash, hash_version, node_count, first_seen_at) "
+            "VALUES (?, 'v1', 1, '2026-09-01T00:00:00Z')",
+            ("t" * 64,),
+        )
+        hub.execute(
+            "INSERT OR IGNORE INTO workflow_recipe (structural_hash, topology_hash, "
+            "hash_version, node_count, first_seen_at) "
+            "VALUES (?, ?, 'v1', 1, '2026-09-01T00:00:00Z')",
+            ("a" * 64, "t" * 64),
+        )
+        hub.execute(
+            "INSERT OR IGNORE INTO workflow_recipe_asset "
+            "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
+            ("a" * 64, widget, name),
+        )
+
+    def test_a_blank_asset_row_is_dropped_and_a_named_one_is_kept(self, hub):
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 0")
+        self._asset(hub, "clip_sha256_2", "")
+        self._asset(hub, "vae_sha256", "")
+        self._asset(hub, "ckpt_name", "realvisxl.safetensors")
+        self._asset(hub, "vae_sha256", "b" * 64)
+        hub.commit()
+
+        apply_migrations(hub)
+
+        assert sorted(
+            row[0]
+            for row in hub.execute(
+                "SELECT normalized_filename FROM workflow_recipe_asset"
+            ).fetchall()
+        ) == ["b" * 64, "realvisxl.safetensors"]
+
+    def test_it_runs_once_and_does_not_refuse_a_hub_that_has_none(self, hub):
+        apply_migrations(hub)
+        assert hub.execute("PRAGMA user_version").fetchone()[0] == (
+            CURRENT_DATA_VERSION
+        )
+        # A blank filed AFTER the backfill has run stays: the step is one-shot,
+        # and the rule in `workflow_hash` is what stops new ones being written.
+        self._asset(hub, "clip_sha256_2", "")
+        hub.commit()
+        apply_migrations(hub)
+        assert (
+            hub.execute("SELECT COUNT(*) FROM workflow_recipe_asset").fetchone()[0] == 1
+        )
+
+
 class TestComponentRoleBackfill:
     """Re-filing support files that were registered before they had kinds.
 

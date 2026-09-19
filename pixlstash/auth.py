@@ -109,6 +109,8 @@ READ_SAFE_POST_PATHS: frozenset[str] = frozenset(
         "/api/v1/pictures/likeness-search",
         "/api/v1/pictures/face-search",
         "/api/v1/characters/likeness-search",
+        # Do NOT add /api/v1/pictures/{id}/text/read: it queues GPU work with no
+        # dedupe, and it is safe only because no resource-scoped token can POST.
     }
 )
 
@@ -230,6 +232,7 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/operations/undo-state",
         "/api/v1/pictures/import/status",
         "/api/v1/pictures/plugins",
+        "/api/v1/recipes",
         "/api/v1/reviews",
         "/api/v1/reviews/preview",
         "/api/v1/server-config/ghost-retention",
@@ -244,6 +247,14 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/users/me/shared-resource-ids",
         "/api/v1/users/me/token",
         "/api/v1/workflows",
+        # Already refused at runtime by the `/api/v1/workflows/` prefix below,
+        # and listed here anyway: the rule this frozenset is checked against is
+        # arithmetic over the registry (every untemplated owner-class GET), not
+        # "every one a prefix does not already happen to catch". An exception
+        # for prefix-covered paths would put the judgement back in, and the
+        # next such route would be a review's job to notice rather than the
+        # build's.
+        "/api/v1/workflows/cards",
     }
 )
 
@@ -259,6 +270,9 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
 # templated owner-class GET that no prefix covers.
 READ_BLOCKED_GET_PREFIXES: tuple[str, ...] = (
     "/api/v1/adapters/",
+    # The workflow list itself (no trailing slash) stays ANY_TOKEN; what sits
+    # under it is a file's setup, which names pictures by id.
+    "/api/v1/comfyui/workflows/",
     "/api/v1/dedup/",
     "/api/v1/model-folders/",
     "/api/v1/model-icons/",
@@ -1574,6 +1588,23 @@ class AuthService:
             return user_id
         raise HTTPException(status_code=401, detail=detail)
 
+    def is_unscoped_owner_request(self, request: Request) -> bool:
+        """Whether *request* carries a fully-unscoped owner credential.
+
+        The predicate behind :meth:`require_unscoped_owner`, for a route that
+        must **narrow** its answer rather than refuse it - a field that names
+        something outside the token's scope, on an otherwise in-scope resource.
+        It is the same spelling of the rule, so the two cannot drift.
+
+        It says nothing about whether the caller is authenticated at all:
+        ``require_user_id`` is what establishes that, and every data route is
+        already past it by the time a handler runs.
+        """
+        if getattr(request.state, "token_scope", None) is not None:
+            return False
+        matched_token = getattr(request.state, "matched_token", None)
+        return matched_token is None or matched_token.resource_type is None
+
     def require_unscoped_owner(
         self,
         request: Request,
@@ -1588,10 +1619,7 @@ class AuthService:
         outside the token's intended scope.
         """
         user_id = self.require_user_id(request)
-        if getattr(request.state, "token_scope", None) is not None:
-            raise HTTPException(status_code=403, detail=detail)
-        matched_token = getattr(request.state, "matched_token", None)
-        if matched_token is not None and matched_token.resource_type is not None:
+        if not self.is_unscoped_owner_request(request):
             raise HTTPException(status_code=403, detail=detail)
         return user_id
 

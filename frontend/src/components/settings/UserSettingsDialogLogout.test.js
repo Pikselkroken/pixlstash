@@ -31,7 +31,7 @@ vi.mock("./PrivacySection.vue", () => ({ default: sectionStub }));
 vi.mock("./ScrapheapSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SnapshotsSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SmartScoreSection.vue", () => ({ default: sectionStub }));
-vi.mock("./WorkflowsSection.vue", () => ({ default: sectionStub }));
+vi.mock("./ComfyuiHostSection.vue", () => ({ default: sectionStub }));
 
 // `isDesktop` is read once when the module is evaluated, so each direction has
 // to set the bridge BEFORE importing the component.

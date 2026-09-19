@@ -21,6 +21,7 @@ from . import (
     _misc,
     _search,
     _serving,
+    _text,
     _thumbnails,
 )
 
@@ -38,10 +39,11 @@ def create_router(server) -> APIRouter:
     _serving.register_routes(router, server)
     _faces.register_routes(router, server)
     # Register the specific /pictures/{id}/... GET routes (anomaly_region,
-    # character_likeness) before _crud so they are matched ahead of the
+    # character_likeness, text) before _crud so they are matched ahead of the
     # /pictures/{id}/{field} catch-all registered in _crud.
     _anomaly.register_routes(router, server)
     _character_likeness.register_routes(router, server)
+    _text.register_routes(router, server)
     # Same reason, and the reason it lives outside this package: the v1.11
     # layout routes are one feature with the library-level settings beside them
     # (routes/library_layout.py), but GET /pictures/{id}/layout is the

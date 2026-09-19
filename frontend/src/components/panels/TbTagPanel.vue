@@ -357,6 +357,7 @@ import {
   rejectTagPrediction,
 } from "../../api/tags";
 import { resetPicturesTags } from "../../api/pictures";
+import { confirmRetag } from "../../composables/confirmRetag";
 import { listTaggers } from "../../api/taggers";
 import { getUserConfig } from "../../api/config";
 import { isSentinelTag, formatSentinelTag } from "../../utils/tags.js";
@@ -778,6 +779,7 @@ async function generateTagsForAll(model = null) {
     .map((id) => Number(id))
     .filter((id) => Number.isFinite(id) && id > 0);
   if (!ids.length || generateTagsLoading.value) return;
+  if (!(await confirmRetag(ids.length))) return;
   generateTagsLoading.value = true;
   generateTagsError.value = "";
   generateTagsSuccess.value = "";
@@ -1140,13 +1142,13 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 
 .plugin-menu-error {
   margin-top: var(--space-3);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   font-size: var(--text-sm);
 }
 
 .plugin-menu-success {
   margin-top: var(--space-3);
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-surface-success));
   font-size: var(--text-sm);
 }
 
@@ -1281,7 +1283,7 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 
 .tag-chip--all:hover:not(:disabled) {
   background: rgba(var(--v-theme-error), 0.18);
-  border-color: rgba(var(--v-theme-error), 0.55);
+  border-color: rgba(var(--v-theme-surface-error), 0.55);
 }
 
 .tag-chip--some {
@@ -1297,14 +1299,14 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 }
 
 .tag-chip--penalised {
-  color: rgb(var(--v-theme-error)) !important;
-  border-color: rgba(var(--v-theme-error), 0.55) !important;
+  color: rgb(var(--v-theme-surface-error)) !important;
+  border-color: rgba(var(--v-theme-surface-error), 0.55) !important;
   background: rgba(var(--v-theme-error), 0.12) !important;
 }
 
 .tag-chip--penalised:hover:not(:disabled) {
   background: rgba(var(--v-theme-error), 0.22) !important;
-  border-color: rgba(var(--v-theme-error), 0.75) !important;
+  border-color: rgba(var(--v-theme-surface-error), 0.75) !important;
 }
 
 .tag-chip--sentinel {

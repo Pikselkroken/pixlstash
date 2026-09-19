@@ -107,9 +107,18 @@ export async function removeStackMembers(id, pictureIds) {
  * @param {Object} [selection]
  * @param {Array<number|string>} [selection.stackIds]
  * @param {Array<number|string>} [selection.pictureIds]
+ * @param {boolean} [selection.keepRecipes] - Keep recipes only: move just the
+ *   copies that could be made again from their recipe.
+ * @param {boolean} [selection.keepEveryGhost] - with `keepRecipes`, plan with
+ *   ghost retention `on`; the real call then turns it on.
  * @returns {Object} the request body.
  */
-function keepCoverOnlyBody({ stackIds, pictureIds } = {}) {
+function keepCoverOnlyBody({
+  stackIds,
+  pictureIds,
+  keepRecipes,
+  keepEveryGhost,
+} = {}) {
   const body = {};
   const stacks = (Array.isArray(stackIds) ? stackIds : [])
     .map(Number)
@@ -119,6 +128,10 @@ function keepCoverOnlyBody({ stackIds, pictureIds } = {}) {
     .filter((id) => Number.isFinite(id));
   if (stacks.length) body.stack_ids = stacks;
   if (pictures.length) body.picture_ids = pictures;
+  if (keepRecipes) {
+    body.keep_recipes = true;
+    if (keepEveryGhost) body.keep_every_ghost = true;
+  }
   return body;
 }
 
@@ -148,10 +161,12 @@ function keepCoverOnlyBody({ stackIds, pictureIds } = {}) {
 export async function previewKeepCoverOnly({
   stackIds,
   pictureIds,
+  keepRecipes,
+  keepEveryGhost,
 } = {}) {
   return unwrap(apiClient.post(
     stacksUrl("/keep-cover-only/preview"),
-    keepCoverOnlyBody({ stackIds, pictureIds }),
+    keepCoverOnlyBody({ stackIds, pictureIds, keepRecipes, keepEveryGhost }),
   ));
 }
 
@@ -171,6 +186,12 @@ export async function previewKeepCoverOnly({
  * @param {Array<number|string>} [selection.pictureIds]
  * @param {string} [selection.batchId] - client-namespaced `cli-…` batch id, so
  *   one gesture stays a single undo. Omit and the server mints one.
+ * @param {boolean} [selection.keepRecipes] - Keep recipes only.
+ * @param {boolean} [selection.keepEveryGhost] - with `keepRecipes`, turn ghost
+ *   retention on before anything moves.
+ * @param {Array<number|string>} [selection.expectedPictureIds] -
+ *   `picture_ids_moving` from the preview the user confirmed; a grown plan is
+ *   refused with a 409 and moves nothing.
  * @returns {Promise<Object>} `{ status, stacks_collapsed, stack_ids_collapsed,
  *   pictures_moved, picture_ids_moved, cover_picture_ids,
  *   covers_gaining_metadata, tags_added, scores_lifted,
@@ -182,8 +203,23 @@ export async function keepCoverOnly({
   stackIds,
   pictureIds,
   batchId,
+  keepRecipes,
+  keepEveryGhost,
+  expectedPictureIds,
 } = {}) {
-  const body = keepCoverOnlyBody({ stackIds, pictureIds });
+  const body = keepCoverOnlyBody({
+    stackIds,
+    pictureIds,
+    keepRecipes,
+    keepEveryGhost,
+  });
+  // The ids the preview reported. A plan that has GROWN since is a 409 and
+  // moves nothing, so the confirm button's figure is the figure acted on.
+  if (Array.isArray(expectedPictureIds)) {
+    body.expected_picture_ids = expectedPictureIds
+      .map(Number)
+      .filter((id) => Number.isFinite(id));
+  }
   if (batchId) body.batch_id = batchId;
   return unwrap(apiClient.post(stacksUrl("/keep-cover-only"), body));
 }

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 import traceback
 from typing import TYPE_CHECKING, Callable, Optional
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 if TYPE_CHECKING:  # annotations only - see the function-local import note below
     import torch
@@ -16,7 +17,7 @@ if TYPE_CHECKING:  # annotations only - see the function-local import note below
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TaggerPlugin
 from pixlstash.utils.model_utils import from_pretrained_local_first
-from pixlstash.utils.vram_utils import empty_device_cache
+from pixlstash.utils.vram_utils import empty_device_cache, is_vram_oom
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 
 # ML imports (torch / torchvision) are deliberately FUNCTION-LOCAL throughout
@@ -31,6 +32,9 @@ FLORENCE_BATCH_SIZE_CPU = 2
 FLORENCE_BASE_VRAM_MB = 900  # Florence-2-base model footprint (fp16 on GPU)
 FLORENCE_LARGE_FT_VRAM_MB = 2600  # Florence-2-large-ft footprint (0.77B, fp16 on GPU)
 FLORENCE_PER_IMAGE_VRAM_MB = 40  # Activation scratch per image in a GPU mini-batch
+FLORENCE_OCR_NUM_BEAMS = (
+    3  # Beams text reading decodes with; the VRAM gate charges per beam
+)
 FLORENCE_MODEL_REVISION = "00921df66db728a9ceb750f5eca43e5c203a2051"
 
 # Selectable Florence-2 checkpoints. One setting drives BOTH captioning and
@@ -78,6 +82,72 @@ def _truncate_at_sentence(caption: str) -> str:
     if last_punct != -1:
         return caption[: last_punct + 1].strip()
     return caption
+
+
+def _words_from_ocr_regions(quad_boxes, labels, image_size) -> list:
+    """Split Florence ``<OCR_WITH_REGION>`` lines into words with boxes.
+
+    Florence boxes whole lines. Each word gets the slice of its line's box that
+    its characters take up.
+
+    ponytail: proportional split over the line quad's axis-aligned bounds, so a
+    word's box drifts on proportional fonts and wide gaps, and on text set at an
+    angle the bounds are far larger than the line and every word lands in the
+    wrong place. A detector with word boxes of its own would fix both.
+
+    Args:
+        quad_boxes: One ``[x1, y1, ..., x4, y4]`` quad per line, in pixels.
+        labels: The text of each line.
+        image_size: ``(width, height)`` the quads are measured in.
+
+    Returns:
+        ``[[{"text": str, "box": [x, y, w, h]}, ...], ...]`` with boxes in
+        fractions of the image, lines top to bottom and words left to right.
+        Lines with no words are dropped.
+    """
+    width, height = image_size
+    if width <= 0 or height <= 0:
+        return []
+    quad_boxes, labels = quad_boxes or [], labels or []
+    if len(quad_boxes) != len(labels):
+        # A generation cut off at the token cap: keep the lines that pair up.
+        logger.warning(
+            "Florence-2 returned %d line boxes for %d lines of text; lines "
+            "without a partner are dropped",
+            len(quad_boxes),
+            len(labels),
+        )
+    lines = []
+    for quad, label in zip(quad_boxes, labels):
+        # Florence boxes the ink, so padding around the label takes no width.
+        text = str(label or "").replace("</s>", "").replace("<s>", "").strip()
+        if not text or not quad or len(quad) != 8:
+            continue
+        xs, ys = quad[0::2], quad[1::2]
+        x1 = min(max(min(xs), 0), width)
+        x2 = min(max(max(xs), 0), width)
+        y1 = min(max(min(ys), 0), height)
+        y2 = min(max(max(ys), 0), height)
+        if x2 <= x1 or y2 <= y1:
+            continue
+        char_w = (x2 - x1) / len(text)
+        words = []
+        for match in re.finditer(r"\S+", text):
+            left = x1 + match.start() * char_w
+            words.append(
+                {
+                    "text": match.group(),
+                    "box": [
+                        round(left / width, 4),
+                        round(y1 / height, 4),
+                        round((match.end() - match.start()) * char_w / width, 4),
+                        round((y2 - y1) / height, 4),
+                    ],
+                }
+            )
+        lines.append((y1, x1, words))
+    lines.sort(key=lambda line: (line[0], line[1]))
+    return [words for _, _, words in lines]
 
 
 def _move_inputs_to_device(inputs: dict, device, dtype) -> dict:
@@ -556,6 +626,114 @@ class Florence2Service:
                     )
 
             logger.error("Florence-2 detection failed: %s", e)
+            logger.debug(traceback.format_exc())
+            return {}
+
+    def read_text(
+        self,
+        image_paths: list,
+        max_new_tokens: int = 1024,
+        max_dim: int = 1024,
+        _retry_on_cpu: bool = True,
+    ) -> dict:
+        """Read the text in a batch of still images, with a box per word.
+
+        Runs ``<OCR_WITH_REGION>`` on each picture as displayed (EXIF
+        orientation applied), so the boxes line up with what the overlay shows.
+
+        Args:
+            image_paths: Still-image file paths.
+            max_new_tokens: Generation cap; a dense page needs many tokens.
+            max_dim: Longest side (px) each image is resized to first.
+            _retry_on_cpu: When True, retry once on CPU after a CUDA error.
+
+        Returns:
+            ``{path: lines}`` as :func:`_words_from_ocr_regions` returns them.
+            Paths that fail to load or read are omitted.
+        """
+        import torch
+
+        if self._model is None:
+            logger.error("Florence-2 model is not initialised")
+            return {}
+
+        task_token = "<OCR_WITH_REGION>"
+        try:
+            valid_items = []
+            for image_path in image_paths:
+                try:
+                    image = ImageOps.exif_transpose(Image.open(image_path)).convert(
+                        "RGB"
+                    )
+                    valid_items.append(
+                        (image_path, _resize_to_max_dim(image, max_dim=max_dim))
+                    )
+                except Exception as image_error:
+                    logger.error(
+                        "Florence-2 failed to load image for text reading %s: %s",
+                        image_path,
+                        image_error,
+                    )
+            if not valid_items:
+                return {}
+
+            images = [img for _, img in valid_items]
+            inputs = self._processor(
+                text=[task_token] * len(images),
+                images=images,
+                return_tensors="pt",
+                padding=True,
+            )
+            inputs = _move_inputs_to_device(inputs, self._model_device, self._dtype)
+            with torch.inference_mode():
+                generated_ids = self._model.generate(
+                    input_ids=inputs["input_ids"],
+                    pixel_values=inputs["pixel_values"],
+                    max_new_tokens=max_new_tokens,
+                    early_stopping=False,
+                    do_sample=False,
+                    num_beams=FLORENCE_OCR_NUM_BEAMS,
+                    pad_token_id=self._processor.tokenizer.pad_token_id,
+                )
+            generated_texts = self._processor.batch_decode(
+                generated_ids, skip_special_tokens=False
+            )
+
+            texts: dict = {}
+            for (image_path, image), generated_text in zip(
+                valid_items, generated_texts
+            ):
+                # Boxes come back in the size handed over here; they are stored
+                # as fractions, so the resized size is the right one.
+                parsed = self._processor.post_process_generation(
+                    generated_text, task=task_token, image_size=image.size
+                ).get(task_token, {})
+                texts[image_path] = _words_from_ocr_regions(
+                    parsed.get("quad_boxes"), parsed.get("labels"), image.size
+                )
+            return texts
+
+        except Exception as e:
+            if is_vram_oom(e):
+                # Out of memory is the task runner's to retry once VRAM is freed;
+                # falling back to CPU here would move captioning there too.
+                raise
+            if _retry_on_cpu and self._is_cuda_error(e):
+                logger.warning(
+                    "Florence-2 text reading failed on GPU (%s); retrying on CPU.", e
+                )
+                if self._reload_on_cpu(cause=e):
+                    return self.read_text(
+                        image_paths,
+                        max_new_tokens=max_new_tokens,
+                        max_dim=max_dim,
+                        _retry_on_cpu=False,
+                    )
+            logger.error(
+                "Florence-2 text reading failed for %d image(s): %s",
+                len(image_paths),
+                e,
+            )
             logger.debug(traceback.format_exc())
             return {}
 

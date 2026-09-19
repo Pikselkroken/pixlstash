@@ -21,6 +21,7 @@ from .entity_project import (  # noqa: F401
 )
 from .detection import Detection  # noqa: F401
 from .face import Face  # noqa: F401
+from .generation import Generation, GenerationInput  # noqa: F401
 from .mixed_stack import MixedStackDismissal, StackCohesion  # noqa: F401
 from .operation import (  # noqa: F401
     Operation,
@@ -60,6 +61,7 @@ from .tag import (  # noqa: F401
     parse_engine_from_description_sentinel,
 )
 from .review import Review  # noqa: F401
+from .saved_recipe import SavedRecipe  # noqa: F401
 from .tag_health import TagHealth  # noqa: F401
 from .tag_prediction import TagPrediction  # noqa: F401
 from .tag_suggestion import TagSuggestion  # noqa: F401

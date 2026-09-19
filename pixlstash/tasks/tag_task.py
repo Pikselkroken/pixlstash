@@ -17,6 +17,7 @@ from pixlstash.db_models import (
     Tag,
     TAG_SENTINEL_LIKE_PATTERN,
     TAG_SENTINEL_ESCAPE_CHAR,
+    is_tag_sentinel,
 )
 from pixlstash.db_models.tag_prediction import (
     feeds_anomaly_score,
@@ -128,6 +129,7 @@ class TagTask(BaseTask):
         pictures: list,
         interactive: bool = False,
         engine_override: str | None = None,
+        reset_generation: int | None = None,
     ):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
         super().__init__(
@@ -142,6 +144,15 @@ class TagTask(BaseTask):
         self._pictures = pictures or []
         self._interactive = interactive
         self._engine_override = engine_override
+        # `reset_generation` is `database.tag_resets.current()` read BEFORE the
+        # pictures were: a picture reset after it gets no write from this task
+        # (#1361). The default, "now", is only right when they were read just
+        # before. The registry is optional on the database object, like
+        # `unprocessable_images`.
+        self._tag_resets = getattr(database, "tag_resets", None)
+        if reset_generation is None and self._tag_resets is not None:
+            reset_generation = self._tag_resets.current()
+        self._reset_generation = reset_generation
         self._preloaded_images: dict[str, PILImage.Image] = {}
         self._preload_lock = threading.Lock()
         self._preload_thread: threading.Thread | None = None
@@ -598,8 +609,23 @@ class TagTask(BaseTask):
             target = human_pos_by_pic if state == "POS" else human_neg_by_pic
             target.setdefault(pid, set()).add(tag_val)
 
-        # Determine which pictures need updating and their new effective tags.
+        # The tagger never deletes a tag it did not write (#1357). Every writer of
+        # a retag sentinel either creates the picture or deletes all of its Tag
+        # rows first (`reset_pictures_tags`, sidecar reconciliation), and this
+        # pass is the only thing that removes the sentinel, and a pass that read
+        # the picture before such a reset is dropped by `_add_tags_unless_reset`
+        # (#1361). So a non-sentinel row present now was written by someone
+        # else - most often a manual add made
+        # while this task was queued, which also removed the sentinel. The write
+        # therefore only removes sentinels and adds what is missing; it used to
+        # delete every row and re-insert `model | human POS`, which silently
+        # dropped a manual tag outside the anomaly vocabulary.
+        #
+        # When the tagger found no applicable tags, only the sentinel goes: an
+        # empty tag set means "processed but no tags found", and MissingTagFinder
+        # only re-queues pictures that still carry a retag sentinel.
         pics_to_update: list[tuple[int, set]] = []
+        preserved_by_pic: dict[int, int] = {}
         for update in updates:
             pic_id = update.get("pic_id")
             if pic_id is None:
@@ -607,21 +633,32 @@ class TagTask(BaseTask):
             if pic_id not in existing_picture_ids:
                 logger.debug("Skipping tag update for missing picture_id=%s", pic_id)
                 continue
-            tags = update.get("tags") or []
-
-            # When the tagger found no applicable tags, leave the tag set empty.
-            # An empty tag set means "processed but no tags found"; MissingTagFinder
-            # only re-queues pictures that still carry a retag sentinel, so a
-            # picture with no tags at all will not be reprocessed.
-            effective_tags = set(tags) if tags else set()
-            # Apply durable human supervision on top of the model's call.
-            effective_tags |= human_pos_by_pic.get(pic_id, set())
+            existing = existing_tags_map.get(pic_id, set())
+            # A human NEG vetoes the model's call; a human POS is re-applied.
+            effective_tags = set(update.get("tags") or [])
             effective_tags -= human_neg_by_pic.get(pic_id, set())
+            effective_tags |= human_pos_by_pic.get(pic_id, set())
 
-            if effective_tags == existing_tags_map.get(pic_id, set()):
+            tags_to_add = effective_tags - existing
+            if not tags_to_add and not any(is_tag_sentinel(t) for t in existing):
                 continue
+            preserved = {
+                t
+                for t in existing
+                if not is_tag_sentinel(t) and t not in effective_tags
+            }
+            if preserved:
+                preserved_by_pic[pic_id] = len(preserved)
+            pics_to_update.append((pic_id, tags_to_add))
 
-            pics_to_update.append((pic_id, effective_tags))
+        if preserved_by_pic:
+            logger.warning(
+                "Tagger: kept %d tag(s) the model did not produce on %d picture(s) "
+                "(added while tagging was pending); per picture: %s",
+                sum(preserved_by_pic.values()),
+                len(preserved_by_pic),
+                preserved_by_pic,
+            )
 
         # A locked set freezes a picture's CONFIRMED tags (the Tag table, not just
         # predictions), so the background tagger must never rewrite them - even if
@@ -644,7 +681,7 @@ class TagTask(BaseTask):
         if not pics_to_update:
             return updated_ids
 
-        # Bulk delete old tags and insert new ones in a single transaction.
+        # Clear the sentinels and insert the missing tags in a single transaction.
         #
         # The rewrite is wrapped in invalidate_on_anomaly_change because an applied Tag
         # row is now an *input* to the scorer's anomaly penalty
@@ -655,14 +692,25 @@ class TagTask(BaseTask):
         # nothing observing it and the cached value would stay stale. update_pic_ids is
         # already lock-filtered above, so frozen pictures are never invalidated.
         update_pic_ids = [pid for pid, _ in pics_to_update]
+
+        def _write(batch: list[tuple[int, set]]) -> None:
+            session.exec(
+                delete(Tag).where(
+                    Tag.picture_id.in_([pid for pid, _ in batch]),
+                    Tag.tag.like(
+                        TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+                    ),
+                )
+            )
+            for pic_id, tags_to_add in batch:
+                for tag_value in tags_to_add:
+                    session.add(Tag(picture_id=pic_id, tag=tag_value))
+
         try:
             with invalidate_on_anomaly_change(
                 session, update_pic_ids, context="tagger tag rewrite"
             ):
-                session.exec(delete(Tag).where(Tag.picture_id.in_(update_pic_ids)))
-                for pic_id, effective_tags in pics_to_update:
-                    for tag_value in effective_tags:
-                        session.add(Tag(picture_id=pic_id, tag=tag_value))
+                _write(pics_to_update)
             session.commit()
             updated_ids.extend(update_pic_ids)
         except IntegrityError as exc:
@@ -672,14 +720,12 @@ class TagTask(BaseTask):
                 len(update_pic_ids),
                 exc,
             )
-            for pic_id, effective_tags in pics_to_update:
+            for pic_id, tags_to_add in pics_to_update:
                 try:
                     with invalidate_on_anomaly_change(
                         session, [pic_id], context="tagger tag rewrite (per-picture)"
                     ):
-                        session.exec(delete(Tag).where(Tag.picture_id == pic_id))
-                        for tag_value in effective_tags:
-                            session.add(Tag(picture_id=pic_id, tag=tag_value))
+                        _write([(pic_id, tags_to_add)])
                     session.commit()
                     updated_ids.append(pic_id)
                 except IntegrityError as inner_exc:
@@ -691,6 +737,48 @@ class TagTask(BaseTask):
                     )
 
         return updated_ids
+
+    def _reset_since_capture(self, picture_ids) -> set[int]:
+        """Ids whose tags were reset after this task read them (#1361).
+
+        Such a task's output belongs to the tags that were replaced: written, it
+        would clear the new sentinel, and the retag's own task would then keep
+        the stale rows as another writer's. Dropping it leaves the sentinel for
+        that task. Must run on the writer thread, where the resets also run.
+        """
+        if self._tag_resets is None:
+            return set()
+        stale = self._tag_resets.reset_since(picture_ids, self._reset_generation)
+        if stale:
+            logger.info(
+                "TagTask %s: dropping output for %d picture(s) retagged since "
+                "it read them: %s",
+                self.id,
+                len(stale),
+                sorted(stale),
+            )
+        return stale
+
+    def _add_tags_unless_reset(self, session: Session, updates: list[dict]):
+        stale = self._reset_since_capture([u["pic_id"] for u in updates])
+        return self._add_tags_bulk(
+            session, [u for u in updates if u["pic_id"] not in stale]
+        )
+
+    def _write_predictions_unless_reset(
+        self,
+        session: Session,
+        label_scores_by_pic_id: dict,
+        tags_by_pic_id: dict,
+        model_version: str,
+    ) -> int:
+        stale = self._reset_since_capture(label_scores_by_pic_id)
+        return self._write_predictions_from_tags(
+            session,
+            {p: v for p, v in label_scores_by_pic_id.items() if p not in stale},
+            tags_by_pic_id,
+            model_version,
+        )
 
     @staticmethod
     def _fetch_faces_for_pictures(session: Session, picture_ids: list) -> dict:
@@ -995,7 +1083,7 @@ class TagTask(BaseTask):
                 if update_payloads:
                     db_tags_start = time.perf_counter()
                     updated_ids = self._db.run_task(
-                        self._add_tags_bulk,
+                        self._add_tags_unless_reset,
                         update_payloads,
                         priority=DBPriority.LOW,
                     )
@@ -1042,7 +1130,7 @@ class TagTask(BaseTask):
                             )
                             db_pred_start = time.perf_counter()
                             self._db.run_task(
-                                self._write_predictions_from_tags,
+                                self._write_predictions_unless_reset,
                                 label_scores_by_pic_id,
                                 tags_by_pic_id,
                                 model_version,

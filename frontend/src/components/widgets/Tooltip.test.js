@@ -196,7 +196,7 @@ describe("Tooltip", () => {
 
   // A right-click on a row opens a menu under a pointer that is still on the
   // row; the hover delay already running must not put the tip back over the
-  // menu, where its hoverable surface would take a menu row's click.
+  // menu, where it would hide the row the pointer wants.
   it("stays shut after a press until the pointer leaves the control", async () => {
     const w = mountHost(
       `<button>Row<Tooltip text="Row tip" activator="parent" /></button>`,

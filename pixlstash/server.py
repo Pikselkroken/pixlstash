@@ -25,6 +25,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
 from pillow_heif import register_heif_opener
@@ -65,6 +66,12 @@ from pixlstash.hub.bootstrap import (
 )
 from pixlstash.hub.registry import LibraryRegistry
 from pixlstash.services.library_switch_service import LibrarySwitchService
+from pixlstash.services.workflow_bindings import migrate_workflow_folder
+from pixlstash.services.workflow_inbox import (
+    WorkflowInboxWatcher,
+    reconcile as reconcile_workflow_inbox,
+    workflow_inbox_dir,
+)
 from pixlstash.services.library_generation_coordinator import (
     LibraryGenerationCoordinator,
 )
@@ -94,7 +101,11 @@ from pixlstash.routes.dedup import create_router as create_dedup_router
 from pixlstash.routes.pictures import (
     create_router as create_pictures_router,
 )
-from pixlstash.routes.comfyui import create_router as create_comfyui_router
+from pixlstash.routes.comfyui import (
+    _store_workflow,
+    create_router as create_comfyui_router,
+    workflow_user_dir,
+)
 from pixlstash.routes.tag_predictions import (
     create_router as create_tag_predictions_router,
 )
@@ -102,6 +113,7 @@ from pixlstash.routes.tag_suggestions import (
     create_router as create_tag_suggestions_router,
 )
 from pixlstash.routes.operations import create_router as create_operations_router
+from pixlstash.routes.recipes import create_router as create_recipes_router
 from pixlstash.routes.reviews import create_router as create_reviews_router
 from pixlstash.routes.insights import create_router as create_insights_router
 from pixlstash.routes.moves import create_router as create_moves_router
@@ -270,6 +282,14 @@ class Server(
             them at a temp directory instead is no longer an option - since #905
             the downloaders read the same accessor, so a temp directory means
             every engine is downloaded again.
+        DEFAULT_MIGRATE_WORKFLOW_TOKENS: Whether start-up migrates the user
+            workflow folder's placeholder tokens to bindings. ``False`` in the
+            test suite for the same reason as the model roots: the folder is
+            machine-global, so a test server would rewrite the developer's own
+            workflows.
+        DEFAULT_WATCH_WORKFLOW_INBOX: Whether start-up imports the watched
+            ``workflows/`` folder and keeps watching it. ``False`` in the test
+            suite: that folder is machine-global too.
     """
 
     DEFAULT_MAX_VRAM_GB: float | None = None
@@ -279,6 +299,8 @@ class Server(
     DEFAULT_CLEANUP_MISSING_PICTURES: bool = False
     DEFAULT_INSIGHTFACE_MODEL_PACK: str | None = None
     DEFAULT_DECLARE_MODEL_ROOTS: bool = True
+    DEFAULT_MIGRATE_WORKFLOW_TOKENS: bool = True
+    DEFAULT_WATCH_WORKFLOW_INBOX: bool = True
 
     @staticmethod
     def running_in_docker() -> bool:
@@ -620,6 +642,40 @@ class Server(
                         exc,
                     )
         _log_stage("model shelf declarations (builtin/insightface/huggingface)")
+        if Server.DEFAULT_MIGRATE_WORKFLOW_TOKENS:
+            # Workflows are stored as imported now, so a file still carrying
+            # {{image_path}} / {{caption}} tokens from the old import dialog
+            # gets bindings instead. One pass; a migrated file has no token.
+            migrate_workflow_folder(workflow_user_dir())
+            _log_stage("workflow placeholder migration")
+        self._workflow_inbox_watcher = None
+        if Server.DEFAULT_WATCH_WORKFLOW_INBOX:
+            # After the migration, so a file the inbox matches against has
+            # its bindings already.
+            inbox = workflow_inbox_dir()
+            try:
+                reconcile_workflow_inbox(inbox, self._store_inbox_workflow)
+            except Exception as exc:
+                # A strange file must not stop start-up; the watcher retries.
+                logger.error(
+                    "Reconciling the workflow inbox %s failed with %s: %s",
+                    inbox,
+                    type(exc).__name__,
+                    exc,
+                    exc_info=True,
+                )
+            try:
+                watcher = WorkflowInboxWatcher(inbox, self._store_inbox_workflow)
+                watcher.start()
+                self._workflow_inbox_watcher = watcher
+            except OSError as exc:
+                logger.error(
+                    "Could not watch the workflow inbox %s; files put there are "
+                    "imported at the next start only: %s",
+                    inbox,
+                    exc,
+                )
+            _log_stage("workflow inbox reconcile")
         if self._hub_bootstrap.migrated:
             logger.info(
                 "First run after the hub/vault split: identity now lives in %s",
@@ -870,11 +926,19 @@ class Server(
         violation on ``hub.db``. That leak was every remaining failure in
         backend-windows shard 2 once the earlier startup defects were fixed.
         """
+        watcher = getattr(self, "_workflow_inbox_watcher", None)
+        if watcher is not None:
+            self._workflow_inbox_watcher = None
+            watcher.stop()
         if getattr(self, "vault", None) is not None:
             logger.info("Closing the vault and cleaning up resources")
             self._close_active_vault()
         self._close_hub()
         gc.collect()
+
+    def _store_inbox_workflow(self, name: str, workflow: dict) -> dict:
+        """Store one inbox file the way a drag and drop does: keep both."""
+        return _store_workflow(self.hub, name, workflow, keep_both=True)
 
     def request_fatal_shutdown(self) -> None:
         """Ask every programmatic listener to exit after fatal vault loss."""
@@ -1432,7 +1496,16 @@ class Server(
 
             return JSONResponse(
                 status_code=422,
-                content={"detail": detail},
+                # NOTE for validator authors: whatever a validator puts in its
+                # ValueError text reaches the caller in this body, so it must
+                # not carry a host path, a credential or the input value.
+                #
+                # Encoded, not handed to JSONResponse raw: a validator that
+                # raises ValueError puts the exception OBJECT in the error's
+                # ``ctx`` (pydantic v2), which json.dumps cannot write, and the
+                # handler for a 422 would then itself fail with a 500. FastAPI's
+                # own default handler encodes for this reason.
+                content={"detail": jsonable_encoder(detail)},
                 headers=headers,
             )
 
@@ -1848,6 +1921,14 @@ class Server(
         # reaches OpenAPI and the generated route table.
         self.api.include_router(
             create_workflows_router(self),
+            prefix=API_V1_PREFIX,
+            dependencies=gate,
+        )
+        # Saved recipes (implementation plan §5.5, step B6). Vault rows, read
+        # against the hub's stacks; the module declares its own tag for the
+        # reason above.
+        self.api.include_router(
+            create_recipes_router(self),
             prefix=API_V1_PREFIX,
             dependencies=gate,
         )

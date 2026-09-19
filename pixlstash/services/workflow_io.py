@@ -40,6 +40,39 @@ _PICTURE_INPUT_CLASSES = frozenset(INPUT_IMAGE_FIELDS) | {
 }
 
 
+# The input a picture loader reads its picture from, where it is not ``image``.
+PICTURE_INPUT_FIELDS: dict[str, tuple[str, ...]] = {
+    **INPUT_IMAGE_FIELDS,
+    "PixlStashPictureLoader": ("picture_ids",),
+    "Image Load": ("image_path",),
+}
+
+
+def is_picture_loader(class_type: str) -> bool:
+    """True for a node that loads the picture a run starts from."""
+    return (
+        "loadimage" in class_type.lower().replace(" ", "")
+        or class_type in _PICTURE_INPUT_CLASSES
+    )
+
+
+def picture_fields(class_type: str) -> tuple[str, ...]:
+    """The inputs of a picture loader that name its picture."""
+    return PICTURE_INPUT_FIELDS.get(class_type, ("image",))
+
+
+def api_graph(document: dict) -> dict | None:
+    """The API-format graph in *document*, or ``None`` for a UI-format file.
+
+    The import dialog stores an embedded prompt chunk as ``{"prompt": graph}``.
+    """
+    if not isinstance(document, dict) or isinstance(document.get("nodes"), list):
+        return None
+    if isinstance(document.get("prompt"), dict):
+        return document["prompt"]
+    return document
+
+
 @dataclass(frozen=True)
 class WorkflowIO:
     """The detected inputs and outputs of one workflow, as node ids.
@@ -50,6 +83,8 @@ class WorkflowIO:
 
     save_nodes: tuple[str, ...] = ()
     picture_inputs: tuple[str, ...] = ()
+    # The class of each picture input, in the same order.
+    picture_input_classes: tuple[str, ...] = ()
     positive_prompts: tuple[str, ...] = ()
     negative_prompts: tuple[str, ...] = ()
     ambiguities: tuple[str, ...] = ()
@@ -78,13 +113,11 @@ def detect_workflow_io(document: dict) -> WorkflowIO:
     Raises:
         WorkflowGraphError: The document cannot be read as a graph.
     """
-    if isinstance(document, dict) and isinstance(document.get("nodes"), list):
+    graph = api_graph(document)
+    if graph is None and isinstance(document, dict):
         nodes = reduce_ui_graph(document)
-    elif isinstance(document, dict) and isinstance(document.get("prompt"), dict):
-        # The import dialog stores an embedded prompt chunk as this envelope.
-        nodes = reduce_api_graph(document["prompt"])
     else:
-        nodes = reduce_api_graph(document)
+        nodes = reduce_api_graph(graph)
 
     # Output collection (_extract_output_node_ids) takes an explicit choice
     # first, whatever its class, and falls back to the save classes.
@@ -101,12 +134,10 @@ def detect_workflow_io(document: dict) -> WorkflowIO:
             key for key, node in nodes.items() if node.class_type in SAVE_NODE_CLASSES
         )
     # ponytail: name rule plus a known-class list; a loader named otherwise is
-    # not found until object_info types it (#1306).
+    # not found, and its image field shows as a parameter (#1306) rather than
+    # an input. Typing loaders from object_info would find it.
     picture_inputs = sorted(
-        key
-        for key, node in nodes.items()
-        if "loadimage" in node.class_type.lower().replace(" ", "")
-        or node.class_type in _PICTURE_INPUT_CLASSES
+        key for key, node in nodes.items() if is_picture_loader(node.class_type)
     )
     ambiguities = []
     if len(save_nodes) > 1:
@@ -142,6 +173,7 @@ def detect_workflow_io(document: dict) -> WorkflowIO:
     return WorkflowIO(
         save_nodes=tuple(save_nodes),
         picture_inputs=tuple(picture_inputs),
+        picture_input_classes=tuple(nodes[key].class_type for key in picture_inputs),
         positive_prompts=positive,
         negative_prompts=negative,
         ambiguities=tuple(ambiguities),

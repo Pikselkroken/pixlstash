@@ -989,6 +989,214 @@ def test_0093_rebuilds_guest_tables_onto_token_public_id_and_clears_rows():
                 assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone() == (0,)
 
 
+def test_0118_hands_back_only_the_pictures_that_carry_a_workflow():
+    """The recipe backfill re-reads what has a workflow and nothing else.
+
+    A library upgraded from 1.11 has no ``generation`` table and every picture
+    stamped scanned. Clearing the stamp on a picture with no workflow would
+    re-read a third of the library for nothing.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            conn.execute("DROP TABLE generation_input")
+            conn.execute("DROP TABLE generation")
+            _insert_minimal_row(
+                conn,
+                "picture",
+                file_path="made.png",
+                workflow_instance_hash="an-instance",
+                workflow_hash_version="v1",
+            )
+            _insert_minimal_row(
+                conn, "picture", file_path="plain.png", workflow_hash_version="v1"
+            )
+            conn.execute(
+                "UPDATE alembic_version SET version_num = "
+                "'0117_add_pending_ghost_cascade'"
+            )
+            conn.commit()
+
+        # To 0118 alone: 0119 hands unkeyed pictures back for a different reason.
+        up = _run_alembic(
+            ["upgrade", "0118_add_generation_tables"], db_url, _MIGRATIONS_DIR
+        )
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            stamps = dict(
+                conn.execute("SELECT file_path, workflow_hash_version FROM picture")
+            )
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+        assert stamps == {"made.png": None, "plain.png": "v1"}
+        assert {"generation", "generation_input"} <= tables
+
+
+def test_0119_hands_back_only_pictures_that_carry_no_workflow():
+    """An A1111 picture was stamped scanned with no keys; it is read again.
+
+    A ComfyUI picture keeps its keys, and a format A1111 data cannot be read
+    from is not re-read at all.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            _insert_minimal_row(
+                conn,
+                "picture",
+                file_path="comfy.png",
+                workflow_instance_hash="an-instance",
+                workflow_hash_version="v1",
+            )
+            _insert_minimal_row(
+                conn, "picture", file_path="a1111.PNG", workflow_hash_version="v1"
+            )
+            _insert_minimal_row(
+                conn, "picture", file_path="photo.jpg", workflow_hash_version="v1"
+            )
+            _insert_minimal_row(
+                conn, "picture", file_path="shot.webp", workflow_hash_version="v1"
+            )
+            _insert_minimal_row(
+                conn, "picture", file_path="clip.mp4", workflow_hash_version="v1"
+            )
+            conn.execute(
+                "UPDATE alembic_version SET version_num = '0118_add_generation_tables'"
+            )
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            stamps = dict(
+                conn.execute("SELECT file_path, workflow_hash_version FROM picture")
+            )
+        assert stamps == {
+            "comfy.png": "v1",
+            "a1111.PNG": None,
+            "photo.jpg": None,
+            "shot.webp": None,
+            "clip.mp4": "v1",
+        }
+
+
+def _has_table(conn, name: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+        ).fetchone()
+        is not None
+    )
+
+
+_SAVED_RECIPE_COLUMNS = {
+    "id",
+    "name",
+    "position",
+    "workflow_key",
+    "prompt",
+    "negative",
+    "loras",
+    "overrides",
+    "seed",
+    "keep_seed",
+    "source_picture_id",
+    "created_at",
+}
+
+
+def _assert_saved_recipe_shape(conn, built_by: str):
+    """The columns, the two indexes and the SET NULL, whichever built the table.
+
+    Called against BOTH the baseline's ``create_all()`` table and the
+    migration's, because those are two independent definitions of one table and
+    nothing else keeps them in step: a fresh vault would otherwise take its
+    shape from the model with no assertion on it at all, and the model losing
+    ``ondelete="SET NULL"`` would leave every test green while deleting a
+    picture a recipe points at started raising.
+    """
+    assert _has_table(conn, "saved_recipe"), f"no saved_recipe table from {built_by}"
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(saved_recipe)")}
+    assert columns == _SAVED_RECIPE_COLUMNS, built_by
+    indexes = {row[1] for row in conn.execute("PRAGMA index_list(saved_recipe)")}
+    assert {
+        "ix_saved_recipe_workflow_key",
+        "ix_saved_recipe_source_picture_id",
+    } <= indexes, f"{built_by}: indexes are {indexes}"
+    foreign_keys = {
+        (row[2], row[3], row[4], row[6])
+        for row in conn.execute("PRAGMA foreign_key_list(saved_recipe)")
+    }
+    assert foreign_keys == {("picture", "source_picture_id", "id", "SET NULL")}, (
+        f"{built_by}: foreign keys are {foreign_keys}"
+    )
+
+
+def test_0121_creates_saved_recipe_on_a_fresh_and_on_an_existing_vault():
+    """The table is there both ways round, and a row survives the upgrade.
+
+    A fresh vault gets ``saved_recipe`` from the baseline's ``create_all()``, so
+    the migration must find it already there and do nothing; a vault upgraded
+    from before B6 has no such table and the migration has to create it. The
+    same run covers both, and the shape is asserted **twice**: once against
+    the table the baseline built from the model and once against the one the
+    migration created, because those are two definitions of one table that
+    nothing else holds together. The picture the foreign key points at is left
+    in place so the SET NULL has something to be checked against.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            # Fresh: the baseline built it from the model, and the migration ran
+            # over a database that already had it.
+            _assert_saved_recipe_shape(conn, "the baseline's create_all()")
+            conn.execute("DROP TABLE saved_recipe")
+            _insert_minimal_row(conn, "picture", file_path="source.png")
+            conn.execute(
+                "UPDATE alembic_version SET version_num = '0120_add_picture_ocr_text'"
+            )
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            _assert_saved_recipe_shape(conn, "migration 0121")
+            # The source picture nulls itself rather than taking the recipe with
+            # it: deleting a picture does not unmake the look it taught.
+            picture_id = conn.execute("SELECT id FROM picture").fetchone()[0]
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute(
+                "INSERT INTO saved_recipe (name, position, workflow_key, prompt, "
+                "loras, overrides, keep_seed, source_picture_id) "
+                "VALUES ('a look', 0, 'a-key', 'a prompt', '[]', '{}', 0, ?)",
+                (picture_id,),
+            )
+            conn.execute("DELETE FROM picture WHERE id = ?", (picture_id,))
+            conn.commit()
+            assert conn.execute(
+                "SELECT source_picture_id FROM saved_recipe"
+            ).fetchone() == (None,)
+
+
 def test_the_migration_chain_has_exactly_one_head():
     """The v1.8.1 merge left two 0086 revisions; only one may be a head.
 

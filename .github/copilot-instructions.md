@@ -471,6 +471,36 @@ wrote them.** Do not force-add a review doc or "fix" the ignore rule.
   tracked, and parsed by
   `tests/test_architecture_guardrails.py::test_coverage_matrix_document_matches_the_registry`.
 
+### Name the base; never review `@{u}`
+
+A session branch is created without tracking config, so `@{u}` is fatal on it:
+`git diff @{u}...HEAD` exits 128 with `no upstream configured for branch
+'<branch>'`. A review of #1417 died there before reading a line.
+
+**Setting an upstream is not the fix.** The mandated `git push -u origin
+<branch>` rewrites tracking to the branch's *own* remote ref, and from then on
+`@{u}...HEAD` is **empty**: the review stops failing and starts passing on a
+diff of nothing, which is worse than the 128 because it reads as a clean
+review. Do not point `@{u}` at the base branch either - under
+`push.default=upstream` a bare `git push` then lands the branch straight on
+`develop`.
+
+Name the base instead. Neither form needs an upstream to exist:
+
+```
+# a branch
+git fetch origin <base> && git diff origin/<base>...HEAD
+
+# a PR, by number, without checking anything out
+git fetch origin pull/<n>/head:refs/remotes/pr/<n>
+git diff origin/<base>...refs/remotes/pr/<n>
+```
+
+Use `...` (three dots) against the base: it diffs from the merge base, so
+commits that landed on the base after the branch forked stay out of the review.
+A review that cannot state which two commits it compared has not established
+what it reviewed.
+
 ## Security & authorization review process
 
 Mandatory for any change touching authentication, authorization, or access-scope (tokens, sharing, per-object/per-resource access). A BOLA audit once shipped a "fix" that closed four endpoints and left three siblings of the same severity open (whole-library leaks via `/pictures/{id}/{field}`, `/stacks/{id}/pictures`, and a `character_id=UNASSIGNED` bypass). The misses were completeness and verification failures, not knowledge gaps.

@@ -163,6 +163,7 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/workflow_library_service.py",  # vault-injection pattern; read-only wrappers around the session-level workflow counts
         "pixlstash/services/tag_scan_service.py",  # vault-injection pattern; sync near-neighbour tag scan
         "pixlstash/services/review_service.py",  # vault-injection pattern; orchestrates scan + review lifecycle
+        "pixlstash/services/saved_recipe_service.py",  # vault-injection pattern; thin wrappers around the *_in_session saved-recipe reads and writes
         "pixlstash/services/tag_health_service.py",  # vault-injection pattern; background cache rebuild dispatch
         "pixlstash/services/snapshot_service.py",  # vault-injection pattern; owns snapshot lifecycle
         # restore_service.py was decomposed into the restore/ package (plan §4.4);
@@ -2344,10 +2345,13 @@ _PRIVATE_ADDRESS_RE = re.compile(
 )
 
 # Named roots, never a repo-root walk: that is what lets every scan in this
-# file work without a node_modules / dist / .venv exclusion list, and a
-# too-greedy exclusion is a silent pass. The list is wide because the scan it
-# mirrors reads the whole diff - a literal in a workflow, an installer script
-# or the website blocks a push exactly as one in a test does.
+# file work without a dist / .venv exclusion list, and a too-greedy exclusion
+# is a silent pass. A node_modules path component is skipped under every root,
+# because electron/ is walked and npm install drops vendored .d.ts files there
+# that document the network APIs with RFC 1918 examples; it is gitignored
+# everywhere, so nothing it hides can reach a push. The list is wide because
+# the scan it mirrors reads the whole diff - a literal in a workflow, an
+# installer script or the website blocks a push exactly as one in a test does.
 _PRIVATE_ADDRESS_ROOTS = (
     ".github",
     "docs",
@@ -2448,11 +2452,14 @@ def _private_address_offenders(root: Path, repo_root: Path) -> list[str]:
     named = root.is_file()
     paths = [root] if named else sorted(root.rglob("*"))
     for path in paths:
+        rel = path.relative_to(repo_root)
+        # A component, not a substring: node_modules_notes.md is first-party.
+        if "node_modules" in rel.parts:
+            continue
         if not path.is_file():
             continue
         if not named and path.suffix not in _PRIVATE_ADDRESS_SUFFIXES:
             continue
-        rel = path.relative_to(repo_root)
         if rel.as_posix().startswith(_PRIVATE_ADDRESS_SKIP):
             continue
         try:
@@ -2538,12 +2545,25 @@ def test_private_address_guardrail_has_teeth(tmp_path):
         + "\n"
     )
     (tmp_path / "longer.md").write_text(f"the gateway is {LAN_IPV4}.7\n")
+    # Vendored code is skipped by path component, and only that: a first-party
+    # file beside it, or one merely named after it, is still read.
+    vendored = tmp_path / "app" / "node_modules" / "@types" / "node"
+    vendored.mkdir(parents=True)
+    (vendored / "net.d.ts").write_text(f"// Subnet: {_TEETH_OFFENDER}\n")
+    (tmp_path / "app" / "main.js").write_text(f"// host {_TEETH_OFFENDER}\n")
+    (tmp_path / "app" / "node_modules_notes.md").write_text(f"{_TEETH_OFFENDER}\n")
 
     offenders = _private_address_offenders(tmp_path, tmp_path)
-    caught = {o.split(":", 1)[0] for o in offenders}
-    assert caught == {"bad.md", "mixed.md", "longer.md", "digit.md", "sentence.md"}, (
-        f"the guardrail reported the wrong set of files: {offenders}"
-    )
+    caught = {o.split(":", 1)[0].replace("\\", "/") for o in offenders}
+    assert caught == {
+        "bad.md",
+        "mixed.md",
+        "longer.md",
+        "digit.md",
+        "sentence.md",
+        "app/main.js",
+        "app/node_modules_notes.md",
+    }, f"the guardrail reported the wrong set of files: {offenders}"
 
 
 def test_private_address_guardrail_reads_a_named_file_of_any_kind(tmp_path):
@@ -2699,6 +2719,42 @@ def test_frontend_import_extensions_match_the_staging_allowlist():
         f"server-only={sorted(STAGING_ALLOWED_MEDIA_EXTS - frontend_exts)}. "
         "A client-only extension uploads the whole file and then fails the "
         "commit; a server-only one is refused before it is ever offered."
+    )
+
+
+def test_base_model_widgets_agree_across_the_stack():
+    """One list of "this widget names the base model", not two that drift.
+
+    `CHECKPOINT_WIDGETS` decides whether `differs_by` says `other checkpoint`
+    or falls back to `other models`; `BASE_WIDGETS` decides whether the
+    Workflows list calls an asset the base model and heads the row with it.
+    They answer the same question and had drifted in BOTH directions -
+    `diffusion_model` and `model_path` only on the client, `checkpoint_id`
+    (#1416) only on the server - so one workflow read as having a base model
+    on one side and a changed one on the other. A comment saying "keep these
+    in sync" is what let that happen; this is the thing holding them together.
+    """
+    from pixlstash.services.workflow_identity import CHECKPOINT_WIDGETS
+
+    shelf_js = (
+        REPO_ROOT / "frontend" / "src" / "utils" / "workflowShelf.js"
+    ).read_text(encoding="utf-8")
+    match = re.search(
+        r"const BASE_WIDGETS = new Set\(\[(.*?)\]\);", shelf_js, re.DOTALL
+    )
+    assert match, (
+        "BASE_WIDGETS is gone from frontend/src/utils/workflowShelf.js - the "
+        "Models column is classifying base models against something else, and "
+        "this guardrail can no longer see what."
+    )
+    frontend_widgets = set(re.findall(r'"([^"]+)"', match.group(1)))
+
+    assert frontend_widgets == set(CHECKPOINT_WIDGETS), (
+        "the base-model widget lists disagree: "
+        f"client-only={sorted(frontend_widgets - CHECKPOINT_WIDGETS)}, "
+        f"server-only={sorted(CHECKPOINT_WIDGETS - frontend_widgets)}. "
+        "A client-only widget heads a row with a model the chip calls "
+        "unchanged; a server-only one is a base model the list never names."
     )
 
 

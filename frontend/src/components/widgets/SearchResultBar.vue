@@ -195,6 +195,41 @@
       </div>
     </template>
 
+    <!-- Narrow a text search to the pictures whose TEXT matched. Offered only
+         once there is a text match to narrow to, and never beside the face
+         search's tuning (the two modes cannot both be armed; if they ever are,
+         the tuning wins). A re-cut of the fetched rows, not a new search. -->
+    <template v-if="showTextSwitch">
+      <span class="search-result-rule" aria-hidden="true"></span>
+      <span
+        class="search-result-scope"
+        role="group"
+        aria-label="Show matches from"
+      >
+        <button
+          type="button"
+          class="search-result-scope-opt"
+          :aria-pressed="!textMatchesOnly"
+          :aria-disabled="imagesLoading ? 'true' : undefined"
+          @click="setTextMatchesOnly(false)"
+        >
+          All
+        </button>
+        <button
+          type="button"
+          class="search-result-scope-opt"
+          :aria-pressed="textMatchesOnly"
+          :aria-disabled="imagesLoading ? 'true' : undefined"
+          @click="setTextMatchesOnly(true)"
+        >
+          <v-icon size="14" aria-hidden="true">mdi-format-title</v-icon>
+          In text
+          <span class="search-result-scope-count">{{ textMatchCount }}</span>
+        </button>
+      </span>
+      <span class="search-result-rule" aria-hidden="true"></span>
+    </template>
+
     <div class="search-result-actions">
       <AppBarButton
         v-if="showSearchAll"
@@ -284,6 +319,10 @@ const props = defineProps({
    * not get the key is a 4.1.2 lie.
    */
   ownsEscape: { type: Boolean, default: true },
+  /** Results of a text search that matched text in the picture. 0 hides the switch. */
+  textMatchCount: { type: Number, default: 0 },
+  /** The switch is on "In text": the grid shows only those results. */
+  textMatchesOnly: { type: Boolean, default: false },
 });
 
 const emit = defineEmits([
@@ -292,6 +331,7 @@ const emit = defineEmits([
   "update:threshold",
   "update:min-refs",
   "assign",
+  "update:text-matches-only",
 ]);
 
 const strengthId = useId();
@@ -307,6 +347,18 @@ const showSearchAll = computed(() => !props.isAllPicturesActive);
 const showThreshold = computed(() => Number.isFinite(props.threshold));
 
 const thresholdPercent = computed(() => Math.round(props.threshold * 100));
+
+// Kept up while narrowed even if the count reads 0, so "All" stays reachable.
+const showTextSwitch = computed(
+  () =>
+    !showThreshold.value &&
+    (props.textMatchCount > 0 || props.textMatchesOnly),
+);
+
+function setTextMatchesOnly(value) {
+  if (props.imagesLoading || value === props.textMatchesOnly) return;
+  emit("update:text-matches-only", value);
+}
 
 const showRefs = computed(() => props.referenceCount > 1);
 
@@ -574,6 +626,51 @@ onUnmounted(() => {
   border-top: 1px solid rgb(var(--v-theme-border));
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.65);
+}
+
+/* All | In text. The segmented recipe (Segmented.vue, buttons.md), as toggle
+   buttons with aria-pressed: it narrows a view rather than setting a value. */
+.search-result-scope {
+  display: inline-flex;
+  flex: none;
+  padding: var(--space-2);
+  background: var(--track-trough);
+  box-shadow: inset 0 0 0 1px var(--track-ring);
+  border-radius: var(--radius-md);
+}
+
+.search-result-scope-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  white-space: nowrap;
+  transition:
+    background var(--dur-1) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard);
+}
+
+.search-result-scope-opt[aria-pressed="false"]:hover {
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.search-result-scope-opt[aria-pressed="true"] {
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  box-shadow: var(--elevation-1);
+}
+
+.search-result-scope-opt[aria-pressed="true"]:not([aria-disabled="true"]):hover {
+  background-image: var(--hover-shade);
+}
+
+.search-result-scope-count {
+  font-variant-numeric: tabular-nums;
 }
 
 .search-result-actions {

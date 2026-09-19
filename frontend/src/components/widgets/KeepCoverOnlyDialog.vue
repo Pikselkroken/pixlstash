@@ -30,12 +30,20 @@
  *     an on-disk original dies. This is a recoverable soft delete, one op-log
  *     batch and one Ctrl+Z; borrowing the heavier ceremony would flatten the
  *     distinction between "recoverable" and "gone".
+ *
+ * With `keep-recipes` it is the Keep recipes only consent (#1315): the same
+ * dialog, moving only the copies that could be made again, naming why the rest
+ * stay, and offering to keep every ghost. Ticking that box re-runs the preview
+ * (the parent listens for `update:keepEveryGhost`), so the figure always
+ * describes what the button will do.
  */
 import { computed, nextTick, ref, watch } from "vue";
 import AppDialog from "./AppDialog.vue";
 import AppButton from "./AppButton.vue";
 import {
   KEEP_COVER_ONLY_ICON_NAME,
+  KEEP_EVERY_GHOST_NOTE,
+  KEEP_RECIPES_ONLY_ICON_NAME,
   UNKNOWN_FIGURE,
   keepCoverOnlyBytesSentence,
   keepCoverOnlyConfirmLabel,
@@ -43,6 +51,9 @@ import {
   keepCoverOnlySkipReasons,
   keepCoverOnlySkippedCount,
   keepCoverOnlyTitle,
+  keepRecipesOnlyLede,
+  keepRecipesOnlyStayingCount,
+  keepRecipesOnlyStayingReasons,
 } from "../../utils/keepCoverOnly";
 
 const props = defineProps({
@@ -69,9 +80,13 @@ const props = defineProps({
   previewFailed: { type: Boolean, default: false },
   /** True while the real run is in flight. */
   busy: { type: Boolean, default: false },
+  /** Keep recipes only: move just the copies that could be made again. */
+  keepRecipes: { type: Boolean, default: false },
+  /** Keep recipes only: the keep-every-ghost box, owned by the parent. */
+  keepEveryGhost: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["close", "confirm"]);
+const emit = defineEmits(["close", "confirm", "update:keepEveryGhost"]);
 
 /**
  * True while no figure from the server may be shown.
@@ -109,7 +124,63 @@ const headlineFigure = computed(() =>
     : picturesMoving.value.toLocaleString(),
 );
 
-const title = computed(() => keepCoverOnlyTitle(stacksEligible.value));
+const title = computed(() =>
+  keepCoverOnlyTitle(stacksEligible.value, props.keepRecipes),
+);
+
+const stayingReasons = computed(() =>
+  figuresUnknown.value || !props.keepRecipes
+    ? []
+    : keepRecipesOnlyStayingReasons(props.preview),
+);
+
+const stayingSummary = computed(() => {
+  const count = keepRecipesOnlyStayingCount(props.preview);
+  return `${count.toLocaleString()} ${count === 1 ? "picture stays" : "pictures stay"} in ${count === 1 ? "its stack" : "their stacks"}`;
+});
+
+/**
+ * Whether this selection has ever had copies staying for want of a ghost.
+ *
+ * Latched rather than read live, because ticking or unticking the box nulls the
+ * preview for the re-run: reading the live value would unmount the control
+ * under the cursor and jump the layout mid-confirm. It is disabled instead
+ * while the new figures land, and reset when the dialog opens.
+ */
+const everGhostBlocked = ref(false);
+
+watch(
+  () => props.preview,
+  (preview) => {
+    if (!preview || props.previewFailed) return;
+    if (
+      preview.ghost_retention !== "on" &&
+      Number(preview.pictures_staying_ghost_not_kept) > 0
+    ) {
+      everGhostBlocked.value = true;
+    }
+  },
+  { immediate: true },
+);
+
+/**
+ * Offered only where it changes something: while ticked (so it can be
+ * unticked), or when copies of this selection stay because their ghost would
+ * not be kept. Never when the setting is already `on`.
+ */
+const showEveryGhost = computed(
+  () => props.keepRecipes && (props.keepEveryGhost || everGhostBlocked.value),
+);
+
+/** The lede branches on the live setting; see `keepRecipesOnlyLede`. */
+const recipesLede = computed(() =>
+  keepRecipesOnlyLede(figuresUnknown.value ? null : props.preview.ghost_retention),
+);
+
+/** The glyph and the confirm label name one operation at all three moments. */
+const confirmIcon = computed(() =>
+  props.keepRecipes ? KEEP_RECIPES_ONLY_ICON_NAME : KEEP_COVER_ONLY_ICON_NAME,
+);
 const confirmLabel = computed(() =>
   keepCoverOnlyConfirmLabel(picturesMoving.value),
 );
@@ -187,7 +258,10 @@ const cancelRef = ref(null);
 watch(
   () => props.open,
   (isOpen) => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      everGhostBlocked.value = false;
+      return;
+    }
     // After the dialog's own enter transition has mounted the footer.
     nextTick(() => {
       cancelRef.value?.focus?.();
@@ -198,7 +272,8 @@ watch(
 
 <template>
   <AppDialog :open="open" :title="title" @close="emit('close')">
-    <p class="kco-lede">
+    <p v-if="keepRecipes" class="kco-lede">{{ recipesLede }}</p>
+    <p v-else class="kco-lede">
       Each stack keeps its cover. Every other picture in it moves to the
       Scrapheap, where you can restore it. A stack collapses whole, even if you
       only picked some of its pictures, and loose pictures are left alone.
@@ -247,6 +322,40 @@ watch(
       </ul>
     </section>
 
+    <!-- The live region holds the figures that change under the reader; the
+         checkbox is a control and sits outside it, or every preview re-run
+         re-announces it. -->
+    <section
+      v-if="stayingReasons.length"
+      class="kco-skips"
+      role="status"
+      aria-labelledby="keep-recipes-staying-title"
+    >
+      <p id="keep-recipes-staying-title" class="kco-skips-title">
+        <v-icon size="16" class="kco-icon">mdi-image-multiple-outline</v-icon>
+        {{ stayingSummary }}
+      </p>
+      <ul>
+        <li v-for="reason in stayingReasons" :key="reason.key">
+          {{ reason.text }}
+        </li>
+      </ul>
+    </section>
+
+    <div v-if="showEveryGhost" class="kco-skips kco-every-ghost-panel">
+      <v-checkbox
+        :model-value="keepEveryGhost"
+        :disabled="busy || loading"
+        density="compact"
+        hide-details
+        class="kco-every-ghost"
+        data-testid="keep-every-ghost"
+        label="Keep a ghost of every picture deleted from the Scrapheap"
+        @update:model-value="emit('update:keepEveryGhost', !!$event)"
+      />
+      <p class="kco-every-ghost-note">{{ KEEP_EVERY_GHOST_NOTE }}</p>
+    </div>
+
     <!-- Info-tinted, not error-tinted: recovery is the reassuring half, and
          DeleteForeverDialog's lock note already made this call for the same
          reason. -->
@@ -276,7 +385,7 @@ watch(
       </AppButton>
       <AppButton
         variant="danger"
-        :icon-left="KEEP_COVER_ONLY_ICON_NAME"
+        :icon-left="confirmIcon"
         :disabled="!canConfirm"
         :loading="busy"
         @click="emit('confirm')"
@@ -305,7 +414,7 @@ watch(
   padding: var(--space-3);
   border-radius: var(--radius-md);
   background: rgba(var(--v-theme-warning), 0.12);
-  border: 1px solid rgba(var(--v-theme-warning), 0.35);
+  border: 1px solid rgba(var(--v-theme-surface-warning), 0.35);
   font-size: var(--text-xs);
   line-height: var(--leading-body);
   color: rgb(var(--v-theme-on-surface));
@@ -319,7 +428,7 @@ watch(
   gap: var(--space-1);
   margin: 0;
   padding-left: var(--space-4);
-  border-left: var(--rail-w) solid rgb(var(--v-theme-error));
+  border-left: var(--rail-w) solid rgb(var(--v-theme-surface-error));
 }
 
 .kco-figure {
@@ -356,7 +465,7 @@ watch(
 .kco-skips {
   margin: 0;
   padding: var(--space-3);
-  border: 1px solid rgba(var(--v-theme-warning), 0.35);
+  border: 1px solid rgba(var(--v-theme-surface-warning), 0.35);
   border-radius: var(--radius-md);
   background: rgba(var(--v-theme-warning), 0.08);
   font-size: var(--text-xs);
@@ -382,13 +491,30 @@ watch(
   gap: var(--space-2);
 }
 
+.kco-every-ghost-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.kco-every-ghost :deep(.v-label) {
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.kco-every-ghost-note {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+}
+
 .kco-recovery {
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
   margin: 0;
   padding: var(--space-4);
-  border: 1px solid rgba(var(--v-theme-info), 0.5);
+  border: 1px solid rgba(var(--v-theme-surface-info), 0.5);
   background: rgba(var(--v-theme-info), 0.08);
   border-radius: var(--radius-md);
   color: rgb(var(--v-theme-on-surface));

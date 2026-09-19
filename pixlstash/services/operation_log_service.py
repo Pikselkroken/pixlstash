@@ -164,6 +164,9 @@ OP_SCRAPHEAP_RESTORE = "pictures.scrapheap.restore"
 # `squash`: in git that word means "merge without losing content", so a
 # git-literate reader grepping it would assume this action loses nothing.
 OP_STACK_KEEP_COVER_ONLY = "stack.keep_cover_only"
+# Keep recipes only (#1315): the same collapse, moving only the copies that could
+# be made again from their recipe.
+OP_STACK_KEEP_RECIPES_ONLY = "stack.keep_recipes_only"
 
 # The tag-review decisions (§21.2). Named for the same reason the scrapheap pair
 # is: the frontend keys its icon/receipt affordances off the string.
@@ -565,6 +568,15 @@ def keep_cover_only_summary(stack_count: int, moved_count: int) -> str:
     """
     stacks = f"{stack_count} stack" if stack_count == 1 else f"{stack_count} stacks"
     return f"Kept the cover of {stacks} · {_pictures(moved_count)} to the Scrapheap"
+
+
+def keep_recipes_only_summary(stack_count: int, moved_count: int) -> str:
+    """Build ``Kept recipes only for 3 stacks · 7 pictures to the Scrapheap``.
+
+    Same construction and the same rules as :func:`keep_cover_only_summary`.
+    """
+    stacks = f"{stack_count} stack" if stack_count == 1 else f"{stack_count} stacks"
+    return f"Kept recipes only for {stacks} · {_pictures(moved_count)} to the Scrapheap"
 
 
 def request_context(request, *, fallback_batch_id: Optional[str] = None) -> dict:
@@ -1200,7 +1212,9 @@ def apply_orientation(
       ``MissingThumbnailFinder`` regenerates the bitmap;
     * ``image_embedding`` / ``perceptual_hash``, NULLed so
       ``MissingImageEmbeddingFinder`` recomputes them - both describe the decoded
-      image, which now decodes at a different rotation.
+      image, which now decodes at a different rotation;
+    * ``ocr_text`` / ``ocr_words``, NULLed so ``MissingOcrFinder`` reads the
+      text again in the new orientation.
 
     ``Picture.width`` / ``height`` are deliberately untouched: they describe the
     stored bitmap, which is copied through byte for byte.
@@ -1334,6 +1348,10 @@ def apply_orientation(
         )
     else:
         _rotate_picture_boxes(session, picture, steps, current)
+    # Text is read from the picture as displayed, so a turn is read again rather
+    # than having its word boxes transformed: sideways text reads badly anyway.
+    picture.ocr_text = None
+    picture.ocr_words = None
 
     # The container changed, so the tier-1 duplicate key and the on-disk size did
     # too. Re-derived here rather than snapshotted, like every other derived value
@@ -2006,9 +2024,18 @@ def _emit(
     # A restored location moves the FILE, so the card's thumbnail URL changes
     # for exactly the reason a restored orientation does - the URL is derived
     # from the path, not from ``GET /pictures/{id}/metadata``.
-    updated_fields = (
-        ["pixels"] if facets & {FACET_ORIENTATION, FACET_LOCATION} else None
-    )
+    #
+    # ``orientation`` rides alongside ``pixels`` when the restore was a TURN.
+    # Three other producers of ``pixels`` rewrite bytes without turning anything
+    # (the thumbnail regeneration task, the layout move route and its task), and
+    # a client cannot tell them apart from the bare field - which left the open
+    # lightbox inferring "was this a turn?" from a metadata read it could not
+    # rely on (#1419). A restored LOCATION is not a turn and does not get it.
+    updated_fields: Optional[list[str]] = None
+    if facets & {FACET_ORIENTATION, FACET_LOCATION}:
+        updated_fields = ["pixels"]
+        if FACET_ORIENTATION in facets:
+            updated_fields.insert(0, "orientation")
     for event in events:
         _notify(event, updated, "updated", updated_fields)
     _notify(EventType.CHANGED_PICTURES, scrapheaped, "removed")

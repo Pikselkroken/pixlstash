@@ -110,9 +110,7 @@
                the menu's other rows (Add folder, ai-toolkit) stay usable while
                a file copies; only Add file refuses. -->
           <AppBarButton
-            v-bind="
-              withRef(menuProps, (el) => (addBtnRef = el))
-            "
+            v-bind="withRef(menuProps, (el) => (addBtnRef = el))"
             class="bar-btn--accent shelf-fold-680"
             :icon="adding ? '' : 'plus'"
             chevron
@@ -120,11 +118,14 @@
             aria-haspopup="menu"
             :aria-expanded="addMenuOpen"
             tooltip="Add models to the shelf"
-            ><v-icon v-if="adding" size="18" class="mdi-spin">mdi-loading</v-icon
+            ><v-icon v-if="adding" size="18" class="mdi-spin"
+              >mdi-loading</v-icon
             >Add</AppBarButton
           >
         </template>
-        <div class="ctx-menu shelf-menu" role="menu"
+        <div
+          class="ctx-menu shelf-menu"
+          role="menu"
           tabindex="-1"
           @keydown="onMenuKeydown"
         >
@@ -428,7 +429,9 @@
       @pick="onThumbnailPicked"
     >
       <template #footer-start>
-        <AppButton variant="ghost" @click="pickIconFile">Choose a file…</AppButton>
+        <AppButton variant="ghost" @click="pickIconFile"
+          >Choose a file…</AppButton
+        >
       </template>
     </PicturePicker>
 
@@ -459,10 +462,7 @@
            needs fixing, so the reader who has read it once gets to put it
            away. It comes back when the shelf is refetched, because a drive that
            is still unplugged is still worth saying once. -->
-      <p
-        v-if="offlineNote && !offlineDismissed"
-        class="shelf-banner"
-      >
+      <p v-if="offlineNote && !offlineDismissed" class="shelf-banner">
         <Tooltip :text="offlineMountPaths" activator="parent" />
         <v-icon size="16">mdi-power-plug-off-outline</v-icon>
         <span class="shelf-banner-text">{{ offlineNote }}</span>
@@ -707,9 +707,14 @@
                      disk - never the word "Unknown". -->
                 <Tooltip :text="DRIVE_KINDS[group.band.kind]?.label || ''">
                   <template #activator="{ props: tipProps }">
-                    <v-icon v-bind="tipProps" size="16" class="shelf-band-icon">{{
-                      DRIVE_KINDS[group.band.kind]?.icon || "mdi-harddisk"
-                    }}</v-icon>
+                    <v-icon
+                      v-bind="tipProps"
+                      size="16"
+                      class="shelf-band-icon"
+                      >{{
+                        DRIVE_KINDS[group.band.kind]?.icon || "mdi-harddisk"
+                      }}</v-icon
+                    >
                   </template>
                 </Tooltip>
                 <span class="shelf-band-name">{{ group.band.label }}</span>
@@ -1226,9 +1231,7 @@
                        title, which also names which of the two dates this is -
                        the column follows the sort, so the same cell holds
                        `Date added` on one shelf and `File date` on the next. -->
-                  <span
-                    role="gridcell"
-                    class="shelf-col shelf-col--date"
+                  <span role="gridcell" class="shelf-col shelf-col--date"
                     ><Tooltip :text="dateTitle(row)" activator="parent" />{{
                       dateCell(row)
                     }}</span
@@ -1274,8 +1277,7 @@
                       <span class="shelf-row-name">{{
                         memberLabel(member, row)
                       }}</span>
-                      <span
-                        class="shelf-row-file"
+                      <span class="shelf-row-file"
                         ><Tooltip
                           :text="copyPathsTitle(member.locations) || ''"
                           activator="parent"
@@ -1301,9 +1303,7 @@
                          was saved is the one thing that differs from step to
                          step, and answering it with the run's would print the
                          same stamp down the whole strip. -->
-                    <span
-                      role="gridcell"
-                      class="shelf-col shelf-col--date"
+                    <span role="gridcell" class="shelf-col shelf-col--date"
                       ><Tooltip
                         :text="dateTitle(member, true)"
                         activator="parent"
@@ -1386,7 +1386,10 @@
       origin="top start"
       :offset="2"
     >
-      <div v-if="folderMenuFolder" class="ctx-menu shelf-menu" role="menu"
+      <div
+        v-if="folderMenuFolder"
+        class="ctx-menu shelf-menu"
+        role="menu"
         tabindex="-1"
         @keydown="onMenuKeydown"
       >
@@ -1499,7 +1502,7 @@ import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { addModelFile } from "../../api/modelFiles";
 import { getPictureThumbnailBlob } from "../../api/pictures";
-import { openModelLocation } from "../../api/modelShelf";
+import { fetchModelCompanions, openModelLocation } from "../../api/modelShelf";
 import {
   createStack,
   removeStackMember,
@@ -1531,6 +1534,7 @@ import {
   bandProjection,
   bandUsage,
   capabilityLabel,
+  companionsSentences,
   copyPathsTitle,
   dateColumnKey,
   defaultSortDirection,
@@ -1640,6 +1644,11 @@ async function confirmForget() {
   if (ok) await store.forgetSelected();
 }
 
+// Set while the delete prompt is being prepared or shown. The companions read
+// sits before the prompt opens, and a second Delete press in that window would
+// otherwise open a second prompt over the first and strand its promise.
+let deletePromptOpen = false;
+
 /**
  * The third confirmation, and the only one standing in front of real bytes.
  *
@@ -1661,6 +1670,16 @@ async function confirmForget() {
  * @param {boolean} permanent - Shift was down: unlink rather than trash.
  */
 async function confirmDelete(permanent) {
+  if (deletePromptOpen) return;
+  deletePromptOpen = true;
+  try {
+    await askAndDelete(permanent);
+  } finally {
+    deletePromptOpen = false;
+  }
+}
+
+async function askAndDelete(permanent) {
   const rows = deletableModels(store.selectedRows, foldersById.value);
   // MODELS, not rows: a stack is one row and six checkpoints, and it is deleted
   // whole exactly as it is moved whole. Counting rows would have offered
@@ -1682,13 +1701,28 @@ async function confirmDelete(permanent) {
   const many = ids.length !== 1;
   const subject = many ? `${ids.length} models` : "this model";
   const trash = trashName();
+  // Asked before the prompt opens, so the reader decides with it in front of
+  // them (#1314). A failed read is said in the prompt rather than skipped:
+  // leaving the section out would read as "nothing else is affected".
+  let companions = null;
+  try {
+    companions = await fetchModelCompanions(ids);
+  } catch (err) {
+    console.warn("[ModelShelf] could not read what the delete leaves behind", {
+      ids,
+      err,
+    });
+  }
+  const leftBehind = companionsSentences(companions, ids.length);
   const ok = await confirm({
     title: permanent
       ? `Permanently delete ${many ? `${ids.length} models?` : "this model?"}`
       : `Move ${many ? `${ids.length} models` : "this model"} to the ${trash}?`,
-    message: permanent
-      ? `The files for ${subject} are deleted permanently from this machine, along with everything recorded about them.`
-      : `The files for ${subject} go to your ${trash}, where you can put them back. The shelf stops listing them.`,
+    message:
+      (permanent
+        ? `The files for ${subject} are deleted permanently from this machine, along with everything recorded about them.`
+        : `The files for ${subject} go to your ${trash}, where you can put them back. The shelf stops listing them.`) +
+      (leftBehind ? ` ${leftBehind}` : ""),
     warning: permanent
       ? "There is no undo for this."
       : `A very large file may be too big for the ${trash} and be deleted outright.`,
@@ -3062,6 +3096,64 @@ function focusDrawnRow(key) {
     }
   }
 }
+
+// ── Arriving from a picture's Recipe section (#1313) ───────────────────────
+//
+// `?model=<id>` picks that model and puts the cursor on it, so a chip clicked
+// in the lightbox lands on the file the picture used rather than at the top of
+// a shelf of a couple of thousand rows. A model the shelf is not drawing - a
+// filter hides it, its group is collapsed, its stack is closed - is left alone
+// rather than forced into view: the row the link names is a fact, and what the
+// reader has filtered the shelf down to is a decision of theirs.
+//
+// Honoured once per value, because `drawnRows` recomputes on every filter,
+// sort and refresh while the query string stays put, and applying it twice
+// would take focus back off whatever the reader had moved to.
+let honouredModel = null;
+
+function honourModelQuery() {
+  const wanted = route?.query?.model;
+  if (!wanted) {
+    honouredModel = null;
+    return;
+  }
+  if (honouredModel === wanted) return;
+  const row = drawnRows.value.find(
+    (entry) => String(entry.id) === String(wanted),
+  );
+  if (!row) {
+    // The shelf has the model but is not drawing it: a filter excludes it, its
+    // group is collapsed, or it is a member of a closed stack. Say so instead
+    // of landing at the top of the list having visibly done nothing - and
+    // offer the one gesture that is certain to reveal it rather than guessing
+    // which of the three is in the way. The reader's filters are theirs; this
+    // does not clear them behind their back.
+    const known = store.rows.find(
+      (entry) => String(entry.id) === String(wanted),
+    );
+    if (!known) return; // not fetched yet, or not on this shelf at all
+    honouredModel = wanted;
+    useNoticeStore().push({
+      level: "info",
+      text: `${known.name || known.filename || "That model"} is on the shelf, but the current filters are hiding it.`,
+      action: { label: "Show everything", handler: () => store.resetFilters() },
+    });
+    return;
+  }
+  honouredModel = wanted;
+  focusedRowKey.value = row.key;
+  store.selectFromClick(row.id, {}, orderedRowIds.value);
+  nextTick(() => focusDrawnRow(row.key));
+}
+
+// Registered on mount rather than at setup. A watcher reads its source once
+// when it is created, and `drawnRows` reads `shownGroups`, which is declared
+// below this point - so a watcher created here would evaluate it inside its own
+// temporal dead zone. The rows are fetched asynchronously anyway, so nothing is
+// missed by waiting for the mount.
+onMounted(() => {
+  watch([() => route?.query?.model, drawnRows], honourModelQuery);
+});
 
 function onRowKeydown(row, event) {
   const drawn = drawnRows.value;
@@ -4530,7 +4622,7 @@ watch(
    hue and the hatch - the state has to survive greyscale and forced-colors. */
 .shelf-band--reject {
   background: rgba(var(--v-theme-error), 0.1);
-  box-shadow: inset 0 0 0 2px rgba(var(--v-theme-error), 0.65);
+  box-shadow: inset 0 0 0 2px rgba(var(--v-theme-surface-error), 0.65);
   cursor: no-drop;
 }
 
@@ -4633,11 +4725,11 @@ watch(
 /* The glyph is non-text at 16px, so it may carry the hue: 3.09 light, 6.72
    dark, both over the 3:1 UI floor. */
 .shelf-band-figures--low .v-icon {
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .shelf-band-figures--reject .v-icon {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .shelf-band-figures {
@@ -5048,7 +5140,7 @@ button.shelf-head-cell:hover {
    They are told apart in GREYSCALE, which is what makes this a treatment and
    not a hue: solid rail, dashed rail, no rail, plus two different glyphs. */
 .shelf-row--broken {
-  border-left-color: rgb(var(--v-theme-error));
+  border-left-color: rgb(var(--v-theme-surface-error));
 }
 
 .shelf-row--offline {
@@ -5200,7 +5292,7 @@ button.shelf-head-cell:hover {
 
 .shelf-row-loc--missing,
 .shelf-row-loc--forgotten {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 /* Muted, never the error colour, and 0.7 like every other muted figure on this
@@ -5278,13 +5370,13 @@ button.shelf-head-cell:hover {
 .shelf-row-new {
   flex: none;
   padding: 0 var(--space-2);
-  border: 1px solid rgba(var(--v-theme-success), 0.5);
+  border: 1px solid rgba(var(--v-theme-surface-success), 0.5);
   border-radius: var(--radius-pill);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-surface-success));
 }
 
 .shelf-col {

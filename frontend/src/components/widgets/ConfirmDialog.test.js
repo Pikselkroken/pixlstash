@@ -4,6 +4,13 @@ import { nextTick } from "vue";
 
 vi.mock("vuetify/components", () => ({
   VIcon: { name: "v-icon", template: "<i><slot /></i>" },
+  VCheckbox: {
+    name: "v-checkbox",
+    props: ["modelValue", "label"],
+    emits: ["update:modelValue"],
+    template:
+      '<label><input type="checkbox" :checked="modelValue" @change="$emit(\'update:modelValue\', $event.target.checked)" />{{ label }}</label>',
+  },
   VDialog: { name: "v-dialog", template: "<div><slot /></div>" },
   VTooltip: {
     template: '<slot name="activator" :props="{}" :is-active="false" />',
@@ -62,5 +69,37 @@ describe("ConfirmDialog", () => {
 
     wrapper.unmount();
     trigger.remove();
+  });
+
+  it("reports a ticked don't-show-again only when the user confirms", async () => {
+    const wrapper = mount(ConfirmDialog, { attachTo: document.body });
+    const onDontShowAgain = vi.fn();
+
+    const cancelled = useConfirm().confirm({ message: "Retag?", onDontShowAgain });
+    await settle();
+    await wrapper.find('input[type="checkbox"]').setValue(true);
+    await wrapper.findAll("button").at(-2).trigger("click");
+    await expect(cancelled).resolves.toBe(false);
+    expect(onDontShowAgain).not.toHaveBeenCalled();
+
+    const confirmed = useConfirm().confirm({ message: "Retag?", onDontShowAgain });
+    await settle();
+    // A new request starts unticked.
+    expect(wrapper.find('input[type="checkbox"]').element.checked).toBe(false);
+    await wrapper.find('input[type="checkbox"]').setValue(true);
+    await wrapper.findAll("button").at(-1).trigger("click");
+    await expect(confirmed).resolves.toBe(true);
+    expect(onDontShowAgain).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it("shows no checkbox unless the caller asks for one", async () => {
+    const wrapper = mount(ConfirmDialog, { attachTo: document.body });
+    const pending = useConfirm().confirm("Continue?");
+    await settle();
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false);
+    await wrapper.findAll("button").at(-1).trigger("click");
+    await pending;
+    wrapper.unmount();
   });
 });

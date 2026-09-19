@@ -380,7 +380,7 @@
 }
 
 .sidebar-project-tree-action-btn--danger:hover {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 /* Sub-sections under an expanded project */
@@ -787,7 +787,7 @@
 }
 
 .sidebar-update-security {
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .sidebar-update-security:hover {
@@ -795,7 +795,7 @@
 }
 
 .sidebar-update-security--high {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .sidebar-update-security--high:hover {
@@ -1581,7 +1581,7 @@
 
 .delete-character-inline:hover {
   background: rgba(var(--v-theme-error), 0.15);
-  color: rgb(var(--v-theme-error)) !important;
+  color: rgb(var(--v-theme-surface-error)) !important;
 }
 
 /* Items within People/Sets sit one step under their section header, which puts
@@ -1815,7 +1815,7 @@
 }
 
 .sidebar-folder-status--pending_mount {
-  color: rgb(var(--v-theme-warning, 255, 152, 0));
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .sidebar-folder-status--scanning {
@@ -1825,7 +1825,7 @@
 }
 
 .sidebar-folder-status--mount_error {
-  color: rgb(var(--v-theme-error, 244, 67, 54));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .sidebar-folder-loading-row {
@@ -1842,7 +1842,7 @@
 }
 
 .sidebar-folder-error-row {
-  color: rgba(var(--v-theme-error, 244, 67, 54), 0.8);
+  color: rgba(var(--v-theme-surface-error), 0.8);
 }
 
 /* ── Sidebar context menu ────────────────────────────── */
@@ -2122,9 +2122,9 @@
 
 .relocate-error {
   font-size: var(--text-sm);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   background: rgba(var(--v-theme-error), 0.08);
-  border: 1px solid rgba(var(--v-theme-error), 0.22);
+  border: 1px solid rgba(var(--v-theme-surface-error), 0.22);
   border-radius: var(--radius-sm);
   padding: var(--space-3) var(--space-3);
 }

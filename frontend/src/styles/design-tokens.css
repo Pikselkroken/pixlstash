@@ -242,6 +242,12 @@
   --badge-size: 16px;      /* min height / min-width of a count pill (on-grid; was an ad-hoc 15px) */
   --badge-size-dot: 8px;   /* the no-count activity dot (on-grid; was an ad-hoc 7px) */
 
+  /* The design system's Tag xs height (`components/core/Tag.jsx`: xs 18px, sm
+     --control-h-sm, md --control-h). It is the dense chip: the workflow card's
+     rows, and the overlay/filmstrip metadata the DS names. Named here rather
+     than spelled in each component so the three chip heights stay three. */
+  --tag-h-xs: 18px;
+
   /* The countdown drain hairline on a self-dismissing transient surface: the
      action receipt today, and the notice card is the obvious second consumer.
      It is a rendered height rather than padding, so it cannot borrow from the
@@ -280,6 +286,18 @@
      (296px = 288 + --space-3). Naming it stops a fifth call site picking a
      fifth number. */
   --stats-panel-w: 288px;
+
+  /* The toolbar filter menu (FilterMenu) and each submenu beside it. Narrower
+     than a lone toolbar panel (the old filter panel was 376px) because two sit
+     side by side: 320 + 280 keeps the pair near 610px with Score open. */
+  --filter-menu-w: 320px;
+  --filter-submenu-w: 280px;
+
+  /* The toolbar filter menu (FilterMenu) and each submenu beside it. Narrower
+     than a lone toolbar panel (the old filter panel was 376px) because two sit
+     side by side: 320 + 280 keeps the pair near 610px with Score open. */
+  --filter-menu-w: 320px;
+  --filter-submenu-w: 280px;
 
   /* The toolbar band. The inspector's tab band is pinned to it so one bottom
      rule runs across the window; the toolbar and the sidebar tabs still spell

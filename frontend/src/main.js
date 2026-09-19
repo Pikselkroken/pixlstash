@@ -43,12 +43,12 @@ if (typeof window !== "undefined" && window.pixlstashDesktop) {
 // Warm light theme. Elevation inverts vs dark: the content canvas is the
 // brightest surface and chrome (sidebar / toolbar / panels) recedes to a warm
 // tinted grey, with raised controls (cards, inputs) going pure white. Text is a
-// warm near-black ramp, never pure #000. Status hues are deepened so they hold
-// contrast on the light canvas - all four of them: `error` #cf3b30 (4.62:1 on
-// the canvas), `warning` #b8861f (3.09:1), `success` #2e7d32 (4.87:1) and `info`
-// #30558c (7.12:1). `success` and `info` were Material 500s until 2026-07 and
-// measured 2.64:1 / 2.97:1, i.e. below the 3:1 UI floor, which made this comment
-// false for half the set. `info` is shared with the dark theme since 2026-09.
+// warm near-black ramp, never pure #000.
+//
+// SOURCE OF TRUTH: the Claude Design system's `tokens/colors.css`. Every value
+// here is one of its tokens, or an app-only key that carries its reason inline.
+// Change the design system first and copy the value here, never the other way
+// round.
 const pixlStashLight = {
   dark: false,
   colors: {
@@ -57,9 +57,9 @@ const pixlStashLight = {
     // style.css) so the titlebar + toolbar + sidebar read as one strip; these
     // values drive the browser layout.
     sidebar: "#f0ede9",
-    "sidebar-text": "#25231e",
+    "sidebar-text": "#23211d",
     toolbar: "#f0ede9",
-    "toolbar-text": "#25231e",
+    "toolbar-text": "#23211d",
     // `sidebar-hover` is the accent duplicated, so it moves with it.
     "sidebar-hover": "#c47a1e",
     "on-sidebar-hover": "#f7f1ea",
@@ -91,6 +91,10 @@ const pixlStashLight = {
     // to the token whose whole job is the former. 5.50:1 on the light theme's
     // `dark-surface` #242628, 6.25:1 on the dark theme's #181b20.
     "dark-surface-primary": "#8EA604",
+    // Olive as a FOREGROUND (a selected option's glyph or label) on this
+    // theme's own surfaces - design system `--selected-ink`. A light ground
+    // takes the deep olive; the dark theme lifts it.
+    "selected-ink": "#567309",
     surface: "#ffffff",
     "on-surface": "#23211d",
     background: "#faf9f7",
@@ -146,25 +150,33 @@ const pixlStashLight = {
     // Warm, low-contrast borders: a visible-but-soft divider and a subtler line.
     border: "#d8d3c8",
     divider: "#e8e4dc",
+    // App-only: Vuetify's own overlay key (dialog and menu backdrops).
     overlay: "#00000033",
     // Warm hover wash (rgba(45,32,15,.06)) instead of cold black.
     hover: "#2d200f0f",
-    // Status hues + their authored foregrounds. The foreground is whichever of
-    // the warm near-white / warm near-black clears 4.5:1 on the SOLID fill; it
-    // is not a house style, it is the only value that passes. Measured:
-    error: "#b54538",
-    "on-error": "#f7f1ea", //   4.83:1 (same value in both themes)
+    // Status FILLS + their labels. One value per hue in both themes (design
+    // system `--error` etc.): a fill carries its label, whatever the canvas.
+    // `warning` is bright enough that its label flips to the near-black.
+    // Measured on the SOLID fill:
+    error: "#b0392b",
+    "on-error": "#f7f1ea", //   5.40:1
     info: "#30558c",
     "on-info": "#f7f1ea", //    6.68:1
-    // `info` as a FOREGROUND (text, rail, glyph) on this theme's own surfaces.
-    // The deep fill already clears them here (7.49:1 on #ffffff, 4.67:1 on a
-    // hovered `panel` row), so it is the same value; the dark theme lifts it. Use this, not `info`,
-    // whenever the hue is drawn rather than filled.
+    success: "#2a7d3e",
+    "on-success": "#f7f1ea", // 4.57:1
+    warning: "#e8912f",
+    "on-warning": "#1b1b1b", // 6.99:1
+    // Status hues as FOREGROUNDS (text, rail, glyph, border) on this theme's own
+    // surfaces - design system `--surface-<status>`. None of the fills survives
+    // being drawn as text on both canvases (light `warning` is 2.1:1 on white),
+    // so whenever the hue is drawn rather than filled, use these. Deepened here
+    // because the canvas is light; the dark theme lifts them.
+    "surface-error": "#9a3327",
+    "surface-warning": "#755215",
+    "surface-success": "#226534",
     "surface-info": "#30558c",
-    success: "#2e7d32",
-    "on-success": "#ffffff", // 5.13:1
-    warning: "#b8861f",
-    "on-warning": "#23211d", // 4.95:1 - the warm near-black, never pure #000
+    // App-only: the pure-black ink the track-trough and drive-meter tints in
+    // style.css are mixed from.
     scrim: "#000000",
     shadow: "#1c160c",
     panel: "#efede9",
@@ -176,9 +188,9 @@ const pixlStashDark = {
   dark: true,
   colors: {
     sidebar: "#23282f",
-    "sidebar-text": "#d8d0c8",
+    "sidebar-text": "#f2e5da",
     toolbar: "#23282f",
-    "toolbar-text": "#d8d0c8",
+    "toolbar-text": "#f2e5da",
     // `sidebar-hover` is the accent duplicated, so it moves with it.
     "sidebar-hover": "#c47a1e",
     "on-sidebar-hover": "#f7f1ea",
@@ -198,6 +210,9 @@ const pixlStashDark = {
     // Identical in both themes, like the four above. Keeps the retired bright
     // olive in service as a dark-card foreground (6.25:1 on #181b20).
     "dark-surface-primary": "#8EA604",
+    // The deep olive measures 2.72:1 on `surface`, so olive as a foreground
+    // takes the lifted value here (5.37:1). See the light theme.
+    "selected-ink": "#8EA604",
     surface: "#23282f",
     "on-surface": "#f2e5da",
     background: "#1b1f24",
@@ -250,25 +265,24 @@ const pixlStashDark = {
     divider: "#2c323a",
     overlay: "#00000066",
     hover: "#ffffff14",
-    // Status hues are DEEP in both themes (unified Camp B palette), so three of
-    // the four carry the warm near-white label like every other fill tier here.
-    // `warning` is the exception: it is bright enough that the label has to flip
-    // to the warm near-black instead. Foreground-on-dark-chrome is a different
-    // job with its own family - see `dark-surface-<status>` above; do not reach
-    // for these values there. Measured on the SOLID fill:
-    error: "#b54538",
-    "on-error": "#f7f1ea", //   4.83:1
+    // Status fills: identical to the light theme - see the note there.
+    // Foreground-on-dark-chrome is a different job with its own family, see
+    // `dark-surface-<status>` above. Measured on the SOLID fill:
+    error: "#b0392b",
+    "on-error": "#f7f1ea", //   5.40:1
     info: "#30558c",
     "on-info": "#f7f1ea", //    6.68:1
-    // `info` as a FOREGROUND on this theme's surfaces: the deep fill reads
-    // 1.98:1 on `surface` and 1.75:1 on `input-background`, so draw with this
-    // instead (6.77:1 on #2b3138, 4.20:1 on a hovered `panel` row). Mirrors the
-    // design system's `--surface-info`.
-    "surface-info": "#9fbce8",
     success: "#2a7d3e",
     "on-success": "#f7f1ea", // 4.57:1
     warning: "#e8912f",
     "on-warning": "#1b1b1b", // 6.99:1
+    // Status hues as FOREGROUNDS on this theme's surfaces, lifted: the fills
+    // read about 2:1 as text here (`info` 1.98:1 on `surface`). Design system
+    // `--surface-<status>`.
+    "surface-error": "#eda79c",
+    "surface-warning": "#e2b05a",
+    "surface-success": "#7ec892",
+    "surface-info": "#9fbce8",
     scrim: "#000000",
     shadow: "#2a2f36",
     panel: "#313337",

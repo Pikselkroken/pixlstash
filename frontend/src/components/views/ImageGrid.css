@@ -223,7 +223,7 @@
 /* ── Visible range pill overlay ── */
 .grid-range-pill {
   position: absolute;
-  top: calc(var(--selbar-height, 48px) + 10px);
+  top: calc(var(--selbar-height, 48px) + var(--filter-strip-h, 0px) + 10px);
   left: 50%;
   transform: translateX(-50%);
   background: rgba(var(--v-theme-surface), 0.82);

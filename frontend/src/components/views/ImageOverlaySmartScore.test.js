@@ -13,6 +13,16 @@
 //      batch / registry-demotion cases the isolated copies cannot model.
 
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
+
+// `AppInspector`'s tab band renders a `VIcon` imported from the Vuetify barrel
+// (#1313 gave the lightbox pane Info | Recipe tabs), and this suite mounts the
+// overlay without the Vuetify plugin. Stub the barrel, per
+// `testing/vuetifyStubs.js`: nothing here needs Vuetify's real behaviour.
+vi.mock("vuetify/components", async () => {
+  const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
+  return vuetifyComponentStubs();
+});
+
 import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
@@ -50,7 +60,6 @@ vi.mock("../../utils/apiClient", () => ({
   appendShareToken: (u) => u,
   isReadOnly: { value: false },
 }));
-
 
 // (1) Verbatim copy of fetchOverlayMetadata's smart-score merge. `data` is the
 // authoritative /pictures/{id}/metadata?smart_score=true response; `image` is
@@ -243,9 +252,8 @@ describe("ImageOverlay mounted smart-score refresh", () => {
   }
 
   const scoreOf = (wrapper) =>
-    wrapper
-      .findComponent({ name: "OverlayMetadataPanel" })
-      .props("image").smartScore;
+    wrapper.findComponent({ name: "OverlayMetadataPanel" }).props("image")
+      .smartScore;
 
   beforeEach(() => {
     setActivePinia(createPinia());

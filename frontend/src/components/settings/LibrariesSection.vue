@@ -748,7 +748,7 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
 }
 
 .library-chip--warn {
-  border-color: rgb(var(--v-theme-warning));
+  border-color: rgb(var(--v-theme-surface-warning));
   background: rgba(var(--v-theme-warning), 0.12);
   color: rgb(var(--v-theme-on-surface));
 }

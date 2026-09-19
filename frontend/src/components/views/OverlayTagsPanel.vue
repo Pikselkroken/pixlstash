@@ -309,6 +309,7 @@ import {
   rejectTagPrediction,
 } from "../../api/tags";
 import { resetPictureTags } from "../../api/pictures";
+import { confirmRetag } from "../../composables/confirmRetag";
 import { listTaggers } from "../../api/taggers";
 import { getUserConfig } from "../../api/config";
 import { getPenalisedTags } from "../../api/users";
@@ -1010,6 +1011,7 @@ async function refreshPictureTags(model = null) {
   if (!props.image?.id || !props.backendUrl) return;
   if (isTagsRefreshing.value) return;
   const capturedImageId = props.image.id;
+  if (!(await confirmRetag(1))) return;
 
   isTagsRefreshing.value = true;
   try {
@@ -1049,10 +1051,6 @@ defineExpose({
    OverlayDescriptionPanel carries its own copy for the same reason. Without
    these, the sections are plain auto-height blocks and the `overflow-y: auto`
    below can never resolve into a scrollbar. */
-.sidebar-section {
-  margin-bottom: 6px;
-}
-
 /* A definite, shrinkable height is what gives `.tag-list` something to scroll
    within: the overlay sidebar is a fixed-height flex column, so this section
    yields down to `min-height` when the column runs out of room. */
@@ -1183,7 +1181,7 @@ defineExpose({
   vertical-align: middle;
   cursor: pointer;
   /* Flex items floor at min-content, so a single long tag would otherwise force
-     the row wider than the 320px sidebar and get clipped by `overflow-x`. */
+     the row wider than the sidebar and get clipped by `overflow-x`. */
   min-width: 0;
   overflow-wrap: anywhere;
 }

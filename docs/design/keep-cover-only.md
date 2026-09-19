@@ -157,9 +157,10 @@ finger from the queue's verdict keys. Document it so it is not "fixed" later.
 
 Context menu and the selection pill's overflow, wearing the shipped
 `.ctx-item--danger`, in the existing trailing danger group behind a separator,
-ordered by escalating severity: Keep cover only → Move to Scrapheap → Delete
-forever. Glyph `mdi-layers-minus`, the inverse of the `mdi-layers-plus` the user
-pressed to build these stacks. Not `mdi-delete`, which would over-claim.
+ordered by escalating severity: Keep recipes only → Keep cover only → Move to
+Scrapheap → Delete forever. Glyph `mdi-layers-minus`, the inverse of the
+`mdi-layers-plus` the user pressed to build these stacks. Not `mdi-delete`,
+which would over-claim.
 
 **No top-level button in the selection pill.** A floating pill over a photo grid
 is the wrong place for an `error`-filled control, and this is periodic cleanup,
@@ -276,6 +277,47 @@ surface picking 3px". Three components already carry a raw 3px rail.
    `KeepCoverOnlyDialog` copies `DedupAutoStackDialog`'s `<kbd>` verbatim, which
    is what "matching the sibling verbatim" asks for above; converging them is one
    change across all the surfaces that carry keycaps, not a per-dialog decision.
+
+## Keep recipes only (#1315)
+
+The sibling that moves only the copies that could be made again from their
+recipe, so what leaves keeps its thumbnail and recipe when the Scrapheap is
+emptied. Named from the recipe-panel design loop ("Recipe only" members, "Keep
+recipes only" as the action), in the same family as this one so it reads as a
+narrower Keep cover only rather than a new kind of risk. Same dialog, same
+routes (`keep_recipes: true`), same keyboard, same one undo.
+
+* **Eligibility is per copy, and every copy that stays is named.** No recorded
+  workflow, a model not on the shelf, no thumbnail yet, or a ghost the privacy
+  setting would not keep. Each stays in its stack; a stack with nothing left to
+  move "won't change".
+* **The consent can turn on keeping every ghost**, offered only when some copies
+  stay for that reason. Ticking it re-runs the preview, and the setting changes
+  only when the confirmed run moved something. It is a privacy setting, turned
+  back down in Settings › Privacy, and not part of the undo.
+* **Its own glyph, and it leads the danger group.** `mdi-image-refresh`: a
+  frame with a circular arrow states the property the eligibility test measures
+  — this picture could be made again — without claiming the app will re-make
+  anything. `mdi-layers-remove` was rejected because its cross reads as *more*
+  severe than the sibling's minus, on the **less** destructive of the two, which
+  inverts the signal the group is ordered by. Keep recipes only moves a strict
+  subset of what Keep cover only moves, so escalating severity puts it first,
+  which also gives the cheapest slot in the group to the safer item.
+* **The button's figure is the figure acted on, and here that needs enforcing.**
+  This is the first mode whose inputs move on their own while the dialog is
+  open: `MissingThumbnailFinder` writes thumbnails, an import can cover an
+  instance hash, a model can reach the shelf. So the confirm carries the
+  previewed ids and the server answers **409** if the plan has grown, moving
+  nothing; a plan that shrank still runs, because moving fewer pictures is
+  inside the consent. Acceptance criterion 1 applied to a moving input.
+* **The lede branches on the live ghost setting**, like the retention sentence
+  does on the live window: under `covered` what takes a recipe away later is
+  deleting the **cover**, and no reader derives that from "your ghost setting".
+* **The headline is the picture count, not a reclaim figure.** This follows the
+  rule above (a figure is for what changes now) and is how the recipe-panel loop
+  drew it. The release plan asked for the reclaim number instead; that ruling is
+  still the owner's, and changing it is copy in `KeepCoverOnlyDialog.vue`, not a
+  contract change.
 
 ## Acceptance criteria
 

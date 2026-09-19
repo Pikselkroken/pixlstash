@@ -23,6 +23,7 @@ class TaskType(str, Enum):
     REFERENCE_FOLDER_SCAN = "ReferenceFolderScanTask"
     SMART_SCORE = "SmartScoreTask"
     TEXT_SCORE = "TextScoreTask"
+    OCR = "OcrTask"
     GFS_SNAPSHOT = "EnsureGfsSnapshotTask"
     TAG_HEALTH_AUTO_REBUILD = "TagHealthAutoRebuildTask"
     SCRAPHEAP_RETENTION_PURGE = "ScrapheapRetentionPurgeTask"
@@ -37,6 +38,7 @@ class TaskType(str, Enum):
     MODEL_FOLDER_SCAN = "ModelFolderScanTask"
     LAYOUT_MOVE = "LayoutMoveTask"
     GHOST_CASCADE = "GhostCascadeTask"
+    WORKFLOW_CARD_BACKFILL = "WorkflowCardBackfillTask"
 
     @staticmethod
     def all():

@@ -25,6 +25,14 @@
         >
           Look again
         </AppButton>
+        <!-- The app-wide tail, minus undo: this view replaces the grid and its
+             toolbar, so without it neither Settings nor the right rail has a
+             control on the screen (#1415). Settings travels on the same `act`
+             channel the findings' own buttons use. -->
+        <TbGlobalActions
+          separator
+          @open-settings="emit('act', { kind: 'settings' })"
+        />
       </div>
     </div>
 
@@ -101,6 +109,7 @@ import { computed, onMounted, ref } from "vue";
 import { VIcon } from "vuetify/components";
 
 import AppButton from "../widgets/AppButton.vue";
+import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import { getInsights } from "../../api/insights";
 
 const emit = defineEmits(["act"]);
@@ -268,7 +277,7 @@ onMounted(load);
 }
 
 .ins-state--error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .ins-lede {

@@ -739,7 +739,7 @@ watch(
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 .pp-note--error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 .pp-note--after {
   padding-top: var(--space-5);

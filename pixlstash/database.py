@@ -1,4 +1,5 @@
 import contextvars
+import functools
 import hashlib
 import inspect
 import itertools
@@ -8,6 +9,7 @@ import os
 import struct
 import threading
 import queue
+import re
 import time
 import traceback
 from contextlib import contextmanager
@@ -30,6 +32,7 @@ import numpy as np
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.tag_reset_registry import TagResetRegistry
 from pixlstash.utils.unprocessable_image_registry import UnprocessableImageRegistry
 
 # These imports are necessary to register the models with SQLModel
@@ -64,6 +67,10 @@ _HASH_SKIP_COLS: frozenset = frozenset(
         "aesthetic_score",
         "smart_score",
         "text_score",
+        # Text read out of the picture (#1197): regenerable, and absent from
+        # every hash computed before the columns existed.
+        "ocr_text",
+        "ocr_words",
     }
 )
 
@@ -677,6 +684,92 @@ def levenshtein_with_id(concatenated_tags, query, picture_id):
     return _levenshtein_internal(concatenated_tags, query, picture_id)
 
 
+# The most a text-in-picture match adds to a search score (#1197). A match is
+# worth about as much as a good caption match, never enough on its own to lift a
+# picture over one that matches in both.
+OCR_TEXT_MATCH_WEIGHT = 0.35
+
+
+@functools.lru_cache(maxsize=64)
+def ocr_query_terms(query: str) -> tuple[str, ...]:
+    """Return the query words text in a picture is matched against.
+
+    Args:
+        query: The search text as typed.
+
+    Returns:
+        Lower-cased words, without stopwords and words of two letters or fewer
+        unless that would leave none.
+    """
+    words = re.findall(r"\w+", str(query or "").lower())
+    significant = [
+        word for word in words if len(word) > 2 and word not in LEVENSHTEIN_STOPWORDS
+    ]
+    return tuple(significant or words)
+
+
+def _ocr_term_matches_token(term: str, token: str) -> bool:
+    """Whether one lower-cased alphanumeric token matches one query term.
+
+    No edits below five letters, one below nine, two beyond, and never on the
+    first letter: OCR confuses letters inside a word ("C0FFEE"), while a
+    different first letter is usually a different word ("goose" for "loose").
+    """
+    if token == term:
+        return True
+    budget = 0 if len(term) < 5 else 1 if len(term) < 9 else 2
+    return (
+        budget > 0
+        and token[:1] == term[:1]
+        and Levenshtein.distance(term, token, score_cutoff=budget) <= budget
+    )
+
+
+def ocr_word_matches(term: str, word: str) -> bool:
+    """Whether one word read from a picture matches one query term.
+
+    Args:
+        term: A lower-cased query term from :func:`ocr_query_terms`.
+        word: A word as it was read, punctuation included.
+
+    Returns:
+        True when any alphanumeric run in *word* matches, by
+        :func:`_ocr_term_matches_token`.
+    """
+    return any(
+        _ocr_term_matches_token(term, token)
+        for token in re.findall(r"\w+", word.lower())
+    )
+
+
+def ocr_text_match(ocr_text, query) -> float:
+    """SQLite scalar: 1.0 when every query term appears in the picture's text.
+
+    Matched word against word rather than scored as a bag like tags are: a
+    receipt carries hundreds of words, and averaging over them would reward a
+    picture for how much text it has rather than for what it says. The text is
+    tokenised once, and an exact hit skips the edit-distance pass.
+
+    Args:
+        ocr_text: ``Picture.ocr_text``; NULL or empty never matches.
+        query: The search text.
+
+    Returns:
+        1.0 on a match, else 0.0.
+    """
+    if not ocr_text:
+        return 0.0
+    terms = ocr_query_terms(query)
+    if not terms:
+        return 0.0
+    tokens = set(re.findall(r"\w+", ocr_text.lower()))
+    matched = all(
+        term in tokens or any(_ocr_term_matches_token(term, token) for token in tokens)
+        for term in terms
+    )
+    return 1.0 if matched else 0.0
+
+
 def character_face_likeness(candidate_blob: bytes, refs_blob: bytes) -> float:
     """Compute softmax-weighted cosine similarity between a candidate face and packed reference faces.
 
@@ -767,6 +860,7 @@ def _apply_sqlite_settings(dbapi_conn, *, wal: bool, foreign_keys: bool) -> None
     dbapi_conn.create_function("levenshtein_with_id", 3, levenshtein_with_id)
     dbapi_conn.create_function("cosine_similarity", 2, ImageUtils.cosine_similarity)
     dbapi_conn.create_function("character_face_likeness", 2, character_face_likeness)
+    dbapi_conn.create_function("ocr_text_match", 2, ocr_text_match)
 
     cursor = dbapi_conn.cursor()
     if wal:
@@ -979,6 +1073,9 @@ class VaultDatabase:
         # decoded (issue #585). Shared by task threads (marking) and finder
         # threads (suppression); reachable from both via their ``self._db``.
         self.unprocessable_images = UnprocessableImageRegistry()
+        # When each picture's tags were last reset, so a tag task that read the
+        # picture before a retag does not write over it (#1361).
+        self.tag_resets = TagResetRegistry()
         db_exists = os.path.exists(self._db_path)
         logger.debug(f"Vault init, db_path={self._db_path}, db_exists={db_exists}")
 

@@ -474,6 +474,21 @@ class InferenceEngine:
         self.ensure_captioning_ready()
         return self.florence_service.detect_objects(image_paths, prompt=prompt)
 
+    def read_text(self, image_paths: list) -> dict:
+        """Read the text in a batch of still images with Florence-2.
+
+        Loads Florence-2 if needed (shared with captioning) and delegates to
+        :meth:`~pixlstash.tagger_plugins.florence2.Florence2Service.read_text`.
+
+        Args:
+            image_paths: Still-image file paths.
+
+        Returns:
+            ``{path: [[{"text": str, "box": [x, y, w, h]}, ...], ...]}``.
+        """
+        self.ensure_captioning_ready()
+        return self.florence_service.read_text(image_paths)
+
     def _effective_pixlstash_tagger_batch_size(self) -> int:
         """Return the VRAM-constrained batch size for the PixlStash tagger."""
         return self.tagging_workflow.effective_pixlstash_tagger_batch_size()

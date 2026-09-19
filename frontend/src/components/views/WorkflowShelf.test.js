@@ -38,7 +38,20 @@ vi.mock("../../api/workflows", () => ({
   getWorkflowGraph: (...args) => getWorkflowGraph(...args),
 }));
 
+const listWorkflowFiles = vi.fn();
+const importWorkflow = vi.fn();
+
+vi.mock("../../api/comfyui", () => ({
+  listWorkflows: (...args) => listWorkflowFiles(...args),
+  getWorkflowInputs: vi.fn(),
+  setWorkflowInputs: vi.fn(),
+  importWorkflow: (...args) => importWorkflow(...args),
+}));
+
 import WorkflowShelf from "./WorkflowShelf.vue";
+import { useWorkflowShelfStore } from "../../stores/useWorkflowShelfStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const globalOpts = {
   global: {
@@ -92,6 +105,94 @@ beforeEach(() => {
   listWorkflowVariants.mockReset().mockResolvedValue([]);
   listWorkflowPictures.mockReset().mockResolvedValue([]);
   getWorkflowGraph.mockReset();
+  listWorkflowFiles.mockReset().mockResolvedValue({ workflows: [] });
+  importWorkflow.mockReset();
+});
+
+describe("the saved workflows", () => {
+  it("lists the files that run, and says which a selection cannot offer", async () => {
+    listWorkflowFiles.mockResolvedValue({
+      workflows: [
+        {
+          name: "edit.json",
+          display_name: "edit",
+          valid: true,
+          workflow_type: "i2i",
+          has_selection_input: false,
+        },
+        {
+          // No field at all reads as offered, the backend's own default.
+          name: "old.json",
+          display_name: "old",
+          valid: true,
+          workflow_type: "i2i",
+        },
+        {
+          name: "t2i.json",
+          display_name: "t2i",
+          valid: true,
+          workflow_type: "t2i",
+          has_selection_input: false,
+        },
+      ],
+    });
+    const wrapper = await mountShelf();
+    const rows = wrapper
+      .findAll("li.wfshelf-file")
+      .map((row) => [
+        row.find(".wfshelf-file-name").text(),
+        row.find(".wfshelf-row-sub").text(),
+      ]);
+    expect(rows).toEqual([
+      ["edit", "image to image · not offered on a selection"],
+      ["old", "image to image"],
+      ["t2i", "text to image"],
+    ]);
+  });
+
+  it("marks the picked file selected and shares one selection with the graphs", async () => {
+    listWorkflowFiles.mockResolvedValue({
+      workflows: [{ name: "edit.json", valid: true, workflow_type: "i2i" }],
+    });
+    const wrapper = await mountShelf();
+    const store = useWorkflowShelfStore();
+    store.select("a".repeat(64));
+    const row = wrapper.find("li.wfshelf-file");
+    expect(row.attributes("aria-selected")).toBe("false");
+
+    await row.trigger("click");
+    expect(store.selectedHash).toBe(null);
+    expect(row.attributes("aria-selected")).toBe("true");
+    expect(row.classes()).toContain("wfshelf-row--selected");
+
+    store.select("a".repeat(64));
+    await wrapper.vm.$nextTick();
+    expect(row.attributes("aria-selected")).toBe("false");
+  });
+
+  it("is one tab stop, walked with the arrows and picked with Enter", async () => {
+    listWorkflowFiles.mockResolvedValue({
+      workflows: [
+        { name: "a.json", valid: true, workflow_type: "i2i" },
+        { name: "b.json", valid: true, workflow_type: "i2i" },
+      ],
+    });
+    const wrapper = await mountShelf();
+    const store = useWorkflowShelfStore();
+    const tabStops = () =>
+      wrapper
+        .findAll("li.wfshelf-file")
+        .map((row) => row.attributes("tabindex"));
+    expect(tabStops()).toEqual(["0", "-1"]);
+
+    const [first] = wrapper.findAll("li.wfshelf-file");
+    await first.trigger("keydown", { key: "ArrowDown" });
+    expect(tabStops()).toEqual(["-1", "0"]);
+    await wrapper.findAll("li.wfshelf-file")[1].trigger("keydown", {
+      key: "Enter",
+    });
+    expect(store.selectedFile).toBe("b.json");
+  });
 });
 
 describe("the list", () => {
@@ -476,5 +577,209 @@ describe("exporting a workflow's graph", () => {
     expect(wrapper.vm.canExport).toBe(false);
     await wrapper.vm.exportGraph();
     expect(getWorkflowGraph).not.toHaveBeenCalled();
+  });
+});
+
+describe("dropping a workflow file", () => {
+  function fileDrop(files, types = ["Files"]) {
+    return { dataTransfer: { types, files, dropEffect: "none" } };
+  }
+
+  async function settle(wrapper) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+  }
+
+  it("stores the parsed file as it is and shows the row it landed on", async () => {
+    const graph = { 1: { class_type: "SaveImage", inputs: {} } };
+    const fresh = topology({ topology_hash: "b".repeat(64), pictures: 0 });
+    importWorkflow.mockImplementation(async () => {
+      // The row exists only once the import has filed it, so the selection
+      // has to come after the refetch to survive it.
+      listWorkflows.mockResolvedValue({
+        scan: { pictures: 28172, scanned: 28172 },
+        workflows: [topology(), fresh],
+      });
+      return { name: "flow.json", matched: false, topology_hash: fresh.topology_hash };
+    });
+    const wrapper = await mountShelf();
+    const store = useWorkflowShelfStore();
+    // A new workflow has no pictures, so "In use" would hide it.
+    store.setView({ show: "in_use" });
+    const file = new File([JSON.stringify(graph)], "flow.json");
+    const note = new File(["x"], "holiday.jpg");
+    await wrapper.find(".wfshelf").trigger("drop", fileDrop([file, note]));
+    await settle(wrapper);
+
+    expect(importWorkflow).toHaveBeenCalledTimes(1);
+    expect(importWorkflow).toHaveBeenCalledWith({
+      name: "flow",
+      workflow: graph,
+      keepBoth: true,
+    });
+    expect(store.selectedHash).toBe(fresh.topology_hash);
+    expect(store.view.show).toBe("all");
+    expect(store.visibleRows.map((row) => row.topology_hash)).toContain(
+      fresh.topology_hash,
+    );
+    // The picture is the window importer's, and is not reported here.
+    expect(useNoticeStore().notices.map((n) => n.text)).toEqual([
+      "Added flow.json.",
+    ]);
+  });
+
+  it("says a copy is already there", async () => {
+    importWorkflow.mockResolvedValue({
+      name: "stored.json",
+      matched: true,
+      topology_hash: "a".repeat(64),
+    });
+    const wrapper = await mountShelf();
+    await wrapper
+      .find(".wfshelf")
+      .trigger("drop", fileDrop([new File(["{}"], "flow.json")]));
+    await settle(wrapper);
+    expect(useNoticeStore().notices.map((n) => n.text)).toEqual([
+      "flow.json is already here, as stored.json.",
+    ]);
+  });
+
+  it("takes a drag that carries files, and nothing else", async () => {
+    const wrapper = await mountShelf();
+    const root = wrapper.find(".wfshelf");
+    const json = new File(["{}"], "flow.json");
+
+    const textDrag = fileDrop([json], ["text/plain"]);
+    await root.trigger("dragenter", textDrag);
+    await root.trigger("dragover", textDrag);
+    expect(root.classes()).not.toContain("wfshelf--drop");
+    await root.trigger("drop", textDrag);
+    await settle(wrapper);
+    expect(importWorkflow).not.toHaveBeenCalled();
+
+    const over = new Event("dragover", { bubbles: true, cancelable: true });
+    over.dataTransfer = { types: ["Files"], files: [], dropEffect: "none" };
+    await root.trigger("dragenter", fileDrop([]));
+    root.element.dispatchEvent(over);
+    // Without this the browser opens the file instead of dropping it.
+    expect(over.defaultPrevented).toBe(true);
+    expect(root.classes()).toContain("wfshelf--drop");
+
+    const dropped = new Event("drop", { bubbles: true, cancelable: true });
+    dropped.dataTransfer = { types: ["Files"], files: [], dropEffect: "none" };
+    root.element.dispatchEvent(dropped);
+    await settle(wrapper);
+    expect(dropped.defaultPrevented).toBe(true);
+    expect(root.classes()).not.toContain("wfshelf--drop");
+  });
+
+  it("refuses a file that is not JSON without importing it", async () => {
+    const wrapper = await mountShelf();
+    const file = new File(["{"], "flow.json");
+    await wrapper.find(".wfshelf").trigger("drop", fileDrop([file]));
+    await settle(wrapper);
+    expect(importWorkflow).not.toHaveBeenCalled();
+    expect(useNoticeStore().notices.map((n) => n.text)).toEqual([
+      "flow.json is not valid JSON.",
+    ]);
+  });
+});
+
+// #1415: the view replaces the grid and its toolbar, so without the app-wide
+// tail nothing on this screen opened Settings or the stats rail - and
+// WorkflowInspector only renders while that rail is open.
+describe("the app-wide toolbar tail", () => {
+  it("asks App.vue for Settings and toggles the stats sidebar itself", async () => {
+    const wrapper = await mountShelf();
+    const sidebar = useSidebarStore();
+
+    await wrapper
+      .find(".wfshelf-toolbar button[aria-label='Settings']")
+      .trigger("click");
+    expect(wrapper.emitted("open-settings")).toHaveLength(1);
+
+    // From the shut state a fresh session starts in: the first press opens the
+    // rail, the second closes it.
+    sidebar.statsOpen = false;
+    await wrapper.find(".wfshelf-toolbar .tb-stats-btn").trigger("click");
+    expect(sidebar.statsOpen).toBe(true);
+    await wrapper.find(".wfshelf-toolbar .tb-stats-btn").trigger("click");
+    expect(sidebar.statsOpen).toBe(false);
+  });
+
+  it("orders the tail separator → TbGlobalActions, last in the bar", async () => {
+    // Placement, not presence: the app-wide chrome sits after this view's own
+    // controls, ruled off from them, at the end - as ModelShelf's bar does.
+    const wrapper = await mountShelf();
+    const bar = wrapper.find(".wfshelf-toolbar").element;
+    const tail = wrapper.find(".wfshelf-bar-tail").element;
+    // TbGlobalActions is multi-root; its Settings button is a stable anchor.
+    const settings = wrapper.find(
+      ".wfshelf-toolbar button[aria-label='Settings']",
+    ).element;
+    const separator = wrapper.find(".wfshelf-toolbar .bar-separator").element;
+    // Ghosts is the last of this view's own controls.
+    const ghosts = wrapper
+      .findAll(".wfshelf-toolbar button")
+      .find((btn) => btn.text().includes("Ghosts")).element;
+    const follows = (a, b) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+    expect(follows(ghosts, separator)).toBe(true);
+    // Adjacency, not merely order: the rule marks the boundary, so nothing may
+    // slip between it and the chrome it rules off.
+    expect(separator.nextElementSibling).toBe(settings);
+    // Nothing of this view's own follows the app-wide chrome. TbGlobalActions
+    // is multi-root, so its stats button is the tail's last element.
+    expect(bar.lastElementChild).toBe(tail);
+    expect(tail.lastElementChild.classList.contains("tb-stats-btn")).toBe(true);
+  });
+
+  // Nothing here writes to the operation log, so undo/redo and the History
+  // popover are not offered at all - the model shelf's exception, for its
+  // reason.
+  it("mounts no undo control", async () => {
+    const wrapper = await mountShelf();
+    expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(false);
+  });
+
+  // The emit above is only half the fix: App.vue has to listen, and nothing
+  // else in this suite fails if that binding is deleted. Asserted against the
+  // source because App.vue needs a mount harness this suite does not have -
+  // the same readFileSync shape Toolbar.test.js uses for its bar recipe.
+  // The toggle's tooltip is its accessible name, and the rail on this screen is
+  // the inspector, not the stats sidebar it is called everywhere else.
+  it("names the rail it actually opens here", async () => {
+    const wrapper = await mountShelf();
+    const stats = wrapper.find(".wfshelf-toolbar .tb-stats-btn");
+    expect(stats.attributes("aria-label")).toBe("Show inspector");
+    useSidebarStore().statsOpen = true;
+    await wrapper.vm.$nextTick();
+    expect(stats.attributes("aria-label")).toBe("Hide inspector");
+  });
+
+  // A run force-opens this rail (`useWorkflowRunStore.openFor`), so the run
+  // panel has to outrank the inspector or the rail opens on "Pick a workflow"
+  // while the run is in progress. App.vue needs a mount harness this suite does
+  // not have, so this is asserted against the source, as above.
+  it("leaves a running workflow's panel ahead of the inspector", async () => {
+    const { readFileSync } = await import("node:fs");
+    const app = readFileSync(`${process.cwd()}/src/App.vue`, "utf8");
+    const run = app.indexOf("<WorkflowRunPanel");
+    const inspector = app.indexOf("<WorkflowInspector");
+    expect(run).toBeGreaterThan(-1);
+    expect(run).toBeLessThan(inspector);
+    expect(app.slice(run, inspector)).toContain('v-if="workflowRunStore.open"');
+    expect(app.slice(inspector, inspector + 80)).toContain("v-else-if");
+  });
+
+  it("is listened to by App.vue, which owns the Settings dialog", async () => {
+    const { readFileSync } = await import("node:fs");
+    const app = readFileSync(`${process.cwd()}/src/App.vue`, "utf8");
+    const tag = app.slice(
+      app.indexOf("<WorkflowShelf"),
+      app.indexOf(">", app.indexOf("<WorkflowShelf")),
+    );
+    expect(tag).toContain('@open-settings="openSettingsDialog"');
   });
 });

@@ -26,10 +26,11 @@ class MissingComfyUIExtractionFinder(SimpleMissingFinder):
     re-offering the same pictures forever (``stand_down``).
     """
 
-    def __init__(self, database, image_root: str, hub=None):
+    def __init__(self, database, image_root: str, hub=None, library_uuid=None):
         super().__init__(database)
         self._image_root = image_root
         self._hub = hub
+        self._library_uuid = library_uuid
         self._scanning_workflows = hub is not None
 
     def finder_name(self) -> str:
@@ -63,6 +64,7 @@ class MissingComfyUIExtractionFinder(SimpleMissingFinder):
             pictures=pictures,
             hub=self._hub if self._scanning_workflows else None,
             on_hub_failure=self.stand_down,
+            library_uuid=self._library_uuid,
         )
 
     def stand_down(self) -> None:

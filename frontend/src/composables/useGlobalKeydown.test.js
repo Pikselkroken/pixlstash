@@ -45,9 +45,9 @@ function press(key, init = {}) {
 }
 
 /** Mount the shelf's root signal - the class `ModelShelf.vue` renders. */
-function mountShelfMarker() {
+function mountShelfMarker(className = "shelf") {
   const el = document.createElement("div");
-  el.className = "shelf";
+  el.className = className;
   document.body.appendChild(el);
   return el;
 }
@@ -98,6 +98,22 @@ describe("the undo chord", () => {
     expect(notices.notices).toHaveLength(1);
     expect(notices.notices[0].key).toBe(SHELF_NO_UNDO_KEY);
     expect(notices.notices[0].text).toContain("aren't undoable");
+  });
+
+  // #1415: the shelf was guarded alone, and the three other grid-replacing
+  // destinations that mount neither a receipt nor an UndoControl were not - so
+  // the chord reverted a library action there with nothing on screen to say so.
+  it.each([
+    ["the workflow library", "wfshelf"],
+    ["Moves", "mv"],
+    ["Insights", "ins"],
+  ])("declines on %s too, for the shelf's reason", (_name, className) => {
+    mountShelfMarker(className);
+    press("z");
+    press("z", { shiftKey: true });
+    expect(store.undo).not.toHaveBeenCalled();
+    expect(store.redo).not.toHaveBeenCalled();
+    expect(notices.notices[0].key).toBe(SHELF_NO_UNDO_KEY);
   });
 
   it("acts again once the shelf unmounts", () => {

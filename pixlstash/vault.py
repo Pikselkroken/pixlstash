@@ -341,6 +341,17 @@ class Vault:
             self._planner_work_finders[TaskType.CHECKPOINT_HASH] = (
                 MissingCheckpointHashFinder(hub=registered_hub)
             )
+            # The workflow-card backfill (§B2). Hub-only in the strongest sense:
+            # it reads stored documents and never a picture, so it keys the
+            # recipes of libraries that are not even attached, and the pictures
+            # a trimmed library no longer has still have their workflow.
+            from pixlstash.tasks.workflow_card_backfill_finder import (
+                WorkflowCardBackfillFinder,
+            )
+
+            self._planner_work_finders[TaskType.WORKFLOW_CARD_BACKFILL] = (
+                WorkflowCardBackfillFinder(hub=registered_hub)
+            )
             # And the workflow library's store is the hub too, so the ComfyUI
             # extraction can file a picture's graph where it outlives the
             # picture (§B3). Replaces the hubless finder work_finders() built:
@@ -357,6 +368,7 @@ class Vault:
                     database=self.db,
                     image_root=self.image_root,
                     hub=registered_hub,
+                    library_uuid=self._library_uuid,
                 )
             )
         self._work_planner = WorkPlanner(
@@ -912,6 +924,7 @@ class Vault:
         def _fetch_pic(session: Session):
             return session.get(Picture, picture_id)
 
+        reset_generation = self.db.tag_resets.current()
         pic = self.db.run_immediate_read_task(_fetch_pic)
         if pic is not None:
             task = TagTask(
@@ -920,6 +933,7 @@ class Vault:
                 pictures=[pic],
                 interactive=True,
                 engine_override=engine_name,
+                reset_generation=reset_generation,
             )
             self.submit_task(task)
 
@@ -1312,6 +1326,22 @@ class Vault:
             )
             return
 
+        if task.type == "OcrTask":
+            self._notify_worker_ids_processed(TaskType.OCR, changed)
+            picture_ids = [pic_id for _, pic_id, _, _ in changed]
+            if picture_ids:
+                # Not visible in the grid and no sort reads it: the open
+                # overlay refetches, nothing else moves.
+                self.notify(
+                    EventType.CHANGED_PICTURES,
+                    {
+                        "picture_ids": picture_ids,
+                        "change_kind": "updated",
+                        "fields": ["ocr_text"],
+                    },
+                )
+            return
+
         if task.type == "TextEmbeddingTask":
             self._notify_worker_ids_processed(TaskType.TEXT_EMBEDDING, changed)
             return
@@ -1694,6 +1724,13 @@ class Vault:
                     self.db.run_immediate_read_task(self._count_missing_text_score) or 0
                 )
                 label = "text_score"
+            elif worker_type == TaskType.OCR:
+                # Counted over the pictures that qualify for reading, not the
+                # library: most pictures are never read at all.
+                total, missing = self.db.run_immediate_read_task(
+                    self._count_ocr_progress
+                ) or (0, 0)
+                label = "text_read"
             elif worker_type == TaskType.DETECTION:
                 # User-triggered (no finder): surface live progress straight from
                 # the running task(s), mirroring the WATCH_FOLDERS handling.
@@ -1755,6 +1792,14 @@ class Vault:
                 finder = self._planner_work_finders.get(TaskType.CHECKPOINT_HASH)
                 total, missing = finder.progress() if finder is not None else (0, 0)
                 label = "checkpoints_hashed"
+            elif worker_type == TaskType.WORKFLOW_CARD_BACKFILL:
+                # Counted over the hub's recipes, not this library's pictures.
+                # Left in `planner_managed` below it would inherit the picture
+                # count and a hardcoded `missing = 0` - the "N / N, nothing
+                # remaining" row the two branches above exist to correct.
+                finder = self._planner_work_finders.get(TaskType.WORKFLOW_CARD_BACKFILL)
+                total, missing = finder.progress() if finder is not None else (0, 0)
+                label = "workflows_carded"
             elif worker_type == TaskType.ORIENTATION:
                 # Without its own count this row fell into `planner_managed`
                 # below - `missing = 0`, so it read "12,094 / 12,094, 0.00/s"
@@ -1988,6 +2033,12 @@ class Vault:
         from pixlstash.tasks.text_score_task import TextScoreTask
 
         return TextScoreTask.count_missing_text_score(session)
+
+    @staticmethod
+    def _count_ocr_progress(session: Session) -> tuple[int, int]:
+        from pixlstash.tasks.ocr_task import OcrTask
+
+        return OcrTask.count_progress(session)
 
     @staticmethod
     def _count_pending_likeness_queue(session: Session) -> int:

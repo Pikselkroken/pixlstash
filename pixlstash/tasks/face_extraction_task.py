@@ -23,6 +23,7 @@ from pixlstash.inference.vram_budget import ORT_ARENA_SHARE
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.face_utils import FaceUtils
 from pixlstash.utils.insightface_batched import BatchedFaceRunner
+from pixlstash.utils.media_files import SUPPORTED_IMAGE_EXTS
 from pixlstash.utils.insightface_model_utils import (
     DEFAULT_MODEL_PACK,
     ensure_model_pack_available,
@@ -580,7 +581,7 @@ class FaceExtractionTask(BaseTask):
     #: threshold of a person watching a log.
     SLOW_BATCH_LOG_S = 5.0
 
-    _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif", ".avif"}
+    _IMAGE_EXTS = SUPPORTED_IMAGE_EXTS
     _VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv"}
     # Minimum pixel dimension (width or height) required for InsightFace to run
     # without triggering an internal cv2.resize assertion failure.  RetinaFace

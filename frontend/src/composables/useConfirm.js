@@ -33,6 +33,10 @@ function normalizeOptions(options) {
     confirmLabel: o.confirmLabel ?? "Confirm",
     cancelLabel: o.cancelLabel ?? "Cancel",
     danger: Boolean(o.danger),
+    // When set, the host shows a "Don't show this again" checkbox and calls
+    // this once if the user confirms with it ticked.
+    onDontShowAgain:
+      typeof o.onDontShowAgain === "function" ? o.onDontShowAgain : null,
   };
 }
 
@@ -44,7 +48,7 @@ export function useConfirm() {
   /**
    * Ask the user to confirm. Resolves true (confirmed) / false (cancelled).
    * @param {string|Object} options - message string, or { title, message,
-   *   warning, confirmLabel, cancelLabel, danger }.
+   *   warning, confirmLabel, cancelLabel, danger, onDontShowAgain }.
    * @returns {Promise<boolean>}
    */
   function confirm(options) {
@@ -88,9 +92,14 @@ export function unregisterConfirmHost() {
 /** Read-only handle to the in-flight request for the host to render. */
 export const activeConfirm = readonly(activeRequest);
 
-/** The host calls this with the user's choice to settle the pending promise. */
-export function resolveConfirm(result) {
+/**
+ * The host calls this with the user's choice to settle the pending promise.
+ * `dontShowAgain` is the checkbox state; it only counts on a confirm.
+ */
+export function resolveConfirm(result, dontShowAgain = false) {
   if (!activeRequest.value) return;
-  activeRequest.value.resolve(Boolean(result));
+  const { options, resolve } = activeRequest.value;
+  if (result && dontShowAgain) options.onDontShowAgain?.();
+  resolve(Boolean(result));
   activeRequest.value = null;
 }

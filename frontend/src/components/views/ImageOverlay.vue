@@ -179,8 +179,8 @@
                     v-if="!validComfyWorkflows.length"
                     class="overlay-comfy-warning"
                   >
-                    No valid workflows found. Workflows need a
-                    {{ imagePlaceholderLabel }} placeholder and a save node.
+                    No valid workflows found. A workflow needs a save node and a
+                    picture input set to Selection in Workflows.
                   </div>
                   <label class="overlay-comfy-field-label">Workflow</label>
                   <select
@@ -222,6 +222,80 @@
                       ></textarea>
                     </div>
                   </template>
+                  <!-- The LoRA goes into a loader the workflow already has
+                       (#1310), or into one PixlStash adds where it has none
+                       and can show where (#1376); otherwise it says why not.
+                       Only once a workflow is chosen: with none there is
+                       nothing to say about its loaders. -->
+                  <template v-if="selectedComfyWorkflow">
+                    <label
+                      class="overlay-comfy-field-label"
+                      for="overlay-comfy-lora"
+                    >
+                      LoRA
+                    </label>
+                    <div
+                      v-if="!comfyLoraSlots.length && !comfyCanInsert"
+                      class="overlay-comfy-note"
+                      role="status"
+                    >
+                      {{ comfyNoLoraText("This workflow") }}
+                    </div>
+                    <div
+                      v-else-if="adaptersError"
+                      class="overlay-comfy-error"
+                      role="alert"
+                    >
+                      {{ adaptersError }}
+                    </div>
+                    <template v-else>
+                      <select
+                        id="overlay-comfy-lora"
+                        v-model="comfyAdapterSha"
+                        class="overlay-comfy-select"
+                      >
+                        <option
+                          v-for="opt in comfyAdapterOptions"
+                          :key="opt.value"
+                          :value="opt.value"
+                        >
+                          {{ opt.label }}
+                        </option>
+                      </select>
+                      <!-- What adding the loader does, before the run does it. -->
+                      <div
+                        v-if="comfyCanInsert && comfyAdapterSha"
+                        class="overlay-comfy-note"
+                        role="status"
+                      >
+                        {{ comfyInsertionText }}
+                      </div>
+                      <!-- Which slot, when the workflow has more than one:
+                           swapping them all would load the chosen LoRA twice
+                           and lose the others. -->
+                      <template v-if="comfyLoraSlots.length > 1">
+                        <label
+                          class="overlay-comfy-field-label"
+                          for="overlay-comfy-lora-slot"
+                        >
+                          Into which loader
+                        </label>
+                        <select
+                          id="overlay-comfy-lora-slot"
+                          v-model="comfyLoraSlot"
+                          class="overlay-comfy-select"
+                        >
+                          <option
+                            v-for="opt in comfySlotOptions"
+                            :key="opt.value"
+                            :value="opt.value"
+                          >
+                            {{ opt.label }}
+                          </option>
+                        </select>
+                      </template>
+                    </template>
+                  </template>
                   <label class="overlay-comfy-checkbox-row">
                     <input v-model="stackI2IOutputs" type="checkbox" />
                     <span>Stack new images with the originals</span>
@@ -258,9 +332,7 @@
           >
             <template #activator="{ props: setTipProps }">
               <AddToEntityControl
-                v-bind="
-                  withRef(setTipProps, (el) => (addToSetControlRef = el))
-                "
+                v-bind="withRef(setTipProps, (el) => (addToSetControlRef = el))"
                 type="set"
                 :key="addToSetControlKey"
                 :subject-ids="[image.id]"
@@ -358,7 +430,9 @@
                   n === 0 ? "No rating" : n
                 }}</span>
                 <v-icon
-                  v-if="(isReadOnly ? guestScore || 0 : image?.score || 0) === n"
+                  v-if="
+                    (isReadOnly ? guestScore || 0 : image?.score || 0) === n
+                  "
                   class="ctx-check"
                   >mdi-check</v-icon
                 >
@@ -483,7 +557,11 @@
             :aria-label="zoomButtonTitle"
             @click="toggleZoomSnap"
           >
-            <Tooltip :text="zoomButtonTitle" activator="parent" :describe="false" />
+            <Tooltip
+              :text="zoomButtonTitle"
+              activator="parent"
+              :describe="false"
+            />
             <v-icon>mdi-magnify</v-icon>
             <span class="zoom-btn-label">{{ zoomButtonLabel }}</span>
           </button>
@@ -660,6 +738,42 @@
                   </span>
                 </div>
               </template>
+              <!-- Word boxes for the Text tab. Same layout space as the face
+                   boxes (inside the transformed media), so they follow zoom
+                   and pan; box coordinates are fractions of the displayed,
+                   orientation-corrected picture. aria-hidden: the word buttons
+                   in the sidebar are the keyboard and screen-reader path. -->
+              <svg
+                v-if="showTextBoxes"
+                class="picture-text-boxes"
+                aria-hidden="true"
+                :style="wordLayerStyle(overlayDims)"
+                :viewBox="`0 0 ${overlayDims.width} ${overlayDims.height}`"
+              >
+                <g
+                  v-for="word in pictureText.words.value"
+                  v-show="word.box"
+                  :key="word.index"
+                  class="picture-text-box"
+                  :class="{
+                    'picture-text-box--match': word.matched,
+                    'picture-text-box--selected': selectedWordSet.has(
+                      word.index,
+                    ),
+                  }"
+                  @pointerdown.stop
+                  @dblclick.stop
+                  @click.stop="onTextBoxClick(word.index, $event)"
+                >
+                  <rect
+                    v-for="part in ['halo', 'line']"
+                    :key="part"
+                    :class="`picture-text-box-${part}`"
+                    v-bind="wordBoxRect(word.box, overlayDims)"
+                  />
+                  <title>{{ word.text }}</title>
+                </g>
+              </svg>
               <!-- The rubber-band rectangle rides INSIDE the transformed
                    media (like the face boxes), so the same layout-space math
                    is correct at every continuous zoom scale; the draw layer
@@ -753,104 +867,138 @@
           @navigate="onFilmstripNavigate"
         />
 
-        <aside
+        <!-- The shared inspector (shell contract rule 8), in its lightbox
+             variant: dark in both themes, laid over the canvas. -->
+        <AppInspector
+          v-model="sidebarTab"
           class="overlay-sidebar"
-          :class="{ open: sidebarOpen, hidden: chromeHidden }"
+          :class="{ hidden: chromeHidden }"
+          label="Picture details"
+          lightbox
+          :open="sidebarOpen"
+          :tabs="sidebarTabs"
         >
-          <OverlayDescriptionPanel
-            ref="descriptionPanelRef"
-            :image="image"
-            :locked="isCurrentLocked"
-            :lock-note="currentLockReason"
-            @update-description="handleDescriptionUpdate"
-            @editing-finished="focusOverlayCanvas"
-          />
+          <!-- `v-show`, never `v-if`: the panels hold editing state and the
+               refs the overlay reaches into for its keyboard shortcuts (T
+               opens the tag field, Escape cancels an edit), and unmounting the
+               Info group behind the Recipe tab would take those with it. -->
+          <div v-show="sidebarTab === 'info'" class="overlay-sidebar-group">
+            <OverlayDescriptionPanel
+              ref="descriptionPanelRef"
+              :image="image"
+              :locked="isCurrentLocked"
+              :lock-note="currentLockReason"
+              :text-state="pictureText.text.value.state"
+              :text-lines="pictureText.text.value.lines"
+              :active-tab="pictureText.activeTab.value"
+              :selected-words="pictureText.selectedWords.value"
+              :text-read-busy="pictureText.readAgainBusy.value"
+              @update-description="handleDescriptionUpdate"
+              @editing-finished="focusOverlayCanvas"
+              @pick-tab="pictureText.pickTab"
+              @select-word="pictureText.selectWord"
+              @clear-word-selection="pictureText.clearSelection"
+              @read-text-again="pictureText.readAgain"
+            />
 
-          <div class="sidebar-section sidebar-section--faces">
-            <div
-              class="section-header section-header--collapsible section-label section-label--on-dark"
-              @click="facesCollapsed = !facesCollapsed"
-            >
-              <span>Faces</span>
-              <v-icon size="16" style="opacity: 0.6">{{
-                facesCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
-              }}</v-icon>
-            </div>
-            <template v-if="!facesCollapsed">
-              <div v-if="faceAssignItems.length" class="face-assign-grid">
-                <div
-                  v-for="face in faceAssignItems"
-                  :key="face.faceKey"
-                  class="face-assign-card"
-                >
-                  <div class="face-assign-row">
-                    <div class="face-assign-thumb">
-                      <div
-                        class="face-assign-crop"
-                        :style="getFaceThumbStyle(face, face.faceIdx)"
-                      ></div>
-                    </div>
-                    <div class="face-assign-meta">
-                      <div
-                        class="face-assign-label"
-                        :style="{ color: faceBoxColor(face.faceIdx) }"
-                      >
-                        {{ face.label }}
+            <div class="sidebar-section sidebar-section--faces">
+              <div
+                class="section-header section-header--collapsible section-label section-label--on-dark"
+                @click="facesCollapsed = !facesCollapsed"
+              >
+                <span>Faces</span>
+                <v-icon size="16" style="opacity: 0.6">{{
+                  facesCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
+                }}</v-icon>
+              </div>
+              <template v-if="!facesCollapsed">
+                <div v-if="faceAssignItems.length" class="face-assign-grid">
+                  <div
+                    v-for="face in faceAssignItems"
+                    :key="face.faceKey"
+                    class="face-assign-card"
+                  >
+                    <div class="face-assign-row">
+                      <div class="face-assign-thumb">
+                        <div
+                          class="face-assign-crop"
+                          :style="getFaceThumbStyle(face, face.faceIdx)"
+                        ></div>
                       </div>
-                      <!-- A native <select> cannot carry the create row's
-                           highlight: macOS Chrome and Safari draw select
-                           popups as OS menus that ignore option colour. This
-                           is the same menu language as the rest of the app
-                           (AddToEntityControl's force-dark skin), in its
-                           single-select face mode. Face mode picks one person
-                           for one face, so it has no subject list to compute a
-                           tri-state across and passes an empty one. -->
-                      <div class="face-assign-person">
-                        <AddToEntityControl
-                          :ref="(el) => setFaceMenuRef(face.faceKey, el)"
-                          type="face"
-                          allow-create
-                          float-menu
-                          :subject-ids="[]"
-                          :force-dark="true"
-                          :face-id="face.id"
-                          :assigned-character-id="face.character_id"
-                          :assigned-character-name="faceAssignedName(face)"
-                          :readonly="isReadOnly"
-                          :disabled="!face.id || isReadOnly"
-                          @assign="handleFaceAssign(face, $event)"
-                          @unassign="unassignFaceCharacter(face)"
-                          @create="openCreatePersonForFace(face, $event)"
-                        />
+                      <div class="face-assign-meta">
+                        <div
+                          class="face-assign-label"
+                          :style="{ color: faceBoxColor(face.faceIdx) }"
+                        >
+                          {{ face.label }}
+                        </div>
+                        <!-- A native <select> cannot carry the create row's
+                             highlight: macOS Chrome and Safari draw select
+                             popups as OS menus that ignore option colour. This
+                             is the same menu language as the rest of the app
+                             (AddToEntityControl's force-dark skin), in its
+                             single-select face mode. Face mode picks one person
+                             for one face, so it has no subject list to compute a
+                             tri-state across and passes an empty one. -->
+                        <div class="face-assign-person">
+                          <AddToEntityControl
+                            :ref="(el) => setFaceMenuRef(face.faceKey, el)"
+                            type="face"
+                            allow-create
+                            float-menu
+                            :subject-ids="[]"
+                            :force-dark="true"
+                            :face-id="face.id"
+                            :assigned-character-id="face.character_id"
+                            :assigned-character-name="faceAssignedName(face)"
+                            :readonly="isReadOnly"
+                            :disabled="!face.id || isReadOnly"
+                            @assign="handleFaceAssign(face, $event)"
+                            @unassign="unassignFaceCharacter(face)"
+                            @create="openCreatePersonForFace(face, $event)"
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
-              </div>
-              <div v-else class="face-assign-empty">No faces detected</div>
-            </template>
+                <div v-else class="face-assign-empty">No faces detected</div>
+              </template>
+            </div>
+
+            <OverlayTagsPanel
+              ref="tagsPanelRef"
+              :image="image"
+              :hidden-tags="hiddenTags"
+              :apply-tag-filter="applyTagFilter"
+              :locked="isCurrentLocked"
+              :lock-note="currentLockReason"
+              @update-tags="handleTagsUpdate"
+              @overlay-change="(payload) => emit('overlay-change', payload)"
+              @add-tag="(imageId, tag) => emit('add-tag', imageId, tag)"
+              @request-metadata-refresh="fetchOverlayMetadata"
+            />
+
+            <OverlayMetadataPanel
+              :image="image"
+              :date-format="dateFormat"
+              :video-duration="videoMeta.duration"
+            />
           </div>
 
-          <OverlayTagsPanel
-            ref="tagsPanelRef"
-            :image="image"
-            :hidden-tags="hiddenTags"
-            :apply-tag-filter="applyTagFilter"
-            :locked="isCurrentLocked"
-            :lock-note="currentLockReason"
-            @update-tags="handleTagsUpdate"
-            @overlay-change="(payload) => emit('overlay-change', payload)"
-            @add-tag="(imageId, tag) => emit('add-tag', imageId, tag)"
-            @request-metadata-refresh="fetchOverlayMetadata"
+          <!-- `v-if`, unlike the Info group above: the Recipe tab is read-only
+               and holds nothing worth preserving across a tab switch, so it
+               costs nothing to build on demand and nothing to throw away. -->
+          <OverlayRecipePanel
+            v-if="sidebarTab === 'recipe'"
+            :recipe="comfyMetadata"
+            :picture-id="image?.id ?? null"
+            :can-generate-variants="
+              comfyuiConfigured && !isReadOnly && !!image?.id
+            "
+            @generate-variants="emit('open-remix-dialog', image?.id)"
           />
-
-          <OverlayMetadataPanel
-            :image="image"
-            :comfy-metadata="comfyMetadata"
-            :date-format="dateFormat"
-            :video-duration="videoMeta.duration"
-          />
-        </aside>
+        </AppInspector>
 
         <!-- The lightbox's own narration of an undoable action. Last child of
              `.overlay-main` on purpose: this is where `--filmstrip-rail-width`
@@ -902,6 +1050,12 @@ import {
 } from "vue";
 import { useWheelZoom } from "../../composables/useWheelZoom";
 import {
+  TEXT_TAB,
+  usePictureText,
+  wordBoxRect,
+  wordLayerStyle,
+} from "../../composables/usePictureText";
+import {
   isSupportedVideoFile,
   getOverlayFormat,
   buildMediaUrl,
@@ -910,7 +1064,11 @@ import {
   safeDownloadName,
   setInternalDragPayload,
 } from "../../utils/media.js";
-import { API_BASE_URL, appendShareToken, isReadOnly } from "../../utils/apiClient";
+import {
+  API_BASE_URL,
+  appendShareToken,
+  isReadOnly,
+} from "../../utils/apiClient";
 import {
   getPictureMetadata,
   listPictureFaces,
@@ -927,9 +1085,12 @@ import {
   removeCharacterFacesByFaceId,
 } from "../../api/characters";
 import { listStackPictures } from "../../api/stacks";
+import { useLoraSwap } from "../../composables/useLoraSwap";
 import {
+  getLoraInsertion,
   listWorkflows,
   runImageToImage,
+  getPictureRecipe,
   getPictureWorkflow,
 } from "../../api/comfyui";
 import { listProjects } from "../../api/projects";
@@ -938,12 +1099,15 @@ import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useOperationStore } from "../../stores/useOperationStore";
 import { useProjectStore } from "../../stores/useProjectStore";
+import { useSearchStore } from "../../stores/useSearchStore";
 import { nextFreeCharacterName } from "../../utils/characterCreateFlow.js";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
+import AppInspector from "../widgets/AppInspector.vue";
 import CharacterEditor from "../editors/CharacterEditor.vue";
 import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";
 import OverlayFilmstrip from "./OverlayFilmstrip.vue";
 import OverlayMetadataPanel from "./OverlayMetadataPanel.vue";
+import OverlayRecipePanel from "./OverlayRecipePanel.vue";
 import OverlayTagsPanel from "./OverlayTagsPanel.vue";
 import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
 import OverlaySaveAsDialog from "../widgets/OverlaySaveAsDialog.vue";
@@ -1031,6 +1195,11 @@ const props = defineProps({
   descriptionUpdate: { type: Object, default: () => ({}) },
   smartScoreUpdate: { type: Object, default: () => ({}) },
   detectionUpdate: { type: Object, default: () => ({}) },
+  // Signals the OCR text of the named pictures changed (`ocr_text`).
+  textUpdate: { type: Object, default: () => ({}) },
+  // Signals the named pictures were turned (`orientation`) - a rotate, or the
+  // undo/redo of one, from this tab or another.
+  orientationUpdate: { type: Object, default: () => ({}) },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
   dateFormat: { type: String, default: "locale" },
@@ -1056,6 +1225,8 @@ const {
   descriptionUpdate,
   smartScoreUpdate,
   detectionUpdate,
+  textUpdate,
+  orientationUpdate,
   hiddenTags,
   applyTagFilter,
   showStacks,
@@ -1071,6 +1242,24 @@ const {
 } = toRefs(props);
 
 const image = ref(null);
+const searchStore = useSearchStore();
+// Text in the picture (#1197). The sidebar's Text tab and the word boxes over
+// the picture share its tab and selection.
+const pictureText = usePictureText({
+  // Null while closed, so reopening lands afresh (the search may have moved).
+  pictureId: computed(() => (open.value ? (image.value?.id ?? null) : null)),
+  getSearchQuery: () => searchStore.searchQuery || "",
+});
+// Hidden while a "Read again" runs: the old boxes are about to be replaced.
+const showTextBoxes = computed(
+  () =>
+    pictureText.activeTab.value === TEXT_TAB &&
+    !pictureText.readAgainBusy.value &&
+    overlayReady.value,
+);
+const selectedWordSet = computed(
+  () => new Set(pictureText.selectedWords.value),
+);
 // Grouping (project/set) membership is stack-atomic: a single stack member shown
 // in the overlay cannot have its membership changed individually - the user must
 // unstack first. Whole-stack edits happen from the collapsed grid tile.
@@ -1091,6 +1280,28 @@ function handleTagsUpdate(newTagsArray) {
   }
 }
 const sidebarOpen = ref(true);
+
+// ── Info | Recipe (#1313) ──────────────────────────────────────────────────
+//
+// The v1.12 design puts the sidebar's two subjects on the inspector's own tab
+// band rather than stacking a Recipe section under Tags: Info is everything the
+// pane showed before, Recipe is everything about how the picture was made.
+//
+// The choice is remembered as the lightbox walks the filmstrip: somebody
+// reading recipes wants the next picture's recipe, not its description.
+//
+// **Never disabled, on a picture with no recipe either.** The design gives an
+// A1111 picture "the same Recipe tab", and a disabled tab is a dead control: a
+// disabled button fires no pointer events, so the tooltip explaining why would
+// never open for a mouse. The panel says it in a sentence instead, which is
+// also what stops the tab appearing and disappearing under the cursor as the
+// reader walks the filmstrip.
+const sidebarTab = ref("info");
+const sidebarTabs = [
+  { value: "info", label: "Info", icon: "mdi-information-outline" },
+  { value: "recipe", label: "Recipe", icon: "mdi-bookmark-outline" },
+];
+
 const chromeHidden = ref(false);
 const chromeRevealTimestamp = ref(0);
 // The zoom family's shared core (Compare's model, adopted here): continuous
@@ -1210,15 +1421,40 @@ function setOverlayImageById(nextId) {
     currentId !== undefined &&
     String(currentId) === nextIdKey;
   const targetFromAll = allImageById.value.get(nextIdKey);
-  const target = targetFromAll
+  let target = targetFromAll
     ? targetFromAll
     : filmstripImageById.value.get(nextIdKey);
+  if (!target && open.value) {
+    // The picture did not exist when the overlay opened, so it is in the live
+    // grid list but not in the snapshot frozen on open - an in-app ComfyUI
+    // i2i/upscale stacking its output next to the picture being viewed is the
+    // case that reaches here (ImageGrid's `update:overlayImageId` handler). The
+    // freeze exists to stop a background refetch dropping the current picture
+    // out of the navigation sequence, not to refuse an explicit move to a new
+    // one, so re-capture it: the filmstrip and next/prev must agree with what
+    // is on screen. Without this the move is a silent no-op and the overlay
+    // stays on the old picture.
+    const live = (Array.isArray(allImages.value) ? allImages.value : []).find(
+      (item) => item?.id != null && String(item.id) === nextIdKey,
+    );
+    if (live) {
+      captureFrozenAllImages();
+      target = live;
+    }
+  }
   if (target) {
     const existingTags = getTagList(image.value?.tags);
     const targetTags = getTagList(target.tags);
     const existingDescription = image.value?.description;
     const existingSmartScore = image.value?.smartScore;
     const existingScore = image.value?.score;
+    // Captured beside the three above rather than read inline below, which is
+    // correct only while the whole literal is evaluated before the assignment:
+    // split it - build `next` then patch it, hoist a branch - and an inline
+    // `image.value?.orientation` silently reads the value it is overwriting and
+    // the preservation becomes a no-op, which is #1419 again.
+    const existingOrientation = image.value?.orientation;
+    const existingPixelSha = image.value?.pixel_sha;
     image.value = {
       ...target,
       // Preserve the existing description when re-setting the same image from filmstrip
@@ -1236,6 +1472,24 @@ function setOverlayImageById(nextId) {
       // for the same image would clobber an optimistic rating change (a 0 toggle is a
       // valid edit, hence the != null guard rather than a truthiness check).
       ...(isSameImage && existingScore != null ? { score: existingScore } : {}),
+      // Preserve the file's bytes for the same reason. A rotate's metadata read
+      // moved them, and `target` may be a row that read never reached (an
+      // expanded stack member from the filmstrip); re-applying its old
+      // orientation puts the pre-rotate `?v=` back on the <img>.
+      //
+      // `target` is usually the sequence FROZEN when the overlay opened, and
+      // this runs on every replacement of the `allImages` array - which is what
+      // `ImageGrid.applyRotatedCards` does right after a rotate. So the same
+      // clobber undid a turn that arrived over the socket: an undo turned the
+      // picture back and the grid's own repaint turned it forward again a
+      // moment later (#1419). Reading the snapshot rather than the array it is
+      // handed, it did that even for a correctly-rotated new record.
+      ...(isSameImage && existingOrientation != null
+        ? { orientation: existingOrientation }
+        : {}),
+      ...(isSameImage && existingPixelSha != null
+        ? { pixel_sha: existingPixelSha }
+        : {}),
       tags: dedupeTagList(
         isSameImage ? (existingTags.length ? existingTags : targetTags) : [],
       ),
@@ -1262,6 +1516,9 @@ const emit = defineEmits([
   "run-plugin",
   "request-context-menu",
   "character-created",
+  // The Recipe section's "Generate variants..." (#1313). The Remix dialog is
+  // the grid's, so the lightbox asks for it rather than hosting a second one.
+  "open-remix-dialog",
 ]);
 
 const descriptionPanelRef = ref(null);
@@ -1282,6 +1539,8 @@ const lastTagUpdateKey = ref(0);
 const lastDescriptionUpdateKey = ref(0);
 const lastSmartScoreUpdateKey = ref(0);
 const lastDetectionUpdateKey = ref(0);
+const lastTextUpdateKey = ref(0);
+const lastOrientationUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
 const comfyuiMenuOpen = ref(false);
 const pluginMenuOpen = ref(false);
@@ -1320,14 +1579,27 @@ const currentLockReason = computed(() =>
 // orientation and writes the next one, so two in flight over one picture race,
 // and one of the turns is silently lost. A chain gives both properties.
 let rotateQueue = Promise.resolve();
-const rotateMetadataInFlightImageIds = new Set();
+// How many byte-change metadata reads are in flight per picture id. A COUNT,
+// not a set of ids: the overlay's own rotate and the echo of that same rotate
+// arriving over the socket can both be reading one picture at once, and with a
+// bare set whichever finished first cleared the marker while the other was
+// still out - dropping the cold-open unpin guard the later read was there to
+// satisfy.
+const rotateMetadataInFlightByImageId = new Map();
+
+function isRotateMetadataInFlight(imageIdKey) {
+  return (rotateMetadataInFlightByImageId.get(imageIdKey) || 0) > 0;
+}
 
 /** Why the rotate controls are greyed, or `null` when they are live. */
 const rotateDisabledReason = computed(() =>
   image.value ? rotateBlockReason([image.value]) : null,
 );
 const canRotateCurrent = computed(
-  () => !isReadOnly.value && !isCurrentLocked.value && canRotateInPlace(image.value),
+  () =>
+    !isReadOnly.value &&
+    !isCurrentLocked.value &&
+    canRotateInPlace(image.value),
 );
 
 /**
@@ -1347,6 +1619,56 @@ const rotateLeftTitle = computed(() => rotateTitle("left", "["));
 const rotateRightTitle = computed(() => rotateTitle("right", "]"));
 
 /**
+ * Re-read everything a rewrite of one picture's bytes invalidates.
+ *
+ * Shared by the rotate made HERE and by the `orientationUpdate` signal that carries
+ * one made anywhere else (an undo or redo, another tab), so the two can never
+ * disagree about what a turn costs:
+ *
+ *   * **metadata**, always. `orientation` moves and `mediaVersion` rebuilds the
+ *     `<img>`'s cache-buster; a rotate leaves the pixels exactly where they
+ *     were, so the orientation is the ONLY thing that can tell the browser the
+ *     file it decoded is now sideways. Counted in
+ *     `rotateMetadataInFlightByImageId` for the duration, so a cold-opened card
+ *     pinned at `orientation: null` unpins on the value this read brings back
+ *     rather than keeping the URL it was pinned to;
+ *   * the **face and detection boxes** and the **text**. The boxes are drawn in
+ *     the file's own coordinate space, which the turn just redefined, and the
+ *     server drops the text on a turn. Re-read rather than transformed here:
+ *     whatever the server now reports is what every other surface draws.
+ *
+ * Both callers KNOW a turn happened rather than inferring one - `runRotate`
+ * from the ids the server said it turned, the watcher from the event's
+ * `orientation` field. An earlier version compared the orientation before and
+ * after the metadata read instead, which was wrong three ways: the shared
+ * `metadataRequestId` can discard that read (leaving the lightbox stale with
+ * no retry), navigating away and back rebuilds `image.value` under it, and a
+ * NULL orientation - every video, and any row the backfill has not reached -
+ * read as "turned" and re-read everything for changes that turned nothing.
+ *
+ * @param {number|string} imageId - the picture that was turned.
+ * @returns {Promise<void>} settles once the metadata read has landed.
+ */
+async function refreshAfterTurn(imageId) {
+  const imageIdKey = String(imageId);
+  rotateMetadataInFlightByImageId.set(
+    imageIdKey,
+    (rotateMetadataInFlightByImageId.get(imageIdKey) || 0) + 1,
+  );
+  try {
+    await fetchOverlayMetadata(imageId);
+  } finally {
+    const left = (rotateMetadataInFlightByImageId.get(imageIdKey) || 1) - 1;
+    if (left > 0) rotateMetadataInFlightByImageId.set(imageIdKey, left);
+    else rotateMetadataInFlightByImageId.delete(imageIdKey);
+  }
+  if (String(image.value?.id) !== imageIdKey) return;
+  fetchFaceBboxes(imageId);
+  fetchDetections(imageId);
+  pictureText.refresh();
+}
+
+/**
  * One 90° step on one picture, plus the three refreshes it owes.
  *
  * They travel three different paths, which is why this is not a one-liner:
@@ -1354,10 +1676,9 @@ const rotateRightTitle = computed(() => rotateTitle("right", "]"));
  *   * the **operation log**, so the receipt narrates the step and offers undo.
  *     Anything the server refused rides that same pill as a second sentence -
  *     a separate notice would be the half the user dismisses;
- *   * the **overlay's own record**, so `orientation` moves and `mediaVersion`
- *     rebuilds the `<img>`'s cache-buster. A rotate leaves the pixels exactly
- *     where they were, so the orientation is the ONLY thing that can tell the
- *     browser the file it decoded is now sideways;
+ *   * the **overlay's own record** - metadata, boxes and text, which
+ *     {@link refreshAfterTurn} owns because a turn made elsewhere costs
+ *     exactly the same reads;
  *   * the **grid card behind us**, whose thumbnail URL carries a version only the
  *     server can recompute. `overlay-change` is the existing channel, and
  *     `fields.pixels` is what tells the grid this was a bitmap change rather
@@ -1380,18 +1701,7 @@ async function runRotate(imageId, direction) {
     // between render and click, or a container the client gate misread). The
     // receipt already says so, so there is nothing left to refresh.
     if (!rotated.includes(String(imageId))) return;
-    const imageIdKey = String(imageId);
-    rotateMetadataInFlightImageIds.add(imageIdKey);
-    try {
-      await fetchOverlayMetadata(imageId);
-    } finally {
-      rotateMetadataInFlightImageIds.delete(imageIdKey);
-    }
-    // The boxes are drawn in the file's own coordinate space, which the turn
-    // just redefined. Re-read rather than transform them here: whatever the
-    // server now reports is what the grid and every other surface will draw.
-    fetchFaceBboxes(imageId);
-    fetchDetections(imageId);
+    await refreshAfterTurn(imageId);
     emit("overlay-change", { imageId, fields: { pixels: true } });
   } catch (e) {
     console.error(`Rotate ${direction} failed for picture ${imageId}`, e);
@@ -1491,14 +1801,20 @@ function persistComfyuiPromptToSession() {
   window.sessionStorage?.setItem(key, value);
 }
 
-// What run_i2i accepts, not workflow_type, until runs use detection (#1307).
+// What run_i2i accepts, not workflow_type: this menu still runs through it,
+// and only a workflow with an input the selection fills. Absent reads as
+// offered, which is the backend's own default for an unconfigured workflow.
 const takesImagePlaceholder = (workflow) =>
   !workflow?.missing_placeholders?.includes(imagePlaceholderLabel);
+const offeredOnSelection = (workflow) =>
+  workflow?.has_selection_input !== false && takesImagePlaceholder(workflow);
 const validComfyWorkflows = computed(() =>
   (comfyuiWorkflows.value || []).filter(
-    (workflow) => workflow?.valid && takesImagePlaceholder(workflow),
+    (workflow) => workflow?.valid && offeredOnSelection(workflow),
   ),
 );
+// Counted on the placeholder alone: a workflow missing its save node is
+// reported here whatever its inputs are set to.
 const invalidComfyWorkflows = computed(() =>
   (comfyuiWorkflows.value || []).filter(
     (workflow) => !workflow?.valid && takesImagePlaceholder(workflow),
@@ -1509,6 +1825,34 @@ const selectedComfyWorkflow = computed(() =>
     (workflow) => workflow?.name === comfyuiSelectedWorkflow.value,
   ),
 );
+/** The chosen workflow's LoRA slots; empty means it has no LoRA loader. */
+const comfyLoraSlots = computed(
+  () => selectedComfyWorkflow.value?.lora_slots || [],
+);
+
+/**
+ * Where a loader would go, when the chosen workflow has none. Not asked by a
+ * share link: the read is owner-only, and a refusal is not news to them.
+ */
+const comfyLoraInsertionSource = computed(() => {
+  if (isReadOnly.value) return null;
+  const name = selectedComfyWorkflow.value?.name;
+  return name ? { key: name, load: () => getLoraInsertion(name) } : null;
+});
+
+const {
+  adapterSha: comfyAdapterSha,
+  chosenSlot: comfyLoraSlot,
+  adaptersError,
+  adapterOptions: comfyAdapterOptions,
+  slotOptions: comfySlotOptions,
+  canInsert: comfyCanInsert,
+  insertionText: comfyInsertionText,
+  noLoaderText: comfyNoLoraText,
+  resetChoice: resetComfyLoraChoice,
+  body: comfyLoraBody,
+} = useLoraSwap(comfyLoraSlots, comfyLoraInsertionSource);
+
 const selectedComfyUsesCaption = computed(() => {
   const missing = Array.isArray(
     selectedComfyWorkflow.value?.missing_placeholders,
@@ -1675,6 +2019,7 @@ async function runComfyWorkflow() {
       caption: comfyuiCaption.value || "",
       client_id: comfyuiClientId.value || undefined,
       stack: stackI2IOutputs.value,
+      ...comfyLoraBody(),
     };
     const body = await runImageToImage(payload, {
       baseUrl: backendUrl.value,
@@ -1869,9 +2214,9 @@ function buildOverlayExpandedStackImages(stackId, fallbackItem, stackCount) {
     ordered.push(img);
   };
 
-  const orderedIds = sortStackMembers(
-    Array.from(imageById.values()),
-  ).map((img) => String(img.id));
+  const orderedIds = sortStackMembers(Array.from(imageById.values())).map(
+    (img) => String(img.id),
+  );
   for (const id of orderedIds) {
     addImage(imageById.get(String(id)));
   }
@@ -2171,6 +2516,9 @@ watch(image, (newImage, oldImage) => {
   if (newImage?.id === oldImage?.id) return;
   comfyuiCaptionTouched.value = false;
   comfyuiCaption.value = "";
+  // The chosen workflow survives paging to the next picture, so its slots do
+  // not change and nothing else would clear a LoRA picked for the last one.
+  resetComfyLoraChoice();
 });
 
 watch(open, (isOpen) => {
@@ -2188,6 +2536,7 @@ function resetComfyState() {
   comfyuiRunSuccess.value = "";
   comfyuiCaptionTouched.value = false;
   comfyuiCaption.value = "";
+  resetComfyLoraChoice();
 }
 
 function setScore(n) {
@@ -2261,7 +2610,8 @@ function showNextImage() {
  */
 function hasNativeCopyContext(target) {
   if (isTypingTarget(target)) return true;
-  const selection = typeof window === "undefined" ? null : window.getSelection?.();
+  const selection =
+    typeof window === "undefined" ? null : window.getSelection?.();
   return Boolean(selection && !selection.isCollapsed && selection.toString());
 }
 
@@ -2372,6 +2722,9 @@ function handleKeydown(e) {
       handleUserActivity();
       if (!isReadOnly.value) {
         sidebarOpen.value = true;
+        // The field it focuses is on Info, so a reader sitting on Recipe must
+        // be brought back to it rather than given an invisible cursor.
+        sidebarTab.value = "info";
         nextTick(() => tagsPanelRef.value?.beginAddTag());
       }
       return;
@@ -2479,6 +2832,7 @@ function handleKeydown(e) {
   } else if ((e.key === "t" || e.key === "T") && sidebarOpen.value) {
     if (!isReadOnly.value) {
       e.preventDefault();
+      sidebarTab.value = "info";
       tagsPanelRef.value?.beginAddTag();
     }
   } else if (["1", "2", "3", "4", "5"].includes(e.key)) {
@@ -3059,7 +3413,7 @@ watch(
     if (
       pinnedOrientation.value === null &&
       currentKnown !== null &&
-      (rotateMetadataInFlightImageIds.has(String(id)) ||
+      (isRotateMetadataInFlight(String(id)) ||
         (previousKnown !== null && currentKnown !== previousKnown))
     ) {
       pinnedOrientation.value = undefined;
@@ -3483,29 +3837,42 @@ function dedupeDetections(items) {
 
 async function fetchComfyWorkflow(imageId) {
   if (!imageId || !backendUrl.value) return;
+  // Cleared before the request, not after it. This component is not rebuilt as
+  // the lightbox walks the filmstrip, so leaving the last picture's recipe in
+  // place means the Recipe tab reads picture N-1's prompt, models and seed
+  // under picture N until the response lands - and, for a picture with no
+  // workflow, until a 404 that never replaces it.
+  comfyMetadata.value = null;
   const requestId = (comfyWorkflowRequestId += 1);
   const requestedImageId = imageId;
   try {
-    const data = await getPictureWorkflow(imageId, {
-      baseUrl: backendUrl.value,
-    });
+    const data = await getPictureRecipe(imageId, { preflight: false });
     if (comfyWorkflowRequestId !== requestId) return;
     if (!image.value || image.value.id !== requestedImageId) return;
-    comfyMetadata.value = data
-      ? {
-          workflow: data.workflow,
-          isApiFormat: data.is_api_format,
-          summary: data.summary,
-          positive_prompt: data.positive_prompt || null,
-          models: data.models || [],
-          loras: data.loras || [],
-        }
-      : null;
+    // `reason: "no_prompt_chunk"` is the recipe read's honest "this picture was
+    // not generated", not an error - and unlike the workflow read it is a 200,
+    // so the Recipe tab's empty state comes from here rather than from a 404.
+    comfyMetadata.value =
+      data && data.reason !== "no_prompt_chunk"
+        ? {
+            source: data.source || "comfyui",
+            summary: data.summary,
+            positive_prompt: data.positive_prompt || null,
+            negativePrompt: data.negative_prompt || null,
+            // The seed as text: a 64-bit one loses digits as a JS number.
+            seedText: data.seed_text || null,
+            // `model_slots` carries the strengths and the shelf rows that the
+            // flat `models` name list cannot; `inputs` is the resolution lock.
+            modelSlots: data.model_slots || [],
+            settings: data.settings || {},
+            inputs: data.inputs || [],
+            topologyHash: data.topology_hash || null,
+          }
+        : null;
   } catch (e) {
-    // 404 is expected when no ComfyUI workflow is embedded
-    if (e?.response?.status !== 404) {
-      console.error("Failed to fetch ComfyUI workflow:", e);
-    }
+    // The recipe read answers 200 for a picture with no recipe, so a 404 here
+    // means the picture or its file is gone, which is worth a line.
+    console.error("Failed to fetch the picture's recipe:", e);
     if (comfyWorkflowRequestId !== requestId) return;
     comfyMetadata.value = null;
   }
@@ -3579,6 +3946,26 @@ async function fetchOverlayMetadata(imageId) {
       merged.metadata = { ...currentMeta, ...dataMeta };
     }
     image.value = merged;
+    // Carry the orientation into the snapshot frozen on open as well. Every
+    // re-resolve of the picture reads that snapshot - the grid's list refresh
+    // after a rotate, and moving to a neighbour and back - so a stale entry
+    // there puts the pre-rotate `?v=` back on the <img>.
+    const frozen = frozenAllImages.value;
+    const frozenIndex = Array.isArray(frozen)
+      ? frozen.findIndex((item) => String(item?.id) === String(imageId))
+      : -1;
+    if (
+      frozenIndex >= 0 &&
+      merged.orientation != null &&
+      frozen[frozenIndex].orientation !== merged.orientation
+    ) {
+      const next = frozen.slice();
+      next[frozenIndex] = {
+        ...frozen[frozenIndex],
+        orientation: merged.orientation,
+      };
+      frozenAllImages.value = next;
+    }
     void ensureOverlayFilmstripForImage();
     void tagsPanelRef.value?.refetchPredictions(imageId);
   } catch (e) {
@@ -4060,6 +4447,7 @@ function preloadAdjacentImages() {
 }
 
 const comfyMetadata = ref(null);
+
 const facesCollapsed = ref(false);
 
 watch(
@@ -4174,6 +4562,60 @@ watch(
   },
 );
 
+// OCR finished (or was cleared for a re-read) for some pictures. Unlike the
+// detection signal this one is gated on the open picture: a text read is one
+// picture's own task, and its frame names that picture.
+watch(
+  () => textUpdate.value,
+  (payload) => {
+    if (!payload || typeof payload !== "object") return;
+    const nextKey = payload.key || 0;
+    if (!nextKey || nextKey === lastTextUpdateKey.value) return;
+    lastTextUpdateKey.value = nextKey;
+    if (!open.value || !image.value?.id) return;
+    const pictureIds = Array.isArray(payload.pictureIds)
+      ? payload.pictureIds.map((id) => String(id))
+      : [];
+    if (!pictureIds.includes(String(image.value.id))) return;
+    pictureText.refresh();
+  },
+);
+
+// The open picture was TURNED somewhere else: an undo or redo of a rotate
+// (Ctrl+Z, the receipt's Undo, the toolbar), or a rotate made in another tab.
+// Any of those leaves this overlay holding the pre-rotate `orientation`, which
+// is the only thing `fullImageSrc` has to tell the browser the file it already
+// decoded is now sideways - so the picture stayed the wrong way up until the
+// lightbox was closed and reopened.
+//
+// It re-reads through the same `refreshAfterTurn` a rotate made HERE does, so
+// the two origins cannot drift apart. The rotate made here receives its own
+// echo like any other and pays one extra round of requestId-deduped reads for
+// it; suppressing that would need a record of what this tab has already
+// applied, and the `restored` branch in useGridRealtimeSync documents why that
+// bookkeeping is the thing to avoid rather than the duplicate.
+//
+// Gated on the payload's ids, like the text watcher above and unlike the score
+// and detection ones. Their ungating is about two signals coalescing into one
+// watcher flush, which cannot happen to a socket-driven ref: `wsOrientationUpdate`
+// is written at most once per `ws.onmessage`, each message is its own
+// macrotask, and Vue drains the pre-flush queue on the microtask between them.
+watch(
+  () => orientationUpdate.value,
+  (payload) => {
+    if (!payload || typeof payload !== "object") return;
+    const nextKey = payload.key || 0;
+    if (!nextKey || nextKey === lastOrientationUpdateKey.value) return;
+    lastOrientationUpdateKey.value = nextKey;
+    if (!open.value || !image.value?.id) return;
+    const pictureIds = Array.isArray(payload.pictureIds)
+      ? payload.pictureIds.map((id) => String(id))
+      : [];
+    if (!pictureIds.includes(String(image.value.id))) return;
+    void refreshAfterTurn(image.value.id);
+  },
+);
+
 const faceAssignItems = computed(() => {
   const faces = Array.isArray(faceBboxes.value) ? faceBboxes.value : [];
   return faces.map((face, idx) => ({
@@ -4224,6 +4666,12 @@ function getOverlayBoxStyle(bbox, color) {
   };
 }
 
+/** Clicking a box selects its word (shift adds) and brings it into view. */
+function onTextBoxClick(index, event) {
+  pictureText.selectWord(index, Boolean(event?.shiftKey));
+  descriptionPanelRef.value?.revealWord?.(index);
+}
+
 /** Return the keyboard to the overlay once a sidebar edit ends. */
 function focusOverlayCanvas() {
   overlayCanvasRef.value?.focus?.();
@@ -4267,8 +4715,7 @@ function mediaActionInfo(target = null) {
 }
 
 function mediaActionError(err, fallback = "Please try again.") {
-  return (
-    errorDetail(err) || err?.message || String(err || fallback) );
+  return errorDetail(err) || err?.message || String(err || fallback);
 }
 
 function triggerMediaDownload(blob, filename) {
@@ -4340,14 +4787,18 @@ async function saveMediaAs(target = null) {
     if (desktop?.beginMediaSaveAs && desktop?.completeMediaSaveAs) {
       const choice = await desktop.beginMediaSaveAs(info.filename);
       if (choice?.canceled) return false;
-      if (!choice?.saveId) throw new Error("The desktop save dialog did not return a save request.");
+      if (!choice?.saveId)
+        throw new Error(
+          "The desktop save dialog did not return a save request.",
+        );
       try {
         const blob = await fetchOriginalMedia(info);
         const result = await desktop.completeMediaSaveAs(
           choice.saveId,
           await blob.arrayBuffer(),
         );
-        if (!result?.saved) throw new Error("The desktop app did not write the file.");
+        if (!result?.saved)
+          throw new Error("The desktop app did not write the file.");
       } catch (err) {
         await desktop.cancelMediaSaveAs?.(choice.saveId);
         throw err;
@@ -4408,8 +4859,7 @@ function copyAvailability() {
   if (!desktopCapable && !browserCapable) {
     return {
       available: false,
-      reason:
-        "This browser cannot copy image pixels. Save the media instead.",
+      reason: "This browser cannot copy image pixels. Save the media instead.",
     };
   }
   const video = isSupportedVideoFile(getOverlayFormat(image.value));
@@ -4464,7 +4914,8 @@ async function renderMediaPng(target = null) {
     );
   }
   const blob = await canvasToBlob(canvas, "image/png");
-  if (!blob) throw new Error("This browser could not encode the pixels as PNG.");
+  if (!blob)
+    throw new Error("This browser could not encode the pixels as PNG.");
   return blob;
 }
 
@@ -4483,7 +4934,8 @@ async function copyMedia(target = null) {
       const result = await window.pixlstashDesktop.copyPngToClipboard(
         await png.arrayBuffer(),
       );
-      if (!result?.copied) throw new Error("The desktop clipboard rejected the image.");
+      if (!result?.copied)
+        throw new Error("The desktop clipboard rejected the image.");
     } else {
       // Pass the pending PNG promise to ClipboardItem and call write immediately;
       // this preserves the transient user activation required by some browsers.

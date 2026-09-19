@@ -522,7 +522,9 @@ const tmLabelMap = {
   snapshot_identity_scrub: "Snapshot cleanup",
   planner_managed: "Planner task",
   checkpoints_hashed: "Checkpoint Hash",
+  workflows_carded: "Workflow cards",
   text_score: "Text score",
+  text_read: "Text in pictures",
   object_detection: "Object detection",
 };
 
@@ -833,28 +835,38 @@ function clearConfidenceFilters(entries) {
 }
 
 // "Unscored" is not a star, so it maps to its own filter rather than to a score
-// range - the same shape as the smart-score chart's Unscored bucket below.
+// range - the same shape as the smart-score chart's Unscored bucket below. The
+// store lets a range and unscored combine (the filter menu's "include
+// unscored"), but each bar here is one pick, so a bar clears the other kind.
 function isScoreBarActive(label) {
-  if (label === "Unscored") return filterStore.unscoredOnlyFilter;
+  if (label === "Unscored")
+    return (
+      filterStore.unscoredOnlyFilter &&
+      filterStore.minScoreFilter == null &&
+      filterStore.maxScoreFilter == null
+    );
   const n = parseInt(label);
   if (isNaN(n)) return false;
-  return filterStore.minScoreFilter === n && filterStore.maxScoreFilter === n;
+  return (
+    filterStore.minScoreFilter === n &&
+    filterStore.maxScoreFilter === n &&
+    !filterStore.unscoredOnlyFilter
+  );
 }
 
 function handleScoreBarClick(label) {
+  const active = isScoreBarActive(label);
   if (label === "Unscored") {
-    filterStore.unscoredOnlyFilter = !filterStore.unscoredOnlyFilter;
+    filterStore.minScoreFilter = null;
+    filterStore.maxScoreFilter = null;
+    filterStore.unscoredOnlyFilter = !active;
     return;
   }
   const n = parseInt(label);
   if (isNaN(n)) return;
-  if (isScoreBarActive(label)) {
-    filterStore.minScoreFilter = null;
-    filterStore.maxScoreFilter = null;
-  } else {
-    filterStore.minScoreFilter = n;
-    filterStore.maxScoreFilter = n;
-  }
+  filterStore.unscoredOnlyFilter = false;
+  filterStore.minScoreFilter = active ? null : n;
+  filterStore.maxScoreFilter = active ? null : n;
 }
 
 const SMART_SCORE_LABEL_TO_BUCKET = {
@@ -988,6 +1000,7 @@ function isAgreementCellActive(star, bucket) {
   return (
     filterStore.minScoreFilter === star &&
     filterStore.maxScoreFilter === star &&
+    !filterStore.unscoredOnlyFilter &&
     filterStore.smartScoreBucketFilter === bucket
   );
 }
@@ -1014,6 +1027,7 @@ function onAgreementCellClick(star, bucket, row, col) {
     clearAgreementFilter();
     return;
   }
+  filterStore.unscoredOnlyFilter = false;
   filterStore.minScoreFilter = star;
   filterStore.maxScoreFilter = star;
   filterStore.smartScoreBucketFilter = bucket;
@@ -1968,7 +1982,7 @@ defineExpose({ focusTasksTab });
 
 .stats-error {
   font-size: var(--text-xs);
-  color: rgba(var(--v-theme-error), 1);
+  color: rgba(var(--v-theme-surface-error), 1);
   padding: var(--space-3) 0;
 }
 
@@ -2085,7 +2099,7 @@ defineExpose({ focusTasksTab });
   font-size: var(--text-2xs);
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-pill);
-  border: 1px solid rgba(var(--v-theme-warning), 0.4);
+  border: 1px solid rgba(var(--v-theme-surface-warning), 0.4);
   color: rgba(var(--v-theme-on-surface), 0.45);
   transition:
     background 0.12s,
@@ -2095,13 +2109,13 @@ defineExpose({ focusTasksTab });
 }
 .penalised-toggle:hover {
   background: rgba(var(--v-theme-warning), 0.1);
-  color: rgba(var(--v-theme-warning), 1);
-  border-color: rgba(var(--v-theme-warning), 0.7);
+  color: rgba(var(--v-theme-surface-warning), 1);
+  border-color: rgba(var(--v-theme-surface-warning), 0.7);
 }
 .penalised-toggle.active {
   background: rgba(var(--v-theme-warning), 0.18);
-  color: rgba(var(--v-theme-warning), 1);
-  border-color: rgba(var(--v-theme-warning), 0.7);
+  color: rgba(var(--v-theme-surface-warning), 1);
+  border-color: rgba(var(--v-theme-surface-warning), 0.7);
 }
 
 .stats-bars {
@@ -2192,7 +2206,7 @@ defineExpose({ focusTasksTab });
 }
 
 .tag-penalised {
-  color: rgba(var(--v-theme-warning), 1);
+  color: rgba(var(--v-theme-surface-warning), 1);
 }
 
 .cooc-sep {
@@ -2284,9 +2298,9 @@ defineExpose({ focusTasksTab });
    agreement, fixed by its position in the grid), OPACITY is how many pictures
    are in it. The hue is redundant with position and every populated cell prints
    its count, so nothing here is carried by colour alone - which is what makes a
-   red/green pair acceptable for colour-blind readers. Status hues come from the
-   theme's own success/warning/error tokens, which are defined per theme, so
-   light and dark each get their tuned value. The fill IS the value, so hover
+   red/green pair acceptable for colour-blind readers. Status hues are the
+   success/warning/error FILLS, one value in both themes, never the lifted
+   `surface-*` text family: the counts below sit on them. The fill IS the value, so hover
    must not change it: hover and focus ring the cell instead. */
 .agreement-cell-rect {
   fill: rgb(var(--v-theme-primary));
@@ -2301,7 +2315,7 @@ defineExpose({ focusTasksTab });
   fill: rgb(var(--v-theme-error));
 }
 /* Once the fill is strong enough to carry it, the count switches to that hue's
-   own label ink (each pairs 4.8:1+ with its fill in both themes). */
+   own label ink (4.57:1+ on its fill, the same in both themes). */
 .agreement-cell--good .agreement-count--on-fill {
   fill: rgb(var(--v-theme-on-success));
 }
@@ -2456,14 +2470,14 @@ defineExpose({ focusTasksTab });
 .tm-status-dot {
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   flex-shrink: 0;
   background: rgba(var(--v-theme-on-surface), 0.2);
 }
 
 .tm-status-dot--running {
-  background: rgb(var(--v-theme-primary));
-  box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.55);
+  background: rgb(var(--v-theme-accent));
+  box-shadow: 0 0 5px rgba(var(--v-theme-accent), 0.55);
   animation: tm-dot-pulse 1.4s ease-in-out infinite;
 }
 
@@ -2499,22 +2513,24 @@ defineExpose({ focusTasksTab });
   border-radius: var(--radius-sm);
 }
 .tm-comfy-abort:hover {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
   background: rgba(var(--v-theme-error), 0.12);
 }
 
 /* ── Tasks tab "busy" indicators ───────────────────────────────────────────── */
+/* Live work wears the accent, not primary: olive is the selection mark (the
+   active tab's underline), and an attention dot is accent (visual-language §12). */
 .tm-tab-icon--busy {
   animation: tm-dot-pulse 1.4s ease-in-out infinite;
-  color: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-accent));
 }
 
 .tm-tab-pulse {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
-  background: rgb(var(--v-theme-primary));
-  box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.6);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-accent));
+  box-shadow: 0 0 5px rgba(var(--v-theme-accent), 0.6);
   animation: tm-dot-pulse 1.4s ease-in-out infinite;
 }
 
@@ -2559,15 +2575,15 @@ defineExpose({ focusTasksTab });
 
 @keyframes tm-import-glow {
   0% {
-    box-shadow: 0 0 0 0 rgba(var(--v-theme-primary), 0.5);
-    border-color: rgba(var(--v-theme-primary), 0.6);
+    box-shadow: 0 0 0 0 rgba(var(--v-theme-accent), 0.5);
+    border-color: rgba(var(--v-theme-accent), 0.6);
   }
   35% {
-    box-shadow: 0 0 0 4px rgba(var(--v-theme-primary), 0.18);
-    border-color: rgba(var(--v-theme-primary), 0.45);
+    box-shadow: 0 0 0 4px rgba(var(--v-theme-accent), 0.18);
+    border-color: rgba(var(--v-theme-accent), 0.45);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(var(--v-theme-primary), 0);
+    box-shadow: 0 0 0 0 rgba(var(--v-theme-accent), 0);
     border-color: rgba(var(--v-theme-on-surface), 0.07);
   }
 }

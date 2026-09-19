@@ -210,11 +210,15 @@
              position learned here holds in Duplicates too. (The model shelf
              writes none and carries no undo - amendment #4.) -->
         <!-- ── Filter button ──────────────────────────────────────── -->
+        <!-- No count badge: the filter strip under the toolbar shows every
+             active filter as a chip. The menu stays open through every choice
+             (close-on-content-click off); Esc, a click outside or the funnel
+             close it. -->
         <v-menu
           v-model="gbFilterMenuOpen"
           :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
+          location="bottom start"
+          origin="top start"
           :offset="8"
           transition="scale-transition"
         >
@@ -223,21 +227,14 @@
               v-bind="menuProps"
               icon="filter"
               chevron
-              :badge="
-                filterStore.activeCount > 0
-                  ? filterStore.activeCount > 99
-                    ? '99+'
-                    : filterStore.activeCount
-                  : null
-              "
-              :active="filterStore.isActive && !gbFilterMenuOpen"
+              :active="filterChipCount > 0 && !gbFilterMenuOpen"
               :open="gbFilterMenuOpen"
               tooltip="Filters"
             />
           </template>
-          <GbFilterPanel
-            :selected-character="props.selectedCharacter"
-            :all-pictures-id="props.allPicturesId"
+          <FilterMenu
+            :count-base-query="props.filterCountBaseQuery"
+            :all-pictures-view="isAllPicturesView"
             :open="gbFilterMenuOpen"
           />
         </v-menu>
@@ -469,35 +466,20 @@
             "
           />
         </v-menu>
-        <!-- ── Toolbar: ComfyUI T2I ──────────────────────────────────── -->
-        <v-menu
+        <!-- ── Toolbar: run a workflow that takes no selection (#1307). The
+             run panel opens in the inspector rail, so the grid stays usable. -->
+        <AppBarButton
           v-if="filterStore.comfyuiConfigured"
-          v-model="tbComfyuiMenuOpen"
-          :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
-          :offset="8"
-          transition="scale-transition"
-        >
-          <template #activator="{ props: menuProps }">
-            <AppBarButton
-              v-bind="menuProps"
-              class="tb-fold-700"
-              icon="image-plus-outline"
-              :open="tbComfyuiMenuOpen"
-              :disabled="isReadOnly"
-              tooltip="Generate new image with ComfyUI from a text prompt"
-              aria-label="Generate new image with ComfyUI"
-            />
-          </template>
-          <TbComfyPanel
-            :open="tbComfyuiMenuOpen"
-            @run-grid="
-              emit('comfyui-run-grid', $event);
-              tbComfyuiMenuOpen = false;
-            "
-          />
-        </v-menu>
+          class="tb-fold-700"
+          icon="image-plus-outline"
+          :active="
+            workflowRunStore.open && workflowRunStore.origin === FROM_TOOLBAR
+          "
+          :disabled="isReadOnly"
+          tooltip="Generate new pictures with a ComfyUI workflow"
+          aria-label="Generate new pictures with a ComfyUI workflow"
+          @click="workflowRunStore.openFor(FROM_TOOLBAR)"
+        />
         <!-- ── The ⋯ overflow (amendment #2 in docs/design/
              toolbar-responsive-decisions.md): a burger may only collapse
              controls from its OWN visual group, and it stands where those
@@ -543,7 +525,7 @@
               :disabled="isReadOnly"
               @click="
                 close();
-                tbComfyuiMenuOpen = true;
+                workflowRunStore.openFor(FROM_TOOLBAR);
               "
             >
               <v-icon class="ctx-icon">mdi-image-plus-outline</v-icon>
@@ -592,7 +574,7 @@
         <UndoControl />
         <!-- ── Toolbar: Settings + stats toggle (shared with the duplicates
              queue, which is why they live in their own component). Never
-             folds (amendment #2); the activity dot stays first-class on the
+             folds (amendment #2); the activity light stays first-class on the
              Stats button at every width. -->
         <TbGlobalActions @open-settings="emit('open-settings')" />
       </div>
@@ -612,13 +594,17 @@ import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import {
+  FROM_TOOLBAR,
+  useWorkflowRunStore,
+} from "../../stores/useWorkflowRunStore";
+import {
   MAX_THUMBNAIL_SIZE_LEVEL,
   DEFAULT_THUMBNAIL_SIZE_LEVEL,
   sizeLabelForLevel,
 } from "../../utils/thumbnailSizes";
-import GbFilterPanel from "./GbFilterPanel.vue";
+import FilterMenu from "./FilterMenu.vue";
+import { filterChips } from "../../utils/filterChips";
 import TbGlobalActions from "./TbGlobalActions.vue";
-import TbComfyPanel from "./TbComfyPanel.vue";
 import TbExportPanel from "./TbExportPanel.vue";
 import TbImportPanel from "./TbImportPanel.vue";
 import TbOverflowMenu from "./TbOverflowMenu.vue";
@@ -635,10 +621,11 @@ const props = defineProps({
   allPicturesId: { type: String, required: true },
   backendUrl: { type: String, default: () => API_BASE_URL },
   comfyuiConfigured: { type: Boolean, default: false },
+  // The grid's view with no filters, for the filter menu's counts.
+  filterCountBaseQuery: { type: String, default: null },
 });
 
 const emit = defineEmits([
-  "comfyui-run-grid",
   "expand-all-stacks",
   "collapse-all-stacks",
   "confirm-export-zip",
@@ -728,7 +715,7 @@ function exportActionLabel(idle) {
   return `Export ${count} picture${count === 1 ? "" : "s"} to zip`;
 }
 
-const tbComfyuiMenuOpen = ref(false);
+const workflowRunStore = useWorkflowRunStore();
 // ── Grid Bar: Sort ─────────────────────────────────────────────────────────────
 const SIMILARITY_SORT_KEY_GB = "CHARACTER_LIKENESS";
 const LIKENESS_GROUPS_SORT_KEY_GB = "LIKENESS_GROUPS";
@@ -988,6 +975,17 @@ const gbSortTypeIcon = computed(() => {
 
 // ── Grid Bar: Filter ───────────────────────────────────────────────────────────
 const gbFilterMenuOpen = ref(false);
+// The funnel is lit exactly when the strip has a chip: the chips are the one
+// answer to "which filters are on", so the two cannot disagree.
+const isAllPicturesView = computed(
+  () =>
+    String(props.selectedCharacter ?? "") === String(props.allPicturesId ?? ""),
+);
+const filterChipCount = computed(
+  () =>
+    filterChips(filterStore, { allPicturesView: isAllPicturesView.value })
+      .length,
+);
 
 // ── Grid Bar: View ─────────────────────────────────────────────────────────────
 const gbViewMenuOpen = ref(false);

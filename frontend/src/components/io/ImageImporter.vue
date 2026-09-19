@@ -308,7 +308,7 @@ function finalizeError(message) {
   importActive.value = false;
   if (transitioned && importRunId) {
     // Phase B failure: the dialog is already gone. Surface it on the task row,
-    // which the toolbar activity dot / Tasks-tab pulse point the user to.
+    // which the toolbar activity light / Tasks-tab pulse point the user to.
     tasksStore.setImportRun(importRunId, {
       status: "failed",
       percent: 0,
@@ -1062,7 +1062,7 @@ defineExpose({ startImport });
 }
 
 .note-icon--error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .note-title {
@@ -1093,7 +1093,7 @@ defineExpose({ startImport });
 }
 
 .stall {
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .bar-track {

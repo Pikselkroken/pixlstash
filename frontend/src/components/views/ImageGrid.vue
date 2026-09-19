@@ -9,6 +9,8 @@
     :descriptionUpdate="wsStore.wsDescriptionUpdate"
     :smartScoreUpdate="wsStore.wsSmartScoreUpdate"
     :detectionUpdate="wsStore.wsDetectionUpdate"
+    :textUpdate="wsStore.wsTextUpdate"
+    :orientationUpdate="wsStore.wsOrientationUpdate"
     :hiddenTags="userPrefsStore.hiddenTags"
     :applyTagFilter="userPrefsStore.applyTagFilter"
     :dateFormat="userPrefsStore.dateFormat"
@@ -34,6 +36,7 @@
     @run-plugin="handlePluginRunRequest"
     @request-context-menu="handleOverlayContextMenuRequest"
     @character-created="emit('refresh-sidebar')"
+    @open-remix-dialog="openRemixDialog"
   />
   <ImageImporter
     ref="imageImporterRef"
@@ -49,7 +52,7 @@
       :selectedSort="sortStore.selectedSort"
       :allPicturesId="String(ALL_PICTURES_ID)"
       :comfyui-configured="filterStore.comfyuiConfigured"
-      @comfyui-run-grid="runComfyuiOnGridImages"
+      :filter-count-base-query="filterCountBaseQuery"
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
       @open-duplicates="emit('open-duplicates')"
@@ -58,6 +61,10 @@
       @local-import="emit('local-import', $event)"
       @confirm-export-zip="emit('confirm-export-zip')"
       @confirm-export-folder="emit('confirm-export-folder', $event)"
+    />
+    <FilterStrip
+      :count-base-query="filterCountBaseQuery"
+      :all-pictures-view="isAllPicturesFilterView"
     />
     <!-- ── Visible range pill ── -->
     <transition name="grid-range-fade">
@@ -282,8 +289,11 @@
       :loading="keepCoverOnlyLoading"
       :preview-failed="keepCoverOnlyPreviewFailed"
       :busy="keepCoverOnlyBusy"
+      :keep-recipes="keepCoverOnlyRecipes"
+      :keep-every-ghost="keepEveryGhost"
       @close="closeKeepCoverOnly"
       @confirm="runKeepCoverOnly"
+      @update:keep-every-ghost="setKeepEveryGhost"
     />
     <div
       v-if="isMultiCharacterView || isSetOverlapView"
@@ -386,11 +396,7 @@
       :selectNewestStackMember="selectNewestStackMember"
       @refresh-grid="onComfyuiRefreshGrid"
       @refresh-sidebar="emit('refresh-sidebar')"
-      @update:overlayImageId="
-        (id) => {
-          overlayImageId.value = id;
-        }
-      "
+      @update:overlayImageId="moveOverlayTo"
     />
 
     <ProgressOverlay
@@ -481,7 +487,7 @@
       <LibraryEmptyState
         v-if="showLibraryEmptyState"
         @choose-folder="emit('choose-folder')"
-        @connect-comfyui="emit('open-settings', 'workflows')"
+        @connect-comfyui="emit('open-settings', 'compute')"
         @add-files="importChosenFiles"
       />
       <div v-else-if="showEmptyState" class="empty-state">
@@ -1069,6 +1075,9 @@
           :assign-from-selection="faceSearchAssignFromSelection"
           :assign-busy="faceSearchAssignBusy"
           :owns-escape="!showSelectionBar"
+          :text-match-count="textMatchCount"
+          :text-matches-only="searchStore.textMatchesOnly"
+          @update:text-matches-only="handleTextMatchesOnly"
           @update:min-refs="handleFaceSearchMinRefs"
           @update:threshold="handleFaceSearchThreshold"
           @assign="handleAssignFaceSearchResults"
@@ -1089,7 +1098,6 @@
           :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
           :selected-image-ids="selectedImageIds"
           :selected-media-support="selectedMediaSupport"
-          :comfyui-client-id="comfyuiClientId"
           :comfyui-configured="filterStore.comfyuiConfigured"
           :show-remove-from-stack="showRemoveFromStack"
           :selected-multiple-stack-ids="selectedMultipleStackIds"
@@ -1118,7 +1126,6 @@
           @dissolve-stacks="dissolveSelectedStacks"
           @create-stacks-from-groups="createStacksFromSelectedGroups"
           @run-plugin="handlePluginRunRequest"
-          @comfyui-run="handleComfyuiRun"
           @tags-applied="handleTagsApplied"
           @auto-tag="handleAutoTag"
           @generate-description="handleGenerateDescription"
@@ -1169,12 +1176,17 @@ import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
+import {
+  FROM_SELECTION,
+  useWorkflowRunStore,
+} from "../../stores/useWorkflowRunStore";
 import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionStore";
 import {
   GHOST_PENDING,
   useOperationStore,
 } from "../../stores/useOperationStore";
 import { useNoticeStore, DEFAULT_TIMEOUTS } from "../../stores/useNoticeStore";
+import { confirmRetag } from "../../composables/confirmRetag";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
 import {
   useAnchorHeight,
@@ -1211,6 +1223,8 @@ import {
 import ImageImporter from "../io/ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
 import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
+import FilterStrip from "../panels/FilterStrip.vue";
+import { filterChips } from "../../utils/filterChips";
 import Toolbar from "../panels/Toolbar.vue";
 import SelectionBar from "../panels/SelectionBar.vue";
 import GridActionPill from "../panels/GridActionPill.vue";
@@ -1301,7 +1315,6 @@ import {
 } from "../../api/pictureSets";
 import { getSharedPictureIds, revokeTokensByResource } from "../../api/users";
 import { listTaggers } from "../../api/taggers";
-import { runTextToImage } from "../../api/comfyui";
 import {
   faceBoxColor,
   formatUserDate,
@@ -1554,6 +1567,10 @@ const faceSearchRanked = ref(null);
 // and this is what keeps the arming click itself from counting as one.
 const faceSearchArmedView = ref(null);
 const faceSearchAssignBusy = ref(false);
+// The last text search's response, { key, query, rows }: each row carries
+// `text_match`, so the result pill's "In text" switch can narrow the grid
+// without searching again.
+const textSearchResults = ref(null);
 const sharedPictureIds = ref(new Set());
 const revokeSharesDialogOpen = ref(false);
 const revokeSharesPending = ref(null); // { pictureId }
@@ -1777,6 +1794,7 @@ async function handleAutoTag({ model } = {}) {
     .map((id) => Number(id))
     .filter((id) => Number.isFinite(id) && id > 0);
   if (!ids.length || !props.backendUrl) return;
+  if (!(await confirmRetag(ids.length))) return;
   try {
     // One request marks the whole selection. No grid reload: the backend's
     // origin-stamped tags_changed event already refreshes a tag-filtered grid,
@@ -1884,7 +1902,7 @@ async function runPluginWithParameters(
       if (newIds.length) {
         triggerNewImageHighlight(newIds);
         if (overlayOpen.value) {
-          overlayImageId.value = newIds[newIds.length - 1];
+          moveOverlayTo(newIds[newIds.length - 1]);
         }
       }
     }
@@ -2013,55 +2031,26 @@ function openRemixDialog(pictureId) {
   remixDialogOpen.value = true;
 }
 
-async function runComfyuiOnGridImages({
-  workflowName,
-  caption = "",
-  seedMode = "random",
-  seed = 0,
-} = {}) {
-  if (!workflowName || !props.backendUrl) return;
-  try {
-    // Build view context so the generated picture is assigned to the current
-    // set / project / character automatically.
-    const contextSetId = primarySelectedSetId.value ?? undefined;
-    const contextProjectId =
-      projectStore.selectedProjectId != null
-        ? projectStore.selectedProjectId
-        : undefined;
-    const rawChar = selectionStore.selectedCharacter;
-    const specialIds = [
-      ALL_PICTURES_ID,
-      UNASSIGNED_PICTURES_ID,
-      SCRAPHEAP_PICTURES_ID,
-    ].map((v) => String(v ?? "").toUpperCase());
-    const charNum =
-      rawChar != null && !specialIds.includes(String(rawChar).toUpperCase())
-        ? Number(rawChar)
-        : NaN;
-    const contextCharacterId =
-      Number.isFinite(charNum) && charNum > 0 ? charNum : undefined;
-
-    const payload = {
-      workflow_name: workflowName,
-      caption: caption || "",
-      client_id: comfyuiClientId.value || undefined,
-      seed_mode: seedMode,
-      seed: seedMode === "fixed" ? seed : undefined,
-      source_picture_id:
-        selectedImageIds.value.length === 1
-          ? selectedImageIds.value[0]
-          : undefined,
-      set_id: contextSetId,
-      project_id: contextProjectId,
-      character_id: contextCharacterId,
-    };
-    const body = await runTextToImage(payload);
-    const prompts = Array.isArray(body?.prompts) ? body.prompts : [];
-    handleComfyuiRun({ prompts });
-  } catch (err) {
-    console.error("ComfyUI T2I run failed:", err);
-  }
-}
+// What a run with no selection files its output into: the set, project and
+// character in view. Fed to the run panel, which lives in the rail (#1307).
+const runViewContext = computed(() => {
+  const rawChar = selectionStore.selectedCharacter;
+  const specialIds = [
+    ALL_PICTURES_ID,
+    UNASSIGNED_PICTURES_ID,
+    SCRAPHEAP_PICTURES_ID,
+  ].map((v) => String(v ?? "").toUpperCase());
+  const charNum =
+    rawChar != null && !specialIds.includes(String(rawChar).toUpperCase())
+      ? Number(rawChar)
+      : NaN;
+  return {
+    client_id: comfyuiClientId.value || undefined,
+    set_id: primarySelectedSetId.value ?? undefined,
+    project_id: projectStore.selectedProjectId ?? undefined,
+    character_id: Number.isFinite(charNum) && charNum > 0 ? charNum : undefined,
+  };
+});
 
 function onComfyuiRefreshGrid() {
   // The new grid card for an in-app ComfyUI result now arrives via the
@@ -3915,6 +3904,7 @@ async function deleteSelected(idsOverride = null) {
 
 /** The dotted op type the backend records, so the receipt note can match it. */
 const KEEP_COVER_ONLY_OP_TYPE = "stack.keep_cover_only";
+const KEEP_RECIPES_ONLY_OP_TYPE = "stack.keep_recipes_only";
 
 const keepCoverOnlyOpen = ref(false);
 const keepCoverOnlyPreview = ref(null);
@@ -3930,24 +3920,43 @@ const keepCoverOnlyBusy = ref(false);
  * agreed to.
  */
 const keepCoverOnlyTargetStackIds = ref([]);
+/** Keep recipes only (#1315): the same dialog and routes, narrower moves. */
+const keepCoverOnlyRecipes = ref(false);
+/** The dialog's keep-every-ghost box; re-previews when it changes. */
+const keepEveryGhost = ref(false);
 // Guards a preview that lands after its dialog was closed or reopened.
 let keepCoverOnlyRunToken = 0;
 
-async function openKeepCoverOnly() {
+async function openKeepCoverOnly(options) {
   if (isReadOnly.value || keepCoverOnlyBusy.value) return;
   const stackIds = keepCoverOnlyStacks.value
     .map((stack) => Number(stack.id))
     .filter((id) => Number.isFinite(id));
   if (!stackIds.length) return;
   keepCoverOnlyTargetStackIds.value = stackIds;
+  keepCoverOnlyRecipes.value = !!options?.keepRecipes;
+  keepEveryGhost.value = false;
+  keepCoverOnlyOpen.value = true;
+  await loadKeepCoverOnlyPreview();
+}
+
+function setKeepEveryGhost(value) {
+  if (keepCoverOnlyBusy.value) return;
+  keepEveryGhost.value = !!value;
+  loadKeepCoverOnlyPreview();
+}
+
+async function loadKeepCoverOnlyPreview() {
+  const stackIds = keepCoverOnlyTargetStackIds.value;
   keepCoverOnlyPreview.value = null;
   keepCoverOnlyPreviewFailed.value = false;
   keepCoverOnlyLoading.value = true;
-  keepCoverOnlyOpen.value = true;
   const token = ++keepCoverOnlyRunToken;
   try {
     const report = await previewKeepCoverOnly({
       stackIds,
+      keepRecipes: keepCoverOnlyRecipes.value,
+      keepEveryGhost: keepEveryGhost.value,
     });
     if (token !== keepCoverOnlyRunToken) return;
     keepCoverOnlyPreview.value = report;
@@ -3975,15 +3984,27 @@ function closeKeepCoverOnly() {
   keepCoverOnlyLoading.value = false;
   keepCoverOnlyPreviewFailed.value = false;
   keepCoverOnlyTargetStackIds.value = [];
+  keepCoverOnlyRecipes.value = false;
+  keepEveryGhost.value = false;
 }
 
 async function runKeepCoverOnly() {
   const stackIds = keepCoverOnlyTargetStackIds.value;
   if (!stackIds.length || keepCoverOnlyBusy.value) return;
   keepCoverOnlyBusy.value = true;
+  const keepRecipes = keepCoverOnlyRecipes.value;
   try {
     const result = await keepCoverOnly({
       stackIds,
+      keepRecipes,
+      keepEveryGhost: keepEveryGhost.value,
+      // What the button's figure was computed from. Keep recipes only is the
+      // first mode whose inputs move while the dialog is open (a background
+      // finder writes a thumbnail, an import covers an instance hash), so the
+      // server refuses with a 409 rather than move more than was confirmed.
+      expectedPictureIds: keepRecipes
+        ? keepCoverOnlyPreview.value?.picture_ids_moving
+        : undefined,
     });
     const movedIds = Array.isArray(result?.picture_ids_moved)
       ? result.picture_ids_moved
@@ -4000,7 +4021,7 @@ async function runKeepCoverOnly() {
     // What the run deliberately left alone rides the SAME pill as what it did,
     // as a second sentence, rather than a notice competing with it.
     operationStore.noteNextReceipt(
-      KEEP_COVER_ONLY_OP_TYPE,
+      keepRecipes ? KEEP_RECIPES_ONLY_OP_TYPE : KEEP_COVER_ONLY_OP_TYPE,
       keepCoverOnlySkipNote(result),
     );
     // Raises "Kept the cover of N stacks · M pictures to the Scrapheap · Undo".
@@ -4018,7 +4039,23 @@ async function runKeepCoverOnly() {
     keepCoverOnlyOpen.value = false;
     keepCoverOnlyPreview.value = null;
     keepCoverOnlyTargetStackIds.value = [];
+    keepCoverOnlyRecipes.value = false;
+    keepEveryGhost.value = false;
   } catch (err) {
+    if (err?.response?.status === 409) {
+      // More pictures qualified while the dialog was open. Nothing was moved:
+      // re-run the preview so the user confirms the figure that is now true.
+      console.warn(
+        `Keep recipes only: the plan grew for stacks [${stackIds.join(", ")}]`,
+        err,
+      );
+      noticeStore.warning(
+        "More pictures can be made again than when this was opened, so nothing was moved. Check the new count and confirm again.",
+        { key: "keep-cover-only" },
+      );
+      await loadKeepCoverOnlyPreview();
+      return;
+    }
     console.error(
       `Keep cover only failed for stacks [${stackIds.join(", ")}]`,
       err,
@@ -4676,11 +4713,31 @@ const searchStatus = computed(() => {
     ? ""
     : ` in ${props.activeCategoryLabel}`;
   const forQuery = query ? ` for "${query}"` : "";
+  const noun = searchStore.textMatchesOnly ? "matches in text" : "matches";
   if (total === 0) {
-    return { count: null, label: `No matches${forQuery}${scope}` };
+    return { count: null, label: `No ${noun}${forQuery}${scope}` };
   }
-  return { count: total, label: `matches${forQuery}${scope}` };
+  return { count: total, label: `${noun}${forQuery}${scope}` };
 });
+
+/**
+ * How many of the current text search's results matched text in the picture.
+ * Zero outside a text search, which is what keeps the pill's switch away.
+ */
+const textMatchCount = computed(() => {
+  const query = (searchStore.searchQuery || "").trim();
+  const cached = textSearchResults.value;
+  if (!query || cached?.query !== query) return 0;
+  return cached.rows.filter((row) => row?.text_match === true).length;
+});
+
+/** The result pill's All / In text switch: re-cut the rows already fetched. */
+function handleTextMatchesOnly(value) {
+  searchStore.textMatchesOnly = value === true;
+  fetchAllGridImages({ textMatchRecut: true }).then(() =>
+    updateVisibleThumbnails(),
+  );
+}
 
 /**
  * Focus rescue. GridActionPill raises this when the half holding focus is about
@@ -4866,12 +4923,29 @@ const showScrapheapBar = computed(() => {
   return isScrapheapView.value;
 });
 const SCRAPHEAP_BAR_HEIGHT_PX = 30;
-const wrapperStyle = { position: "relative", height: "100%" };
+// The filter strip sits under the toolbar while any filter is on, and what
+// hangs off --selbar-height moves down by its height.
+const isAllPicturesFilterView = computed(
+  () => String(selectionStore.selectedCharacter) === String(ALL_PICTURES_ID),
+);
+const filterStripVisible = computed(
+  () =>
+    filterChips(filterStore, {
+      allPicturesView: isAllPicturesFilterView.value,
+    }).length > 0,
+);
+const wrapperStyle = computed(() => ({
+  position: "relative",
+  height: "100%",
+  "--filter-strip-h": filterStripVisible.value
+    ? "var(--toolbar-height)"
+    : "0px",
+}));
 const scrollWrapperStyle = computed(() => ({
   position: "absolute",
   top: showScrapheapBar.value
-    ? `calc(var(--selbar-height, 48px) + ${SCRAPHEAP_BAR_HEIGHT_PX}px)`
-    : "var(--selbar-height, 48px)",
+    ? `calc(var(--selbar-height, 48px) + var(--filter-strip-h, 0px) + ${SCRAPHEAP_BAR_HEIGHT_PX}px)`
+    : "calc(var(--selbar-height, 48px) + var(--filter-strip-h, 0px))",
   left: "0",
   right: "0",
   bottom: "0",
@@ -5376,6 +5450,33 @@ const {
   clearSelection,
 } = useMultiSelect();
 
+// The run panel sits in App's rail, outside the grid: it reads the live
+// selection, the view context and the progress runner from here (#1307).
+const workflowRunStore = useWorkflowRunStore();
+watch(
+  selectedImageIds,
+  (ids) => {
+    workflowRunStore.selectionIds = (ids || [])
+      .map((id) => Number(getPictureId(id)))
+      .filter((id) => Number.isFinite(id) && id > 0);
+  },
+  { immediate: true, deep: true },
+);
+watch(
+  runViewContext,
+  (context) => {
+    workflowRunStore.context = context;
+  },
+  { immediate: true },
+);
+const detachWorkflowRunner = workflowRunStore.attachRunner(handleComfyuiRun);
+onUnmounted(() => {
+  detachWorkflowRunner();
+  // No grid, no selection to run on and no runner to follow the run.
+  workflowRunStore.close();
+  workflowRunStore.selectionIds = [];
+});
+
 // The locked-delete cards (`showLockedDeleteNotice`) are scoped to the context
 // they describe: the sentence is about THIS selection in THIS view, and it
 // carries an action, so it is sticky and nothing would otherwise take it down.
@@ -5542,6 +5643,16 @@ function _pushOverlayRoute(id) {
   _overlayRouter.replace({ query }).finally(() => {
     _overlayRoutePushPending = false;
   });
+}
+
+// Moving the open overlay is two writes, not one: the id the overlay renders
+// from AND the `?overlay=` query the lightbox is addressable by (§7). Three
+// call sites move it - opening one, a plugin run creating a picture, a ComfyUI
+// run stacking one - and the two that only wrote the id left the URL pointing
+// at the previous picture, so a reload or a shared link went back to it.
+function moveOverlayTo(id) {
+  overlayImageId.value = id;
+  _pushOverlayRoute(id);
 }
 
 function _removeOverlayRoute() {
@@ -5802,6 +5913,7 @@ const {
   smartScoreLoadingVisible,
   buildGridFetchKey,
   buildPictureIdsQueryParams,
+  buildFilterCountBaseQuery,
   fetchAllGridImages,
   fetchAllPicturesCount,
   debouncedFetchAllGridImages,
@@ -5840,6 +5952,7 @@ const {
     faceSearchThreshold,
     faceSearchMinRefs,
     faceSearchRanked,
+    textSearchResults,
   },
   props,
   {
@@ -5861,6 +5974,9 @@ const {
     onGridFetchDone,
   },
 );
+// The view with no filters: the filter menu counts against it, and the strip
+// shows its size as the "of N".
+const filterCountBaseQuery = computed(() => buildFilterCountBaseQuery());
 
 // ── Character membership undo/redo must reconcile a character grid ───
 // The history endpoint changes the face metadata and the operation store updates
@@ -6379,9 +6495,8 @@ async function openOverlay(img) {
   overlayInitialExpandedStackIds.value = Array.from(
     expandedStackIds.value || [],
   );
-  overlayImageId.value = img.id;
   overlayOpen.value = true;
-  _pushOverlayRoute(img.id);
+  moveOverlayTo(img.id);
   markEnd("pixlstash:interaction-open-picture");
 }
 
@@ -7506,7 +7621,7 @@ function handleContextMenuOpenPluginPanel() {
 }
 
 function handleContextMenuOpenComfyuiPanel() {
-  selectionBarRef.value?.openComfyuiPanel();
+  workflowRunStore.openFor(FROM_SELECTION);
 }
 
 function openSegmentDialog() {
@@ -7750,8 +7865,8 @@ defineExpose({
   isImagesLoading: () => imagesLoading.value,
   isOverlayOpen: () => overlayOpen.value,
   markOverlayDeferredRefresh,
+  hasPendingGridImages,
   clearFaceSelection,
-  runComfyuiOnGridImages,
   hasCursorFocus: computed(() => cursorIdx.value !== null),
   // Lets the sidebar's Scrapheap context menu reach the same consent-gated
   // empty-scrapheap flow the empty-state placeholder uses. The caller navigates
@@ -7773,6 +7888,21 @@ defineExpose({
 function markOverlayDeferredRefresh() {
   if (!overlayOpen.value) return;
   pendingOverlayGridRefresh.value = true;
+}
+
+/**
+ * True when a background fetch has parked a whole grid list for overlay close.
+ *
+ * `closeOverlay` takes that branch first and assigns the parked list WHOLESALE,
+ * clearing the deferral flags with it - so any in-place write made to the live
+ * `allGridImages` while the overlay was open is discarded, with nothing queued
+ * to repair it. A caller that would otherwise write in place (the rotate
+ * applier) asks this first and marks a deferred refresh instead.
+ *
+ * @returns {boolean}
+ */
+function hasPendingGridImages() {
+  return pendingGridImages.value !== null;
 }
 
 // ============================================================
@@ -8513,6 +8643,9 @@ async function handleAssignFaceSearchResults() {
 watch(
   () => searchStore.searchQuery,
   (newVal) => {
+    // The cached response is for the old query; the "In text" re-cut only
+    // ever reuses the current query's, which the fetch writes after this.
+    textSearchResults.value = null;
     if (newVal && newVal.trim()) {
       resetFaceAndImageSearches();
     }

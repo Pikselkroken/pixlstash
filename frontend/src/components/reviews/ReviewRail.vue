@@ -643,7 +643,7 @@ function archivedSummary(a) {
   white-space: nowrap;
 }
 .rs-rail-stale {
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-dark-surface-warning));
 }
 .rs-rail-session-count {
   font-size: var(--text-2xs);
