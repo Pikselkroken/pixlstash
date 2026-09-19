@@ -459,9 +459,16 @@ const watchedPath = computed(
 // `?topology=<hash>` selects the card that topology made and puts the cursor
 // on it, so the link from the lightbox lands on the card rather than at the
 // top of the grid. A topology can hold several cards — a different checkpoint
-// is a different card — and the grid lists one card per stack, so the FIRST in
-// the sorted order is taken: it is the one the reader would have found first
-// anyway.
+// is a different card — so the FIRST in the sorted order is taken: it is the
+// one the reader would have found first anyway.
+//
+// **Only the cards the GRID lists**, which is one per stack. A stack groups by
+// `core_hash`, which strips post-processing, so a member can carry a topology
+// its cover does not, and a link naming that member's topology matches
+// nothing and is left alone rather than landing somewhere arbitrary. Closing
+// that gap needs a topology→card read the API does not have; the shelf had no
+// such gap because it listed every topology as a row of its own. F7 replaces
+// this link with the card's own *Show all N pictures* chip.
 //
 // Honoured once per value rather than on every `cards` change, because the
 // grid is refetched (a file is added, a LoRA slot is flipped) while the query

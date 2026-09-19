@@ -1477,6 +1477,12 @@ watcher the model shelf uses. See §9.1b for the destination itself.
   stays put, and a second application would take focus off whatever the reader
   had moved to. `immediate`, because the store's cards outlive a route change
   and a second visit on the same link has nothing left for the watcher to see.
+  **It matches only the cards the grid lists**, one per stack: a stack groups
+  by `core_hash`, which strips post-processing, so a member can carry a
+  topology its cover does not and a link naming that one matches nothing and
+  is left alone. The shelf had no such gap, listing every topology as a row;
+  closing it needs a topology→card read the API does not have, and F7 replaces
+  the link with the card's own *Show all N pictures* chip.
 - **`--wf-columns` is computed, not `auto-fill`.** A `ResizeObserver` reads the
   grid's `clientWidth` and the count is `floor((width + gap) / (min + gap))`;
   the grid is then TOLD to draw that many columns. The cursor arithmetic, the
