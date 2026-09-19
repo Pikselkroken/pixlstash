@@ -81,9 +81,12 @@
  * open card is marked by its rotated ▸ alone; an olive wash over the band said
  * "selected" about six cards nobody had selected.
  *
- * The Grid|List switch, *Unstack all* and the hidden-member count are not here:
- * the first arrives in F2, and the other two have no route in `develop` to read
- * or write (see the pull request).
+ * The Grid|List switch, *Unstack all* and the hidden-member count are not here.
+ * The switch is F2's. The other two are blocked on the READ side rather than
+ * the write side: B4 (#1396) shipped `POST /workflows/stacks/{id}/unstack`,
+ * but `GET /workflows/cards` serves no `stack_id` to address it by — and it
+ * drops hidden cards BEFORE grouping, so a stack's hidden-member count is not
+ * in the payload at any level. Both want one more field on the card.
  */
 import { computed } from "vue";
 

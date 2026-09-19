@@ -1534,12 +1534,13 @@ same watcher the shelf uses.
   copies. `ImageGrid.css` still owns where it sits in a picture tile's
   stacking order.
 - **Not here, and why.** The Grid|List switch is F2's. *Unstack all* and the
-  panel header's **"N hidden · Show"** have **no route in `develop`**: there is
-  no workflow-card unstack or unhide endpoint (they arrive with B4, #1396), and
-  `GET /workflows/cards` drops hidden cards BEFORE grouping, so a **stack's**
-  hidden-member count is not in the payload at any level. Both are deferred to
-  the step that adds the endpoint rather than drawn as controls that do
-  nothing. The **grid-level** counts are a different number and are shown: the
+  panel header's **"N hidden · Show"** are blocked on the READ side, not the
+  write side: B4 (#1396) shipped `POST /workflows/stacks/{id}/unstack` and
+  `PATCH /workflows/{key}`'s `hidden`, but `GET /workflows/cards` serves no
+  `stack_id` for the first to be addressed by, and it drops hidden cards
+  BEFORE grouping, so a **stack's** hidden-member count is not in the payload
+  at any level. Each wants one more field on the card; until then they are
+  left out rather than drawn as controls that do nothing. The **grid-level** counts are a different number and are shown: the
   toolbar subtitle reads "N workflows · N hidden · N one-offs" from the
   payload's own `hidden` / `one_offs`, and the empty state says which of the
   two it is in rather than announcing "Nothing found yet" over a subtitle
