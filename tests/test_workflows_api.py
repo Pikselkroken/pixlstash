@@ -57,10 +57,13 @@ from pixlstash.hub.workflow_card_reads import (
 )
 from pixlstash.hub.workflow_card_writes import set_stack_order
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, effective_stack_keys
-from pixlstash.hub.workflows import PictureGhost, record_picture_ghosts
+from pixlstash.hub.workflows import PictureGhost, get_document, record_picture_ghosts
 from pixlstash.services.workflow_hash import WorkflowGraphError, asset_reference
 from pixlstash.services import workflow_card_service
-from pixlstash.routes.workflows import UNNAMED_CARD
+import pixlstash.routes.workflows as workflows_routes
+from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
+from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
+from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
 from pixlstash.services.workflow_identity import (
     WORKFLOW_KEY_VERSION,
     guess_mark,
@@ -118,6 +121,11 @@ _WORKFLOW_WRITE_ROUTES = (
     ("POST", "/api/v1/workflows/stacks"),
     ("PUT", "/api/v1/workflows/stacks/{stack_id}/order"),
     ("POST", "/api/v1/workflows/stacks/{stack_id}/unstack"),
+    # The run route and its dry run (v1.12 B7). OWNER_ONLY, which NARROWS the
+    # picture-scoped run routes in comfyui.py: those replay one named
+    # picture's own graph, this resolves one from the whole library.
+    ("POST", "/api/v1/workflows/run"),
+    ("POST", "/api/v1/workflows/run/preflight"),
 )
 
 
@@ -3955,6 +3963,8 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
         ("POST", f"{API}/workflows/stacks", {"keys": [BUSY_CARD, FORGOTTEN_CARD]}),
         ("PUT", f"{API}/workflows/stacks/{stack_id}/order", {"keys": [BUSY_CARD]}),
         ("POST", f"{API}/workflows/stacks/{stack_id}/unstack", None),
+        ("POST", f"{API}/workflows/run", {"workflow_key": BUSY_CARD}),
+        ("POST", f"{API}/workflows/run/preflight", {"workflow_key": BUSY_CARD}),
     ):
         assert_real_route(workflow_env.server.api, method, path)
         r = client.request(method, path, json=body)
@@ -4919,3 +4929,1262 @@ def test_a_picture_input_needs_an_open_library_and_says_so(workflow_env, monkeyp
         ).status_code
         == 503
     )
+
+
+# ===========================================================================
+# Running a card (v1.12 B7) — POST /workflows/run and its pre-flight
+# ===========================================================================
+
+# A card that CAN run, seeded per test beside the fixture's own. The seeded
+# cards deliberately have no save node, which is a reason code rather than a
+# runnable workflow, so one card here carries the whole happy path and every
+# refusal below is measured as a change from it.
+RUN_TOPOLOGY = _h("runtopology")
+RUN_RECIPE = _h("runrecipe")
+RUN_CARD = _h("runcard")
+RUN_CORE = _h("runcore")
+RUN_INSTANCE = _h("runinstance")
+
+RUN_DOCUMENT = {
+    "1": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {"ckpt_name": asset_reference("realvisxl.safetensors")},
+    },
+    "2": {
+        "class_type": "LoraLoader",
+        "inputs": {
+            "lora_name": asset_reference("add_detail.safetensors"),
+            "strength_model": None,
+            "strength_clip": None,
+            "model": ["1", 0],
+        },
+    },
+    "3": {
+        "class_type": "KSampler",
+        "inputs": {"steps": None, "cfg": None, "seed": None, "model": ["2", 0]},
+    },
+    "4": {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": None, "images": ["3", 0]},
+    },
+}
+
+# What a healthy ComfyUI would answer for RUN_DOCUMENT. Every refusal test
+# below takes this and removes exactly one thing, so the reason it asserts is
+# the only difference from a graph that runs.
+RUN_OBJECT_INFO = {
+    "KSampler": {
+        "input": {
+            "required": {
+                "seed": ["INT", {"default": 0}],
+                "steps": ["INT", {"default": 20}],
+                "cfg": ["FLOAT", {"default": 7.0}],
+            }
+        }
+    },
+    "CheckpointLoaderSimple": {
+        "input": {"required": {"ckpt_name": [["realvisxl.safetensors"], {}]}}
+    },
+    "LoraLoader": {
+        "input": {
+            "required": {
+                "lora_name": [["add_detail.safetensors", "other.safetensors"], {}],
+                "strength_model": ["FLOAT", {"default": 1.0}],
+                "strength_clip": ["FLOAT", {"default": 1.0}],
+            }
+        }
+    },
+    "SaveImage": {"input": {"required": {"filename_prefix": ["STRING", {}]}}},
+}
+
+
+# The LoRA on the shelf for the run tests, named so it resolves to the SECOND
+# of the loader's two options: matching the one the graph already holds would
+# pass whether or not the adapter was ever placed.
+RUN_ADAPTER_DIGEST = _h("add-detail-digest")
+RUN_ADAPTER_FILENAME = "other.safetensors"
+
+# The runnable card's picture has CONTENT, unlike the module's other fixtures.
+# A `fixed` picture input names its picture by `pixel_sha`, so without one the
+# "is it still here" read can only ever be asked about a picture that is not,
+# which is the half of that branch that needs no code to pass.
+RUN_PIXEL_SHA = _h("run-one-pixels")
+
+
+def _seed_runnable_card(server) -> int:
+    """Add RUN_CARD, its variant, its instance and one picture on it.
+
+    Written per test rather than into ``_seed_hub``, because a card with a save
+    node changes the grid, the covers and the defaults every other test in this
+    module asserts. Returns that picture's id.
+    """
+    with server.hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE sha256 = ?", (RUN_ADAPTER_DIGEST,))
+        conn.execute(
+            # `kind` is NOT NULL for an adapter by CHECK constraint: every
+            # producer supplies an algorithm, 'unknown' included.
+            "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
+            "VALUES ('adapter', 'unknown', ?, ?, 'scanned')",
+            (RUN_ADAPTER_FILENAME, RUN_ADAPTER_DIGEST),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_topology "
+            "(topology_hash, hash_version, node_count, first_seen_at) "
+            "VALUES (?, 'v1', ?, ?)",
+            (RUN_TOPOLOGY, 4, "2026-09-01T00:00:00Z"),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_topology_core "
+            "(topology_hash, core_hash, core_version, workflow_type, slots) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                RUN_TOPOLOGY,
+                RUN_CORE,
+                CORE_RULE_VERSION,
+                "txt2img",
+                json.dumps(
+                    [
+                        {
+                            "label": slot.label,
+                            "class_type": slot.class_type,
+                            "widget": slot.widget,
+                            "is_lora": slot.is_lora,
+                        }
+                        for slot in slots(RUN_DOCUMENT)
+                    ]
+                ),
+            ),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_recipe "
+            "(structural_hash, topology_hash, hash_version, node_count, first_seen_at) "
+            "VALUES (?, ?, 'v1', ?, ?)",
+            (RUN_RECIPE, RUN_TOPOLOGY, 4, "2026-09-01T00:00:00Z"),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_recipe_graph "
+            "(structural_hash, document_sha256, document, created_at) "
+            "VALUES (?, ?, ?, '2026-09-01T00:00:00Z')",
+            (
+                RUN_RECIPE,
+                hashlib.sha256(json.dumps(RUN_DOCUMENT).encode()).hexdigest(),
+                json.dumps(RUN_DOCUMENT),
+            ),
+        )
+        for widget, filename in (
+            ("ckpt_name", "realvisxl.safetensors"),
+            ("lora_name", "add_detail.safetensors"),
+        ):
+            conn.execute(
+                "INSERT OR REPLACE INTO workflow_recipe_asset "
+                "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
+                (RUN_RECIPE, widget, filename),
+            )
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_variant "
+            "(structural_hash, topology_hash, workflow_key, key_version) "
+            "VALUES (?, ?, ?, ?)",
+            (RUN_RECIPE, RUN_TOPOLOGY, RUN_CARD, WORKFLOW_KEY_VERSION),
+        )
+        instance = json.loads(json.dumps(RUN_DOCUMENT))
+        instance["3"]["inputs"].update({"steps": 24, "cfg": 6.5})
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_recipe_instance "
+            "(library_uuid, instance_hash, structural_hash, hash_version, "
+            "document, first_seen_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                server.vault.library_uuid,
+                RUN_INSTANCE,
+                RUN_RECIPE,
+                "v1",
+                json.dumps(instance),
+                "2026-09-01T00:00:00Z",
+            ),
+        )
+
+    def write(session):
+        picture = Picture(
+            file_path="run_one.png",
+            deleted=False,
+            created_at=_stamp("2026-09-02T00:00:00Z"),
+            score=5,
+            pixel_sha=RUN_PIXEL_SHA,
+            workflow_topology_hash=RUN_TOPOLOGY,
+            workflow_structural_hash=RUN_RECIPE,
+            workflow_instance_hash=RUN_INSTANCE,
+            workflow_hash_version="v1",
+        )
+        session.add(picture)
+        session.commit()
+        return picture.id
+
+    return server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+
+
+# A SECOND runnable card, for the one question a single card cannot ask: the
+# run cap counts every group, and one card can never exceed it because `count`
+# alone is capped by the field.
+RUN_RECIPE_TWO = _h("runrecipetwo")
+RUN_CARD_TWO = _h("runcardtwo")
+RUN_INSTANCE_TWO = _h("runinstancetwo")
+
+
+def _seed_second_runnable_card(server) -> int:
+    """The same graph on a second card, so a selection makes two groups."""
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_recipe "
+            "(structural_hash, topology_hash, hash_version, node_count, first_seen_at) "
+            "VALUES (?, ?, 'v1', ?, ?)",
+            (RUN_RECIPE_TWO, RUN_TOPOLOGY, 4, "2026-09-03T00:00:00Z"),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_recipe_graph "
+            "(structural_hash, document_sha256, document, created_at) "
+            "VALUES (?, ?, ?, '2026-09-03T00:00:00Z')",
+            (
+                RUN_RECIPE_TWO,
+                hashlib.sha256(json.dumps(RUN_DOCUMENT).encode()).hexdigest(),
+                json.dumps(RUN_DOCUMENT),
+            ),
+        )
+        for widget, filename in (
+            ("ckpt_name", "realvisxl.safetensors"),
+            ("lora_name", "add_detail.safetensors"),
+        ):
+            conn.execute(
+                "INSERT OR REPLACE INTO workflow_recipe_asset "
+                "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
+                (RUN_RECIPE_TWO, widget, filename),
+            )
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_variant "
+            "(structural_hash, topology_hash, workflow_key, key_version) "
+            "VALUES (?, ?, ?, ?)",
+            (RUN_RECIPE_TWO, RUN_TOPOLOGY, RUN_CARD_TWO, WORKFLOW_KEY_VERSION),
+        )
+        instance = json.loads(json.dumps(RUN_DOCUMENT))
+        instance["3"]["inputs"].update({"steps": 24, "cfg": 6.5})
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_recipe_instance "
+            "(library_uuid, instance_hash, structural_hash, hash_version, "
+            "document, first_seen_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                server.vault.library_uuid,
+                RUN_INSTANCE_TWO,
+                RUN_RECIPE_TWO,
+                "v1",
+                json.dumps(instance),
+                "2026-09-03T00:00:00Z",
+            ),
+        )
+
+    def write(session):
+        picture = Picture(
+            file_path="run_two.png",
+            deleted=False,
+            created_at=_stamp("2026-09-04T00:00:00Z"),
+            score=5,
+            workflow_topology_hash=RUN_TOPOLOGY,
+            workflow_structural_hash=RUN_RECIPE_TWO,
+            workflow_instance_hash=RUN_INSTANCE_TWO,
+            workflow_hash_version="v1",
+        )
+        session.add(picture)
+        session.commit()
+        return picture.id
+
+    return server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+
+
+@pytest.fixture
+def runnable(workflow_env, monkeypatch):
+    """RUN_CARD seeded, ComfyUI answering, and nothing actually submitted.
+
+    ``_read_object_info`` is patched rather than the HTTP layer because it is
+    the one seam both routes read ComfyUI through, and every reason code below
+    is "this same install, minus one thing".
+    """
+    picture_id = _seed_runnable_card(workflow_env.server)
+    submitted: list[dict] = []
+
+    def fake_submit(base_url, workflow_instance, client_id=None):
+        submitted.append(
+            {"graph": workflow_instance, "client_id": client_id, "url": base_url}
+        )
+        return {"prompt_id": f"prompt-{len(submitted)}"}
+
+    monkeypatch.setattr(workflows_routes, "_submit_comfyui_prompt", fake_submit)
+    # The import worker polls a ComfyUI that is not there; it is a daemon
+    # thread and its failure is not this suite's subject, so it never starts.
+    monkeypatch.setattr(
+        workflows_routes, "_process_comfyui_outputs", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url: (json.loads(json.dumps(RUN_OBJECT_INFO)), None),
+    )
+    return SimpleNamespace(
+        env=workflow_env,
+        owner=workflow_env.owner,
+        server=workflow_env.server,
+        picture_id=picture_id,
+        submitted=submitted,
+        monkeypatch=monkeypatch,
+    )
+
+
+def _reasons(payload) -> set[str]:
+    """Every reason code a plan came back with, across all its groups."""
+    return {
+        reason["code"] for group in payload["groups"] for reason in group["reasons"]
+    }
+
+
+def _preflight(client, **body) -> dict:
+    r = client.post(f"{API}/workflows/run/preflight", json=body)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+# --- the sources -----------------------------------------------------------
+
+
+def test_the_linked_imported_file_is_the_first_source_tried(runnable, monkeypatch):
+    """Tier 1 wins over a picture and over a stored instance.
+
+    It is the only tier that is the workflow AS AUTHORED — the other two are
+    reconstructions — so a card holding one must run that and nothing else.
+    """
+    from_file = json.loads(json.dumps(RUN_DOCUMENT))
+    from_file["3"]["inputs"].update({"steps": 11, "cfg": 1.5, "seed": 5})
+    from_file["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    from_file["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    monkeypatch.setattr(
+        workflows_routes,
+        "_resolve_workflow_path",
+        lambda name: ("/authored.json", "user"),
+    )
+    monkeypatch.setattr(workflows_routes, "_load_workflow_json", lambda path: from_file)
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_file "
+            "(workflow_name, workflow_key, topology_hash, structural_hash) "
+            "VALUES (?, ?, ?, ?)",
+            ("authored.json", RUN_CARD, RUN_TOPOLOGY, RUN_RECIPE),
+        )
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["source"] == "file", r.json()
+    # The file's own values, not the instance document's 24/6.5.
+    assert runnable.submitted[0]["graph"]["3"]["inputs"]["steps"] == 11
+
+
+def test_a_kept_pictures_embedded_graph_is_the_second_source(runnable, monkeypatch):
+    """Tier 2: a real run of the card, with real filenames, off the best picture."""
+    embedded = json.loads(json.dumps(RUN_DOCUMENT))
+    embedded["3"]["inputs"].update({"steps": 33, "cfg": 3.5, "seed": 7})
+    embedded["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    embedded["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    read: list[int] = []
+
+    def fake_embedded(server, picture_id):
+        read.append(picture_id)
+        return embedded
+
+    monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", fake_embedded)
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["source"] == "picture", r.json()
+    # It names WHICH picture answered, and that is the card's best.
+    assert r.json()["groups"][0]["source_picture_id"] == read[0]
+    assert runnable.submitted[0]["graph"]["3"]["inputs"]["steps"] == 33
+
+
+def test_a_picture_whose_file_has_gone_falls_through_instead_of_erroring(
+    runnable, monkeypatch
+):
+    """The resolver is walking candidates; an unreadable one is not an error.
+
+    Wrong if the request 404s: the best picture of a card being off the disk
+    is exactly when the next tier is wanted.
+    """
+
+    def gone(server, picture_id):
+        raise HTTPException(status_code=404, detail="Picture file missing")
+
+    monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", gone)
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    assert payload["groups"][0]["source"] == "instance", payload
+    assert payload["groups"][0]["reasons"] == [], payload
+
+
+@pytest.mark.parametrize("source", ["workflow", "picture", "saved_recipe"])
+def test_a_card_runs_from_any_of_its_three_sources(runnable, source):
+    """The same card, named three ways, resolves to the same runnable graph.
+
+    Three ways of NAMING one card, which is not the same axis as the three
+    source tiers — those are covered by the three tests above. All three land
+    on tier 3 here because this fixture's card has no file and its picture has
+    none on disk.
+    """
+    body = {"workflow_key": RUN_CARD}
+    if source == "picture":
+        body = {"picture_ids": [runnable.picture_id]}
+    elif source == "saved_recipe":
+        r = runnable.owner.post(
+            f"{API}/recipes",
+            json={"name": "cold light", "workflow_key": RUN_CARD, "prompt": "a cat"},
+        )
+        assert r.status_code in {200, 201}, r.text
+        body = {"saved_recipe_id": r.json()["id"]}
+
+    payload = _preflight(runnable.owner, **body)
+    assert payload["groups"], payload
+    assert payload["groups"][0]["workflow_key"] == RUN_CARD
+    assert payload["groups"][0]["reasons"] == [], payload
+    assert payload["ok"] is True
+    # Tier 3: the card has no imported file and its picture has no file on
+    # disk, so the stored instance document is what answered.
+    assert payload["groups"][0]["source"] == "instance"
+
+
+def test_exactly_one_source_may_be_named(runnable):
+    for body in (
+        {},
+        {"workflow_key": RUN_CARD, "picture_ids": [runnable.picture_id]},
+        {"workflow_key": RUN_CARD, "saved_recipe_id": 1},
+    ):
+        r = runnable.owner.post(f"{API}/workflows/run/preflight", json=body)
+        assert r.status_code == 400, f"{body}: {r.status_code} {r.text}"
+
+
+def test_several_pictures_with_no_target_group_by_their_recipe(runnable):
+    """One selection spanning two cards is two groups, not one run of the first."""
+    busy = runnable.server.vault.db.run_immediate_read_task(
+        lambda session: [
+            p.id
+            for p in session.exec(
+                select(Picture).where(Picture.workflow_structural_hash == BUSY_RECIPE_A)
+            ).all()
+            if not p.deleted
+        ]
+    )
+    payload = _preflight(runnable.owner, picture_ids=[runnable.picture_id, *busy[:2]])
+    keys = {group["workflow_key"] for group in payload["groups"]}
+    assert keys == {RUN_CARD, BUSY_CARD}, payload
+    # Each group carries the pictures that chose it and nobody else's.
+    by_key = {group["workflow_key"]: group for group in payload["groups"]}
+    assert by_key[RUN_CARD]["picture_ids"] == [runnable.picture_id]
+    assert sorted(by_key[BUSY_CARD]["picture_ids"]) == sorted(busy[:2])
+
+
+def test_a_target_runs_that_card_instead_of_the_ones_selected(runnable):
+    """`target` is how a stack's other member is chosen."""
+    payload = _preflight(
+        runnable.owner, picture_ids=[runnable.picture_id], target=BUSY_CARD
+    )
+    assert [group["workflow_key"] for group in payload["groups"]] == [BUSY_CARD]
+
+
+# --- every reason code -----------------------------------------------------
+
+
+def test_a_workflow_source_reports_no_save_node(runnable):
+    """BUSY's stored graph has nothing that writes an image."""
+    payload = _preflight(runnable.owner, workflow_key=BUSY_CARD)
+    assert "no_save_node" in _reasons(payload), payload
+
+
+def test_a_forgotten_model_name_surfaces_as_a_missing_model(runnable):
+    """FORGOTTEN's references have no asset row, so nothing names its models.
+
+    This is the tier-3 resolution rule showing through: the stored document
+    still says a model went there and the hub can no longer say which, so the
+    run reports a missing model rather than pretending the slot is empty.
+    """
+    payload = _preflight(runnable.owner, workflow_key=FORGOTTEN_CARD)
+    assert "missing_models" in _reasons(payload), payload
+    missing = [
+        model
+        for group in payload["groups"]
+        for reason in group["reasons"]
+        if reason["code"] == "missing_models"
+        for model in reason["models"]
+    ]
+    assert any(model["file"] == FORGOTTEN_MODEL for model in missing), missing
+    # The folder is named, because it is where the owner has to put the file.
+    assert {"loras", "checkpoints"} <= {model["folder"] for model in missing}, missing
+
+
+def test_a_card_this_hub_does_not_hold_has_no_runnable_source(runnable):
+    payload = _preflight(runnable.owner, workflow_key=_h("nosuchcard"))
+    assert _reasons(payload) == {"no_runnable_source"}, payload
+
+
+def test_a_picture_on_no_card_reports_a1111_or_nothing_to_run(runnable, monkeypatch):
+    """The two honest "nothing to run" states are told apart, not merged."""
+    unscanned = runnable.server.vault.db.run_immediate_read_task(
+        lambda session: session.exec(
+            select(Picture).where(Picture.workflow_structural_hash.is_(None))
+        ).first()
+    )
+    assert unscanned is not None, "the fixture's unscanned picture is gone"
+
+    payload = _preflight(runnable.owner, picture_ids=[unscanned.id])
+    assert _reasons(payload) == {"no_runnable_source"}, payload
+
+    # The same picture, with A1111 infotext behind it.
+    monkeypatch.setattr(
+        workflows_routes, "_read_embedded_metadata", lambda server, pid: {}
+    )
+    monkeypatch.setattr(workflows_routes, "reduce_a1111", lambda metadata: object())
+    payload = _preflight(runnable.owner, picture_ids=[unscanned.id])
+    assert _reasons(payload) == {"a1111"}, payload
+
+
+def test_a_missing_node_pack_is_reported_by_name(runnable):
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info.pop("LoraLoader")
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    nodes = [
+        node
+        for group in payload["groups"]
+        for reason in group["reasons"]
+        if reason["code"] == "missing_nodes"
+        for node in reason["nodes"]
+    ]
+    assert nodes == ["LoraLoader"], payload
+
+
+def test_a_model_this_comfyui_does_not_have_names_the_file_and_the_folder(runnable):
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [
+        ["something_else.safetensors"],
+        {},
+    ]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    models = [
+        model
+        for group in payload["groups"]
+        for reason in group["reasons"]
+        if reason["code"] == "missing_models"
+        for model in reason["models"]
+    ]
+    assert models == [{"file": "realvisxl.safetensors", "folder": "checkpoints"}], (
+        payload
+    )
+
+
+def test_an_unreachable_comfyui_is_reported_and_a_configured_one_says_so(runnable):
+    """The two ComfyUI codes are different questions with different fixes.
+
+    Both halves are asserted. `comfyui_not_configured` is the address being
+    PixlStash's own guess, so the fix is "set your ComfyUI address";
+    `comfyui_unreachable` is an address the owner chose that did not answer,
+    so the fix is "start ComfyUI".
+    """
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
+    )
+    assert "comfyui_not_configured" in _reasons(
+        _preflight(runnable.owner, workflow_key=RUN_CARD)
+    )
+
+    # `.test` is RFC 2606's reserved name; nothing resolves it and the fetch is
+    # patched out anyway. What matters is only that the user HAS an address.
+    r = runnable.owner.patch(
+        f"{API}/users/me/config", json={"comfyui_url": "http://comfyui.test:8188"}
+    )
+    assert r.status_code == 200, r.text
+    try:
+        assert "comfyui_unreachable" in _reasons(
+            _preflight(runnable.owner, workflow_key=RUN_CARD)
+        )
+        # ...and it is the ONLY one of the two: reporting both would leave a
+        # panel deciding which sentence to show.
+        assert "comfyui_not_configured" not in _reasons(
+            _preflight(runnable.owner, workflow_key=RUN_CARD)
+        )
+    finally:
+        # The user row outlives the test; `fresh_library` re-seeds the hub and
+        # the vault and would not undo this.
+        runnable.owner.patch(f"{API}/users/me/config", json={"comfyui_url": ""})
+
+
+def test_an_uninspectable_comfyui_runs_only_on_the_owners_acknowledgement(runnable):
+    """The `allow_unchecked` consent rule, both directions.
+
+    Without it nothing at all is known about the graph, so the request fails
+    closed. With it the run goes ahead AND the reason is still reported: the
+    fact stays true, and a panel that hid it would be hiding what was consented
+    to.
+    """
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
+    )
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "refused", r.json()
+    assert runnable.submitted == [], "an uninspected graph ran without consent"
+
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_key": RUN_CARD, "allow_unchecked": True},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    assert len(runnable.submitted) == 1, "consent did not let the run through"
+    # The reason survives the consent rather than being cleared by it.
+    assert r.json()["groups"][0]["reasons"][0]["code"] == "comfyui_not_configured"
+
+
+def test_consent_does_not_reach_a_missing_model(runnable):
+    """`allow_unchecked` answers "nothing could be checked", nothing else.
+
+    A missing model is a fact that WAS established, so there is nothing there
+    to consent to. Asserted on a MIXED batch and on the healthy card in it,
+    because that is the only thing that isolates the batch rule: a one-card
+    request would refuse from the per-card rule whatever the batch rule said.
+    """
+    forgotten = runnable.server.vault.db.run_immediate_read_task(
+        lambda session: [
+            p.id
+            for p in session.exec(
+                select(Picture).where(
+                    Picture.workflow_structural_hash == FORGOTTEN_RECIPE
+                )
+            ).all()
+            if not p.deleted
+        ]
+    )
+    assert forgotten, "the fixture's forgotten-card pictures are gone"
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "picture_ids": [runnable.picture_id, forgotten[0]],
+            "allow_unchecked": True,
+        },
+    )
+    assert r.json()["status"] == "refused", r.json()
+    assert runnable.submitted == []
+    # The healthy card has no reason of its own and still does not run: that is
+    # the batch rule, and consent did not switch it off.
+    healthy = {g["workflow_key"]: g for g in r.json()["groups"]}[RUN_CARD]
+    assert healthy["reasons"] == [], healthy
+    assert healthy["runs"] == 0, healthy
+
+
+def test_a_graph_with_pixlstash_nodes_is_refused(runnable):
+    """It would read and write the library while PixlStash is running it.
+
+    The node is put in the stored graph and DETECTED, rather than the detector
+    being replaced with `lambda: True`: patching it would guard the plumbing
+    and say nothing about whether such a graph is recognised.
+    """
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["PixlStashPictureLoader"] = {"input": {"required": {}}}
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    with runnable.server.hub.transaction() as conn:
+        instance = json.loads(json.dumps(RUN_DOCUMENT))
+        instance["3"]["inputs"].update({"steps": 24, "cfg": 6.5})
+        instance["5"] = {"class_type": "PixlStashPictureLoader", "inputs": {}}
+        conn.execute(
+            "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
+            (json.dumps(instance), RUN_INSTANCE),
+        )
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    assert "pixlstash_nodes" in _reasons(payload), payload
+
+
+def test_a_lora_asked_for_where_there_is_no_loader_says_so(runnable):
+    """`no_lora_loader` is the code for a graph that has no slot at all.
+
+    Asked only when a LoRA is actually being placed: a workflow with no loader
+    is perfectly runnable on its own, and reporting this for one would make
+    every plain card look broken.
+    """
+    # The card as it stands HAS a slot, so the code must not appear.
+    assert "no_lora_loader" not in _reasons(
+        _preflight(runnable.owner, workflow_key=RUN_CARD)
+    )
+
+    runnable.monkeypatch.setattr(
+        workflows_routes, "detect_lora_targets", lambda graph: []
+    )
+    payload = _preflight(
+        runnable.owner,
+        workflow_key=RUN_CARD,
+        loras=[{"node_id": "2", "sha256": RUN_ADAPTER_DIGEST}],
+    )
+    assert "no_lora_loader" in _reasons(payload), payload
+
+
+def test_a_lora_addressed_to_a_slot_the_graph_does_not_have_is_refused(runnable):
+    """A graph that HAS slots, asked for one it does not, is a 400 by name.
+
+    Different from the code above on purpose: "this workflow takes no LoRA"
+    and "this workflow has no slot called that" send the caller two places.
+    """
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={
+            "workflow_key": RUN_CARD,
+            "loras": [{"node_id": "99", "sha256": RUN_ADAPTER_DIGEST}],
+        },
+    )
+    assert r.status_code == 400, r.text
+    assert "no LoRA slot" in r.json()["detail"]
+
+
+def test_a_lora_is_placed_in_its_own_slot_with_its_own_strengths(runnable):
+    """One slot is a node AND a field (#1377), and the strengths are this run's."""
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_key": RUN_CARD,
+            "loras": [
+                {
+                    "node_id": "2",
+                    "field": "lora_name",
+                    "sha256": RUN_ADAPTER_DIGEST,
+                    "strength_model": 0.4,
+                    "strength_clip": 0.2,
+                }
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    inputs = runnable.submitted[0]["graph"]["2"]["inputs"]
+    assert inputs["lora_name"] == "other.safetensors", inputs
+    assert inputs["strength_model"] == 0.4
+    assert inputs["strength_clip"] == 0.2
+
+
+def test_a_fixed_picture_input_whose_picture_is_still_here_is_not_reported(
+    runnable,
+):
+    """The positive half, and it is the half that needs the code to be right.
+
+    A `fixed` input names its picture by content, so "is it still here" is a
+    lookup that has to come back with the sha. Asserting only the absent case
+    passes on a read that cannot return anything at all.
+    """
+    r = runnable.owner.put(
+        f"{API}/workflows/{RUN_CARD}/inputs",
+        json={
+            "inputs": [
+                {
+                    "slot_label": "load",
+                    "input_name": "image",
+                    "mode": "fixed",
+                    "pixel_sha": RUN_PIXEL_SHA,
+                }
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    assert "fixed_input_deleted" not in _reasons(payload), payload
+    assert payload["groups"][0]["reasons"] == [], payload
+
+
+def test_a_fixed_picture_input_that_has_been_deleted_is_reported(runnable):
+    """The card's fixed input names a picture this library no longer holds."""
+    r = runnable.owner.put(
+        f"{API}/workflows/{RUN_CARD}/inputs",
+        json={
+            "inputs": [
+                {
+                    "slot_label": "load",
+                    "input_name": "image",
+                    "mode": "fixed",
+                    "pixel_sha": _h("a picture that left"),
+                }
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    assert "fixed_input_deleted" in _reasons(payload), payload
+
+
+def test_a_ui_format_file_is_not_a_runnable_source(runnable, monkeypatch):
+    """A card whose only source is a UI export says which format it is in."""
+    monkeypatch.setattr(
+        workflows_routes,
+        "_resolve_workflow_path",
+        lambda name: ("/nowhere.json", "user"),
+    )
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_workflow_json",
+        lambda path: {"nodes": [{"id": 1, "type": "KSampler"}], "links": []},
+    )
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_file "
+            "(workflow_name, workflow_key, topology_hash, structural_hash) "
+            "VALUES (?, ?, ?, ?)",
+            ("ui_only.json", HIDDEN_CARD, HIDDEN_TOPOLOGY, HIDDEN_RECIPE),
+        )
+    # HIDDEN has no instances in this library, so the file is its only tier.
+    payload = _preflight(runnable.owner, workflow_key=HIDDEN_CARD)
+    assert "ui_format" in _reasons(payload), payload
+
+
+# --- what a run actually does ----------------------------------------------
+
+
+def test_count_produces_that_many_submissions(runnable):
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={"workflow_key": RUN_CARD, "count": 3}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["runs"] == 3, r.json()
+    assert len(runnable.submitted) == 3
+    # Each is its own graph with its own seed, not three references to one.
+    seeds = {entry["graph"]["3"]["inputs"]["seed"] for entry in runnable.submitted}
+    assert len(seeds) == 3, seeds
+
+
+def test_a_new_run_is_not_stacked_with_the_picture_it_came_from(runnable):
+    """The default is unstacked, which is where this differs from run_recipe."""
+    stacked: list = []
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "stack_for_picture",
+        lambda vault, picture_id: stacked.append(picture_id) or 7,
+    )
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={"picture_ids": [runnable.picture_id]}
+    )
+    assert r.status_code == 200, r.text
+    assert stacked == [], "a run was stacked with its source without being asked"
+
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [runnable.picture_id], "stack": True},
+    )
+    assert r.status_code == 200, r.text
+    assert stacked == [runnable.picture_id], "stack: true did not reach the stack"
+
+
+def test_a_missing_model_blocks_the_whole_mixed_batch(runnable):
+    """One card short of a file stops the cards beside it that were fine.
+
+    Installing a model is a trip away from the keyboard, so queueing the rest
+    would leave the owner repeating the gesture to catch what was skipped.
+    """
+    busy = runnable.server.vault.db.run_immediate_read_task(
+        lambda session: [
+            p.id
+            for p in session.exec(
+                select(Picture).where(
+                    Picture.workflow_structural_hash == FORGOTTEN_RECIPE
+                )
+            ).all()
+            if not p.deleted
+        ]
+    )
+    assert busy, "the fixture's forgotten-card pictures are gone"
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [runnable.picture_id, busy[0]]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "refused", r.json()
+    assert runnable.submitted == [], "a run was queued behind a missing model"
+    # The runnable card is reported as run-able-but-blocked rather than silently
+    # dropped: its own reasons are empty and its run count is zero.
+    by_key = {group["workflow_key"]: group for group in r.json()["groups"]}
+    assert by_key[RUN_CARD]["reasons"] == []
+    assert by_key[RUN_CARD]["runs"] == 0
+
+
+def test_values_are_applied_at_run_time_and_never_written_back(runnable):
+    """An edited default is an override on the submitted graph, nothing more."""
+    stored = get_document(runnable.server.hub, RUN_RECIPE)
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_key": RUN_CARD,
+            "values": [{"slot_label": "steps", "input_name": "steps", "value": 99}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    # The stored graph is content-addressed: rewriting it would change the very
+    # identity of the card being run.
+    assert get_document(runnable.server.hub, RUN_RECIPE) == stored
+
+
+def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["5"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": None, "clip": ["1", 1]},
+    }
+    document["3"]["inputs"]["positive"] = ["5", 0]
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "detect_workflow_io",
+        lambda graph: SimpleNamespace(positive_prompts=("5",), negative_prompts=()),
+    )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CLIPTextEncode"] = {"input": {"required": {"text": ["STRING", {}]}}}
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    with runnable.server.hub.transaction() as conn:
+        instance = json.loads(json.dumps(document))
+        instance["3"]["inputs"].update({"steps": 24, "cfg": 6.5})
+        instance["5"]["inputs"]["text"] = "the saved prompt"
+        conn.execute(
+            "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
+            (json.dumps(instance), RUN_INSTANCE),
+        )
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_key": RUN_CARD, "prompt": "a lighthouse at dusk"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    assert (
+        runnable.submitted[0]["graph"]["5"]["inputs"]["text"] == "a lighthouse at dusk"
+    )
+
+
+def test_more_runs_than_one_request_starts_are_refused(runnable):
+    """`count` alone is Pydantic's; count TIMES groups is the route's."""
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_key": RUN_CARD, "count": MAX_RUNS_PER_REQUEST + 1},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_the_cap_counts_every_group_not_every_card(runnable):
+    """Two cards at half the cap each is over it, and Pydantic cannot see that.
+
+    The aggregate is what reaches ComfyUI's queue, so the aggregate is what is
+    capped — a per-card ceiling would let a wide selection multiply straight
+    through it.
+    """
+    second = _seed_second_runnable_card(runnable.server)
+    # Both cards run, so both groups carry `count`. Half the cap each is over
+    # it, and no field validator can see that.
+    half = MAX_RUNS_PER_REQUEST // 2 + 1
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={"picture_ids": [runnable.picture_id, second], "count": half},
+    )
+    assert r.status_code == 400, r.text
+    assert "more than one request starts" in r.json()["detail"]
+    # The control: one under the cap between them goes through, so the refusal
+    # above is the total and not the second card merely existing.
+    ok = _preflight(
+        runnable.owner,
+        picture_ids=[runnable.picture_id, second],
+        count=MAX_RUNS_PER_REQUEST // 2,
+    )
+    assert ok["runs"] == MAX_RUNS_PER_REQUEST, ok
+
+
+def test_an_unchecked_graph_needs_the_owners_acknowledgement(runnable):
+    """Fail closed when nothing could be learned about the graph."""
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
+    )
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    # An unreachable ComfyUI blocks the batch before the acknowledgement is
+    # even reached, which is the stronger of the two refusals.
+    assert r.json()["status"] == "refused", r.json()
+    assert runnable.submitted == []
+
+
+def test_keeping_a_seed_a_stored_recipe_does_not_have_is_refused(runnable):
+    """`seed_mode: "keep"` on a tier-3 source has nothing to keep.
+
+    A stored instance document nulls its seeds by design, so keeping one would
+    submit zero for every run — `count: 3` silently producing three identical
+    images. Refused rather than quietly re-read as "new", which answers a
+    different question than the one asked.
+    """
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_key": RUN_CARD, "seed_mode": "keep", "count": 3},
+    )
+    assert r.status_code == 400, r.text
+    assert "keeps no seed" in r.json()["detail"]
+    assert runnable.submitted == []
+
+    # A source that DOES carry a seed keeps it, which is what makes the
+    # refusal above about the source rather than about the mode.
+    embedded = json.loads(json.dumps(RUN_DOCUMENT))
+    embedded["3"]["inputs"].update({"steps": 33, "cfg": 3.5, "seed": 4242})
+    embedded["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    embedded["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_load_embedded_api_prompt", lambda server, pid: embedded
+    )
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_key": RUN_CARD, "seed_mode": "keep", "count": 2},
+    )
+    assert r.status_code == 200, r.text
+    assert [e["graph"]["3"]["inputs"]["seed"] for e in runnable.submitted] == [
+        4242,
+        4242,
+    ]
+
+
+def test_the_dry_run_and_the_run_agree_about_a_missing_seed(runnable):
+    """A body the run rejects must never pre-flight as `ok`.
+
+    The whole value of a dry run is that it answers the same question; a
+    validation living inside the submission loop would let the panel say "this
+    will run" about a body that then 400s.
+    """
+    body = {"workflow_key": RUN_CARD, "seed_mode": "fixed"}
+    dry = runnable.owner.post(f"{API}/workflows/run/preflight", json=body)
+    wet = runnable.owner.post(f"{API}/workflows/run", json=body)
+    assert dry.status_code == 400, dry.text
+    assert wet.status_code == 400, wet.text
+    assert dry.json()["detail"] == wet.json()["detail"]
+    assert runnable.submitted == []
+
+
+def test_a_lora_not_on_this_comfyui_is_a_reason_not_a_hard_error(runnable):
+    """A dry run that 400s instead of reporting a reason is not a dry run.
+
+    The adapter is on the shelf and not on this ComfyUI, which is the same
+    fact as any other model the graph names and must be the same kind of
+    answer.
+    """
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["LoraLoader"]["input"]["required"]["lora_name"] = [
+        ["add_detail.safetensors"],
+        {},
+    ]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    payload = _preflight(
+        runnable.owner,
+        workflow_key=RUN_CARD,
+        loras=[{"node_id": "2", "sha256": RUN_ADAPTER_DIGEST}],
+    )
+    models = [
+        model
+        for group in payload["groups"]
+        for reason in group["reasons"]
+        if reason["code"] == "missing_models"
+        for model in reason["models"]
+    ]
+    assert models == [{"file": RUN_ADAPTER_FILENAME, "folder": "loras"}], payload
+
+
+def test_a_saved_recipes_own_loras_are_placed_in_the_graphs_slots(runnable):
+    """ "Run this saved look" that drops the look's LoRAs is the wrong result."""
+    r = runnable.owner.post(
+        f"{API}/recipes",
+        json={
+            "name": "with its lora",
+            "workflow_key": RUN_CARD,
+            "prompt": "a cat",
+            "loras": [
+                {
+                    "filename": RUN_ADAPTER_FILENAME,
+                    "sha256": RUN_ADAPTER_DIGEST,
+                    "strength": 0.6,
+                }
+            ],
+        },
+    )
+    assert r.status_code in {200, 201}, r.text
+    run = runnable.owner.post(
+        f"{API}/workflows/run", json={"saved_recipe_id": r.json()["id"]}
+    )
+    assert run.status_code == 200, run.text
+    inputs = runnable.submitted[0]["graph"]["2"]["inputs"]
+    assert inputs["lora_name"] == RUN_ADAPTER_FILENAME, inputs
+    assert inputs["strength_model"] == 0.6, inputs
+
+
+def test_a_saved_seed_never_overrides_a_seed_mode_the_caller_sent(runnable):
+    """The request wins over the row, which is what the merge promises."""
+    r = runnable.owner.post(
+        f"{API}/recipes",
+        json={
+            "name": "pinned seed",
+            "workflow_key": RUN_CARD,
+            "prompt": "a cat",
+            "seed": "4242",
+            "keep_seed": True,
+        },
+    )
+    assert r.status_code in {200, 201}, r.text
+    recipe_id = r.json()["id"]
+
+    # Left open: the recipe's kept seed applies.
+    run = runnable.owner.post(
+        f"{API}/workflows/run", json={"saved_recipe_id": recipe_id}
+    )
+    assert run.status_code == 200, run.text
+    assert runnable.submitted[0]["graph"]["3"]["inputs"]["seed"] == 4242
+
+    # Asked for explicitly: the caller's choice stands and a fresh seed is drawn.
+    runnable.submitted.clear()
+    run = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"saved_recipe_id": recipe_id, "seed_mode": "new", "count": 2},
+    )
+    assert run.status_code == 200, run.text
+    seeds = [e["graph"]["3"]["inputs"]["seed"] for e in runnable.submitted]
+    assert 4242 not in seeds, seeds
+    assert len(set(seeds)) == 2, seeds
+
+
+def test_a_failure_part_way_through_still_reports_what_was_queued(runnable):
+    """A prompt id nobody was told about is a generation nobody can find.
+
+    Wrong if the request raises: two runs are already in ComfyUI's queue and
+    importing, and a 500 loses every id.
+    """
+    calls = {"n": 0}
+
+    def flaky(base_url, workflow_instance, client_id=None):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise HTTPException(status_code=502, detail="ComfyUI prompt request failed")
+        return {"prompt_id": f"prompt-{calls['n']}"}
+
+    runnable.monkeypatch.setattr(workflows_routes, "_submit_comfyui_prompt", flaky)
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={"workflow_key": RUN_CARD, "count": 5}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "partial", r.json()
+    assert [p["prompt_id"] for p in r.json()["prompts"]] == ["prompt-1", "prompt-2"]
+    assert r.json()["runs"] == 2
+
+
+def test_the_body_takes_no_inputs_field(runnable):
+    """Nothing FILLS a card's picture inputs yet, so nothing offers to.
+
+    A field accepted and ignored is worse than one that is absent: a caller
+    would send a picture and get a run that never read it. `fixed_input_deleted`
+    still reads the setup — reading it and filling it are different jobs.
+    """
+    assert "inputs" not in RunRequest.model_fields
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={"workflow_key": RUN_CARD, "inputs": {"2": 1}},
+    )
+    # Pydantic ignores an unknown key rather than failing; what matters is that
+    # the OpenAPI schema never promised it.
+    assert r.status_code == 200, r.text
+    schema = runnable.server.api.openapi()["components"]["schemas"]["RunRequest"]
+    assert "inputs" not in schema["properties"], schema["properties"].keys()
+
+
+def test_consent_never_silently_swaps_the_lora_that_was_asked_for(runnable):
+    """`allow_unchecked` consents to running uninspected, not to another LoRA.
+
+    A filename slot is resolved against what THIS ComfyUI lists, and with no
+    `object_info` there is no list — so the run cannot honour the request and
+    must say so rather than quietly keep the stored graph's LoRA.
+    """
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
+    )
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_key": RUN_CARD,
+            "allow_unchecked": True,
+            "loras": [{"node_id": "2", "sha256": RUN_ADAPTER_DIGEST}],
+        },
+    )
+    assert r.status_code == 400, r.text
+    assert "which file to write into LoRA slot" in r.json()["detail"]
+    assert runnable.submitted == []
+
+    # The control: the same consent with no LoRA asked for still runs, so the
+    # refusal above is about the LoRA and not about the consent.
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_key": RUN_CARD, "allow_unchecked": True},
+    )
+    assert r.status_code == 200 and r.json()["status"] == "success", r.text
+    assert len(runnable.submitted) == 1
+    # ...and the graph still names what it always named, untouched.
+    assert (
+        runnable.submitted[0]["graph"]["2"]["inputs"]["lora_name"]
+        == "add_detail.safetensors"
+    )
+
+
+def test_a_saved_recipe_on_a_card_this_hub_lacks_carries_a_reason(runnable):
+    """`runs: 0` with an empty `reasons` would contradict the one response rule."""
+    r = runnable.owner.post(
+        f"{API}/recipes",
+        json={"name": "orphan", "workflow_key": _h("nosuchcard"), "prompt": "a cat"},
+    )
+    assert r.status_code in {200, 201}, r.text
+    payload = _preflight(runnable.owner, saved_recipe_id=r.json()["id"])
+    assert _reasons(payload) == {"no_runnable_source"}, payload
+    assert payload["ok"] is False
+
+
+def test_a_stored_value_a_run_cannot_take_is_named_rather_than_assigned(runnable):
+    """The merge re-validates: a row must not walk past the body's ceilings.
+
+    `model_copy(update=…)` assigns without validating, so a seed stored above
+    the 64-bit ceiling would reach ComfyUI as a number no sampler can take.
+    """
+    r = runnable.owner.post(
+        f"{API}/recipes",
+        json={
+            "name": "impossible seed",
+            "workflow_key": RUN_CARD,
+            "prompt": "a cat",
+            "seed": str(2**64),
+            "keep_seed": True,
+        },
+    )
+    assert r.status_code in {200, 201}, r.text
+    run = runnable.owner.post(
+        f"{API}/workflows/run", json={"saved_recipe_id": r.json()["id"]}
+    )
+    assert run.status_code == 422, run.text
+    assert "cannot take" in run.json()["detail"]
+    assert runnable.submitted == []
+
+
+def test_one_stack_holds_every_run_of_a_group(runnable):
+    """`stack: true` with `count: 3` is one stack, asked for once."""
+    stacked: list[int] = []
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "stack_for_picture",
+        lambda vault, picture_id: stacked.append(picture_id) or 7,
+    )
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [runnable.picture_id], "stack": True, "count": 3},
+    )
+    assert r.status_code == 200, r.text
+    assert len(runnable.submitted) == 3
+    # One write task, not one per run: it is idempotent, so a per-run call was
+    # two wasted writes rather than a wrong answer - but it was still two.
+    assert stacked == [runnable.picture_id], stacked

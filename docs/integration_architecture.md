@@ -527,6 +527,86 @@ raising a `workflows_changed` event (§8) on the way out:
 | `PUT /api/v1/workflows/stacks/{stack_id}/order` | Reorder, `keys[0]` the cover | `{keys}` (≥2) → `{stack_id, keys}`. Ordering an `auto:<core hash>` grouping is what materialises it |
 | `POST /api/v1/workflows/stacks/{stack_id}/unstack` | Dissolve a whole stack | — → `{stack_id: null, keys}` |
 
+Running a card (v1.12 B7), also `OWNER_ONLY` — which is **narrower** than the
+`PICTURE_SCOPED` run routes in `comfyui.py`, because a card is a whole-library
+identity rather than one caller's picture. Neither route raises
+`workflows_changed`: a run makes a picture, and the card it ran is unchanged.
+
+| Route | Purpose | Body → Response |
+|---|---|---|
+| `POST /api/v1/workflows/run/preflight` | What a run would do, doing none of it | The body below → `{ok, runs, groups: [RunGroup]}` |
+| `POST /api/v1/workflows/run` | Run it | The same body → `{status, runs, groups, prompts: [{workflow_key, prompt_id}]}`; `status: "refused"` with `prompts: []` when nothing was submittable |
+
+The body, identical on both: **exactly one source** — `picture_ids`,
+`saved_recipe_id` or `workflow_key` (400 otherwise) — plus an optional `target`
+workflow key that runs *that* card instead, which is how a stack's other member
+is chosen. Then `prompt`, `negative`, `loras: [{node_id, field, sha256,
+strength_model?, strength_clip?}]` (**one slot is a node AND a field**, so a
+stacker's `lora_name_1` and `lora_name_2` are two slots), `values:
+[{slot_label, input_name, value}]` addressed the way a card's defaults are,
+`count`, `seed_mode: "new" | "keep" | "fixed"` with `seed`,
+`destination: {set_id?, project_id?, character_id?}`, `stack` and
+`allow_unchecked`.
+
+**There is no `inputs` field.** A card's picture-input setup is *read* — a
+fixed input whose picture has gone is `fixed_input_deleted` — but nothing
+*fills* one yet, because filling it means uploading pictures into ComfyUI's
+input folder, which is the i2i path `POST /comfyui/workflows/{name}/run`
+already owns. It is left out rather than accepted and ignored, which would let
+a caller send a picture and get a run that never read it.
+
+Six rules the client must not re-derive:
+
+1. **With several pictures and no `target`, the server groups them by each
+   picture's recipe.** A selection spanning three cards is three groups, each
+   carrying the pictures that chose it — not one run of the first card over all
+   of them.
+2. **`reasons` empty is the only thing that means "this would run".** Each
+   entry is `{code, …payload}` from a closed set: `comfyui_not_configured`,
+   `comfyui_unreachable`, `ui_format`, `missing_nodes: {nodes}`,
+   `missing_models: {models: [{file, folder}]}`, `a1111`, `fixed_input_deleted`,
+   `no_lora_loader`, `pixlstash_nodes`, `no_save_node`, `no_runnable_source`.
+   A code and never a sentence: one batch mixes sources, and a panel grouping
+   "these four are missing the same model" cannot do it from prose.
+3. **A missing model blocks the whole batch**, mixed or not, and so does an
+   unreachable ComfyUI. Every group's `runs` goes to zero and nothing is
+   submitted — including the groups whose own `reasons` are empty.
+4. **A new run is NOT stacked with the picture it came from** unless the body
+   says `stack: true`. This is where it differs from `POST /comfyui/run_recipe`,
+   which stacks by default: that replays one picture's own graph, so the output
+   genuinely is another take of it, while this runs a card.
+5. **`allow_unchecked` is the consent rule and it does something.** Without it
+   an uninspectable ComfyUI (`comfyui_unreachable` / `comfyui_not_configured`)
+   blocks the batch and nothing is submitted. With it the runs go ahead **and
+   the reason is still reported**, because the fact stays true. Consent reaches
+   no other code: a missing model is a fact that *was* established, so a
+   consented batch missing one is still refused. It does not reach a `loras`
+   entry either: a filename slot is resolved against what that ComfyUI lists,
+   so with nothing to resolve against the run is a 400 rather than one that
+   quietly keeps whatever LoRA the stored graph named. A digest slot needs no
+   list and goes through.
+6. **The two routes answer identically, including their errors.** A body that
+   cannot be interpreted against this card is a `400`/`404`/`422` **on both** —
+   two sources named, an unknown `saved_recipe_id`, a malformed key,
+   `seed_mode: "fixed"` with no `seed`, `seed_mode: "keep"` on a source that
+   keeps none, a LoRA addressed to a slot the graph has not, or `count ×
+   groups` over `MAX_RUNS_PER_REQUEST`. Everything else — including a LoRA that
+   is on the shelf but not on this ComfyUI — is a reason code. A pre-flight
+   that 400s where the run returns reasons would not be a dry run.
+
+**Edited defaults are overrides applied at run time and never written back into
+a graph.** The stored document is content-addressed, so rewriting it would
+change the identity of the very card being run.
+
+**`seed_mode: "keep"` needs a source that carries a seed.** Tiers 1 and 2 do;
+tier 3 does not, because a stored instance document nulls its seeds by design,
+so `keep` there is a 400 rather than `count` identical images at seed 0.
+
+**A failure part way through the submissions answers `status: "partial"`** with
+the prompt ids already queued. They are running in ComfyUI whatever the request
+returns, and an id nobody was told about is a generation the owner cannot find,
+cancel or attribute.
+
 Two rules the writes add to the five below: **a stack left with one member
 dissolves** (the row goes, and the card stands on its own), and a
 `{stack_id}` is either a minted 32-hex id or `auto:` followed by a 64-hex core

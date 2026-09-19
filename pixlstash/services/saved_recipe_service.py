@@ -503,3 +503,13 @@ def rekey_recipes(vault, moved: dict[str, list[str]]) -> int:
     if not moved:
         return 0
     return vault.db.run_task(rekey_in_session, moved)
+
+
+def read_in_session(session: Session, recipe_id: int) -> Optional[SavedRecipe]:
+    """One saved recipe row by id, or ``None``."""
+    return session.get(SavedRecipe, recipe_id)
+
+
+def read_recipe(vault, recipe_id: int) -> Optional[SavedRecipe]:
+    """One saved recipe by id, for a run that starts from it (B7)."""
+    return vault.db.run_immediate_read_task(read_in_session, recipe_id)

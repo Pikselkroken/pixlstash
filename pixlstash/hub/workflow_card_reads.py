@@ -376,3 +376,34 @@ def keys_in_stack(hub: HubDatabase, stack_id: str) -> list[str]:
             ),
         )
     ]
+
+
+def picture_inputs(
+    hub: HubDatabase, library_uuid: str, workflow_key: str
+) -> list[dict]:
+    """How each picture input of a card is filled, as the owner set it (B4).
+
+    The read side of ``PUT /workflows/{key}/inputs``. Scoped to one library for
+    the reason the table is keyed that way: a ``fixed`` row names a picture by
+    ``pixel_sha`` in ONE vault, and handing another library's setup to a run
+    would have it look for a picture that library does not hold.
+
+    Returns:
+        ``[{slot_label, input_name, mode, pixel_sha}]``, ordered so two reads
+        of an unchanged hub answer identically.
+    """
+    return [
+        {
+            "slot_label": slot_label,
+            "input_name": input_name,
+            "mode": mode,
+            "pixel_sha": pixel_sha,
+        }
+        for slot_label, input_name, mode, pixel_sha in hub.fetchall(
+            "SELECT slot_label, input_name, mode, pixel_sha "
+            "FROM workflow_key_picture_input "
+            "WHERE library_uuid = ? AND workflow_key = ? "
+            "ORDER BY slot_label, input_name",
+            (library_uuid, workflow_key),
+        )
+    ]

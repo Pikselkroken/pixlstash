@@ -1158,6 +1158,14 @@ _PROJECT_REFS_IN_TYPED_BODY = frozenset(
         ("POST", "/api/v1/reviews", "payload.project_id"),
         ("POST", "/api/v1/tag_suggestions/bulk-accept", "payload.project_id"),
         ("POST", "/api/v1/tag_suggestions/scan", "payload.project"),
+        # v1.12 B7. `destination` says where a run with no source picture
+        # files its output, so the project is the owner naming a destination
+        # rather than a filter to narrow by. Both are OWNER_ONLY POSTs and
+        # neither is in `READ_SAFE_POST_PATHS`, so no resource-scoped token
+        # reaches either one - which is assertion 2 below, not a claim made
+        # here.
+        ("POST", "/api/v1/workflows/run", "body.destination.project_id"),
+        ("POST", "/api/v1/workflows/run/preflight", "body.destination.project_id"),
     }
 )
 
