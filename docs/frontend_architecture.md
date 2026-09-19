@@ -1604,6 +1604,10 @@ action, so it belongs in the footer and opens a popup (F5).
   answers with the key the card moved to, and the rail follows it: staying on
   the key it sent leaves the panel reading a card the hub no longer has. The
   slot is addressed by `slot_label`, which the card payload carries for this.
+  A flip also **forgets the store's cached stack members** — every card of the
+  topology may have moved — and the rail falls back to the card the detail
+  read brought back when the successor key is not in the grid at all, which
+  is what a merge into somebody else's stack looks like.
 - **Defaults are whole-set writes.** Resetting one value sends every other
   edited value back untouched, which is the only way "reset one" exists on a
   route that replaces the set. The pin is the same shape. The detail route

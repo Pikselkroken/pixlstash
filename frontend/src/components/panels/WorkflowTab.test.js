@@ -277,6 +277,40 @@ describe("with several workflows selected", () => {
 });
 
 describe("which card the rail shows", () => {
+  it("keeps showing a card the flip moved out of the grid", async () => {
+    // A flip can merge this card into somebody else's stack, and the grid
+    // lists one card per stack — so the successor key is not in `cards` and
+    // the detail read is the only thing that still has it.
+    getWorkflowCard.mockImplementation(async (key) =>
+      detail({ card: { key, name: "Merged into a stack" } }),
+    );
+    listWorkflowCards.mockResolvedValue({
+      cards: [card({ key: "e".repeat(64) })],
+      one_offs: 0,
+      hidden: 0,
+    });
+    const { wrapper } = await mountWith([KEY]);
+    const recipe = wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Recipe");
+    await recipe.trigger("click");
+    await flush(wrapper);
+    expect(textOf(wrapper)).toContain("Merged into a stack");
+    expect(textOf(wrapper)).not.toContain("Pick a workflow");
+  });
+
+  it("forgets the cached stack members a flip may have re-keyed", async () => {
+    const { wrapper, store } = await mountWith([KEY]);
+    store.members = { [KEY]: [card()] };
+    const recipe = wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Recipe");
+    await recipe.trigger("click");
+    await flush(wrapper);
+    expect(store.members).toEqual({});
+  });
+
+
   it("shows a selected stack member, which the grid never lists", async () => {
     const member = card({ key: OTHER, name: "SDXL portrait (lightning)" });
     const cover = card({ stack_size: 2, member_keys: [OTHER] });

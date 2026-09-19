@@ -299,6 +299,12 @@ const card = computed(() => {
     const found = group.find((entry) => entry.key === key);
     if (found) return found;
   }
+  // Last: the card the detail read brought back. The grid lists one card per
+  // stack and leaves out hidden cards and one-offs, so a selected card is not
+  // always a listed one — and a mark flip that merged this card into somebody
+  // else's stack lands exactly there, which used to empty the rail on the one
+  // gesture this tab exists for.
+  if (detail.value?.card?.key === key) return detail.value.card;
   return null;
 });
 
@@ -425,6 +431,9 @@ async function flipMark(slot, mark) {
   busy.value = `slot:${slot.label}`;
   try {
     const moved = await setWorkflowSlots(key, { [slot.label]: mark });
+    // Every card of the topology may have been re-keyed, so the cached stack
+    // members are about workflows the hub no longer has.
+    store.forgetMembers();
     await store.fetchCards();
     store.select(moved.key);
     await loadDetail(moved.key);
