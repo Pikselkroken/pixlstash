@@ -1,7 +1,7 @@
 <template>
   <article
     class="wf-card"
-    :class="{ 'wf-card--stack': stack }"
+    :class="{ 'wf-card--stack': stackMark }"
     role="group"
     :aria-label="accessibleName"
     data-testid="workflow-card"
@@ -24,7 +24,7 @@
     <div
       v-else
       class="wf-card__cover wf-card__cover--empty"
-      :class="{ 'wf-card__cover--stack': stack }"
+      :class="{ 'wf-card__cover--stack': stackMark }"
     >
       <span v-if="card.type" class="wf-card__type" aria-hidden="true">{{
         card.type
@@ -50,7 +50,7 @@
          same thing. So no `.stop`: like ▸, the click also reaches the row
          underneath and selects the card. -->
     <button
-      v-if="stack"
+      v-if="stackMark"
       type="button"
       class="wf-card__badge wf-card__badge--start wf-card__badge--button"
       tabindex="-1"
@@ -65,7 +65,7 @@
     <div class="wf-card__meta">
       <div class="wf-card__row">
         <AppButton
-          v-if="stack"
+          v-if="stackMark"
           class="wf-card__toggle"
           :class="{ 'wf-card__toggle--open': expanded }"
           variant="ghost"
@@ -155,11 +155,26 @@ const props = defineProps({
   expanded: { type: Boolean, default: false },
   /** The id of the panel ▸ opens, for `aria-controls`. */
   panelId: { type: String, default: "" },
+  /** This card is a row inside its own stack's open panel. */
+  member: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["toggle", "run"]);
 
 const stack = computed(() => isStack(props.card));
+/**
+ * Whether to wear the marks that say "there are more cards under this one".
+ *
+ * A member row is served the WHOLE stack's `stack_size`, so `stack` is true for
+ * every row in the panel and each of them drew the layered count and a ▸ that
+ * did nothing: no `@toggle` is bound there, and `openStack(memberKey)` would
+ * not find the key among the grid's cards anyway. Worse for a reader, each ▸
+ * offered `aria-expanded="false"` with nothing to expand.
+ *
+ * `stack` itself is left alone below: `factChips` branches on it, and the
+ * "differs by" chips are exactly what a member row exists to show.
+ */
+const stackMark = computed(() => stack.value && !props.member);
 const covers = computed(() => (props.card.covers ?? []).slice(0, 3));
 // Ratings run 1-5; 0 or null is "not rated".
 const rating = computed(() => props.card.rating > 0);
@@ -175,7 +190,9 @@ const checkpointChips = computed(() => {
 });
 const loras = computed(() => loraChips(props.card));
 const facts = computed(() => factChips(props.card));
-const accessibleName = computed(() => cardAccessibleName(props.card));
+const accessibleName = computed(() =>
+  cardAccessibleName(props.card, { member: props.member }),
+);
 </script>
 
 <style scoped>

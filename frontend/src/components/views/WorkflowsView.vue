@@ -316,7 +316,18 @@ const flatRows = computed(() => {
   const at = cards.findIndex((entry) => entry.key === openKey);
   if (at < 0) return cards;
   const cols = Math.max(1, columns.value);
-  const rowEnd = Math.min(cards.length, (Math.floor(at / cols) + 1) * cols);
+  const rowEnd = (Math.floor(at / cols) + 1) * cols;
+  // **The stack's own row is padded to whole first**, not just the member
+  // block. A stack in the last, INCOMPLETE row would otherwise splice the
+  // block in at `cards.length`, which is not a multiple of `cols`, and from
+  // there `index % columns` stops naming the column a row is drawn in: six
+  // cards over four columns put the block at index 6, so Down from the stack
+  // card landed on a hole with nothing below it and the panel could not be
+  // reached by keyboard at all.
+  const head = cards.slice(0, rowEnd);
+  while (head.length < rowEnd) {
+    head.push({ kind: "hole", id: `hole:head:${head.length}` });
+  }
   const members = store.openMembers;
   const block = members.map((card, memberIndex) => ({
     kind: "member",
@@ -327,9 +338,9 @@ const flatRows = computed(() => {
   }));
   const padded = Math.ceil(Math.max(block.length, 1) / cols) * cols;
   while (block.length < padded) {
-    block.push({ kind: "hole", id: `hole:${block.length}` });
+    block.push({ kind: "hole", id: `hole:block:${block.length}` });
   }
-  return [...cards.slice(0, rowEnd), ...block, ...cards.slice(rowEnd)];
+  return [...head, ...block, ...cards.slice(rowEnd)];
 });
 
 /** The open stack card's column, for the panel's notch. */

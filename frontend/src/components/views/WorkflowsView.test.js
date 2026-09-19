@@ -254,6 +254,37 @@ describe("the panel re-anchors on resize", () => {
     await gridEl.trigger("keydown", { key: "ArrowDown" });
     expect(cursorKey(wrapper)).toBe("e");
   });
+
+  it("a stack in the last, incomplete row keeps the panel reachable", async () => {
+    // Six cards over four columns leaves the second row holding two, and "e"
+    // is a stack drawn in column 1 of it:
+    //   a b c d | e f
+    // Splicing the member block in at `cards.length` — 6, not a multiple of
+    // 4 — puts it at column 2, so from there `index % columns` names the
+    // wrong column for every row: Down from "e" landed on a padding hole
+    // with nothing below it and the cursor did not move at all, and Up from
+    // a member crossed a column on the way. The stack's own row is padded to
+    // whole first, which is what keeps the arithmetic true.
+    //   a b c d | e f · · | e e1 e2 ·
+    const wrapper = await grid(1008);
+    await useWorkflowsStore().openStack("e");
+    await flush();
+    expect(memberKeys(wrapper)).toEqual(["e", "e1", "e2"]);
+
+    const gridEl = wrapper.find(".wfv-grid");
+    // "e" is flat index 4, column 0; the panel's cover row is index 8.
+    await wrapper.findAll(".wfv-row")[4].trigger("click");
+    expect(cursorKey(wrapper)).toBe("e");
+    await gridEl.trigger("keydown", { key: "ArrowDown" });
+    expect(cursorKey(wrapper)).toBe("e");
+    expect(document.activeElement.className).toContain("stack-panel__member");
+
+    // Up from "e1" (the member in column 1) is "f", which the browser draws
+    // in column 1 of the row above the panel — not "b", three columns over.
+    await wrapper.findAll(".stack-panel__member")[1].trigger("click");
+    await gridEl.trigger("keydown", { key: "ArrowUp" });
+    expect(cursorKey(wrapper)).toBe("f");
+  });
 });
 
 describe("the keyboard crosses the panel boundary", () => {

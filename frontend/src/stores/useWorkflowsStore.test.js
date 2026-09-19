@@ -196,4 +196,107 @@ describe("one stack open at a time", () => {
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
+
+  it("asks again after a failure instead of caching it as the answer", async () => {
+    // A dropped request is not an answer. Writing the cover alone into
+    // `members` satisfied the "already have them" guard, so the panel said
+    // "2 could not be read" for the rest of the session however often the
+    // reader reopened the stack — even once the network was back.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    getWorkflowCard.mockRejectedValue(new Error("nope"));
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    await store.openStack("the-stack");
+    expect(getWorkflowCard).toHaveBeenCalledTimes(2);
+    store.closeStack();
+
+    getWorkflowCard.mockImplementation((key) =>
+      Promise.resolve({ card: { key, member_keys: [] } }),
+    );
+    await store.openStack("the-stack");
+    expect(getWorkflowCard).toHaveBeenCalledTimes(4);
+    expect(store.openMembers.map((card) => card.key)).toEqual([
+      "the-stack",
+      "m1",
+      "m2",
+    ]);
+    warn.mockRestore();
+  });
+
+  it("reports the OPEN stack's loading, not whichever request finished first", async () => {
+    // One boolean shared by every stack cleared on the first request to
+    // finish, so `b`'s completion told the panel that `e`'s members could not
+    // be read while they were still on the wire.
+    const release = {};
+    getWorkflowCard.mockImplementation(
+      (key) =>
+        new Promise((resolve) => {
+          release[key] = () => resolve({ card: { key, member_keys: [] } });
+        }),
+    );
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    const first = store.openStack("the-stack");
+    const second = store.openStack("few-but-loved");
+    expect(store.openStackKey).toBe("few-but-loved");
+    expect(store.membersLoading).toBe(true);
+
+    // The stack that is NOT open finishes. The open one is still fetching.
+    release.m1();
+    release.m2();
+    await first;
+    expect(store.membersLoading).toBe(true);
+
+    release.m3();
+    await second;
+    expect(store.membersLoading).toBe(false);
+  });
+});
+
+describe("a session reset stops the old session's answers landing", () => {
+  it("drops a fetch and a member request that resolve after the reset", async () => {
+    // Without an epoch stamp both of these write the previous credential's
+    // rows — and their cover thumbnail URLs — into the new session's store.
+    let releaseCards;
+    listWorkflowCards.mockReturnValue(
+      new Promise((resolve) => {
+        releaseCards = () => resolve({ cards: CARDS, one_offs: 3, hidden: 1 });
+      }),
+    );
+    const store = useWorkflowsStore();
+    const pending = store.fetchCards();
+
+    store.reset();
+    releaseCards();
+    await pending;
+    expect(store.cards).toEqual([]);
+    expect(store.loaded).toBe(false);
+    // And the refusal is not permanent: `fetchCards` returns early while
+    // `loading` is set, so the reset has to clear it as well.
+    expect(store.loading).toBe(false);
+
+    listWorkflowCards.mockResolvedValue({
+      cards: CARDS,
+      one_offs: 3,
+      hidden: 1,
+    });
+    await store.fetchCards();
+    expect(store.cards).toHaveLength(4);
+
+    let releaseMember;
+    getWorkflowCard.mockImplementation(
+      (key) =>
+        new Promise((resolve) => {
+          releaseMember = () => resolve({ card: { key, member_keys: [] } });
+        }),
+    );
+    const open = store.openStack("few-but-loved");
+    store.reset();
+    releaseMember();
+    await open;
+    expect(store.members).toEqual({});
+    expect(store.openStackKey).toBe(null);
+  });
 });

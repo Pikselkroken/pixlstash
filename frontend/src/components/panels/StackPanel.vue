@@ -55,7 +55,7 @@
         @click="emit('select', member.key, $event)"
       >
         <div class="stack-panel__cell" role="gridcell">
-          <WorkflowCard :card="member" />
+          <WorkflowCard :card="member" member />
           <!-- The cover is what the others are compared against, so it is the
                one member whose special row is empty; without the flag its row
                reads as "this one differs by nothing". -->

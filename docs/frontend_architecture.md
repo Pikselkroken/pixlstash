@@ -1441,7 +1441,7 @@ Load-bearing behaviours, each of which is a deliberate decision rather than an i
 The uniform workflow card and its two parts. Mounted by `WorkflowsView.vue` (F1a, below) and by its `StackPanel`. In this code a `workflow_recipe` / structural hash is a **variant**; a user's Recipe is a **saved recipe**.
 
 - **The card shape is snake_case and uses B1's slot vocabulary** (`mark: "structural" | "recipe"`, #1390), documented at the top of `utils/workflowCard.js`, so `GET /workflows/cards` (B3) needs no mapping layer and cannot invert the solid/dashed meaning in translation. `models` carries **every** non-LoRA slot (checkpoint, unet, vae, clip), because a stack whose difference reads "other models" has to have those models behind it in ⓘ; a card row still names the checkpoint only.
-- **`WorkflowCard`** takes one `card`, `expanded` and `panelId`; emits `toggle` (▸) and `run` (*Run it…* on a card with no pictures). **Every card is exactly `--wf-card-h` (252px)**: a `--wf-cover-h` (132px) 2fr/1fr cover, then four `--control-h-sm` rows (name, checkpoint, LoRAs, special facts) that clip rather than wrap. Both heights are component-local by design decision. Cover and meta are fixed-height `flex: none` boxes, so content cannot grow the card and a change to the sum shows as a wrong height. jsdom has no layout, so `WorkflowCard.test.js` resolves the stylesheet against the token sheet and asserts the sum and that row 4's right padding keeps it clear of ⓘ; the content cases (0 and 5 LoRAs, long names) were measured once in Chromium, not in CI.
+- **`WorkflowCard`** takes one `card`, `expanded`, `panelId` and `member`; emits `toggle` (▸) and `run` (*Run it…* on a card with no pictures). **Every card is exactly `--wf-card-h` (252px)**: a `--wf-cover-h` (132px) 2fr/1fr cover, then four `--control-h-sm` rows (name, checkpoint, LoRAs, special facts) that clip rather than wrap. Both heights are component-local by design decision. Cover and meta are fixed-height `flex: none` boxes, so content cannot grow the card and a change to the sum shows as a wrong height. jsdom has no layout, so `WorkflowCard.test.js` resolves the stylesheet against the token sheet and asserts the sum and that row 4's right padding keeps it clear of ⓘ; the content cases (0 and 5 LoRAs, long names) were measured once in Chromium, not in CI.
 - **A stack** (`stackSize` ≥ 2) adds ▸ before the name and a layered count on the cover; its facts row reads "differs by". ▸ and ⓘ are real `AppButton`s at `tabindex="-1"`: the Workflows grid's roving cursor owns Tab. **The layered count is a button too** (#1402) — it is the mark that says there are cards under this one, so it opens the stack as well — but it stays `aria-hidden` and off the tab order: ▸ is the announced control and a second one saying the same thing is noise, not access.
 - **"+N" is not a control.** The card's `aria-label` (`cardAccessibleName`) carries every chip, saying "workflow LoRA" or "recipe LoRA slot" because the solid/dashed border is not announced, and ratings as "4.8 of 5".
 - **`ChipRow`** measures its chips from a hidden natural-width copy, shows as many as fit (`fitChipCount`, which always keeps one and ellipsizes it rather than showing a bare "+N"), and emits `overflow` with the hidden count (F2's List column is the second consumer).
@@ -1480,7 +1480,12 @@ same watcher the shelf uses.
   are spliced in at the END of its row — where the panel sits in the DOM — and
   padded with holes to a whole number of rows, so `index % columns` is the
   column a row is drawn in on both sides of the boundary and Down from the
-  stack's row enters the panel at the nearest column. Holes are not cursor
+  stack's row enters the panel at the nearest column. **The stack's own row is
+  padded first**: a stack in the last, incomplete row would otherwise splice
+  the block in at an index that is no multiple of `columns`, and from there the
+  column arithmetic is wrong for every row after it — six cards over four
+  columns left Down from the stack card on a hole with nothing below it, so the
+  panel could not be reached by keyboard at all. Holes are not cursor
   stops. **A stack's cover appears twice**, as the grid's stack card and as the
   panel's first (flagged) member, so entries carry a unique `id` beside the
   shared card `key` and a DOM lookup is scoped by kind.
@@ -1528,7 +1533,28 @@ same watcher the shelf uses.
   arrived. Members are one detail request each, so counting arrivals leaves a
   six-member stack reading "1 workflow" for six round trips — and permanently
   if one of them fails. While any are missing the header says so
-  ("reading the rest…", or "N could not be read").
+  ("reading the rest…", or "N could not be read"), and which of the two it says
+  is read off the OPEN stack: `membersLoading` is `inflight.has(openStackKey)`,
+  not a boolean shared by every stack, or opening `b` and then `e` has `b`
+  finishing tell the panel that `e`'s members could not be read while they are
+  still on the wire.
+- **A member row is drawn with `member` set, which drops the stack marks.**
+  Members carry the WHOLE stack's `stack_size` — the service sets it on every
+  member so one opened alone still shows what it differs by — so without the
+  prop each row in the panel wore the layered count and a ▸ bound to nothing,
+  offering a reader N collapsed expandables that never expand, and announced
+  itself as "stack of N workflows" from inside that stack. The difference chips
+  and their "differs by" label stay: they are what the row is for.
+- **A failed member request is recorded, not cached as the answer.** Writing
+  the cover alone into `members` satisfied the "already have them" guard, so
+  one dropped request left the panel reading "N could not be read" for the rest
+  of the session however often it was reopened. Three states, as
+  `useWorkflowShelfStore.loadSamples` settles the same hazard: in `inflight`,
+  answered in `members`, failed in `membersFailed`, and a reopen clears the
+  third and asks again. The store also carries an **epoch stamp** bumped by
+  `reset()`, so a fetch still in flight when the credential changes cannot
+  write the old session's cards, or their cover thumbnail URLs, into the new
+  one.
 - **`.stack-cover-flag` moved from `ImageGrid.css` (scoped) to `App.css`
   (global)** so the picture grid and this panel wear one chip rather than two
   copies. `ImageGrid.css` still owns where it sits in a picture tile's

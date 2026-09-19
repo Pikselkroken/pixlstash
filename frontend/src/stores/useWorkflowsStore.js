@@ -56,9 +56,25 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   const openStackKey = ref(null);
   /** `{coverKey: [cover, …members]}` — a stack's cards, once fetched. */
   const members = ref({});
-  const membersLoading = ref(false);
   /** Keys whose member requests are in flight, so a second open is a no-op. */
-  const inflight = new Set();
+  const inflight = ref(new Set());
+  /** Keys whose member request came back empty-handed. A retry clears them. */
+  const membersFailed = ref(new Set());
+
+  /**
+   * The OPEN stack's members are still coming.
+   *
+   * Read off `inflight` rather than kept as a boolean of its own: one flag
+   * shared by every stack cleared on whichever request finished first, so
+   * opening `b` and then `e` had `b`'s completion tell the panel that `e`'s
+   * members "could not be read" while they were still on the wire.
+   */
+  const membersLoading = computed(() => inflight.value.has(openStackKey.value));
+
+  // A stamp, not a boolean: an in-flight fetch that resolves after a session
+  // reset must not write its rows, or its cover thumbnail URLs, into the new
+  // session's store.
+  let epoch = 0;
 
   /** Selected card keys; a member's key mixes freely with a top-level one. */
   const selectedKeys = ref([]);
@@ -99,17 +115,20 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     if (loading.value) return;
     loading.value = true;
     error.value = "";
+    const mine = epoch;
     try {
       const body = await listWorkflowCards();
+      if (mine !== epoch) return;
       cards.value = body.cards;
       oneOffs.value = body.one_offs;
       hidden.value = body.hidden;
       loaded.value = true;
     } catch (err) {
-      error.value = errorMessage(err, "Could not read the workflows.");
       console.warn("[workflows] could not read the cards", err);
+      if (mine !== epoch) return;
+      error.value = errorMessage(err, "Could not read the workflows.");
     } finally {
-      loading.value = false;
+      if (mine === epoch) loading.value = false;
     }
   }
 
@@ -133,29 +152,46 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     const card = cards.value.find((entry) => entry.key === coverKey);
     if (!card || !isStack(card)) return;
     openStackKey.value = coverKey;
-    if (members.value[coverKey] || inflight.has(coverKey)) return;
-    inflight.add(coverKey);
-    membersLoading.value = true;
+    if (members.value[coverKey] || inflight.value.has(coverKey)) return;
+    const mine = epoch;
+    inflight.value = new Set(inflight.value).add(coverKey);
+    // Cleared as the attempt starts, not as it ends: a retry must not read as
+    // failed while it is in flight.
+    if (membersFailed.value.has(coverKey)) {
+      const cleared = new Set(membersFailed.value);
+      cleared.delete(coverKey);
+      membersFailed.value = cleared;
+    }
     try {
       const fetched = await Promise.all(
         (card.member_keys ?? []).map((key) => getWorkflowCard(key)),
       );
-      members.value = {
-        ...members.value,
-        [coverKey]: [card, ...fetched.map((body) => body.card)],
-      };
+      if (mine === epoch) {
+        members.value = {
+          ...members.value,
+          [coverKey]: [card, ...fetched.map((body) => body.card)],
+        };
+      }
     } catch (err) {
-      error.value = errorMessage(err, "Could not read this stack.");
       console.warn(
         `[workflows] could not read the members of ${coverKey}`,
         err,
       );
-      // The cover alone rather than nothing: the panel then says what it can
-      // instead of hanging on a spinner with an error nobody reads.
-      members.value = { ...members.value, [coverKey]: [card] };
+      if (mine !== epoch) return;
+      error.value = errorMessage(err, "Could not read this stack.");
+      // The failure is RECORDED, not written into `members` as an answer.
+      // Writing the cover alone there satisfied the "already have them" guard
+      // above, so one dropped request made the panel say "N could not be
+      // read" for the rest of the session however often it was reopened.
+      // `openMembers` still falls back to the cover, so the panel draws the
+      // same thing — it just asks again next time.
+      membersFailed.value = new Set(membersFailed.value).add(coverKey);
     } finally {
-      inflight.delete(coverKey);
-      membersLoading.value = false;
+      if (mine === epoch) {
+        const next = new Set(inflight.value);
+        next.delete(coverKey);
+        inflight.value = next;
+      }
     }
   }
 
@@ -196,13 +232,19 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   }
 
   function reset() {
+    epoch += 1;
     cards.value = [];
     oneOffs.value = 0;
     hidden.value = 0;
     loaded.value = false;
+    // Cleared here too: the in-flight fetch's `finally` belongs to the old
+    // epoch and will not clear it, and `fetchCards` refuses to start while it
+    // is set — which would leave the new session looking at an empty grid.
+    loading.value = false;
     error.value = "";
     members.value = {};
-    inflight.clear();
+    inflight.value = new Set();
+    membersFailed.value = new Set();
     openStackKey.value = null;
     selectedKeys.value = [];
   }

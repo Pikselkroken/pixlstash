@@ -279,6 +279,26 @@ describe("WorkflowCard", () => {
     expect(wrapper.find(".wf-card__badge--start").exists()).toBe(false);
   });
 
+  it("has none of them on a member row either, but keeps its differences", () => {
+    // A member is served the WHOLE stack's `stack_size` — deliberately, so a
+    // member opened alone still shows what it differs by — so every row in an
+    // open panel wore the layered count and a ▸ that could not expand
+    // anything, and announced itself as a stack of six while sitting inside
+    // that stack.
+    const wrapper = mountCard(CROWDED, { member: true });
+    expect(wrapper.find(".wf-card__toggle").exists()).toBe(false);
+    expect(wrapper.find(".wf-card__badge--start").exists()).toBe(false);
+    expect(wrapper.classes()).not.toContain("wf-card--stack");
+
+    const name = wrapper.attributes("aria-label");
+    expect(name).not.toContain("stack of 6 workflows");
+    // What the row is for stays: the chips, their label, and everything else
+    // the name reads.
+    expect(name).toContain("differs by: + face detailer");
+    expect(wrapper.text()).toContain("differs by");
+    expect(wrapper.text()).toContain("+ upscale 2×");
+  });
+
   it("puts ⓘ on every card as a real button outside the tab order", () => {
     const info = mountCard(BARE).find(".wf-card__info");
     expect(info.element.tagName).toBe("BUTTON");
