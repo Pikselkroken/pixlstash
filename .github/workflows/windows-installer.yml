@@ -69,14 +69,8 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
           EXPECTED_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          $tag = $env:RELEASE_TAG
-          $expected = "v$env:EXPECTED_VERSION"
-          if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:(?:a|b|rc)[0-9]+|[.-]dev[.-]?[0-9]+)?$') {
-            Write-Error "Release tag has an unsupported format: $tag"
-          }
-          if ($tag -ne $expected) {
-            Write-Error "Tag $tag does not match pyproject version $expected"
-          }
+          python scripts/check_release_tag.py "$env:RELEASE_TAG" "$env:EXPECTED_VERSION"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Install Inno Setup
         shell: pwsh

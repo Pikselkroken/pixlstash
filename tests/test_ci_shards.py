@@ -404,8 +404,7 @@ def test_electron_apple_signing_requires_validated_release_tag():
     assert "validated_release_tag=false" in validation["run"]
     assert "validated_release_tag=true" in validation["run"]
     assert '"refs/tags/$RELEASE_TAG"' in validation["run"]
-    assert "^v[0-9]+" in validation["run"]
-    assert '"v$EXPECTED_VERSION"' in validation["run"]
+    assert "scripts/check_release_tag.py" in validation["run"]
 
     unsigned = steps_by_name["Build unsigned Electron installers"]
     assert unsigned["if"] == (
@@ -1760,3 +1759,43 @@ def test_a_complete_map_warns_about_nothing():
         warnings.simplefilter("always")
         _warn_or_fail_on_map_coverage(gated, recorded_files)
     assert caught == [], [str(w.message) for w in caught]
+
+
+@pytest.mark.parametrize(
+    ("tag", "expected_version", "accepted"),
+    [
+        ("v1.12.0-dev.2", "1.12.0.dev.2", True),
+        ("v1.12.0.dev.2", "1.12.0.dev.2", True),
+        ("v1.12.0.dev2", "1.12.0.dev.2", True),
+        ("v1.11.2rc1", "1.11.2rc1", True),
+        ("v1.11.3", "1.11.3", True),
+        ("v1.12.0-dev.2", "1.12.0.dev.3", False),
+        ("v1.12.0", "1.12.1", False),
+        ("1.12.0", "1.12.0", False),
+        ("v1.12.0-nightly", "1.12.0", False),
+        ("v1.12.0.post1", "1.12.0.post1", False),
+        ("v1.12.0\n", "1.12.0", False),
+    ],
+)
+def test_release_tag_check_compares_normalised_versions(
+    tag, expected_version, accepted
+):
+    """A dev tag's separator must not decide whether a release builds.
+
+    ``v1.12.0-dev.1`` and ``v1.12.0-dev.2`` both failed the Windows installer
+    and Electron builds because the workflows compared the tag with the
+    pyproject version as raw strings, while the format check above it accepted
+    either separator. The two spellings are the same PEP 440 version.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "check_release_tag.py"),
+            tag,
+            expected_version,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is accepted, result.stderr or result.stdout
