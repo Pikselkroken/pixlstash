@@ -227,10 +227,12 @@ describe("Toolbar - the shell band's one box recipe", () => {
       "src/components/views/LibraryInsights.vue",
       ".ins-toolbar",
     );
-    // The three bars that gained the app-wide tail in #1415.
+    // The three bars that gained the app-wide tail in #1415. The Workflows
+    // one is `WorkflowsView` since F1b; it copied the shelf's box recipe so
+    // the screen that replaced it sits at the same height.
     const workflows = blockOf(
-      "src/components/views/WorkflowShelf.vue",
-      ".wfshelf-toolbar",
+      "src/components/views/WorkflowsView.vue",
+      ".wfv-toolbar",
     );
     const moves = blockOf(
       "src/components/views/MovesReview.vue",
@@ -320,12 +322,12 @@ describe("Toolbar - the shell band's one box recipe", () => {
     // its count at a fourth ink, the same drift the shelf's --text-xl was
     // (#1415).
     const wfTitle = blockOf(
-      "src/components/views/WorkflowShelf.vue",
-      ".wfshelf-title",
+      "src/components/views/WorkflowsView.vue",
+      ".wfv-title",
     );
     const wfSub = blockOf(
-      "src/components/views/WorkflowShelf.vue",
-      ".wfshelf-sub",
+      "src/components/views/WorkflowsView.vue",
+      ".wfv-sub",
     );
     const mvTitle = blockOf(
       "src/components/views/MovesReview.vue",
@@ -350,8 +352,8 @@ describe("Toolbar - the shell band's one box recipe", () => {
     // toggle that had just narrowed the column by opening the rail (#1415).
     // `min-width: 0` is the half that actually lets a nowrap flex item shrink.
     const wfTail = blockOf(
-      "src/components/views/WorkflowShelf.vue",
-      ".wfshelf-bar-tail",
+      "src/components/views/WorkflowsView.vue",
+      ".wfv-bar-tail",
     );
     for (const identity of [wfTitle, mvTitle]) {
       expect(identity).toContain("min-width: 0");

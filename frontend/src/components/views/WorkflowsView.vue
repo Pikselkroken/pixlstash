@@ -54,6 +54,23 @@
         aria-hidden="true"
         @change="filesChosen"
       />
+
+      <span class="wfv-spacer"></span>
+      <!-- The app-wide tail, minus undo: this view replaces the grid and its
+           toolbar, so without it neither Settings nor the right rail has a
+           control on the screen — and the rail is where `WorkflowTab` is
+           shown (`AppInspector` gates it on `sidebarStore.statsOpen`), so the
+           rail would be unreachable (#1415). Its own `--space-3` cluster
+           because this bar spaces its controls wider, and `rail-name` because
+           the toggle's tooltip is also its accessible name and this rail is
+           not the stats sidebar. -->
+      <span class="wfv-bar-tail">
+        <TbGlobalActions
+          separator
+          rail-name="inspector"
+          @open-settings="emit('open-settings')"
+        />
+      </span>
     </div>
 
     <p v-if="store.error" class="wfv-error" role="alert">{{ store.error }}</p>
@@ -192,9 +209,8 @@
 
 <script setup>
 /**
- * The Workflows grid (v1.12 Workflows & Recipes, F1a) — on `/workflows-next`,
- * with no sidebar entry, until F1b puts it on `/workflows` and retires the
- * shelf. See `docs/frontend_architecture.md` §5.
+ * The Workflows grid (v1.12 Workflows & Recipes, F1a) — on `/workflows` since
+ * F1b retired the shelf. See `docs/frontend_architecture.md` §5.
  *
  * ONE FLAT LIST. The cards, and — while a stack is open — its members, are one
  * index space, so the roving cursor crosses the panel boundary with the same
@@ -212,7 +228,7 @@ import {
   ref,
   watch,
 } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
 import { importWorkflow } from "../../api/comfyui";
@@ -226,6 +242,7 @@ import {
 import { errorMessage } from "../../utils/apiError";
 import { isStack } from "../../utils/workflowCard";
 import StackPanel from "../panels/StackPanel.vue";
+import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import OptionRows from "../widgets/OptionRows.vue";
@@ -243,11 +260,13 @@ import WorkflowCard from "../widgets/WorkflowCard.vue";
 const COLUMN_MIN = 240;
 const COLUMN_GAP = 12;
 
+// Settings is App.vue's dialog; TbGlobalActions flips the sidebar store itself.
 const emit = defineEmits(["open-settings"]);
 
 const store = useWorkflowsStore();
 const filterStore = useFilterStore();
 const router = useRouter();
+const route = useRoute();
 
 const gridEl = ref(null);
 const fileInput = ref(null);
@@ -433,6 +452,45 @@ onMounted(async () => {
 /** What the owner calls the folder: the host path when the server has one. */
 const watchedPath = computed(
   () => watchedFolder.value?.host_path || watchedFolder.value?.folder || "",
+);
+
+// ── Arriving from a picture's Recipe section (#1313) ──────────────────────
+//
+// `?topology=<hash>` selects the card that topology made and puts the cursor
+// on it, so the link from the lightbox lands on the card rather than at the
+// top of the grid. A topology can hold several cards — a different checkpoint
+// is a different card — and the grid lists one card per stack, so the FIRST in
+// the sorted order is taken: it is the one the reader would have found first
+// anyway.
+//
+// Honoured once per value rather than on every `cards` change, because the
+// grid is refetched (a file is added, a LoRA slot is flipped) while the query
+// string stays put, and a second application would take focus back off
+// whatever the reader had moved to. `immediate` because the store's cards
+// outlive a route change: a second visit on the same link has nothing left to
+// change for the watcher to see.
+let honouredTopology = null;
+
+watch(
+  [() => route?.query?.topology, () => store.sortedCards],
+  ([wanted]) => {
+    if (!wanted) {
+      honouredTopology = null;
+      return;
+    }
+    if (honouredTopology === wanted) return;
+    const card = store.sortedCards.find(
+      (entry) => entry.topology_hash === wanted,
+    );
+    if (!card) return;
+    honouredTopology = wanted;
+    store.select(card.key);
+    const at = flatRows.value.findIndex(
+      (entry) => entry.id === `card:${card.key}`,
+    );
+    if (at >= 0) nextTick(() => moveCursor(at));
+  },
+  { immediate: true },
 );
 
 function openWatchedFolder() {
@@ -685,8 +743,8 @@ async function filesChosen(event) {
   overflow: hidden;
 }
 
-/* The shelf bar's box recipe, copied from `WorkflowShelf.vue` so the screen
-   that replaces it sits at the same height beside the model shelf: a fixed 36
+/* The retired workflow shelf's box recipe, carried over so the screen that
+   replaced it sits at the same height beside the model shelf: a fixed 36
    with the hairline INSIDE it and no vertical padding. `--bar-height` is 48
    and would not. `container-name` carries the names the shared chrome's own
    `@container` rules are written against — the class attribute alone does
@@ -727,6 +785,21 @@ async function filesChosen(event) {
   flex-shrink: 4;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.wfv-spacer {
+  flex: 1;
+}
+
+/* The app-wide tail's own gap: this bar spaces its controls at --space-4, and
+   the tail must land at the --space-3 every other host lays it out at. Never
+   the member that gives — it is the app-wide chrome, and the control that
+   opens the rail must not be the one the edge eats. */
+.wfv-bar-tail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 0 0 auto;
 }
 
 .wfv-error {

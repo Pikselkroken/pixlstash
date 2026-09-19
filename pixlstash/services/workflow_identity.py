@@ -83,13 +83,13 @@ _PICTURE_WIDGET_RE = re.compile(r"(^|_)(image|images|video|mask)(_|$)")
 # changed rather than falling back to "other models". The shelf loader names
 # its checkpoint by id, not by filename (#1416).
 #
-# **Kept identical to `BASE_WIDGETS` in `frontend/src/utils/workflowShelf.js`**,
-# which answers the same question for the Models column, and which had drifted
-# from this set in both directions - `diffusion_model` and `model_path` were
-# only there, `checkpoint_id` only here. A workflow then reads as having a base
-# model on one side and a changed one on the other. The drift is what #1416
-# was, so it is asserted rather than agreed:
-# `tests/test_architecture_guardrails.py::test_base_model_widgets_agree_across_the_stack`.
+# **This is now the only copy.** The retired workflow shelf kept a
+# `BASE_WIDGETS` of its own for the Models column, and the two drifted in both
+# directions - `diffusion_model` and `model_path` only there, `checkpoint_id`
+# only here - so a workflow read as having a base model on one side and a
+# changed one on the other (#1416). A guardrail held them equal until F1b
+# (#1404) deleted the shelf: the Workflows grid reads the slot `kind` this
+# module derives, so there is no second list left to drift.
 CHECKPOINT_WIDGETS = frozenset(
     {
         "ckpt_name",

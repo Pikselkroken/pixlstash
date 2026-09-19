@@ -52,24 +52,6 @@ export function useWindowFileImport({ sidebarRef }) {
     return Boolean(target.closest(".image-grid, .grid-scroll-wrapper"));
   }
 
-  /**
-   * A drop of workflow JSON files alone onto the Workflows view is that view's
-   * to take (#1303). This listener runs first, in the capture phase, so it has
-   * to stand aside rather than report the files as unsupported beside the
-   * view's own "Added" notice. Anything else dropped there still imports.
-   */
-  function isWorkflowDropOnWorkflowsView(event) {
-    const target = event?.target;
-    if (!(target instanceof Element) || !target.closest(".wfshelf")) {
-      return false;
-    }
-    const dropped = Array.from(event.dataTransfer?.files || []);
-    return (
-      dropped.length > 0 &&
-      dropped.every((file) => /\.json$/i.test(file?.name || ""))
-    );
-  }
-
   function isExternalFileDragEvent(event) {
     const dataTransfer = event?.dataTransfer;
     if (!dataTransfer) return false;
@@ -221,7 +203,6 @@ export function useWindowFileImport({ sidebarRef }) {
       event.preventDefault();
       return;
     }
-    if (isWorkflowDropOnWorkflowsView(event)) return;
     event.preventDefault();
     // Decided synchronously, from the flat list, because `stopPropagation` only
     // counts while the event is still being dispatched - which is now, before

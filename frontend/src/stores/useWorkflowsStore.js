@@ -9,10 +9,6 @@ import { errorMessage } from "../utils/apiError";
 /**
  * The Workflows grid (v1.12 F1a) — the cards, the sort, and which stack is open.
  *
- * Separate from `useWorkflowShelfStore`, which owns the shipped topology list
- * on `/workflows`: the two read different routes and answer different
- * questions, and F1b replaces the shelf rather than merging the two.
- *
  * **One stack open at a time**, deliberately unlike the picture grid, where any
  * number of stacks can be expanded at once. A workflow stack's panel is a
  * full-width band that pushes every later row down, so two open panels put the
@@ -234,6 +230,23 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     closeStack();
   }
 
+  /**
+   * Forget what was read and read the grid again, after something OUTSIDE this
+   * view changed what the cards say.
+   *
+   * The one caller is a ghost purge in Settings › Privacy: forgetting a model
+   * name or a picture ghost changes what a card names and how many pictures it
+   * counts, and a grid left alone would go on showing what was just purged.
+   * The cached stack members go with it for `forgetMembers`' own reason.
+   *
+   * **Only re-read when the grid has been read**, so a purge made by somebody
+   * who has never opened Workflows fires no request.
+   */
+  function invalidate() {
+    forgetMembers();
+    if (loaded.value) fetchCards();
+  }
+
   function toggleStack(coverKey) {
     if (openStackKey.value === coverKey) closeStack();
     else openStack(coverKey);
@@ -305,6 +318,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     openStack,
     closeStack,
     forgetMembers,
+    invalidate,
     toggleStack,
     select,
     selectRange,

@@ -24,7 +24,13 @@ vi.mock("vuetify/components", async () => {
 });
 
 const push = vi.fn();
-vi.mock("vue-router", () => ({ useRouter: () => ({ push }) }));
+// `query` is reassigned per test, so the mock hands back the live object
+// rather than a snapshot taken when the module was loaded.
+const route = { name: "workflows", query: {} };
+vi.mock("vue-router", () => ({
+  useRouter: () => ({ push }),
+  useRoute: () => route,
+}));
 
 const listWorkflowCards = vi.fn();
 const getWorkflowCard = vi.fn();
@@ -44,6 +50,7 @@ import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 const card = (key, extra = {}) => ({
   key,
   name: key,
+  topology_hash: `topology-${key}`,
   models: [],
   loras: [],
   differs_by: [],
@@ -139,6 +146,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   observers = [];
   push.mockClear();
+  route.query = {};
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -150,11 +158,12 @@ beforeEach(() => {
     },
   );
   listImportFolders.mockResolvedValue({ folders: [] });
-  listWorkflowCards.mockResolvedValue({
-    cards: CARDS,
-    one_offs: 0,
-    hidden: 0,
-  });
+  // A FRESH array per call, as a real response is: the store assigns it to
+  // `cards`, and handing back the same object would make a refetch a no-op
+  // that no watcher on the list could see.
+  listWorkflowCards.mockImplementation(() =>
+    Promise.resolve({ cards: [...CARDS], one_offs: 0, hidden: 0 }),
+  );
   getWorkflowCard.mockImplementation((key) =>
     Promise.resolve({ card: card(key, { stack_size: 3 }) }),
   );
@@ -586,5 +595,45 @@ describe("the empty state", () => {
       name: "import-folder",
       params: { id: "7" },
     });
+  });
+});
+
+// ── The Recipe section's Open ─────────────────────────────────────────────
+//
+// `/workflows?topology=<hash>` is the link a picture's Recipe section pushes.
+// The shelf honoured it and the grid replaced the shelf, so it has to land on
+// the card rather than at the top of the list.
+describe("arriving on ?topology=", () => {
+  it("selects the card that topology made and puts the cursor on it", async () => {
+    route.query = { topology: "topology-d" };
+    const wrapper = await grid();
+
+    expect(useWorkflowsStore().selectedKeys).toEqual(["d"]);
+    expect(cursorKey(wrapper)).toBe("d");
+  });
+
+  it("leaves the cursor alone for a topology this library does not have", async () => {
+    route.query = { topology: "topology-nothing" };
+    const wrapper = await grid();
+
+    expect(useWorkflowsStore().selectedKeys).toEqual([]);
+    // The grid's own default: the first row holds the only tab stop.
+    expect(cursorKey(wrapper)).toBe("a");
+  });
+
+  it("does not take focus back after a refetch", async () => {
+    route.query = { topology: "topology-d" };
+    const wrapper = await grid();
+    expect(cursorKey(wrapper)).toBe("d");
+
+    // The reader moves on, and something re-reads the grid under them - a
+    // file added, a LoRA slot flipped. The link must not be applied twice.
+    await wrapper.find('[data-key="f"]').trigger("click");
+    expect(cursorKey(wrapper)).toBe("f");
+
+    await useWorkflowsStore().fetchCards();
+    await flush();
+
+    expect(cursorKey(wrapper)).toBe("f");
   });
 });

@@ -24,9 +24,8 @@ import App from "../App.vue";
 //   /models                                 → Model shelf (adapters/checkpoints)
 //   /models?model=<id>                      → …opened on that model (a Recipe chip's link)
 //   /models/runs                            → ai-toolkit training runs, the shelf's second view
-//   /workflows                              → the workflow library (topologies)
+//   /workflows                              → the Workflows grid (one card per workflow)
 //   /workflows?topology=<hash>              → …opened on that workflow (the Recipe section's Open)
-//   /workflows-next                         → the new Workflows grid (v1.12 F1a, temporary, no sidebar entry)
 //   /ref-folder/:id                         → Reference folder view (id = numeric)
 //   /import-folder/:id                      → Import folder view (id = numeric)
 //
@@ -68,9 +67,6 @@ const routes = [
   { path: "/models", name: "models", component: App },
   { path: "/models/runs", name: "models-runs", component: App },
   { path: "/workflows", name: "workflows", component: App },
-  // v1.12 F1a: the new Workflows grid, with no sidebar entry. F1b moves it
-  // onto `/workflows` and deletes this line.
-  { path: "/workflows-next", name: "workflows-next", component: App },
   // The runs were briefly a destination of their own. They are a view of the
   // shelf, so the old path redirects rather than 404s - it was published.
   { path: "/training-runs", redirect: "/models/runs" },

@@ -86,26 +86,15 @@ const MovesReview = defineAsyncComponent(
 const ReviewSessionsOverlay = defineAsyncComponent(
   () => import("./components/views/ReviewSessionsOverlay.vue"),
 );
-const WorkflowShelf = defineAsyncComponent(
-  () => import("./components/views/WorkflowShelf.vue"),
-);
-// v1.12 F1a: the new Workflows grid, reachable only by typing
-// `/workflows-next`. Async like the shelf, and for the same reason — nothing
-// that is not on screen belongs in the first chunk.
+// The Workflows grid, on `/workflows` since F1b. Async like every other
+// destination, and for the same reason — nothing that is not on screen
+// belongs in the first chunk.
 const WorkflowsView = defineAsyncComponent(
   () => import("./components/views/WorkflowsView.vue"),
 );
-// The workflow library's right rail. Async like the view it belongs to, and a
-// component of its own rather than a branch inside StatsSidebar: that panel
-// fetches on watchers, so a hidden-but-mounted copy would keep asking for
-// numbers nobody is looking at.
-const WorkflowInspector = defineAsyncComponent(
-  () => import("./components/panels/WorkflowInspector.vue"),
-);
-// The Workflows grid's rail (v1.12 F3). A second component rather than a
-// branch in the one above it: that inspector reads the shipped shelf's store
-// and its file-keyed routes, and both keep serving `/workflows` until F1b
-// swaps the route and deletes the pair of them.
+// Its right rail (v1.12 F3), a component of its own rather than a branch
+// inside StatsSidebar: that panel fetches on watchers, so a
+// hidden-but-mounted copy would keep asking for numbers nobody is looking at.
 const WorkflowTab = defineAsyncComponent(
   () => import("./components/panels/WorkflowTab.vue"),
 );
@@ -215,7 +204,6 @@ const {
   isInsightsView,
   isMovesView,
   isWorkflowsView,
-  isWorkflowsNextView,
   handleSelectModels,
   handleSelectInsights,
   handleSelectMoves,
@@ -804,18 +792,12 @@ defineExpose({
                 v-else-if="isMovesView"
                 @open-settings="openSettingsDialog"
               />
-              <!-- The workflow library lists graphs the hub knows about rather
+              <!-- The Workflows grid lists graphs the hub knows about rather
                    than pictures in this library, so like the shelf it replaces
                    the grid instead of floating over it, and the grid stays
                    unmounted while it is open. -->
-              <WorkflowShelf
-                v-else-if="isWorkflowsView"
-                @open-settings="openSettingsDialog"
-              />
-              <!-- The same slot, for the grid that replaces the shelf in F1b.
-                   It has no sidebar entry: `/workflows-next` is typed. -->
               <WorkflowsView
-                v-else-if="isWorkflowsNextView"
+                v-else-if="isWorkflowsView"
                 @open-settings="openSettingsDialog"
               />
               <ImageGrid
@@ -870,8 +852,7 @@ defineExpose({
              so with the inspector first the rail opened onto "Pick a workflow"
              while a run was in progress behind it. -->
         <WorkflowRunPanel v-if="workflowRunStore.open" />
-        <WorkflowInspector v-else-if="isWorkflowsView" />
-        <WorkflowTab v-else-if="isWorkflowsNextView" />
+        <WorkflowTab v-else-if="isWorkflowsView" />
         <StatsSidebar v-else ref="statsSidebarRef" />
       </div>
       <ReviewSessionsOverlay
