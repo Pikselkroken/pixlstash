@@ -40,6 +40,14 @@ defineProps({
   margin-bottom: var(--space-2);
 }
 
+/* A section may carry more than one action (API Tokens has two), and two
+   adjacent AppButtons would otherwise touch. Inert for a single-button slot. */
+.s-section__action {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
 .s-section__title {
   font-weight: var(--weight-semibold);
   font-size: var(--text-base);

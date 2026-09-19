@@ -23,6 +23,7 @@ import AppInput from "../widgets/AppInput.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import SettingsSection from "./SettingsSection.vue";
+import ConnectAgentDialog from "./ConnectAgentDialog.vue";
 import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
@@ -54,6 +55,7 @@ const tokenDeleteDialogOpen = ref(false);
 // The create-token logic (createUserToken) is unchanged; this ref just controls
 // whether the form is shown in a dialog instead of inline.
 const createTokenDialogOpen = ref(false);
+const connectAgentDialogOpen = ref(false);
 const tokenToDelete = ref(null);
 const tokenScope = ref("ALL");
 const tokenResourceType = ref(null);
@@ -87,6 +89,7 @@ function resetForm() {
   tokenDialogOpen.value = false;
   tokenDeleteDialogOpen.value = false;
   createTokenDialogOpen.value = false;
+  connectAgentDialogOpen.value = false;
   tokenToDelete.value = null;
   tokenScope.value = "ALL";
   tokenResourceType.value = null;
@@ -586,6 +589,15 @@ watch(
     <SettingsSection title="API Tokens" class="account-tokens-section">
       <template #action>
         <AppButton
+          variant="secondary"
+          size="sm"
+          icon-left="robot-outline"
+          :disabled="tokensLoading"
+          @click="connectAgentDialogOpen = true"
+        >
+          Connect AI agent
+        </AppButton>
+        <AppButton
           variant="primary"
           size="sm"
           icon-left="plus"
@@ -694,6 +706,13 @@ watch(
       </div>
     </SettingsSection>
   </div>
+
+  <!-- ── Connect an AI agent (MCP) ───────────────────────────────────── -->
+  <ConnectAgentDialog
+    :open="connectAgentDialogOpen"
+    @close="connectAgentDialogOpen = false"
+    @created="fetchUserTokens"
+  />
 
   <!-- ── New API token dialog (create form) ──────────────────────────── -->
   <AppDialog
