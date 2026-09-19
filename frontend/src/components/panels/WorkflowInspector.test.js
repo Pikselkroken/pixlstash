@@ -36,8 +36,14 @@ vi.mock("../../api/comfyui", () => ({
   setWorkflowInputs: (...args) => setWorkflowInputs(...args),
 }));
 
+const routerPush = vi.fn();
+// Written per test where it matters: the way back is read off the route, not
+// spelled out here.
+const currentRoute = { path: "/workflows", query: {}, fullPath: "/workflows" };
+
 vi.mock("vue-router", () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: (...args) => routerPush(...args) }),
+  useRoute: () => currentRoute,
 }));
 
 import WorkflowInspector from "./WorkflowInspector.vue";
@@ -113,6 +119,8 @@ beforeEach(() => {
   getWorkflowInputs.mockReset();
   setWorkflowInputs.mockReset();
   deleteWorkflow.mockReset();
+  routerPush.mockReset();
+  currentRoute.path = "/workflows";
   listWorkflowFiles.mockReset().mockResolvedValue({ workflows: [] });
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -138,6 +146,26 @@ describe("the Pictures tab's three answers", () => {
     listWorkflowPictures.mockResolvedValue([11, 12, 13]);
     const { wrapper } = await mountOnPictures();
     expect(wrapper.findAll("button.wfins-tile")).toHaveLength(3);
+  });
+
+  it("carries the way back to the shelf when a tile opens a picture", async () => {
+    // The lightbox is mounted inside the grid this view replaces, so a tile has
+    // to leave for the picture-grid route to show one. Without `?from=` closing
+    // it left the reader on All Pictures instead of the shelf (see
+    // `utils/overlayRoute.js`, and `ImageGridOverlayCloseReturn.test.js` for the
+    // other half).
+    //
+    // The route is read, not assumed: this view will move to `/workflows` proper
+    // when F1b lands, and a hard-coded way back would then send the reader to a
+    // screen they were not on.
+    currentRoute.path = "/workflows-next";
+    listWorkflowPictures.mockResolvedValue([11, 12, 13]);
+    const { wrapper } = await mountOnPictures();
+    await wrapper.findAll("button.wfins-tile")[1].trigger("click");
+    expect(routerPush).toHaveBeenCalledWith({
+      name: "all-pictures",
+      query: { overlay: "12", from: "/workflows-next" },
+    });
   });
 
   it("says the workflow outlived its pictures when the ids come back empty", async () => {

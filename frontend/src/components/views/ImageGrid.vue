@@ -1194,6 +1194,7 @@ import {
   useBottomAnchor,
 } from "../../composables/useBottomAnchor";
 import { FLOATING_BOTTOM_GAP_PX } from "../../utils/floatingBottom";
+import { overlayCloseTarget } from "../../utils/overlayRoute";
 import { markEnd, markStart } from "../../utils/perfMarks";
 import { useScopedNotice } from "../../composables/useScopedNotice";
 import { buildPurgeBadge } from "../../utils/retention.js";
@@ -5656,12 +5657,23 @@ function moveOverlayTo(id) {
   _pushOverlayRoute(id);
 }
 
-function _removeOverlayRoute() {
+// Closing the lightbox drops `?overlay=` and stays put - except when the
+// picture was opened from a destination that replaces this grid (the workflow
+// library's tiles), which sends the route to come back to as `?from=`. Without
+// it the close left the reader on All Pictures instead of the shelf they came
+// from. `overlayCloseTarget` owns that decision, so it can be read and tested as
+// one thing; `ImageGridOverlayCloseReturn.test.js` mounts this component and
+// pins that the close actually asks it.
+//
+// `returnToOrigin` is what separates the reader closing the lightbox from this
+// component closing it to reveal its own work - see `closeOverlay`.
+function _removeOverlayRoute(returnToOrigin) {
   _overlayRoutePushPending = true;
-  const { overlay: _removed, ...rest } = _overlayRoute.query;
-  _overlayRouter.replace({ query: rest }).finally(() => {
-    _overlayRoutePushPending = false;
-  });
+  _overlayRouter
+    .replace(overlayCloseTarget(_overlayRoute.query, returnToOrigin))
+    .finally(() => {
+      _overlayRoutePushPending = false;
+    });
 }
 
 watch(
@@ -5674,7 +5686,10 @@ watch(
       }
     } else {
       if (overlayOpen.value) {
-        closeOverlay();
+        // The route has already moved - this is catching up with it, not the
+        // reader closing the lightbox - so it must not act on a `?from=` of its
+        // own accord.
+        closeOverlay(false);
       }
     }
   },
@@ -6501,11 +6516,17 @@ async function openOverlay(img) {
   markEnd("pixlstash:interaction-open-picture");
 }
 
-function closeOverlay() {
+// `returnToOrigin` false for every close this component makes on its own
+// behalf: a reverse-image search, a delete, a restore and "use as input" all
+// close the lightbox precisely so their result is visible in the grid behind
+// it, and honouring `?from=` would send that result to a screen with no grid.
+// The default is the reader's own close (the X, Escape, the `close` emit, which
+// carries no payload), which is the one that goes back where it came from.
+function closeOverlay(returnToOrigin = true) {
   overlayOpen.value = false;
   overlayImageId.value = null;
   overlayInitialExpandedStackIds.value = [];
-  _removeOverlayRoute();
+  _removeOverlayRoute(returnToOrigin);
   if (comfyuiRunner.value?.comfyuiPendingOverlayRefresh) {
     comfyuiRunner.value.comfyuiPendingOverlayRefresh.value = false;
   }
@@ -7558,7 +7579,7 @@ function handleOverlayReverseImageSearch() {
   faceLikenessSearchFaceId.value = null;
   reverseImageSearchPictureIds.value = [id];
   // Reveal the results behind the lightbox and clear any text search.
-  closeOverlay();
+  closeOverlay(false);
   emit("clear-search", "");
 }
 
@@ -7570,7 +7591,7 @@ function handleOverlayFindSimilarFaces(faceId) {
   // land in the grid BEHIND the lightbox, and while the overlay is open every
   // grid mutation is deferred (§9.1), so without closing it the action looks
   // like it did nothing at all.
-  closeOverlay();
+  closeOverlay(false);
   emit("clear-search", "");
 }
 
@@ -7590,7 +7611,7 @@ async function handleOverlayDelete() {
   // soft-deletes immediately. Either way, close the lightbox so it never shows
   // a picture that has just left the current view.
   await deleteSelected([id]);
-  closeOverlay();
+  closeOverlay(false);
 }
 
 async function handleOverlayScrapheapRestore() {
@@ -7605,7 +7626,7 @@ async function handleOverlayScrapheapRestore() {
     });
   }
   removeImagesById([id]);
-  closeOverlay();
+  closeOverlay(false);
   emit("refresh-sidebar");
   fetchAllGridImages().then(() => {
     loadedRanges.value = [];
@@ -7634,7 +7655,7 @@ function handleContextMenuOpenComfyuiPanel() {
 function useOverlayPictureAsInput(pictureId) {
   const id = pictureId ?? overlayImageId.value;
   if (id == null) return;
-  if (overlayOpen.value) closeOverlay();
+  if (overlayOpen.value) closeOverlay(false);
   // Narrowed to this picture, always.
   //
   // `handleImageContextMenu` keeps a selection the right-clicked picture is
