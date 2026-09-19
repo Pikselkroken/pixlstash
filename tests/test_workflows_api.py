@@ -3092,7 +3092,20 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
     assert card["models"][0]["name"] == "realvisxl.safetensors"
     # One LoRA slot, guessed `recipe` from its filename, so it is an anonymous
     # slot rather than a named file: a character LoRA is the recipe's business.
-    assert card["loras"] == [{"name": None, "kind": "lora", "mark": "recipe"}]
+    # `slot_label` is the address `PUT /workflows/{key}/slots` marks, and it
+    # travels with the slot because the Workflow tab's Workflow/Recipe switch
+    # (F3) has nothing else to name the slot it just flipped.
+    lora_label = next(
+        slot.label for slot in slots(_DOCUMENTS[BUSY_RECIPE_A]) if slot.is_lora
+    )
+    assert card["loras"] == [
+        {
+            "name": None,
+            "kind": "lora",
+            "mark": "recipe",
+            "slot_label": lora_label,
+        }
+    ]
 
 
 def test_a_card_says_when_it_was_last_used_so_the_grid_can_sort_by_it(
@@ -4089,8 +4102,18 @@ def test_a_cards_overrides_pins_and_inputs_are_written_whole(workflow_env):
             "SELECT pins FROM workflow_key_pins WHERE workflow_key = ?", (BUSY_CARD,)
         )["pins"]
     ) == [["slot-a", "steps"]]
+    # And READ BACK on the detail route, which is the only thing that makes
+    # the pin a control rather than a write into the dark: the Workflow tab
+    # draws the pin it sets from here (v1.12 F3).
+    assert owner.get(f"{API}/workflows/cards/{BUSY_CARD}").json()["pins"] == [
+        {"slot_label": "slot-a", "input_name": "steps"}
+    ]
     # `[]` is somebody who unpinned everything; null forgets the choice.
     owner.put(f"{API}/workflows/{BUSY_CARD}/pins", json={"pins": []})
+    # The same two answers survive the round trip, because a client renders
+    # them differently: `[]` shows nothing above "All N", `null` applies its
+    # own default pins.
+    assert owner.get(f"{API}/workflows/cards/{BUSY_CARD}").json()["pins"] == []
     assert (
         json.loads(
             hub.fetchone(
@@ -4107,6 +4130,7 @@ def test_a_cards_overrides_pins_and_inputs_are_written_whole(workflow_env):
         )
         is None
     )
+    assert owner.get(f"{API}/workflows/cards/{BUSY_CARD}").json()["pins"] is None
 
     assert (
         owner.put(

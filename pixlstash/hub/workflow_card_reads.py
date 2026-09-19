@@ -330,6 +330,41 @@ def default_overrides(
     }
 
 
+def key_pins(hub: HubDatabase, workflow_key: str) -> Optional[list[tuple[str, str]]]:
+    """The parameters the owner pinned on this card, or ``None`` for no choice.
+
+    The read side of ``PUT /workflows/{key}/pins``. ``None`` and ``[]`` are
+    different answers and the table keeps them apart: ``None`` is a card
+    nobody has pinned on, so a client applies its own default pins, and ``[]``
+    is somebody who unpinned everything.
+
+    A row whose JSON will not parse is reported as no choice rather than
+    raising: the pins decide which of a card's defaults show first, and a
+    panel that will not open is a worse answer than one showing the default
+    set. The hash is logged so the row can be found.
+    """
+    row = hub.fetchone(
+        "SELECT pins FROM workflow_key_pins WHERE workflow_key = ?", (workflow_key,)
+    )
+    if row is None:
+        return None
+    try:
+        stored = json.loads(row["pins"])
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "The pins of card %s will not parse, so the card reads as having "
+            "none and its default pins apply: %s",
+            workflow_key,
+            exc,
+        )
+        return None
+    return [
+        (str(pin[0]), str(pin[1]))
+        for pin in stored
+        if isinstance(pin, (list, tuple)) and len(pin) == 2
+    ]
+
+
 def keys_in_stack(hub: HubDatabase, stack_id: str) -> list[str]:
     """Every card one stack holds, in order; empty when it holds none.
 

@@ -1576,8 +1576,52 @@ same watcher the shelf uses.
   toolbar subtitle reads "N workflows · N hidden · N one-offs" from the
   payload's own `hidden` / `one_offs`, and the empty state says which of the
   two it is in rather than announcing "Nothing found yet" over a subtitle
-  reporting forty hidden cards. The inspector rail is not mounted on this route
-  either; selection lives in the store ready for it.
+  reporting forty hidden cards. The inspector rail is mounted by
+  `WorkflowTab.vue` below; selection lives in the store and the rail follows
+  it.
+
+#### `WorkflowTab.vue` + `WorkflowDefaultRow.vue` (`panels/`), v1.12 F3
+
+The Workflows grid's right rail: one `AppInspector` tab, **Workflow**, mounted
+by `App.vue` on `/workflows-next` in place of `StatsSidebar` exactly as
+`WorkflowInspector` is on `/workflows`. There is **no Run tab** — Run… is an
+action, so it belongs in the footer and opens a popup (F5).
+
+- **A sibling of `WorkflowInspector.vue`, not a reshaping of it**, though the
+  implementation plan names that file. The shelf on `/workflows` is still
+  served by that inspector and by the file-keyed
+  `/comfyui/workflows/{name}/…` routes behind it, and every step of this
+  feature has to leave the shelf working until F1b. F1b deletes
+  `WorkflowShelf.vue`, its store and its inspector together, which is where
+  that reshaping actually lands.
+- **The rail follows the SELECTION, not the open stack.** A member is never in
+  `store.cards` — the grid lists one card per stack — so the fetched
+  `store.members` lists are searched too; without that, selecting a row inside
+  an open stack panel emptied the rail. The header then reads "In the X
+  stack · N pictures" for a member and "Showing the cover · N pictures" for a
+  stack's cover.
+- **The LoRA slot's `Segmented` re-keys the card.** `PUT /workflows/{key}/slots`
+  answers with the key the card moved to, and the rail follows it: staying on
+  the key it sent leaves the panel reading a card the hub no longer has. The
+  slot is addressed by `slot_label`, which the card payload carries for this.
+- **Defaults are whole-set writes.** Resetting one value sends every other
+  edited value back untouched, which is the only way "reset one" exists on a
+  route that replaces the set. The pin is the same shape. The detail route
+  carries `pins`, and `null` (nobody has chosen) is not `[]` (everything
+  unpinned): `null` applies the component's own `DEFAULT_PINS`, which is the
+  design's choice of steps, cfg, guidance, width and height.
+- **What is drawn but not writable yet, and why.** The checkpoint and VAE are
+  fields rather than selects: no route changes a card's model file. A LoRA's
+  strength reads "—" because the card payload carries no strength. The ⋯ menu
+  holds Hide/Unhide alone — Duplicate, Open in ComfyUI, Export workflow and
+  Delete are in the plan's route table and are not in
+  `authz/registry.py`. The picture-input UI has not moved here either: the
+  key-based read that would list a card's picture inputs does not exist (only
+  `PUT /workflows/{key}/inputs` does), so there is nothing to render.
+- **Run… with several selected stays on screen and refuses**: `aria-disabled`
+  plus `aria-describedby` pointing at "Run one workflow at a time". A control
+  that disappears teaches nobody why. The multi-selection also gets *Stack
+  together* and *Hide*. Until F5 lands, Run… opens the shipped run panel.
 
 #### Shared shell pieces (issue #1301)
 Four pieces every screen builds on, to the design system's shell contract (`ui_kits/app/unified-shell.html`, rules 2, 3, 8 and 9). Reuse them; do not re-roll them.

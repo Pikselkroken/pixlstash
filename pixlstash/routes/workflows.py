@@ -57,6 +57,7 @@ from pixlstash.hub.workflow_card_reads import (
     card_index,
     find_card,
     instance_documents,
+    key_pins,
     keys_in_stack,
     picture_inputs,
 )
@@ -273,6 +274,13 @@ class WorkflowSlotModel(BaseModel):
     name: str | None = None
     kind: str
     mark: str | None = None
+    slot_label: str | None = Field(
+        None,
+        description=(
+            "The slot's address, as `PUT /workflows/{key}/slots` marks it. "
+            "Null for a slot the cached list gave no label."
+        ),
+    )
 
 
 class WorkflowDefault(BaseModel):
@@ -379,6 +387,16 @@ class WorkflowCardDetail(BaseModel):
     notes: str | None = None
     hidden: bool = False
     variants: list[WorkflowVariant] = Field(default_factory=list)
+    pins: list[ParameterAddress] | None = Field(
+        None,
+        description=(
+            "The parameters the owner pinned, addressed as `PUT "
+            "/workflows/{key}/pins` takes them. `null` is a card nobody has "
+            "pinned on, so the client's own default pins apply; `[]` is "
+            "somebody who unpinned everything. Without this the pins were "
+            "write-only and the Workflow tab could not draw the pin it sets."
+        ),
+    )
 
 
 # ── The writes (v1.12 B4) ───────────────────────────────────────────────────
@@ -791,7 +809,9 @@ def _display_name(card) -> str:
 
 def _slot_models(slots) -> list[WorkflowSlotModel]:
     return [
-        WorkflowSlotModel(name=slot.name, kind=slot.kind, mark=slot.mark)
+        WorkflowSlotModel(
+            name=slot.name, kind=slot.kind, mark=slot.mark, slot_label=slot.label
+        )
         for slot in slots
     ]
 
@@ -1089,11 +1109,18 @@ def create_router(server) -> APIRouter:
         if figure is None:
             raise HTTPException(status_code=404, detail="Unknown workflow card.")
         card = figure.card
+        pins = key_pins(hub, workflow_key)
         return WorkflowCardDetail(
             card=_card(figure, card_defaults(hub, server.vault, card)),
             notes=card.notes,
             hidden=card.hidden,
             variants=_card_variants(hub, server.vault, card),
+            pins=None
+            if pins is None
+            else [
+                ParameterAddress(slot_label=slot_label, input_name=input_name)
+                for slot_label, input_name in pins
+            ],
         )
 
     @router.get(
