@@ -19,6 +19,10 @@ comparison drops that. The version string names the installer file and the
 Inno Setup ``PIXLSTASH_VERSION``, so an unvalidated one ships in artifact
 names while the wheel normalises it away.
 
+Every shape the pattern admits parses, so there is no ``InvalidVersion``
+branch to carry: a pattern loosened past PEP 440 would raise, and an
+unhandled raise exits non-zero, which is the same fail-closed answer.
+
 Requires ``packaging``. Every caller installs it explicitly: the one workflow
 that relied on it arriving with ``build`` would have started rejecting valid
 tags the moment the validation step moved ahead of the wheel build.
@@ -27,7 +31,7 @@ tags the moment the validation step moved ahead of the wheel build.
 import re
 import sys
 
-from packaging.version import InvalidVersion, Version
+from packaging.version import Version
 
 # ``fullmatch`` and ``\A``/``\Z`` are each sufficient alone and kept together
 # deliberately: with a bare ``.match()`` the anchors are the only thing
@@ -55,13 +59,8 @@ def main(argv: list[str]) -> int:
         return _fail(f"Release tag has an unsupported format: {tag}")
     if not TAG_PATTERN.fullmatch(f"v{expected}"):
         return _fail(f"pyproject version has an unsupported format: {expected}")
-    try:
-        if Version(tag[1:]) != Version(expected):
-            return _fail(f"Tag {tag} does not match pyproject version {expected}")
-    except InvalidVersion as exc:
-        return _fail(
-            f"Cannot compare tag {tag} with pyproject version {expected}: {exc}"
-        )
+    if Version(tag[1:]) != Version(expected):
+        return _fail(f"Tag {tag} does not match pyproject version {expected}")
     return 0
 
 
