@@ -284,7 +284,7 @@
 // outlived everything it made, so the panel keeps its shape.
 
 import { computed, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 
 import { deleteWorkflow } from "../../api/comfyui";
 import { pictureThumbnailUrl } from "../../api/pictures";
@@ -329,6 +329,7 @@ const notices = useNoticeStore();
 const sidebarStore = useSidebarStore();
 const userPrefs = useUserPrefsStore();
 const router = useRouter();
+const route = useRoute();
 const { confirm } = useConfirm();
 
 const tab = ref("workflow");
@@ -522,10 +523,29 @@ function thumbUrl(id) {
  *
  * `?overlay=<id>` on the library route is the shipped way to open one — it is
  * how a reloaded lightbox restores itself — so this reuses that rather than
- * inventing a second route into the viewer.
+ * inventing a second route into the viewer. The lightbox lives inside the grid
+ * this view replaces, so there is nowhere else to open it.
+ *
+ * `?from=` is this screen's way back: closing the lightbox honours it, so the
+ * reader returns to the shelf rather than being left on All Pictures, which is
+ * where every close used to land.
+ *
+ * What comes back is the destination, not the scroll: the selected workflow and
+ * the Show filter are the store's and survive, but `App.vue` mounts this view
+ * under `v-else-if` with no `<KeepAlive>`, so the list is built again from the
+ * top and refetched. A row the refetch no longer lists loses the selection with
+ * it, which is the store's existing rule and not something this route restores.
+ *
+ * The path without its query, deliberately. `?topology=` is a one-shot
+ * instruction from a Recipe link that the shelf honours on mount: carrying it
+ * back would re-select whichever workflow that link named, over whichever one
+ * the reader has since chosen.
  */
 function openPicture(id) {
-  router.push({ name: "all-pictures", query: { overlay: String(id) } });
+  router.push({
+    name: "all-pictures",
+    query: { overlay: String(id), from: route.path },
+  });
 }
 
 // A workflow that has outlived its pictures cannot show the Pictures tab, and a

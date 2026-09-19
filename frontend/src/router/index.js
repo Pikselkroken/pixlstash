@@ -37,6 +37,12 @@ import App from "../App.vue";
 //                                  have no id of their own (a subfolder, or a
 //                                  folder an insight points at).
 //   ?overlay=<pictureId>         → Open ImageOverlay for that picture
+//   ?from=<path>                 → Where closing that overlay goes, for the
+//                                  destinations that replace the grid the
+//                                  lightbox lives in (the workflow library's
+//                                  picture tiles). Absent, the close stays put
+//                                  and only drops ?overlay=.
+//                                  (see utils/overlayRoute.js)
 //   ?review=board                → Open the tag-review overlay on the health board
 //   ?review=<reviewId>           → …on that review (open session or archived receipt)
 //   ?review_project=<id>         → Board scope: project

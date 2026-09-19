@@ -4515,6 +4515,41 @@ its pictures…" for ever with the failure's own sentence unreachable. So:
 through `?overlay=<id>` on the library route, which is the shipped way a
 reloaded lightbox restores itself rather than a second route into the viewer.
 
+**It carries `?from=/workflows` with it, and that is how closing comes back.**
+The lightbox is mounted inside `ImageGrid`, which this destination replaces, so
+a tile has nowhere to open a picture but the **picture-grid** route — and
+closing it there left the reader on All Pictures, a view they never asked for,
+with the shelf two clicks away. `overlayCloseTarget` (`utils/overlayRoute.js`)
+is the one decision `ImageGrid._removeOverlayRoute` makes: `?from=` is a
+same-document absolute path to replace the route with, anything else (a
+protocol, a protocol-relative host, a repeated parameter) is ignored and the
+close drops `?overlay=` and stays put as it always did. Everything else in the
+query belonged to the route being left and goes with it — **except `?token=`**,
+which belongs to the session: this close does not run through
+`useAppNavigation.withShareToken`, so it carries the share token itself or the
+visitor lands on a URL that 401s on the next reload. The **path only**, not the
+full one: `?topology=` is a one-shot instruction from a Recipe link that the
+shelf honours on mount, so carrying it back would re-select the workflow that
+link named over whichever one the reader has since chosen. The same query works
+for any later destination in this position.
+
+**It returns to the destination, not to the scroll.** The selection and the
+Show filter are `useWorkflowShelfStore`'s and survive the round trip; `App.vue`
+mounts the shelf under `v-else-if` with no `<KeepAlive>`, so the list is built
+again from the top and `onMounted` refetches it — and a row that refetch no
+longer lists clears the selection by the store's existing rule. Restoring the
+scroll position is not part of this and would need the shelf to keep one.
+
+**Only the reader's own close goes back.** `closeOverlay(returnToOrigin = true)`
+takes the default from the overlay's `close` emit (the X, Escape), which carries
+no payload; every close `ImageGrid` makes on its own behalf passes `false` — the
+reverse-image and face-likeness searches, the lightbox delete and scrapheap
+restore, "use as input", and the route watcher catching up with a navigation
+that has already happened. Those close the lightbox *precisely* to show their
+result in the grid behind it, so leaving for the shelf would land it on a screen
+that has no grid. `from` is dropped either way: it is one close's instruction,
+not a property of the route that later closes inherit.
+
 **Running a workflow is the run panel in the rail** (#1307,
 `WorkflowRunPanel.vue`). The selection pill's ComfyUI entry (and the context
 menu's, and Remix's "use the batch panel") opens it for workflows with a
