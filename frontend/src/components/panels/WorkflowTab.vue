@@ -252,7 +252,7 @@ import {
 } from "../../api/workflows";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
-import { useWorkflowRunStore } from "../../stores/useWorkflowRunStore";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
@@ -279,7 +279,7 @@ const DEFAULT_PINS = ["steps", "cfg", "guidance", "width", "height"];
 const store = useWorkflowsStore();
 const sidebarStore = useSidebarStore();
 const notices = useNoticeStore();
-const runStore = useWorkflowRunStore();
+const runDialog = useRunDialogStore();
 
 const tab = ref("workflow");
 const tabs = [
@@ -686,9 +686,22 @@ function hideSelected() {
  * selected: the button stays on screen and `aria-disabled` says why, rather
  * than disappearing and leaving nothing to explain.
  */
+/**
+ * Run… opens the Run popup on THIS card (v1.12 F5).
+ *
+ * No picture behind it, so the popup shows the card's cover, an empty prompt
+ * and a set picker for where the output is filed - which is the one thing a
+ * card-sourced run has to be told and a picture-sourced one already knows.
+ */
 function run() {
-  if (multiple.value) return;
-  runStore.openFor("toolbar");
+  if (multiple.value || !card.value) return;
+  runDialog.openRun({
+    kind: "card",
+    workflowKey: card.value.key,
+    name: card.value.name,
+    coverUrl: card.value.covers?.[0] || "",
+    emptyPrompt: true,
+  });
 }
 
 watch(selectedKey, (key) => loadDetail(key), { immediate: true });

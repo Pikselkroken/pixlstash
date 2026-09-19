@@ -545,19 +545,23 @@ describe("Toolbar - the ⋯ overflow mirrors its controls", () => {
     expect(labels).toEqual([
       "Export grid to zip",
       "Import photos…",
-      "Generate with ComfyUI…",
       "View options…",
     ]);
   });
 
-  // The rows honour the SAME v-ifs as the buttons they mirror: no ComfyUI
-  // configured, no row; read-only drops Import (owner-only dialog) and
-  // History (there is no UndoControl to open).
-  it("mirrors the v-ifs: ComfyUI row only when configured", async () => {
+  // Running left the toolbar entirely in v1.12 F5: a run is started from a
+  // workflow or from pictures, both of which have their own entry, and the
+  // button here opened a rail panel that no longer exists.
+  it("offers no way to start a run, configured or not", async () => {
+    const filterStore = useFilterStore();
+    filterStore.comfyuiConfigured = true;
     const wrapper = mountToolbar();
     const panel = await openOverflow(wrapper);
     const labels = panel.findAll(".ctx-item").map((b) => b.text());
     expect(labels).not.toContain("Generate with ComfyUI…");
+    expect(
+      wrapper.find('button[aria-label^="Generate new pictures"]').exists(),
+    ).toBe(false);
   });
 
   it("honours read-only: the Import row is gone", async () => {

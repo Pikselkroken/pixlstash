@@ -21,7 +21,7 @@ import { useFilterStore } from "./stores/useFilterStore";
 import { useGridStore } from "./stores/useGridStore";
 import { useSidebarStore } from "./stores/useSidebarStore";
 import { useUserPrefsStore } from "./stores/useUserPrefsStore";
-import { useWorkflowRunStore } from "./stores/useWorkflowRunStore";
+import { useRunDialogStore } from "./stores/useRunDialogStore";
 import { useFolderMappingStore } from "./stores/useFolderMappingStore";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
@@ -98,10 +98,14 @@ const WorkflowsView = defineAsyncComponent(
 const WorkflowTab = defineAsyncComponent(
   () => import("./components/panels/WorkflowTab.vue"),
 );
-// The run panel takes the stats panel's place in the rail while it is open
-// (#1307), for the same reason the workflow inspector does.
-const WorkflowRunPanel = defineAsyncComponent(
-  () => import("./components/panels/WorkflowRunPanel.vue"),
+// The two Run popups (v1.12 F5). Mounted here rather than in the grid: they
+// are opened from the grid's menus, from the lightbox and from the Workflows
+// view's Workflow tab, and this is the only parent all three share.
+const RunDialog = defineAsyncComponent(
+  () => import("./components/io/RunDialog.vue"),
+);
+const MakeMoreDialog = defineAsyncComponent(
+  () => import("./components/io/MakeMoreDialog.vue"),
 );
 
 // --- Stores ---
@@ -110,7 +114,7 @@ const filterStore = useFilterStore();
 const gridStore = useGridStore();
 const sidebarStore = useSidebarStore();
 const userPrefsStore = useUserPrefsStore();
-const workflowRunStore = useWorkflowRunStore();
+const runDialogStore = useRunDialogStore();
 const projectStore = useProjectStore();
 const wsStore = useWsStore();
 const reviewSessionsStore = useReviewSessionsStore();
@@ -382,6 +386,23 @@ function onRestoreConfirmed() {
   gridStore.wsUpdateKey = Date.now();
   gridStore.refreshGridVersion();
   refreshSidebar();
+}
+
+/**
+ * A Run popup queued something. The prompts go to the grid's ComfyUI runner
+ * for progress, and the toast says where the pictures will turn up: the Tasks
+ * tab, which is where a run this app started is followed.
+ */
+function onRunStarted({ prompts = [], pictureIds = [] } = {}) {
+  runDialogStore.started(prompts, pictureIds);
+  noticeStore.push({
+    level: "success",
+    text:
+      prompts.length === 1
+        ? "Started 1 run in ComfyUI."
+        : `Started ${prompts.length} runs in ComfyUI.`,
+    action: { label: "Show", handler: focusTasksTabPanel },
+  });
 }
 
 /**
@@ -847,14 +868,31 @@ defineExpose({
         <!-- One rail, four uses (implementation plan §F2). On the workflow
              library it carries the selected workflow; everywhere else it is the
              statistics panel it has always been. -->
-        <!-- A run outranks the inspector, including on the workflow library:
-             starting one force-opens this rail (`useWorkflowRunStore.openFor`),
-             so with the inspector first the rail opened onto "Pick a workflow"
-             while a run was in progress behind it. -->
-        <WorkflowRunPanel v-if="workflowRunStore.open" />
-        <WorkflowTab v-else-if="isWorkflowsView" />
+        <!-- Nothing contends for this rail any more. The shelf's own inspector
+             went with the shelf in F1b, and the run panel that used to outrank
+             both became a popup in F5, so `/workflows` is the one branch left
+             ahead of the stats panel. -->
+        <WorkflowTab v-if="isWorkflowsView" />
         <StatsSidebar v-else ref="statsSidebarRef" />
       </div>
+      <RunDialog
+        v-if="runDialogStore.source"
+        open
+        :source="runDialogStore.source"
+        :context="runDialogStore.context"
+        @close="runDialogStore.close()"
+        @run="onRunStarted"
+        @open-settings="openSettingsDialog"
+      />
+      <MakeMoreDialog
+        v-if="runDialogStore.makeMore"
+        open
+        :source="runDialogStore.makeMore"
+        :context="runDialogStore.context"
+        @close="runDialogStore.close()"
+        @run="onRunStarted"
+        @open-settings="openSettingsDialog"
+      />
       <ReviewSessionsOverlay
         v-if="reviewSessionsStore.overlayOpen"
         :inert="librarySwitchOverlayOpen"

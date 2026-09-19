@@ -58,7 +58,7 @@ import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
 import { useMovesStore } from "./useMovesStore";
 import { useWorkflowsStore } from "./useWorkflowsStore";
-import { useWorkflowRunStore } from "./useWorkflowRunStore";
+import { useRunDialogStore } from "./useRunDialogStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
@@ -156,17 +156,15 @@ const STORES = [
       Object.keys(s.members).length === 0,
   },
   {
-    // The run panel holds the grid's selection, which names pictures of the
-    // library the old session could see, and is closed with it.
-    name: "useWorkflowRunStore",
-    use: useWorkflowRunStore,
+    // An open Run popup names pictures and a card of the library the old
+    // session could see, and is closed with it.
+    name: "useRunDialogStore",
+    use: useRunDialogStore,
     seed: (s) => {
-      s.open = true;
-      s.selectionIds = [11, 12];
+      s.openRun({ kind: "picture", pictureIds: [11, 12] });
       s.context = { character_id: 3 };
     },
-    isEmpty: (s) =>
-      !s.open && s.selectionIds.length === 0 && !s.context.character_id,
+    isEmpty: (s) => !s.source && !s.makeMore && !s.context.character_id,
   },
   {
     name: "useLockedSetsStore",

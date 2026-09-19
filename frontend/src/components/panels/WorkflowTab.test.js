@@ -352,6 +352,26 @@ describe("with several workflows selected", () => {
     );
   });
 
+  it("opens the Run popup on THIS card when Run… is pressed", async () => {
+    // The only entry point to a card-sourced run now that the toolbar's
+    // Generate button is gone, and it was unguarded: `function run() { return; }`
+    // kept the whole suite green.
+    const { wrapper } = await mountWith([KEY], [card()]);
+    const { useRunDialogStore } = await import("../../stores/useRunDialogStore");
+    const run = wrapper.findAll("button").find((b) => b.text().includes("Run…"));
+
+    await run.trigger("click");
+    await flush(wrapper);
+
+    expect(useRunDialogStore().source).toMatchObject({
+      kind: "card",
+      workflowKey: KEY,
+      // No picture behind it, so the popup shows the card's cover and an empty
+      // prompt rather than prefilling from a recipe it does not have.
+      emptyPrompt: true,
+    });
+  });
+
   it("does not start a run when Run… is pressed", async () => {
     const { wrapper } = await mountWith(
       [KEY, OTHER],
@@ -362,9 +382,17 @@ describe("with several workflows selected", () => {
       .find((b) => b.text().includes("Run…"));
     await run.trigger("click");
     await flush(wrapper);
-    const { useWorkflowRunStore } =
-      await import("../../stores/useWorkflowRunStore");
-    expect(useWorkflowRunStore().open).toBe(false);
+    const { useRunDialogStore } = await import(
+      "../../stores/useRunDialogStore"
+    );
+    // Seeded first: `source` is null on a fresh store, so asserting null
+    // against an untouched default would pass with `run()` deleted entirely.
+    const runDialog = useRunDialogStore();
+    expect(runDialog.source).toBe(null);
+    runDialog.openRun({ kind: "picture", pictureIds: [99] });
+    await run.trigger("click");
+    await flush(wrapper);
+    expect(runDialog.source.pictureIds).toEqual([99]);
   });
 
   it("offers Stack together and Hide, and says how many are selected", async () => {

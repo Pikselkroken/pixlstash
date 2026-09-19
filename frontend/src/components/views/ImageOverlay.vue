@@ -810,7 +810,7 @@
               comfyuiConfigured && !isReadOnly && !!image?.id
             "
             :comfyui-configured="comfyuiConfigured"
-            @generate-variants="emit('open-remix-dialog', image?.id)"
+            @run="emit('run-recipe', image?.id)"
             @use-as-input="emit('use-as-input', image?.id)"
           />
         </AppInspector>
@@ -1321,9 +1321,9 @@ const emit = defineEmits([
   "run-plugin",
   "request-context-menu",
   "character-created",
-  // The Recipe section's "Generate variants..." (#1313). The Remix dialog is
-  // the grid's, so the lightbox asks for it rather than hosting a second one.
-  "open-remix-dialog",
+  // The Recipe tab's "Run…" (#1407). The Run popup is mounted in App.vue, so
+  // the lightbox asks for it rather than hosting a second one.
+  "run-recipe",
   "use-as-input",
 ]);
 

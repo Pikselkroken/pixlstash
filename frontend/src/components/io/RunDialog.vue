@@ -1,0 +1,1220 @@
+<template>
+  <AppDialog
+    :open="open"
+    size="lg"
+    :title="title"
+    :subtitle="subtitle"
+    :persistent="submitting"
+    @close="onRequestClose"
+    @accept="submit"
+  >
+    <p v-if="loadFailed" class="rund-note rund-note--bad" role="alert">
+      {{ loadFailed }}
+    </p>
+    <p v-else-if="loading" class="rund-note" role="status">
+      Reading what this runs…
+    </p>
+
+    <div v-else class="rund">
+      <!-- ── Left: what the run is made from ──────────────────────────────
+           168px wide and the picture 168×252, which is the design's own
+           measurement and nothing else in the app uses: a component-local
+           value rather than a token nobody else would read. -->
+      <div class="rund-src">
+        <img
+          v-if="coverUrl"
+          class="rund-pic"
+          :src="coverUrl"
+          :alt="`The picture this run is made from: ${sourceName}`"
+        />
+        <span v-else class="rund-pic rund-pic--empty">
+          <v-icon size="28">mdi-sitemap-outline</v-icon>
+        </span>
+        <div class="rund-meta">
+          <span class="rund-name">{{ sourceName }}</span>
+          <span class="rund-sub">{{ sourceKindLine }}</span>
+        </div>
+        <dl class="rund-kv">
+          <dt>Results go to</dt>
+          <dd v-if="!picksDestination">{{ destinationLine }}</dd>
+          <dd v-else>
+            <AppSelect
+              v-model="destinationSetId"
+              label="Results go to"
+              hide-label
+              compact
+              :options="setOptions"
+            />
+          </dd>
+          <template v-if="seedText">
+            <dt>Seed of the original</dt>
+            <dd class="rund-mono">{{ seedText }}</dd>
+          </template>
+        </dl>
+      </div>
+
+      <!-- ── Right: the form, four columns ──────────────────────────────── -->
+      <div class="rund-form">
+        <div class="rund-f rund-f--4">
+          <span class="rund-l">Workflow</span>
+          <AppSelect
+            v-model="workflowKey"
+            label="Workflow"
+            hide-label
+            compact
+            :options="workflowOptions"
+            :disabled="submitting"
+          />
+        </div>
+
+        <p v-if="fellBack.length" class="rund-f rund-f--4 rund-note" role="status">
+          {{ fellBackLine }}
+        </p>
+
+        <div class="rund-f rund-f--4">
+          <span class="rund-l">
+            Prompt
+            <RunResetChip
+              v-if="prompt !== basePrompt"
+              :value="basePrompt || 'no prompt'"
+              label="Prompt"
+              @reset="prompt = basePrompt"
+            />
+          </span>
+          <AppTextarea
+            v-model="prompt"
+            label="Prompt"
+            :rows="3"
+            :disabled="submitting"
+            @keydown.stop
+          />
+        </div>
+
+        <div class="rund-f rund-f--4">
+          <span class="rund-l">
+            LoRAs<span class="rund-sp" /><span class="rund-l2">Strength</span>
+            <span class="rund-x-gap" />
+          </span>
+          <p v-if="!loraSlots.length" class="rund-note">
+            {{
+              hasRecipe
+                ? "This workflow has no LoRA loader."
+                : "Open one of this workflow's pictures to change its LoRAs."
+            }}
+          </p>
+          <div v-for="(row, index) in loras" :key="row.key" class="rund-lora">
+            <AppSelect
+              v-model="row.sha256"
+              :label="`LoRA ${index + 1}`"
+              hide-label
+              compact
+              :options="adapterOptions"
+              :disabled="submitting"
+            />
+            <AppInput
+              v-model.number="row.strength"
+              :aria-label="`Strength of LoRA ${index + 1}`"
+              type="number"
+              min="-10"
+              max="10"
+              :disabled="submitting"
+              @keydown.stop
+            />
+            <AppBarButton
+              icon="close"
+              :tooltip="`Remove LoRA ${index + 1}`"
+              :disabled="submitting"
+              @click="removeLora(index)"
+            />
+          </div>
+          <AppButton
+            v-if="loraSlots.length"
+            size="sm"
+            icon-left="plus"
+            :disabled="submitting || loras.length >= loraSlots.length"
+            @click="addLora"
+          >
+            Add LoRA
+          </AppButton>
+        </div>
+
+        <div v-if="sizeFields.length" class="rund-f">
+          <span class="rund-l">
+            Size
+            <RunResetChip
+              v-if="sizeEdited"
+              :value="`${baseOf(sizeFields[0])} × ${baseOf(sizeFields[1])}`"
+              label="Size"
+              @reset="resetSize"
+            />
+          </span>
+          <div class="rund-size">
+            <AppInput
+              v-for="field in sizeFields"
+              :key="address(field)"
+              :model-value="currentValue(field)"
+              :aria-label="field.label"
+              type="number"
+              :disabled="submitting"
+              @update:model-value="(v) => setValue(field, coerce(field, v))"
+              @keydown.stop
+            />
+          </div>
+        </div>
+
+        <div v-for="field in scalarFields" :key="address(field)" class="rund-f">
+          <span class="rund-l">
+            {{ field.label }}
+            <RunResetChip
+              v-if="isEdited(field)"
+              :value="baseOf(field)"
+              :label="field.label"
+              @reset="resetValue(field)"
+            />
+          </span>
+          <AppInput
+            :model-value="currentValue(field)"
+            :aria-label="field.label"
+            type="number"
+            :disabled="submitting"
+            @update:model-value="(v) => setValue(field, coerce(field, v))"
+            @keydown.stop
+          />
+        </div>
+
+        <div class="rund-f">
+          <span class="rund-l">Count</span>
+          <AppInput
+            v-model.number="count"
+            aria-label="How many to make"
+            type="number"
+            min="1"
+            :max="String(MAX_COUNT)"
+            :disabled="submitting"
+            @keydown.stop
+          />
+        </div>
+
+        <div class="rund-f rund-f--2">
+          <span class="rund-l">Seed</span>
+          <AppSelect
+            v-model="seedMode"
+            label="Seed"
+            hide-label
+            compact
+            :options="seedOptions"
+            :disabled="submitting"
+          />
+          <!-- Deliberately a TEXT field: `type="number"` hands back a
+               `Number`, which is exactly the rounding this avoids. -->
+          <AppInput
+            v-if="seedMode === 'fixed'"
+            v-model="seed"
+            aria-label="Seed"
+            mono
+            :error="seedError"
+            :disabled="submitting"
+            @keydown.stop
+          />
+        </div>
+
+        <div v-if="checkpointField" class="rund-f rund-f--2">
+          <span class="rund-l">
+            Checkpoint
+            <RunResetChip
+              v-if="isEdited(checkpointField)"
+              :value="baseOf(checkpointField)"
+              label="Checkpoint"
+              @reset="resetValue(checkpointField)"
+            />
+          </span>
+          <AppInput
+            :model-value="String(currentValue(checkpointField))"
+            aria-label="Checkpoint"
+            mono
+            :disabled="submitting"
+            @update:model-value="(v) => setValue(checkpointField, coerce(checkpointField, v))"
+            @keydown.stop
+          />
+        </div>
+
+        <div class="rund-f rund-f--4 rund-more">
+          <!-- The negative prompt only opens when the original had one: an
+               empty box under every run would read as a field somebody forgot
+               to fill in. -->
+          <details v-if="baseNegative" class="rund-disc">
+            <summary>Negative prompt</summary>
+            <AppTextarea
+              v-model="negative"
+              label="Negative prompt"
+              :rows="2"
+              :disabled="submitting"
+              @keydown.stop
+            />
+          </details>
+          <details v-if="restFields.length" class="rund-disc">
+            <summary>
+              All {{ defaults.length }} parameters
+              <span class="rund-quiet">{{ restFields.length }} more</span>
+            </summary>
+            <div v-for="field in restFields" :key="address(field)" class="rund-rest">
+              <span class="rund-l">
+                {{ field.label }}
+                <RunResetChip
+                  v-if="isEdited(field)"
+                  :value="baseOf(field)"
+                  :label="field.label"
+                  @reset="resetValue(field)"
+                />
+              </span>
+              <AppInput
+                :model-value="String(currentValue(field))"
+                :aria-label="field.label"
+                :disabled="submitting"
+                @update:model-value="(v) => setValue(field, coerce(field, v))"
+                @keydown.stop
+              />
+            </div>
+          </details>
+        </div>
+
+        <RunReasonNotice
+          v-for="reason in reasons"
+          :key="reason.code"
+          class="rund-f rund-f--4"
+          :reason="reason"
+          :busy="preflighting"
+          @settings="emit('open-settings', 'compute')"
+          @retry="runPreflight"
+          @drop-lora="dropLoras"
+        />
+        <p v-if="submitError" class="rund-f rund-f--4 rund-note rund-note--bad" role="alert">
+          {{ submitError }}
+        </p>
+      </div>
+    </div>
+
+    <template #footer>
+      <p v-if="runBlocker" :id="blockerId" class="rund-note rund-note--bad">
+        {{ runBlocker }}
+      </p>
+      <template v-if="naming">
+        <AppInput
+          v-model="recipeName"
+          aria-label="Name for the saved recipe"
+          placeholder="Name this recipe"
+          autofocus
+          @keydown.stop.enter="saveRecipe"
+        />
+        <AppButton :disabled="saving" @click="naming = false">Cancel</AppButton>
+        <AppButton
+          variant="primary"
+          :loading="saving"
+          :disabled="!recipeName.trim()"
+          @click="saveRecipe"
+        >
+          Save
+        </AppButton>
+      </template>
+      <template v-else>
+        <AppButton
+          icon-left="bookmark-plus-outline"
+          :disabled="!activeKey || submitting"
+          @click="startNaming"
+        >
+          Save as recipe
+        </AppButton>
+        <span class="rund-sp" />
+        <AppButton :disabled="submitting" @click="onRequestClose">Cancel</AppButton>
+        <!-- `aria-disabled`, not `disabled`: a natively-disabled button is
+             out of the tab order, so a keyboard reader could never reach the
+             reason `aria-describedby` points at. `submit()` does the actual
+             refusing. Same shape as the Recipe tab's own Run button. -->
+        <AppButton
+          variant="primary"
+          icon-left="play"
+          :loading="submitting"
+          :aria-disabled="canRun ? undefined : 'true'"
+          :aria-describedby="runBlocker ? blockerId : undefined"
+          @click="submit"
+        >
+          {{ runLabel }}
+        </AppButton>
+      </template>
+    </template>
+  </AppDialog>
+</template>
+
+<script setup>
+/**
+ * The Run popup (v1.12 F5) - one dialog for every source.
+ *
+ * A picture's recipe, a whole selection, or a workflow card off the Workflows
+ * view all open this: the left column says what the run is made from and where
+ * its output goes, the right is the card's own parameters, prefilled and
+ * editable. Nothing here is written back into a workflow - every edit is an
+ * override `POST /workflows/run` applies to the graph at submission time, which
+ * is what keeps the card's content-addressed identity intact (B7).
+ *
+ * **An edited field is marked in its label row**, never beside the control: the
+ * four-column grid stays aligned only if a chip cannot change a cell's height.
+ */
+import { computed, reactive, ref, useId, watch } from "vue";
+import { VIcon } from "vuetify/components";
+
+import { getPictureRecipe } from "../../api/comfyui";
+import { listAdapters } from "../../api/modelShelf";
+import { createSavedRecipe } from "../../api/recipes";
+import {
+  getWorkflowCard,
+  listWorkflowCards,
+  preflightWorkflowRun,
+  runWorkflowCard,
+} from "../../api/workflows";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
+import { errorMessage } from "../../utils/apiError";
+import { reasonsBlock } from "../../utils/runReasons";
+import AppBarButton from "../widgets/AppBarButton.vue";
+import AppButton from "../widgets/AppButton.vue";
+import AppDialog from "../widgets/AppDialog.vue";
+import AppInput from "../widgets/AppInput.vue";
+import AppSelect from "../widgets/AppSelect.vue";
+import AppTextarea from "../widgets/AppTextarea.vue";
+import RunReasonNotice from "./RunReasonNotice.vue";
+import RunResetChip from "./RunResetChip.vue";
+
+const props = defineProps({
+  open: { type: Boolean, default: false },
+  /**
+   * `{kind, pictureIds, workflowKey, pickWorkflow, name, coverUrl}` - see
+   * `useRunDialogStore`. Replaced rather than mutated, so a new source is one
+   * watcher tick and never a half-swapped form.
+   */
+  source: { type: Object, default: null },
+  /** `{client_id, set_id, project_id, character_id}` from the grid. */
+  context: { type: Object, default: () => ({}) },
+});
+
+const emit = defineEmits(["close", "run", "open-settings"]);
+
+/**
+ * `MAX_RUNS_PER_REQUEST` (`pixlstash/routes/comfyui.py`), which `_plan`
+ * applies to the TOTAL across every group. One `target` is one group, so here
+ * the total is the count.
+ */
+const MAX_COUNT = 200;
+/** `MAX_SEED_64` in `pixlstash/routes/workflows.py`: ComfyUI's own ceiling. */
+const MAX_SEED = 2n ** 64n - 1n;
+/** The parameters the design pins, in its order, addressed by widget name. */
+const SCALAR_PINNED = ["steps", "cfg", "cfg_scale", "guidance"];
+const SIZE_INPUTS = ["width", "height"];
+const CHECKPOINT_INPUT = "ckpt_name";
+const SEPARATOR = "/";
+
+const blockerId = useId();
+const notices = useNoticeStore();
+const entityLists = useEntityListsStore();
+
+const loading = ref(false);
+const loadFailed = ref("");
+const submitting = ref(false);
+const submitError = ref("");
+const preflighting = ref(false);
+const preflightError = ref("");
+/** What the server said this body would submit, at the count it was asked at. */
+const plannedRuns = ref(0);
+
+const card = ref(null);
+const recipe = ref(null);
+const cards = ref([]);
+const adapters = ref([]);
+const reasons = ref([]);
+const activeKey = ref("");
+/** address -> the label it had on the card it was edited on. */
+const editedLabels = reactive({});
+/** address -> the owner's value, over the card's own default. */
+const edits = reactive({});
+const fellBack = ref([]);
+
+const prompt = ref("");
+const negative = ref("");
+const count = ref(1);
+const seedMode = ref("new");
+/**
+ * The chosen seed, as TEXT and never as a number.
+ *
+ * ComfyUI draws seeds up to 2**64-1 and a JavaScript `Number` loses digits
+ * above 2**53, so `Number("18446744073709551615")` is a different seed and
+ * `JSON.stringify` would send that different seed. The digits are carried
+ * through untouched; Pydantic parses the string into a Python int exactly.
+ * The same reason `GET /comfyui/pictures/{id}/recipe` serves `seed_text`
+ * beside `seed` at all.
+ */
+const seed = ref("0");
+const loras = ref([]);
+const destinationSetId = ref("");
+
+const naming = ref(false);
+const saving = ref(false);
+const recipeName = ref("");
+
+const LAST_SET_KEY = "pixlstash:runDialogSetId";
+
+/**
+ * The card being run, and switching to another.
+ *
+ * A writable computed rather than a `watch` on the ref: the load path assigns
+ * the key itself, and a watcher cannot tell that assignment from the owner
+ * choosing the first workflow in "Run a workflow on these…", where the previous
+ * value is the empty string either way. Here the two are different call sites.
+ */
+const workflowKey = computed({
+  get: () => activeKey.value,
+  set: (key) => {
+    if (!key || key === activeKey.value) return;
+    const hadCard = Boolean(card.value);
+    activeKey.value = key;
+    void switchCard(key, hadCard);
+  },
+});
+
+async function switchCard(key, keepEdits) {
+  try {
+    await loadCard(key, { keepEdits });
+    await runPreflight();
+  } catch (err) {
+    loadFailed.value = errorMessage(err, "Could not read that workflow.");
+  }
+}
+
+const defaults = computed(() => card.value?.defaults || []);
+const hasRecipe = computed(() => Boolean(recipe.value));
+const loraSlots = computed(() => recipe.value?.lora_slots || []);
+const pictureIds = computed(() => props.source?.pictureIds || []);
+const kind = computed(() => props.source?.kind || "picture");
+/** A card with no source picture picks where its output is filed. */
+const picksDestination = computed(() => !pictureIds.value.length);
+
+const title = computed(() =>
+  kind.value === "card" ? "Run workflow" : "Run recipe",
+);
+const subtitle = computed(() => card.value?.name || "");
+const sourceName = computed(
+  () => props.source?.name || card.value?.name || "This run",
+);
+const coverUrl = computed(
+  () => props.source?.coverUrl || card.value?.covers?.[0] || "",
+);
+const seedText = computed(() => recipe.value?.seed_text || "");
+
+const sourceKindLine = computed(() => {
+  const many = pictureIds.value.length;
+  if (kind.value === "card") return "Workflow, with no picture behind it";
+  if (many > 1) return `${many} pictures, all on this workflow`;
+  return "This picture's recipe";
+});
+
+function address(field) {
+  return `${field.slot_label}${SEPARATOR}${field.input_name}`;
+}
+
+/**
+ * The value a field started at: the card's own default, and the picture's own
+ * setting over it where the picture is what opened this. That is what the ↺
+ * chip carries and what it puts back.
+ */
+function baseOf(field) {
+  // Only while the card being run is the one that MADE the picture. A stack
+  // member is a different graph, so the picture's own steps say nothing about
+  // it, and showing them would make its defaults look like edits.
+  const ownCard = recipe.value?.workflow_key
+    ? recipe.value.workflow_key === activeKey.value
+    : false;
+  const fromPicture = ownCard
+    ? recipe.value?.settings?.[field.input_name]
+    : undefined;
+  return fromPicture !== undefined && fromPicture !== null
+    ? fromPicture
+    : field.value;
+}
+
+function currentValue(field) {
+  const key = address(field);
+  return key in edits ? edits[key] : baseOf(field);
+}
+
+function isEdited(field) {
+  return address(field) in edits;
+}
+
+/**
+ * One typed value, in the type the field started as.
+ *
+ * `undefined` is "this is not a value": an emptied number box reads as `""`,
+ * and `Number("")` is 0, so a field the owner merely cleared would be recorded
+ * as a deliberate zero and submitted as one. Anything unparseable is the same
+ * answer, since `JSON.stringify(NaN)` is `null` and `RunValue` refuses it.
+ */
+function coerce(field, raw) {
+  if (typeof baseOf(field) !== "number") return raw;
+  const text = String(raw ?? "").trim();
+  if (!text) return undefined;
+  const value = Number(text);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function setValue(field, value) {
+  const key = address(field);
+  // Not a value: the field goes back to what it started at rather than
+  // recording a zero nobody typed.
+  if (value === undefined || value === baseOf(field)) {
+    delete edits[key];
+    delete editedLabels[key];
+    return;
+  }
+  edits[key] = value;
+  editedLabels[key] = field.label;
+}
+
+function resetValue(field) {
+  const key = address(field);
+  delete edits[key];
+  delete editedLabels[key];
+}
+
+const byInput = computed(() => {
+  const map = {};
+  for (const field of defaults.value) map[field.input_name] = field;
+  return map;
+});
+
+const scalarFields = computed(() =>
+  SCALAR_PINNED.map((name) => byInput.value[name]).filter(Boolean),
+);
+/**
+ * Width and height, drawn as one "Size" cell — and only when BOTH are there.
+ *
+ * A card carrying one of them is drawn as an ordinary parameter instead. Half
+ * a Size cell would be a control that lies about what it sets, and pinning the
+ * half that exists without rendering it would hide the field from the form
+ * entirely: it would be neither a pinned row nor one of "All N parameters".
+ */
+const sizeFields = computed(() => {
+  const both = SIZE_INPUTS.map((name) => byInput.value[name]);
+  return both.every(Boolean) ? both : [];
+});
+const checkpointField = computed(() => byInput.value[CHECKPOINT_INPUT] || null);
+const pinnedAddresses = computed(
+  () =>
+    new Set(
+      [...scalarFields.value, ...sizeFields.value, checkpointField.value]
+        .filter(Boolean)
+        .map(address),
+    ),
+);
+/** Everything the pinned rows did not show, behind "All N parameters". */
+const restFields = computed(() =>
+  defaults.value.filter((field) => !pinnedAddresses.value.has(address(field))),
+);
+
+const sizeEdited = computed(() => sizeFields.value.some(isEdited));
+function resetSize() {
+  sizeFields.value.forEach(resetValue);
+}
+
+const basePrompt = computed(() => recipe.value?.positive_prompt || "");
+
+/**
+ * What to send as `prompt`, or `null` to leave the graph's own alone.
+ *
+ * An empty box is only an instruction to blank the prompt when there WAS one
+ * on screen to blank. Without a recipe behind it the box starts empty because
+ * nothing filled it, which is not the same thing.
+ */
+const promptOverride = computed(() => {
+  const typed = prompt.value;
+  if (typed) return typed;
+  return basePrompt.value ? "" : null;
+});
+const baseNegative = computed(() => recipe.value?.negative_prompt || "");
+
+const seedOptions = [
+  { value: "new", label: "New for each picture" },
+  { value: "keep", label: "Keep the original's" },
+  { value: "fixed", label: "A seed I choose" },
+];
+
+const workflowOptions = computed(() => {
+  const rows = [];
+  if (card.value) {
+    rows.push({ value: card.value.key, label: card.value.name });
+    for (const key of card.value.member_keys || []) {
+      rows.push({ value: key, label: memberLabel(key) });
+    }
+  }
+  // "Run a workflow on these…" opens with the whole library in the picker;
+  // otherwise only the stack's own members, which is the switch the design
+  // describes.
+  for (const row of props.source?.pickWorkflow ? cards.value : []) {
+    if (!rows.some((option) => option.value === row.key)) {
+      rows.push({ value: row.key, label: row.name });
+    }
+  }
+  return rows;
+});
+
+function memberLabel(key) {
+  const known = cards.value.find((row) => row.key === key);
+  return known?.name || `Stack member ${key.slice(0, 8)}`;
+}
+
+const adapterOptions = computed(() =>
+  adapters.value
+    .filter((adapter) => adapter?.sha256)
+    .map((adapter) => ({
+      value: adapter.sha256,
+      label: adapter.display_name || adapter.filename || adapter.sha256.slice(0, 12),
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label)),
+);
+
+const setOptions = computed(() => [
+  { value: "", label: "No set" },
+  ...entityLists.pictureSets.map((row) => ({
+    value: String(row.id),
+    label: row.name,
+  })),
+]);
+
+/**
+ * Where the output is filed, said as it will actually happen.
+ *
+ * The run carries the grid's own view context, so with a set in view the new
+ * pictures land in it. With none there is nothing to be next to: they are
+ * imported into the library unfiled, which is worth saying rather than
+ * promising they will appear beside their source.
+ */
+const destinationLine = computed(() => {
+  const setId = props.context?.set_id;
+  const row = entityLists.pictureSets.find(
+    (item) => String(item.id) === String(setId),
+  );
+  if (row) return `${row.name}, beside the pictures they came from`;
+  return "Your library, in no set";
+});
+
+const fellBackLine = computed(
+  () =>
+    `${fellBack.value.join(", ")} went back to this workflow's own ${
+      fellBack.value.length === 1 ? "value" : "values"
+    }.`,
+);
+
+/** A seed is a whole number, up to ComfyUI's 2**64-1, checked as digits. */
+const seedError = computed(() => {
+  if (seedMode.value !== "fixed") return "";
+  const text = String(seed.value ?? "").trim();
+  if (!/^\d+$/.test(text)) return "A seed is a whole number.";
+  return BigInt(text) > MAX_SEED ? "That is larger than ComfyUI's biggest seed." : "";
+});
+
+const runBlocker = computed(() => {
+  if (!activeKey.value) return "Choose a workflow first.";
+  if (seedError.value) return seedError.value;
+  if (!Number.isInteger(count.value) || count.value < 1 || count.value > MAX_COUNT)
+    return `Between 1 and ${MAX_COUNT} runs at a time.`;
+  if (preflightError.value) return preflightError.value;
+  if (reasonsBlock(reasons.value)) return "This run cannot start; see below.";
+  return "";
+});
+const canRun = computed(() => !runBlocker.value && !submitting.value);
+const runLabel = computed(() =>
+  Number.isInteger(count.value) && count.value > 0 ? `Run ${count.value}` : "Run",
+);
+
+/** The body both the pre-flight and the run take, so the two never disagree. */
+function runBody() {
+  const values = Object.entries(edits).map(([key, value]) => {
+    const [slotLabel, inputName] = splitAddress(key);
+    return { slot_label: slotLabel, input_name: inputName, value };
+  });
+  const body = {
+    // `null` means "leave the graph's own text alone"; `""` means "blank it",
+    // and `_apply_prompts` honours both literally. A card or a multi-picture
+    // selection reads no recipe, so the box is empty because there was nothing
+    // to prefill it with - sending that emptiness would wipe every positive
+    // prompt node in the graph and generate from no prompt at all.
+    prompt: promptOverride.value,
+    negative: baseNegative.value ? negative.value : null,
+    loras: loras.value
+      .filter((row) => row.sha256)
+      .map((row) => ({
+        node_id: row.node_id,
+        field: row.field,
+        sha256: row.sha256,
+        strength_model: Number.isFinite(row.strength) ? row.strength : null,
+      })),
+    values,
+    count: count.value,
+    seed_mode: seedMode.value,
+    // The digits as they were typed. A Number here would round a 64-bit
+    // seed into a different one on the way out.
+    seed: seedMode.value === "fixed" ? String(seed.value).trim() : null,
+    client_id: props.context?.client_id || null,
+  };
+  // Exactly one source, which the route checks before it reads anything: with
+  // pictures the card is `target`, and without them it IS the source.
+  if (pictureIds.value.length) {
+    body.picture_ids = pictureIds.value;
+    body.target = activeKey.value;
+  } else {
+    body.workflow_key = activeKey.value;
+  }
+  const setId = picksDestination.value ? destinationSetId.value : props.context?.set_id;
+  const destination = {
+    set_id: setId ? Number(setId) : null,
+    project_id: picksDestination.value ? null : props.context?.project_id ?? null,
+    character_id: picksDestination.value
+      ? null
+      : props.context?.character_id ?? null,
+  };
+  if (Object.values(destination).some((value) => value != null)) {
+    body.destination = destination;
+  }
+  return body;
+}
+
+function splitAddress(key) {
+  const at = key.lastIndexOf(SEPARATOR);
+  return [key.slice(0, at), key.slice(at + 1)];
+}
+
+function addLora() {
+  const used = new Set(loras.value.map((row) => `${row.field}@${row.node_id}`));
+  const slot = loraSlots.value.find(
+    (item) => !used.has(`${item.field}@${item.node_id}`),
+  );
+  if (!slot) return;
+  loras.value.push(loraRow(slot));
+}
+
+function loraRow(slot, sha256 = "") {
+  return {
+    key: `${slot.field}@${slot.node_id}`,
+    node_id: String(slot.node_id),
+    field: String(slot.field),
+    sha256,
+    strength: Number(slot.strengths?.model ?? 1),
+  };
+}
+
+function removeLora(index) {
+  loras.value.splice(index, 1);
+}
+
+/**
+ * The `no_lora_loader` fix: take the LoRA out and ASK AGAIN.
+ *
+ * Without the second half the reason stays in `reasons`, `runBlocker` stays
+ * set and the Run button stays disabled for ever - a fix button that makes the
+ * refusal permanent. The server decides `wants_lora` from `body.loras`, so an
+ * empty list genuinely clears it.
+ */
+async function dropLoras() {
+  loras.value = [];
+  await runPreflight();
+}
+
+async function loadAdapters() {
+  if (adapters.value.length) return;
+  try {
+    adapters.value = await listAdapters();
+  } catch (err) {
+    // The picker degrades to the slots already in the graph; the run still
+    // works, so this is a warning and not a blocker.
+    console.warn("Could not read the model shelf's LoRAs:", err);
+  }
+}
+
+/**
+ * Load the card behind `key`, keeping every edit whose address it still has.
+ *
+ * The fields that do NOT survive are named rather than dropped in silence:
+ * switching to a stack member is a deliberate comparison, and a steps value
+ * that quietly went back to 8 is the thing the design asks to be told about.
+ */
+async function loadCard(key, { keepEdits = false } = {}) {
+  const detail = await getWorkflowCard(key);
+  const next = detail?.card || null;
+  if (!keepEdits) {
+    card.value = next;
+    fellBack.value = [];
+    return;
+  }
+  const addresses = new Set((next?.defaults || []).map(address));
+  const lost = Object.keys(edits).filter((key2) => !addresses.has(key2));
+  fellBack.value = lost.map((key2) => editedLabels[key2] || key2);
+  for (const key2 of lost) {
+    delete edits[key2];
+    delete editedLabels[key2];
+  }
+  card.value = next;
+}
+
+async function runPreflight() {
+  if (!activeKey.value) {
+    reasons.value = [];
+    return;
+  }
+  preflighting.value = true;
+  preflightError.value = "";
+  try {
+    const answer = await preflightWorkflowRun(runBody());
+    reasons.value = (answer?.groups || []).flatMap((group) => group.reasons || []);
+    plannedRuns.value = Number(answer?.runs) || 0;
+  } catch (err) {
+    // The route answers 400/404/422 here exactly as it does on the run, "so
+    // the two never disagree" - so a 4xx is this body being refused and is
+    // shown now rather than after the owner presses Run. Anything else (the
+    // network, a 5xx) is the question not being asked, which is not a refusal:
+    // the button stays live and the run itself answers.
+    reasons.value = [];
+    const status = err?.response?.status;
+    if (status >= 400 && status < 500) {
+      preflightError.value = errorMessage(err, "This run would be refused.");
+    } else {
+      preflightError.value = "";
+      console.warn("Could not pre-flight this run:", err);
+    }
+  } finally {
+    preflighting.value = false;
+  }
+}
+
+/** Bumped per open, so a slower earlier read cannot write over a later one. */
+let loadToken = 0;
+
+async function load() {
+  const token = (loadToken += 1);
+  const mine = () => token === loadToken;
+  loading.value = true;
+  loadFailed.value = "";
+  submitError.value = "";
+  reasons.value = [];
+  fellBack.value = [];
+  for (const key of Object.keys(edits)) delete edits[key];
+  for (const key of Object.keys(editedLabels)) delete editedLabels[key];
+  recipe.value = null;
+  card.value = null;
+  cards.value = [];
+  loras.value = [];
+  count.value = 1;
+  seedMode.value = "new";
+  naming.value = false;
+  recipeName.value = "";
+  try {
+    if (props.source?.pickWorkflow) {
+      cards.value = (await listWorkflowCards()).cards;
+    }
+    // One picture is a recipe to prefill from; several are a card the server
+    // already agreed they share, so the card alone is the honest source.
+    if (pictureIds.value.length === 1) {
+      const data = await getPictureRecipe(pictureIds.value[0], { preflight: false });
+      if (!mine()) return;
+      recipe.value = data?.reason === "no_prompt_chunk" ? null : data;
+    }
+    const key = props.source?.workflowKey || recipe.value?.workflow_key || "";
+    activeKey.value = key;
+    if (key) await loadCard(key);
+    if (!mine()) return;
+    prompt.value = props.source?.emptyPrompt ? "" : basePrompt.value;
+    negative.value = baseNegative.value;
+    seed.value = seedText.value || "0";
+    // Only the DIGEST slots are prefilled. `RunLora.sha256` is required, and a
+    // filename slot names a file rather than a digest, so there is nothing to
+    // fill it with that the run could address; matching the name against the
+    // shelf would be a guess, and the wrong guess loads somebody else's file of
+    // that name. Such a slot is left out, which is not a loss: an entry the
+    // run does not carry is the graph keeping its own LoRA, and Add LoRA is
+    // there to override it deliberately.
+    loras.value = loraSlots.value
+      .filter((slot) => slot.by === "digest" && slot.value)
+      .map((slot) => loraRow(slot, String(slot.value)));
+    destinationSetId.value =
+      readLastSet() || (props.context?.set_id ? String(props.context.set_id) : "");
+    void loadAdapters();
+    // Both branches need the names: one to pick a set, the other to say which
+    // one the output is going into.
+    void entityLists.refresh("sets");
+    await runPreflight();
+  } catch (err) {
+    if (mine()) {
+      loadFailed.value = errorMessage(err, "Could not read what this would run.");
+    }
+  } finally {
+    if (mine()) loading.value = false;
+  }
+}
+
+function readLastSet() {
+  try {
+    return window.localStorage?.getItem(LAST_SET_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function rememberSet(value) {
+  try {
+    window.localStorage?.setItem(LAST_SET_KEY, value || "");
+  } catch {
+    // The preference simply will not persist this session.
+  }
+}
+
+function startNaming() {
+  recipeName.value = card.value?.name || "";
+  naming.value = true;
+}
+
+async function saveRecipe() {
+  if (!recipeName.value.trim() || saving.value) return;
+  saving.value = true;
+  try {
+    const body = runBody();
+    await createSavedRecipe({
+      workflow_key: activeKey.value,
+      name: recipeName.value.trim(),
+      prompt: prompt.value,
+      negative: body.negative,
+      loras: loras.value
+        .filter((row) => row.sha256)
+        .map((row) => ({
+          filename: adapterName(row.sha256),
+          sha256: row.sha256,
+          strength: Number(row.strength) || 1,
+        })),
+      overrides: { ...edits },
+      seed: seedMode.value === "fixed" ? String(seed.value).trim() : null,
+      keep_seed: seedMode.value === "keep",
+      source_picture_id: pictureIds.value[0] ?? null,
+    });
+    naming.value = false;
+    notices.push({ level: "success", text: `Saved “${recipeName.value.trim()}”.` });
+  } catch (err) {
+    notices.push({
+      level: "error",
+      text: errorMessage(err, "Could not save that recipe."),
+    });
+  } finally {
+    saving.value = false;
+  }
+}
+
+function adapterName(sha256) {
+  const row = adapters.value.find((item) => item.sha256 === sha256);
+  return row?.filename || row?.display_name || sha256;
+}
+
+function onRequestClose() {
+  if (submitting.value) return;
+  emit("close");
+}
+
+async function submit() {
+  if (!canRun.value) return;
+  submitting.value = true;
+  submitError.value = "";
+  try {
+    const answer = await runWorkflowCard(runBody());
+    const prompts = Array.isArray(answer?.prompts) ? answer.prompts : [];
+    if (!prompts.length) {
+      reasons.value = (answer?.groups || []).flatMap((group) => group.reasons || []);
+      submitError.value = "Nothing was queued; see the reason below.";
+      return;
+    }
+    if (picksDestination.value) rememberSet(destinationSetId.value);
+    emit("run", { prompts, pictureIds: pictureIds.value });
+    emit("close");
+  } catch (err) {
+    // A submission error is a FORM error: keep the dialog and every input.
+    submitError.value = errorMessage(err, "Could not start the run.");
+  } finally {
+    submitting.value = false;
+  }
+}
+
+watch(
+  () => [props.open, props.source],
+  ([open]) => {
+    if (open) void load();
+  },
+  { immediate: true },
+);
+</script>
+
+<style scoped>
+.rund {
+  display: grid;
+  /* 168px is the design's own source column, and the picture below fills it at
+     168×252. Nothing else in the app draws a 2:3 thumbnail at a fixed size, so
+     it stays here rather than becoming a token with one reader. */
+  grid-template-columns: 168px minmax(0, 1fr);
+  gap: var(--space-6);
+  align-items: start;
+}
+
+.rund-src {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.rund-pic {
+  width: 168px;
+  height: 252px;
+  border-radius: var(--radius-md);
+  object-fit: cover;
+  display: block;
+}
+
+.rund-pic--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(var(--v-theme-on-surface), 0.06);
+  color: rgba(var(--v-theme-on-surface), 0.5);
+}
+
+.rund-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.rund-name {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.rund-sub,
+.rund-kv dt {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.rund-kv {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-4);
+  border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
+.rund-kv dd {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.rund-mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.rund-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-5) var(--space-4);
+  align-content: start;
+}
+
+.rund-f {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.rund-f--2 {
+  grid-column: span 2;
+}
+
+.rund-f--4 {
+  grid-column: span 4;
+}
+
+/* The label row carries the ↺ chip, so an edited field never changes height
+   and the four columns stay on one baseline. */
+.rund-l {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--space-5);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.rund-sp {
+  flex: 1;
+}
+
+.rund-l2 {
+  width: 72px;
+  text-align: right;
+}
+
+.rund-x-gap {
+  width: var(--control-h-bar);
+}
+
+.rund-lora,
+.rund-size {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px var(--control-h-bar);
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.rund-size {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.rund-more {
+  border-top: 1px solid rgb(var(--v-theme-divider));
+  padding-top: var(--space-4);
+}
+
+.rund-disc > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-h);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.rund-rest {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+}
+
+.rund-quiet,
+.rund-note {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.rund-note {
+  margin: 0;
+  line-height: var(--leading-body);
+}
+
+.rund-note--bad {
+  color: rgb(var(--v-theme-surface-error));
+}
+</style>

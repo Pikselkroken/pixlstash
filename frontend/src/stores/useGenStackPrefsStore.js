@@ -1,10 +1,15 @@
 import { ref } from "vue";
 import { defineStore } from "pinia";
 
-// Remembered client preferences for whether newly generated / filtered images
-// are stacked with the originals they were derived from. Two independent
-// booleans (ComfyUI image-to-image vs. plugin "Filters" runs), both default ON
-// so the historical always-stack behaviour is preserved on a fresh install.
+// Remembered client preference for whether newly filtered images are stacked
+// with the originals they were derived from. Defaults ON, so the historical
+// always-stack behaviour is preserved on a fresh install.
+//
+// There used to be a second one, `stackI2IOutputs`, for ComfyUI
+// image-to-image. Both of its surfaces - the Remix dialog and the rail run
+// panel - went in v1.12 F5, and `POST /workflows/run` deliberately does not
+// stack (a new run is a NEW picture, not a variant of the one it was made
+// from), so the preference had nothing left to decide.
 
 function loadBool(key, fallback = true) {
   try {
@@ -25,19 +30,11 @@ function saveBool(key, val) {
   }
 }
 
-const I2I_KEY = "pixlstash:stackI2IOutputs";
 const FILTER_KEY = "pixlstash:stackFilterOutputs";
 
 export const useGenStackPrefsStore = defineStore("genStackPrefs", () => {
-  // Stack ComfyUI image-to-image outputs with their source picture.
-  const stackI2IOutputs = ref(loadBool(I2I_KEY));
   // Stack plugin "Filters" outputs with their source picture.
   const stackFilterOutputs = ref(loadBool(FILTER_KEY));
-
-  function setStackI2IOutputs(val) {
-    stackI2IOutputs.value = !!val;
-    saveBool(I2I_KEY, stackI2IOutputs.value);
-  }
 
   function setStackFilterOutputs(val) {
     stackFilterOutputs.value = !!val;
@@ -45,9 +42,7 @@ export const useGenStackPrefsStore = defineStore("genStackPrefs", () => {
   }
 
   return {
-    stackI2IOutputs,
     stackFilterOutputs,
-    setStackI2IOutputs,
     setStackFilterOutputs,
   };
 });

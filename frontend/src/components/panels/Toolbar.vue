@@ -466,20 +466,6 @@
             "
           />
         </v-menu>
-        <!-- ── Toolbar: run a workflow that takes no selection (#1307). The
-             run panel opens in the inspector rail, so the grid stays usable. -->
-        <AppBarButton
-          v-if="filterStore.comfyuiConfigured"
-          class="tb-fold-700"
-          icon="image-plus-outline"
-          :active="
-            workflowRunStore.open && workflowRunStore.origin === FROM_TOOLBAR
-          "
-          :disabled="isReadOnly"
-          tooltip="Generate new pictures with a ComfyUI workflow"
-          aria-label="Generate new pictures with a ComfyUI workflow"
-          @click="workflowRunStore.openFor(FROM_TOOLBAR)"
-        />
         <!-- ── The ⋯ overflow (amendment #2 in docs/design/
              toolbar-responsive-decisions.md): a burger may only collapse
              controls from its OWN visual group, and it stands where those
@@ -516,20 +502,6 @@
             >
               <v-icon class="ctx-icon">mdi-cloud-upload-outline</v-icon>
               <span>Import photos…</span>
-            </button>
-            <button
-              v-if="filterStore.comfyuiConfigured"
-              type="button"
-              role="menuitem"
-              class="ctx-item tb-row-700"
-              :disabled="isReadOnly"
-              @click="
-                close();
-                workflowRunStore.openFor(FROM_TOOLBAR);
-              "
-            >
-              <v-icon class="ctx-icon">mdi-image-plus-outline</v-icon>
-              <span>Generate with ComfyUI…</span>
             </button>
             <button
               type="button"
@@ -593,10 +565,6 @@ import { useSearchStore } from "../../stores/useSearchStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
-import {
-  FROM_TOOLBAR,
-  useWorkflowRunStore,
-} from "../../stores/useWorkflowRunStore";
 import {
   MAX_THUMBNAIL_SIZE_LEVEL,
   DEFAULT_THUMBNAIL_SIZE_LEVEL,
@@ -715,7 +683,6 @@ function exportActionLabel(idle) {
   return `Export ${count} picture${count === 1 ? "" : "s"} to zip`;
 }
 
-const workflowRunStore = useWorkflowRunStore();
 // ── Grid Bar: Sort ─────────────────────────────────────────────────────────────
 const SIMILARITY_SORT_KEY_GB = "CHARACTER_LIKENESS";
 const LIKENESS_GROUPS_SORT_KEY_GB = "LIKENESS_GROUPS";

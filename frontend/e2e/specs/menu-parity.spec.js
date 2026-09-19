@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { test, expect } from '../fixtures/test.js'
 
 // Release plan §4 — Selection ▾ / context-menu parity, the manual check this
@@ -73,6 +74,41 @@ const CONTEXT_ONLY_SINGLE_IMAGE_ACTIONS = [
   'Remove all shares',
 ]
 
+// The spec's own blind spot. An entry gated on `comfyuiConfigured` renders in
+// NEITHER menu here — the e2e backend has no ComfyUI address — so the live
+// comparison above sees two absences and calls them equal. That is exactly the
+// #403 shape: the two run entries (v1.12 F5) were added as a mirrored pair, and
+// a later change that drops one from one menu would pass the run above in
+// silence. Asserted against the sources instead, which is the only place the
+// pair is visible without a ComfyUI to connect to.
+const COMFYUI_GATED_ACTIONS = [
+  { label: 'Make more like these…', event: 'make-more' },
+  { label: 'Run a workflow on these…', event: 'run-workflow' },
+]
+
+const MENU_SOURCES = [
+  'src/components/panels/SelectionMenu.vue',
+  'src/components/widgets/ImageGridContextMenu.vue',
+]
+
+/**
+ * The `<button>` element that carries a label, as source text.
+ *
+ * A bare `source.includes(label)` would be satisfied by the label sitting in a
+ * comment, or by a button that has lost its `v-if`, its `:disabled` or its
+ * click handler — which is most of the ways one of these entries can rot. The
+ * element is pulled out so those can be asserted on.
+ */
+function buttonCarrying(source, label) {
+  for (const match of source.matchAll(/<button[\s\S]*?<\/button>/g)) {
+    const [element] = match
+    // Skip a label that is only mentioned in a comment inside the element.
+    const withoutComments = element.replace(/<!--[\s\S]*?-->/g, '')
+    if (withoutComments.includes(label)) return withoutComments
+  }
+  return null
+}
+
 test.describe('selection / context menu parity (§4, #403)', () => {
   test('both menus list the same actions for a multi-picture selection', async ({
     grid,
@@ -114,5 +150,32 @@ test.describe('selection / context menu parity (§4, #403)', () => {
     // toEqual prints the exact two-way diff when they diverge, which is what
     // made #403 diagnosable from CI output alone.
     expect(contextLabels).toEqual(selectionLabels)
+  })
+
+  test('both menus declare the ComfyUI-gated actions this fixture cannot show', () => {
+    for (const path of MENU_SOURCES) {
+      const source = readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8')
+      for (const { label, event } of COMFYUI_GATED_ACTIONS) {
+        const button = buttonCarrying(source, label)
+        expect(
+          button,
+          `${path} has no <button> reading "${label}", which its sibling menu offers`,
+        ).not.toBeNull()
+        // The three ways the entry rots without the label moving: it stops
+        // being gated on ComfyUI, it stops being gated on a selection, or it
+        // stops firing the event the other menu fires.
+        expect(button, `"${label}" in ${path} lost its ComfyUI gate`).toContain(
+          'comfyuiConfigured',
+        )
+        expect(
+          button,
+          `"${label}" in ${path} lost its empty-selection guard`,
+        ).toMatch(/:disabled=/)
+        expect(
+          button,
+          `"${label}" in ${path} no longer fires "${event}"`,
+        ).toContain(event)
+      }
+    }
   })
 })
