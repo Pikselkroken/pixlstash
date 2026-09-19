@@ -30,7 +30,6 @@ vi.mock("../../api/config", () => ({
 
 vi.mock("../../api/comfyui", () => ({
   listWorkflows: vi.fn(async () => []),
-  deleteWorkflow: vi.fn(),
   importWorkflow: vi.fn(),
 }));
 

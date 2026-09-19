@@ -9,6 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { reactive } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 
 vi.mock("vuetify/components", async () => {
@@ -24,9 +25,12 @@ vi.mock("vuetify/components", async () => {
 });
 
 const push = vi.fn();
-// `query` is reassigned per test, so the mock hands back the live object
-// rather than a snapshot taken when the module was loaded.
-const route = { name: "workflows", query: {} };
+// REACTIVE, and not a plain object: the component watches
+// `() => route.query?.topology`, and in the real app `useRoute()` is reactive,
+// so a test whose route is inert silently cannot see a query CHANGE - only
+// whatever was set before mount. That gap hid a bug where the note outlived
+// the query that caused it.
+const route = reactive({ name: "workflows", query: {} });
 vi.mock("vue-router", () => ({
   useRouter: () => ({ push }),
   useRoute: () => route,
@@ -642,6 +646,23 @@ describe("arriving on ?topology=", () => {
     expect(note).toContain("12 counted as one-offs");
   });
 
+  // `withheld` is a count, and 1 is the common shape of a small library.
+  it('says "1 is being left out", not "1 are"', async () => {
+    listWorkflowCards.mockImplementation(() =>
+      Promise.resolve({ cards: [...CARDS], one_offs: 0, hidden: 1 }),
+    );
+    route.query = { topology: "topology-nothing" };
+    const wrapper = await grid();
+
+    const note = wrapper.find(".wfv-note").text();
+    expect(note).toContain("1 is being left out");
+    expect(note).not.toContain("1 are being left out");
+    // The live region is built from the same parts and says it too.
+    expect(wrapper.find('[role="status"]').text()).toContain(
+      "1 is being left out",
+    );
+  });
+
   it("says nothing while the cards are still on the wire", async () => {
     // "Not here" is false until the grid has been read, and a note that
     // appears and then corrects itself is worse than one that waits.
@@ -659,6 +680,79 @@ describe("arriving on ?topology=", () => {
     await flush();
     expect(wrapper.find(".wfv-note").exists()).toBe(false);
     expect(useWorkflowsStore().selectedKeys).toEqual(["d"]);
+  });
+
+  // The store outlives the component, so the `immediate` pass runs during
+  // setup against whatever the last visit left in `cards` - before
+  // `onMounted` refetches. A verdict reached there must stay revisable.
+  it("revises a miss decided on a stale card list", async () => {
+    await grid();
+    mounted.pop().unmount(); // leaves `cards` and `loaded` in the store
+
+    // The workflow crossed the one-off threshold while we were away, so the
+    // fresh answer holds a card the stale list does not.
+    const arrived = card("newcomer", { rank: 1 });
+    listWorkflowCards.mockImplementation(() =>
+      Promise.resolve({ cards: [...CARDS, arrived], one_offs: 0, hidden: 0 }),
+    );
+    route.query = { topology: "topology-newcomer" };
+
+    const second = await grid();
+
+    expect(second.find(".wfv-note").exists()).toBe(false);
+    expect(useWorkflowsStore().selectedKeys).toEqual(["newcomer"]);
+  });
+
+  // The sidebar's Workflows entry pushes this same route with no query, so
+  // the query can go without a remount. The note belongs to the link.
+  it("drops the note when the query goes away", async () => {
+    route.query = { topology: "topology-nothing" };
+    const wrapper = await grid();
+    expect(wrapper.find(".wfv-note").exists()).toBe(true);
+
+    route.query = {};
+    await flush();
+
+    expect(wrapper.find(".wfv-note").exists()).toBe(false);
+  });
+
+  // `flatRows` is rebuilt when `columns` lands, and `measure()` runs as a
+  // pre-flush job — so a row looked up BEFORE the tick names a different seat
+  // by the time `moveCursor` reads it.
+  //
+  // The window needs `columns` to move between the watcher's synchronous part
+  // and its `nextTick`, which means the grid must measure a real width on its
+  // FIRST `measure()` — jsdom reports 0, so the prototype is stubbed for this
+  // test alone. With a stack open (which survives unmount) the two disagree by
+  // a whole row: `f` is index 8 at one column, and index 8 at four columns is
+  // `e`.
+  it("lands on the right card when the columns change under it", async () => {
+    await grid();
+    const store = useWorkflowsStore();
+    await store.openStack("b");
+    await flush();
+    mounted.pop().unmount();
+    expect(store.openStackKey).toBe("b");
+
+    const owned = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "clientWidth",
+    );
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get: () => 1008,
+    });
+    try {
+      route.query = { topology: "topology-f" };
+      const second = mountView();
+      await flush();
+
+      expect(cursorKey(second)).toBe("f");
+    } finally {
+      if (owned)
+        Object.defineProperty(HTMLElement.prototype, "clientWidth", owned);
+      else delete HTMLElement.prototype.clientWidth;
+    }
   });
 
   it("does not yank focus out of the open Sort popover", async () => {

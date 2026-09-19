@@ -84,8 +84,9 @@
     <p v-if="linkMissed" class="wfv-note">
       That workflow is not in this grid.
       <template v-if="withheld"
-        >{{ withheld }} are being left out: {{ store.hidden }} hidden and
-        {{ store.oneOffs }} counted as one-offs.</template
+        >{{ withheld }} {{ withheld === 1 ? "is" : "are" }} being left out:
+        {{ store.hidden }} hidden and {{ store.oneOffs }} counted as
+        one-offs.</template
       >
     </p>
 
@@ -499,6 +500,16 @@ const watchedPath = computed(
 // whatever the reader had moved to. `immediate` because the store's cards
 // outlive a route change: a second visit on the same link has nothing left to
 // change for the watcher to see.
+//
+// **Only a HIT is marked honoured.** The store outlives this component, so the
+// `immediate` pass runs during setup against whatever the last visit left in
+// `cards` — before `onMounted` refetches. Marking a MISS honoured there makes
+// a verdict reached on a stale list permanent: a workflow that has since
+// crossed the one-off threshold, or arrived from the watched folder, is in the
+// fresh answer, but the refetch's re-fire returns at the guard above and the
+// screen goes on saying the opposite of what the grid holds. A hit still
+// applies once, which is all the focus protection was ever for; only the "not
+// here" verdict is left open to fresher data.
 let honouredTopology = null;
 
 watch(
@@ -506,6 +517,10 @@ watch(
   ([wanted]) => {
     if (!wanted) {
       honouredTopology = null;
+      // The query can go without a remount - the sidebar's Workflows entry
+      // pushes this same route with no query - and the note belongs to the
+      // link, not to the screen.
+      linkMissed.value = false;
       return;
     }
     // A repeated `?topology=` makes this an array, which matches no card. It
@@ -514,28 +529,39 @@ watch(
     // Nothing to say until the grid has been read: "not here" is false while
     // the answer is still on the wire.
     if (!store.loaded) return;
-    honouredTopology = wanted;
     const card = store.sortedCards.find(
       (entry) => entry.topology_hash === wanted,
     );
     if (!card) {
+      const plural = withheld.value === 1 ? "is" : "are";
       announcement.value = withheld.value
-        ? `That workflow is not in the grid. ${withheld.value} are being left out: ${store.hidden} hidden and ${store.oneOffs} counted as one-offs.`
+        ? `That workflow is not in the grid. ${withheld.value} ${plural} being left out: ${store.hidden} hidden and ${store.oneOffs} counted as one-offs.`
         : "That workflow is not in the grid.";
       linkMissed.value = true;
       return;
     }
+    honouredTopology = wanted;
     linkMissed.value = false;
     store.select(card.key);
-    const at = flatRows.value.findIndex(
-      (entry) => entry.id === `card:${card.key}`,
-    );
     // Not while the reader is inside a popover or the file dialog: the cards
     // arrive asynchronously, so this can fire a second after the screen went
     // interactive, and yanking focus out from under a gesture in progress is
     // worse than landing at the top of the grid. `onKeyDown` guards on the
     // same flag.
-    if (at >= 0 && !sortMenuOpen.value) nextTick(() => moveCursor(at));
+    //
+    // The row is looked up BY ID inside the callback, never as an index
+    // computed out here: `flatRows` is rebuilt by a resort, by a stack opening
+    // and by `columns` landing — which it does between setup and this tick,
+    // since `measure()` runs as a pre-flush job — and an index held across any
+    // of those names a different card, or a `hole`. That is the whole reason
+    // the cursor is an id (see `cursorId`).
+    if (!sortMenuOpen.value) {
+      nextTick(() =>
+        moveCursor(
+          flatRows.value.findIndex((entry) => entry.id === `card:${card.key}`),
+        ),
+      );
+    }
   },
   { immediate: true },
 );

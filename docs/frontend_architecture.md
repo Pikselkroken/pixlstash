@@ -4587,9 +4587,12 @@ from the UI today and are not oversights**:
   is the one a card is labelled from. See `docs/backend_architecture.md`.
 - **The client calls only the shelf made**: `listWorkflows`,
   `listWorkflowVariants`, `listWorkflowPictures` and `getWorkflowGraph`
-  (`api/workflows.js`) and `setWorkflowInputs` (`api/comfyui.js`) went with it
-  rather than being kept warm for a screen that does not exist. The routes
-  stay, so F5/F6/F7 re-add the lines they need against the shape they want.
+  (`api/workflows.js`), and `setWorkflowInputs` and `deleteWorkflow`
+  (`api/comfyui.js`), went with it rather than being kept warm for a screen
+  that does not exist. **The routes stay** — `DELETE /comfyui/workflows/{name}`
+  included — so F5/F6/F7 re-add the lines they need against the shape they
+  want. A function whose only test is its own unit test is not covered, it is
+  only green.
 
 #### `?from=`: the way back, built here and currently unused
 
