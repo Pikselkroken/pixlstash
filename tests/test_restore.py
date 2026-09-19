@@ -4323,8 +4323,15 @@ def test_full_restore_drains_an_admitted_share_before_swap(server, monkeypatch):
 
     async def _serve_admitted_share(_request):
         admitted.set()
+        # 120 s, not 10, for the reason 807045a1 gives about this file's
+        # `release_token_clear`: a paused handler has to out-wait the
+        # ORCHESTRATION that releases it. This test allows the restore up to
+        # 20 s to reach the drain (`close_started.wait(20)`) plus 0.2 s to
+        # prove it has not swapped, and only then sets the event - so a
+        # handler giving up at 10 s calls a step the test itself permits a
+        # failure, and a Windows runner takes several times what Linux does.
         released = await asyncio.get_running_loop().run_in_executor(
-            None, release_share.wait, 10
+            None, release_share.wait, 120
         )
         assert released, "test did not release admitted share request"
         matched = share_service.validate_picture_share_token(
@@ -4440,8 +4447,14 @@ def test_full_restore_drains_an_admitted_http_request_before_swap(server, monkey
     ):
         if request.headers.get("x-pause-after-admission") == "yes":
             admitted.set()
+            # 120 s, not 10: same shape as the share-drain sibling above and
+            # as `release_token_clear` (807045a1). The handler resumes into
+            # `original_admitted`, so giving up early does not just fail the
+            # wait - the request then meets an auth already closed for restore
+            # and answers 503 where the test asserts 200, which is how this one
+            # reddened `backend-windows shard 2` on #1435.
             released = await asyncio.get_running_loop().run_in_executor(
-                None, release_request.wait, 10
+                None, release_request.wait, 120
             )
             assert released, "test did not release admitted request"
         return await original_admitted(
