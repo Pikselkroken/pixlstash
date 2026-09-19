@@ -699,3 +699,88 @@ def test_authz_gate_noops_on_websocket_scope():
         send=None,
     )
     assert asyncio.run(gate(ws)) is None
+
+
+# ---------------------------------------------------------------------------
+# workflows_changed: the wire frame a workflow write raises (v1.12 B4)
+#
+# Here rather than beside the routes that emit it, because what the routes can
+# reach is the ``data`` dict they built: a listener on the vault asserts the
+# emitter's own dict back to itself and never touches the broadcaster. The
+# frame documented in integration_architecture.md §8 is only observable on the
+# other side of ``_broadcast_ws_event``, which is what this module's capture
+# harness gives.
+# ---------------------------------------------------------------------------
+
+
+def test_a_workflow_change_goes_out_as_its_own_frame(server):
+    """The documented shape, field by field.
+
+    §8 promises a `workflows_changed` frame carrying `keys` and `reason`. It is
+    not `pictures_changed`: a card is not a picture, its key is not a picture
+    id, and a client reading this as an empty picture event would reload the
+    grid it is not looking at and never the view that changed.
+    """
+    payload = _broadcast_capture(
+        server,
+        EventType.CHANGED_WORKFLOWS,
+        {
+            "keys": ["abc", "def"],
+            "reason": "stacks",
+            "source": "ui",
+            "origin_client_id": "example-tab",
+        },
+    )
+    assert payload["type"] == "workflows_changed"
+    assert payload["event"] == "CHANGED_WORKFLOWS"
+    assert payload["keys"] == ["abc", "def"]
+    assert payload["reason"] == "stacks"
+    assert payload["source"] == "ui"
+    assert payload["origin_client_id"] == "example-tab"
+    assert "picture_ids" not in payload
+
+
+def test_an_unknown_workflow_change_reason_degrades_rather_than_vanishes(server):
+    """§8's allowlist rule, in both directions.
+
+    `reason` is a closed set that **degrades** an unknown value to `changed`
+    rather than rejecting the event: a client must be able to treat any frame
+    as "look again", so an emit site naming something else must still arrive.
+    """
+    from pixlstash.ws.broadcaster import DEFAULT_REASON, WORKFLOW_CHANGE_REASONS
+
+    for reason in WORKFLOW_CHANGE_REASONS:
+        payload = _broadcast_capture(
+            server, EventType.CHANGED_WORKFLOWS, {"keys": [], "reason": reason}
+        )
+        assert payload["reason"] == reason, f"{reason} was not carried through"
+    for bad in ("renamed", "", None, 7):
+        payload = _broadcast_capture(
+            server, EventType.CHANGED_WORKFLOWS, {"keys": ["x"], "reason": bad}
+        )
+        assert payload["reason"] == DEFAULT_REASON, f"{bad!r} was not degraded"
+        assert payload["keys"] == ["x"], "the event itself must still arrive"
+
+
+def test_a_workflow_change_reaches_a_client_whatever_its_grid_filters(server):
+    """A card is not a picture, so no grid filter says anything about it.
+
+    `_should_send_ws_update` is what would drop it, and a client filtering its
+    grid to one character still has the Workflows view open.
+    """
+    ws = _CaptureWS()
+    with server._ws_clients_lock:
+        saved = list(server._ws_clients)
+        server._ws_clients = [
+            {"ws": ws, "filters": {"character_id": 7, "rating": 5}, "owner": True}
+        ]
+    try:
+        asyncio.run(
+            server._broadcast_ws_event(
+                EventType.CHANGED_WORKFLOWS, {"keys": ["k"], "reason": "changed"}
+            )
+        )
+    finally:
+        with server._ws_clients_lock:
+            server._ws_clients = saved
+    assert [frame["type"] for frame in ws.received] == ["workflows_changed"]

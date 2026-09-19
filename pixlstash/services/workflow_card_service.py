@@ -40,6 +40,7 @@ from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_card_reads import (
+    AUTO_STACK_PREFIX,
     Card,
     StackRows,
     asset_names,
@@ -343,7 +344,7 @@ def effective_stacks(
         )
         if len(ordered) < 2:
             continue
-        stack_id = identity if kind == "manual" else f"auto:{identity}"
+        stack_id = identity if kind == "manual" else f"{AUTO_STACK_PREFIX}{identity}"
         stacks.append(
             Stack(
                 stack_id=stack_id,

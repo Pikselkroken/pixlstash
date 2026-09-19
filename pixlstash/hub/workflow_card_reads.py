@@ -33,6 +33,16 @@ from pixlstash.utils.sql_chunking import chunked
 
 logger = get_logger(__name__)
 
+# The prefix an automatic stack's id carries. An automatic grouping is not a
+# row - it IS the set of cards sharing a ``core_hash`` - so ``auto:`` and that
+# hash are the only thing that names one, and storing an ordered grouping
+# under the same id is what makes ordering it idempotent. Defined here because
+# three modules need the same literal:
+# :mod:`pixlstash.services.workflow_card_service` produces it,
+# :func:`keys_in_stack` below resolves it, and
+# :mod:`pixlstash.hub.workflow_card_writes` writes it.
+AUTO_STACK_PREFIX = "auto:"
+
 
 @dataclass
 class Card:
@@ -318,3 +328,51 @@ def default_overrides(
             (workflow_key,),
         )
     }
+
+
+def keys_in_stack(hub: HubDatabase, stack_id: str) -> list[str]:
+    """Every card one stack holds, in order; empty when it holds none.
+
+    Both kinds of stack answer here, because both can be addressed by a write
+    and only one of them is a row:
+
+    * a **stored** stack (manual, or an automatic group somebody has ordered)
+      has a ``workflow_stack_member`` row per card;
+    * an automatic grouping that nobody has ordered is not a row at all - it
+      IS the set of cards sharing a ``core_hash``, and ``auto:<core_hash>`` is
+      the only thing that names it
+      (:data:`pixlstash.hub.workflow_card_writes.AUTO_STACK_PREFIX`).
+
+    The automatic half subtracts the cards that have left the group, the way
+    :func:`pixlstash.hub.workflow_cards.effective_stack_keys` does: a stored
+    membership elsewhere or a ``workflow_unstacked`` row both mean this group
+    is no longer where that card sits, and dissolving a group would otherwise
+    write an ``unstacked`` row for a card that is not in it.
+    """
+    stored = [
+        key
+        for (key,) in hub.fetchall(
+            "SELECT workflow_key FROM workflow_stack_member WHERE stack_id = ? "
+            "ORDER BY position, workflow_key",
+            (stack_id,),
+        )
+    ]
+    if stored or not stack_id.startswith(AUTO_STACK_PREFIX):
+        return stored
+    return [
+        key
+        for (key,) in hub.fetchall(
+            "SELECT DISTINCT v.workflow_key FROM workflow_variant v "
+            "JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
+            "AND c.core_version = ? "
+            "WHERE v.key_version = ? AND c.core_hash = ? "
+            "AND v.workflow_key NOT IN (SELECT workflow_key FROM workflow_stack_member) "
+            "AND v.workflow_key NOT IN (SELECT workflow_key FROM workflow_unstacked) "
+            "ORDER BY v.workflow_key",
+            (
+                CORE_RULE_VERSION,
+                WORKFLOW_KEY_VERSION,
+                stack_id[len(AUTO_STACK_PREFIX) :],
+            ),
+        )
+    ]

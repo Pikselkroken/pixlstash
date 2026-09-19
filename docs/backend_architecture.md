@@ -744,8 +744,17 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/workflows/cards/{workflow_key}                                        | workflows       | One workflow card                                           |
 | GET    | /api/v1/workflows/cards/{workflow_key}/pictures                               | workflows       | Pictures made with a card                                   |
 | GET    | /api/v1/workflows/recipes/{structural_hash}/graph                             | workflows       | A recipe's stored graph                                     |
+| POST   | /api/v1/workflows/stacks                                                      | workflows       | Stack workflows together                                    |
+| PUT    | /api/v1/workflows/stacks/{stack_id}/order                                     | workflows       | Reorder a stack                                             |
+| POST   | /api/v1/workflows/stacks/{stack_id}/unstack                                   | workflows       | Dissolve a stack                                            |
 | GET    | /api/v1/workflows/{topology_hash}/pictures                                    | workflows       | Pictures made with a workflow                               |
 | GET    | /api/v1/workflows/{topology_hash}/variants                                    | workflows       | List a workflow's variants                                  |
+| PATCH  | /api/v1/workflows/{workflow_key}                                              | workflows       | Edit a workflow card                                        |
+| PUT    | /api/v1/workflows/{workflow_key}/defaults                                     | workflows       | Set a card's parameter defaults                             |
+| PUT    | /api/v1/workflows/{workflow_key}/inputs                                       | workflows       | Set a card's picture inputs                                 |
+| PUT    | /api/v1/workflows/{workflow_key}/pins                                         | workflows       | Set a card's pinned parameters                              |
+| PUT    | /api/v1/workflows/{workflow_key}/slots                                        | workflows       | Mark a card's LoRA slots                                    |
+| POST   | /api/v1/workflows/{workflow_key}/unstack                                      | workflows       | Take a card out of its stack                                |
 | GET    | /version                                                                      | server          | Read Version                                                |
 | WS     | /api/v1/ws/updates                                                            | config          | Real-time event stream                                      |
 | WS     | /api/v1/ws/comfyui                                                            | comfyui         | ComfyUI workflow progress                                   |
@@ -3209,10 +3218,41 @@ with no scope filter at all. A scoped answer needs a narrowing parameter and a
 policy to check it against; inventing one with no route to check it would only
 look like the question had been settled.
 
-**Nothing here mutates**, so `AccessPolicy` aside there is no write half to
-declare yet: naming a workflow (§F3) and running one (§F5) are later steps, and
-forgetting ghosts is a privacy purge beside the retention setting
-(`/server-config/ghost-retention/*`, see *Picture ghosts* below).
+**The write half is the owner editing their own library (v1.12 B4)**, and it is
+`OWNER_ONLY` for a plainer reason than the reads: a card's name, its pins, its
+overrides and the stack it sits in belong to no picture, set, character or
+project, so no narrower policy could describe one. Rows go through
+`hub/workflow_card_writes.py`, which is the only module that writes them;
+`routes/workflows.py` validates a request, resolves the keys with
+`workflow_cards.effective_stack_keys`, and says "look again"
+(`EventType.CHANGED_WORKFLOWS`) on the way out. Running a workflow (§F5) is
+still a later step, and forgetting ghosts is a privacy purge beside the
+retention setting (`/server-config/ghost-retention/*`, see *Picture ghosts*
+below).
+
+**`PUT /workflows/{key}/slots` is the one write that changes identity.** A LoRA
+slot's mark decides whether that LoRA reaches the card key, so flipping one
+re-keys **every variant of the topology** — one card can split into several, or
+several can merge into one — and the re-key and the carry-over of everything the
+owner said about those cards are **one transaction**, or a correction silently
+empties a card somebody has named, pinned and stacked. A split **copies** the
+attributes to every successor; a merge gives them to the member with the most
+pictures (ties broken on the key, so the winner does not depend on row order),
+and the picture counts come from the vault because the hub does not hold them.
+Two cases that look like edge cases and are not: a variant whose stored document
+will not parse or will not reduce keeps the key it is on, so its card survives
+the pass even when a sibling moved; and `workflow_file.workflow_key` is re-keyed
+with it, or an imported file stops saying it runs the card until the next import.
+
+**A stack left with one member dissolves**, on every write that can leave one
+that way, because the read side already draws a group of one as a lone card and
+a row saying otherwise is a row the next reader believes
+(`effective_stack_keys` consults membership before the automatic grouping).
+Dissolving a stack writes a `workflow_unstacked` row per member: an automatic
+grouping is not a row, so without one it re-forms on the next read and the
+gesture reads as having done nothing. Those rows are keyed on the **card**,
+which is what makes both kinds of stack decision survive a `CORE_VERSION` bump
+regrouping everything around them.
 
 **A row carries what the ghosts filter needs** (#1309): `ghosts` (the active
 library's picture ghosts, joined to a topology through the ghost's
@@ -4030,6 +4070,7 @@ a promise that Tailscale is local for every authentication mechanism.
 | `LIBRARY_SWITCHED`       | ✓ broadcast |
 | `VRAM_OOM`               | ✓ broadcast |
 | `EXTERNAL_MOVES_PENDING` | ✓ broadcast |
+| `CHANGED_WORKFLOWS`      | ✓ broadcast |
 <!-- AUTOGEN:end name="events" -->
 
 - Events are published from `Vault` whenever a task or domain operation completes; the broadcaster in `server.py` fans the filtered subset out to **owner-level** connected clients (see WebSocket authentication below).

@@ -183,6 +183,49 @@ def list_in_session(
     return [serialize(row) for row in rows]
 
 
+def rekey_in_session(session: Session, moved: dict[str, list[str]]) -> int:
+    """Move every recipe of a re-keyed card onto the key it went to.
+
+    **This is the migration ``db_models/saved_recipe.py`` says the change that
+    makes a re-keying reachable owes this table** (v1.12 B4). A card key is
+    content, so it survives a regrouping, an Unstack and a ``CORE_VERSION``
+    bump - but not a slot-mark flip, which recomputes it. A recipe left on the
+    old key is addressed by a key no variant carries: its workflow's tab stops
+    listing it and nothing says where it went, and unlike a hub row it is
+    **authored** and cannot be rebuilt from anything.
+
+    Args:
+        moved: ``{old key: [new key, ...]}`` from
+            :func:`pixlstash.hub.workflow_card_writes.flip_slot_marks`,
+            biggest successor first.
+
+    Returns:
+        How many recipes moved.
+
+    A split has several successors and a recipe goes to the **first**, which is
+    the one holding most of the card's pictures. The row names a workflow and
+    not a variant, so which half of a split it was saved from is not recorded
+    anywhere and cannot be recovered - sending it to the biggest is a choice,
+    and the alternatives (copying it to every successor, or dropping it) are
+    both worse: one invents recipes the owner never saved, the other is the
+    silent loss this function exists to close.
+    """
+    moved_count = 0
+    for old_key, successors in moved.items():
+        if not successors or successors[0] == old_key:
+            continue
+        rows = session.exec(
+            select(SavedRecipe).where(SavedRecipe.workflow_key == old_key)
+        ).all()
+        for row in rows:
+            row.workflow_key = successors[0]
+            session.add(row)
+        moved_count += len(rows)
+    if moved_count:
+        session.commit()
+    return moved_count
+
+
 def counts_by_workflow_key(session: Session) -> dict[str, int]:
     """How many saved recipes each card holds, for the whole library at once.
 
@@ -435,3 +478,17 @@ def delete_recipe(vault, recipe_id: int) -> bool:
 def reorder_recipes(vault, recipe_ids: list[int]) -> Optional[list[int]]:
     """Re-position these recipes; ``None`` when one of them does not exist."""
     return vault.db.run_task(reorder_in_session, recipe_ids)
+
+
+def rekey_recipes(vault, moved: dict[str, list[str]]) -> int:
+    """Follow a card re-keying; returns how many recipes moved.
+
+    **Not in the hub's transaction, and it cannot be**: the recipes are vault
+    rows and the cards are hub rows, so this is a second write to a second
+    database. A crash between the two leaves recipes on a key no variant
+    carries, which is the state this closes rather than one it introduces -
+    and the log below is what says so, since nothing else would.
+    """
+    if not moved:
+        return 0
+    return vault.db.run_task(rekey_in_session, moved)

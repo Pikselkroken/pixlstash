@@ -338,6 +338,9 @@ def test_event_types_fully_classified():
             # Vault-wide reconciliation queue nudge (v1.11 Phase 5), like
             # VRAM_OOM: not a grid view a client's filters could exclude it from.
             EventType.EXTERNAL_MOVES_PENDING.name,
+            # A workflow card changed (v1.12 B4). A card is not a picture, so
+            # no grid filter says anything about whether a client wants it.
+            EventType.CHANGED_WORKFLOWS.name,
         }
     )
 

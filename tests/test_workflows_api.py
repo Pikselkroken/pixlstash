@@ -47,16 +47,25 @@ from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, ReferenceFolder
 from pixlstash.db_models.saved_recipe import SavedRecipe
-from pixlstash.hub.workflow_card_reads import instance_documents, variant_documents
-from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
+from pixlstash.event_types import EventType
+from pixlstash.hub.workflow_card_reads import (
+    AUTO_STACK_PREFIX,
+    default_overrides,
+    instance_documents,
+    variant_documents,
+)
+from pixlstash.hub.workflow_card_writes import set_stack_order
+from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, effective_stack_keys
 from pixlstash.hub.workflows import PictureGhost, record_picture_ghosts
 from pixlstash.services.workflow_hash import WorkflowGraphError, asset_reference
 from pixlstash.services import workflow_card_service
+from pixlstash.routes.workflows import UNNAMED_CARD
 from pixlstash.services.workflow_identity import (
     WORKFLOW_KEY_VERSION,
     guess_mark,
     slots,
     topology_node_labels,
+    workflow_key,
 )
 from pixlstash.services.workflow_io import detect_workflow_io
 import pixlstash.routes.comfyui as comfyui_module
@@ -92,6 +101,22 @@ _WORKFLOW_ROUTES = (
     # Where a LoRA loader would go (#1376): it reaches the owner's ComfyUI, and
     # its refusal is measured with the GET belts emptied in the test below.
     ("GET", "/api/v1/comfyui/workflows/{workflow_name}/lora-insertion"),
+)
+
+# The card and stack writes (v1.12 B4), pinned in their own tuple: the reads
+# above are owner-only over a disclosure judgement, these are owner-only
+# because they are the owner rearranging their own library and no narrower
+# scope could describe one.
+_WORKFLOW_WRITE_ROUTES = (
+    ("PATCH", "/api/v1/workflows/{workflow_key}"),
+    ("PUT", "/api/v1/workflows/{workflow_key}/slots"),
+    ("PUT", "/api/v1/workflows/{workflow_key}/defaults"),
+    ("PUT", "/api/v1/workflows/{workflow_key}/pins"),
+    ("PUT", "/api/v1/workflows/{workflow_key}/inputs"),
+    ("POST", "/api/v1/workflows/{workflow_key}/unstack"),
+    ("POST", "/api/v1/workflows/stacks"),
+    ("PUT", "/api/v1/workflows/stacks/{stack_id}/order"),
+    ("POST", "/api/v1/workflows/stacks/{stack_id}/unstack"),
 )
 
 
@@ -3642,3 +3667,1086 @@ def test_the_hub_card_reads_survive_a_list_longer_than_sqlites_cap(workflow_env)
         assert set(variant_documents(hub, [BUSY_RECIPE_B, *filler])) == {BUSY_RECIPE_B}
     finally:
         hub.connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, previous)
+
+
+# ===========================================================================
+# The writes (v1.12 B4)
+#
+# Same shared environment, and the autouse fixture wipes every card table
+# before each test, so a write here cannot reach the next one. The flip
+# fixture below is seeded by the tests that need it rather than by the module,
+# because it is a fifth topology with pictures of its own: seeded module-wide
+# it would change the row count, the scan totals and the library's mean rating
+# that every assertion above is written against.
+# ===========================================================================
+
+FLIP_TOPOLOGY = _h("fliptopology")
+FLIP_RECIPE_A = _h("fliprecipea")
+FLIP_RECIPE_B = _h("fliprecipeb")
+FLIP_CORE = _h("flipcore")
+
+# Two variants of ONE graph that differ in nothing but which character LoRA
+# sits in the slot. That is the whole point of the fixture: with the slot
+# marked `recipe` they are one card, and marking it `structural` is what
+# splits them - so the split and the merge are the same two rows read twice.
+_FLIP_DOCUMENTS = {
+    FLIP_RECIPE_A: {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": asset_reference("realvisxl.safetensors")},
+        },
+        "2": {
+            "class_type": "LoraLoader",
+            "inputs": {
+                "lora_name": asset_reference("character_ada.safetensors"),
+                "model": ["1", 0],
+            },
+        },
+        "3": {"class_type": "KSampler", "inputs": {"steps": None, "model": ["2", 0]}},
+    },
+    FLIP_RECIPE_B: {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": asset_reference("realvisxl.safetensors")},
+        },
+        "2": {
+            "class_type": "LoraLoader",
+            "inputs": {
+                "lora_name": asset_reference("character_bo.safetensors"),
+                "model": ["1", 0],
+            },
+        },
+        "3": {"class_type": "KSampler", "inputs": {"steps": None, "model": ["2", 0]}},
+    },
+}
+
+_FLIP_ASSETS = (
+    (FLIP_RECIPE_A, "ckpt_name", "realvisxl.safetensors"),
+    (FLIP_RECIPE_A, "lora_name", "character_ada.safetensors"),
+    (FLIP_RECIPE_B, "ckpt_name", "realvisxl.safetensors"),
+    (FLIP_RECIPE_B, "lora_name", "character_bo.safetensors"),
+)
+
+# Three pictures on A and one on B, so a merge has a winner that is not the
+# lexicographically first key by luck: the assertion is about the count.
+_FLIP_PICTURES = (
+    ("flip_a_one.png", FLIP_RECIPE_A),
+    ("flip_a_two.png", FLIP_RECIPE_A),
+    ("flip_a_three.png", FLIP_RECIPE_A),
+    ("flip_b_one.png", FLIP_RECIPE_B),
+)
+
+
+def _flip_slot_label(structural_hash: str) -> str:
+    """The LoRA slot both flip variants share, by B1's own rule."""
+    return next(
+        slot.label for slot in slots(_FLIP_DOCUMENTS[structural_hash]) if slot.is_lora
+    )
+
+
+def _flip_key(structural_hash: str, structural_labels=()) -> str:
+    """The card key one flip variant lands on under these marks.
+
+    **Derived and not written out**, unlike the module's other keys: the flip
+    recomputes a key from the stored document, so a hand-written fixture key
+    would make "the marks are already in force" look like a re-key.
+    """
+    return workflow_key(
+        FLIP_TOPOLOGY, slots(_FLIP_DOCUMENTS[structural_hash]), structural_labels
+    )
+
+
+def _seed_flip_fixture(server) -> str:
+    """Add the flip topology, its two variants and their pictures; return the
+    one card both variants are on while the LoRA slot is marked ``recipe``."""
+    label = _flip_slot_label(FLIP_RECIPE_A)
+    assert label == _flip_slot_label(FLIP_RECIPE_B), (
+        "the two flip variants must share a slot label, or they are not two "
+        "variants of one topology and nothing below tests a flip"
+    )
+    merged = _flip_key(FLIP_RECIPE_A)
+    assert merged == _flip_key(FLIP_RECIPE_B), (
+        "with the LoRA slot marked recipe the two variants must share a key"
+    )
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_topology "
+            "(topology_hash, hash_version, node_count, first_seen_at) "
+            "VALUES (?, 'v1', 3, '2026-08-06T00:00:00Z')",
+            (FLIP_TOPOLOGY,),
+        )
+        conn.executemany(
+            "INSERT INTO workflow_recipe (structural_hash, topology_hash, "
+            "hash_version, node_count, first_seen_at) "
+            "VALUES (?, ?, 'v1', 3, '2026-08-06T00:00:00Z')",
+            [(FLIP_RECIPE_A, FLIP_TOPOLOGY), (FLIP_RECIPE_B, FLIP_TOPOLOGY)],
+        )
+        conn.executemany(
+            "INSERT INTO workflow_recipe_graph "
+            "(structural_hash, document_sha256, document, created_at) "
+            "VALUES (?, 'x', ?, '2026-08-06T00:00:00Z')",
+            [(key, json.dumps(doc)) for key, doc in _FLIP_DOCUMENTS.items()],
+        )
+        conn.executemany(
+            "INSERT INTO workflow_recipe_asset "
+            "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
+            _FLIP_ASSETS,
+        )
+        conn.executemany(
+            "INSERT INTO workflow_variant (structural_hash, topology_hash, "
+            "workflow_key, key_version) VALUES (?, ?, ?, ?)",
+            [
+                (FLIP_RECIPE_A, FLIP_TOPOLOGY, merged, WORKFLOW_KEY_VERSION),
+                (FLIP_RECIPE_B, FLIP_TOPOLOGY, merged, WORKFLOW_KEY_VERSION),
+            ],
+        )
+        conn.execute(
+            "INSERT INTO workflow_topology_core (topology_hash, core_hash, "
+            "core_version, workflow_type, slots) VALUES (?, ?, ?, 'txt2img', ?)",
+            (
+                FLIP_TOPOLOGY,
+                FLIP_CORE,
+                CORE_RULE_VERSION,
+                json.dumps(
+                    [
+                        {
+                            "label": slot.label,
+                            "class_type": slot.class_type,
+                            "widget": slot.widget,
+                            "is_lora": slot.is_lora,
+                        }
+                        for slot in slots(_FLIP_DOCUMENTS[FLIP_RECIPE_A])
+                    ]
+                ),
+            ),
+        )
+        # The mark as B2 froze it: neither filename holds a speed-LoRA word,
+        # so the guess is `recipe` and the two variants share one card.
+        conn.execute(
+            "INSERT INTO workflow_slot_mark (topology_hash, slot_label, mark) "
+            "VALUES (?, ?, ?)",
+            (FLIP_TOPOLOGY, label, guess_mark("character_ada.safetensors")),
+        )
+
+    def write(session):
+        for path, structural in _FLIP_PICTURES:
+            session.add(
+                Picture(
+                    file_path=path,
+                    deleted=False,
+                    created_at=_stamp("2026-08-18T00:00:00Z"),
+                    workflow_topology_hash=FLIP_TOPOLOGY,
+                    workflow_structural_hash=structural,
+                    workflow_hash_version="v1",
+                )
+            )
+        session.commit()
+
+    server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+    return merged
+
+
+def _add_flip_pictures(server, structural_hash: str, count: int) -> None:
+    """Give one flip variant more pictures, so which half is bigger can be set
+    per test rather than only by the fixture's own counts."""
+
+    def write(session):
+        for n in range(count):
+            session.add(
+                Picture(
+                    file_path=f"flip_extra_{structural_hash[:6]}_{n}.png",
+                    deleted=False,
+                    created_at=_stamp("2026-08-19T00:00:00Z"),
+                    workflow_topology_hash=FLIP_TOPOLOGY,
+                    workflow_structural_hash=structural_hash,
+                    workflow_hash_version="v1",
+                )
+            )
+        session.commit()
+
+    server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+
+
+def _attr_row(server, key: str):
+    return server.hub.fetchone(
+        "SELECT name, notes, hidden FROM workflow_attr WHERE workflow_key = ?", (key,)
+    )
+
+
+def _events(server):
+    """Collect every CHANGED_WORKFLOWS envelope raised while the block runs."""
+    seen = []
+
+    def listener(event_type, data=None):
+        if event_type is EventType.CHANGED_WORKFLOWS:
+            seen.append(data)
+
+    server.vault.add_event_listener(listener)
+
+    def stop():
+        # The vault has no remover: this is a shared server, so a listener
+        # left behind would collect the next test's events into a dead list.
+        with server.vault._event_listeners_lock:
+            server.vault._event_listeners.remove(listener)
+
+    return seen, stop
+
+
+def test_every_workflow_write_route_is_declared_owner_only():
+    """§16.1 again, for the writes: the declaration IS the enforcement.
+
+    Pinned separately from the reads because the reasons differ. A read is
+    owner-only over a disclosure judgement; a write is owner-only because it
+    is the owner rearranging their own library and no scope could describe it.
+    """
+    for key in _WORKFLOW_WRITE_ROUTES:
+        assert key in ROUTE_POLICIES, f"{key} has no ROUTE_POLICIES entry"
+        assert ROUTE_POLICIES[key].policy is AccessPolicy.OWNER_ONLY, (
+            f"{key} declares {ROUTE_POLICIES[key].policy}, not OWNER_ONLY"
+        )
+
+
+def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
+    """Every write refuses a live resource-scoped share token.
+
+    **What this measures is the verb belt, not the gate**, and saying so is
+    the point: every token this suite can mint is READ, and the middleware
+    refuses PATCH/PUT/POST before the gate ever reads a declaration. The gate's
+    half is pinned by the declaration test above, which is why both exist.
+    """
+    token = _mint(
+        workflow_env.owner,
+        "workflow write probe",
+        resource_type="character",
+        resource_id=workflow_env.character_id,
+    )
+    client = _bearer(workflow_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, (
+        "the scoped token is dead; the refusals below would prove nothing"
+    )
+    stack_id = f"{AUTO_STACK_PREFIX}{SHARED_CORE}"
+    for method, path, body in (
+        ("PATCH", f"{API}/workflows/{BUSY_CARD}", {"name": "nope"}),
+        ("PUT", f"{API}/workflows/{BUSY_CARD}/slots", {"marks": {}}),
+        ("PUT", f"{API}/workflows/{BUSY_CARD}/defaults", {"defaults": []}),
+        ("PUT", f"{API}/workflows/{BUSY_CARD}/pins", {"pins": []}),
+        ("PUT", f"{API}/workflows/{BUSY_CARD}/inputs", {"inputs": []}),
+        ("POST", f"{API}/workflows/{BUSY_CARD}/unstack", None),
+        ("POST", f"{API}/workflows/stacks", {"keys": [BUSY_CARD, FORGOTTEN_CARD]}),
+        ("PUT", f"{API}/workflows/stacks/{stack_id}/order", {"keys": [BUSY_CARD]}),
+        ("POST", f"{API}/workflows/stacks/{stack_id}/unstack", None),
+    ):
+        assert_real_route(workflow_env.server.api, method, path)
+        r = client.request(method, path, json=body)
+        assert r.status_code == 403, f"{method} {path}: {r.status_code} {r.text}"
+    # The positive control, and it is what makes the nine refusals above mean
+    # something: the same gesture from the owner lands.
+    assert (
+        workflow_env.owner.patch(
+            f"{API}/workflows/{BUSY_CARD}", json={"name": "Owner can"}
+        ).status_code
+        == 200
+    )
+
+
+def test_naming_a_card_shows_on_the_grid_and_clearing_it_goes_back(workflow_env):
+    """PATCH writes the fields sent and leaves the rest; null clears."""
+    owner = workflow_env.owner
+    r = owner.patch(
+        f"{API}/workflows/{BUSY_CARD}",
+        json={"name": "My portrait workflow", "notes": "cfg 7, always"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["card"]["name"] == "My portrait workflow"
+    assert r.json()["notes"] == "cfg 7, always"
+
+    grid = owner.get(f"{API}/workflows/cards").json()
+    named = {card["key"]: card["name"] for card in grid["cards"]}
+    assert named[BUSY_CARD] == "My portrait workflow"
+
+    # Notes alone: the name must stand rather than be cleared by omission.
+    r = owner.patch(f"{API}/workflows/{BUSY_CARD}", json={"notes": "cfg 8 now"})
+    assert r.json()["card"]["name"] == "My portrait workflow"
+    assert r.json()["notes"] == "cfg 8 now"
+
+    r = owner.patch(f"{API}/workflows/{BUSY_CARD}", json={"name": None})
+    assert r.status_code == 200, r.text
+    # Back to the fallback, which is the file that runs it or the stand-in.
+    assert r.json()["card"]["name"] == UNNAMED_CARD
+
+
+def test_hiding_a_card_takes_it_off_the_grid_and_it_still_opens(workflow_env):
+    """Hiding is a decision about the grid, never a deletion."""
+    owner = workflow_env.owner
+    before = owner.get(f"{API}/workflows/cards").json()
+    assert BUSY_CARD in {card["key"] for card in before["cards"]}
+
+    assert (
+        owner.patch(f"{API}/workflows/{BUSY_CARD}", json={"hidden": True}).status_code
+        == 200
+    )
+    after = owner.get(f"{API}/workflows/cards").json()
+    assert BUSY_CARD not in {card["key"] for card in after["cards"]}
+    assert after["hidden"] == before["hidden"] + 1
+
+    detail = owner.get(f"{API}/workflows/cards/{BUSY_CARD}")
+    assert detail.status_code == 200
+    assert detail.json()["hidden"] is True
+
+
+def test_a_stack_whose_members_are_all_hidden_is_hidden(workflow_env):
+    """BUSY and FORGOTTEN share a core hash, so they are one stack.
+
+    Hiding both must leave the grid drawing neither, and counting both: a
+    stack is hidden when its members are, because the grid draws the cover and
+    a hidden cover is not drawn.
+    """
+    owner = workflow_env.owner
+    cover = owner.get(f"{API}/workflows/cards").json()["cards"]
+    assert any(card["stack_size"] == 2 for card in cover), (
+        "the fixture's stack is gone; this test would pass on nothing"
+    )
+    for key in (BUSY_CARD, FORGOTTEN_CARD):
+        assert (
+            owner.patch(f"{API}/workflows/{key}", json={"hidden": True}).status_code
+            == 200
+        )
+    grid = owner.get(f"{API}/workflows/cards").json()
+    assert not {BUSY_CARD, FORGOTTEN_CARD} & {card["key"] for card in grid["cards"]}
+
+
+def test_a_cards_overrides_pins_and_inputs_are_written_whole(workflow_env):
+    """The three whole-set writes, each read back where something reads it."""
+    owner, hub = workflow_env.owner, workflow_env.server.hub
+    r = owner.put(
+        f"{API}/workflows/{BUSY_CARD}/defaults",
+        json={
+            "defaults": [
+                {"slot_label": "slot-a", "input_name": "steps", "value": 42},
+                {"slot_label": "slot-a", "input_name": "keep", "value": True},
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    edited = {
+        (default["slot_label"], default["input_name"]): default
+        for default in r.json()["card"]["defaults"]
+    }
+    assert edited[("slot-a", "steps")]["value"] == "42"
+    assert edited[("slot-a", "steps")]["provenance"] == "edited"
+    # A bool is stored the way a graph writes one, not as Python's `True`.
+    assert edited[("slot-a", "keep")]["value"] == "true"
+    assert default_overrides(hub, BUSY_CARD)[("slot-a", "keep")] == "true"
+
+    # Whole, so a second write with one entry leaves one entry.
+    owner.put(
+        f"{API}/workflows/{BUSY_CARD}/defaults",
+        json={
+            "defaults": [{"slot_label": "slot-a", "input_name": "cfg", "value": 7.5}]
+        },
+    )
+    assert set(default_overrides(hub, BUSY_CARD)) == {("slot-a", "cfg")}
+
+    assert (
+        owner.put(
+            f"{API}/workflows/{BUSY_CARD}/pins",
+            json={"pins": [{"slot_label": "slot-a", "input_name": "steps"}]},
+        ).status_code
+        == 200
+    )
+    assert json.loads(
+        hub.fetchone(
+            "SELECT pins FROM workflow_key_pins WHERE workflow_key = ?", (BUSY_CARD,)
+        )["pins"]
+    ) == [["slot-a", "steps"]]
+    # `[]` is somebody who unpinned everything; null forgets the choice.
+    owner.put(f"{API}/workflows/{BUSY_CARD}/pins", json={"pins": []})
+    assert (
+        json.loads(
+            hub.fetchone(
+                "SELECT pins FROM workflow_key_pins WHERE workflow_key = ?",
+                (BUSY_CARD,),
+            )["pins"]
+        )
+        == []
+    )
+    owner.put(f"{API}/workflows/{BUSY_CARD}/pins", json={"pins": None})
+    assert (
+        hub.fetchone(
+            "SELECT pins FROM workflow_key_pins WHERE workflow_key = ?", (BUSY_CARD,)
+        )
+        is None
+    )
+
+    assert (
+        owner.put(
+            f"{API}/workflows/{BUSY_CARD}/inputs",
+            json={
+                "inputs": [
+                    {
+                        "slot_label": "slot-a",
+                        "input_name": "image",
+                        "mode": "fixed",
+                        "pixel_sha": _h("apicture"),
+                    }
+                ]
+            },
+        ).status_code
+        == 200
+    )
+    row = hub.fetchone(
+        "SELECT library_uuid, mode, pixel_sha FROM workflow_key_picture_input "
+        "WHERE workflow_key = ?",
+        (BUSY_CARD,),
+    )
+    assert row["mode"] == "fixed"
+    assert row["library_uuid"] == workflow_env.server.vault.library_uuid
+    # A fixed input with no picture is refused rather than stored as a row no
+    # run could satisfy -- the CHECK constraint says the same thing, and a 500
+    # out of the database is not how a bad request is answered.
+    assert (
+        owner.put(
+            f"{API}/workflows/{BUSY_CARD}/inputs",
+            json={
+                "inputs": [
+                    {
+                        "slot_label": "slot-a",
+                        "input_name": "image",
+                        "mode": "fixed",
+                        "pixel_sha": None,
+                    }
+                ]
+            },
+        ).status_code
+        == 422
+    )
+
+
+def test_marking_a_lora_slot_structural_splits_the_card_and_carries_it_over(
+    workflow_env,
+):
+    """The split half of the acceptance.
+
+    Two variants of one graph differing only in which character LoRA they
+    load: marked `recipe` they are one card, and marking the slot `structural`
+    pulls the LoRA into the key and makes two. **Every new key inherits the
+    owner's attributes** -- name, notes, pins, overrides -- because the
+    alternative is a correction that silently empties a card somebody named.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    label = _flip_slot_label(FLIP_RECIPE_A)
+
+    assert (
+        owner.patch(
+            f"{API}/workflows/{merged}",
+            json={"name": "Character sheet", "notes": "two characters"},
+        ).status_code
+        == 200
+    )
+    owner.put(
+        f"{API}/workflows/{merged}/defaults",
+        json={"defaults": [{"slot_label": "s", "input_name": "steps", "value": 28}]},
+    )
+    owner.put(
+        f"{API}/workflows/{merged}/pins",
+        json={"pins": [{"slot_label": "s", "input_name": "steps"}]},
+    )
+
+    r = owner.put(
+        f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
+    )
+    assert r.status_code == 200, r.text
+    split = {_flip_key(FLIP_RECIPE_A, [label]), _flip_key(FLIP_RECIPE_B, [label])}
+    assert len(split) == 2, "the marks did not separate the two variants"
+    assert r.json()["key"] in split
+    assert set(r.json()["moved"][merged]) == split
+
+    for key in split:
+        assert owner.get(f"{API}/workflows/cards/{key}").status_code == 200
+        row = _attr_row(server, key)
+        assert row is not None, f"{key} lost the owner's attributes in the split"
+        assert row["name"] == "Character sheet"
+        assert row["notes"] == "two characters"
+        assert default_overrides(server.hub, key) == {("s", "steps"): "28"}
+        assert (
+            server.hub.fetchone(
+                "SELECT pins FROM workflow_key_pins WHERE workflow_key = ?", (key,)
+            )
+            is not None
+        )
+    # And the card they came from is gone rather than left behind empty.
+    assert owner.get(f"{API}/workflows/cards/{merged}").status_code == 404
+
+
+def test_merging_two_cards_keeps_the_name_of_the_one_with_most_pictures(workflow_env):
+    """The merge half: flipping back folds the two cards into one again.
+
+    Three pictures on one and one on the other, so the winner is decided by
+    the count and not by which key happens to sort first -- the assertion
+    names the loser's name as the one that must NOT survive.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    label = _flip_slot_label(FLIP_RECIPE_A)
+    assert (
+        owner.put(
+            f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
+        ).status_code
+        == 200
+    )
+
+    busy_key = _flip_key(FLIP_RECIPE_A, [label])
+    quiet_key = _flip_key(FLIP_RECIPE_B, [label])
+    owner.patch(f"{API}/workflows/{busy_key}", json={"name": "The busy one"})
+    owner.patch(f"{API}/workflows/{quiet_key}", json={"name": "The quiet one"})
+    assert (
+        owner.get(f"{API}/workflows/cards/{busy_key}").json()["card"]["picture_count"]
+        == 3
+    )
+
+    r = owner.put(
+        f"{API}/workflows/{busy_key}/slots", json={"marks": {label: "recipe"}}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["key"] == merged
+    assert r.json()["moved"][busy_key] == [merged]
+    row = _attr_row(server, merged)
+    assert row["name"] == "The busy one", (
+        "the merged card took the name of the card with fewer pictures"
+    )
+    assert _attr_row(server, quiet_key) is None
+
+
+def test_a_variant_that_will_not_reduce_keeps_its_card_and_its_attributes(
+    workflow_env,
+):
+    """The one way the flip can destroy work, pinned.
+
+    A variant whose stored document will not parse keeps the key it is on -
+    both branches log and carry on rather than taking the flip down. Its
+    SIBLING moves, so the card they shared is no longer among the new keys,
+    and a carry-over that cleared "every key no new key replaced" would empty
+    a card a variant is still sitting on.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_graph SET document = '{oops' "
+            "WHERE structural_hash = ?",
+            (FLIP_RECIPE_B,),
+        )
+    assert (
+        owner.patch(
+            f"{API}/workflows/{merged}", json={"name": "Half of me stays"}
+        ).status_code
+        == 200
+    )
+
+    label = _flip_slot_label(FLIP_RECIPE_A)
+    r = owner.put(
+        f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
+    )
+    assert r.status_code == 200, r.text
+    # B could not be re-keyed, so it is still on the card they shared - and
+    # that card must still know its name.
+    assert (
+        server.hub.fetchone(
+            "SELECT workflow_key FROM workflow_variant WHERE structural_hash = ?",
+            (FLIP_RECIPE_B,),
+        )["workflow_key"]
+        == merged
+    )
+    row = _attr_row(server, merged)
+    assert row is not None and row["name"] == "Half of me stays", (
+        "the flip emptied a card a variant is still on"
+    )
+    assert _attr_row(server, _flip_key(FLIP_RECIPE_A, [label]))["name"] == (
+        "Half of me stays"
+    )
+
+
+def test_a_mark_flip_refuses_a_slot_the_workflow_does_not_have(workflow_env):
+    """Named rather than ignored: a mark on a label no reader will ever look
+    up would answer 200 to a flip that cannot have happened."""
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    r = owner.put(
+        f"{API}/workflows/{merged}/slots", json={"marks": {"not-a-slot": "structural"}}
+    )
+    assert r.status_code == 422, r.text
+    r = owner.put(
+        f"{API}/workflows/{merged}/slots",
+        json={"marks": {_flip_slot_label(FLIP_RECIPE_A): "maybe"}},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_stacking_two_stacks_merges_them_and_keeps_the_first_ones_cover(workflow_env):
+    """Selection order is the stack's order, so the first selection covers it."""
+    owner, server = workflow_env.owner, workflow_env.server
+    # BUSY and FORGOTTEN already share a core hash. Stacking BINNED onto the
+    # first of them must bring the whole automatic group with it.
+    r = owner.post(f"{API}/workflows/stacks", json={"keys": [BINNED_CARD, BUSY_CARD]})
+    assert r.status_code == 201, r.text
+    assert r.json()["keys"][0] == BINNED_CARD
+    assert set(r.json()["keys"]) == {BINNED_CARD, BUSY_CARD, FORGOTTEN_CARD}
+    stack_id = r.json()["stack_id"]
+    assert effective_stack_keys(server.hub, BUSY_CARD)[0] == BINNED_CARD
+
+    r = owner.put(
+        f"{API}/workflows/stacks/{stack_id}/order",
+        json={"keys": [BUSY_CARD, FORGOTTEN_CARD, BINNED_CARD]},
+    )
+    assert r.status_code == 200, r.text
+    assert effective_stack_keys(server.hub, BINNED_CARD) == [
+        BUSY_CARD,
+        FORGOTTEN_CARD,
+        BINNED_CARD,
+    ]
+
+
+def test_unstacking_one_card_leaves_the_rest_and_dissolves_a_stack_of_one(
+    workflow_env,
+):
+    """A stack left with one member is not a stack, and the row goes with it."""
+    owner, server = workflow_env.owner, workflow_env.server
+    assert set(effective_stack_keys(server.hub, BUSY_CARD)) == {
+        BUSY_CARD,
+        FORGOTTEN_CARD,
+    }
+    r = owner.post(f"{API}/workflows/{BUSY_CARD}/unstack")
+    assert r.status_code == 200, r.text
+    assert effective_stack_keys(server.hub, BUSY_CARD) == [BUSY_CARD]
+    assert effective_stack_keys(server.hub, FORGOTTEN_CARD) == [FORGOTTEN_CARD]
+
+    # A manual stack of three, one taken out, leaves a stack of two standing.
+    stack_id = owner.post(
+        f"{API}/workflows/stacks",
+        json={"keys": [BUSY_CARD, FORGOTTEN_CARD, BINNED_CARD]},
+    ).json()["stack_id"]
+    owner.post(f"{API}/workflows/{BINNED_CARD}/unstack")
+    assert effective_stack_keys(server.hub, BUSY_CARD) == [BUSY_CARD, FORGOTTEN_CARD]
+    # Down to one, and the row is gone rather than left naming a lone card.
+    owner.post(f"{API}/workflows/{FORGOTTEN_CARD}/unstack")
+    assert effective_stack_keys(server.hub, BUSY_CARD) == [BUSY_CARD]
+    assert (
+        server.hub.fetchone(
+            "SELECT 1 FROM workflow_stack WHERE stack_id = ?", (stack_id,)
+        )
+        is None
+    )
+
+
+def test_dissolving_a_whole_stack_keeps_its_members_apart(workflow_env):
+    """The automatic grouping must not re-form on the next read.
+
+    An `auto:` id names a grouping that is not a row, so taking it apart is
+    only visible if every member is recorded as having left it.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    stack_id = f"{AUTO_STACK_PREFIX}{SHARED_CORE}"
+    r = owner.post(f"{API}/workflows/stacks/{stack_id}/unstack")
+    assert r.status_code == 200, r.text
+    assert set(r.json()["keys"]) == {BUSY_CARD, FORGOTTEN_CARD}
+    assert effective_stack_keys(server.hub, BUSY_CARD) == [BUSY_CARD]
+    assert effective_stack_keys(server.hub, FORGOTTEN_CARD) == [FORGOTTEN_CARD]
+    # A stack this hub does not hold is a 404, never a silent success.
+    assert (
+        owner.post(
+            f"{API}/workflows/stacks/{AUTO_STACK_PREFIX}{_h('nosuchcore')}/unstack"
+        ).status_code
+        == 404
+    )
+    assert owner.post(f"{API}/workflows/stacks/not-a-stack/unstack").status_code == 422
+
+
+def test_stack_decisions_and_attributes_survive_a_regrouping(workflow_env):
+    """The acceptance: a `CORE_VERSION` bump must not undo what the owner did.
+
+    A bump re-derives every `core_hash`, which is what the automatic grouping
+    IS -- so the test regroups the fixture by rewriting those hashes. Both
+    kinds of decision are keyed on the CARD and must come through: the name,
+    and the two stack decisions (a card taken out of its group, and a manual
+    stack of cards that never shared one).
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    assert (
+        owner.patch(
+            f"{API}/workflows/{BUSY_CARD}", json={"name": "Survivor"}
+        ).status_code
+        == 200
+    )
+    assert owner.post(f"{API}/workflows/{BUSY_CARD}/unstack").status_code == 200
+    manual = owner.post(
+        f"{API}/workflows/stacks", json={"keys": [BINNED_CARD, HIDDEN_CARD]}
+    ).json()["stack_id"]
+
+    # The regrouping. Every topology lands on a new core hash, so nothing the
+    # grid would group by is what it was before this line.
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET core_hash = ? || core_hash",
+            (_h("bumped")[:8],),
+        )
+
+    assert _attr_row(server, BUSY_CARD)["name"] == "Survivor"
+    assert effective_stack_keys(server.hub, BUSY_CARD) == [BUSY_CARD], (
+        "the regrouping put a card back in a group it was taken out of"
+    )
+    assert set(effective_stack_keys(server.hub, BINNED_CARD)) == {
+        BINNED_CARD,
+        HIDDEN_CARD,
+    }
+    assert (
+        server.hub.fetchone(
+            "SELECT 1 FROM workflow_stack WHERE stack_id = ?", (manual,)
+        )
+        is not None
+    )
+
+
+def test_every_write_says_which_cards_to_look_at_again(workflow_env):
+    """`CHANGED_WORKFLOWS` on each write, with its keys and its reason.
+
+    A "look again" signal, so what is asserted is that it is raised at all,
+    that it names the card the gesture was about, and that the reason
+    separates an edit from a restack -- which is what a client uses to decide
+    whether to re-read one card or the whole grid.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    seen, stop = _events(server)
+    try:
+        owner.patch(
+            f"{API}/workflows/{BUSY_CARD}",
+            json={"name": "Announced"},
+            headers={"X-Client-Id": "example-tab"},
+        )
+        owner.put(f"{API}/workflows/{BUSY_CARD}/pins", json={"pins": []})
+        owner.post(f"{API}/workflows/{BUSY_CARD}/unstack")
+    finally:
+        stop()
+    assert [event["reason"] for event in seen] == ["changed", "changed", "stacks"]
+    assert seen[0]["keys"] == [BUSY_CARD]
+    assert seen[0]["origin_client_id"] == "example-tab"
+    assert seen[0]["source"] == "ui"
+    # The unstack names the stack it took the card out of, not the card alone:
+    # every member's tile changes when one leaves.
+    assert set(seen[2]["keys"]) == {BUSY_CARD, FORGOTTEN_CARD}
+
+
+def test_an_unknown_card_cannot_be_written_to(workflow_env):
+    """A 404 rather than an attribute row against a card this hub never had."""
+    owner = workflow_env.owner
+    unknown = _h("nosuchcard")
+    for method, path, body in (
+        ("PATCH", f"{API}/workflows/{unknown}", {"name": "x"}),
+        ("PUT", f"{API}/workflows/{unknown}/slots", {"marks": {}}),
+        ("PUT", f"{API}/workflows/{unknown}/defaults", {"defaults": []}),
+        ("PUT", f"{API}/workflows/{unknown}/pins", {"pins": []}),
+        ("PUT", f"{API}/workflows/{unknown}/inputs", {"inputs": []}),
+        ("POST", f"{API}/workflows/{unknown}/unstack", None),
+        ("POST", f"{API}/workflows/stacks", {"keys": [BUSY_CARD, unknown]}),
+    ):
+        assert_real_route(workflow_env.server.api, method, path)
+        r = owner.request(method, path, json=body)
+        assert r.status_code == 404, f"{method} {path}: {r.status_code} {r.text}"
+    assert (
+        owner.patch(f"{API}/workflows/not-a-digest", json={"name": "x"}).status_code
+        == 422
+    )
+    assert (
+        owner.post(f"{API}/workflows/stacks", json={"keys": [BUSY_CARD]}).status_code
+        == 400
+    )
+
+
+def test_a_split_carries_everything_the_owner_said_and_the_file_with_it(workflow_env):
+    """Every table in `_KEYED_TABLES`, not just the ones with a route.
+
+    The cover and the "keep this out of its group" row have no write of their
+    own in this step, so nothing else would notice them being dropped from the
+    carry-over -- and the coverage matrix claims the cover comes across. The
+    workflow FILE is here for the same reason: its key is derived rather than
+    the owner's, but a file left on a dead key is a card that stops saying a
+    workflow on this machine runs it.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    label = _flip_slot_label(FLIP_RECIPE_A)
+    pixel_sha = _h("acover")
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_cover (library_uuid, workflow_key, pixel_sha) "
+            "VALUES (?, ?, ?)",
+            (server.vault.library_uuid, merged, pixel_sha),
+        )
+        conn.execute(
+            "INSERT INTO workflow_unstacked (workflow_key) VALUES (?)", (merged,)
+        )
+        conn.execute(
+            "INSERT INTO workflow_file "
+            "(workflow_name, topology_hash, structural_hash, workflow_key) "
+            "VALUES ('flip_a.json', ?, ?, ?)",
+            (FLIP_TOPOLOGY, FLIP_RECIPE_A, merged),
+        )
+
+    assert (
+        owner.put(
+            f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
+        ).status_code
+        == 200
+    )
+    split = {_flip_key(FLIP_RECIPE_A, [label]), _flip_key(FLIP_RECIPE_B, [label])}
+    for key in split:
+        assert (
+            server.hub.fetchone(
+                "SELECT pixel_sha FROM workflow_cover WHERE workflow_key = ?", (key,)
+            )["pixel_sha"]
+            == pixel_sha
+        ), f"{key} lost the cover the owner chose"
+        assert (
+            server.hub.fetchone(
+                "SELECT 1 FROM workflow_unstacked WHERE workflow_key = ?", (key,)
+            )
+            is not None
+        ), f"{key} lost the decision to keep it out of its group"
+    # The file follows the variant it holds, not the card it used to be on.
+    assert server.hub.fetchone(
+        "SELECT workflow_key FROM workflow_file WHERE workflow_name = 'flip_a.json'"
+    )["workflow_key"] == _flip_key(FLIP_RECIPE_A, [label])
+    assert (
+        owner.get(f"{API}/workflows/cards/{_flip_key(FLIP_RECIPE_A, [label])}").json()[
+            "card"
+        ]["imported"]
+        is True
+    )
+
+
+def test_a_split_sends_the_caller_to_the_half_with_the_pictures(workflow_env):
+    """`SlotMarkResult.key` is the BIGGEST successor, and `moved` says so first.
+
+    The card the caller was looking at has no single successor after a split,
+    so the route promises the one holding most of its pictures -- three
+    against one in this fixture. Asserted by name rather than by membership:
+    `in split` passes for either half and is what makes the promise unpinned.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    label = _flip_slot_label(FLIP_RECIPE_A)
+    r = owner.put(
+        f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
+    )
+    assert r.status_code == 200, r.text
+    biggest = _flip_key(FLIP_RECIPE_A, [label])
+    smallest = _flip_key(FLIP_RECIPE_B, [label])
+    assert (
+        owner.get(f"{API}/workflows/cards/{biggest}").json()["card"]["picture_count"]
+        == 3
+    )
+    assert (
+        owner.get(f"{API}/workflows/cards/{smallest}").json()["card"]["picture_count"]
+        == 1
+    )
+    assert r.json()["key"] == biggest
+    assert r.json()["moved"][merged] == [biggest, smallest]
+
+
+def test_a_split_of_a_stacked_card_keeps_the_stacks_cover(workflow_env):
+    """`workflow_stack_member.position` is not part of the primary key.
+
+    Copied verbatim, both halves land on the position the card had, and
+    `effective_stack_keys` then breaks the tie on the KEY -- handing the cover
+    to whichever digest sorts first. The fixture is built so that is the
+    WRONG half: the small one's key sorts first.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    label = _flip_slot_label(FLIP_RECIPE_A)
+    # B is given the pictures here, because the tie-break is only WRONG when
+    # the small half's key sorts first, and with the module's counts (A big)
+    # A's key happens to sort first anyway -- which would make this pass
+    # against the very bug it is for.
+    _add_flip_pictures(server, FLIP_RECIPE_B, 4)
+    biggest = _flip_key(FLIP_RECIPE_B, [label])
+    smallest = _flip_key(FLIP_RECIPE_A, [label])
+    assert smallest < biggest, (
+        "this fixture only tests the tie-break while the small half's key "
+        "sorts first; the flip fixture's documents decide that"
+    )
+    # BINNED rather than BUSY: BUSY shares a core hash with FORGOTTEN, so
+    # stacking it would pull that card in too and the stack under test would
+    # not be the pair this is about.
+    stack_id = owner.post(
+        f"{API}/workflows/stacks", json={"keys": [merged, BINNED_CARD]}
+    ).json()["stack_id"]
+
+    assert (
+        owner.put(
+            f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
+        ).status_code
+        == 200
+    )
+    assert effective_stack_keys(server.hub, BINNED_CARD) == [
+        biggest,
+        smallest,
+        BINNED_CARD,
+    ], "the split moved the stack's cover to the half with fewer pictures"
+    assert [
+        row["position"]
+        for row in server.hub.fetchall(
+            "SELECT position FROM workflow_stack_member WHERE stack_id = ? "
+            "ORDER BY position",
+            (stack_id,),
+        )
+    ] == [0, 1, 2], "two members share a position"
+
+
+def test_a_re_keying_takes_the_saved_recipes_with_it(workflow_env):
+    """The migration `db_models/saved_recipe.py` says this change owes it.
+
+    A saved recipe is a VAULT row keyed on the card key, and it is authored:
+    unlike a hub row it cannot be rebuilt from anything. Left on the old key
+    it is addressed by a key no variant carries, its workflow's tab stops
+    listing it, and nothing says where it went.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    label = _flip_slot_label(FLIP_RECIPE_A)
+    r = owner.post(
+        f"{API}/recipes",
+        json={"workflow_key": merged, "name": "Kept look", "prompt": "a portrait"},
+    )
+    assert r.status_code == 201, r.text
+    recipe_id = r.json()["id"]
+
+    assert (
+        owner.put(
+            f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
+        ).status_code
+        == 200
+    )
+    biggest = _flip_key(FLIP_RECIPE_A, [label])
+    listed = owner.get(f"{API}/recipes?workflow_key={biggest}").json()
+    assert [row["id"] for row in listed] == [recipe_id], (
+        "the saved recipe was orphaned on a key no variant carries"
+    )
+    assert listed[0]["workflow_key"] == biggest
+    # And it is not left behind on a card that no longer exists.
+    assert owner.get(f"{API}/recipes?workflow_key={merged}").json() == []
+
+
+def test_reordering_a_stack_cannot_leave_a_card_in_two_of_them(workflow_env):
+    """A complete ordered member list, checked against what the stack holds.
+
+    `effective_stack_keys` orders by `stack_id` to make a double membership
+    *reproducible*, never correct, so this route must not be able to create
+    one -- and a key left out of the list would be deleted from the stack with
+    nothing recording that it left.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    stack_id = owner.post(
+        f"{API}/workflows/stacks", json={"keys": [BUSY_CARD, FORGOTTEN_CARD]}
+    ).json()["stack_id"]
+
+    # A stack this hub does not hold is a 404, not a stack minted out of thin
+    # air -- the same answer its `unstack` sibling gives.
+    assert (
+        owner.put(
+            f"{API}/workflows/stacks/{'f' * 32}/order",
+            json={"keys": [BUSY_CARD, BINNED_CARD]},
+        ).status_code
+        == 404
+    )
+    assert (
+        owner.put(
+            f"{API}/workflows/stacks/{AUTO_STACK_PREFIX}{_h('nosuchcore')}/order",
+            json={"keys": [BUSY_CARD, BINNED_CARD]},
+        ).status_code
+        == 404
+    )
+    # A list that is not this stack's membership is refused whole.
+    assert (
+        owner.put(
+            f"{API}/workflows/stacks/{stack_id}/order",
+            json={"keys": [BUSY_CARD, BINNED_CARD]},
+        ).status_code
+        == 400
+    )
+    assert [
+        row["stack_id"]
+        for row in server.hub.fetchall(
+            "SELECT stack_id FROM workflow_stack_member WHERE workflow_key = ?",
+            (BUSY_CARD,),
+        )
+    ] == [stack_id], "a card ended up in two stacks at once"
+    # The gesture it does take.
+    assert (
+        owner.put(
+            f"{API}/workflows/stacks/{stack_id}/order",
+            json={"keys": [FORGOTTEN_CARD, BUSY_CARD]},
+        ).status_code
+        == 200
+    )
+    assert effective_stack_keys(server.hub, BUSY_CARD) == [FORGOTTEN_CARD, BUSY_CARD]
+
+    # And the hub function keeps the guarantee on its own. The route refuses
+    # the shape above before the hub ever sees it, so without this the hub
+    # would be correct only because of its one caller -- and it is the
+    # module's public entry point, which the next caller will reach for.
+    set_stack_order(server.hub, "e" * 32, [BUSY_CARD, BINNED_CARD])
+    assert [
+        row["stack_id"]
+        for row in server.hub.fetchall(
+            "SELECT stack_id FROM workflow_stack_member WHERE workflow_key = ?",
+            (BUSY_CARD,),
+        )
+    ] == ["e" * 32], "the card kept its old membership as well as the new one"
+
+
+def test_naming_one_parameter_twice_is_refused_rather_than_a_500(workflow_env):
+    """Both whole-set writes, both keyed on `(slot_label, input_name)`.
+
+    The sibling constraint on the same table (a `fixed` input with no picture)
+    is pre-validated; this one reached the database as an uncaught
+    IntegrityError, which is a 500 for what is a bad request.
+    """
+    owner = workflow_env.owner
+    assert (
+        owner.put(
+            f"{API}/workflows/{BUSY_CARD}/defaults",
+            json={
+                "defaults": [
+                    {"slot_label": "s", "input_name": "steps", "value": 1},
+                    {"slot_label": "s", "input_name": "steps", "value": 2},
+                ]
+            },
+        ).status_code
+        == 422
+    )
+    assert (
+        owner.put(
+            f"{API}/workflows/{BUSY_CARD}/inputs",
+            json={
+                "inputs": [
+                    {"slot_label": "s", "input_name": "image", "mode": "picker"},
+                    {"slot_label": "s", "input_name": "image", "mode": "selection"},
+                ]
+            },
+        ).status_code
+        == 422
+    )
+    # The same address on two different slots is not a duplicate.
+    assert (
+        owner.put(
+            f"{API}/workflows/{BUSY_CARD}/defaults",
+            json={
+                "defaults": [
+                    {"slot_label": "a", "input_name": "steps", "value": 1},
+                    {"slot_label": "b", "input_name": "steps", "value": 2},
+                ]
+            },
+        ).status_code
+        == 200
+    )
