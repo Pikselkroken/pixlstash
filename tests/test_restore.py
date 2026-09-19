@@ -4402,8 +4402,9 @@ def test_full_restore_drains_an_admitted_share_before_swap(server, monkeypatch):
         share_thread.join(timeout=10)
         if restore_thread.ident is not None:  # never started if admission failed
             # Past the 30 s _RESTORE_DRAIN_TIMEOUT_SECONDS with room for the
-            # swap, so a wedged restore still reaches the is_alive assert
-            # below rather than returning from a join that quietly expired.
+            # swap: on the passing path the is_alive assert below then reports
+            # a wedged restore rather than a join that quietly expired. When an
+            # assertion above fired, this is only the drain being let finish.
             restore_thread.join(timeout=90)
 
     assert not share_thread.is_alive(), "share request did not finish"
@@ -4526,8 +4527,9 @@ def test_full_restore_drains_an_admitted_http_request_before_swap(server, monkey
         blocked_thread.join(timeout=10)
         if restore_thread.ident is not None:  # never started if admission failed
             # Past the 30 s _RESTORE_DRAIN_TIMEOUT_SECONDS with room for the
-            # swap, so a wedged restore still reaches the is_alive assert
-            # below rather than returning from a join that quietly expired.
+            # swap: on the passing path the is_alive assert below then reports
+            # a wedged restore rather than a join that quietly expired. When an
+            # assertion above fired, this is only the drain being let finish.
             restore_thread.join(timeout=90)
 
     assert not blocked_thread.is_alive(), "admitted request did not finish"

@@ -1190,10 +1190,13 @@ def test_a_rescan_is_a_task_with_progress_a_denominator_and_one_scan_per_folder(
         }
     finally:
         # Inside the try, so an assertion that fires still releases the held
-        # scan instead of parking a TaskRunner slot on release.wait(30).
+        # scan instead of parking a TaskRunner slot on release.wait(30). The
+        # wait for it to settle belongs in here too: released but unawaited,
+        # the scan is still running on the same progress lane the next test
+        # reads.
         release.set()
+        row = _await_scan(shelf_env, folder_id)
 
-    row = _await_scan(shelf_env, folder_id)
     assert row["scan_status"] == "completed", row
     assert row["scan_error"] is None, row
     assert row["file_count"] == 3, row

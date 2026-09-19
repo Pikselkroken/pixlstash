@@ -78,25 +78,30 @@ def test_a_file_event_during_watch_scheduling_does_not_deadlock(tmp_path):
     dispatcher = threading.Thread(
         target=observer.dispatch_like_watchdog, args=(1,), daemon=True
     )
-    dispatcher.start()
-    assert observer.dispatching.wait(timeout=5)
-
     # ...while the main thread schedules another watch, which used to take the
     # watcher lock first and then wait for the observer lock: the ABBA pair.
     scheduler = threading.Thread(
         target=watcher.watch_folder, args=(2, str(tmp_path)), daemon=True
     )
-    scheduler.start()
-    observer.release.set()
-
-    scheduler.join(timeout=5)
-    dispatcher.join(timeout=5)
-    assert not scheduler.is_alive(), "watch_folder deadlocked against the dispatch"
-    assert not dispatcher.is_alive(), "the dispatch deadlocked against watch_folder"
-    assert [f for f, _ in observer.scheduled] == [1, 2]
-
-    for timer in list(watcher._timers.values()):
-        timer.cancel()
+    dispatcher.start()
+    try:
+        try:
+            assert observer.dispatching.wait(timeout=5)
+            scheduler.start()
+        finally:
+            # Inside the try, so an assertion that fires still releases and
+            # joins the dispatch instead of leaving it parked on
+            # release.wait(5) holding the observer lock.
+            observer.release.set()
+            if scheduler.ident is not None:  # unstarted if the dispatch failed
+                scheduler.join(timeout=5)
+            dispatcher.join(timeout=5)
+        assert not scheduler.is_alive(), "watch_folder deadlocked against the dispatch"
+        assert not dispatcher.is_alive(), "the dispatch deadlocked against watch_folder"
+        assert [f for f, _ in observer.scheduled] == [1, 2]
+    finally:
+        for timer in list(watcher._timers.values()):
+            timer.cancel()
 
 
 def test_unwatch_releases_the_lock_before_calling_the_observer(tmp_path):
@@ -107,15 +112,20 @@ def test_unwatch_releases_the_lock_before_calling_the_observer(tmp_path):
     dispatcher = threading.Thread(
         target=observer.dispatch_like_watchdog, args=(3,), daemon=True
     )
-    dispatcher.start()
-    assert observer.dispatching.wait(timeout=5)
-
     unwatcher = threading.Thread(target=watcher.unwatch_folder, args=(3,), daemon=True)
-    unwatcher.start()
-    observer.release.set()
+    dispatcher.start()
+    try:
+        assert observer.dispatching.wait(timeout=5)
+        unwatcher.start()
+    finally:
+        # Inside the try, so an assertion that fires still releases and joins
+        # the dispatch instead of leaving it parked on release.wait(5) holding
+        # the observer lock.
+        observer.release.set()
+        if unwatcher.ident is not None:  # unstarted if the dispatch failed
+            unwatcher.join(timeout=5)
+        dispatcher.join(timeout=5)
 
-    unwatcher.join(timeout=5)
-    dispatcher.join(timeout=5)
     assert not unwatcher.is_alive()
     assert not dispatcher.is_alive()
     assert len(observer.unscheduled) == 1
