@@ -126,7 +126,7 @@ from pixlstash.routes.comfyui import (
     store_workflow_copy,
     trash_user_workflow,
 )
-from pixlstash.services.workflow_export import scrub_for_export
+from pixlstash.services.workflow_export import download_stem, scrub_for_export
 from pixlstash.services.workflow_identity import RECIPE, STRUCTURAL
 from pixlstash.services.workflow_hash import WorkflowGraphError, structural_document
 from pixlstash.services.workflow_identity import topology_node_labels
@@ -733,22 +733,6 @@ class WorkflowExport(BaseModel):
     )
     source: str = Field(
         description="Where the graph was resolved from: file, picture or instance."
-    )
-
-
-class RecipeExport(BaseModel):
-    """``GET /recipes/{id}/export``: a saved recipe, whole, and what it shares.
-
-    Unlike the workflow export this hides nothing - a recipe IS the prompt and
-    the LoRAs, and an export that dropped them would be a file that makes
-    nothing. ``shares`` is what the dialog lists before the owner agrees to it.
-    """
-
-    filename: str
-    recipe: dict
-    shares: list[str] = Field(
-        default_factory=list,
-        description="Plainly what this file tells whoever opens it.",
     )
 
 
@@ -2389,11 +2373,15 @@ def create_router(server) -> APIRouter:
     def _file_stem(card) -> str:
         """What a file written for this card should be called, without .json.
 
-        Basenamed, because a card's name is the owner's own text and this goes
-        both into a path under the user folder and into a download filename.
+        Sanitised, because a card's name is the owner's own text and it goes
+        both into a path under the user folder and into a download name the
+        CLIENT writes with — so the cleaning has to hold on the client's
+        platform too, which ``os.path.basename`` on Linux does not do for a
+        Windows separator. ``resolve_path_within`` is still the backstop on
+        this side (``routes/comfyui.py``); this is the half that leaves.
         """
         stem = os.path.splitext(card.file_name)[0] if card.file_name else ""
-        return os.path.basename(stem or _display_name(card)) or "workflow"
+        return download_stem(stem or _display_name(card)) or "workflow"
 
     def _structural_lora_slots(card, graph: dict) -> set[tuple[str, str]]:
         """``(node id, widget)`` of every LoRA slot the owner marked structural.
@@ -2587,8 +2575,15 @@ def create_router(server) -> APIRouter:
         ),
         response_model=WorkflowDeleted,
         responses={
-            404: {"description": "This machine has no such card."},
+            404: {
+                "description": (
+                    "This machine has no such card, or the card names a file "
+                    "the user folder does not hold — a built-in, or one "
+                    "already gone from disk."
+                )
+            },
             409: {"description": "This card has no workflow file to delete."},
+            500: {"description": "The file could not be moved to the trash."},
         },
     )
     def delete_workflow(request: Request, workflow_key: str):

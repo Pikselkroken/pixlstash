@@ -263,6 +263,12 @@ def store_workflow_copy(hub, name: str, workflow: dict) -> tuple[str, str | None
     The name is made free by the same ``(2)`` counter the import uses, so a
     duplicate of a duplicate lands beside its sibling rather than over it.
 
+    **The shape check and the placeholder migration are NOT skipped**, only the
+    match: a file written here has to be as loadable as an imported one, and
+    ``_store_workflow``'s own comment says why the migration matters - a
+    workflow stored with placeholder tokens beside migrated siblings is one
+    that will not run.
+
     Args:
         hub: The hub, or ``None``; filing is secondary to storing.
         name: The name asked for, with or without its ``.json``.
@@ -273,9 +279,11 @@ def store_workflow_copy(hub, name: str, workflow: dict) -> tuple[str, str | None
         could not be filed, which does not stop the file being written.
 
     Raises:
-        ValueError: *name* escapes the user folder.
+        NotAWorkflowError: *workflow* is not shaped like a ComfyUI workflow.
         OSError: The file could not be written.
     """
+    check_comfy_workflow(workflow)
+    workflow, _migrated = workflow_bindings.migrate_placeholders(workflow)
     stored = _normalize_workflow_name(name) or "workflow.json"
     workflow_dir = workflow_user_dir()
     os.makedirs(workflow_dir, exist_ok=True)

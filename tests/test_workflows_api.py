@@ -75,6 +75,10 @@ from pixlstash.services.workflow_identity import (
     topology_node_labels,
     workflow_key,
 )
+from pixlstash.services.workflow_export import (
+    download_name,
+    scrub_for_export,
+)
 from pixlstash.services.workflow_io import detect_workflow_io
 import pixlstash.routes.comfyui as comfyui_module
 from pixlstash.services import saved_recipe_service, workflow_bindings, workflow_inbox
@@ -6344,13 +6348,18 @@ def test_an_export_names_the_categories_it_removed_and_never_the_values(exportab
     """`removed` is what a client renders; a value in it would be the leak itself."""
     payload = exportable.owner.get(f"{API}/workflows/{RUN_CARD}/export").json()
     assert set(payload["removed"]) == {
-        "LoRA slots that are part of the look",
+        "model names this machine does not hold",
         "node titles",
         "picture file names",
         "prompts",
         "seeds",
         "where the pictures were saved",
     }, payload["removed"]
+    # The forgotten LoRA is reported as a MODEL NAME and not as "a LoRA that is
+    # part of the look", which is the opposite fact. Both blank it; only one of
+    # them tells the owner what actually happened in the case this feature
+    # leads with.
+    assert "LoRA slots that are part of the look" not in payload["removed"]
 
 
 def test_an_export_refuses_a_graph_it_cannot_read_rather_than_publishing_it(
@@ -6535,15 +6544,24 @@ def test_inserting_a_lora_loader_writes_a_copy_with_a_slot_to_swap_into(loaderle
 
 
 def test_inserting_a_loader_leaves_the_original_workflow_alone(loaderless):
-    """`_store_workflow`'s dedupe is bypassed, so the copy is a second file."""
-    (loaderless.tmp_path / "original.json").write_text(json.dumps(LOADERLESS_DOCUMENT))
+    """The stored file is never rewritten: the loader goes into a NEW file.
+
+    Asserts what it can observe — the original's bytes, and that the new file
+    is a different file with one more node in it. The dedupe bypass this route
+    also depends on is guarded where it IS observable, by
+    ``test_duplicating_twice_puts_a_second_file_beside_the_first``, where the
+    two documents are identical; here the spliced graph would not match the
+    original anyway, so asserting it would prove nothing.
+    """
+    original = loaderless.tmp_path / "original.json"
+    original.write_text(json.dumps(LOADERLESS_DOCUMENT))
     body = loaderless.owner.post(
         f"{API}/workflows/{RUN_CARD}/insert-lora-loader"
     ).json()
-    assert body["name"] != "original.json"
-    assert json.loads((loaderless.tmp_path / "original.json").read_text()) == (
-        LOADERLESS_DOCUMENT
-    )
+    assert json.loads(original.read_text()) == LOADERLESS_DOCUMENT
+    written = json.loads((loaderless.tmp_path / body["name"]).read_text())
+    assert written != LOADERLESS_DOCUMENT
+    assert len(written) == len(LOADERLESS_DOCUMENT) + 1
 
 
 def test_inserting_a_loader_into_a_workflow_that_has_one_is_refused_with_the_reason(
@@ -6575,3 +6593,185 @@ def test_inserting_a_loader_without_comfyui_is_a_503_not_a_guess(runnable, tmp_p
     r = runnable.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
     assert r.status_code == 503, r.text
     assert list(tmp_path.glob("*.json")) == [], "a file was written anyway"
+
+
+# --- the shapes one hand-written graph never asks about ---------------------
+#
+# Every test above runs against a single-sampler graph whose prompts sit in a
+# plain `CLIPTextEncode`. An adversarial pass found four leaks that shape
+# cannot see, each of which published the owner's own writing. They are
+# asserted here against `scrub_for_export` directly rather than through the
+# route: the route adds a card, a source tier and a shelf, none of which is
+# what these are about, and the leak is in the scrub.
+
+LEAKED = "a portrait of SOMEONE-REAL"
+
+
+def _sdxl_graph() -> dict:
+    """An SDXL graph: its prompt widgets are `text_g` and `text_l`."""
+    return {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "base.safetensors"},
+        },
+        "2": {
+            "class_type": "CLIPTextEncodeSDXL",
+            "inputs": {"text_g": LEAKED, "text_l": LEAKED, "clip": ["1", 1]},
+        },
+        "3": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "blurry", "clip": ["1", 1]},
+        },
+        "4": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": 7,
+                "model": ["1", 0],
+                "positive": ["2", 0],
+                "negative": ["3", 0],
+            },
+        },
+        "5": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": "x", "images": ["4", 0]},
+        },
+    }
+
+
+def test_the_sdxl_encoders_own_prompt_widgets_are_blanked():
+    """`text_g` / `text_l`, which no run-time binding names.
+
+    The bug this replaces reported `"prompts"` in `removed` — because the
+    plain negative encoder beside it WAS blanked — while writing the positive
+    prompt into the file. A scrub that says it removed the prompt and did not
+    is worse than one that never claimed to.
+    """
+    exported, removed = scrub_for_export(_sdxl_graph())
+    assert exported["2"]["inputs"]["text_g"] == ""
+    assert exported["2"]["inputs"]["text_l"] == ""
+    assert LEAKED not in json.dumps(exported)
+    assert "prompts" in removed
+
+
+def test_two_samplers_reading_different_prompts_are_still_blanked():
+    """`detect_workflow_io` reports NO prompt node here, which is the trap.
+
+    A hires-fix graph — two samplers, two positive prompts — makes the detector
+    return an ambiguity and an empty prompt set. Blanking by widget name is
+    what makes that case identical to the simple one.
+    """
+    graph = _sdxl_graph()
+    graph["2"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": LEAKED, "clip": ["1", 1]},
+    }
+    graph["6"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": f"second pass, {LEAKED}", "clip": ["1", 1]},
+    }
+    graph["7"] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": 9,
+            "model": ["1", 0],
+            "positive": ["6", 0],
+            "negative": ["3", 0],
+        },
+    }
+    assert detect_workflow_io(graph).positive_prompts == (), (
+        "the detector must still find nothing here, or this test has stopped "
+        "asking its question"
+    )
+    exported, removed = scrub_for_export(graph)
+    assert LEAKED not in json.dumps(exported)
+    assert "prompts" in removed
+
+
+def test_a_lora_named_by_digest_is_a_lora_slot_too():
+    """The ComfyUI-PixlStash loaders name their adapter in `lora_sha256`.
+
+    `unvouched` says nothing about it — the owner HAS that LoRA, so the shelf
+    vouches for the digest — and a digest identifies a model on a public
+    registry as surely as a filename does. Only the slot rule can take it out,
+    and it only can if it knows both spellings (#1416's lesson).
+    """
+    digest = "a" * 64
+    graph = _sdxl_graph()
+    graph["8"] = {
+        "class_type": "PixlStashAdapterLoader",
+        "inputs": {"lora_sha256": digest, "lora_sha256_2": digest, "model": ["1", 0]},
+    }
+    exported, removed = scrub_for_export(graph)
+    assert exported["8"]["inputs"]["lora_sha256"] == ""
+    assert exported["8"]["inputs"]["lora_sha256_2"] == ""
+    assert "LoRA slots that are part of the look" in removed
+
+
+def test_a_model_the_shelf_vouches_for_travels_without_its_folder():
+    """ComfyUI files models in folders, and a person names a folder.
+
+    The shelf check reads the basename, so `characters/<a person>/base.safetensors`
+    is vouched for on the strength of `base.safetensors` alone. Emitting what
+    was judged is the only honest answer; the recipient's ComfyUI has its own
+    layout regardless.
+    """
+    graph = _sdxl_graph()
+    graph["1"]["inputs"]["ckpt_name"] = "characters/someone/Base.safetensors"
+    exported, removed = scrub_for_export(graph)
+    assert exported["1"]["inputs"]["ckpt_name"] == "Base.safetensors"
+    assert "the folders your models are filed in" in removed
+
+
+def test_a_seed_kept_as_a_string_is_nulled_like_any_other():
+    """The reducer judges a seed on the widget's name; so does this."""
+    graph = _sdxl_graph()
+    graph["4"]["inputs"]["seed"] = "987654321"
+    exported, removed = scrub_for_export(graph)
+    assert exported["4"]["inputs"]["seed"] == 0
+    assert "seeds" in removed
+
+
+def test_prose_nested_in_a_list_or_a_dict_is_blanked_and_a_link_is_not():
+    """A list is not always a wire, and `is_link` is what tells them apart."""
+    graph = _sdxl_graph()
+    graph["2"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": [LEAKED, {"prompt": LEAKED}], "clip": ["1", 1]},
+    }
+    exported, removed = scrub_for_export(graph)
+    assert LEAKED not in json.dumps(exported)
+    assert "prompts" in removed
+    # The wire is untouched, or the graph no longer runs anywhere.
+    assert exported["2"]["inputs"]["clip"] == ["1", 1]
+    assert exported["4"]["inputs"]["model"] == ["1", 0]
+
+
+def test_a_shelf_row_id_does_not_leave_the_machine():
+    """`checkpoint_id` names a row in this machine's database and nothing else."""
+    graph = _sdxl_graph()
+    graph["1"]["inputs"]["checkpoint_id"] = "412"
+    exported, removed = scrub_for_export(graph)
+    assert exported["1"]["inputs"]["checkpoint_id"] == ""
+    assert "model names this machine does not hold" in removed
+
+
+def test_the_forgotten_model_sentinel_never_reaches_the_file():
+    """A source resolved from a stored instance carries it where a name was."""
+    graph = _sdxl_graph()
+    graph["1"]["inputs"]["ckpt_name"] = FORGOTTEN_MODEL
+    exported, removed = scrub_for_export(graph)
+    assert exported["1"]["inputs"]["ckpt_name"] == ""
+    assert "model names this machine does not hold" in removed
+
+
+def test_an_export_download_name_is_cleaned_for_the_client_that_writes_it():
+    """The client writes the file, so the cleaning must hold on ITS platform.
+
+    `os.path.basename` on Linux leaves a Windows separator alone, which is the
+    one traversal it would have been reached for.
+    """
+    assert download_name("..\\..\\evil") == "evil.json"
+    assert download_name("../../evil") == "evil.json"
+    assert download_name(None) == "recipe.json"
+    assert download_name("a\tb") == "a b.json"
+    assert len(download_name("x" * 400)) <= 105

@@ -629,15 +629,21 @@ Five rules the client must not re-derive:
 1. **The workflow export is scrubbed and the recipe export is not, and that is
    the whole difference between them.** The export blanks the prompt and
    caption targets, nulls seeds, empties every LoRA slot the owner has not
-   marked `structural`, strips `_meta` titles, blanks picture file names,
-   resets output paths (`filename_prefix` names a folder on the owner's disk),
-   and drops any model name or digest the model shelf cannot vouch for. A recipe
+   marked `structural` — **by filename and by digest** — strips `_meta` titles,
+   blanks picture file names, resets output paths (`filename_prefix` names a
+   folder on the owner's disk), drops `checkpoint_id` (a row id in this
+   machine's database), and drops any model name the model shelf cannot vouch
+   for along with the *folder* of the ones it can. A recipe
    *is* the prompt and the LoRA names, so its export withholds nothing and
    says so in `shares` instead — which is the list the export dialog puts in
    front of the owner before they agree to it.
 2. **`removed` names categories, never values.** "prompts", "seeds", "LoRA
    slots that are part of the look", "node titles", "picture file names",
-   "where the pictures were saved", "model names this machine does not hold". A response repeating the prompt
+   "where the pictures were saved", "the folders your models are filed in",
+   "model names this machine does not hold". A forgotten model name sitting in
+   a LoRA widget reports as the **model** category, not the LoRA one: it is a
+   forgotten model name, and calling it "part of the look" would tell the owner
+   the opposite of what happened. A response repeating the prompt
    it withheld would be the leak the scrub exists to stop, so a client wanting
    to tell the owner what came out renders these strings and has nothing else
    to render.
@@ -648,7 +654,11 @@ Five rules the client must not re-derive:
    that picture would carry it straight back out. The export checks the shelf
    rather than the ghost list, so a name nobody on this machine holds is blank
    in the file — including a name the ghost list can no longer see because
-   forgetting it is what removed it from there.
+   forgetting it is what removed it from there. **Prose is found by widget
+   name across the whole graph**, never by asking which node the sampler
+   reads: that question returns nothing for a hires-fix graph with two
+   samplers, and names widgets (`text`) that an SDXL encoder (`text_g`,
+   `text_l`) does not have.
 4. **Duplicate and Insert loader write a file and never change one.** Both
    land in the user's workflow folder under a free name (`… (copy).json`,
    `… (copy) (2).json`), both are **unscrubbed** — they stay on this machine

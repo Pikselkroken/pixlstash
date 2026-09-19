@@ -1,8 +1,9 @@
 - Export a workflow as a ComfyUI file you can give to somebody else. PixlStash
   takes out everything that belongs to a run rather than to the workflow: the
   prompt, the seed, the LoRA slots that are part of the look, the node titles
-  you wrote, the folder the pictures were saved into, the name of any picture
-  that went in, and the name of any model this machine no longer has —
+  you wrote, the folder the pictures were saved into, the folders your models
+  are filed in, the name of any picture that went in, and the name of any
+  model this machine no longer has —
   including a model whose name you asked PixlStash to forget but which one of
   your pictures still records. It tells you what it left out.
 - Export a saved recipe as a file too. That one shares everything, because a

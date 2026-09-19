@@ -122,7 +122,14 @@ OUTPUT_PREFIX_FIELD = "filename_prefix"
 # resolves as the asset it is. Measured against the owner's libraries: not one
 # of these names currently reaches the extension test, so this closes a hole
 # without moving a single existing key.
-_TEXT_FIELD_NAMES = frozenset(
+#
+# Public, with :func:`carries_prose` below, because
+# ``services/workflow_export.py`` has to answer the same question - "did a
+# person write this?" - about a file leaving the machine, and it is the same
+# population either way. A second list there was a second list to drift:
+# copying ``workflow_bindings``'s narrower one shipped SDXL's ``text_g`` and
+# ``text_l`` straight into an exported file.
+TEXT_FIELD_NAMES = frozenset(
     {
         "text",
         "text_g",
@@ -133,7 +140,7 @@ _TEXT_FIELD_NAMES = frozenset(
         "wildcard",
     }
 )
-_TEXT_FIELD_SUFFIX_RE = re.compile(r"_(text|prompt|caption|query|search)$", re.I)
+TEXT_FIELD_SUFFIX_RE = re.compile(r"_(text|prompt|caption|query|search)$", re.I)
 
 # A filename is one path component; prose is not. A newline can never appear in
 # a filename and 255 bytes is the component limit on every filesystem
@@ -280,6 +287,18 @@ def is_link(value: Any) -> bool:
     )
 
 
+def carries_prose(widget_name: str) -> bool:
+    """True when a widget of this name holds something a person WROTE.
+
+    :data:`TEXT_FIELD_NAMES` and :data:`TEXT_FIELD_SUFFIX_RE` as one question,
+    so the reducer (which must keep prose out of a stored document) and
+    ``services/workflow_export.py`` (which must keep it out of a file leaving
+    the machine) cannot answer it differently.
+    """
+    lowered = str(widget_name or "").lower()
+    return lowered in TEXT_FIELD_NAMES or bool(TEXT_FIELD_SUFFIX_RE.search(lowered))
+
+
 def normalized_filename(value: str) -> str:
     """Lowercase basename, extension kept, directory stripped (rule 5)."""
     return value.lower().rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
@@ -333,8 +352,7 @@ def structural_widget_value(name: str, value: Any) -> Optional[str]:
         # kilobyte in a `*_sha256` widget out of the kept-forever document.
         lowered = value.lower()
         return lowered if DIGEST_PREFIX_RE.match(lowered) else None
-    lowered = name.lower()
-    if lowered in _TEXT_FIELD_NAMES or _TEXT_FIELD_SUFFIX_RE.search(lowered):
+    if carries_prose(name):
         return None
     if "\n" in value or len(value) > _MAX_FILENAME_LENGTH:
         return None

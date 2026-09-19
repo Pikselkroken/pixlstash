@@ -19,7 +19,6 @@ pictures across the whole stack, which is the whole-library disclosure class
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
@@ -27,6 +26,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from pixlstash.hub.workflow_cards import effective_stack_keys, variant_hashes_for_keys
 from pixlstash.hub.workflows import unvouched_model_values
+from pixlstash.services.workflow_export import download_name
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import saved_recipe_service
 from pixlstash.services.workflow_events import announce_changed_workflows
@@ -176,6 +176,8 @@ def _shares(recipe: dict, unvouched) -> list[str]:
     been forgotten on purpose, and a recipe carries it in plain text.
     """
     shares: list[str] = []
+    if recipe.get("name"):
+        shares.append(f"the name you gave it, {recipe['name']!r}")
     if recipe.get("prompt"):
         shares.append("the prompt you wrote")
     if recipe.get("negative"):
@@ -189,8 +191,10 @@ def _shares(recipe: dict, unvouched) -> list[str]:
         shares.append(f"{len(names)} LoRA file name(s): {', '.join(sorted(names))}")
     if recipe.get("overrides"):
         shares.append(f"{len(recipe['overrides'])} parameter setting(s)")
-    if recipe.get("seed"):
+    if recipe.get("seed") is not None:
         shares.append("the seed it keeps")
+    if recipe.get("created_at"):
+        shares.append("when you saved it")
     forgotten = sorted({name for name in names if unvouched("lora_name", name)})
     if forgotten:
         shares.append(
@@ -380,9 +384,7 @@ def create_router(server) -> APIRouter:
             len(shares),
         )
         return RecipeExport(
-            # Basenamed: the name is the owner's own text, and it is handed
-            # to a client that will write a file with it.
-            filename=f"{os.path.basename(recipe.get('name') or '') or 'recipe'}.json",
+            filename=download_name(recipe.get("name")),
             recipe=recipe,
             shares=shares,
         )
