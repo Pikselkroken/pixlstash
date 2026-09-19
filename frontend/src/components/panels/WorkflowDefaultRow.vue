@@ -111,7 +111,7 @@ const emit = defineEmits(["toggle-pin", "reset"]);
   padding: 0 var(--space-2);
   border: 1px solid rgb(var(--v-theme-divider));
   border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-surface), 0.04);
+  background: rgba(var(--v-theme-on-surface), 0.06);
   font-size: var(--text-sm);
 }
 

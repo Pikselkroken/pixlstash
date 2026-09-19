@@ -207,10 +207,31 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * can name workflows the hub no longer has. `fetchCards` does not clear
    * them — it only re-reads the grid, which lists covers — so an open stack
    * would keep drawing its pre-flip members until the session reset.
+   *
+   * **The open stack is collapsed, not re-read.** Left open with no members,
+   * `openMembers` falls back to the cover alone and `StackPanel` reports the
+   * difference as "N could not be read" — a failure message for a deliberate
+   * invalidation, with no way out but collapsing it by hand. Worse when the
+   * flip re-keyed the cover out of the grid: `openMembers` is then empty, the
+   * panel is not drawn at all, and the row keeps `aria-expanded="true"`.
+   * Re-expanding fetches fresh members through the path that already exists.
+   *
+   * **The epoch is bumped for the reason `reset` bumps it**: `openStack`'s
+   * completion path guards only on `mine === epoch`, so a member read that
+   * was on the wire writes the PRE-flip members straight back into the map
+   * this function just emptied. Clearing `inflight` alone would not stop it,
+   * and would let a second open re-issue reads the first is still making.
+   * `loading` goes with it because the old epoch's `finally` will not clear
+   * it — and every caller here follows this with `fetchCards()`, which
+   * early-returns to nothing while `loading` is set.
    */
   function forgetMembers() {
+    epoch += 1;
+    loading.value = false;
     members.value = {};
+    inflight.value = new Set();
     membersFailed.value = new Set();
+    closeStack();
   }
 
   function toggleStack(coverKey) {

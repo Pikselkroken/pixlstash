@@ -300,3 +300,79 @@ describe("a session reset stops the old session's answers landing", () => {
     expect(store.openStackKey).toBe(null);
   });
 });
+
+describe("forgetting the members a re-key invalidated", () => {
+  it("collapses the open stack rather than leaving it reporting a failure", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("the-stack");
+    expect(store.members["the-stack"]).toHaveLength(3);
+
+    store.forgetMembers();
+    // Left open with no members, `openMembers` falls back to the cover alone
+    // and `StackPanel` renders `size - members.length` as "2 could not be
+    // read" — a failure message for a deliberate invalidation. Collapsed,
+    // re-expanding re-reads them through the path that already exists.
+    expect(store.members).toEqual({});
+    expect(store.openStackKey).toBe(null);
+    expect(store.openMembers).toEqual([]);
+  });
+
+  it("drops a member read that was already on the wire, and can read again", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    let releaseMember;
+    getWorkflowCard.mockImplementation(
+      (key) =>
+        new Promise((resolve) => {
+          releaseMember = () => resolve({ card: { key, name: "stale" } });
+        }),
+    );
+    // One member, so one promise to release.
+    const open = store.openStack("few-but-loved");
+
+    store.forgetMembers();
+    releaseMember();
+    await open;
+    // The pre-flip members, written back into the map this just emptied:
+    // `openStack`'s completion path guards only on the epoch, so clearing
+    // `inflight` alone would not stop it.
+    expect(store.members).toEqual({});
+
+    // And `inflight` has to be cleared with it, or re-expanding the stack
+    // returns early for ever: the key is still in it and nothing will take
+    // it out, because the old epoch's `finally` is epoch-guarded too.
+    getWorkflowCard.mockImplementation((key) =>
+      Promise.resolve({ card: { key, name: "fresh" } }),
+    );
+    await store.openStack("few-but-loved");
+    expect(store.members["few-but-loved"]?.[1]?.name).toBe("fresh");
+  });
+
+  it("leaves a grid read able to start again", async () => {
+    const store = useWorkflowsStore();
+    let releaseCards;
+    listWorkflowCards.mockReturnValue(
+      new Promise((resolve) => {
+        releaseCards = () => resolve({ cards: CARDS, one_offs: 3, hidden: 1 });
+      }),
+    );
+    const pending = store.fetchCards();
+
+    store.forgetMembers();
+    releaseCards();
+    await pending;
+    // Every caller does `forgetMembers()` then `await fetchCards()`, and
+    // `fetchCards` returns early while `loading` is set. The old epoch's
+    // `finally` will not clear it, so this has to.
+    expect(store.loading).toBe(false);
+
+    listWorkflowCards.mockResolvedValue({
+      cards: CARDS,
+      one_offs: 3,
+      hidden: 1,
+    });
+    await store.fetchCards();
+    expect(store.cards).toHaveLength(4);
+  });
+});

@@ -1608,6 +1608,14 @@ action, so it belongs in the footer and opens a popup (F5).
   topology may have moved — and the rail falls back to the card the detail
   read brought back when the successor key is not in the grid at all, which
   is what a merge into somebody else's stack looks like.
+  `useWorkflowsStore.forgetMembers()` **collapses the open stack and bumps the
+  epoch**, taking `reset()`'s shape: left open with no members `StackPanel`
+  renders the shortfall as "N could not be read", a failure message for a
+  deliberate invalidation; and `openStack`'s completion path is epoch-guarded
+  only, so a member read already on the wire would write the pre-flip members
+  straight back. `loading` is cleared with the epoch because the old epoch's
+  `finally` will not, and every caller follows it with `fetchCards()`, which
+  early-returns while `loading` is set.
 - **Defaults are whole-set writes.** Resetting one value sends every other
   edited value back untouched, which is the only way "reset one" exists on a
   route that replaces the set. The pin is the same shape. The detail route
@@ -1620,16 +1628,23 @@ action, so it belongs in the footer and opens a popup (F5).
 - **One write at a time, and every answer is checked against the selection
   before it is used.** `detail` carries the card, its defaults and its pins
   together, so two writes in flight means the slower answer discards the
-  faster one's change; `claim()` refuses the second. And the selection moves
-  while a write is out — clicking another card is exactly what blurs the
+  faster one's change; `queueWrite()` runs them in turn. **Queued, not
+  refused**: the gesture that starts the second write is routinely the one
+  that ends the first — clicking a pin is what blurs the notes box — so
+  refusing would drop that click and leave the pin looking dead. The multi-
+  select Hide loops one card at a time for a second reason: there is no bulk
+  route, and each PATCH runs a whole `read_grid()` inside `_read_detail`.
+  And the selection moves while a write is out — clicking another card is exactly what blurs the
   notes box and fires its save — so `stillOn()` drops an answer for a card
   that has gone. The notes box is drawn only once *this* card's detail has
   arrived, because the draft otherwise holds the last card's text and blurring
   it writes that onto this one.
 - **What is drawn but not writable yet, and why.** The checkpoint and VAE are
   fields rather than selects: no route changes a card's model file. A LoRA's
-  strength reads "—" because `_describe_slots` reads `asset_names`, which is
-  filenames, and `FEATURED_NAMES` excludes `strength_model`. The ⋯ menu holds
+  strength is **not drawn at all** — `_describe_slots` reads `asset_names`,
+  which is filenames, and `FEATURED_NAMES` excludes `strength_model`, and an
+  empty bordered field reads as a control that is broken rather than as "not
+  recorded". It arrives with the data. The ⋯ menu holds
   Hide/Unhide alone: Duplicate and Open in ComfyUI have no route at all;
   *Export workflow* has to write a runnable ComfyUI file and the only graph
   read that exists, `GET /workflows/recipes/{structural_hash}/graph`, answers

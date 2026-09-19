@@ -70,9 +70,11 @@
                 <v-icon size="16">mdi-layers-outline</v-icon>
                 {{ slot.name || "recipe LoRA" }}
               </span>
-              <!-- No strength in the card payload, so the box says "not
-                   recorded" rather than inventing 1.00. -->
-              <span class="wftab-strength num">—</span>
+              <!-- No strength field. The card payload carries no strength
+                   (`_describe_slots` reads filenames, and `FEATURED_NAMES`
+                   has no `strength_model`), and an empty bordered box reads
+                   as a control that is broken rather than as "not recorded".
+                   It arrives with the data. -->
             </div>
             <!-- Disabled without a `slot_label`: the field is nullable
                  (`WorkflowSlotModel`), and the mark is written by label, so
@@ -439,17 +441,31 @@ function fail(err, fallback) {
 }
 
 /**
- * Start a write, or refuse because one is already out.
+ * Run a write after whichever is already out, never beside it.
  *
- * `busy` is one token rather than one per control on purpose, and this is
- * what makes that safe: two writes in flight at once clear each other's token
- * and, since `defaults`, `pins` and the card itself all come back on the same
- * `detail`, the slower answer discards the faster one's change.
+ * `defaults`, `pins`, the notes and the card all come back on one `detail`,
+ * so two writes in flight means the slower answer discards the faster one's
+ * change. **Queued rather than refused**, because the gesture that starts
+ * the second write is routinely the one that ends the first: clicking a pin
+ * is what blurs the notes box, so a refusal would drop that click and leave
+ * the pin looking dead.
+ *
+ * The chain is never broken by a failure — each link catches its own — and
+ * `busy` names only the link that is running, so the control that fired it
+ * is the one that shows it.
  */
-function claim(token) {
-  if (busy.value) return false;
-  busy.value = token;
-  return true;
+let writes = Promise.resolve();
+
+function queueWrite(token, work) {
+  writes = writes.then(async () => {
+    busy.value = token;
+    try {
+      await work();
+    } finally {
+      busy.value = "";
+    }
+  });
+  return writes;
 }
 
 /**
@@ -472,28 +488,27 @@ function stillOn(key) {
  * sent: staying on the old one leaves the rail reading a card that no longer
  * exists. The grid is re-read for the same reason.
  */
-async function flipMark(slot, mark) {
+function flipMark(slot, mark) {
   const key = selectedKey.value;
   if (!key || !slot.label || slot.mark === mark) return;
-  if (!claim(`slot:${slot.label}`)) return;
-  try {
-    const moved = await setWorkflowSlots(key, { [slot.label]: mark });
-    // Every card of the topology may have been re-keyed, so the cached stack
-    // members are about workflows the hub no longer has.
-    store.forgetMembers();
-    await store.fetchCards();
-    if (!stillOn(key)) return;
-    // `select` moves `selectedKey`, which the watcher below turns into the
-    // detail read. Calling `loadDetail` here as well fetched the same card
-    // twice; when the flip did not move it the watcher does not fire, so
-    // that case reads explicitly.
-    if (moved.key === key) await loadDetail(key);
-    else store.select(moved.key);
-  } catch (err) {
-    fail(err, "Could not change that LoRA slot.");
-  } finally {
-    busy.value = "";
-  }
+  return queueWrite(`slot:${slot.label}`, async () => {
+    try {
+      const moved = await setWorkflowSlots(key, { [slot.label]: mark });
+      // Every card of the topology may have been re-keyed, so the cached
+      // stack members are about workflows the hub no longer has.
+      store.forgetMembers();
+      await store.fetchCards();
+      if (!stillOn(key)) return;
+      // `select` moves `selectedKey`, which the watcher below turns into the
+      // detail read. Calling `loadDetail` here as well fetched the same card
+      // twice; when the flip did not move it the watcher does not fire, so
+      // that case reads explicitly.
+      if (moved.key === key) await loadDetail(key);
+      else store.select(moved.key);
+    } catch (err) {
+      fail(err, "Could not change that LoRA slot.");
+    }
+  });
 }
 
 /**
@@ -503,145 +518,167 @@ async function flipMark(slot, mark) {
  * value back untouched; sending only the survivors of a filter is the same
  * request and is what makes "reset one" possible at all.
  */
-async function resetDefault(row) {
+function resetDefault(row) {
   const key = selectedKey.value;
   if (!key) return;
-  if (!claim(`default:${row.label}`)) return;
-  try {
-    const kept = defaults.value
-      .filter(
-        (entry) =>
-          entry.provenance === "edited" &&
-          !(
-            entry.slot_label === row.slot_label &&
-            entry.input_name === row.input_name
-          ),
-      )
-      .map((entry) => ({
-        slot_label: entry.slot_label,
-        input_name: entry.input_name,
-        value: entry.value,
-      }));
-    const body = await setWorkflowDefaults(key, kept);
-    if (stillOn(key)) detail.value = body;
-  } catch (err) {
-    fail(err, "Could not reset that value.");
-  } finally {
-    busy.value = "";
-  }
+  return queueWrite(`default:${row.label}`, async () => {
+    try {
+      const kept = defaults.value
+        .filter(
+          (entry) =>
+            entry.provenance === "edited" &&
+            !(
+              entry.slot_label === row.slot_label &&
+              entry.input_name === row.input_name
+            ),
+        )
+        .map((entry) => ({
+          slot_label: entry.slot_label,
+          input_name: entry.input_name,
+          value: entry.value,
+        }));
+      const body = await setWorkflowDefaults(key, kept);
+      if (stillOn(key)) detail.value = body;
+    } catch (err) {
+      fail(err, "Could not reset that value.");
+    }
+  });
 }
 
 /** Pin or unpin one parameter. Whole-set, like the defaults. */
-async function togglePin(row) {
+function togglePin(row) {
   const key = selectedKey.value;
   if (!key) return;
-  if (!claim(`default:${row.label}`)) return;
-  try {
-    const pins = defaults.value
-      .filter((entry) =>
-        entry.slot_label === row.slot_label &&
-        entry.input_name === row.input_name
-          ? !entry.pinned
-          : entry.pinned,
-      )
-      .map((entry) => ({
-        slot_label: entry.slot_label,
-        input_name: entry.input_name,
-      }));
-    const body = await setWorkflowPins(key, pins);
-    if (stillOn(key)) detail.value = { ...detail.value, pins: body.pins ?? pins };
-  } catch (err) {
-    fail(err, "Could not change that pin.");
-  } finally {
-    busy.value = "";
-  }
+  return queueWrite(`default:${row.label}`, async () => {
+    try {
+      const pins = defaults.value
+        .filter((entry) =>
+          entry.slot_label === row.slot_label &&
+          entry.input_name === row.input_name
+            ? !entry.pinned
+            : entry.pinned,
+        )
+        .map((entry) => ({
+          slot_label: entry.slot_label,
+          input_name: entry.input_name,
+        }));
+      const body = await setWorkflowPins(key, pins);
+      if (stillOn(key)) {
+        detail.value = { ...detail.value, pins: body.pins ?? pins };
+      }
+    } catch (err) {
+      fail(err, "Could not change that pin.");
+    }
+  });
 }
 
-async function saveNotes() {
+/**
+ * Save the notes, on blur.
+ *
+ * Queued like every other write, and it has to be: this PATCH answers with
+ * the whole detail, pins included, so landing beside a pin write puts the
+ * pre-toggle pins back on screen while the server holds the new ones. Blur
+ * is exactly when that happens — clicking the pin is what blurs this box.
+ *
+ * The draft is compared at QUEUE time, not at run time: the comparison is
+ * "did the person change anything", and by the time an earlier write has
+ * finished `detail` may already carry what they typed.
+ */
+function saveNotes() {
   const key = selectedKey.value;
   // `detail` null is a card whose notes have not arrived; the box is not
   // drawn then, and the draft belongs to whatever was read last.
   if (!key || !detail.value || notesDraft.value === (detail.value.notes ?? "")) {
     return;
   }
-  try {
-    const body = await patchWorkflowCard(key, {
-      notes: notesDraft.value || null,
-    });
-    if (stillOn(key)) detail.value = body;
-  } catch (err) {
-    fail(err, "Could not save those notes.");
-  }
+  const notes = notesDraft.value || null;
+  return queueWrite("notes", async () => {
+    try {
+      const body = await patchWorkflowCard(key, { notes });
+      if (stillOn(key)) detail.value = body;
+    } catch (err) {
+      fail(err, "Could not save those notes.");
+    }
+  });
 }
 
-async function toggleHidden() {
+function toggleHidden() {
   const key = selectedKey.value;
   if (!key || !detail.value) return;
   menuOpen.value = false;
   const hiding = !detail.value.hidden;
-  if (!claim("hidden")) return;
-  try {
-    const body = await patchWorkflowCard(key, { hidden: hiding });
-    if (stillOn(key)) detail.value = body;
-    // A hidden card leaves the grid, so the rail would have nothing to draw
-    // were it not for the detail fallback in `card` — which is also what
-    // keeps Unhide reachable from here.
-    store.forgetMembers();
-    await store.fetchCards();
-  } catch (err) {
-    fail(err, hiding ? "Could not hide that workflow." : "Could not unhide it.");
-  } finally {
-    busy.value = "";
-  }
+  return queueWrite("hidden", async () => {
+    try {
+      const body = await patchWorkflowCard(key, { hidden: hiding });
+      if (stillOn(key)) detail.value = body;
+      // A hidden card leaves the grid, so the rail would have nothing to
+      // draw were it not for the detail fallback in `card` — which is also
+      // what keeps Unhide reachable from here.
+      store.forgetMembers();
+      await store.fetchCards();
+    } catch (err) {
+      fail(
+        err,
+        hiding ? "Could not hide that workflow." : "Could not unhide it.",
+      );
+    }
+  });
 }
 
-async function stackSelected() {
-  if (!claim("stack")) return;
-  try {
-    await stackWorkflows([...store.selectedKeys]);
-    store.forgetMembers();
-    await store.fetchCards();
-    store.clearSelection();
-  } catch (err) {
-    fail(err, "Could not stack those workflows.");
-  } finally {
-    busy.value = "";
-  }
+function stackSelected() {
+  const keys = [...store.selectedKeys];
+  return queueWrite("stack", async () => {
+    try {
+      await stackWorkflows(keys);
+      store.forgetMembers();
+      await store.fetchCards();
+      store.clearSelection();
+    } catch (err) {
+      fail(err, "Could not stack those workflows.");
+    }
+  });
 }
 
 /**
  * Hide every selected workflow.
  *
- * `allSettled`, and the grid is re-read whatever happened: a loop that threw
- * on the first refusal left the ones before it hidden on the server, still
- * drawn in the grid, still selected, under one sentence saying none of it
- * worked. The message names how many actually went.
+ * **One at a time, and every one attempted.** There is no bulk-hide route,
+ * and each PATCH runs a whole `read_grid()` inside `_read_detail` — whose own
+ * docstring says the grid read is paid once per gesture rather than per card
+ * — so firing N of them at once maximises both grid reads and single-writer
+ * contention on the hub. A plain loop that threw on the first refusal was
+ * worse again: it left the ones before it hidden on the server, still drawn
+ * and still selected, under one sentence saying none of it worked. So the
+ * loop runs to the end and the message names how many actually went.
  */
-async function hideSelected() {
-  if (!claim("hide")) return;
+function hideSelected() {
   const keys = [...store.selectedKeys];
-  try {
-    const results = await Promise.allSettled(
-      keys.map((key) => patchWorkflowCard(key, { hidden: true })),
-    );
-    const refused = results.filter((result) => result.status === "rejected");
+  return queueWrite("hide", async () => {
+    let refused = 0;
+    let firstError = null;
+    for (const key of keys) {
+      try {
+        await patchWorkflowCard(key, { hidden: true });
+      } catch (err) {
+        refused += 1;
+        firstError = firstError ?? err;
+      }
+    }
     store.forgetMembers();
     await store.fetchCards();
-    if (!refused.length) {
+    if (!refused) {
       store.clearSelection();
       return;
     }
-    console.warn("[workflows] some cards would not hide", refused[0].reason);
+    console.warn("[workflows] some cards would not hide", firstError);
     notices.push({
       level: "error",
       text:
-        refused.length === keys.length
+        refused === keys.length
           ? "None of those workflows could be hidden."
-          : `${keys.length - refused.length} of ${keys.length} workflows were hidden; the rest could not be.`,
+          : `${keys.length - refused} of ${keys.length} workflows were hidden; the rest could not be.`,
     });
-  } finally {
-    busy.value = "";
-  }
+  });
 }
 
 /**
@@ -731,7 +768,7 @@ watch(selectedKey, (key) => loadDetail(key), { immediate: true });
   padding: 0 var(--space-3);
   border: 1px solid rgb(var(--v-theme-divider));
   border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-surface), 0.04);
+  background: rgba(var(--v-theme-on-surface), 0.06);
   font-size: var(--text-sm);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -766,7 +803,7 @@ watch(selectedKey, (key) => loadDetail(key), { immediate: true });
   padding: 0 var(--space-3);
   border: 1px solid rgb(var(--v-theme-divider));
   border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-surface), 0.04);
+  background: rgba(var(--v-theme-on-surface), 0.06);
   font-size: var(--text-xs);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -776,23 +813,6 @@ watch(selectedKey, (key) => loadDetail(key), { immediate: true });
 .wftab-chip--empty {
   border-style: dashed;
   background: transparent;
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-/* A local track, like the 96px label column above: wide enough for a
-   strength ("0.85") and no wider. Not a spacing token used as a width. */
-.wftab-strength {
-  flex: none;
-  width: 56px;
-  height: var(--control-h);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgb(var(--v-theme-divider));
-  border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-surface), 0.04);
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
@@ -817,7 +837,7 @@ watch(selectedKey, (key) => loadDetail(key), { immediate: true });
   padding: var(--space-2) var(--space-3);
   border: 1px solid rgb(var(--v-theme-divider));
   border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-surface), 0.04);
+  background: rgba(var(--v-theme-on-surface), 0.06);
   color: inherit;
   font: inherit;
   font-size: var(--text-sm);
@@ -868,6 +888,6 @@ watch(selectedKey, (key) => loadDetail(key), { immediate: true });
 }
 
 .wftab-item:hover {
-  background: rgba(var(--v-theme-on-surface), 0.08);
+  background: var(--hover-wash);
 }
 </style>

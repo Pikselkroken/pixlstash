@@ -403,6 +403,60 @@ describe("a write that comes back after the selection moved", () => {
     expect(wrapper.find("textarea").element.value).toBe("the real notes");
   });
 
+  it("does not let a notes save put the pre-toggle pins back", async () => {
+    // The sequence is one gesture: clicking a pin is what blurs the notes
+    // box, so the PATCH and the PUT are started by the same click. The PATCH
+    // answers with the WHOLE detail, pins included, so landing second it
+    // puts the pin back while the server holds the new value.
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: { defaults: [STEPS, SAMPLER] } }),
+    );
+    // A hub that answers with the pins it holds AT THAT MOMENT. The PATCH is
+    // the slow one, which is the reviewer's case: blur queues it first, so
+    // run beside the pin write it answers last, carrying `pins: null`.
+    let held = null;
+    let settleNotes;
+    setWorkflowPins.mockImplementation(async (_key, pins) => {
+      held = pins;
+      return { pins };
+    });
+    patchWorkflowCard.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          const answer = { pins: held };
+          settleNotes = () =>
+            resolve(
+              detail({
+                card: { defaults: [STEPS, SAMPLER] },
+                notes: "a note",
+                ...answer,
+              }),
+            );
+        }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    await wrapper.find("textarea").setValue("a note");
+    await wrapper.find("textarea").trigger("blur");
+    await rowNamed(wrapper, "sampler_name").find("button").trigger("click");
+    await flush(wrapper);
+
+    // Blur runs before the click, so the notes PATCH is the one in flight
+    // and the pin write waits behind it rather than racing it.
+    expect(patchWorkflowCard).toHaveBeenCalledWith(KEY, { notes: "a note" });
+    expect(setWorkflowPins).not.toHaveBeenCalled();
+    settleNotes();
+    await flush(wrapper);
+
+    // Both ran, and the pin stuck. Fired together, the PATCH's answer lands
+    // last carrying the pins from before the toggle, the default set applies
+    // again and `sampler_name` drops back inside the fold while the hub
+    // holds it pinned.
+    expect(setWorkflowPins).toHaveBeenCalledTimes(1);
+    expect(
+      rowNamed(wrapper, "sampler_name").element.closest("details"),
+    ).toBeNull();
+  });
+
   it("runs one write at a time, so two cannot discard each other", async () => {
     getWorkflowCard.mockResolvedValue(
       detail({ card: { defaults: [STEPS, CFG] } }),
