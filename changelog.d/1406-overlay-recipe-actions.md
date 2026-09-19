@@ -5,7 +5,9 @@
   have no seed to change, ComfyUI may not be connected, and a shared link is a
   read-only view. Each says its own thing rather than blaming the connection.
 - The Recipe tab and the right-click menu in the full-screen view gain **Use as
-  input for…**, which selects the picture and opens the run panel so you can
-  pick a workflow to run it through.
+  input for…**: it closes the full-screen view, selects that one picture, and
+  opens the run panel so you can pick a workflow to run it through.
 - The full-screen view's **I2I** menu is gone; *Use as input for…* replaces it
   with the run panel's fuller set of options.
+- *Edit with ComfyUI* is now called **Use as input for…** in the grid's
+  right-click menu and in the selection menu. Same action, clearer name.

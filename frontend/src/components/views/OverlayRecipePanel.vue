@@ -207,6 +207,16 @@
         <p v-if="runReason" :id="runReasonId" class="recipe-run-reason">
           {{ runReason }}
         </p>
+        <!-- Only when it is not the sentence above: the two refusals coincide
+             on a read-only session, and printing it twice would read as two
+             separate problems. -->
+        <p
+          v-if="inputReasonIsOwn"
+          :id="inputReasonId"
+          class="recipe-run-reason"
+        >
+          {{ useAsInputReason }}
+        </p>
         <div class="recipe-foot-actions">
           <!-- `aria-disabled`, not `disabled`: a natively-disabled button is
                out of the tab order, so a keyboard reader could never reach the
@@ -226,12 +236,16 @@
             Generate variants…
           </AppButton>
           <AppButton
-            v-if="canUseAsInput"
+            v-if="comfyuiConfigured"
             variant="secondary"
             size="sm"
             block
-            tooltip="Run a workflow with this picture as its input"
-            @click="emit('use-as-input')"
+            :aria-disabled="useAsInputReason ? 'true' : undefined"
+            :aria-describedby="inputDescribedBy"
+            :tooltip="
+              useAsInputReason || 'Run a workflow with this picture as its input'
+            "
+            @click="onUseAsInput"
           >
             <v-icon size="16">mdi-image-plus</v-icon>
             Use as input for…
@@ -286,6 +300,7 @@ const props = defineProps({
 const emit = defineEmits(["generate-variants", "use-as-input"]);
 
 const runReasonId = useId();
+const inputReasonId = useId();
 
 /**
  * Why this recipe cannot be run again, or null when it can.
@@ -300,7 +315,7 @@ const runReasonId = useId();
 const RUN_REASONS = {
   a1111:
     "This picture was made in A1111 or Forge, so there is no ComfyUI graph " +
-    "here to run again. Use it as the input for a workflow instead.",
+    "here to run again.",
   no_seed_input:
     "This graph has no seed to change, so running it again would make the " +
     "same picture.",
@@ -342,20 +357,47 @@ const runReason = computed(() => {
 });
 
 /**
- * Whether to offer the picture as a workflow's input at all.
+ * Why the picture cannot be offered as a workflow's input, or null when it can.
  *
- * Hidden rather than disabled, which is how both context menus treat the same
- * action: it opens the run panel, and a run panel that can only say "this
- * session is read-only" is not worth closing the lightbox for.
+ * The two context menus that carry the same action are the contract: both
+ * fence the entry on `comfyuiConfigured` (no ComfyUI, nothing to be an input
+ * FOR, so the entry does not exist) and both render it disabled for a
+ * read-only session rather than hiding it. This matches them, so the action
+ * behaves the same way wherever the reader meets it.
  */
-const canUseAsInput = computed(
-  () => props.comfyuiConfigured && !isReadOnly.value,
+const READ_ONLY_REASON =
+  "This is a read-only view of the picture, so nothing can be run from it.";
+
+const useAsInputReason = computed(() =>
+  isReadOnly.value ? READ_ONLY_REASON : null,
 );
+
+/**
+ * Where each button's `aria-describedby` points.
+ *
+ * The two refusals coincide on a read-only session and diverge everywhere
+ * else - a read-only reader looking at an A1111 picture is told two different
+ * things, one per button. One sentence is rendered once and shared when they
+ * agree; when they differ each button gets its own, so neither is described by
+ * a sentence about the other.
+ */
+const inputReasonIsOwn = computed(
+  () => !!useAsInputReason.value && useAsInputReason.value !== runReason.value,
+);
+const inputDescribedBy = computed(() => {
+  if (!useAsInputReason.value) return undefined;
+  return inputReasonIsOwn.value ? inputReasonId : runReasonId;
+});
 
 function onGenerateVariants() {
   // `aria-disabled` leaves the button clickable, so the refusal is here.
   if (runReason.value) return;
   emit("generate-variants");
+}
+
+function onUseAsInput() {
+  if (useAsInputReason.value) return;
+  emit("use-as-input");
 }
 
 const router = useRouter();

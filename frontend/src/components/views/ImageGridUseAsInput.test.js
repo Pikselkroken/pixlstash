@@ -3,11 +3,15 @@
 //
 // The act is three things at once - close the lightbox, narrow the selection,
 // open the run panel - and the middle one is the part that is easy to ship
-// wrong. A selection is shared state with no undo: `handleImageContextMenu`
-// and `handleFaceBboxContextMenu` both narrow to one picture ONLY when it is
-// not already selected, precisely so that right-clicking inside a selection
-// you built on purpose does not throw it away. A new path that replaces
-// unconditionally looks identical in every screenshot and loses the selection.
+// wrong, because the obvious rule is the wrong one here.
+//
+// `handleImageContextMenu` keeps a selection the right-clicked picture is
+// already part of. That is right in the GRID, where the selection is on screen
+// and the user can see what the menu is about to act on. It is wrong in the
+// lightbox: `openOverlay` never touches `selectedImageIds`, so the selection is
+// invisible, and both ways into this function name exactly one picture. Keeping
+// an unseen 50-picture selection would hand the run panel all 50 from a control
+// whose tooltip says "this picture".
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
@@ -103,18 +107,21 @@ describe("using the lightbox picture as a workflow's input", () => {
     expect(wrapper.vm.lastSelectedImageId).toBe(42);
   });
 
-  it("keeps a selection the picture is already part of", () => {
-    // The convention `handleImageContextMenu` follows. Acting on one picture
-    // of a selection the user built is not a reason to discard the rest, and
-    // the run panel reads the live selection, so this decides what runs.
+  it("narrows even when the picture is already in the selection", () => {
+    // The case the grid's own rule would preserve, and the reason it must not
+    // here: the lightbox does not show the selection, so those other 12
+    // pictures are ones the reader cannot see and did not ask to run.
+    // `workflowRunStore.selectionIds` is the live grid selection and
+    // `WorkflowRunPanel` reads it at run time, so leaving them in decides what
+    // actually runs.
     const wrapper = mountGrid();
     wrapper.vm.selectedImageIds = [11, 42, 13];
     wrapper.vm.lastSelectedImageId = 11;
 
     wrapper.vm.useOverlayPictureAsInput(42);
 
-    expect(wrapper.vm.selectedImageIds).toEqual([11, 42, 13]);
-    expect(wrapper.vm.lastSelectedImageId).toBe(11);
+    expect(wrapper.vm.selectedImageIds).toEqual([42]);
+    expect(wrapper.vm.lastSelectedImageId).toBe(42);
   });
 
   it("opens the run panel on the selection", () => {

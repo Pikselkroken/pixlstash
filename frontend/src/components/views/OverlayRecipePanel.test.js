@@ -382,15 +382,76 @@ describe("OverlayRecipePanel", () => {
     }
   });
 
-  it("hides the input action outright for a read-only view", () => {
-    // Hidden, not disabled, which is how both context menus treat it: it
-    // opens a run panel that could only refuse.
+  it("disables the input action for a read-only view, as the menus do", () => {
+    // Present but dead, which is what both context-menu copies of this action
+    // do (`:disabled="isReadOnly"`). Hiding it here and disabling it there
+    // would make one action behave two ways.
     isReadOnly.value = true;
     try {
       const wrapper = render({ comfyuiConfigured: true });
-      expect(
-        wrapper.findAll("button").some((b) => b.text().includes("Use as input")),
-      ).toBe(false);
+      const button = wrapper
+        .findAll("button")
+        .find((b) => b.text().includes("Use as input"));
+      expect(button).toBeDefined();
+      expect(button.attributes("aria-disabled")).toBe("true");
+    } finally {
+      isReadOnly.value = false;
+    }
+  });
+
+  it("does not act when the dead input action is clicked anyway", async () => {
+    isReadOnly.value = true;
+    try {
+      const wrapper = render({ comfyuiConfigured: true });
+      const button = wrapper
+        .findAll("button")
+        .find((b) => b.text().includes("Use as input"));
+      await button.trigger("click");
+      expect(wrapper.emitted("use-as-input")).toBeUndefined();
+    } finally {
+      isReadOnly.value = false;
+    }
+  });
+
+  it("describes each button by its own reason when the two differ", () => {
+    // A read-only reader looking at an A1111 picture is refused twice, for two
+    // different reasons: pointing both buttons at one sentence would describe
+    // one of them with the other's problem.
+    isReadOnly.value = true;
+    try {
+      const wrapper = render({
+        recipe: { ...RECIPE, source: "a1111", available: false },
+        comfyuiConfigured: true,
+      });
+      const run = wrapper.find(".recipe-run");
+      const input = wrapper
+        .findAll("button")
+        .find((b) => b.text().includes("Use as input"));
+      const runDesc = run.attributes("aria-describedby");
+      const inputDesc = input.attributes("aria-describedby");
+      expect(runDesc).toBeTruthy();
+      expect(inputDesc).toBeTruthy();
+      expect(inputDesc).not.toBe(runDesc);
+      expect(wrapper.find(`#${runDesc}`).text()).toContain("A1111 or Forge");
+      expect(wrapper.find(`#${inputDesc}`).text()).toContain("read-only");
+    } finally {
+      isReadOnly.value = false;
+    }
+  });
+
+  it("shares one sentence when the two refusals coincide", () => {
+    // Read-only, ordinary ComfyUI picture: both buttons are refused for the
+    // same reason, and it is printed once.
+    isReadOnly.value = true;
+    try {
+      const wrapper = render({ comfyuiConfigured: true });
+      const input = wrapper
+        .findAll("button")
+        .find((b) => b.text().includes("Use as input"));
+      expect(input.attributes("aria-describedby")).toBe(
+        wrapper.find(".recipe-run").attributes("aria-describedby"),
+      );
+      expect(wrapper.findAll(".recipe-run-reason")).toHaveLength(1);
     } finally {
       isReadOnly.value = false;
     }
