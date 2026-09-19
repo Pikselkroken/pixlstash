@@ -123,6 +123,7 @@ async function copy(key, text) {
 
       <div class="cad-block">
         <span class="section-label">Claude Code</span>
+        <p class="cad-step">Run this once in a terminal. Any folder will do.</p>
         <div class="cad-row">
           <code class="cad-code">{{ claudeCommand }}</code>
           <AppButton
@@ -138,6 +139,22 @@ async function copy(key, text) {
 
       <div class="cad-block">
         <span class="section-label">Any other MCP client</span>
+        <p class="cad-step">
+          Goes in your client's MCP configuration file — in Claude Desktop,
+          <strong>Settings → Developer → Edit Config</strong>. If that file
+          already lists servers, add the <code>"pixlstash"</code> entry inside
+          its existing <code>"mcpServers"</code> block rather than replacing
+          the file, or you will drop the servers already there.
+          <a
+            class="cad-link"
+            href="https://modelcontextprotocol.io/quickstart/user"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Where to find it
+            <v-icon size="x-small" aria-hidden="true">mdi-open-in-new</v-icon>
+          </a>
+        </p>
         <div class="cad-row">
           <code class="cad-code cad-code--json">{{ configJson }}</code>
           <AppButton
@@ -178,6 +195,26 @@ async function copy(key, text) {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+/* What to actually do with the block below it. Without this the JSON is a
+   puzzle: it is obvious how to copy and not at all obvious where it goes. */
+.cad-step {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  opacity: 0.75;
+}
+.cad-step code {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+.cad-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: rgb(var(--v-theme-on-surface));
+  font-weight: var(--weight-medium);
+  text-decoration: underline;
 }
 .cad-row {
   display: flex;

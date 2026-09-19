@@ -74,6 +74,19 @@ describe("the configuration handed to the agent", () => {
     expect(text).toContain("claude mcp add");
   });
 
+  it("says what to do with each block, not just what it is", async () => {
+    const wrapper = await mintedDialog();
+    const text = wrapper.text();
+
+    // A copyable JSON object with no instruction is a puzzle: copying it is
+    // the obvious part, knowing where it goes is not.
+    expect(text).toMatch(/run this once in a terminal/i);
+    expect(text).toMatch(/configuration file/i);
+    // The one way this goes wrong destructively.
+    expect(text).toMatch(/rather than replacing the file/i);
+    expect(wrapper.find('a[href*="modelcontextprotocol.io"]').exists()).toBe(true);
+  });
+
   it("registers the server for every directory, not just the current one", async () => {
     const wrapper = await mintedDialog();
 
