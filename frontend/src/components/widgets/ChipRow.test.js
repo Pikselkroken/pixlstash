@@ -57,15 +57,22 @@ const moreChip = (wrapper) =>
   own(wrapper).find((el) => el.classList.contains("chip-row__more"));
 
 /**
- * Every rule in a component's scoped stylesheet whose selector list is one of
+ * Every rule in a component's stylesheets whose selector list is one of
  * `selectors`, as its raw declarations. Selectors are compared with whitespace
  * collapsed, so a Prettier reflow reports nothing; returning ALL of them (not
  * the first) is what lets a caller insist a selector is declared only once.
+ *
+ * EVERY `<style>` block, not the first: an SFC may carry several, so reading
+ * one of them leaves a second block reverting the chip invisible to the
+ * assertions below.
  */
 function rules(file, selectors) {
   const wanted = [selectors].flat().map((s) => s.replace(/\s+/g, " ").trim());
   return readFileSync(file, "utf8")
-    .split("<style scoped>")[1]
+    .split(/<style[^>]*>/)
+    .slice(1)
+    .join("")
+    .replaceAll("</style>", "")
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .split("}")
     .filter((r) => wanted.includes(r.split("{")[0].replace(/\s+/g, " ").trim()))
@@ -181,6 +188,26 @@ describe("ChipRow", () => {
     }
   });
 
+  it("mutes the glyph once, so a dashed chip's is not 0.7 of 0.7", () => {
+    // `--dashed` mutes the chip's own ink, so an `opacity` on the icon on top
+    // of it draws that glyph at 0.49 - 3.10:1 on the light card, under the
+    // 4.5:1 design-tokens.test.js holds the token to. That guard models one
+    // application of the token, so nothing but this notices the product.
+    const [icon] = rules(
+      "src/components/widgets/ChipRow.vue",
+      ".chip-row__icon",
+    );
+    expect(icon).not.toMatch(/opacity:/);
+    expect(icon).toContain(
+      "color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary))",
+    );
+    expect(
+      rules("src/components/widgets/ChipRow.vue", ".chip-row__chip--dashed")[0],
+    ).toContain(
+      "color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary))",
+    );
+  });
+
   it("draws the same fact chip ⓘ draws, so one list reads as one list", () => {
     // The popover wraps its chips and the row clips its own, so InfoPopover
     // cannot mount a ChipRow and spells the chip a second time. Nothing but this
@@ -199,8 +226,9 @@ describe("ChipRow", () => {
     expect(popover).toContain("font-size: var(--text-2xs)");
     expect(popover).toContain("border-radius: var(--radius-sm)");
     expect(popover).toContain("border: 1px solid rgb(var(--v-theme-border))");
-    // Unfilled, like the card's fact chip and unlike its model chip.
-    expect(popover).not.toContain("background:");
+    // Unfilled, like the card's fact chip and unlike its model chip. The
+    // longhand counts too, or a `background-color` fill slips past.
+    expect(popover).not.toMatch(/background(-color)?:/);
     for (const declaration of [
       "height: var(--tag-h-xs)",
       "padding: 0 var(--space-2)",

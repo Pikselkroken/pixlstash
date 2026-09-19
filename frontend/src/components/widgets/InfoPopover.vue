@@ -214,6 +214,8 @@ const models = computed(() => [
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
 }
 
+/* --text-sm against the dt's --text-xs: the app kit's own `.kv` pair
+   (`ui_kits/app/unified.css`), where the label recedes and the value is read. */
 .info-popover__kv dd {
   margin: 0;
   font-size: var(--text-sm);

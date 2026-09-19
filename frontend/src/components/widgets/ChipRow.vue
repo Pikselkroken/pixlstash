@@ -41,14 +41,24 @@
 // stack panel's List "Differs by" column when F2 builds it.
 //
 // The chip is the design's `.uchip`: a bordered control-tier chip on the input
-// surface, --tag-h-xs tall, --text-2xs, with a muted glyph. The glyph separates
-// the three KINDS OF THING a row can name - `cube-outline` a model, `layers` a
-// LoRA, `plus` a slot - and says nothing finer: `checkpointModel` falls back to
-// the first model of any kind, so a card whose graph has no checkpoint draws the
-// model glyph over a unet, exactly as ⓘ already lists it. Three variants, all
-// from the design: `dashed` is a slot the recipe fills rather than a model the
-// workflow carries; `fact` drops the fill because a fact is not a model; "+N" is
-// a fact chip with a muted count.
+// surface, --tag-h-xs tall, --text-2xs, with a muted glyph. That is the app
+// kit's own chip one size down: `ui_kits/app/unified.css` in the Design System
+// project draws `.chip` - "the shape for every small labelled datum" - as
+// `--input-bg` behind a 1px `--border` with the label at full `--text`, at
+// --text-xs and `2px var(--space-3)`. The kit is the citable half of this; the
+// workflow card's own spec lives in an artifact neither synced project holds,
+// so cite the kit when the two agree. One place they do not: the kit's unfilled
+// `.chip--quiet` drops the fill AND mutes the label, where `fact` below keeps
+// full ink, because a fact the card states is not secondary to the model
+// beside it.
+//
+// The glyph separates the three KINDS OF THING a row can name - `cube-outline`
+// a model, `layers` a LoRA, `plus` a slot - and says nothing finer:
+// `checkpointModel` falls back to the first model of any kind, so a card whose
+// graph has no checkpoint draws the model glyph over a unet, exactly as ⓘ
+// already lists it. Three variants, all from the design: `dashed` is a slot
+// the recipe fills rather than a model the workflow carries; `fact` drops the
+// fill because a fact is not a model; "+N" is a fact chip with a muted count.
 //
 // Approximated against the design, all in the app's favour: 18px tall where it
 // draws 20 (--tag-h-xs, rather than a fourth chip height for 2px), --space-2
@@ -58,9 +68,10 @@
 // and not the font.
 //
 // In the LIGHT theme `input-background` and `surface` are both #ffffff, so the
-// fill does not separate a model chip from a fact chip there and the outline and
-// the glyph carry it alone. That is the design's own light palette, not a
-// mapping choice made here.
+// fill does not separate a model chip from a fact chip there. The outline is
+// the same on both, so what is left is the glyph alone - a model chip has one
+// and a fact chip does not. That is the design's own light palette, not a
+// mapping choice made here, and it is the part worth a designer's sign-off.
 
 import {
   computed,
@@ -160,9 +171,14 @@ defineExpose({ measure });
   overflow: hidden;
 }
 
+/* Muted with a colour, not `opacity`: `--dashed` mutes the chip's own ink, and
+   an opacity on top of that would draw the glyph at 0.7 x 0.7 = 0.49 - 3.10:1
+   on the light card, under the 4.5:1 `design-tokens.test.js` holds
+   `--opacity-text-secondary` to. That guard measures one application of the
+   token and cannot see a product of two, so the mute is applied here once. */
 .chip-row__icon {
   flex-shrink: 0;
-  opacity: var(--opacity-text-secondary);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .chip-row__label {
