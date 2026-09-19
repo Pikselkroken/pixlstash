@@ -428,15 +428,19 @@ class TestSwitching:
 
         switch_thread = threading.Thread(target=do_switch)
         switch_thread.start()
-        deadline = time.monotonic() + 5
-        while server.library_coordinator.state.value != "switching":
-            assert time.monotonic() < deadline
-            time.sleep(0.01)
-        assert not switched.is_set()
-
-        release.set()
-        switch_thread.join(timeout=20)
         try:
+            try:
+                deadline = time.monotonic() + 5
+                while server.library_coordinator.state.value != "switching":
+                    assert time.monotonic() < deadline
+                    time.sleep(0.01)
+                assert not switched.is_set()
+            finally:
+                # Inside the try, so an assertion that fires still releases and
+                # joins the paused import instead of leaving it parked on
+                # release.wait(10) holding the import lease.
+                release.set()
+                switch_thread.join(timeout=20)
             assert not errors
             assert switched.is_set()
             assert server.library_registry.active_library().uuid == spare_library.uuid
@@ -549,16 +553,18 @@ class TestSwitching:
         )
         first_thread.start()
         try:
-            assert build_entered.wait(timeout=10)
-            second_thread.start()
-            second_thread.join(timeout=5)
-            assert not second_thread.is_alive(), "second switch must fail promptly"
-        finally:
-            release_build.set()
-        first_thread.join(timeout=20)
-        second_thread.join(timeout=20)
-
-        try:
+            try:
+                assert build_entered.wait(timeout=10)
+                second_thread.start()
+                second_thread.join(timeout=5)
+                assert not second_thread.is_alive(), "second switch must fail promptly"
+            finally:
+                # The joins belong in here too: released but unjoined, the switch
+                # is still running when the next test starts.
+                release_build.set()
+                first_thread.join(timeout=20)
+                if second_thread.ident is not None:  # unstarted if the pause failed
+                    second_thread.join(timeout=20)
             assert not first_thread.is_alive()
             assert not second_thread.is_alive()
             assert responses["first"].status_code == 200
