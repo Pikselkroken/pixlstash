@@ -18,7 +18,9 @@ import { join } from "node:path";
 
 vi.mock("../../utils/apiClient", async () => {
   const { ref } = await import("vue");
-  return { isReadOnly: ref(false) };
+  // API_BASE_URL is needed by ConnectAgentDialog, which AccountSection mounts.
+  // A wholesale mock that omits it makes the import throw, not read undefined.
+  return { isReadOnly: ref(false), API_BASE_URL: "http://127.0.0.1:9537/api/v1" };
 });
 
 vi.mock("../../api/config", () => ({
