@@ -79,6 +79,7 @@ from pixlstash.services import (
     workflow_inbox,
     workflow_parameters,
 )
+from pixlstash.services.workflow_events import announce_changed_workflows
 from pixlstash.services.workflow_hash import WorkflowGraphError
 from pixlstash.services.workflow_io import api_graph, detect_workflow_io
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -215,12 +216,17 @@ def _store_workflow(
     # before the name is looked at, and keep_both has nothing to keep.
     existing = _find_stored_copy(wanted)
     if existing is not None:
+        topology_hash, card_key = _file_in_hub(hub, existing, workflow)
         return {
             "status": "success",
             "name": existing,
             "workflow_dir": workflow_dir,
             "matched": True,
-            "topology_hash": _file_in_hub(hub, existing, workflow),
+            "topology_hash": topology_hash,
+            # Not in ``ComfyUIWorkflowImportResponse`` and therefore not on the
+            # wire: it is here so the caller can name the card in its
+            # ``CHANGED_WORKFLOWS`` event without filing the graph twice.
+            "workflow_key": card_key,
         }
     if os.path.exists(path) and not overwrite:
         if not keep_both:
@@ -233,12 +239,14 @@ def _store_workflow(
             counter += 1
 
     _save_workflow_json(path, workflow)
+    topology_hash, card_key = _file_in_hub(hub, name, workflow)
     return {
         "status": "success",
         "name": name,
         "workflow_dir": workflow_dir,
         "matched": False,
-        "topology_hash": _file_in_hub(hub, name, workflow),
+        "topology_hash": topology_hash,
+        "workflow_key": card_key,
     }
 
 
@@ -292,8 +300,8 @@ def _find_stored_copy(wanted: str) -> str | None:
     return None
 
 
-def _file_in_hub(hub, name: str, workflow: dict) -> str | None:
-    """File the workflow in the library, returning its topology hash.
+def _file_in_hub(hub, name: str, workflow: dict) -> tuple[str | None, str | None]:
+    """File the workflow in the library: ``(topology hash, card key)``.
 
     Content-addressed and idempotent, so a workflow the library already has
     from its pictures lands on that same row. Not being filed does not stop
@@ -304,7 +312,7 @@ def _file_in_hub(hub, name: str, workflow: dict) -> str | None:
     file has only a topology, so it lands on a card with no assets.
     """
     if hub is None:
-        return None
+        return None, None
     try:
         if isinstance(workflow.get("nodes"), list):
             topology_hash = record_ui_graph(hub, workflow)
@@ -315,8 +323,7 @@ def _file_in_hub(hub, name: str, workflow: dict) -> str | None:
                 graph = workflow
             keys = record_api_graph(hub, graph)
             topology_hash, structural_hash = keys.topology_hash, keys.structural_hash
-        _card_the_file(hub, name, topology_hash, structural_hash)
-        return topology_hash
+        return topology_hash, _card_the_file(hub, name, topology_hash, structural_hash)
     except WorkflowGraphError as exc:
         logger.info(
             "Imported workflow is not filed in the library, its graph "
@@ -340,19 +347,25 @@ def _file_in_hub(hub, name: str, workflow: dict) -> str | None:
             type(exc).__name__,
             exc,
         )
-    return None
+    return None, None
 
 
-def _card_the_file(hub, name: str, topology_hash: str, structural_hash: str | None):
-    """Put the stored file on its card, without ever costing the caller its hash.
+def _card_the_file(
+    hub, name: str, topology_hash: str, structural_hash: str | None
+) -> str | None:
+    """Put the stored file on its card; return that card's key, or None.
 
     Its own handler rather than the one around the filing above: a card is the
     optional half, and letting it raise would make the import answer
     ``topology_hash: null`` for a graph that *was* filed - the essential half
     retracted by the secondary one. The backfill finder picks the card up.
+
+    The key is returned so the import can name the card in its
+    ``CHANGED_WORKFLOWS`` event. ``None`` means the card was not written, and
+    the event then says only "look again", which is all it ever promises.
     """
     try:
-        workflow_cards.record_file(hub, name, topology_hash, structural_hash)
+        return workflow_cards.record_file(hub, name, topology_hash, structural_hash)
     except Exception as exc:
         logger.warning(
             "Imported workflow %s is filed but not on a card yet, which failed "
@@ -361,6 +374,7 @@ def _card_the_file(hub, name: str, topology_hash: str, structural_hash: str | No
             type(exc).__name__,
             exc,
         )
+    return None
 
 
 MAX_SEED = 2**32 - 1
@@ -3005,7 +3019,7 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ComfyUIWorkflowImportResponse,
     )
-    def import_comfyui_workflow(payload: dict = Body(...)):
+    def import_comfyui_workflow(request: Request, payload: dict = Body(...)):
         # Sync on purpose: finding a stored copy reads every workflow file, so
         # FastAPI runs this on its thread pool rather than the event loop.
         name = _normalize_workflow_name(payload.get("name"))
@@ -3022,13 +3036,24 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid workflow name")
         try:
             with workflow_inbox.INBOX_LOCK:
-                return _store_workflow(
+                result = _store_workflow(
                     getattr(server, "hub", None),
                     name,
                     workflow,
                     overwrite=bool(payload.get("overwrite")),
                     keep_both=bool(payload.get("keep_both")),
                 )
+            # An imported file lands on a card, so the Workflows view has a
+            # new (or newly runnable) one to draw. A "look again" signal: the
+            # card's counts and covers are computed per request, so nothing
+            # about it is carried here.
+            announce_changed_workflows(
+                server,
+                [key for key in (result.get("workflow_key"),) if key],
+                "imported",
+                origin_client_id=getattr(request.state, "origin_client_id", None),
+            )
+            return result
         except NotAWorkflowError as exc:
             logger.warning("Refused importing %s: %s", name, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc

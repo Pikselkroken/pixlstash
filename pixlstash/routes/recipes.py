@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field, field_validator
 from pixlstash.hub.workflow_cards import effective_stack_keys, variant_hashes_for_keys
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import saved_recipe_service
+from pixlstash.services.workflow_events import announce_changed_workflows
 
 logger = get_logger(__name__)
 
@@ -161,6 +162,20 @@ def create_router(server) -> APIRouter:
     """
     router = APIRouter(tags=["recipes"])
 
+    def _announce(request: Request, workflow_key: Optional[str]) -> None:
+        """Say the card's saved recipes changed, so an open tab re-reads them.
+
+        The card's own `saved_recipe_count` moves with them, and the one-off
+        clause reads it (a card carrying a saved recipe is never folded away),
+        so the Workflows grid is stale until it looks again.
+        """
+        announce_changed_workflows(
+            server,
+            [workflow_key] if workflow_key else [],
+            "recipes",
+            origin_client_id=getattr(request.state, "origin_client_id", None),
+        )
+
     def _hub():
         hub = getattr(server, "hub", None)
         if hub is None:
@@ -224,11 +239,13 @@ def create_router(server) -> APIRouter:
         fields = payload.model_dump()
         fields["loras"] = [lora.model_dump() for lora in payload.loras]
         try:
-            return saved_recipe_service.create_recipe(server.vault, fields)
+            recipe = saved_recipe_service.create_recipe(server.vault, fields)
         except saved_recipe_service.UnknownSourcePicture as exc:
             # A bad id in the body, not a fault: answered as a refusal rather
             # than left to the vault's foreign key, which would be a 500.
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _announce(request, payload.workflow_key)
+        return recipe
 
     # Declared before the ``{recipe_id}`` routes below. Nothing collides today —
     # there is no ``PUT /recipes/{recipe_id}`` — but FastAPI matches in
@@ -253,6 +270,9 @@ def create_router(server) -> APIRouter:
         ordered = saved_recipe_service.reorder_recipes(server.vault, recipe_ids)
         if ordered is None:
             raise HTTPException(status_code=404, detail="No such recipe.")
+        # No key: a reorder is one tab's list and the ids are recipes, not
+        # cards. The event still says "look again", which is all it promises.
+        _announce(request, None)
         return {"recipe_ids": ordered}
 
     @router.patch(
@@ -278,6 +298,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if recipe is None:
             raise HTTPException(status_code=404, detail="No such recipe.")
+        _announce(request, recipe.get("workflow_key"))
         return recipe
 
     @router.delete(
@@ -291,6 +312,10 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         if not saved_recipe_service.delete_recipe(server.vault, recipe_id):
             raise HTTPException(status_code=404, detail="No such recipe.")
+        # The row is gone, so the card it was on cannot be named. Reading it
+        # first, only to put it in an event that says "look again" anyway,
+        # would be a query bought for nothing.
+        _announce(request, None)
         return {"deleted": recipe_id}
 
     return router

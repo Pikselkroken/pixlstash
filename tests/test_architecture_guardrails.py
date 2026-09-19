@@ -338,6 +338,9 @@ def test_event_types_fully_classified():
             # Vault-wide reconciliation queue nudge (v1.11 Phase 5), like
             # VRAM_OOM: not a grid view a client's filters could exclude it from.
             EventType.EXTERNAL_MOVES_PENDING.name,
+            # A workflow card changed (v1.12 B4). A card is not a picture, so
+            # no grid filter says anything about whether a client wants it.
+            EventType.CHANGED_WORKFLOWS.name,
         }
     )
 
@@ -3069,3 +3072,76 @@ def test_desktop_download_links_match_the_electron_artifact_name():
             f"install.html offers a .{extension} download for {platform}, but "
             f"electron/package.json builds {sorted(configured)} there"
         )
+
+
+# ── A mark flip carries every table the owner's decisions live in ───────────
+
+
+def _hub_tables_keyed_on_a_workflow_key() -> set[str]:
+    """Every hub table with a ``workflow_key`` column, read from the schema.
+
+    The column and not a foreign key: ``workflow_key`` is a content address and
+    nothing declares a reference to it, so the column's presence is the only
+    thing that says a row belongs to a card.
+    """
+    source = (REPO_ROOT / "pixlstash" / "hub" / "schema.py").read_text()
+    return {
+        match.group(1)
+        for match in re.finditer(
+            r"CREATE TABLE IF NOT EXISTS (\w+) \((.*?)\n\)", source, re.S
+        )
+        if re.search(r"^\s*workflow_key\s", match.group(2), re.M)
+    }
+
+
+def test_a_mark_flip_carries_every_table_a_card_key_appears_in():
+    """``_KEYED_TABLES`` is derivable, so it is derived rather than remembered.
+
+    A slot-mark flip re-keys every card of a topology and carries the owner's
+    decisions across (``hub/workflow_card_writes.flip_slot_marks``). The
+    carry-over loops over ``_KEYED_TABLES``, so a card table added to the
+    schema and not to that tuple is a name, a set of pins or a stack
+    membership silently dropped by the next flip - a loss with no error and no
+    log, on rows that cannot be rebuilt.
+
+    The module says the tuple is "the one place a new card table has to be
+    listed", which makes it easy to find and does nothing to make it fail.
+    This is the failing half: the tuple is exactly the tables carrying a
+    ``workflow_key`` column, less the two that hold a DERIVED key and are
+    re-keyed by their own ``UPDATE`` rather than copied.
+    """
+    from pixlstash.hub.workflow_card_writes import _KEYED_TABLES
+
+    # Not the owner's decisions, so not copied: both are rebuilt from the
+    # stored graphs, and `_rekey_variants` moves each with a single UPDATE
+    # because a split must NOT duplicate a variant or a file onto both halves.
+    derived = {"workflow_variant", "workflow_file"}
+    assert set(_KEYED_TABLES).isdisjoint(derived), (
+        "a derived table copied by the carry-over would duplicate a variant "
+        "onto both halves of a split"
+    )
+    assert _hub_tables_keyed_on_a_workflow_key() == set(_KEYED_TABLES) | derived, (
+        "a hub table keyed on workflow_key is neither carried by a mark flip "
+        "nor one of the derived tables it re-keys: add it to _KEYED_TABLES, or "
+        "to `derived` here with the UPDATE that moves it"
+    )
+
+
+def test_the_keyed_table_guardrail_has_teeth(tmp_path):
+    """Break the derivation and the assertion above has to notice.
+
+    The check reads a regex over ``schema.py``; a regex that silently matched
+    nothing would pass for every tuple, which is the way a guardrail like this
+    fails in practice.
+    """
+    assert _hub_tables_keyed_on_a_workflow_key(), (
+        "the schema scan found no card tables at all, so it would pass "
+        "whatever _KEYED_TABLES held"
+    )
+    from pixlstash.hub.workflow_card_writes import _KEYED_TABLES
+
+    pretend = set(_KEYED_TABLES) - {"workflow_cover"} | {"workflow_variant"}
+    assert _hub_tables_keyed_on_a_workflow_key() != pretend | {
+        "workflow_variant",
+        "workflow_file",
+    }

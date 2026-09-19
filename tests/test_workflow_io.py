@@ -7,6 +7,7 @@ import os
 import pathlib
 import shutil
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -304,6 +305,18 @@ def _route(router, path, method="POST"):
     )
 
 
+def _request(client_id=None):
+    """The one thing a handler called directly reads off the request.
+
+    ``OriginClientMiddleware`` puts the originating tab's ``X-Client-Id`` on
+    ``request.state``, and the import route threads it into the
+    ``CHANGED_WORKFLOWS`` event so that tab can recognise its own change
+    (v1.12 B4). Calling the endpoint as a function skips the middleware, so
+    the state it would have set is supplied here.
+    """
+    return SimpleNamespace(state=SimpleNamespace(origin_client_id=client_id))
+
+
 def test_run_i2i_refuses_a_migrated_workflow_without_an_image_binding(
     tmp_path, monkeypatch
 ):
@@ -447,7 +460,7 @@ def test_a_fresh_install_takes_the_marker_so_an_as_is_import_keeps_detection(
     )
     graph = _t2i_graph()
     graph["7"] = _node("LoadImage", image="a.png")
-    endpoint({"name": "mine", "workflow": graph})
+    endpoint(_request(), {"name": "mine", "workflow": graph})
 
     assert workflow_bindings.migrate_workflow_folder(str(user_dir)) == 0
     stored = _load(user_dir / "mine.json")
@@ -650,7 +663,7 @@ def import_route(tmp_path, monkeypatch):
     endpoint = _route(comfyui_module.create_router(server), "/comfyui/workflows/import")
 
     def call(**payload):
-        return endpoint(payload)
+        return endpoint(_request(), payload)
 
     call.inbox = inbox
     call.trash = trash

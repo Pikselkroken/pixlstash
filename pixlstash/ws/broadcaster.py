@@ -37,6 +37,14 @@ _WS_SNAPSHOT_EVENT_TYPES = {
 }
 
 
+# Why a card changed, as the wire carries it (v1.12 B4). Closed on purpose and
+# degraded rather than rejected, exactly like ``CHANGE_KINDS`` below: an emit
+# site naming something else still says "look again", which is the whole of the
+# contract, and the reason is a hint about what to look at first.
+WORKFLOW_CHANGE_REASONS = ("imported", "changed", "stacks", "recipes")
+DEFAULT_REASON = "changed"
+
+
 class WsBroadcasterMixin:
     """WebSocket vault-event broadcasting for ``Server``."""
 
@@ -152,6 +160,10 @@ class WsBroadcasterMixin:
                 # Vault-wide, like VRAM_OOM: the reconciliation queue is not a
                 # grid view a client's filters could exclude it from.
                 EventType.EXTERNAL_MOVES_PENDING,
+                # A card is not a picture, so the grid filters say nothing
+                # about it: a client filtering to one character still has the
+                # Workflows view open.
+                EventType.CHANGED_WORKFLOWS,
             )
             or event_type in _WS_SNAPSHOT_EVENT_TYPES
         )
@@ -280,6 +292,22 @@ class WsBroadcasterMixin:
             payload = {
                 "type": "external_moves_pending",
                 "event": event_type.name,
+            }
+        elif event_type == EventType.CHANGED_WORKFLOWS:
+            # A "look again" nudge like external_moves_pending, and for the
+            # same reason: a card's counts, covers and stack are computed per
+            # request over the whole vault, so anything carried here would be
+            # a card the client then has to re-read anyway. It says which keys
+            # to look at and why; the envelope below says which tab did it.
+            info = data if isinstance(data, dict) else {}
+            reason = info.get("reason")
+            payload = {
+                "type": "workflows_changed",
+                "event": event_type.name,
+                "keys": [str(key) for key in (info.get("keys") or [])],
+                "reason": (
+                    reason if reason in WORKFLOW_CHANGE_REASONS else DEFAULT_REASON
+                ),
             }
         elif event_type in _WS_SNAPSHOT_EVENT_TYPES:
             info = data if isinstance(data, dict) else {}

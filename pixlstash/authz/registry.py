@@ -1742,6 +1742,56 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/workflows/cards"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/workflows/cards/{workflow_key}"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/workflows/cards/{workflow_key}/pictures"): RoutePolicy(_OWNER),
+    # The card writes (v1.12 B4). OWNER_ONLY throughout and, unlike the reads
+    # above it, this tier is not even a judgement about disclosure: every one
+    # of them is the owner editing their own library - what a workflow is
+    # called, which of its LoRA slots are part of it, which cards share a
+    # stack - and none of it is scoped to a picture, a set, a character or a
+    # project, so there is no narrower policy that could describe it. The
+    # verbs carry their own belt as well: the READ-token middleware refuses
+    # PATCH, PUT and POST before the gate reads a declaration.
+    #
+    # Two of them answer with the card they changed, which is the same
+    # whole-library disclosure `GET /workflows/cards/{workflow_key}` is owner
+    # only for, and `PUT .../slots` is the one that mutates identity: it
+    # re-keys every card of a topology and carries the owner's attributes
+    # across. Nothing here is a host path or a host capability.
+    ("PATCH", "/api/v1/workflows/{workflow_key}"): RoutePolicy(
+        _OWNER,
+        justification="Name, notes and hidden on one card; PATCH blocked for READ tokens; owner only",
+    ),
+    ("PUT", "/api/v1/workflows/{workflow_key}/slots"): RoutePolicy(
+        _OWNER,
+        justification="Mark a card's LoRA slots, which re-keys every card of the topology; PUT blocked for READ tokens; owner only",
+    ),
+    ("PUT", "/api/v1/workflows/{workflow_key}/defaults"): RoutePolicy(
+        _OWNER,
+        justification="A card's parameter overrides; PUT blocked for READ tokens; owner only",
+    ),
+    ("PUT", "/api/v1/workflows/{workflow_key}/pins"): RoutePolicy(
+        _OWNER,
+        justification="A card's pinned parameters; PUT blocked for READ tokens; owner only",
+    ),
+    ("PUT", "/api/v1/workflows/{workflow_key}/inputs"): RoutePolicy(
+        _OWNER,
+        justification="A card's picture-input setup, which names a Fixed picture by content; PUT blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/workflows/{workflow_key}/unstack"): RoutePolicy(
+        _OWNER,
+        justification="Take one card out of its stack; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/workflows/stacks"): RoutePolicy(
+        _OWNER,
+        justification="Stack cards together; POST blocked for READ tokens; owner only",
+    ),
+    ("PUT", "/api/v1/workflows/stacks/{stack_id}/order"): RoutePolicy(
+        _OWNER,
+        justification="Reorder a stack; PUT blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/workflows/stacks/{stack_id}/unstack"): RoutePolicy(
+        _OWNER,
+        justification="Dissolve a whole stack; POST blocked for READ tokens; owner only",
+    ),
     # ── recipes.py (saved recipes, plan §5.5 / step B6) ─────────────────────
     # OWNER_ONLY throughout, and a decision rather than a default. A saved
     # recipe holds the owner's prompt and names the models they run, and the

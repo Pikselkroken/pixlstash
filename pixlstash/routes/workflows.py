@@ -1,4 +1,4 @@
-"""The Workflows view's reads: the library list, one row's variants, its graph.
+"""The Workflows view: the library list, the cards, and what the owner writes.
 
 **The list opens at topology level** (workflow implementation plan §F1, design
 `DECISIONS.md`). A topology is the graph alone; the recipes filed under it are
@@ -23,20 +23,46 @@ tiles are made of. Declared in ``pixlstash/authz/registry.py``, never inline.
 They also refuse remote plaintext under ``require_ssl``, like the model-shelf
 reads that name the same model files.
 
-**Nothing here mutates.** Naming a workflow and running one are later steps
-(§F3, §F5), and forgetting ghosts is a privacy purge that lives with the
-retention setting in ``routes/config.py``; this module is the view's read side
-and it is deliberately the whole of it.
+**The writes are the owner editing their own library** (v1.12 B4): a card's
+name, notes and hidden flag, its parameter overrides, pins and picture inputs,
+which of its LoRA slots are part of the workflow, and which cards sit in one
+stack. They are ``OWNER_ONLY`` for the reason the reads are and one more: they
+are the owner's own decisions about their library and there is nothing scoped
+about them.
+
+**No write here decides identity or grouping.** A card key is
+``services/workflow_identity``, a stack is resolved in
+``hub/workflow_cards.effective_stack_keys``, and the rows are written by
+``hub/workflow_card_writes``; this module validates a request, resolves the
+keys with those, and says "look again" on the way out
+(``EventType.CHANGED_WORKFLOWS``).
+
+Running a workflow is still a later step (§F5), and forgetting ghosts is a
+privacy purge that lives with the retention setting in ``routes/config.py``.
 """
 
 from __future__ import annotations
 
 import re
+from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Body, HTTPException, Query, Request
+from pydantic import BaseModel, Field, field_validator
 
-from pixlstash.hub.workflow_card_reads import find_card
+from pixlstash.hub.workflow_card_reads import card_index, find_card, keys_in_stack
+from pixlstash.hub.workflow_card_writes import (
+    AUTO_STACK_PREFIX,
+    flip_slot_marks,
+    replace_defaults,
+    replace_picture_inputs,
+    replace_pins,
+    set_attributes,
+    set_stack_order,
+    stack_together,
+    unstack_card,
+    unstack_stack,
+)
+from pixlstash.hub.workflow_cards import effective_stack_keys
 from pixlstash.hub.workflows import (
     adapter_slots_by_topology,
     assets_by_topology,
@@ -52,11 +78,15 @@ from pixlstash.hub.workflows import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_card_service import card_defaults, read_grid
+from pixlstash.services import saved_recipe_service
+from pixlstash.services.workflow_events import announce_changed_workflows
+from pixlstash.services.workflow_identity import RECIPE, STRUCTURAL
 from pixlstash.services.workflow_library_service import (
     read_card_picture_ids,
     read_library,
     read_recipe_activity,
     read_topology_picture_ids,
+    read_variant_picture_counts,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
@@ -293,6 +323,209 @@ class WorkflowCardDetail(BaseModel):
     notes: str | None = None
     hidden: bool = False
     variants: list[WorkflowVariant] = Field(default_factory=list)
+
+
+# ── The writes (v1.12 B4) ───────────────────────────────────────────────────
+# Every ceiling below is here so a hand-made request cannot turn one of these
+# whole-set writes into a place to park a document. The forms the frontend
+# offers are nowhere near any of them.
+MAX_NAME_LENGTH = 200
+MAX_NOTES_LENGTH = 4000
+MAX_LABEL_LENGTH = 200
+MAX_VALUE_LENGTH = 2000
+# A slot list, a pin list and a parameter form are all per-topology and small;
+# a stack is a handful of cards somebody selected. The stack ceiling is the
+# largest because a merge expands each selection to its whole stack first.
+MAX_SLOT_MARKS = 200
+MAX_DEFAULTS = 200
+MAX_PINS = 200
+MAX_INPUTS = 200
+MAX_STACK_KEYS = 500
+
+# A stack is named either by the id ``stack_together`` minted (a uuid4 hex) or,
+# for an automatic grouping, by ``auto:`` and the core hash that IS the
+# grouping. Checked rather than trusted, so a malformed id is a 422 naming the
+# parameter instead of a write against a stack nothing will ever read.
+_STACK_ID_RE = re.compile(rf"^(?:{AUTO_STACK_PREFIX}[0-9a-f]{{64}}|[0-9a-f]{{32}})$")
+
+
+class WorkflowCardEdit(BaseModel):
+    """``PATCH /workflows/{key}``: the fields the request carries, and no more.
+
+    ``null`` for ``name`` or ``notes`` clears it, which is the card's own
+    default and not the same as leaving the field out - so the handler reads
+    ``exclude_unset`` rather than testing for ``None``.
+    """
+
+    name: str | None = Field(None, max_length=MAX_NAME_LENGTH)
+    notes: str | None = Field(None, max_length=MAX_NOTES_LENGTH)
+    hidden: bool | None = None
+
+
+class SlotMarks(BaseModel):
+    """``PUT /workflows/{key}/slots``: which LoRA slots are the workflow's.
+
+    ``marks`` is ``{slot_label: "structural" | "recipe"}`` over this card's
+    LoRA slots. A slot left out keeps the mark it has, so correcting one is one
+    entry rather than the whole list.
+    """
+
+    marks: dict[str, str] = Field(default_factory=dict, max_length=MAX_SLOT_MARKS)
+
+    @field_validator("marks")
+    @classmethod
+    def _known_marks(cls, value: dict[str, str]) -> dict[str, str]:
+        for label, mark in value.items():
+            if len(label) > MAX_LABEL_LENGTH:
+                raise ValueError("A slot label is longer than a slot label can be.")
+            if mark not in (STRUCTURAL, RECIPE):
+                raise ValueError(f"mark must be {STRUCTURAL!r} or {RECIPE!r}.")
+        return value
+
+
+def _one_row_per_address(entries) -> None:
+    """Refuse a whole-set write that names one parameter twice.
+
+    Both tables these feed are keyed on ``(…, slot_label, input_name)``, so a
+    repeated address is a UNIQUE violation out of the database - a 500 for
+    what is a bad request, and the same class as the ``fixed``-without-a-
+    picture CHECK the model beside this one pre-validates. Refused here for
+    the same reason, rather than left for whichever of the two constraints the
+    caller happens to trip first.
+    """
+    seen = set()
+    for entry in entries:
+        address = (entry.slot_label, entry.input_name)
+        if address in seen:
+            raise ValueError(
+                f"{entry.input_name!r} is named twice for one slot; each "
+                "parameter may appear once."
+            )
+        seen.add(address)
+
+
+class ParameterAddress(BaseModel):
+    """One parameter of a card, addressed the way the card's defaults are.
+
+    ``(slot_label, input_name)`` and never a node id: every re-serialisation
+    renumbers those and a card's variants disagree about them.
+    """
+
+    slot_label: str = Field(min_length=1, max_length=MAX_LABEL_LENGTH)
+    input_name: str = Field(min_length=1, max_length=MAX_LABEL_LENGTH)
+
+
+class CardDefault(ParameterAddress):
+    """One parameter the owner has set this card to start from."""
+
+    value: bool | int | float | str
+
+
+class CardDefaults(BaseModel):
+    """``PUT /workflows/{key}/defaults``: the card's whole override set.
+
+    Whole rather than per parameter, because the form shows every featured
+    parameter at once - so an empty list is somebody clearing them all, which
+    is a state and not a no-op.
+    """
+
+    defaults: list[CardDefault] = Field(default_factory=list, max_length=MAX_DEFAULTS)
+
+    @field_validator("defaults")
+    @classmethod
+    def _bounded_values(cls, value: list[CardDefault]) -> list[CardDefault]:
+        for default in value:
+            if len(str(default.value)) > MAX_VALUE_LENGTH:
+                raise ValueError(
+                    f"A parameter value is longer than {MAX_VALUE_LENGTH} characters."
+                )
+        _one_row_per_address(value)
+        return value
+
+
+class CardPins(BaseModel):
+    """``PUT /workflows/{key}/pins``: which parameters the form shows first.
+
+    ``null`` forgets the card's pins, so the defaults apply again; ``[]`` is
+    somebody who unpinned everything, which the hub keeps as a row.
+    """
+
+    pins: list[ParameterAddress] | None = Field(None, max_length=MAX_PINS)
+
+
+class CardPictureInput(ParameterAddress):
+    """How one picture input of a card is filled.
+
+    ``fixed`` names a picture by content (``pixel_sha``) rather than by id,
+    because SQLite reuses a vault id the moment the next import lands.
+    """
+
+    mode: Literal["selection", "picker", "fixed"]
+    pixel_sha: str | None = Field(None, max_length=64)
+
+
+class CardPictureInputs(BaseModel):
+    """``PUT /workflows/{key}/inputs``: this card's whole picture-input setup."""
+
+    inputs: list[CardPictureInput] = Field(default_factory=list, max_length=MAX_INPUTS)
+
+    @field_validator("inputs")
+    @classmethod
+    def _fixed_names_a_picture(
+        cls, value: list[CardPictureInput]
+    ) -> list[CardPictureInput]:
+        for entry in value:
+            if entry.mode == "fixed" and not entry.pixel_sha:
+                raise ValueError("A fixed input must name a picture.")
+        _one_row_per_address(value)
+        return value
+
+
+class StackKeys(BaseModel):
+    """A complete, ordered list of card keys. ``keys[0]`` is the cover."""
+
+    keys: list[str] = Field(default_factory=list, max_length=MAX_STACK_KEYS)
+
+
+class StackResult(BaseModel):
+    """A stack as it stands after the write, so a caller can confirm it."""
+
+    stack_id: str | None = None
+    keys: list[str] = Field(default_factory=list)
+
+
+class SlotMarkResult(BaseModel):
+    """Where a mark flip left the card that was addressed, and what else moved.
+
+    ``key`` is where the requested card now lives: flipping a mark re-keys
+    every variant of the topology, so the card the caller was looking at has a
+    new URL and nothing else in the response would tell them. A split has
+    several successors and this is the biggest of them - the one holding most
+    of the pictures the card had - because a client has to open one of them.
+
+    ``moved`` is ``{old key: [key, ...]}`` over every card of that topology,
+    biggest first, and empty when the marks asked for were already the marks
+    in force.
+
+    **A key may list itself**, and a client must not read every entry as a
+    card that went away. A variant whose stored document will not parse keeps
+    the key it is on, so if a sibling moved, that card both moved and did not:
+    it is still open at its own URL and still holds its name, its pins and its
+    saved recipes. ``key`` is the one to follow; the list is what to check a
+    key against before deciding it is gone.
+    """
+
+    key: str
+    moved: dict[str, list[str]] = Field(default_factory=dict)
+
+
+def _stored_value(value: bool | int | float | str) -> str:
+    """An override as the hub keeps it. ``workflow_default_override.value`` is
+    TEXT and the read side hands it back verbatim, so a bool is written the way
+    a graph writes one rather than as Python's ``True``."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
 
 
 def _require_hash(value: str, name: str) -> str:
@@ -634,9 +867,17 @@ def create_router(server) -> APIRouter:
     def get_card(request: Request, workflow_key: str):
         server.auth.ensure_secure_when_required(request)
         _require_hash(workflow_key, "workflow_key")
-        hub = _hub()
-        # The whole grid for one card, because its rank is Bayesian: the prior
-        # is the library's own mean rating, which cannot be read off one card.
+        return _read_detail(_hub(), workflow_key)
+
+    def _read_detail(hub, workflow_key: str) -> WorkflowCardDetail:
+        """One card opened, for the detail route and for what a write answers.
+
+        The whole grid for one card, because its rank is Bayesian: the prior is
+        the library's own mean rating, which cannot be read off one card. A
+        write answers with this so the caller sees the card it just changed
+        rather than an echo of its own request - and pays the grid read once,
+        on a gesture a person made, rather than per card.
+        """
         figure = read_grid(hub, server.vault).figure(workflow_key)
         if figure is None:
             raise HTTPException(status_code=404, detail="Unknown workflow card.")
@@ -674,5 +915,370 @@ def create_router(server) -> APIRouter:
         if card is None:
             raise HTTPException(status_code=404, detail="Unknown workflow card.")
         return read_card_picture_ids(server.vault, card.variants, limit)
+
+    # ── The writes (v1.12 B4) ───────────────────────────────────────────────
+    # The stack routes are declared BEFORE the templated card routes below:
+    # FastAPI matches in declaration order, and `/workflows/stacks/{id}/order`
+    # would otherwise sit behind nothing today but behind the first
+    # `/workflows/{key}/{anything}` somebody adds.
+    #
+    # Every one of these emits `CHANGED_WORKFLOWS`, which is a "look again"
+    # signal and not a card: the counts, covers and stacks a card shows are
+    # computed per request over the whole vault, so the client re-reads
+    # `GET /workflows/cards` rather than trusting what a write carried back.
+
+    def _announce(request: Request, keys, reason: str) -> None:
+        """Tell every other tab which cards to look at again, and why."""
+        announce_changed_workflows(
+            server,
+            keys,
+            reason,
+            origin_client_id=getattr(request.state, "origin_client_id", None),
+        )
+
+    def _require_card(hub, workflow_key: str):
+        """One card by key, or a 404 - never an attribute row on a dead key."""
+        _require_hash(workflow_key, "workflow_key")
+        card = find_card(hub, workflow_key)
+        if card is None:
+            raise HTTPException(status_code=404, detail="Unknown workflow card.")
+        return card
+
+    def _known_keys(hub, keys: list[str]) -> list[str]:
+        """The keys, checked whole: one unknown card refuses the request.
+
+        Refused whole rather than filtered, for `PUT /recipes/order`'s reason:
+        a half-applied stack is worse than a rejected one, and a filtered list
+        would silently stack fewer cards than the owner selected.
+        """
+        if len(set(keys)) != len(keys):
+            raise HTTPException(status_code=400, detail="keys must be unique")
+        known = {card.workflow_key for card in card_index(hub)}
+        for key in keys:
+            _require_hash(key, "workflow_key")
+            if key not in known:
+                raise HTTPException(status_code=404, detail="Unknown workflow card.")
+        return keys
+
+    def _stack_id(stack_id: str) -> str:
+        if not _STACK_ID_RE.match(stack_id):
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid stack_id: expected a stack id or auto:<core hash>.",
+            )
+        return stack_id
+
+    @router.post(
+        "/workflows/stacks",
+        summary="Stack workflows together",
+        description=(
+            "Put the cards named in one stack, in the order given. A card "
+            "already in a stack brings its whole stack with it, and the first "
+            "key stays the cover — so merging two stacks keeps the "
+            "first-selected one's cover and the name that goes with it."
+        ),
+        response_model=StackResult,
+        status_code=201,
+        responses={404: {"description": "One of the cards does not exist."}},
+    )
+    def stack_workflows(request: Request, payload: StackKeys = Body(...)):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        selected = _known_keys(hub, payload.keys)
+        if len(selected) < 2:
+            raise HTTPException(
+                status_code=400, detail="A stack needs at least two cards."
+            )
+        # Each selection expands to the stack it is already in, in selection
+        # order, so stacking two stacks merges them rather than pulling one
+        # card out of each.
+        members: list[str] = []
+        for key in selected:
+            for member in effective_stack_keys(hub, key):
+                if member not in members:
+                    members.append(member)
+        if len(members) > MAX_STACK_KEYS:
+            raise HTTPException(
+                status_code=400, detail="That would make a stack too large to order."
+            )
+        stack_id = stack_together(hub, members)
+        _announce(request, members, "stacks")
+        return StackResult(stack_id=stack_id, keys=members)
+
+    @router.put(
+        "/workflows/stacks/{stack_id}/order",
+        summary="Reorder a stack",
+        description=(
+            "Set a stack's member order by a complete ordered key list; the "
+            "first key is the cover. Ordering an automatic grouping is what "
+            "makes it a stack of its own, so the order survives a regrouping."
+        ),
+        response_model=StackResult,
+        responses={404: {"description": "One of the cards does not exist."}},
+    )
+    def reorder_stack(request: Request, stack_id: str, payload: StackKeys = Body(...)):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        _stack_id(stack_id)
+        keys = _known_keys(hub, payload.keys)
+        if len(keys) < 2:
+            raise HTTPException(
+                status_code=400, detail="A stack needs at least two cards."
+            )
+        members = keys_in_stack(hub, stack_id)
+        if not members:
+            # A shape this hub does not hold, checked like its `unstack`
+            # sibling rather than written blind: a well-formed id naming no
+            # stack would otherwise mint one, and an `auto:` id naming no
+            # group would mint one with a `core_hash` no topology has.
+            raise HTTPException(status_code=404, detail="Unknown workflow stack.")
+        if set(keys) != set(members):
+            # A complete ordered list of what is in the stack, and refused
+            # whole when it is not. A key left out would be deleted from the
+            # stack by the write - with no record that it left, so it would
+            # rejoin its automatic group on the next read with nothing said -
+            # and a key added is `POST /workflows/stacks`' gesture, not this
+            # one.
+            raise HTTPException(
+                status_code=400,
+                detail="keys must name every card in the stack, and no other.",
+            )
+        set_stack_order(hub, stack_id, keys)
+        _announce(request, keys, "stacks")
+        return StackResult(stack_id=stack_id, keys=keys)
+
+    @router.post(
+        "/workflows/stacks/{stack_id}/unstack",
+        summary="Dissolve a stack",
+        description=(
+            "Take a whole stack apart: every member stands on its own "
+            "afterwards and stays out of the automatic grouping it came from."
+        ),
+        response_model=StackResult,
+        responses={404: {"description": "This machine has no such stack."}},
+    )
+    def dissolve_stack(request: Request, stack_id: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        _stack_id(stack_id)
+        keys = keys_in_stack(hub, stack_id)
+        if not keys:
+            raise HTTPException(status_code=404, detail="Unknown workflow stack.")
+        unstack_stack(hub, stack_id, keys)
+        _announce(request, keys, "stacks")
+        return StackResult(stack_id=None, keys=keys)
+
+    @router.patch(
+        "/workflows/{workflow_key}",
+        summary="Edit a workflow card",
+        description=(
+            "Write the fields the request carries; the rest stand. A null name "
+            "or notes clears it. Hiding a card takes it out of the grid — it "
+            "still opens by its own URL, and nothing about it is deleted."
+        ),
+        response_model=WorkflowCardDetail,
+        responses={404: {"description": "This machine has no such card."}},
+    )
+    def edit_card(request: Request, workflow_key: str, payload: WorkflowCardEdit):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        _require_card(hub, workflow_key)
+        changes = payload.model_dump(exclude_unset=True)
+        if "hidden" in changes and changes["hidden"] is None:
+            # The column is NOT NULL and has no "unset" state: a null there is
+            # a caller meaning "not hidden", which the hub is told plainly
+            # rather than left to coerce.
+            changes["hidden"] = False
+        set_attributes(hub, workflow_key, **changes)
+        _announce(request, [workflow_key], "changed")
+        return _read_detail(hub, workflow_key)
+
+    @router.put(
+        "/workflows/{workflow_key}/slots",
+        summary="Mark a card's LoRA slots",
+        description=(
+            "Say which of this workflow's LoRA slots are part of the workflow "
+            "(structural) and which are part of the look (recipe). This "
+            "re-keys every card of the topology: a card may split into "
+            "several or several may merge into one, and the response says "
+            "where this card went."
+        ),
+        response_model=SlotMarkResult,
+        responses={404: {"description": "This machine has no such card."}},
+    )
+    def mark_slots(request: Request, workflow_key: str, payload: SlotMarks = Body(...)):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        card = _require_card(hub, workflow_key)
+        lora_labels = {slot.get("label") for slot in card.slots if slot.get("is_lora")}
+        unknown = sorted(set(payload.marks) - lora_labels)
+        if unknown:
+            # Named rather than ignored: a mark on a label this topology has no
+            # LoRA slot for is a row every reader skips, so accepting it would
+            # answer 200 to a flip that cannot have happened.
+            raise HTTPException(
+                status_code=422,
+                detail=f"This workflow has no LoRA slot called {unknown[0]!r}.",
+            )
+        if getattr(server.vault, "library_uuid", None) is None:
+            # The flip decides its merge winner on the vault's picture counts
+            # and has to move the vault's saved recipes afterwards. With no
+            # library open it could do neither, and a re-key that skipped both
+            # would pick an arbitrary winner and orphan the recipes.
+            raise HTTPException(
+                status_code=503,
+                detail="No library is open, so a workflow cannot be re-keyed.",
+            )
+        moved = flip_slot_marks(
+            hub,
+            card.topology_hash,
+            payload.marks,
+            read_variant_picture_counts(server.vault),
+        )
+        # The migration `db_models/saved_recipe.py` says a re-keying owes this
+        # table. A second database, so it cannot be in the hub's transaction;
+        # it is the first thing after it, and it is logged.
+        try:
+            rekeyed = saved_recipe_service.rekey_recipes(server.vault, moved)
+        except Exception:
+            # The hub transaction has already committed, so the cards have
+            # moved and the recipes have not. Re-running the flip will not
+            # repair it - the marks are now the marks in force, so a second
+            # PUT re-keys nothing and returns an empty `moved` - which is
+            # exactly why the map goes in the log rather than only the count:
+            # it is the only record of which key each recipe set belongs on.
+            # Raised rather than answered 200, because a saved recipe is
+            # authored and silently stranding one is the failure
+            # `rekey_in_session` exists to close.
+            logger.exception(
+                "A slot-mark flip on topology %s re-keyed its cards but could "
+                "not move the saved recipes with them. The recipes are still "
+                "on their old keys; the cards moved as %r.",
+                card.topology_hash,
+                moved,
+            )
+            raise
+        if rekeyed:
+            logger.info(
+                "A slot-mark flip on topology %s moved %d saved recipe(s) onto "
+                "the cards their workflows were re-keyed to.",
+                card.topology_hash,
+                rekeyed,
+            )
+        successors = moved.get(workflow_key) or [workflow_key]
+        touched = {workflow_key, *moved}
+        touched.update(key for keys in moved.values() for key in keys)
+        _announce(request, sorted(touched), "changed")
+        return SlotMarkResult(key=successors[0], moved=moved)
+
+    @router.put(
+        "/workflows/{workflow_key}/defaults",
+        summary="Set a card's parameter defaults",
+        description=(
+            "Replace this card's whole set of parameter overrides. An empty "
+            "list clears them, and the card's defaults then come from the "
+            "pictures it has made again."
+        ),
+        response_model=WorkflowCardDetail,
+        responses={404: {"description": "This machine has no such card."}},
+    )
+    def set_defaults(
+        request: Request, workflow_key: str, payload: CardDefaults = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        _require_card(hub, workflow_key)
+        replace_defaults(
+            hub,
+            workflow_key,
+            [
+                (default.slot_label, default.input_name, _stored_value(default.value))
+                for default in payload.defaults
+            ],
+        )
+        _announce(request, [workflow_key], "changed")
+        return _read_detail(hub, workflow_key)
+
+    @router.put(
+        "/workflows/{workflow_key}/pins",
+        summary="Set a card's pinned parameters",
+        description=(
+            "Which parameters this card's form shows before 'All N'. An empty "
+            "list is everything unpinned; null forgets the choice, so the "
+            "default pins apply again."
+        ),
+        response_model=CardPins,
+        responses={404: {"description": "This machine has no such card."}},
+    )
+    def set_pins(request: Request, workflow_key: str, payload: CardPins = Body(...)):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        _require_card(hub, workflow_key)
+        replace_pins(
+            hub,
+            workflow_key,
+            None
+            if payload.pins is None
+            else [(pin.slot_label, pin.input_name) for pin in payload.pins],
+        )
+        _announce(request, [workflow_key], "changed")
+        return payload
+
+    @router.put(
+        "/workflows/{workflow_key}/inputs",
+        summary="Set a card's picture inputs",
+        description=(
+            "How each picture input of this card is filled: from the "
+            "selection, from a picker, or from one fixed picture. Kept per "
+            "library, because a picture is a picture in one library."
+        ),
+        response_model=CardPictureInputs,
+        responses={
+            404: {"description": "This machine has no such card."},
+            503: {"description": "No library is open, so there is nothing to set up."},
+        },
+    )
+    def set_picture_inputs(
+        request: Request, workflow_key: str, payload: CardPictureInputs = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        _require_card(hub, workflow_key)
+        library_uuid = getattr(server.vault, "library_uuid", None)
+        if not library_uuid:
+            raise HTTPException(
+                status_code=503,
+                detail="No library is open, so a picture input cannot be set up.",
+            )
+        replace_picture_inputs(
+            hub,
+            library_uuid,
+            workflow_key,
+            [
+                (entry.slot_label, entry.input_name, entry.mode, entry.pixel_sha)
+                for entry in payload.inputs
+            ],
+        )
+        _announce(request, [workflow_key], "changed")
+        return payload
+
+    @router.post(
+        "/workflows/{workflow_key}/unstack",
+        summary="Take a card out of its stack",
+        description=(
+            "Stand this card on its own. The rest of its stack stays as it "
+            "was unless one card is left, in which case that stack dissolves."
+        ),
+        response_model=StackResult,
+        responses={404: {"description": "This machine has no such card."}},
+    )
+    def unstack_workflow(request: Request, workflow_key: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        _require_card(hub, workflow_key)
+        before = effective_stack_keys(hub, workflow_key)
+        unstack_card(hub, workflow_key)
+        _announce(request, before, "stacks")
+        return StackResult(stack_id=None, keys=[workflow_key])
 
     return router

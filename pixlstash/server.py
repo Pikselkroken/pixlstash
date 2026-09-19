@@ -67,6 +67,7 @@ from pixlstash.hub.bootstrap import (
 from pixlstash.hub.registry import LibraryRegistry
 from pixlstash.services.library_switch_service import LibrarySwitchService
 from pixlstash.services.workflow_bindings import migrate_workflow_folder
+from pixlstash.services.workflow_events import announce_changed_workflows
 from pixlstash.services.workflow_inbox import (
     WorkflowInboxWatcher,
     reconcile as reconcile_workflow_inbox,
@@ -937,8 +938,21 @@ class Server(
         gc.collect()
 
     def _store_inbox_workflow(self, name: str, workflow: dict) -> dict:
-        """Store one inbox file the way a drag and drop does: keep both."""
-        return _store_workflow(self.hub, name, workflow, keep_both=True)
+        """Store one inbox file the way a drag and drop does: keep both.
+
+        The card it lands on is announced, so a file dropped in the folder
+        appears on an open Workflows view rather than at the next reload. No
+        origin client id: nobody's tab did this, so every tab reloads. The
+        start-up reconcile runs before the vault is open and announces
+        nothing, which is right - the first read of the view draws it anyway.
+        """
+        result = _store_workflow(self.hub, name, workflow, keep_both=True)
+        announce_changed_workflows(
+            self,
+            [key for key in (result.get("workflow_key"),) if key],
+            "imported",
+        )
+        return result
 
     def request_fatal_shutdown(self) -> None:
         """Ask every programmatic listener to exit after fatal vault loss."""

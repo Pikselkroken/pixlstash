@@ -492,9 +492,10 @@ half was moved onto `/recipe` and deleted here.
 
 ### 2.3 The `/workflows` contract (v1.11)
 
-The Workflows view's read side (implementation plan §F1/§F2, plus the v1.12
-card grid). Seven GETs, no mutators: naming a workflow is a later step, and running one is the run route further down this section. Forgetting ghosts
-is not here either: it is two purges beside the retention setting,
+The Workflows view (implementation plan §F1/§F2, plus the v1.12 card grid and
+its writes). Seven GETs and nine mutators; running a workflow is the run route
+further down this section. Forgetting ghosts is not here either: it is two
+purges beside the retention setting,
 `DELETE /server-config/ghost-retention/ghosts` and
 `.../model-ghosts?expected=N`, whose counts `GET /server-config/ghost-retention`
 returns as `picture_ghosts` and `model_ghosts` (Settings › Privacy,
@@ -510,6 +511,26 @@ and a `409` means the set changed and nothing was forgotten.
 | `GET /api/v1/workflows/cards` | The card grid, in cover-rank order, one card per stack | `{cards: [WorkflowCard], one_offs, hidden}` |
 | `GET /api/v1/workflows/cards/{workflow_key}` | One card opened | `{card, notes, hidden, variants: [WorkflowVariant]}` |
 | `GET /api/v1/workflows/cards/{workflow_key}/pictures?limit=` | Ids for one card's pictures, newest first | `[int]` |
+
+The writes (v1.12 B4), every one of them `OWNER_ONLY` and every one of them
+raising a `workflows_changed` event (§8) on the way out:
+
+| Route | Purpose | Body → Response |
+|---|---|---|
+| `PATCH /api/v1/workflows/{workflow_key}` | Name, notes, hidden | `{name?, notes?, hidden?}` → the opened card. Fields **not sent** stand; an explicit `null` name or notes clears it |
+| `PUT /api/v1/workflows/{workflow_key}/slots` | Mark LoRA slots `structural` \| `recipe` | `{marks: {slot_label: mark}}` → `{key, moved: {old: [key, …]}}`. **Re-keys every card of the topology**: `key` is where the card the caller had went (the biggest successor of a split), and a key not in `moved` did not move. **A key in `moved` may list itself**, which is a card that both moved and did not: a variant whose stored document will not parse keeps the key it is on, so if a sibling moved, that card is still open at its own URL and still holds its name, its pins and its saved recipes. A client following the caller's card takes `key`; a client deciding a card is gone must check for its own key in the list rather than read every entry as a departure. A label the topology has no LoRA slot for is a 422 |
+| `PUT /api/v1/workflows/{workflow_key}/defaults` | The card's parameter overrides, whole | `{defaults: [{slot_label, input_name, value}]}` → the opened card, the values back as `provenance: "edited"`. Stored as text, so `30` comes back `"30"` and `true` as `"true"` |
+| `PUT /api/v1/workflows/{workflow_key}/pins` | The pinned parameters, whole | `{pins: [{slot_label, input_name}] \| null}` → the same. `[]` is everything unpinned, `null` forgets the choice |
+| `PUT /api/v1/workflows/{workflow_key}/inputs` | The picture-input setup, whole, **per library** | `{inputs: [{slot_label, input_name, mode, pixel_sha?}]}` → the same. `mode: "fixed"` must carry a `pixel_sha` (422 otherwise); 503 when no library is open |
+| `POST /api/v1/workflows/{workflow_key}/unstack` | Take one card out of its stack | — → `{stack_id: null, keys}` |
+| `POST /api/v1/workflows/stacks` | Stack cards together | `{keys}` (≥2) → `{stack_id, keys}`. Each key **expands to the stack it is already in**, so stacking two stacks merges them, and `keys[0]` stays the cover |
+| `PUT /api/v1/workflows/stacks/{stack_id}/order` | Reorder, `keys[0]` the cover | `{keys}` (≥2) → `{stack_id, keys}`. Ordering an `auto:<core hash>` grouping is what materialises it |
+| `POST /api/v1/workflows/stacks/{stack_id}/unstack` | Dissolve a whole stack | — → `{stack_id: null, keys}` |
+
+Two rules the writes add to the five below: **a stack left with one member
+dissolves** (the row goes, and the card stands on its own), and a
+`{stack_id}` is either a minted 32-hex id or `auto:` followed by a 64-hex core
+hash — anything else is a 422.
 
 Five things the two sides have agreed and neither may drift from:
 
@@ -977,7 +998,7 @@ The backend's [EventType](../pixlstash/event_types.py) enum names are **not** se
 
 | Field | Type | Description |
 |---|---|---|
-| `type` | string | Wire type. Picture/mutation events: `picture_imported` \| `pictures_changed` \| `tags_changed` \| `descriptions_changed` \| `characters_changed` \| `plugin_progress`. Snapshot/restore events (carry snapshot/restore info rather than `picture_ids`): `snapshot_created` \| `snapshot_deleted` \| `restore_started` \| `restore_completed` \| `restore_failed`. Machine/vault events (carry neither): `vram_oom` \| `external_moves_pending`. |
+| `type` | string | Wire type. Picture/mutation events: `picture_imported` \| `pictures_changed` \| `tags_changed` \| `descriptions_changed` \| `characters_changed` \| `plugin_progress`. Snapshot/restore events (carry snapshot/restore info rather than `picture_ids`): `snapshot_created` \| `snapshot_deleted` \| `restore_started` \| `restore_completed` \| `restore_failed`. Machine/vault events (carry neither): `vram_oom` \| `external_moves_pending`. Library-object events (carry their own ids rather than `picture_ids`): `workflows_changed`. |
 | `event` | string | Backend `EventType.name`; diagnostic only, not part of the behavioural contract. |
 | `source` | `"ui"` \| `"external"` | Coarse origin class. `"ui"` = an attributable owner action through the SPA; `"external"` = work that originated outside the UI (watch/reference folders, external API writes, background ML finishers, externally-run ComfyUI). Defaults to `"external"`. |
 | `origin_client_id` | `string` \| `null` | The `X-Client-Id` of the originating tab, or `null` for background/external work. **The primary signal** — a tab recognises the echo of its own change by matching this against its own id. |
@@ -997,6 +1018,7 @@ Per-type payload specifics (all carry the envelope fields above):
 | `plugin_progress` | Image plugin run progress | `plugin`, `progress`, `total`, `picture_id` | Update `wsPluginProgress` for the plugin progress UI |
 | `vram_oom` | A GPU task ran out of VRAM: emitted before each retry, then once more to close the sequence | `attempt` (the attempt this frame is about, 1-based), `max_attempts`, `gave_up`, `recovered`, `task_type` (diagnostic only) | One keyed notice (`vram-oom`), updated in place by the later frames. Exactly one closing frame: `recovered` (that attempt succeeded) or `gave_up` (the sequence ended without the work). **`gave_up` with `attempt < max_attempts` is an early stop** — the task died of something else, or the app is shutting down — and the SPA promises no later retry for it; only an exhausted sequence says the work will be tried again. The retry frames carry an explicit timeout longer than the backend's pause, or the card would expire between frames and stop coalescing. |
 | `external_moves_pending` | A reference-folder scan queued one or more moves the owner made outside PixlStash for reconciliation (v1.11 Phase 5) | — (no count; the queue is reclassified live, so a number on the wire could already be stale) | Debounced (3s) re-fetch of `GET /moves/pending`, so a burst of scans settling around the same time re-fetches once |
+| `workflows_changed` | A workflow card changed (v1.12 B4): a workflow file imported or dropped in the watched inbox, a card named/annotated/hidden, its parameter defaults, pins or picture inputs written, its LoRA slots re-marked, a stack written, or a saved recipe written | `keys: string[]` (the card keys touched; may be empty), `reason: "imported" \| "changed" \| "stacks" \| "recipes"` | **Nothing listens yet** — the Workflows grid has no screen until F1b, so this row is the contract the client will be written against rather than behaviour that has shipped. When it is: re-fetch `GET /workflows/cards` (or the one card, when `keys` names it). **Deliberately carries no card**: a card's counts, cover strip, rank and stack are computed per request across the whole vault, so anything on the wire would be re-read anyway. `reason` is a hint about what moved, not a contract — the value set is a closed allowlist on the backend (`WORKFLOW_CHANGE_REASONS`, module level in `ws/broadcaster.py`) that **degrades an unknown value to `changed`** rather than rejecting it, so a client must treat any value as "look again" |
 | `snapshot_created` / `snapshot_deleted` | Vault snapshot created or deleted | snapshot info (id, kind, …) | Refresh the snapshots panel |
 | `restore_started` / `restore_completed` / `restore_failed` | Vault restore lifecycle | restore info | Drive the restore progress/result UI |
 

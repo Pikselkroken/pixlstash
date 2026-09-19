@@ -193,6 +193,16 @@ def read_recipe_activity(
     return vault.db.run_immediate_read_task(recipe_activity, structural_hashes)
 
 
+def read_variant_picture_counts(vault) -> dict[str, int]:
+    """``{structural_hash: kept pictures}``, vault-wide.
+
+    What a slot-mark flip decides its merge winner on (v1.12 B4): the flip is
+    a hub write, the counts belong to whichever vault is attached, and the two
+    are joined by the hub on the variants it is re-keying.
+    """
+    return vault.db.run_immediate_read_task(recipe_picture_counts)
+
+
 def read_topology_picture_ids(vault, topology_hash: str, limit: int) -> list[int]:
     """The inspector's tile ids for one topology."""
     return vault.db.run_immediate_read_task(topology_picture_ids, topology_hash, limit)

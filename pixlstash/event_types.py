@@ -30,3 +30,9 @@ class EventType(Enum):
     # polling; the count itself is re-fetched from GET /moves/pending, this
     # event only says "look again".
     EXTERNAL_MOVES_PENDING = auto()
+    # A workflow card changed: imported, edited, re-keyed by a slot-mark flip,
+    # restacked, or a saved recipe written (v1.12 B4). A "look again" signal
+    # like EXTERNAL_MOVES_PENDING - it names the keys it touched and why, and
+    # the client re-fetches GET /workflows/cards rather than trusting a card
+    # carried on the wire.
+    CHANGED_WORKFLOWS = auto()
