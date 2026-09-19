@@ -42,8 +42,17 @@ const globalOpts = {
   },
 };
 
+// Every mount is tracked and torn down below. Left alive, the bar's `Tooltip`
+// children reach their `onUnmounted` only when Vitest disposes the file's
+// jsdom, and that hook calls `document.removeEventListener` after `document`
+// has gone — an unhandled rejection attributed to this file, appearing or not
+// with the worker scheduling rather than with anything the tests do.
+const mountedBars = [];
+
 function mountBar(props = {}) {
-  return mount(SearchResultBar, { ...globalOpts, props });
+  const wrapper = mount(SearchResultBar, { ...globalOpts, props });
+  mountedBars.push(wrapper);
+  return wrapper;
 }
 
 /** Props for an armed character face search. */
@@ -76,6 +85,7 @@ function armedBar() {
 }
 
 afterEach(() => {
+  while (mountedBars.length) mountedBars.pop().unmount();
   vi.useRealTimers();
 });
 
@@ -420,9 +430,9 @@ describe("SearchResultBar - All / In text switch (#1197)", () => {
   const scopeGroup = (w) => w.find('[role="group"][aria-label="Show matches from"]');
 
   it("is absent when no result matched text", () => {
-    expect(scopeGroup(mountBar(textSearch({ textMatchCount: 0 }))).exists()).toBe(
-      false,
-    );
+    expect(
+      scopeGroup(mountBar(textSearch({ textMatchCount: 0 }))).exists(),
+    ).toBe(false);
   });
 
   it("appears with a text match, All pressed, the text count on In text", () => {

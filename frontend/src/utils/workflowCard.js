@@ -19,6 +19,16 @@
 //     stack_size,                       // 2 or more makes the card a stack
 //     saved_recipe_count,
 //     defaults: [{ label, value }],
+//     // Read by the Workflows grid rather than by the card itself, and listed
+//     // here because this block is the shape's one description (F1a, #1402):
+//     rank,                             // the Bayesian cover rank the grid is
+//                                       // ordered by. NOT `rating`: it is
+//                                       // smoothed towards the library mean,
+//                                       // so it orders cards against each
+//                                       // other and means nothing alone.
+//     last_used,                        // ISO, or null when the card has no
+//                                       // kept pictures. The *Recently used*
+//                                       // sort; null sorts below every date.
 //   }
 //
 // A card row names the checkpoint only; ⓘ lists every model, so a stack whose
@@ -93,8 +103,14 @@ export function ratingLabel(rating) {
  * The card's accessible name. "+N" is not a control, so this is the only place
  * a screen reader hears the chips a narrow card clipped, and it says "workflow"
  * or "recipe" because the dashed border is not announced.
+ *
+ * `member` is a row inside its own stack's panel. It carries the WHOLE stack's
+ * `stack_size` — the service sets it on every member deliberately, so a member
+ * opened alone still shows what it differs by — so without this every row in
+ * the panel announced itself as "stack of N workflows" while sitting inside
+ * that very stack. The difference chips stay: they are what the row is for.
  */
-export function cardAccessibleName(card) {
+export function cardAccessibleName(card, { member = false } = {}) {
   const count = card.picture_count ?? 0;
   const checkpoint = checkpointModel(card);
   const loras = (card.loras ?? []).map((lora) =>
@@ -103,7 +119,7 @@ export function cardAccessibleName(card) {
   const facts = factChips(card).map((chip) => chip.label);
   const parts = [
     card.name,
-    isStack(card) ? `stack of ${card.stack_size} workflows` : null,
+    isStack(card) && !member ? `stack of ${card.stack_size} workflows` : null,
     checkpoint ? `${checkpoint.kind} ${checkpoint.name}` : null,
     loras.length ? `LoRAs: ${loras.join("; ")}` : "no LoRAs",
     facts.length

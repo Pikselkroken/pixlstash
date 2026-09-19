@@ -237,6 +237,25 @@ describe("WorkflowCard", () => {
     expect(wrapper.find(".wf-card__badge--start").text()).toContain("6");
   });
 
+  it("opens the stack from the layered count as well as from ▸", async () => {
+    const wrapper = mountCard(CROWDED, { panelId: "stack-panel" });
+    const badge = wrapper.find(".wf-card__badge--start");
+    // It is the mark that says there are cards underneath, so it is the first
+    // thing a reader aims at. A real button, but off the tab order and hidden
+    // from assistive tech: ▸ is the announced control, and hiding a second one
+    // is only honest while the two do exactly the same thing.
+    expect(badge.element.tagName).toBe("BUTTON");
+    expect(badge.attributes("tabindex")).toBe("-1");
+    expect(badge.attributes("aria-hidden")).toBe("true");
+    await badge.trigger("click");
+    expect(wrapper.emitted("toggle")).toHaveLength(1);
+  });
+
+  it("does not put a layered count on a card that is not a stack", () => {
+    const wrapper = mountCard(BARE);
+    expect(wrapper.find(".wf-card__badge--start").exists()).toBe(false);
+  });
+
   it("keeps the layered count on a stack with no pictures", () => {
     const wrapper = mountCard({ ...CROWDED, covers: [], picture_count: 0 });
     expect(wrapper.find(".wf-card__cover--empty").exists()).toBe(true);
@@ -258,6 +277,26 @@ describe("WorkflowCard", () => {
     const wrapper = mountCard(BARE);
     expect(wrapper.find(".wf-card__toggle").exists()).toBe(false);
     expect(wrapper.find(".wf-card__badge--start").exists()).toBe(false);
+  });
+
+  it("has none of them on a member row either, but keeps its differences", () => {
+    // A member is served the WHOLE stack's `stack_size` — deliberately, so a
+    // member opened alone still shows what it differs by — so every row in an
+    // open panel wore the layered count and a ▸ that could not expand
+    // anything, and announced itself as a stack of six while sitting inside
+    // that stack.
+    const wrapper = mountCard(CROWDED, { member: true });
+    expect(wrapper.find(".wf-card__toggle").exists()).toBe(false);
+    expect(wrapper.find(".wf-card__badge--start").exists()).toBe(false);
+    expect(wrapper.classes()).not.toContain("wf-card--stack");
+
+    const name = wrapper.attributes("aria-label");
+    expect(name).not.toContain("stack of 6 workflows");
+    // What the row is for stays: the chips, their label, and everything else
+    // the name reads.
+    expect(name).toContain("differs by: + face detailer");
+    expect(wrapper.text()).toContain("differs by");
+    expect(wrapper.text()).toContain("+ upscale 2×");
   });
 
   it("puts ⓘ on every card as a real button outside the tab order", () => {

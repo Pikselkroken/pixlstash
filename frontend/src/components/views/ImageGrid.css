@@ -868,23 +868,12 @@
   filter: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.55));
 }
 
-/* Bottom-left, on the photo scrim: the same corner and the same backing the
-   grid's other permanent chips use, so it reads as one family. */
-.stack-cover-flag {
-  position: absolute;
-  bottom: var(--space-2);
-  left: var(--space-2);
-  z-index: var(--z-raised);
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-sm);
-  background: var(--scrim-photo);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
-  pointer-events: none;
-}
+/* `.stack-cover-flag` itself now lives unscoped in App.css, `z-index` and all:
+   the Workflows stack panel (v1.12 F1a) flags its cover member with the same
+   chip, and a scoped copy of it in two stylesheets is how the two drift. The
+   diagram below still names it because it is still a neighbour in this tile's
+   stacking order — but the declaration it refers to is in App.css now, so a
+   change to that order has to be made there. */
 
 /* The ribbon that groups an expanded stack. It has one required position in the
    tile's local stacking order and both neighbours matter:

@@ -476,6 +476,28 @@ kbd {
   line-height: 1.5;
 }
 
+/* The cover of an expanded stack, named. Bottom-left, on the photo scrim: the
+   same corner and the same backing the grid's other permanent chips use, so it
+   reads as one family. Global rather than scoped to `ImageGrid.css`, where it
+   began: the Workflows stack panel (v1.12 F1a) flags its cover member with the
+   same chip, and the two must not drift. `ImageGrid.css` still owns where it
+   sits in a picture tile's stacking order. */
+.stack-cover-flag {
+  position: absolute;
+  bottom: var(--space-2);
+  left: var(--space-2);
+  z-index: var(--z-raised);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  pointer-events: none;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Toolbar menus - shared chrome for the Sort / Filter / Grid-view popovers.
    These menus live in several components (Toolbar.vue and the Filter*Menu

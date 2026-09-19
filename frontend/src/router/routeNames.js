@@ -38,3 +38,15 @@ export const MODEL_SHELF_ROUTES = ["models", "models-runs"];
  * first. When a second workflow route lands, adding it here is the whole edit.
  */
 export const WORKFLOW_ROUTES = ["workflows"];
+
+/**
+ * The Workflows grid's temporary home (v1.12 F1a, #1402).
+ *
+ * Deliberately NOT in `WORKFLOW_ROUTES`: that list lights the sidebar's
+ * Workflows entry and mounts the shipped shelf, and this route has neither. It
+ * exists so the new grid can be built and tested against a real library while
+ * `/workflows` keeps working, and F1b deletes it by moving the view onto
+ * `/workflows`. The one thing it shares with the shelf is that its routes are
+ * owner-only, so a READ session is bounced off it (`useAppNavigation`).
+ */
+export const WORKFLOWS_NEXT_ROUTE = "workflows-next";
