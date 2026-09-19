@@ -783,9 +783,12 @@ location. If the file already lists servers, add the `"pixlstash"` entry inside
 the existing `"mcpServers"` block rather than replacing the file, or you will
 drop the servers already there.
 
-No address is needed: `pixlstash-mcp` reads the port out of your
-`server-config.json`, the same file the server reads, so it keeps working if
-you change the port. Pass `--url` (or set `PIXLSTASH_URL`) only to point it at
+No address is needed: `pixlstash-mcp` reads the port, the scheme and the
+certificate out of your `server-config.json`, the same file the server reads,
+so it keeps working if you change any of them. If you have **Require SSL** on,
+it connects over https and trusts PixlStash's own self-signed certificate.
+The desktop app keeps a separate `server-config.json`, and its shim passes that
+path with `--server-config`; point a hand-written config at it the same way. Pass `--url` (or set `PIXLSTASH_URL`) only to point it at
 a different machine. **Do not copy the address out of the desktop app's
 window** - that is an ephemeral port the desktop shell picks afresh on every
 launch, so it stops resolving the next time PixlStash starts.
@@ -801,8 +804,9 @@ in that virtualenv. If your MCP client then reports
 environment; give it the absolute path, which `which pixlstash-mcp` prints in a
 shell where PixlStash runs.
 
-Tools: `search_pictures`, `list_pictures`, `get_picture`, `view_picture`,
-`list_tags`, `list_sets`, `list_characters`, `list_projects`, `get_recipe`.
+Tools: `search_pictures`, `list_pictures`, `count_pictures`, `get_picture`,
+`view_picture`, `list_tags`, `list_sets`, `list_characters`, `list_projects`,
+`get_recipe`.
 `list_pictures` and `search_pictures` also narrow by `set_id`, `character_id`,
 `project_id` and `tags`.
 

@@ -599,7 +599,16 @@ function applyShellCommand(): void {
     // success is deliberately not folded into `shimReachable`, which is about
     // the CLI hint shown in Settings.
     const mcp = mcpShimForwardsTo();
-    syncMcpShim(shellCommand, mcp.launcher, mcpShimPath(), mcp.windowsPython);
+    // Its own config path, not the platform default: the desktop keeps a
+    // separate server-config.json, and reading the wrong one gets the wrong
+    // port and the wrong scheme.
+    syncMcpShim(
+      shellCommand,
+      mcp.launcher,
+      serverConfigPath(),
+      mcpShimPath(),
+      mcp.windowsPython,
+    );
     // Follows the shim rather than the preference, so a refused shim never
     // leaves a directory on PATH that holds nothing.
     const onPath = syncUserPath(installed, dirname(shimPath()));

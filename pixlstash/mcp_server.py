@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.client
 import json
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.parse
@@ -162,6 +164,20 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": dict(_FILTERS)},
     },
     {
+        "name": "count_pictures",
+        "description": "How many pictures match, without listing them. Answers "
+        "'how many pictures are there' in one call, and takes the same set, "
+        "character, project and tag filters as list_pictures.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                key: value
+                for key, value in _FILTERS.items()
+                if key not in ("limit", "offset")
+            },
+        },
+    },
+    {
         "name": "get_picture",
         "description": "Full metadata for one picture: tags, description, "
         "scores, dimensions and embedded file metadata.",
@@ -234,7 +250,9 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _build_opener() -> urllib.request.OpenerDirector:
+def _build_opener(
+    context: ssl.SSLContext | None = None,
+) -> urllib.request.OpenerDirector:
     """An opener that reaches the named URL and nothing else.
 
     The token goes to the URL the owner named and nowhere else, which takes two
@@ -244,7 +262,10 @@ def _build_opener() -> urllib.request.OpenerDirector:
     consults ``no_proxy`` only), so a proxy set for the shell would receive the
     Authorization header.
     """
-    return urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
+    handlers: list = [_NoRedirect, urllib.request.ProxyHandler({})]
+    if context is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    return urllib.request.build_opener(*handlers)
 
 
 class ToolError(Exception):
@@ -271,10 +292,12 @@ def unreachable_message(base: str, reason) -> str:
     )
 
 
-def http_fetch(base_url: str, token: str) -> Fetch:
+def http_fetch(
+    base_url: str, token: str, context: ssl.SSLContext | None = None
+) -> Fetch:
     """Return a :data:`Fetch` that GETs *base_url* with *token* as Bearer."""
     base = base_url.rstrip("/")
-    opener = _build_opener()
+    opener = _build_opener(context)
 
     def fetch(path: str, params: dict) -> tuple[int, str, bytes]:
         query = urllib.parse.urlencode(params, doseq=True)
@@ -295,6 +318,25 @@ def http_fetch(base_url: str, token: str) -> Fetch:
         except urllib.error.URLError as exc:
             logger.warning("[mcp] Could not reach %s%s: %s", base, path, exc)
             raise ToolError(unreachable_message(base, exc.reason)) from exc
+        except http.client.RemoteDisconnected as exc:
+            # The server accepted the connection and then hung up without
+            # speaking HTTP. On this port that means one thing far more often
+            # than any other: it is serving TLS and we knocked in plain text.
+            logger.warning("[mcp] %s closed the connection on %s", base, path)
+            raise ToolError(
+                f"{base} accepted the connection and closed it without "
+                "answering. That is what a TLS listener does when it is sent "
+                "plain HTTP, so PixlStash is probably serving https on this "
+                "port. Check `require_ssl` in its server-config.json, and "
+                "point this server at that file with --server-config."
+            ) from exc
+        except ssl.SSLError as exc:
+            logger.warning("[mcp] TLS failed against %s: %s", base, exc)
+            raise ToolError(
+                f"Could not establish a secure connection to {base}: {exc}. "
+                "PixlStash generates its own certificate; --server-config "
+                "points here at the file naming it."
+            ) from exc
         except TimeoutError as exc:
             # Only the *send* is wrapped in URLError; a read timeout arrives
             # bare. The first search loads the text encoder, which is the call
@@ -382,6 +424,10 @@ def call_tool(fetch: Fetch, name: str, arguments: dict) -> list[dict]:
                 "mimeType": content_type.split(";")[0] or "image/webp",
             }
         ]
+    if name == "count_pictures":
+        # The paging keys are dropped from the schema but _paging still builds
+        # the filter params; the route ignores limit and offset.
+        return _json_content(_get(fetch, "/pictures/count", _paging(arguments))[1])
     if name == "list_tags":
         return _json_content(_get(fetch, "/tags")[1])
     if name == "list_sets":
@@ -486,28 +532,71 @@ def _version() -> str:
         return "unknown"
 
 
-def configured_url() -> str:
-    """The base URL of the server, from the port it is configured to serve on.
+def read_server_config(path: str | None = None) -> dict:
+    """The server's own ``server-config.json``, or ``{}`` if it cannot be read.
 
-    Not from anything the browser saw. The desktop shell serves its window
-    from an **ephemeral** loopback port that the shell picks per launch
-    (``listeners.py``, ``_build_electron_configs``), so a URL copied out of the
-    window works until the app restarts and then points at nothing. The
-    configured port is the stable one, and it is in the file the server itself
-    reads, so the answer is the same one the server used.
+    Which file this is decides everything below, and there is more than one on
+    a machine: a pip install uses the platform config dir, while the desktop
+    app keeps its own beside its Electron user data. Getting this wrong reads
+    somebody else's port and scheme, so the desktop shim passes its path
+    explicitly rather than letting us guess.
     """
+    path = path or os.environ.get("PIXLSTASH_SERVER_CONFIG") or SERVER_CONFIG_PATH
     try:
-        with open(SERVER_CONFIG_PATH, encoding="utf-8") as handle:
-            port = int(json.load(handle).get("port", DEFAULT_PORT))
-    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        with open(path, encoding="utf-8") as handle:
+            config = json.load(handle)
+        if not isinstance(config, dict):
+            raise ValueError(f"expected an object, got {type(config).__name__}")
+        return config
+    except (OSError, ValueError) as exc:
+        logger.warning("[mcp] Could not read %s (%s); using defaults", path, exc)
+        return {}
+
+
+def configured_url(config: dict | None = None) -> str:
+    """Where the server is, from the config the server itself reads.
+
+    Both halves matter. The port, because the desktop shell serves its window
+    on an ephemeral one that changes every launch, so anything taken from a
+    browser is stale by the next start-up. And the scheme, because a TLS
+    listener answers a plain HTTP request by closing the connection, which
+    surfaces as "Remote end closed connection without response" and looks for
+    all the world like a crashed server.
+    """
+    config = read_server_config() if config is None else config
+    scheme = "https" if config.get("require_ssl") else "http"
+    try:
+        port = int(config.get("port", DEFAULT_PORT))
+    except (TypeError, ValueError):
         logger.warning(
-            "[mcp] Could not read a port from %s (%s); using %s",
-            SERVER_CONFIG_PATH,
-            exc,
+            "[mcp] Ignoring unusable port %r; using %s",
+            config.get("port"),
             DEFAULT_PORT,
         )
         port = DEFAULT_PORT
-    return f"http://127.0.0.1:{port}"
+    return f"{scheme}://127.0.0.1:{port}"
+
+
+def ssl_context_for(config: dict) -> ssl.SSLContext | None:
+    """Trust the server's own certificate, which is normally self-signed.
+
+    PixlStash generates its own certificate, so the system trust store will
+    never contain it. Pinning that one file keeps verification switched on -
+    including the hostname check, since the generated certificate carries
+    127.0.0.1 in its SANs - rather than reaching for the usual
+    ``check_hostname = False`` and accepting anything on the port.
+    """
+    if not config.get("require_ssl"):
+        return None
+    certfile = config.get("ssl_certfile")
+    if certfile and os.path.exists(certfile):
+        return ssl.create_default_context(cafile=certfile)
+    logger.warning(
+        "[mcp] require_ssl is set but %r is not readable; using the system "
+        "trust store, which will reject a self-signed certificate",
+        certfile,
+    )
+    return ssl.create_default_context()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -520,10 +609,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--url",
-        default=os.environ.get("PIXLSTASH_URL") or configured_url(),
+        # Resolved in main(), not here: it depends on --server-config, which
+        # argparse has not read yet while the defaults are being built.
+        default=None,
         help="Base URL of the PixlStash server. Defaults to $PIXLSTASH_URL, "
-        "else loopback on the port in server-config.json, else "
+        "else the scheme and port in server-config.json, else "
         f"http://127.0.0.1:{DEFAULT_PORT}.",
+    )
+    parser.add_argument(
+        "--server-config",
+        default=None,
+        help="PixlStash's server-config.json, which names the port, whether it "
+        "serves https, and its certificate. Defaults to "
+        f"$PIXLSTASH_SERVER_CONFIG, else {SERVER_CONFIG_PATH}. The desktop app "
+        "keeps its own copy elsewhere and its shim passes that path.",
     )
     return parser
 
@@ -538,12 +637,16 @@ def main(argv: list[str] | None = None) -> int:
     if not token:
         print("PIXLSTASH_TOKEN is not set; mint an API token first.", file=sys.stderr)
         return 1
-    fetch = http_fetch(args.url, token)
+    # One config decides the port, the scheme and which certificate to trust,
+    # so it is read once and all three come from the same file.
+    config = read_server_config(args.server_config)
+    url = args.url or os.environ.get("PIXLSTASH_URL") or configured_url(config)
+    fetch = http_fetch(url, token, ssl_context_for(config))
     # Say so now, on stderr, rather than letting the first tool call be the
     # first the owner hears of it: a client that starts this server at launch
     # shows nothing until something is asked of it. Not fatal - PixlStash may
     # simply start later, and exiting would have the client give up for good.
-    warn_if_unreachable(fetch, args.url)
+    warn_if_unreachable(fetch, url)
     serve(fetch)
     return 0
 

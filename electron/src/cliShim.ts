@@ -127,15 +127,22 @@ export function shimScript(launcher: string, windowsHub?: string): string {
  * No `--url`: `pixlstash.mcp_server` reads the configured port from
  * `server-config.json` itself.
  */
-export function mcpShimScript(launcher: string, windowsPython?: string): string {
+export function mcpShimScript(
+  launcher: string,
+  serverConfig: string,
+  windowsPython?: string,
+): string {
   if (windowsPython === undefined) {
-    return `#!/bin/sh\n# ${MARKER}\nexec ${shQuote(launcher)} mcp "$@"\n`;
+    return (
+      `#!/bin/sh\n# ${MARKER}\n` +
+      `exec ${shQuote(launcher)} mcp --server-config ${shQuote(serverConfig)} "$@"\n`
+    );
   }
   return [
     '@echo off',
     `REM ${MARKER}`,
     'setlocal',
-    `${cmdQuote(windowsPython)} -m pixlstash.mcp_server %*`,
+    `${cmdQuote(windowsPython)} -m pixlstash.mcp_server --server-config ${cmdQuote(serverConfig)} %*`,
     'exit /b %ERRORLEVEL%',
     '',
   ].join('\r\n');
@@ -232,13 +239,14 @@ export function syncShim(
 export function syncMcpShim(
   enabled: boolean,
   launcher: string,
+  serverConfig: string,
   path: string = mcpShimPath(),
   windowsPython?: string,
 ): boolean {
   return writeShim(
     enabled,
     path,
-    mcpShimScript(launcher, windowsPython),
+    mcpShimScript(launcher, serverConfig, windowsPython),
     windowsPython === undefined,
   );
 }

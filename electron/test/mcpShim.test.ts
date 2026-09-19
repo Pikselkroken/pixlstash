@@ -17,6 +17,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mcpShimPath, mcpShimScript, parseMcpArgs, syncMcpShim } from '../src/cliShim';
 
+const CFG = '/home/me/.config/pixlstash-desktop/server-config.json';
+
 describe('parseMcpArgs - deciding between a window and an MCP run', () => {
   it('a packaged launch with no arguments opens a window', () => {
     assert.equal(parseMcpArgs(['/opt/PixlStash/pixlstash']), null);
@@ -42,14 +44,20 @@ describe('mcpShimScript - what the forwarder runs', () => {
   it('goes through the launcher on unix, which is the durable name', () => {
     // An AppImage is mounted at a different random path every launch, so the
     // interpreter inside it cannot be named ahead of time; the .AppImage can.
-    const script = mcpShimScript('/home/me/Apps/PixlStash.AppImage');
+    const script = mcpShimScript('/home/me/Apps/PixlStash.AppImage', '/home/me/.config/pixlstash-desktop/server-config.json');
     assert.match(script, /^#!\/bin\/sh\n/);
-    assert.match(script, /exec '\/home\/me\/Apps\/PixlStash\.AppImage' mcp "\$@"/);
+    assert.match(script, /exec '\/home\/me\/Apps\/PixlStash\.AppImage' mcp /);
+    // The desktop keeps its own server-config.json; reading the platform
+    // default instead got the wrong port and the wrong scheme, which is what
+    // made every tool call fail against an https listener.
+    assert.ok(script.includes(`--server-config '${CFG}'`));
+    assert.match(script, /"\$@"\n$/);
   });
 
   it('goes straight to the interpreter on Windows, whose launcher has no console', () => {
-    const script = mcpShimScript('ignored', 'C:\\Program Files\\PixlStash\\python.exe');
-    assert.match(script, /-m pixlstash\.mcp_server %\*/);
+    const script = mcpShimScript('ignored', 'C:\\cfg\\server-config.json', 'C:\\Program Files\\PixlStash\\python.exe');
+    assert.ok(script.includes('-m pixlstash.mcp_server --server-config'));
+    assert.ok(script.includes('"C:\\cfg\\server-config.json" %*'));
     assert.ok(script.includes('"C:\\Program Files\\PixlStash\\python.exe"'));
     // CRLF, or cmd.exe mis-parses it.
     assert.ok(script.includes('\r\n'));
@@ -57,12 +65,12 @@ describe('mcpShimScript - what the forwarder runs', () => {
 
   it('names no URL, because the server reads the configured port itself', () => {
     // Baking one in is how the dialog shipped a dead ephemeral port once.
-    assert.ok(!mcpShimScript('/opt/PixlStash/pixlstash').includes('--url'));
-    assert.ok(!mcpShimScript('x', 'C:\\python.exe').includes('--url'));
+    assert.ok(!mcpShimScript('/opt/PixlStash/pixlstash', '/home/me/.config/pixlstash-desktop/server-config.json').includes('--url'));
+    assert.ok(!mcpShimScript('x', 'C:\\cfg.json', 'C:\\python.exe').includes('--url'));
   });
 
   it("quotes a path with a space, and a shell quote inside a user's home", () => {
-    const script = mcpShimScript("/home/o'brien/My Apps/PixlStash.AppImage");
+    const script = mcpShimScript("/home/o'brien/My Apps/PixlStash.AppImage", '/home/me/.config/pixlstash-desktop/server-config.json');
     assert.match(script, /exec '\/home\/o'\\''brien\/My Apps\/PixlStash\.AppImage' mcp/);
   });
 });
@@ -74,13 +82,13 @@ describe('syncMcpShim - installing and removing it', () => {
     const dir = mkdtempSync(join(tmpdir(), 'pixlstash-mcp-shim-'));
     const path = shimIn(dir);
 
-    assert.equal(syncMcpShim(true, '/opt/PixlStash/pixlstash', path), true);
+    assert.equal(syncMcpShim(true, '/opt/PixlStash/pixlstash', CFG, path), true);
     assert.ok(existsSync(path));
-    assert.match(readFileSync(path, 'utf8'), / mcp "\$@"/);
+    assert.match(readFileSync(path, 'utf8'), / mcp --server-config /);
     // Without the execute bit the client's spawn fails with EACCES.
     assert.equal(statSync(path).mode & 0o111, 0o111);
 
-    assert.equal(syncMcpShim(false, '/opt/PixlStash/pixlstash', path), false);
+    assert.equal(syncMcpShim(false, '/opt/PixlStash/pixlstash', CFG, path), false);
     assert.equal(existsSync(path), false);
   });
 
@@ -89,11 +97,11 @@ describe('syncMcpShim - installing and removing it', () => {
     const path = shimIn(dir);
     writeFileSync(path, '#!/bin/sh\n# mine, from my own venv\n');
 
-    assert.equal(syncMcpShim(true, '/opt/PixlStash/pixlstash', path), false);
+    assert.equal(syncMcpShim(true, '/opt/PixlStash/pixlstash', CFG, path), false);
     assert.match(readFileSync(path, 'utf8'), /mine, from my own venv/);
 
     // And disabling leaves it alone too, rather than deleting their file.
-    assert.equal(syncMcpShim(false, '/opt/PixlStash/pixlstash', path), false);
+    assert.equal(syncMcpShim(false, '/opt/PixlStash/pixlstash', CFG, path), false);
     assert.ok(existsSync(path));
   });
 
@@ -101,8 +109,8 @@ describe('syncMcpShim - installing and removing it', () => {
     const dir = mkdtempSync(join(tmpdir(), 'pixlstash-mcp-shim-'));
     const path = shimIn(dir);
 
-    syncMcpShim(true, '/old/PixlStash.AppImage', path);
-    syncMcpShim(true, '/new/PixlStash.AppImage', path);
+    syncMcpShim(true, '/old/PixlStash.AppImage', CFG, path);
+    syncMcpShim(true, '/new/PixlStash.AppImage', CFG, path);
     const script = readFileSync(path, 'utf8');
     assert.ok(script.includes('/new/PixlStash.AppImage'));
     assert.ok(!script.includes('/old/PixlStash.AppImage'));

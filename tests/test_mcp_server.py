@@ -11,8 +11,11 @@ missing.
 import http.server
 import io
 import json
+import datetime
+import ipaddress
 import re
 import socket
+import ssl
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -149,6 +152,7 @@ def test_protocol_handshake_and_tool_list():
         "list_pictures",
         "get_picture",
         "view_picture",
+        "count_pictures",
         "list_tags",
         "list_sets",
         "list_characters",
@@ -191,6 +195,106 @@ def test_an_unknown_protocol_version_gets_ours():
     assert reply["result"]["protocolVersion"] == mcp_server.PROTOCOL_VERSION
 
 
+def test_https_is_taken_from_the_config_not_assumed(tmp_path, monkeypatch):
+    """A TLS listener sent plain HTTP just hangs up, which reads as a crash.
+
+    `require_ssl` decides the scheme. Getting it wrong is not a clean failure:
+    the connection is accepted and closed with no reply, which surfaces as
+    "Remote end closed connection without response".
+    """
+    config = tmp_path / "server-config.json"
+    config.write_text(json.dumps({"port": 9537, "require_ssl": True}), encoding="utf-8")
+    monkeypatch.setattr(mcp_server, "SERVER_CONFIG_PATH", str(config))
+    monkeypatch.delenv("PIXLSTASH_URL", raising=False)
+
+    assert mcp_server.configured_url() == "https://127.0.0.1:9537"
+    # The positive control: the same file without the flag stays on http.
+    config.write_text(json.dumps({"port": 9537}), encoding="utf-8")
+    assert mcp_server.configured_url() == "http://127.0.0.1:9537"
+
+
+def test_the_servers_own_certificate_is_trusted_and_still_verified(tmp_path):
+    """PixlStash signs its own certificate, so the system store never has it.
+
+    Pinning that one file keeps verification on, including the hostname check.
+    Turning verification off instead would accept anything on the port.
+    """
+    assert mcp_server.ssl_context_for({}) is None
+    assert mcp_server.ssl_context_for({"require_ssl": False}) is None
+
+    missing = mcp_server.ssl_context_for(
+        {"require_ssl": True, "ssl_certfile": str(tmp_path / "absent.pem")}
+    )
+    assert missing is not None and missing.verify_mode == ssl.CERT_REQUIRED
+
+    # A real self-signed certificate, trusted by name rather than by giving up.
+    certfile = tmp_path / "cert.pem"
+    certfile.write_text(_self_signed_pem(), encoding="utf-8")
+    context = mcp_server.ssl_context_for(
+        {"require_ssl": True, "ssl_certfile": str(certfile)}
+    )
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+    # get_ca_certs() lists only CA-flagged certificates, and a self-signed
+    # server certificate is not one; the store count is what says it loaded.
+    assert context.cert_store_stats()["x509"] >= 1
+
+
+def test_a_tls_listener_sent_plain_http_explains_itself():
+    """The exact failure the desktop hit: https on the port, http in the client."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+
+        def hang_up_on_plaintext():
+            conn, _ = server.accept()
+            # What a TLS listener does with a plaintext GET: no reply at all.
+            conn.recv(1024)
+            conn.close()
+
+        thread = threading.Thread(target=hang_up_on_plaintext, daemon=True)
+        thread.start()
+        fetch = mcp_server.http_fetch(f"http://127.0.0.1:{port}", "example-token")
+        result = _call(fetch, "list_tags")
+        thread.join(timeout=5)
+
+    assert result["isError"] is True
+    text = result["content"][0]["text"]
+    assert "closed it without answering" in text
+    assert "https" in text and "--server-config" in text
+    assert context.verify_mode is not None  # keeps the import honest
+
+
+def _self_signed_pem() -> str:
+    """A throwaway self-signed certificate, shaped like PixlStash's own."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "pixlstash-test")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime(2020, 1, 1))
+        .not_valid_after(datetime.datetime(2040, 1, 1))
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
+            ),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    return cert.public_bytes(serialization.Encoding.PEM).decode()
+
+
 def test_the_default_url_is_the_configured_port_not_a_guess(tmp_path, monkeypatch):
     """The port the server is configured for, read from the file it reads.
 
@@ -205,15 +309,24 @@ def test_the_default_url_is_the_configured_port_not_a_guess(tmp_path, monkeypatc
     monkeypatch.delenv("PIXLSTASH_URL", raising=False)
 
     assert mcp_server.configured_url() == "http://127.0.0.1:12345"
-    assert mcp_server.build_parser().parse_args([]).url == "http://127.0.0.1:12345"
 
-    # An explicit --url still wins, and so does the environment.
+    # --url is resolved in main(), because it depends on --server-config, which
+    # argparse has not read while the defaults are being built. Left unset it
+    # is None and the config answers.
+    assert mcp_server.build_parser().parse_args([]).url is None
     assert (
         mcp_server.build_parser().parse_args(["--url", "http://example.test"]).url
         == "http://example.test"
     )
-    monkeypatch.setenv("PIXLSTASH_URL", "http://127.0.0.1:1")
-    assert mcp_server.build_parser().parse_args([]).url == "http://127.0.0.1:1"
+
+    # And the config a caller names is the one read, which is the whole point:
+    # the desktop app keeps its own, elsewhere.
+    other = tmp_path / "desktop-server-config.json"
+    other.write_text(json.dumps({"port": 9999, "require_ssl": True}), encoding="utf-8")
+    assert (
+        mcp_server.configured_url(mcp_server.read_server_config(str(other)))
+        == "https://127.0.0.1:9999"
+    )
 
 
 @pytest.mark.parametrize(
@@ -387,7 +500,7 @@ def test_every_tool_request_is_a_get_through_http_fetch(monkeypatch):
         return Response()
 
     monkeypatch.setattr(
-        mcp_server, "_build_opener", lambda: SimpleNamespace(open=urlopen)
+        mcp_server, "_build_opener", lambda context=None: SimpleNamespace(open=urlopen)
     )
     fetch = mcp_server.http_fetch("http://127.0.0.1:9537/", "example-token")
     _call(fetch, "list_pictures", tags=["cat", "dog"], limit=5000)
@@ -424,6 +537,7 @@ def test_every_tool_path_resolves_to_a_mounted_route(env):
     _call(fetch, "list_pictures")
     for tool in PICTURE_TOOLS:
         _call(fetch, tool, picture_id=env.pic_a)
+    _call(fetch, "count_pictures")
     for tool in ("list_tags", "list_sets", "list_characters", "list_projects"):
         _call(fetch, tool)
     # Every tool is exercised, so a new one cannot skip this check by
