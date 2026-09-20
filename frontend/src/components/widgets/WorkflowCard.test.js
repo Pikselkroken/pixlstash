@@ -63,10 +63,15 @@ const FILE_ONLY = {
   name: "z image",
   models: [
     {
+      // `title` is deliberately nothing like the filename's derived name:
+      // `deriveModelName("z_image_bf16.safetensors")` is "Z Image Bf16", and
+      // both would give the same initials, so an initials assertion alone
+      // cannot tell which of the two the mark used.
       name: "z_image_bf16.safetensors",
-      title: "Z Image",
+      title: "Borrowed Light",
       icon: null,
       base_model: null,
+      base_model_folded: null,
       kind: "unet",
     },
   ],
@@ -77,8 +82,25 @@ const FILE_ONLY = {
   variant_count: 0,
 };
 
+// The same card on a model the shelf holds a chosen picture for.
+const FILE_ONLY_WITH_ICON = {
+  ...FILE_ONLY,
+  key: "w11",
+  models: [{ ...FILE_ONLY.models[0], icon: "a".repeat(64) }],
+};
+
 // The same card on a file the recovery could read nothing out of.
 const UNREAD = { ...FILE_ONLY, key: "w10", models: [] };
+
+// And one where the recovery found a LoRA but missed the loader beside it:
+// `models` is empty while `loras` is not, so "non-empty" cannot stand in for
+// "read".
+const HALF_READ = {
+  ...FILE_ONLY,
+  key: "w12",
+  models: [],
+  loras: [{ name: "add_detail.safetensors", mark: "structural" }],
+};
 
 const CROWDED = {
   ...BARE,
@@ -517,16 +539,64 @@ describe("WorkflowCard", () => {
     expect(marks).toHaveLength(1);
     // The shelf's own identity slot, on its initials because this model
     // reached no shelf row with a picture on it.
-    expect(marks[0].find(".mmark-initials").text()).toBe("ZI");
+    expect(marks[0].find(".mmark-initials").text()).toBe("BL");
     expect(wrapper.find(".wf-card__empty-line").exists()).toBe(false);
     // "Run it…" stays: the cover says what the workflow loads, not that it ran.
     expect(wrapper.find(".wf-card__cover--empty").text()).toContain("Run it");
     // And the row names the model rather than claiming there is none. The
     // SHELF's name for it, as every other card's model row does (#1454).
-    expect(wrapper.findAll(".wf-card__row")[1].text()).toContain("Z Image");
+    expect(wrapper.findAll(".wf-card__row")[1].text()).toContain(
+      "Borrowed Light",
+    );
     expect(wrapper.findAll(".wf-card__row")[1].text()).not.toContain(
       "z_image_bf16",
     );
+  });
+
+  it("leads the cover with the base model, however the file listed them", () => {
+    // Five loaders and four marks: the one the card is ABOUT must not be the
+    // one the slice drops. A real Z-Image graph lists its VAE and its text
+    // encoder before its UNET.
+    const many = {
+      ...FILE_ONLY,
+      key: "w13",
+      models: [
+        { name: "ae.safetensors", kind: "vae" },
+        { name: "qwen_3_4b.safetensors", kind: "clip" },
+        { name: "clip_l.safetensors", kind: "clip" },
+        { name: "controlnet.safetensors", kind: "controlnet" },
+        {
+          name: "z_image_bf16.safetensors",
+          title: "Borrowed Light",
+          kind: "unet",
+        },
+      ],
+    };
+    const wrapper = mountCard(many);
+    const marks = wrapper.findAll(".wf-card__mark");
+    expect(marks).toHaveLength(4);
+    expect(marks[0].find(".mmark-initials").text()).toBe("BL");
+    expect(wrapper.find(".wf-card__mark-more").text()).toBe("+1");
+  });
+
+  it("draws the shelf's own picture for a model that has one", () => {
+    // The whole point of carrying `icon` on the slot: without it every mark
+    // on every card falls to initials and the field is decoration.
+    const wrapper = mountCard(FILE_ONLY_WITH_ICON);
+    const img = wrapper.find(".wf-card__mark .mmark-img");
+    expect(img.exists()).toBe(true);
+    expect(img.attributes("src")).toContain("a".repeat(64));
+    expect(wrapper.find(".wf-card__mark .mmark-initials").exists()).toBe(false);
+  });
+
+  it("will not say No checkpoint about a loader it could not read", () => {
+    // The recovery found the LoRA and missed the base model beside it, so
+    // `models` is empty on a card that plainly loads one.
+    const wrapper = mountCard(HALF_READ);
+    const rows = wrapper.findAll(".wf-card__row");
+    expect(rows[1].text()).toBe("Base model not read");
+    expect(rows[2].text()).toContain("add_detail");
+    expect(wrapper.attributes("aria-label")).toContain("base model not read");
   });
 
   it("leaves every other pictureless cover exactly as it was", () => {
@@ -544,9 +614,11 @@ describe("WorkflowCard", () => {
     // The last resort: the shipped empty cover, unchanged.
     expect(wrapper.find(".wf-card__empty-line").text()).toBe("No pictures yet");
     const rows = wrapper.findAll(".wf-card__row");
-    expect(rows[1].text()).toBe("Checkpoint not read");
+    expect(rows[1].text()).toBe("Base model not read");
     expect(rows[2].text()).toBe("LoRAs not read");
-    expect(wrapper.attributes("aria-label")).toContain("models not read");
+    const label = wrapper.attributes("aria-label");
+    expect(label).toContain("base model not read");
+    expect(label).toContain("LoRAs not read");
   });
 
   it("hides the pictureless cover's own words too", () => {

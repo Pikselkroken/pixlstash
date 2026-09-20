@@ -636,6 +636,46 @@ def test_a_ui_file_lands_on_a_card_with_no_assets(hub):
     ]
 
 
+def test_a_file_never_forks_a_card_a_variant_already_holds(hub):
+    """The dedup guard: one key, one Card, and it keeps its variants.
+
+    A graph that names NO model keys on ``topology_only_key`` - that is what
+    that key means - so a topology can have a variant on the very key the file
+    pass derives. Yielding it twice would put two Cards under one key on the
+    grid, and the second, built from the file alone, carries no variants: the
+    card would lose its pictures, its defaults and its stack depending on
+    which of the two a reader reached first.
+    """
+    modelless = {
+        "1": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": 512, "height": 512, "batch_size": 1},
+        },
+        "2": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["1", 0], "filename_prefix": "x"},
+        },
+    }
+    keys = record_api_graph(hub, modelless)
+    assert card_of(hub, keys.structural_hash) == workflow_cards.topology_only_key(
+        keys.topology_hash
+    )
+    # A file of the same topology whose own variant is missing - an
+    # editor-format export of that graph, which files no recipe.
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_file "
+            "(workflow_name, topology_hash, structural_hash, workflow_key) "
+            "VALUES (?, ?, NULL, ?)",
+            ("modelless.json", keys.topology_hash, card_of(hub, keys.structural_hash)),
+        )
+
+    cards = card_index(hub)
+    assert len(cards) == 1
+    assert cards[0].variants == [keys.structural_hash]
+    assert cards[0].file_name == "modelless.json"
+
+
 def test_a_files_card_is_derived_rather_than_read_back(hub):
     """The key `card_index` puts a file-only card on is computed, not stored.
 

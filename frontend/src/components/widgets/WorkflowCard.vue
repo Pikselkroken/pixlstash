@@ -40,8 +40,13 @@
       <!-- The models this card's own file names, drawn the way the shelf draws
            a model (#1466). A card with no pictures AND no recipe has nothing
            else that identifies it, and this is the one thing about it that was
-           read rather than guessed at. `aria-hidden` like the rest of the
-           cover: the card's own label already names every model. -->
+           read rather than guessed at.
+
+           `aria-hidden` like the rest of the cover, and the label below is
+           where those models are announced. It names the BASE MODEL and the
+           LoRAs, which is what the rows say too - a recovered `vae` or `clip`
+           is drawn here and named nowhere, the same silence every other card
+           keeps about its accessory slots. -->
       <ul v-if="coverMarks.length" class="wf-card__marks" aria-hidden="true">
         <li v-for="mark in coverMarks" :key="mark.key" class="wf-card__mark">
           <Tooltip :text="mark.label" activator="parent" :describe="false" />
@@ -114,13 +119,13 @@
           aria-hidden="true"
         />
         <span v-else class="wf-card__none" aria-hidden="true">{{
-          unread ? "Checkpoint not read" : "No checkpoint"
+          checkpointIsUnread ? "Base model not read" : "No checkpoint"
         }}</span>
       </div>
       <div class="wf-card__row">
         <ChipRow v-if="loras.length" :items="loras" aria-hidden="true" />
         <span v-else class="wf-card__none" aria-hidden="true">{{
-          unread ? "LoRAs not read" : "No LoRAs"
+          lorasAreUnread ? "LoRAs not read" : "No LoRAs"
         }}</span>
       </div>
       <div class="wf-card__row wf-card__row--facts">
@@ -170,9 +175,10 @@ import {
   checkpointModel,
   factChips,
   isStack,
+  checkpointUnread,
   loraChips,
+  lorasUnread,
   modelDisplayName,
-  modelsUnread,
 } from "../../utils/workflowCard";
 import AppButton from "./AppButton.vue";
 import ChipRow from "./ChipRow.vue";
@@ -181,8 +187,9 @@ import ModelMark from "./ModelMark.vue";
 import Tooltip from "./Tooltip.vue";
 
 // How many marks the empty cover draws before it counts the rest. Four squares
-// at --entity-thumb and their gaps are what fits on one line of a card at the
-// 240px column floor; a fifth wraps.
+// at --entity-thumb and their gaps are ~108px against a cover at least 240px
+// wide. The row does not wrap and the marks do not shrink, so a fifth would
+// overflow rather than move - which is what the slice is for.
 const COVER_MARKS = 4;
 
 const props = defineProps({
@@ -287,13 +294,20 @@ const hasPictures = computed(
  * different state from one nothing has ever run, and widening this to both
  * would be a change to a screen this issue was not about.
  */
-const coverModels = computed(() =>
-  (props.card.variant_count ?? 1) === 0
-    ? [...(props.card.models ?? []), ...(props.card.loras ?? [])].filter(
-        (model) => model.name,
-      )
-    : [],
-);
+const coverModels = computed(() => {
+  if ((props.card.variant_count ?? 1) !== 0) return [];
+  const named = [
+    ...(props.card.models ?? []),
+    ...(props.card.loras ?? []),
+  ].filter((model) => model.name);
+  // **The base model leads, whatever order the file listed its loaders in.**
+  // The rest is document order, and the row is clipped to COVER_MARKS: a
+  // graph that loads its VAE and both text encoders before its checkpoint
+  // would otherwise have the one model the card is *about* sliced off the
+  // end. `checkpointModel` picks the same one the name row was built from.
+  const base = checkpointModel(props.card);
+  return base ? [base, ...named.filter((model) => model !== base)] : named;
+});
 const coverMarks = computed(() =>
   coverModels.value.slice(0, COVER_MARKS).map((model, i) => ({
     // Indexed, because one workflow may load the same file twice and two
@@ -315,7 +329,10 @@ const coverMarks = computed(() =>
 const coverOverflow = computed(() =>
   Math.max(coverModels.value.length - COVER_MARKS, 0),
 );
-const unread = computed(() => modelsUnread(props.card));
+// Per ROW, not per card: the recovery can find a LoRA and miss the loader
+// beside it, and an empty row must not become a claim either way (#1466).
+const checkpointIsUnread = computed(() => checkpointUnread(props.card));
+const lorasAreUnread = computed(() => lorasUnread(props.card));
 const checkpointChips = computed(() => {
   const model = checkpointModel(props.card);
   return model

@@ -71,6 +71,7 @@ from pixlstash.services.workflow_hash import (
     structural_document,
 )
 from pixlstash.services import workflow_card_service
+from pixlstash.utils.known_base_models import fold
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
 from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
@@ -3625,6 +3626,10 @@ _EDITOR_WORKFLOW = {
     "links": [[1, 1, 0, 2, 0, "*"], [2, 2, 0, 3, 0, "*"]],
 }
 _EDITOR_ICON = _h("editor-card-icon")
+# A base model spelled the way a safetensors header spells it, so `fold` has a
+# real fold to do rather than passing a canonical label through untouched.
+_EDITOR_BASE_MODEL = "flux.1-dev"
+_EDITOR_BASE_MODEL_FOLDED = fold(_EDITOR_BASE_MODEL)
 
 
 def _file_a_workflow(server, tmp_path, monkeypatch, name, workflow, keys=None) -> str:
@@ -3646,12 +3651,18 @@ def _file_a_workflow(server, tmp_path, monkeypatch, name, workflow, keys=None) -
     return workflow_cards.record_file(server.hub, name, topology)
 
 
-def _give_the_shelf_model_an_icon(server) -> None:
-    """Put a chosen picture on the seeded shelf row, re-seeded next test."""
+def _give_the_shelf_model_a_picture(server) -> None:
+    """Put a chosen picture and a base model on the seeded shelf row.
+
+    Both re-seeded before the next test. The base model is a string
+    `known_base_models` recognises, so `fold` has something to fold: an
+    unrecognised one folds to null and would leave the whole wiring saying
+    nothing.
+    """
     with server.hub.transaction() as conn:
         conn.execute(
-            "UPDATE model SET icon_sha256 = ? WHERE filename = ?",
-            (_EDITOR_ICON, _SHELF_FILENAME),
+            "UPDATE model SET icon_sha256 = ?, base_model = ? WHERE filename = ?",
+            (_EDITOR_ICON, _EDITOR_BASE_MODEL, _SHELF_FILENAME),
         )
 
 
@@ -3691,7 +3702,7 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
     is the seeded shelf model and carries its title and its picture, the LoRA
     is this module's model ghost and carries neither.
     """
-    _give_the_shelf_model_an_icon(workflow_env.server)
+    _give_the_shelf_model_a_picture(workflow_env.server)
     key = _file_a_workflow(
         workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
     )
@@ -3699,13 +3710,18 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
     card = _by_key(_cards(workflow_env.owner))[key]
     # `unet`, not `checkpoint`: the recovery keeps the widget each name came
     # off, and a Flux or Z-Image graph carries no checkpoint at all.
+    # `base_model` is the shelf's raw column and `base_model_folded` its
+    # canonical label: a client hashes a generated mark's colour out of
+    # `folded or raw`, so the same model has to arrive here spelled the way it
+    # arrives on the shelf or one file gets two colours in two places.
+    assert _EDITOR_BASE_MODEL_FOLDED not in (None, _EDITOR_BASE_MODEL)
     assert card["models"] == [
         {
             "name": _SHELF_FILENAME,
             "title": _SHELF_TITLE,
             "icon": _EDITOR_ICON,
-            "base_model": None,
-            "base_model_folded": None,
+            "base_model": _EDITOR_BASE_MODEL,
+            "base_model_folded": _EDITOR_BASE_MODEL_FOLDED,
             "kind": "unet",
             "mark": None,
             # No label: a slot label is an address inside a stored topology,
@@ -3728,6 +3744,85 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
             "slot_label": None,
         }
     ]
+
+
+def test_an_editor_format_card_answers_the_same_on_its_own_route(
+    workflow_env, tmp_path, monkeypatch
+):
+    """The detail route reads the file too, and every write answers with it.
+
+    `_read_detail` is the write path's seam: PATCH, the defaults, the pins and
+    the slot marks all answer with it, so a card that had its models on the
+    grid and lost them the moment somebody renamed it would be the bug nobody
+    reported.
+    """
+    _give_the_shelf_model_a_picture(workflow_env.server)
+    key = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
+    )
+
+    on_the_grid = _by_key(_cards(workflow_env.owner))[key]
+    opened = _detail(workflow_env.owner, key)["card"]
+    assert opened["models"] == on_the_grid["models"]
+    assert opened["loras"] == on_the_grid["loras"]
+
+    # ...and after a write, which answers with that same read.
+    r = workflow_env.owner.patch(
+        f"{API}/workflows/{key}", json={"name": "Editor workflow"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["card"]["models"] == on_the_grid["models"]
+
+
+def test_two_files_of_one_topology_make_one_card(workflow_env, tmp_path, monkeypatch):
+    """A card key is a content address, so two copies of one graph share it.
+
+    The dedup guard: the same key must not arrive twice from the file pass, and
+    it must not arrive from the file pass at all once a variant already carries
+    it.
+    """
+    key = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
+    )
+    # The same graph under a second name, which files a second row on one key.
+    same = json.loads(json.dumps(_EDITOR_WORKFLOW))
+    assert (
+        _file_a_workflow(
+            workflow_env.server, tmp_path, monkeypatch, "editor-copy.json", same
+        )
+        == key
+    )
+
+    cards = _by_key(_cards(workflow_env.owner))
+    assert set(cards) == {BUSY_CARD, key}
+    # `MIN(workflow_name)`, the same rule the variant half of `card_index`
+    # uses, so a card names itself the same way on two reads of one hub. That
+    # is SQLite's byte order, where `editor-copy.json` sorts under
+    # `editor.json` because `-` precedes `.`.
+    assert cards[key]["name"] == "editor-copy"
+
+
+def test_a_loader_this_build_does_not_know_leaves_the_row_silent(
+    workflow_env, tmp_path, monkeypatch
+):
+    """No list of loader classes is every loader there is (#1466 review).
+
+    The recovery finds a LoRA it knows and misses the base model beside it, so
+    `models` is empty while `loras` is not. The row must still decline to say
+    "No checkpoint" — `variant_count: 0` is what a client branches on, and the
+    payload has to leave it that choice rather than implying an answer.
+    """
+    graph = json.loads(json.dumps(_EDITOR_WORKFLOW))
+    graph["nodes"][0]["type"] = "SomeThirdPartyCheckpointLoader"
+    key = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "custom.json", graph
+    )
+
+    card = _by_key(_cards(workflow_env.owner))[key]
+    assert card["models"] == []
+    assert [lora["name"] for lora in card["loras"]] == [_EDITOR_UNRESOLVED]
+    # Non-empty models is NOT what tells a client the card was read.
+    assert card["variant_count"] == 0
 
 
 def test_a_card_with_a_recipe_never_reads_its_models_off_the_file(
@@ -3792,7 +3887,7 @@ def test_the_shelfs_picture_needs_one_candidate_where_its_name_needs_agreement(
     picture *of one of them*, so an ambiguous name takes none.
     """
     hub = workflow_env.server.hub
-    _give_the_shelf_model_an_icon(workflow_env.server)
+    _give_the_shelf_model_a_picture(workflow_env.server)
     mark = workflow_card_service.model_marks(hub, [_SHELF_FILENAME])[_SHELF_FILENAME]
     assert (mark.title, mark.icon) == (_SHELF_TITLE, _EDITOR_ICON)
 
@@ -3820,7 +3915,7 @@ def test_two_names_for_one_shelf_model_both_keep_its_picture(workflow_env):
     picture the shelf holds drawing initials.
     """
     hub = workflow_env.server.hub
-    _give_the_shelf_model_an_icon(workflow_env.server)
+    _give_the_shelf_model_a_picture(workflow_env.server)
     digest = hub.fetchone(
         "SELECT sha256 FROM model WHERE filename = ?", (_SHELF_FILENAME,)
     )["sha256"]

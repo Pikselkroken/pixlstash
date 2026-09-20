@@ -11,6 +11,7 @@ import math
 from typing import Any
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.comfyui_recipe_service import MODEL_FILENAME_FIELDS
 
 logger = get_logger(__name__)
 
@@ -511,28 +512,49 @@ def extract_generation_info(workflow: dict) -> dict:
         return {"models": [], "loras": [], "positive_prompt": None, "seed": None}
 
 
-# Which widget each model loader reads its filename from. The same three
-# branches :func:`extract_generation_info` has, with the widget kept rather
-# than folded away - a card drawn out of these has to tell a checkpoint slot
-# from a unet one, and both land in that function's single ``models`` list.
-_LOADER_WIDGETS = (
-    (_CHECKPOINT_CLASSES, "ckpt_name"),
-    (_UNET_CLASSES, "unet_name"),
-    (_LORA_CLASSES, "lora_name"),
-)
+# The loaders whose model name is the FIRST widget value, for the UI-format
+# node that declares no inputs at all and is therefore a bare positional array.
+# Only these three: every other loader in the map below either interleaves its
+# widgets or carries several, and a positional guess there would name the wrong
+# file rather than none.
+_NAME_FIRST_CLASSES = _CHECKPOINT_CLASSES | _UNET_CLASSES | _LORA_CLASSES
+
+# `config_name` is a YAML beside the checkpoint, not a model: it reaches no
+# shelf row and would draw a mark for a file nobody loads.
+_NOT_A_MODEL_WIDGET = frozenset({"config_name"})
+
+
+def _model_widgets_of(class_type: str) -> tuple[str, ...]:
+    """Every widget of this loader that holds a model file name."""
+    return tuple(
+        field
+        for field in MODEL_FILENAME_FIELDS.get(class_type, ())
+        if field not in _NOT_A_MODEL_WIDGET
+    )
 
 
 def loaded_model_widgets(workflow: dict) -> list[tuple[str, str]]:
     """``[(widget name, filename)]`` for every model loader in *workflow*.
 
     Both serialisations, like :func:`extract_generation_info`, and the same
-    best effort: a **UI-format** file names its widget values by position, so
-    a name is read off ``widgets_values`` through the node's declared inputs
-    and falls back to slot 0 where the widget is not declared at all. That
-    recovers the real names from a real file and recovers **nothing** from a
-    template-style export, whose loaders carry no value - so an empty answer
-    is "this document did not say", never "this workflow loads no models", and
-    a caller must keep the two apart.
+    best effort: a **UI-format** file names its widget values by position, so a
+    name is read off ``widgets_values`` through the node's declared inputs, and
+    falls back to slot 0 only for the three loader families whose model name is
+    the first widget (:data:`_NAME_FIRST_CLASSES`).
+
+    **Which widget each loader reads is ``MODEL_FILENAME_FIELDS``'**, the map
+    the pre-flight check already uses, rather than a list of its own: a card
+    built from these is read beside one built from a stored slot list, and two
+    answers to "which widget names a model" is how the two drift. That map
+    carries the VAE, CLIP, ControlNet, upscale and Diffusers loaders as well as
+    the three that name a base model, so each recovered slot arrives under the
+    widget ``_SLOT_KINDS`` turns into its real kind.
+
+    It is still a list of classes, and no list of classes is every loader there
+    is: a graph loading through a custom node recovers nothing for it. That is
+    why an empty answer means "this document did not say" and never "this
+    workflow loads no models" -- and why a card drawn from this must not turn
+    a missing slot into a claim (``utils/workflowCard.checkpointUnread``).
 
     Muted and bypassed nodes are skipped, because they do not load anything
     when the workflow runs.
@@ -542,18 +564,9 @@ def loaded_model_widgets(workflow: dict) -> list[tuple[str, str]]:
     """
     if not isinstance(workflow, dict):
         return []
-    if isinstance(workflow.get("nodes"), list) or isinstance(
-        workflow.get("links"), list
-    ):
-        return _loaded_model_widgets_ui(workflow)
-    return _loaded_model_widgets_api(workflow)
-
-
-def _widget_for(class_type: str) -> str | None:
-    for classes, widget in _LOADER_WIDGETS:
-        if class_type in classes:
-            return widget
-    return None
+    if is_api_format(workflow):
+        return _loaded_model_widgets_api(workflow)
+    return _loaded_model_widgets_ui(workflow)
 
 
 def _loaded_model_widgets_ui(workflow: dict) -> list[tuple[str, str]]:
@@ -565,15 +578,22 @@ def _loaded_model_widgets_ui(workflow: dict) -> list[tuple[str, str]]:
             # mode 2 = muted/never, mode 4 = bypassed - skip both.
             if node.get("mode", 0) not in (0, None):
                 continue
-            widget = _widget_for(node.get("type", ""))
-            if widget is None:
+            class_type = node.get("type", "")
+            widgets = _model_widgets_of(class_type)
+            if not widgets:
                 continue
-            name = _get_widget_value_ui(node, widget)
-            if name is None:  # widget not declared in inputs[]; use slot 0
+            named = [(widget, _get_widget_value_ui(node, widget)) for widget in widgets]
+            if (
+                all(value is None for _, value in named)
+                and class_type in _NAME_FIRST_CLASSES
+            ):
+                # No input declared the widget, so the array is bare and the
+                # model name is slot 0 - true of these three families only.
                 values = node.get("widgets_values") or []
-                name = values[0] if values else None
-            if isinstance(name, str) and name:
-                found.append((widget, name))
+                named = [(widgets[0], values[0] if values else None)]
+            for widget, value in named:
+                if isinstance(value, str) and value:
+                    found.append((widget, value))
     return found
 
 
@@ -582,12 +602,11 @@ def _loaded_model_widgets_api(workflow: dict) -> list[tuple[str, str]]:
     for node in workflow.values():
         if not isinstance(node, dict):
             continue
-        widget = _widget_for(node.get("class_type", ""))
-        if widget is None:
-            continue
-        name = (node.get("inputs") or {}).get(widget)
-        if isinstance(name, str) and name:
-            found.append((widget, name))
+        inputs = node.get("inputs") or {}
+        for widget in _model_widgets_of(node.get("class_type", "")):
+            value = inputs.get(widget)
+            if isinstance(value, str) and value:
+                found.append((widget, value))
     return found
 
 

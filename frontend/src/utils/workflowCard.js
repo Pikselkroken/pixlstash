@@ -19,7 +19,11 @@
 //                                       // name row and the type chip both
 //                                       // read it, so one fact has one voice
 //     models: [{ name, title, icon, base_model, base_model_folded, kind,
-//               mark?, slot_label? }],
+//               mark, slot_label }],
+//                                       // EVERY key is always present: these
+//                                       // are Pydantic defaults, so an
+//                                       // absent value arrives as null and
+//                                       // never as a missing key.
 //                                       // every non-LoRA slot: checkpoint,
 //                                       // unet, vae, clip… `kind` is the slot.
 //                                       // `title` is the MODEL SHELF's name
@@ -38,8 +42,8 @@
 //                                       // shelf serves them by. A card with
 //                                       // no pictures draws itself out of
 //                                       // these (#1466). Usually all null
-//     loras:  [{ name, title, icon, base_model, base_model_folded, mark,
-//               slot_label? }],
+//     loras:  [{ name, title, icon, base_model, base_model_folded, kind,
+//               mark, slot_label }],
 //                                       // "structural" = in the workflow
 //                                       // (a filled chip), "recipe" = a slot
 //                                       // the recipe fills (dashed).
@@ -99,9 +103,10 @@
 //                                       // and nothing else, whose models were
 //                                       // recovered from the file rather than
 //                                       // read off a recipe. See
-//                                       // `modelsUnread` — such a card with
-//                                       // no models has not been read, and
-//                                       // must not be said to have none.
+//                                       // On such a card an EMPTY model row
+//                                       // means nobody read it, never that
+//                                       // the workflow has none — see
+//                                       // `checkpointUnread`.
 //   }
 //
 // A card row names the BASE MODEL only (checkpoint, or the unet a Flux or SD3
@@ -136,25 +141,38 @@ export function isStack(card) {
 }
 
 /**
- * Whether nobody has read this card's models, as against having read none.
+ * A card with no recipe: every model it names was recovered from its own file.
  *
- * A card with `variant_count: 0` (#1466) is a stored workflow file and nothing
- * else. It has no recipe, so no cached slot list, and its models are whatever
- * could be recovered from the file's own widget values — which is the real
- * names out of a real file and nothing at all out of a template-style export
- * whose loaders were never filled in. An empty model row on such a card is
- * therefore "not read", and "no checkpoint" would be a claim nobody made.
+ * `variant_count: 0` (#1466) is a stored editor-format workflow file and
+ * nothing else — no recipe, so no cached slot list, and its models are
+ * whatever could be read out of the file's own widget values.
  *
- * A card that carries no `variant_count` at all is read as having a recipe:
- * every card the route serves carries one, so the missing case is a caller
- * that predates the field, and the ordinary answer is the safe one to give it.
+ * A card carrying no `variant_count` at all is read as having a recipe: every
+ * card the route serves carries one, so the missing case is a caller that
+ * predates the field, and the ordinary answer is the safe one to give it.
  */
-export function modelsUnread(card) {
-  return (
-    (card.variant_count ?? 1) === 0 &&
-    !(card.models ?? []).length &&
-    !(card.loras ?? []).length
-  );
+function noRecipe(card) {
+  return (card.variant_count ?? 1) === 0;
+}
+
+/**
+ * Whether the base-model row is silent because nobody read it.
+ *
+ * **An empty row on a recipe-less card is never a claim.** The recovery finds
+ * loaders by class, and no list of classes is every loader there is — so a
+ * graph loading through one it does not know recovers its LoRAs, leaves
+ * `models` empty, and the row would say "No checkpoint" about a workflow that
+ * plainly has one. That is the exact sentence this card exists to stop a card
+ * making, one loader family over, so a card with no recipe says nothing at all
+ * about what its file did not name.
+ */
+export function checkpointUnread(card) {
+  return noRecipe(card) && !checkpointModel(card);
+}
+
+/** The same for the LoRA row, and for the same reason. */
+export function lorasUnread(card) {
+  return noRecipe(card) && !(card.loras ?? []).length;
 }
 
 /**
@@ -286,10 +304,13 @@ export function cardAccessibleName(card, { member = false } = {}) {
     checkpoint ? `${checkpoint.kind} ${modelDisplayName(checkpoint)}` : null,
     // "not read" rather than "no LoRAs" where nothing was read at all: such a
     // card is silent about its models, not certain it has none.
+    // What the visible rows say, in the same words: a card with no recipe is
+    // silent about what its file did not name, never certain it has none.
+    checkpointUnread(card) ? "base model not read" : null,
     loras.length
       ? `LoRAs: ${loras.join("; ")}`
-      : modelsUnread(card)
-        ? "models not read"
+      : lorasUnread(card)
+        ? "LoRAs not read"
         : "no LoRAs",
     facts.length
       ? `${isStack(card) ? "differs by" : "facts"}: ${facts.join(", ")}`

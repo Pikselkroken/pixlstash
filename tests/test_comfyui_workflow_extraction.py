@@ -12,6 +12,8 @@ import pathlib
 
 import pytest
 
+from pixlstash.services.comfyui_recipe_service import MODEL_FILENAME_FIELDS
+from pixlstash.services.workflow_identity import CHECKPOINT_WIDGETS
 from pixlstash.utils.comfyui_utilities import (
     extract_comfy_workflow_info,
     extract_generation_info,
@@ -25,6 +27,10 @@ EXPECTED_CSV = WORKFLOWS_DIR / "expected_results.csv"
 
 def _workflow_files() -> list[pathlib.Path]:
     return sorted(WORKFLOWS_DIR.glob("*.json"))
+
+
+def _load_fixture(name: str) -> dict:
+    return json.loads((WORKFLOWS_DIR / name).read_text())
 
 
 def _load_expected() -> dict[str, dict]:
@@ -79,13 +85,31 @@ def test_loaded_model_widgets_agrees_with_the_csv_and_keeps_the_widget(
     found = loaded_model_widgets(json.loads(workflow_file.read_text()))
 
     loras = [name for widget, name in found if widget == "lora_name"]
-    models = [name for widget, name in found if widget != "lora_name"]
-    assert "|".join(models) == expected["models"]
+    base = [name for widget, name in found if widget in CHECKPOINT_WIDGETS]
+    assert "|".join(base) == expected["models"]
     assert "|".join(loras) == expected["loras"]
-    assert {widget for widget, _ in found} <= {
-        "ckpt_name",
+    # Every widget comes off `MODEL_FILENAME_FIELDS`, so each one is a widget
+    # `_SLOT_KINDS` turns into a real slot kind rather than falling through to
+    # the generic "model" - which is what a card row branches on.
+    assert {widget for widget, _ in found} <= set(
+        field for fields in MODEL_FILENAME_FIELDS.values() for field in fields
+    )
+
+
+def test_loaded_model_widgets_reads_the_accessory_loaders_too() -> None:
+    """Not only the base model and the LoRAs.
+
+    `extract_generation_info` reports those two and nothing else, which is all
+    a picture's recipe line needs. A card drawn out of its models shows what
+    the cached slot list would have shown, and that list covers the VAE, the
+    CLIP, the ControlNet and the upscaler too - so the two paths describe one
+    workflow the same way rather than two.
+    """
+    found = loaded_model_widgets(_load_fixture("image_z_image.json"))
+    assert {widget for widget, _ in found} == {
         "unet_name",
-        "lora_name",
+        "vae_name",
+        "clip_name",
     }
 
 

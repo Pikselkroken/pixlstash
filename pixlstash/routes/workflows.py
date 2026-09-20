@@ -1096,6 +1096,15 @@ def _display_name(card, models=()) -> str:
     return named + _specials_suffix(card)
 
 
+# What a workflow file may be before the grid declines to parse it. A real one
+# is tens to hundreds of kilobytes; the largest in this repo's own fixtures is
+# under 300 KB, and the watched folder is a place anything can be dropped. The
+# size is already in hand from the ``stat`` the cache key needs, so refusing
+# costs nothing - and this read now happens on the grid and on every workflow
+# write, where it used to happen on neither.
+MAX_WORKFLOW_FILE_BYTES = 32 * 1024 * 1024
+
+
 # ponytail: one entry per file version; stale versions age out of the LRU.
 @functools.lru_cache(maxsize=256)
 def _file_model_widgets(path: str, mtime_ns: int, size: int) -> tuple:
@@ -1106,6 +1115,15 @@ def _file_model_widgets(path: str, mtime_ns: int, size: int) -> tuple:
     request, and a file that will not read is logged once rather than on every
     open of the view.
     """
+    if size > MAX_WORKFLOW_FILE_BYTES:
+        logger.warning(
+            "Workflow file %s is %s bytes, past the %s this read will parse, "
+            "so the card it is the whole of is described with no models.",
+            path,
+            size,
+            MAX_WORKFLOW_FILE_BYTES,
+        )
+        return ()
     try:
         document = _load_workflow_json(path)
     except (OSError, ValueError, RecursionError) as exc:
