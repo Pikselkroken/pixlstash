@@ -1043,10 +1043,19 @@ def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
         # route because the read belongs inside this transaction - the same
         # critical section the state gate runs in.
         #
-        # Only while something still declares it, which is what every non-
-        # `missing` state means here: a declared engine nothing has fetched is
-        # `not_downloaded`, and `declare_folder`'s sweep writes `missing` exactly
-        # when the declaration stopped naming the row. That is the DISCOVERED
+        # Only while something still declares it, which is what `present`,
+        # `unreachable` and `not_downloaded` mean here: a declared engine nothing
+        # has fetched is `not_downloaded`, and `declare_folder`'s sweep writes
+        # `missing` exactly when the declaration stopped naming the row.
+        #
+        # `removed` is excluded with it, and by construction rather than by
+        # argument (#1439). It satisfies "not missing" while meaning the
+        # opposite - the owner deleted that copy on purpose - so left in, an
+        # engine every copy of which had been merged away would stay refused
+        # forever as "something still declares it". It is unreachable today only
+        # because `POST /model-files/merge` refuses an engine outright, which is a
+        # gate in another file; this is the class closed here where the predicate
+        # is, the way the other five were. That is the DISCOVERED
         # roots - a repo dropped by `huggingface-cli delete-cache`, a deleted
         # InsightFace pack - and nothing fetches those back, so refusing them
         # left the owner a row drawn as a fault that no verb on the shelf could
@@ -1062,7 +1071,7 @@ def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
             for row in conn.execute(
                 f"SELECT id FROM model WHERE id IN ({placeholders}) AND file_kind = ? "
                 "AND EXISTS (SELECT 1 FROM model_file WHERE model_id = model.id "
-                "AND state <> 'missing')",
+                "AND state NOT IN ('missing', 'removed'))",
                 (*ids, FILE_ENGINE),
             ).fetchall()
         }

@@ -1357,6 +1357,37 @@ class TestModelSwap:
         )
         assert graph["4"]["inputs"]["ckpt_name"] == "gone.safetensors"
 
+    def test_it_writes_the_spelling_this_comfyui_advertises(self):
+        """The candidate is verified with separators normalised; the value written
+        has to be the option that matched.
+
+        ComfyUI compares exactly, so writing a Windows-spelled candidate onto an
+        install that lists the POSIX form would be a substitution that fails at
+        the queue - the one thing this function's contract says cannot happen.
+        """
+        graph = {
+            "4": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": "gone.safetensors"},
+            }
+        }
+        object_info = {
+            "CheckpointLoaderSimple": {
+                "input": {"required": {"ckpt_name": [["sub/kept.safetensors"], {}]}}
+            }
+        }
+        swapped = apply_model_swap(
+            graph,
+            detect_model_targets(graph, object_info),
+            # As a Windows host recorded the relpath.
+            {"gone.safetensors": ["sub\\kept.safetensors"]},
+            object_info,
+        )
+        assert [s["now"] for s in swapped] == ["sub/kept.safetensors"]
+        assert graph["4"]["inputs"]["ckpt_name"] == "sub/kept.safetensors"
+        # And the graph really does pass now, which is the property at stake.
+        assert preflight_prompt(graph, object_info)["missing_models"] == []
+
     def test_a_model_with_no_other_name_is_left_alone(self):
         graph = json.loads(json.dumps(self.GRAPH))
         assert (

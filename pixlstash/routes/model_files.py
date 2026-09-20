@@ -625,6 +625,28 @@ def _plan_merge(hub, keep: list[KeepModelCopy]) -> tuple[dict[int, dict], list[d
     return plans, refused
 
 
+def _warn_about_samples(model_path: str) -> None:
+    """Say that a removed copy left a previews directory behind, and leave it.
+
+    The merge deliberately does not take ``<stem>_samples/`` with the copy (see
+    the removal loop). Logged rather than silent because the consequence is real
+    and deferred: a re-import of that training run into this folder will be
+    refused until the directory is removed by hand, which is the importer working
+    as designed but is a sentence nobody can connect to a merge they did days
+    ago without this line.
+    """
+    directory = samples_relpath(model_path)
+    if os.path.isdir(directory) and not os.path.islink(directory):
+        logger.info(
+            "Left %s in place: %s was removed as a duplicate but the model is "
+            "still on the shelf, so its training previews are still its own. "
+            "Re-importing that run into this folder will be refused until they "
+            "are removed by hand.",
+            directory,
+            os.path.basename(model_path),
+        )
+
+
 def _mark_removed(hub, copies: list[dict]) -> None:
     """Record that these copies were removed on purpose, keeping their rows.
 
@@ -665,8 +687,8 @@ def _mark_removed(hub, copies: list[dict]) -> None:
             )
 
 
-def _comfyui_reads(comfyui_url: Optional[str], plans: dict[int, dict]) -> list[dict]:
-    """Which copies about to go a configured ComfyUI says it can load.
+def _advertised_names(comfyui_url: Optional[str]) -> set[str]:
+    """Every model filename the owner's configured ComfyUI says it can load.
 
     **Asked of ComfyUI, not of the filesystem.** PixlStash holds a URL and no
     path into that install's ``models/`` tree, and its combo lists are the truth
@@ -675,14 +697,19 @@ def _comfyui_reads(comfyui_url: Optional[str], plans: dict[int, dict]) -> list[d
     the rule the submit-time swap obeys - verify against what ComfyUI
     advertises, never against what PixlStash believes.
 
-    An unset URL or an unreachable ComfyUI answers "nothing", and the empty list
-    is reported as exactly that by the client: the absence of a warning here is
-    not a promise that no ComfyUI reads the file.
+    Its own function so the **network call happens outside**
+    ``SHELF_IO_LOCK``: it blocks for up to 15 s per phase, and inside the slot
+    that is every move, import, add and delete on the machine refused for the
+    duration with a sentence about a move that is not running.
+
+    An unset URL or an unreachable ComfyUI answers "nothing", and the empty set
+    is reported as exactly that by the client: the absence of a warning is not a
+    promise that no ComfyUI reads the file.
     """
     if not comfyui_url:
-        return []
+        return set()
     try:
-        advertised = advertised_model_names(fetch_object_info(comfyui_url))
+        return advertised_model_names(fetch_object_info(comfyui_url))
     except RuntimeError as exc:
         logger.info(
             "Could not ask ComfyUI at %s which models it reads, so the merge "
@@ -690,6 +717,17 @@ def _comfyui_reads(comfyui_url: Optional[str], plans: dict[int, dict]) -> list[d
             comfyui_url,
             exc,
         )
+        return set()
+
+
+def _comfyui_reads(advertised: set[str], plans: dict[int, dict]) -> list[dict]:
+    """Which copies about to go that ComfyUI says it can load.
+
+    *advertised* is :func:`_advertised_names`' answer, read before the lock; this
+    half is pure matching and costs nothing, so a dry run and the real call agree
+    by construction.
+    """
+    if not advertised:
         return []
     reads: list[dict] = []
     for model_id, plan in plans.items():
@@ -1241,6 +1279,14 @@ def create_router(server) -> APIRouter:
             keep[item.model_id] = item
         user = server.auth.get_user_for_request(request)
         comfyui_url = (getattr(user, "comfyui_url", None) or "").rstrip("/")
+        # **Asked BEFORE the lock.** `fetch_object_info` is a blocking HTTP call
+        # with a 15 s per-phase timeout, and inside the slot an unreachable
+        # ComfyUI would 409 every move, import, add and delete for the length of
+        # it - with "a move or an import is already running", which is not what
+        # happened. The run pre-flight asks the same question without any lock.
+        # The cost of hoisting it is one wasted GET when every model turns out to
+        # be refused; the cost of not hoisting it is the whole shelf.
+        advertised = _advertised_names(comfyui_url)
 
         # The *same* slot a move, an import, an add and the delete take.
         if not SHELF_IO_LOCK.acquire(blocking=False):
@@ -1254,9 +1300,9 @@ def create_router(server) -> APIRouter:
             )
         try:
             plans, refused = _plan_merge(server.hub, list(keep.values()))
-            # Asked before anything is removed, so a dry run and the real call
+            # Matched before anything is removed, so a dry run and the real call
             # report the same warning about the same files.
-            reads = _comfyui_reads(comfyui_url, plans)
+            reads = _comfyui_reads(advertised, plans)
             merged: list[int] = []
             files_removed = 0
             if not payload.dry_run:
@@ -1267,8 +1313,21 @@ def create_router(server) -> APIRouter:
                         for path in paths:
                             _remove(path, permanent=payload.permanent)
                             done += 1
-                            # After the file, and never allowed to fail it.
-                            _remove_samples(path, permanent=payload.permanent)
+                            # **No `_remove_samples` here**, unlike the delete.
+                            # That call is licensed by the model going with its
+                            # previews: the directory is then an orphan no route
+                            # lists, and one that refuses the owner's whole
+                            # re-import of that run. Here the model SURVIVES, so
+                            # a run's previews are still the previews of a model
+                            # on the shelf - and the copy that carries them is
+                            # usually the imported one, which is exactly the copy
+                            # somebody merging toward a tidier folder is likely to
+                            # remove. Destroying them would be a loss the gesture
+                            # never asked for, and `permanent=true` would `rmtree`
+                            # them. The cost is the re-import refusal the delete
+                            # avoids, which is recoverable and visible; this is
+                            # not.
+                            _warn_about_samples(path)
                     except (TrashPermissionError, OSError) as exc:
                         reason = (
                             "partly_deleted"

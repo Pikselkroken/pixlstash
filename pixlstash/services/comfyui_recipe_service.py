@@ -252,6 +252,24 @@ def _normalize_filename(value: str) -> str:
     return value.replace("\\", "/")
 
 
+def _matching_option(value: str, options: list[str]) -> str | None:
+    """The advertised option *value* names, in **ComfyUI's own spelling**.
+
+    :func:`_match_option` answers "is this loadable" and normalizes separators to
+    do it, which is right for a check and not enough for a patch: a caller about
+    to write the value into a graph has to write the string this install actually
+    lists, because ComfyUI compares exactly. Case is not folded, for the same
+    reason ``_match_option`` reports a case-only difference as a miss.
+
+    Returns ``None`` when no option matches, so a caller can loop candidates.
+    """
+    normalized = _normalize_filename(value)
+    for option in options:
+        if _normalize_filename(option) == normalized:
+            return option
+    return None
+
+
 def _match_option(value: str, options: list[str]) -> str | None:
     """Return ``None`` if *value* is present, else a note on the near-miss.
 
@@ -536,17 +554,23 @@ def apply_model_swap(
         # it, which is most real model filenames.
         candidates = aliases.get(_alias_key(value)) or ()
         for candidate in candidates:
-            match = _match_option(candidate, options)
-            if match is not None:
+            # The OPTION, not the candidate: `_match_option` accepts a candidate
+            # whose separators merely normalize onto an advertised entry, and
+            # ComfyUI compares exactly - so writing the candidate's own spelling
+            # could put `sub\x.safetensors` into a graph on an install that
+            # advertises `sub/x.safetensors`, which is the one thing this
+            # function's contract promises cannot happen.
+            listed = _matching_option(candidate, options)
+            if listed is None:
                 continue
-            inputs[field] = candidate
+            inputs[field] = listed
             substitutions.append(
                 {
                     "node_id": str(target.get("node_id")),
                     "class_type": node.get("class_type"),
                     "field": field,
                     "was": value,
-                    "now": candidate,
+                    "now": listed,
                 }
             )
             break
