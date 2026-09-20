@@ -3629,6 +3629,38 @@ def test_a_partly_drawn_stack_carries_no_stack_id_to_reorder_it_by(workflow_env)
     assert r.status_code == 400, r.text
 
 
+def test_a_stack_that_collapses_to_one_drawn_card_carries_no_stack_id(workflow_env):
+    """`stack_size: 1` and a non-null id is the one state the field forbids.
+
+    Deriving which stacks the grid drew whole means grouping the WHOLE card
+    set as well as the drawn one, and that grouping writes an id onto every
+    figure it touches. A card whose group falls below two once the hidden
+    cards and one-offs are taken is then in no drawn stack at all, so nothing
+    downstream revisits it -- and it would be served standing alone while
+    carrying the id of a group it is the only visible member of. A client
+    reads a non-null id as "this card is in a stack"; here it is not.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    assert _by_key(_cards(owner))[BUSY_CARD]["stack_id"], "expected a drawn stack"
+
+    # BUSY and FORGOTTEN are the shared-core pair. Hide one and the other is
+    # a lone card whose group still holds two.
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_attr (workflow_key, hidden) VALUES (?, 1) "
+            "ON CONFLICT(workflow_key) DO UPDATE SET hidden = 1",
+            (FORGOTTEN_CARD,),
+        )
+    drawn = _by_key(_cards(owner))[BUSY_CARD]
+    assert drawn["stack_size"] == 1
+    assert drawn["stack_id"] is None
+    # The hidden card is served the same way on its own route: it is in no
+    # stack anybody can see, so it names none either.
+    hidden = _detail(owner, FORGOTTEN_CARD)["card"]
+    assert hidden["stack_size"] == 1
+    assert hidden["stack_id"] is None
+
+
 def test_a_stack_shows_the_union_of_its_members_difference_chips(workflow_env):
     """The chips belong to the drawn card, because the cover is what is drawn.
 

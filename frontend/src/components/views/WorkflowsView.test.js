@@ -1194,3 +1194,86 @@ describe("the cursor in List", () => {
     expect(["b", "b1", "b2"]).not.toContain(cursorKey(wrapper));
   });
 });
+
+describe("the menu's move verbs follow the row too", () => {
+  // The menu reaches the same three writes as Alt+↑/↓, by pointer and by
+  // Shift+F10. Wired straight to the store they skipped the follow-and-
+  // announce step entirely: the write tears every member row down, the
+  // menu's activator is a pair of coordinates with no element to restore
+  // focus to, and the live region said only that the panel closed and
+  // reopened.
+  const STACKED = CARDS.map((entry) =>
+    entry.key === "b" ? { ...entry, stack_id: "stack-b" } : entry,
+  );
+
+  async function menuOn(wrapper, key) {
+    await wrapper
+      .find(`.stack-panel__member[data-key="${key}"]`)
+      .trigger("click");
+    await wrapper
+      .find(".wfv-grid")
+      .trigger("keydown", { key: "F10", shiftKey: true });
+    await flush();
+  }
+
+  /** The grid as it stands, until a reorder re-derives which card it draws. */
+  function serveStack(coverKey, memberKeys) {
+    listWorkflowCards.mockResolvedValue({
+      cards: STACKED.map((entry) =>
+        entry.key === "b"
+          ? {
+              ...entry,
+              key: coverKey,
+              name: coverKey,
+              member_keys: memberKeys,
+            }
+          : entry,
+      ),
+      one_offs: 0,
+      hidden: 0,
+    });
+  }
+
+  async function openStackB() {
+    serveStack("b", ["b1", "b2"]);
+    // The cover is what the grid draws, and the server re-derives it from the
+    // new order — so a mock that keeps serving the old cover would have the
+    // panel close on every *Make it the cover*, and hide the very thing these
+    // two tests are about.
+    reorderStack.mockImplementation(async (stack_id, keys) => {
+      serveStack(keys[0], keys.slice(1));
+      return { stack_id, keys };
+    });
+    const wrapper = await grid();
+    await useWorkflowsStore().openStack("b");
+    await flush();
+    return wrapper;
+  }
+
+  it("announces and re-seats the cursor after Move later", async () => {
+    const wrapper = await openStackB();
+    await menuOn(wrapper, "b1");
+    await wrapper.findAll(".ctx-item")[2].trigger("click");
+    await flush();
+
+    expect(reorderStack).toHaveBeenCalledWith("stack-b", ["b", "b2", "b1"]);
+    expect(wrapper.find('[role="status"]').text()).toMatch(
+      /b1, position \d+ of 3/,
+    );
+    // The row the reader was on is the row they are still on.
+    expect(cursorKey(wrapper)).toBe("b1");
+  });
+
+  it("announces and re-seats the cursor after Make it the cover", async () => {
+    const wrapper = await openStackB();
+    await menuOn(wrapper, "b2");
+    await wrapper.findAll(".ctx-item")[0].trigger("click");
+    await flush();
+
+    expect(reorderStack).toHaveBeenCalledWith("stack-b", ["b2", "b", "b1"]);
+    expect(wrapper.find('[role="status"]').text()).toMatch(
+      /b2, position \d+ of 3/,
+    );
+    expect(cursorKey(wrapper)).toBe("b2");
+  });
+});

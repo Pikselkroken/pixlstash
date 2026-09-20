@@ -178,6 +178,30 @@ describe("StackPanel", () => {
     expect(rows[1].findAll("img")).toHaveLength(0);
   });
 
+  it("keeps the cover's union out of the row's name as well as its cells", async () => {
+    useWorkflowPrefsStore().setStackView("list");
+    const wrapper = makePanel();
+    await wrapper.vm.$nextTick();
+
+    // Every cell but ⋯ is `aria-hidden`, so the label is the whole of what a
+    // screen reader hears. Blanking only the cells would leave it saying the
+    // cover differs from itself by what its siblings differ from IT by.
+    const label = wrapper.find(".stack-panel__row").attributes("aria-label");
+    expect(label).toContain("the stack's cover");
+    expect(label).not.toContain("face detailer");
+    expect(label).not.toContain("other checkpoint");
+    // The rest of the name is untouched, so this is a narrowing and not a
+    // silencing: the row still identifies its workflow.
+    expect(label).toContain("cover");
+    expect(label).toContain("realvisXL_v5");
+
+    // …and a member row still says what it differs by, which is its point.
+    const second = wrapper
+      .findAll(".stack-panel__row")[1]
+      .attributes("aria-label");
+    expect(second).toContain("face detailer");
+  });
+
   it("blanks the cover row's Differs by, which is the others' union", async () => {
     useWorkflowPrefsStore().setStackView("list");
     const wrapper = makePanel();

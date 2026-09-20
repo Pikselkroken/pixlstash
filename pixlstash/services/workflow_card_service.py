@@ -493,6 +493,15 @@ def read_grid(hub: HubDatabase, vault) -> Grid:
         stack.stack_id: set(stack.member_keys)
         for stack in effective_stacks(figures, rows)[0]
     }
+    # **That pass WROTE `stack_id` onto every figure it grouped**, hidden
+    # cards and one-offs included, and nothing below would clear them: the
+    # drawn pass only ever sets ids, and a card whose group collapses below
+    # two once the dropped cards are taken is in no drawn stack to be
+    # revisited. It would be served `stack_size: 1` beside a non-null id -
+    # the one state the field's contract says cannot happen. Cleared here,
+    # before the grouping whose answer is served.
+    for figure in figures:
+        figure.stack_id = None
     stacks, belongs = effective_stacks(visible, rows)
     partial = {
         key

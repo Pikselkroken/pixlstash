@@ -1620,7 +1620,11 @@ watcher the model shelf uses. See §9.1b for the destination itself.
   members differ by — it is the one tile the grid draws for the stack — so
   listing it there makes the first row claim its siblings' differences as its
   own, beside a Checkpoint cell deliberately left empty. The Cover pill is
-  what that row says instead.
+  what that row says instead — **and the blanking reaches the row's accessible
+  name**, which is the whole of what a screen reader hears here, every cell but
+  ⋯ being `aria-hidden`. Left in, the label told a reader the cover differed
+  from itself by the very things its siblings differ from it by, over a row
+  that visibly said nothing of the kind.
 - **One member menu, in ⋯ and in right-click and in both views**, built from a
   single list in `StackPanel` rather than written out per view — which is what
   makes the four combinations identical rather than identical today, and is
@@ -1654,6 +1658,13 @@ watcher the model shelf uses. See §9.1b for the destination itself.
   client therefore never sends a partial list: it has no id to send one to, and
   the ordering verbs go disabled instead of failing with a sentence about keys
   the owner was never shown. A move at either end is a no-op rather than a wrap.
+- **Every path that moves a member follows it and says where it landed.**
+  Alt+↑/↓ and the menu's *Move earlier* / *Move later* / *Make it the cover*
+  reach the same three writes and all route through one `followMove` wrapper.
+  Wired straight to the store the menu skipped it: the write tears every member
+  row down, and the menu's activator is a pair of coordinates with no element
+  for focus to fall back to, so a reader choosing *Move later* was left outside
+  the grid hearing only that the panel had closed and reopened.
 - **Alt+↑/↓ moves the row and follows it**, and **swallows the arrow whether or
   not it can act**: the write re-reads the grid, so every member row is torn
   down and rebuilt and the browser drops its focus — without the follow, one

@@ -736,8 +736,11 @@ the two sides have agreed:
    F1a shipped in. Ordering an automatic group materialises its row and the
    `auto:` id still answers, so an id read before the write is good after it.
 
-   **It is null in two cases, and a client must not tell them apart by
-   guessing.** A card in no stack has none. So does a card in a stack **this
+   **It is null in three cases, and a client must not tell them apart by
+   guessing.** A card in no stack has none. Nor does one whose group falls
+   below two once the dropped cards are taken — it is drawn standing alone, so
+   `stack_size: 1` beside a non-null id is a state this field never answers
+   with, whichever route serves the card. So does a card in a stack **this
    listing drew only part of** — because `cards` drops hidden cards and
    one-offs *before* grouping (point 4 above), while the order route validates
    against the hub's membership, which still counts them. A client ordering the

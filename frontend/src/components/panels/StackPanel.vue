@@ -319,10 +319,24 @@ const pending = computed(() => {
 
 const toolbarName = computed(() => `${props.name || "Stack"} stack`);
 
-/** A List row's accessible name, plus the one thing the row adds: its place. */
+/**
+ * A List row's accessible name, plus the one thing the row adds: its place.
+ *
+ * **The cover's `differs_by` is dropped**, for the reason its two chip cells
+ * are left blank: it is the UNION of what the OTHER rows differ by, carried
+ * on the cover because the grid draws one tile per stack. Every cell but ⋯ is
+ * `aria-hidden`, so this string is the whole of what a screen reader hears —
+ * and left in, it tells a reader the cover differs from itself by the very
+ * things its siblings differ from it by, while the row in front of a sighted
+ * reader says nothing of the kind.
+ */
 function rowName(member, index) {
-  const name = cardAccessibleName(member, { member: true });
-  return index === 0 ? `${name}, the stack's cover` : name;
+  if (index !== 0) return cardAccessibleName(member, { member: true });
+  const name = cardAccessibleName(
+    { ...member, differs_by: [] },
+    { member: true },
+  );
+  return `${name}, the stack's cover`;
 }
 
 /**

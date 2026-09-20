@@ -182,8 +182,8 @@
             :can-reorder="Boolean(store.openStackId)"
             @close="closePanel"
             @select="(key, event) => onRowClick(memberRowIndex(key), event)"
-            @make-cover="store.makeCover"
-            @move="(key, delta) => store.moveMember(key, delta)"
+            @make-cover="(key) => followMove(key, store.makeCover(key))"
+            @move="(key, delta) => moveMember(key, delta)"
             @unstack="store.unstackMember"
             @hide="store.hideMember"
           />
@@ -874,15 +874,19 @@ function onKeyDown(event) {
 }
 
 /**
- * Move a member and follow it, which is the whole of the keyboard gesture.
+ * Follow a member that has just been reordered, and say where it landed.
  *
- * The write re-reads the grid, so every member row is torn down and rebuilt
- * and the browser drops the focus it was holding. Without the second half of
- * this, Alt+Down once leaves a keyboard reader outside the grid entirely, and
- * the row that moved is the one thing they cannot see move.
+ * **Every path that moves a member goes through here** — Alt+↑/↓, and the
+ * menu's *Move earlier* / *Move later* / *Make it the cover*, which reach the
+ * same three writes by pointer or by Shift+F10. The write re-reads the grid,
+ * so every member row is torn down and rebuilt and the browser drops the
+ * focus it was holding; the menu's own activator is a pair of coordinates, so
+ * there is no element for it to fall back to. Without this a keyboard reader
+ * choosing *Move later* is left outside the grid, told only that the panel
+ * closed and reopened, and never that the row moved at all.
  */
-async function moveMember(key, delta) {
-  const moved = await store.moveMember(key, delta);
+async function followMove(key, write) {
+  const moved = await write;
   const at = memberRowIndex(key);
   if (at < 0) return;
   moveCursor(at);
@@ -896,6 +900,11 @@ async function moveMember(key, delta) {
   announcement.value = `${member?.name || "Workflow"}, position ${
     position + 1
   } of ${store.openMembers.length}`;
+}
+
+/** Alt+↑/↓, and the menu's two Move items. */
+function moveMember(key, delta) {
+  return followMove(key, store.moveMember(key, delta));
 }
 
 /** Open the open panel's member menu on `key`, anchored on its row. */
