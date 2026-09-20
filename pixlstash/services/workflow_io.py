@@ -30,6 +30,7 @@ from pixlstash.services.workflow_hash import (
     reduce_api_graph,
     reduce_ui_graph,
 )
+from pixlstash.utils.comfyui_utilities import is_api_format
 
 _PROMPT_SIDES = ("positive", "negative")
 
@@ -64,13 +65,22 @@ def picture_fields(class_type: str) -> tuple[str, ...]:
 def api_graph(document: dict) -> dict | None:
     """The API-format graph in *document*, or ``None`` for a UI-format file.
 
-    The import dialog stores an embedded prompt chunk as ``{"prompt": graph}``.
+    Which serialisation a document is in is :func:`is_api_format`'s question
+    and no caller's: it honours the ``last_node_id`` / ``last_link_id`` hints
+    ComfyUI writes as well as the ``nodes`` / ``links`` arrays, where a check
+    for ``nodes`` alone reads a truncated editor export as an API graph and
+    walks it as a flat map (#1482).
+
+    The import dialog stores an embedded prompt chunk as ``{"prompt": graph}``,
+    and **the envelope is not the graph**: a hint left on the outside of one
+    says nothing about what it wraps, so the wrapped graph is what is sniffed.
     """
-    if not isinstance(document, dict) or isinstance(document.get("nodes"), list):
+    if not isinstance(document, dict):
         return None
-    if isinstance(document.get("prompt"), dict):
-        return document["prompt"]
-    return document
+    wrapped = document.get("prompt")
+    if isinstance(wrapped, dict):
+        return wrapped if is_api_format(wrapped) else None
+    return document if is_api_format(document) else None
 
 
 @dataclass(frozen=True)

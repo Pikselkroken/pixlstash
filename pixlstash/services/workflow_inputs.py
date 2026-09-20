@@ -46,16 +46,19 @@ def _raw_node(document: dict, node_id: str) -> dict:
     A UI-format node inside a subgraph has a namespaced id (``"75:61"``) that no
     entry in ``nodes`` carries, so it falls back to its class name for a title.
     """
-    if isinstance(document.get("nodes"), list):
+    graph = api_graph(document)
+    if graph is None:
         return next(
             (
                 node
-                for node in document["nodes"]
+                # An editor document is one the hints can name, so ``nodes`` is
+                # not guaranteed to be there, let alone to be a list.
+                for node in document.get("nodes") or ()
                 if isinstance(node, dict) and str(node.get("id")) == node_id
             ),
             {},
         )
-    node = (api_graph(document) or {}).get(node_id)
+    node = graph.get(node_id)
     return node if isinstance(node, dict) else {}
 
 

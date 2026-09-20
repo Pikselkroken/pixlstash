@@ -481,8 +481,11 @@ def _extract_generation_info_api(workflow: dict) -> dict:
 def extract_generation_info(workflow: dict) -> dict:
     """Extract model names, LoRA names, and positive prompt from a workflow.
 
-    Works with both UI format (``nodes`` + ``links`` arrays) and API format
-    (flat dict of node dicts with ``class_type`` + ``inputs``).
+    Works with both serialisations, and which one this is is
+    :func:`is_api_format`'s answer rather than a second opinion taken here
+    (#1482): a document carrying the ``last_node_id`` / ``last_link_id`` hints
+    is the editor graph even where its body would read as a flat node map, and
+    is read as one rather than walked as both.
 
     Args:
         workflow: A parsed ComfyUI workflow dict as returned by
@@ -501,11 +504,8 @@ def extract_generation_info(workflow: dict) -> dict:
           the ``seed`` widget of ``KSampler``/``KSamplerAdvanced`` or the
           ``noise_seed`` input of ``RandomNoise``.
     """
-    is_ui_format = isinstance(workflow.get("nodes"), list) or isinstance(
-        workflow.get("links"), list
-    )
     try:
-        if is_ui_format:
+        if not is_api_format(workflow):
             return _extract_generation_info_ui(workflow)
         return _extract_generation_info_api(workflow)
     except Exception:
@@ -783,12 +783,8 @@ def is_comfy_workflow(value: Any) -> bool:
     """
     if not isinstance(value, dict):
         return False
-    # UI format
-    if isinstance(value.get("nodes"), list) or isinstance(value.get("links"), list):
-        return True
-    if isinstance(value.get("last_node_id"), int) or isinstance(
-        value.get("last_link_id"), int
-    ):
+    # UI format - the same four hints, and only `is_api_format` knows them.
+    if not is_api_format(value):
         return True
     # API format: most top-level entries must be node dicts
     vals = list(value.values())

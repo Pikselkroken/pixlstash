@@ -27,7 +27,7 @@ from copy import deepcopy
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import INPUT_IMAGE_FIELDS
 from pixlstash.services.workflow_hash import WorkflowGraphError
-from pixlstash.services.workflow_io import detect_workflow_io
+from pixlstash.services.workflow_io import api_graph, detect_workflow_io
 
 logger = get_logger(__name__)
 
@@ -350,12 +350,10 @@ def run_targets(document: dict, detected=None) -> dict[str, list[dict]]:
                     {"path": binding.get("path"), "template": binding.get("template")}
                 )
         return targets
-    if isinstance(document.get("nodes"), list):
+    graph = api_graph(document)
+    if graph is None:
         return targets
-
-    prefix, graph = [], document
-    if isinstance(document.get("prompt"), dict):
-        prefix, graph = ["prompt"], document["prompt"]
+    prefix = ["prompt"] if graph is not document else []
     try:
         found = detected or detect_workflow_io(document)
     except WorkflowGraphError as exc:
