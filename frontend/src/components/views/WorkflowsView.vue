@@ -40,6 +40,32 @@
         </div>
       </v-menu>
 
+      <!-- No count on the strip's own chips and a count here, which is the
+           reverse of the picture grid: that toolbar keeps its strip on screen
+           beside the button, and this one is a row that only exists while a
+           filter is on. Both read the same `filterChips`. -->
+      <v-menu
+        v-model="filterMenuOpen"
+        location="bottom start"
+        origin="top start"
+        :offset="8"
+        :close-on-content-click="false"
+      >
+        <template #activator="{ props: menuProps }">
+          <AppBarButton
+            v-bind="menuProps"
+            icon="filter"
+            :badge="store.filterChips.length || null"
+            :active="store.filterChips.length > 0 && !filterMenuOpen"
+            :open="filterMenuOpen"
+            aria-haspopup="menu"
+            :aria-expanded="filterMenuOpen"
+            >Filters</AppBarButton
+          >
+        </template>
+        <WorkflowFilterMenu />
+      </v-menu>
+
       <!-- "Add" is today's workflow import, unchanged: the file lands through
            `POST /comfyui/workflows/import`, the route the retired shelf's own
            drop target posted to. The gesture went with the shelf; this screen
@@ -75,6 +101,13 @@
       </span>
     </div>
 
+    <FilterStrip
+      inline
+      :chips="store.filterChips"
+      :of-label="store.filterOfLabel"
+      class="wfv-strip"
+    />
+
     <p v-if="store.error" class="wfv-error" role="alert">{{ store.error }}</p>
 
     <!-- A Recipe section's Open that named a workflow this grid does not list.
@@ -85,9 +118,24 @@
       That workflow is not in this grid.
       <template v-if="withheld"
         >{{ withheld }} {{ withheld === 1 ? "is" : "are" }} being left out:
-        {{ store.hidden }} hidden and {{ store.oneOffs }} counted as
+        {{ withheldHidden }} hidden and {{ withheldOneOffs }} counted as
         one-offs.</template
       >
+    </p>
+
+    <!-- The fifth kind of empty: the library HAS workflows and the filters
+         leave none. Not the empty state below - that screen offers three ways
+         to get a first workflow, and this reader already has some. The strip
+         above carries the way back, so this only has to say which it is. -->
+    <p v-if="filteredOut" class="wfv-note">
+      No workflow matches these filters.
+      <button
+        class="wfv-note-clear"
+        type="button"
+        @click="store.clearFilters()"
+      >
+        Clear all
+      </button>
     </p>
 
     <!-- The §9 empty state: the shipped art, a Tiny5 `--text-2xl` headline and
@@ -102,8 +150,8 @@
         <h2 class="wfv-empty__title">Nothing found yet</h2>
         <p v-if="withheld" class="wfv-empty__lead">
           Every workflow this library has is being left out of the grid:
-          {{ store.hidden }} hidden and {{ store.oneOffs }} counted as one-offs.
-          Nothing has been lost.
+          {{ withheldHidden }} hidden and {{ withheldOneOffs }} counted as
+          one-offs. Nothing has been lost.
         </p>
         <p v-else class="wfv-empty__lead">
           A workflow arrives with the pictures it made, or as a file of its own.
@@ -264,8 +312,10 @@ import {
 } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import { isStack } from "../../utils/workflowCard";
+import FilterStrip from "../panels/FilterStrip.vue";
 import StackPanel from "../panels/StackPanel.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
+import WorkflowFilterMenu from "../panels/WorkflowFilterMenu.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import OptionRows from "../widgets/OptionRows.vue";
@@ -305,6 +355,7 @@ const gridEl = ref(null);
 const panelRef = ref(null);
 const fileInput = ref(null);
 const sortMenuOpen = ref(false);
+const filterMenuOpen = ref(false);
 const columns = ref(1);
 // **The cursor is an entry id, not an index.** `flatRows` is rebuilt by a
 // resort, by a stack opening and by one closing, and an index held across any
@@ -328,6 +379,13 @@ const comfyuiConfigured = computed(() => filterStore.comfyuiConfigured);
 const showEmptyState = computed(
   () => store.loaded && !store.loading && store.cards.length === 0,
 );
+const filteredOut = computed(
+  () =>
+    store.loaded &&
+    !store.loading &&
+    store.cards.length > 0 &&
+    store.sortedCards.length === 0,
+);
 
 /**
  * How many workflows the grid HAS but is not drawing.
@@ -338,13 +396,21 @@ const showEmptyState = computed(
  * routes that are not in `develop` yet, so for now this is a sentence rather
  * than a way back in.
  */
-const withheld = computed(() => store.hidden + store.oneOffs);
+const withheldHidden = computed(() =>
+  store.filters.showHidden ? 0 : store.hidden,
+);
+const withheldOneOffs = computed(() =>
+  store.filters.hideOneOffs ? store.oneOffs : 0,
+);
+const withheld = computed(() => withheldHidden.value + withheldOneOffs.value);
 
 const subtitle = computed(() => {
-  const count = store.cards.length;
+  const count = store.sortedCards.length;
   const parts = [count === 1 ? "1 workflow" : `${count} workflows`];
-  if (store.hidden) parts.push(`${store.hidden} hidden`);
-  if (store.oneOffs) parts.push(`${store.oneOffs} one-offs`);
+  // Only what is still being LEFT OUT. A filter that let the hidden ones in
+  // makes "40 hidden" a caption for cards the reader is looking at.
+  if (withheldHidden.value) parts.push(`${withheldHidden.value} hidden`);
+  if (withheldOneOffs.value) parts.push(`${withheldOneOffs.value} one-offs`);
   return parts.join(" · ");
 });
 
@@ -1035,6 +1101,19 @@ async function filesChosen(event) {
   padding: var(--space-3) var(--space-5);
   color: rgba(var(--v-theme-on-surface), 0.6);
   font-size: var(--text-sm);
+}
+.wfv-note-clear {
+  color: rgb(var(--v-theme-on-surface));
+  text-decoration: underline;
+}
+.wfv-note-clear:hover {
+  color: rgb(var(--v-theme-primary));
+}
+
+/* The chip strip sits in the flow here (`inline`), so it needs the screen's
+   own side padding rather than the picture grid's full-bleed bar. */
+.wfv-strip {
+  padding-inline: var(--space-5);
 }
 
 /* The scroller, and the only thing here carrying padding: the grid inside it

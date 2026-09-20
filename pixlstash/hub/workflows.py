@@ -877,6 +877,24 @@ def picture_ghosts_by_topology(hub: HubDatabase, library_uuid: str) -> dict[str,
     return {row["topology_hash"]: row["ghosts"] for row in rows}
 
 
+def picture_ghosts_by_variant(hub: HubDatabase, library_uuid: str) -> dict[str, int]:
+    """The same ghosts counted per VARIANT, for the Workflows grid's filter.
+
+    A card is a set of variants inside a topology, and a topology can carry
+    several cards - so counting per topology, as the retired shelf's row did,
+    would tell every card of that topology it keeps a ghost its neighbour
+    holds. The ghost row already names the structural hash, so summing the
+    card's own variants is exact and costs the same one query.
+    """
+    rows = hub.fetchall(
+        "SELECT structural_hash, COUNT(*) AS ghosts "
+        "FROM workflow_picture_ghost WHERE library_uuid = ? "
+        "GROUP BY structural_hash",
+        (library_uuid,),
+    )
+    return {row["structural_hash"]: row["ghosts"] for row in rows}
+
+
 def erase_picture_ghosts(hub: HubDatabase, library_uuid: str) -> int:
     """Destroy every ghost one library holds. Returns how many.
 

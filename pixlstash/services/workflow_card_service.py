@@ -52,6 +52,7 @@ from pixlstash.hub.workflow_card_reads import (
     stack_rows,
     variant_documents,
 )
+from pixlstash.hub.workflows import model_ghost_names, picture_ghosts_by_variant
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import WorkflowGraphError
 from pixlstash.services.workflow_identity import (
@@ -175,6 +176,8 @@ class CardFigures:
     differs_by: list[str] = field(default_factory=list)
     models: list[SlotModel] = field(default_factory=list)
     loras: list[SlotModel] = field(default_factory=list)
+    ghosts: int = 0
+    model_ghosts: int = 0
 
     @property
     def rating(self) -> Optional[float]:
@@ -455,9 +458,25 @@ def describe_differences(
             cover_figure.differs_by = union
 
 
-def read_grid(hub: HubDatabase, vault) -> Grid:
+def read_grid(
+    hub: HubDatabase,
+    vault,
+    *,
+    include_hidden: bool = False,
+    include_one_offs: bool = False,
+) -> Grid:
     """Everything ``GET /workflows/cards`` answers. See the module docstring
-    for what it costs."""
+    for what it costs.
+
+    The two flags are the Filters panel's *Show hidden workflows* and the
+    unticked *Hide one-offs* (F7). They widen what is DRAWN; ``hidden`` and
+    ``one_offs`` are counted either way, so the panel can label its own
+    checkboxes with the number it is letting in. Widening here rather than in
+    the client is what keeps the stacking honest: the grouping runs over
+    exactly the cards the grid shows, so letting a hidden member back in makes
+    its stack two again instead of leaving the cover claiming a size its own
+    grid contradicts.
+    """
     cards = card_index(hub)
     activity, candidates, saved_recipes = read_card_grid(vault, COVER_DEPTH)
     figures = _figures(cards, activity, candidates, saved_recipes)
@@ -468,10 +487,18 @@ def read_grid(hub: HubDatabase, vault) -> Grid:
     # other standing alone, with `stack_size` 1. That is the grid telling the
     # truth about what it drew rather than a stack being destroyed - the
     # `workflow_stack_member` rows are untouched and unhiding restores it.
+    #
+    # **Both counts are taken over the same set whatever the flags say** -
+    # hidden over every card, one-offs over the cards that are not hidden -
+    # so ticking one checkbox does not move the other's number underneath it.
     hidden = sum(1 for figure in figures if figure.card.hidden)
-    visible = [figure for figure in figures if not figure.card.hidden]
-    one_offs = sum(1 for figure in visible if figure.one_off)
-    visible = [figure for figure in visible if not figure.one_off]
+    one_offs = sum(1 for figure in figures if figure.one_off and not figure.card.hidden)
+    visible = [
+        figure
+        for figure in figures
+        if (include_hidden or not figure.card.hidden)
+        and (include_one_offs or not figure.one_off)
+    ]
 
     # Over every card and not only the drawn ones: a hidden card still opens
     # on the detail route, and it would otherwise show a cover the owner has
@@ -535,6 +562,7 @@ def read_grid(hub: HubDatabase, vault) -> Grid:
     drawn = [figure for figure in visible if figure.card.workflow_key not in covered]
     drawn.sort(key=_rank_order)
     _describe_slots(hub, figures)
+    _describe_ghosts(hub, vault, figures)
     return Grid(
         cards=drawn,
         stacks=stacks,
@@ -603,6 +631,46 @@ def _describe_slots(hub: HubDatabase, figures: list[CardFigures]) -> None:
                         label=str(slot.get("label") or "") or None,
                     )
                 )
+
+
+def _describe_ghosts(hub: HubDatabase, vault, figures: list[CardFigures]) -> None:
+    """Fill in what each card keeps of something deleted (F7's Ghosts filter).
+
+    Two kinds, counted apart because forgetting them is two different purges
+    in Settings › Privacy: a **picture ghost** is the thumbnail and prompt of a
+    picture this library no longer has, and a **model ghost** is the name of a
+    model the shelf does not hold. The Filters row asks only whether a card
+    keeps either, so the two are summed by the client; they are reported
+    separately because ⓘ can say which.
+
+    Three hub reads for the whole grid, all of them counts or name sets.
+
+    **The names are read off the variants and not off** :attr:`CardFigures.
+    models` **and** :attr:`~CardFigures.loras`, which is why this makes its own
+    ``asset_names`` call rather than reusing the one :func:`_describe_slots`
+    makes. Those two lists are what the CARD is drawn as: they cover the
+    card's first variant alone, and a recipe LoRA is deliberately anonymous
+    there, so a forgotten character LoRA - the commonest model ghost of all -
+    would never be counted.
+    """
+    library_uuid = getattr(vault, "library_uuid", None)
+    by_variant = picture_ghosts_by_variant(hub, library_uuid) if library_uuid else {}
+    ghost_names = model_ghost_names(hub)
+    names = asset_names(
+        hub, [variant for figure in figures for variant in figure.card.variants]
+    )
+    for figure in figures:
+        figure.ghosts = sum(
+            by_variant.get(variant, 0) for variant in figure.card.variants
+        )
+        figure.model_ghosts = len(
+            {
+                filename
+                for variant in figure.card.variants
+                for _widget, filename in names.get(variant, ())
+            }
+            & ghost_names
+        )
 
 
 def by_key(figures: list[CardFigures]) -> dict[str, CardFigures]:

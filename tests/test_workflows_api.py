@@ -3042,8 +3042,8 @@ _CONTRACT_FIELDS = {
 }
 
 
-def _cards(owner) -> dict:
-    payload = owner.get(f"{API}/workflows/cards")
+def _cards(owner, query: str = "") -> dict:
+    payload = owner.get(f"{API}/workflows/cards{query}")
     assert payload.status_code == 200, payload.text
     return payload.json()
 
@@ -3486,6 +3486,129 @@ def test_a_one_off_is_counted_and_an_imported_file_takes_it_out_of_the_count(
     payload = _cards(workflow_env.owner)
     assert payload["one_offs"] == 0
     assert _by_key(payload)[BINNED_CARD]["imported"] is True
+
+
+def test_the_filters_panel_can_ask_for_the_one_offs_and_for_the_hidden(
+    workflow_env,
+):
+    """F7's two checkboxes, and the counts that label them.
+
+    Both counts are taken over the same set whatever the flags say, so the
+    panel can go on writing "Hide one-offs (1)" while it is showing that one:
+    a count that moved when its own checkbox was ticked would read as the
+    number of cards still being held back, which is zero.
+    """
+    owner = workflow_env.owner
+    drawn = _cards(owner)
+    assert BINNED_CARD not in _by_key(drawn)
+    assert HIDDEN_CARD not in _by_key(drawn)
+
+    with_one_offs = _cards(owner, "?include_one_offs=true")
+    assert BINNED_CARD in _by_key(with_one_offs)
+    assert HIDDEN_CARD not in _by_key(with_one_offs)
+    assert (with_one_offs["one_offs"], with_one_offs["hidden"]) == (1, 1)
+
+    with_hidden = _cards(owner, "?include_hidden=true")
+    assert HIDDEN_CARD in _by_key(with_hidden)
+    assert BINNED_CARD not in _by_key(with_hidden)
+    assert (with_hidden["one_offs"], with_hidden["hidden"]) == (1, 1)
+
+    both = _cards(owner, "?include_hidden=true&include_one_offs=true")
+    assert {BINNED_CARD, HIDDEN_CARD} <= set(_by_key(both))
+    assert (both["one_offs"], both["hidden"]) == (1, 1)
+
+    # The overlap, which is where a count taken over the widened set gives
+    # itself away: HIDDEN is only spared the one-off rule by its workflow
+    # file, so without it the card is both. Letting the hidden ones in must
+    # not make the one-off count climb - the checkbox beside that number is
+    # the thing that let them in, and its own label would move as it was
+    # ticked.
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute("DELETE FROM workflow_file WHERE workflow_key = ?", (HIDDEN_CARD,))
+    assert _cards(owner)["one_offs"] == 1
+    assert _cards(owner, "?include_hidden=true")["one_offs"] == 1
+
+
+def test_a_hidden_card_let_back_in_rejoins_its_stack(workflow_env):
+    """The reason the two flags are the server's and not the client's.
+
+    HIDDEN is put in BUSY's group, so hiding it leaves BUSY a lone card. Asked
+    for the hidden ones, the grouping has to run over the widened set: a
+    client-side filter would draw HIDDEN beside a BUSY still calling itself a
+    stack of one, and the stack's cover would be whichever of them the client
+    happened to list first.
+    """
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET core_hash = ? WHERE topology_hash = ?",
+            (SHARED_CORE, HIDDEN_TOPOLOGY),
+        )
+    cards = _by_key(_cards(workflow_env.owner))
+    assert cards[BUSY_CARD]["stack_size"] == 2
+    assert HIDDEN_CARD not in cards
+
+    cards = _by_key(_cards(workflow_env.owner, "?include_hidden=true"))
+    assert cards[BUSY_CARD]["stack_size"] == 3
+    assert set(cards[BUSY_CARD]["member_keys"]) == {FORGOTTEN_CARD, HIDDEN_CARD}
+    assert HIDDEN_CARD not in cards
+
+
+def test_a_card_counts_the_ghosts_its_own_variants_keep(workflow_env):
+    """The Filters panel's Ghosts row: "keeps something deleted", per CARD.
+
+    A SECOND CARD IS PUT ON BUSY'S TOPOLOGY for this, because that is the only
+    shape that can tell the two readings apart: counting per topology - what
+    the retired shelf's row did, the topology being its row - hands the ghost
+    to every card of that topology, and a fixture where each topology carries
+    one card reads identically either way.
+    """
+    server = workflow_env.server
+    sibling_variant, sibling_card = _h("siblingrecipe"), _h("siblingcard")
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_recipe "
+            "(structural_hash, topology_hash, hash_version, node_count, first_seen_at) "
+            "VALUES (?, ?, 'v1', 47, '2026-08-06T00:00:00Z')",
+            (sibling_variant, BUSY_TOPOLOGY),
+        )
+        conn.execute(
+            "INSERT INTO workflow_variant "
+            "(structural_hash, topology_hash, workflow_key, key_version) "
+            "VALUES (?, ?, ?, ?)",
+            (sibling_variant, BUSY_TOPOLOGY, sibling_card, WORKFLOW_KEY_VERSION),
+        )
+    record_picture_ghosts(
+        server.hub,
+        [
+            PictureGhost(
+                library_uuid=server.vault.library_uuid,
+                pixel_sha="sha-busy-ghost",
+                instance_hash=_h("busy-ghost-instance"),
+                structural_hash=BUSY_RECIPE_A,
+                thumbnail=b"thumbnail-bytes",
+            ),
+            # Another library's ghost, which this library must not count.
+            PictureGhost(
+                library_uuid=_h("another-library"),
+                pixel_sha="sha-elsewhere",
+                instance_hash=_h("elsewhere-instance"),
+                structural_hash=FORGOTTEN_RECIPE,
+                thumbnail=b"thumbnail-bytes",
+            ),
+        ],
+    )
+    cards = _by_key(_cards(workflow_env.owner))
+    assert cards[BUSY_CARD]["ghosts"] == 1
+    # The forgotten LoRA name is the model ghost the shelf fixture already
+    # carries, and it sits on BUSY's slots.
+    assert cards[BUSY_CARD]["model_ghosts"] == 1
+
+    # Same topology, no variant of its own that anything was filed against.
+    sibling = _detail(workflow_env.owner, sibling_card)["card"]
+    assert (sibling["ghosts"], sibling["model_ghosts"]) == (0, 0)
+    # And another library's ghost is nobody's here.
+    other = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]
+    assert (other["ghosts"], other["model_ghosts"]) == (0, 0)
 
 
 def _save_recipe(server, workflow_key, name="A look I kept"):

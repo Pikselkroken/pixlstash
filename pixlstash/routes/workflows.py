@@ -390,6 +390,20 @@ class WorkflowCard(BaseModel):
             "ordered against each other, and is meaningless on its own."
         ),
     )
+    ghosts: int = Field(
+        0,
+        description=(
+            "Picture ghosts this card's variants keep for the active library: "
+            "the thumbnail and prompt of a picture the library no longer has."
+        ),
+    )
+    model_ghosts: int = Field(
+        0,
+        description=(
+            "How many of the models this card names are not on the shelf. "
+            "With `ghosts`, what the Filters panel's Ghosts row asks about."
+        ),
+    )
 
 
 class WorkflowCards(BaseModel):
@@ -949,6 +963,8 @@ def _card(figure, defaults=()) -> WorkflowCard:
             key for key in figure.member_keys if key != figure.card.workflow_key
         ],
         stack_id=figure.stack_id,
+        ghosts=figure.ghosts,
+        model_ghosts=figure.model_ghosts,
     )
 
 
@@ -1169,13 +1185,34 @@ def create_router(server) -> APIRouter:
         description=(
             "Every workflow card this machine holds, in cover-rank order, one "
             "card per stack. Hidden cards and one-offs are counted rather than "
-            "listed."
+            "listed, unless the two flags ask for them."
         ),
         response_model=WorkflowCards,
     )
-    def list_cards(request: Request):
+    def list_cards(
+        request: Request,
+        include_hidden: bool = Query(
+            False,
+            description=(
+                "List hidden cards too - the Filters panel's *Show hidden "
+                "workflows*. `hidden` still counts them either way."
+            ),
+        ),
+        include_one_offs: bool = Query(
+            False,
+            description=(
+                "List one-offs too - *Hide one-offs* unticked. `one_offs` "
+                "still counts them either way."
+            ),
+        ),
+    ):
         server.auth.ensure_secure_when_required(request)
-        grid = read_grid(_hub(), server.vault)
+        grid = read_grid(
+            _hub(),
+            server.vault,
+            include_hidden=include_hidden,
+            include_one_offs=include_one_offs,
+        )
         return WorkflowCards(
             cards=[_card(figure) for figure in grid.cards],
             one_offs=grid.one_offs,

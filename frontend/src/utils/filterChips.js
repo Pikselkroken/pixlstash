@@ -248,5 +248,13 @@ export function filterChips(store, { allPicturesView = true } = {}) {
       store.comfyuiLoraFilter = without(store.comfyuiLoraFilter, name);
     });
   }
+  // *Show all N pictures* on a workflow card (F7). No menu row offers it: the
+  // Workflows screen is the only place that knows a card's key, so the chip is
+  // how it arrives and its × is the whole of the way back.
+  if (store.workflowFilter) {
+    push("workflow", "Workflow", store.workflowFilter.name, () => {
+      store.workflowFilter = null;
+    });
+  }
   return chips;
 }

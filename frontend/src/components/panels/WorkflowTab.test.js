@@ -36,7 +36,15 @@ vi.mock("../../api/workflows", () => ({
   stackWorkflows: (...args) => stackWorkflows(...args),
 }));
 
+// *Show all N pictures* (F7) leaves this screen for the library.
+const push = vi.fn();
+vi.mock("vue-router", () => ({
+  useRouter: () => ({ push }),
+  useRoute: () => ({ name: "workflows", query: {} }),
+}));
+
 import WorkflowTab from "./WorkflowTab.vue";
+import { useFilterStore } from "../../stores/useFilterStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 
@@ -575,6 +583,33 @@ describe("which card the rail shows", () => {
     await recipe.trigger("click");
     await flush(wrapper);
     expect(store.members).toEqual({});
+  });
+
+  // Half of the chip's round trip: this screen is the only one that knows a
+  // card's key, and `useGridFetch.test.js` holds the half that spends it.
+  it("opens the library on the card's own pictures, as a removable chip", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    const link = wrapper.find('[data-testid="wftab-show-pictures"]');
+    expect(link.text()).toBe("184 pictures");
+    expect(link.attributes("aria-label")).toBe("Show all 184 pictures");
+
+    await link.trigger("click");
+
+    expect(useFilterStore().workflowFilter).toEqual({
+      key: KEY,
+      name: "Cinematic portrait",
+    });
+    expect(push).toHaveBeenCalledWith("/");
+  });
+
+  // Nothing to show, so nothing to press: a link that filtered the library
+  // down to nothing would read as a broken grid rather than as an empty card.
+  it("leaves the figure as plain text on a card with no pictures", async () => {
+    const { wrapper } = await mountWith([KEY], [card({ picture_count: 0 })]);
+    expect(wrapper.find('[data-testid="wftab-show-pictures"]').exists()).toBe(
+      false,
+    );
+    expect(textOf(wrapper)).toContain("0 pictures");
   });
 
   it("shows a selected stack member, which the grid never lists", async () => {

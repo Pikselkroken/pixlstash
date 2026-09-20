@@ -13,8 +13,17 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+
+// ⓘ carries *Show all N pictures* (F7), so the card now reaches the filter
+// store and the router through it.
+const push = vi.fn();
+vi.mock("vue-router", () => ({
+  useRouter: () => ({ push }),
+  useRoute: () => ({ name: "workflows", query: {} }),
+}));
 
 vi.mock("vuetify/components", async () => {
   const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
@@ -62,6 +71,11 @@ const CROWDED = {
   imported: true,
   stack_size: 6,
 };
+
+beforeEach(() => {
+  setActivePinia(createPinia());
+  push.mockClear();
+});
 
 function mountCard(card, props = {}) {
   return mount(WorkflowCard, {

@@ -508,7 +508,7 @@ and a `409` means the set changed and nothing was forgotten.
 | `GET /api/v1/workflows/{topology_hash}/variants` | One row's expansion | `[WorkflowVariant]` |
 | `GET /api/v1/workflows/{topology_hash}/pictures?limit=` | Ids for the inspector's tiles, newest first | `[int]` |
 | `GET /api/v1/workflows/recipes/{structural_hash}/graph` | One recipe's stored graph | `{structural_hash, document, runnable}` |
-| `GET /api/v1/workflows/cards` | The card grid, in cover-rank order, one card per stack | `{cards: [WorkflowCard], one_offs, hidden}`. **`name` is never null**: the owner's name, else the workflow FILE that runs it without its extension, else `"<base model>: <Type>"` built here (`realvisxl: Text to Image`), else `"Untitled workflow"`. The built one takes the first of `BASE_MODEL_KINDS` — derived from `CHECKPOINT_WIDGETS`, so a VAE or a text encoder can never name a card — and is deliberately not unique; #1454 owns the `… + FaceDetailer` and character-LoRA halves. `type_label` is `type` as ComfyUI spells it (`txt2img` → `Text to Image`), served rather than mirrored so a card's name row and its type chip cannot say one fact in two vocabularies. `covers` are **API-relative** thumbnail paths: an `<img src>` bypasses the client's interceptor, so a consumer prefixes the API base and appends the share token itself |
+| `GET /api/v1/workflows/cards?include_hidden=&include_one_offs=` | The card grid, in cover-rank order, one card per stack | `{cards: [WorkflowCard], one_offs, hidden}`. The two flags are the Workflows Filters panel's *Show hidden workflows* and an unticked *Hide one-offs* (F7); both default false, so the grid a client asks nothing for is unchanged. **They widen what is LISTED, never what is counted**: `one_offs` and `hidden` are taken over the same sets whatever the flags say, so a client can label the checkbox that is letting them in. **The widening belongs here and not in the client** because the grouping runs over exactly the cards the grid lists — a hidden member let back in makes its stack two again, where a client-side filter would draw it beside a cover still declaring `stack_size: 1`. Each card also carries `ghosts` (picture ghosts this library holds for the card's own variants) and `model_ghosts` (models it names that are not on the shelf), which is what the panel's Ghosts row asks about; both are per CARD, not per topology, because a topology can carry several cards and only one of them may hold the ghost. **`name` is never null**: the owner's name, else the workflow FILE that runs it without its extension, else `"<base model>: <Type>"` built here (`realvisxl: Text to Image`), else `"Untitled workflow"`. The built one takes the first of `BASE_MODEL_KINDS` — derived from `CHECKPOINT_WIDGETS`, so a VAE or a text encoder can never name a card — and is deliberately not unique; #1454 owns the `… + FaceDetailer` and character-LoRA halves. `type_label` is `type` as ComfyUI spells it (`txt2img` → `Text to Image`), served rather than mirrored so a card's name row and its type chip cannot say one fact in two vocabularies. `covers` are **API-relative** thumbnail paths: an `<img src>` bypasses the client's interceptor, so a consumer prefixes the API base and appends the share token itself |
 | `GET /api/v1/workflows/cards/{workflow_key}` | One card opened | `{card, notes, hidden, variants: [WorkflowVariant], pins}`. `pins` is `null` when nobody has pinned on the card (the client applies its own default pins) and `[]` when everything is unpinned; the two are different answers. A card's `models` and `loras` each carry `slot_label`, the address `PUT /workflows/{key}/slots` marks |
 | `GET /api/v1/workflows/cards/{workflow_key}/pictures?limit=` | Ids for one card's pictures, newest first | `[int]` |
 
@@ -902,6 +902,13 @@ library**; a client that treats "no results" as "filter ignored" would be
 reading it backwards. The key itself comes from a card read, or from
 `GET /api/v1/comfyui/pictures/{id}/recipe` (§11.2), which reports the card the
 picture's own variant is on.
+
+The shipped consumer is F7's *Show all N pictures*: the picture figure in the
+Workflow tab's header and in a card's ⓘ sends `workflow_key` and lands on the
+library with a removable **Workflow** chip. It sends the KEY and not the stack
+even for a stack's cover, because the figure it is on is that card's own
+picture count — a card carries its own pictures and never its members' — so a
+stack filter would answer with more pictures than the link offered.
 
 ---
 

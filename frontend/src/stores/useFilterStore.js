@@ -48,6 +48,10 @@ export const useFilterStore = defineStore("filter", () => {
   // has ruled on yet) is still honoured by the store and the API, but the filter
   // panel no longer offers it: the duplicate queue owns that work.
   const stackStateFilter = ref("all");
+  // One workflow card's pictures (v1.12 F7's *Show all N pictures*):
+  // `{key, name}`, or null. The name is carried because the chip has to say
+  // which workflow, and the grid holds no workflow cards to look it up in.
+  const workflowFilter = ref(null);
 
   function resetFilters() {
     mediaTypeFilter.value = "all";
@@ -67,6 +71,7 @@ export const useFilterStore = defineStore("filter", () => {
     comfyuiLoraFilter.value = [];
     impossibleSources.value = [];
     stackStateFilter.value = "all";
+    workflowFilter.value = null;
   }
 
   return {
@@ -88,6 +93,7 @@ export const useFilterStore = defineStore("filter", () => {
     comfyuiConfigured,
     impossibleSources,
     stackStateFilter,
+    workflowFilter,
     resetFilters,
   };
 });
