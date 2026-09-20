@@ -1512,16 +1512,19 @@ proves ran together, with a model free to appear in more than one.
   verb bar used to stand in for: reading `visibleRows` on the grid would leave
   Delete live over models that screen shows none of. The ids survive the switch
   either way, so the row list offers them again.
-- **A RUN is the one thing a card can stand for besides one file.**
-  `shownModelIds` fans a run out into its members, so the grid can draw a card
-  named after step 2 of 6 with no run affordance on it at all. `setGridRows`
-  therefore pulls a whole run into the fold the moment any step of it is on a
-  card and lets `collapseStacks` make it one row, and `modelsBehind` resolves a
-  click on such a card to the run that holds it — the row list's "a member
-  picked out of an expanded strip stands for itself" exception does not apply
-  here, because there is no strip to open. Without both, Forget aimed at a card
-  would destroy half a run from a screen that draws no runs, which is the
-  partial state `services/stack_membership` exists to forbid.
+- **`setGridRows` does not fold runs, and that is the one place it departs from
+  `visibleRows`.** `shownModelIds` fans a run out into its members, so the grid
+  can draw a card named after step 2 of 6 — and a second card named after step 1
+  beside it. Folding them was tried, on the reasoning that a run is atomic, and
+  is wrong for this screen: clicking one card lit up every other card built on
+  the same run, and a verb aimed at the set in front of the reader reached files
+  in sets they were not looking at. The grid's question is *what is in THIS
+  workflow set*, and a card names exactly one file in it. So a card resolves
+  through `modelsBehind` to itself, which is the shelf's own documented
+  exception — "a member picked out of an expanded strip stands for itself" —
+  reached by a different route: the card names the one file a recipe recorded.
+  The atomic gesture stays where the run is visible, on the row list, which
+  draws it as one row and takes it whole.
 - **`setGridModelIds` is the narrower question the VIEW asks**: which ids have a
   card or a tray row, so a click has something to aim at. Intersected with
   `rows`, because a verb writes a shelf row and a combination can name a model

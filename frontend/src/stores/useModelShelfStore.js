@@ -1662,27 +1662,24 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * measured over drawn rows, a run is atomic - holds on both screens from one
    * piece of code instead of one screen's worth of special cases.
    *
-   * **A run is pulled in WHOLE the moment any step of it is on a card.** The
-   * grid has no run affordance at all: `shownModelIds` fans a run out into its
-   * members, so a card can be named after step 2 of 6 with nothing on it saying
-   * so. Taking that card to mean one file would let Forget destroy half a run -
-   * the partial state `services/stack_membership` exists to forbid - so the
-   * whole run is drawn into the fold and `collapseStacks` makes it one row, with
-   * the cover's `memberIds`. One click on that card is then one row wearing six
-   * files, which is what the bar counts and what the verbs write.
+   * **Runs are NOT folded here, and that is the difference from `visibleRows`.**
+   * A card is one model and stands for that model alone. An earlier draft pulled
+   * a whole run in whenever any step of it was on a card, on the reasoning that
+   * a run is atomic - and on this screen the effect was that clicking one card
+   * lit up every other card built on the same run, and a verb aimed at the set
+   * in front of you reached files in sets you were not looking at. That is the
+   * wrong shape for the grid: the question it answers is *what is in THIS
+   * workflow set*, and a card names exactly one file in it.
+   *
+   * The atomic gesture still exists where the reader can see the run: the row
+   * list draws it as one row and takes it whole. Picking one file out of a run
+   * is the shelf's own documented exception, and a card is that gesture - it
+   * names the one file a recipe recorded.
    */
   const setGridRows = computed(() => {
     const drawn = setGridModelIds.value;
     if (!drawn.size) return [];
-    const runs = new Set();
-    for (const row of rows.value) {
-      if (row.stack_id != null && drawn.has(row.id)) runs.add(row.stack_id);
-    }
-    const shown = rows.value.filter(
-      (row) =>
-        drawn.has(row.id) || (row.stack_id != null && runs.has(row.stack_id)),
-    );
-    return collapseStacks(shown.map(displayRow));
+    return rows.value.filter((row) => drawn.has(row.id)).map(displayRow);
   });
 
   /**
@@ -2013,25 +2010,16 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * `visibleRows`, so the lookup misses and the id comes back alone. That is
    * the intent rather than a gap - opening a run and pointing at one file
    * inside it is how that file is taken out of the run, or made its cover.
+   *
+   * **A card on the set grid is the same gesture**, reached differently: that
+   * card names the one file a recipe recorded, `setGridRows` does not fold runs,
+   * so the lookup finds a row standing for itself and the id comes back alone.
+   * Folding them was tried and is wrong here - it lit up every other card built
+   * on the same run and pointed a verb at sets the reader was not looking at.
    */
   function modelsBehind(id) {
-    const drawn = screenRows.value;
-    const own = drawn.find((candidate) => candidate.id === id);
-    if (own?.memberIds?.length) return own.memberIds;
-    // **On the set grid the exception above has no precondition, so it does not
-    // apply.** A card there is named after whichever file a recipe recorded,
-    // which can be any STEP of a run, and the card says nothing about the run -
-    // there is no strip to open and nothing to point inside. So a click on it is
-    // the atomic gesture, not the one that picks a file out: the run that holds
-    // the id is what the card stands for. Without this a Forget aimed at a card
-    // would destroy one step of six from a screen that draws no runs at all.
-    if (view.groupBy === GRID_GROUP_BY && !own) {
-      const holder = drawn.find((candidate) =>
-        candidate.memberIds?.includes(id),
-      );
-      if (holder) return holder.memberIds;
-    }
-    return [id];
+    const row = screenRows.value.find((candidate) => candidate.id === id);
+    return row?.memberIds?.length ? row.memberIds : [id];
   }
 
   function selectFromClick(id, { ctrl = false, shift = false } = {}, order) {

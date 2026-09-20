@@ -23,9 +23,8 @@
   the list. Right-click gives you the same menu — rename, set a base model,
   move, set a thumbnail, forget, delete — and the selection bar floats over the
   cards as it does over the rows. A card is only ever the one model it is named
-  after, never the whole set, so a Delete cannot take a shared VAE with it —
-  and where that model is one step of a stacked run, the card takes the run
-  whole, exactly as a run behaves everywhere else on the shelf.
+  after, never the whole set and never a neighbouring set, so a Delete cannot
+  take a shared VAE with it.
 - Changing the default resets your grouping once, on the first open after
   updating. Everything else you had set — the sort, any column widths you had
   dragged, collapsed groups, the folder layout — is kept.

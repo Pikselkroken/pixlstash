@@ -3010,12 +3010,16 @@ describe("the workflow sets", () => {
     expect([...store.selectedIds].sort()).toEqual([1, 2]);
   });
 
-  it("takes a run whole from a card named after one step of it", async () => {
-    // The grid has NO run affordance: `shownModelIds` fans a run out into its
-    // members, so a card can be named after step 2 of 6 with nothing on it
-    // saying so. Letting that card mean one file would let Forget destroy half
-    // a run - the partial state `services/stack_membership` forbids - so the
-    // fold pulls the whole run in and the card selects all of it.
+  it("takes ONE file from a card, though that file is a step of a run", async () => {
+    // **A card is one model and stands for that model alone.** An earlier draft
+    // folded runs here, on the reasoning that a run is atomic: the effect was
+    // that clicking one card lit up every other card built on the same run, and
+    // a verb aimed at the set in front of the reader reached files in sets they
+    // were not looking at. The grid's question is *what is in THIS workflow
+    // set*, and a card names exactly one file in it.
+    //
+    // Two cards on one run, which is the shape that made it visible: a recipe
+    // names step two, another names step one.
     listAdapters.mockResolvedValue([
       adapter({ id: 1, sha256: "a".repeat(64), stack_id: 7, stack_position: 0 }),
       adapter({ id: 2, sha256: "b".repeat(64), stack_id: 7, stack_position: 1 }),
@@ -3023,9 +3027,15 @@ describe("the workflow sets", () => {
     fetchWorkflowSets.mockResolvedValue({
       combinations: [
         {
-          // The recipe names the SECOND step, not the cover.
           key: "2",
           models: [{ id: 2, name: "step-two.st", kind: "checkpoint" }],
+          recipes: 1,
+          picture_count: 1,
+          covers: [],
+        },
+        {
+          key: "1",
+          models: [{ id: 1, name: "step-one.st", kind: "checkpoint" }],
           recipes: 1,
           picture_count: 1,
           covers: [],
@@ -3038,16 +3048,25 @@ describe("the workflow sets", () => {
     await store.fetchRows();
     await store.loadWorkflowSets();
 
-    // One card, named after step two; the run behind it is one folded row.
-    expect(store.setGroups).toHaveLength(1);
-    expect(store.setGridRows.map((r) => r.id)).toEqual([1]);
-    expect(store.setGridRows[0].memberIds).toEqual([1, 2]);
+    // Two cards, and two rows behind them: the grid does not fold the run.
+    expect(store.setGroups).toHaveLength(2);
+    expect(store.setGridRows.map((r) => r.id).sort()).toEqual([1, 2]);
+    expect(store.setGridRows.every((r) => !r.memberIds)).toBe(true);
 
-    store.selectFromClick(2, {}, [2]);
+    store.selectFromClick(2, {}, [1, 2]);
+
+    // Asserted on identity, not on a count: the point is that the OTHER card's
+    // model did not come with it, which a length of 1 would not tell you.
+    expect([...store.selectedIds]).toEqual([2]);
+    expect(store.selectedRows.map((r) => r.id)).toEqual([2]);
+    expect(store.selectedModelIds).toEqual([2]);
+    expect(store.isSelected(1)).toBe(false);
+
+    // And the row list still takes the run whole, which is where the reader can
+    // actually see that it is one.
+    store.setView({ groupBy: "none" });
+    store.selectFromClick(1, {}, [1]);
     expect([...store.selectedIds].sort()).toEqual([1, 2]);
-    // One row for the bar to count, and both files for a verb to write.
-    expect(store.selectedRows).toHaveLength(1);
-    expect(store.selectedModelIds.sort()).toEqual([1, 2]);
   });
 
   it("answers Select all shown with the grid's models, on the grid", async () => {
