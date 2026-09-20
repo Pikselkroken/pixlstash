@@ -29,7 +29,7 @@ from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_identity import WORKFLOW_KEY_VERSION
-from pixlstash.utils.sql_chunking import SQLITE_ID_CHUNK, chunked
+from pixlstash.utils.sql_chunking import chunked
 
 logger = get_logger(__name__)
 
@@ -223,60 +223,6 @@ def asset_names(
         ):
             names.setdefault(structural_hash, []).append((widget, filename))
     return names
-
-
-def model_titles(hub: HubDatabase, names: list[str]) -> dict[str, str]:
-    """``{slot name: model.display_name}`` for the shelf's own name for a model.
-
-    The slot name is what ``workflow_recipe_asset`` stored, which is one of
-    three things (``services.workflow_hash.structural_widget_value``): a
-    lowercased basename, a SHA-256 digest, or a shelf id. All three are looked
-    up in one query per batch, because a card cannot say which of them it holds
-    and a caller that guessed would silently miss the graphs using the other
-    two.
-
-    **Hub to hub.** ``model`` and the workflow tables are the same database, so
-    this is a join rather than a derivation, and a model the shelf has never
-    scanned simply has no entry - the caller keeps the filename.
-
-    A name two shelf rows claim with *different* titles is dropped rather than
-    resolved: naming a card after the wrong model is worse than naming it after
-    its file, and there is nothing here that could tell the two apart.
-
-    Only the names that were asked for come back. A row matched on its digest
-    also has a filename and an id, and volunteering those would make the answer
-    depend on which of a model's three names some other card happened to hold -
-    including by marking a name ambiguous that nobody asked about.
-    """
-    titles: dict[str, str] = {}
-    ambiguous: set[str] = set()
-    wanted = {name.lower() for name in names if name}
-    # A THIRD of the usual chunk: the statement binds each batch three times,
-    # once per column it might match, so the default 900 would carry 2,700
-    # parameters and fail outright on a SQLite built to the 999 floor.
-    for batch in chunked(sorted(wanted), SQLITE_ID_CHUNK // 3):
-        placeholders = ",".join("?" * len(batch))
-        rows = hub.fetchall(
-            "SELECT display_name, filename, sha256, id FROM model "
-            f"WHERE display_name IS NOT NULL AND display_name <> '' AND ("
-            f"LOWER(filename) IN ({placeholders}) "
-            f"OR sha256 IN ({placeholders}) "
-            f"OR CAST(id AS TEXT) IN ({placeholders}))",
-            (*batch, *batch, *batch),
-        )
-        for row in rows:
-            title = row["display_name"]
-            for key in (
-                (row["filename"] or "").lower(),
-                (row["sha256"] or "").lower(),
-                str(row["id"]),
-            ):
-                if key not in wanted or key in ambiguous:
-                    continue
-                if titles.setdefault(key, title) != title:
-                    del titles[key]
-                    ambiguous.add(key)
-    return titles
 
 
 def find_card(hub: HubDatabase, workflow_key: str) -> Optional[Card]:

@@ -54,7 +54,6 @@ from pixlstash.hub.workflow_card_reads import (
     Card,
     default_overrides,
     instance_documents,
-    model_titles,
     variant_documents,
 )
 from pixlstash.hub.workflow_card_writes import set_stack_order
@@ -70,7 +69,7 @@ import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
 from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
-from pixlstash.services.workflow_card_service import SlotModel
+from pixlstash.services.workflow_card_service import SlotModel, model_titles
 from pixlstash.services.workflow_identity import (
     FACE_DETAILER,
     UPSCALE,
@@ -3142,9 +3141,15 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
     lora_label = next(
         slot.label for slot in slots(_DOCUMENTS[BUSY_RECIPE_A]) if slot.is_lora
     )
+    #
+    # `title` is null here and that is the state, not an omission: the LoRA is
+    # not on the shelf. It is served on every slot all the same, because the
+    # card's name row is built from it and a client showing `name` instead
+    # would describe one model twice (#1416).
     assert card["loras"] == [
         {
             "name": None,
+            "title": None,
             "kind": "lora",
             "mark": "recipe",
             "slot_label": lora_label,
@@ -3317,6 +3322,15 @@ def test_a_card_is_never_nameless(workflow_env):
         workflows_routes._display_name(_nameless("txt2img", ("teleportation",)), titled)
         == "Krea 2: Text to Image"
     )
+    # **A card with no recognised type still takes the suffix**, on the bare
+    # stem: `workflow_type` is null for any graph matching none of its five
+    # shapes, and "Krea 2 + Upscale" is the honest name for one - the model,
+    # and what it adds.
+    assert (
+        workflows_routes._display_name(_nameless(None, (UPSCALE,)), titled)
+        == "Krea 2 + Upscale"
+    )
+
     # The suffix is on the GENERATED name only. A card named after its workflow
     # file keeps the owner's spelling untouched.
     filed = Card(
@@ -3340,6 +3354,38 @@ def test_a_card_is_never_nameless(workflow_env):
         )
     named = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
     assert named["name"] == "Flux2 portrait"
+
+
+def test_a_card_never_calls_one_model_two_different_things(workflow_env):
+    """The name row and every chip under it read the same name for one model.
+
+    The generated name is built from the SHELF's name for the base model, so a
+    payload carrying only the filename would have the card read `Krea 2: Text
+    to Image` over a chip reading `realvisxl.safetensors` - one model described
+    twice, on one card, and spoken that way to a screen reader. That is exactly
+    the pair that drifted in #1416, which is why the shelf's name is SERVED on
+    the slot rather than left for a client to look up.
+    """
+    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    checkpoint = next(slot for slot in card["models"] if slot["kind"] == "checkpoint")
+    assert checkpoint["name"] == _SHELF_FILENAME
+    assert checkpoint["title"] == _SHELF_TITLE
+    # The name row was built from the title, so the title is what a client has
+    # to be able to show beside it.
+    assert checkpoint["title"] in card["name"]
+    assert checkpoint["name"] not in card["name"]
+
+    # A model the shelf does not know carries no title at all, and the client
+    # falls back to the filename - which is also what the name row does.
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET display_name = NULL WHERE filename = ?",
+            (_SHELF_FILENAME,),
+        )
+    plain = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    plain_ckpt = next(s for s in plain["models"] if s["kind"] == "checkpoint")
+    assert plain_ckpt["title"] is None
+    assert plain["name"] == "realvisxl: Text to Image"
 
 
 def test_a_card_says_the_post_processing_it_carries_and_when_it_cannot(
@@ -3395,6 +3441,12 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
         row["sha256"]: _SHELF_TITLE,
         str(row["id"]): _SHELF_TITLE,
     }
+    # **And the SHORT hash A1111 writes**, which is a prefix of that digest
+    # rather than the digest. `structural_widget_value` keeps 10 and 12 hex
+    # characters as readily as 64, so a lookup matching only the long form
+    # leaves every A1111-sourced card wearing a raw hex blob for a name.
+    assert model_titles(hub, [row["sha256"][:10]]) == {row["sha256"][:10]: _SHELF_TITLE}
+    assert model_titles(hub, [row["sha256"][:12]]) == {row["sha256"][:12]: _SHELF_TITLE}
     # A model the shelf has never scanned has no entry, which is how a card
     # keeps its filename stem rather than being renamed after something else.
     assert model_titles(hub, ["add_detail.safetensors"]) == {}
@@ -3418,6 +3470,24 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
             )
         assert model_titles(hub, [_SHELF_FILENAME]) == {_SHELF_FILENAME: _SHELF_TITLE}
 
+        # **A SECOND COPY under a different spelling resolves too.**
+        # `model.filename` is frozen at first sight while `model_file` holds a
+        # row per copy, so the same checkpoint sitting in an archive under a
+        # longer name is a name only the location table knows.
+        with hub.transaction() as conn:
+            folder = conn.execute(
+                "INSERT INTO model_folder (path, kind, movable) "
+                "VALUES ('/home/me/models', 'checkpoint', 'no')"
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+                "VALUES (?, ?, 'SDXL/RealVisXL_v5.0.safetensors', 'present')",
+                (row["id"], folder),
+            )
+        assert model_titles(hub, ["realvisxl_v5.0.safetensors"]) == {
+            "realvisxl_v5.0.safetensors": _SHELF_TITLE
+        }
+
         # **Two rows claiming one filename with different titles is dropped,
         # not resolved.** Naming a card after the wrong model is worse than
         # naming it after its file, and nothing here could tell the two apart.
@@ -3429,6 +3499,15 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
                 (second,),
             )
         assert model_titles(hub, [_SHELF_FILENAME]) == {}
+        # **An UNNAMED rival is an ambiguity too, and this is the one a filter
+        # on `display_name` in SQL hides**: the rival never reaches the check,
+        # so the named row wins by default and a card using the unnamed file is
+        # titled after a model it did not use.
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET display_name = NULL WHERE sha256 = ?", (second,)
+            )
+        assert model_titles(hub, [_SHELF_FILENAME]) == {}
         # ... while two rows agreeing are not an ambiguity at all.
         with hub.transaction() as conn:
             conn.execute(
@@ -3438,6 +3517,8 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
         assert model_titles(hub, [_SHELF_FILENAME]) == {_SHELF_FILENAME: _SHELF_TITLE}
     finally:
         with hub.transaction() as conn:
+            conn.execute("DELETE FROM model_file WHERE model_id = ?", (row["id"],))
+            conn.execute("DELETE FROM model_folder WHERE path = '/home/me/models'")
             conn.execute("DELETE FROM model WHERE sha256 = ?", (second,))
             conn.execute(
                 "UPDATE model SET filename = ? WHERE id = ?",
@@ -4383,7 +4464,8 @@ def _seed_flip_fixture(server) -> str:
         )
         conn.execute(
             "INSERT INTO workflow_topology_core (topology_hash, core_hash, "
-            "core_version, workflow_type, slots) VALUES (?, ?, ?, 'txt2img', ?)",
+            "core_version, workflow_type, slots, specials) "
+            "VALUES (?, ?, ?, 'txt2img', ?, '')",
             (
                 FLIP_TOPOLOGY,
                 FLIP_CORE,
@@ -5628,8 +5710,8 @@ def _seed_runnable_card(server) -> int:
         )
         conn.execute(
             "INSERT OR REPLACE INTO workflow_topology_core "
-            "(topology_hash, core_hash, core_version, workflow_type, slots) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "(topology_hash, core_hash, core_version, workflow_type, slots, "
+            "specials) VALUES (?, ?, ?, ?, ?, '')",
             (
                 RUN_TOPOLOGY,
                 RUN_CORE,

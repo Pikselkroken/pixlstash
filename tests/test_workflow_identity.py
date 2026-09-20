@@ -310,6 +310,33 @@ def test_special_groups_says_what_one_graph_has_rather_than_how_two_differ():
     assert special_groups(both) == (UPSCALE, FACE_DETAILER)
 
 
+def test_a_loader_on_its_own_is_not_the_graph_doing_the_thing():
+    """Narrower than the strip, and deliberately so.
+
+    `node_groups` puts a detector loader in the FACE_DETAILER group because it
+    exists to remove a group whole - leaving the loader behind while removing
+    the detailer it feeds would change the stack key for nothing. Printing is
+    the opposite case: a `SAMLoader` with no detailer in front of it must not
+    put "+ FaceDetailer" on the card's only identifying text, and an upscale
+    model loaded and never applied must not claim an upscale.
+    """
+    for loader in (
+        _node("SAMLoader", model_name="sam_vit_b.pth"),
+        _node("UltralyticsDetectorProvider", model_name="face_yolo.pt"),
+        _node("UpscaleModelLoader", model_name="4x_ultra.pth"),
+    ):
+        graph = _graph(extra={"99": loader})
+        # The strip still sees it - that is the behaviour being narrowed, not
+        # a bug - and the printed answer does not.
+        assert loader["class_type"] in str(graph)
+        assert special_groups(_doc(graph)) == ()
+
+    # ... and the worker beside the loader is still counted, so the narrowing
+    # did not simply switch the feature off.
+    assert special_groups(_doc(_graph(face_detailer=True))) == (FACE_DETAILER,)
+    assert special_groups(_doc(_graph(upscale=True))) == (UPSCALE,)
+
+
 def test_special_groups_refuses_a_raw_graph_like_every_other_rule_here():
     """A raw graph names its models by value; every rule here needs the stored
     document. Reading one anyway would report no groups for a graph that has

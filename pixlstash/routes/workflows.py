@@ -285,6 +285,18 @@ class WorkflowSlotModel(BaseModel):
     """
 
     name: str | None = None
+    title: str | None = Field(
+        None,
+        description=(
+            "What the model shelf calls this file — the trainer's own name, "
+            "or the one the owner typed — or null where the shelf does not "
+            "know it. **A client showing the model shows this in preference "
+            "to `name`**, because the card's generated `name` was built from "
+            "it: a chip reading `realvisxl.safetensors` under a name row "
+            "reading `Krea 2` is one model described twice, which is the "
+            "drift #1416 already cost this pair once."
+        ),
+    )
     kind: str
     mark: str | None = None
     slot_label: str | None = Field(
@@ -1046,7 +1058,11 @@ def _display_name(card, models=()) -> str:
 def _slot_models(slots) -> list[WorkflowSlotModel]:
     return [
         WorkflowSlotModel(
-            name=slot.name, kind=slot.kind, mark=slot.mark, slot_label=slot.label
+            name=slot.name,
+            title=slot.title,
+            kind=slot.kind,
+            mark=slot.mark,
+            slot_label=slot.label,
         )
         for slot in slots
     ]

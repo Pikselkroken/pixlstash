@@ -136,8 +136,15 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
     # returning early on a current card while the topology cache is stale would
     # leave the finder handing this variant out on every sweep, for a pass that
     # does nothing.
-    core_current = row["core_cached"] is not None and row["core_specials"] is not None
-    if row["workflow_key"] is not None and core_current:
+    #
+    # **The two cache gaps are kept apart** rather than folded into one "is it
+    # current". A row missing only `specials` already holds a `core_hash` under
+    # the current rule, and re-deriving that would run the Weisfeiler-Leman
+    # refinement over every topology in the hub on upgrade to fill in at most
+    # two words. That row is UPDATEd in place instead.
+    core_missing = row["core_cached"] is None
+    specials_missing = row["core_specials"] is None
+    if row["workflow_key"] is not None and not core_missing and not specials_missing:
         return row["workflow_key"]
     try:
         document = json.loads(row["document"])
@@ -158,14 +165,29 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
     # topology with 200 variants would otherwise recompute and rewrite one row
     # 200 times in a single pass.
     core = (
-        None
-        if core_current
-        else core_hash(document, strip_loras=STRIP_LORAS_FOR_STACKS)
+        core_hash(document, strip_loras=STRIP_LORAS_FOR_STACKS)
+        if core_missing
+        else None
     )
     with hub.transaction() as conn:
         marks = _freeze_marks(conn, topology_hash, structural_hash, document_slots)
         if core is not None:
             _cache_topology(conn, topology_hash, document, document_slots, core)
+        elif specials_missing:
+            # The whole cost of the upgrade for an already-cached topology: one
+            # reduction, no refinement, and the row's stack key, type and slots
+            # are left exactly where the grid is already reading them.
+            # `core_version` is in the WHERE so a row re-stamped under another
+            # rule between the read and here is not written by this branch.
+            conn.execute(
+                "UPDATE workflow_topology_core SET specials = ? "
+                "WHERE topology_hash = ? AND core_version = ?",
+                (
+                    ",".join(special_groups(document)),
+                    topology_hash,
+                    CORE_RULE_VERSION,
+                ),
+            )
         key = workflow_key(
             topology_hash,
             document_slots,

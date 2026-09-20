@@ -12,6 +12,7 @@ import sqlite3
 import pytest
 
 from pixlstash.hub import workflow_cards
+from pixlstash.hub.workflow_cards import record_identity
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflows import (
     forget_asset_names,
@@ -383,7 +384,8 @@ def test_a_topology_cached_before_the_specials_column_is_re_derived(hub):
     after = hub.fetchone("SELECT * FROM workflow_topology_core")
     assert after["specials"] == FACE_DETAILER
     # Nothing else moved: the grid saw the same stack key, type and slots
-    # throughout.
+    # throughout. The core hash is not merely EQUAL, it was never recomputed -
+    # see the next test, which is what asserts that.
     assert (after["core_hash"], after["workflow_type"], after["slots"]) == (
         before["core_hash"],
         before["workflow_type"],
@@ -392,6 +394,84 @@ def test_a_topology_cached_before_the_specials_column_is_re_derived(hub):
     assert card_of(hub, keys.structural_hash) is not None
     assert finder.progress() == (1, 0)
     assert finder.find_task() is None
+
+
+def test_filling_specials_alone_does_not_rerun_the_refinement(hub, monkeypatch):
+    """The upgrade may not pay the hub's most expensive pass for two words.
+
+    `core_hash` is a Weisfeiler-Leman refinement and a strip; `special_groups`
+    is one reduction. A topology that already holds a current `core_hash` and
+    only wants `specials` therefore gets an UPDATE, not a re-derivation - which
+    on an existing library is the difference between one reduction per topology
+    and a refinement per topology.
+
+    Asserted by making `core_hash` fail: if the specials-only path calls it at
+    all, this test raises rather than quietly costing more.
+    """
+    record_api_graph(hub, _graph(face_detailer=True))
+    with hub.transaction() as conn:
+        conn.execute("UPDATE workflow_topology_core SET specials = NULL")
+
+    def explode(*args, **kwargs):
+        raise AssertionError("core_hash was re-run to fill specials alone")
+
+    monkeypatch.setattr(workflow_cards, "core_hash", explode)
+    assert (
+        WorkflowCardBackfillFinder(hub=hub).find_task()._run_task()["identified"] == 1
+    )
+    assert (
+        hub.fetchone("SELECT specials FROM workflow_topology_core")["specials"]
+        == FACE_DETAILER
+    )
+
+
+def test_a_core_row_restamped_under_another_rule_is_not_updated_by_this_branch(hub):
+    """The specials-only UPDATE names the rule it read, so it cannot cross one.
+
+    Two cases, and only the second needs arranging.
+
+    A row already stamped under another rule when the pass starts never reaches
+    the UPDATE at all: it does not join, so the variant takes the core-missing
+    path and a fresh row is written under the current stamp.
+
+    The one the ``core_version`` in the WHERE actually guards is the RACE - the
+    row is re-stamped by a second process *between* the read that found
+    ``specials`` NULL and this write. Driven here by re-stamping inside the
+    pass's own transaction, from `_freeze_marks`, which runs on that connection
+    immediately before the UPDATE. Without the guard the UPDATE lands, and this
+    build's taxonomy is filed as the other rule's answer.
+    """
+    keys = record_api_graph(hub, _graph(face_detailer=True))
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET specials = NULL, core_version = 'v0'"
+        )
+    record_identity(hub, keys.structural_hash)
+    row = hub.fetchone("SELECT core_version, specials FROM workflow_topology_core")
+    assert (row["core_version"], row["specials"]) == (
+        workflow_cards.CORE_RULE_VERSION,
+        FACE_DETAILER,
+    )
+
+    # Now the race. `specials` is NULL under the CURRENT rule when the pass
+    # reads, so it takes the UPDATE branch - and the stamp moves under it.
+    with hub.transaction() as conn:
+        conn.execute("UPDATE workflow_topology_core SET specials = NULL")
+    real_freeze = workflow_cards._freeze_marks
+
+    def restamp(conn, topology_hash, structural_hash, document_slots):
+        conn.execute("UPDATE workflow_topology_core SET core_version = 'v9'")
+        return real_freeze(conn, topology_hash, structural_hash, document_slots)
+
+    workflow_cards._freeze_marks = restamp
+    try:
+        record_identity(hub, keys.structural_hash)
+    finally:
+        workflow_cards._freeze_marks = real_freeze
+    raced = hub.fetchone("SELECT core_version, specials FROM workflow_topology_core")
+    # Left alone: the row belongs to 'v9' now, and this pass has nothing true
+    # to say about a rule it did not run.
+    assert (raced["core_version"], raced["specials"]) == ("v9", None)
 
 
 def test_flipping_the_lora_strip_is_a_new_core_rule(hub):

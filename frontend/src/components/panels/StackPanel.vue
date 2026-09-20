@@ -264,6 +264,7 @@ import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 import {
   cardAccessibleName,
   checkpointModel,
+  modelLabel,
   factChips as cardFactChips,
 } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
@@ -415,8 +416,12 @@ function checkpointChips(member, index) {
   // rather than compared.
   if (!model?.name || index === 0) return [];
   const cover = checkpointModel(props.members[0]);
+  // Compared by FILE and labelled by shelf name. Two files the shelf happens
+  // to call the same thing are still two files, so the comparison stays on
+  // `name`; the chip says what the card's name row says, so the panel and the
+  // grid do not call one model two things.
   if (cover?.name === model.name) return [];
-  return [{ key: "ckpt", label: model.name, icon: "cube-outline" }];
+  return [{ key: "ckpt", label: modelLabel(model), icon: "cube-outline" }];
 }
 
 /**
