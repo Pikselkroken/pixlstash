@@ -2868,18 +2868,39 @@ anyway. Wired into `_plan` at one site, between the swap and `judge`.
   It is that function's inverse, and it rewires nothing until every consumer has
   been checked — a graph half rewired around a node still in it is worse than
   one that refused.
-- **Two loaders keep their refusal, and both are the honest answer.** A
-  **stacker** naming more than one LoRA of which one is gone stays, because
-  taking the node out would drop the adapters that *are* installed; and a loader
-  something reads an output of that no input of that type can stand in for stays,
-  because rewiring it would leave that consumer wired to nothing. Both are logged
-  with the file that could not be found.
+- **Three loaders keep their refusal, and each is the honest answer.** A
+  **stacker** whose other LoRA slots are filled stays, because taking the node
+  out would drop the adapters that *are* installed — and a slot counts as filled
+  whether it names a file or is **wired** from another node, since converting
+  `lora_name` to an input is an ordinary ComfyUI gesture and `preflight_prompt`
+  skips a link, so counting only literal strings would read a live second
+  adapter as an empty slot. A loader something reads an output of that no input
+  of that type can stand in for stays, because rewiring it would leave that
+  consumer wired to nothing. And a **forgotten** LoRA stays: `FORGOTTEN_MODEL`
+  means the hub lost the reference's name, not that the file is gone, so
+  bypassing would trade `resolve_references`' intended surfacing for a run
+  quietly made without an adapter the owner has — and send them to install a
+  file called `(forgotten model)`. All three are logged with the value that
+  could not be found.
 - **Before `judge`, so the graph judged is the graph submitted.** The bypassed
   loader is gone by the time the pre-flight runs again, so it is not reported as
   a missing model the owner would go looking for; what is left in
-  `missing_models` is what genuinely blocks. It is skipped when `_apply_loras`
-  has already refused: that run is not happening, and reporting a bypass beside a
-  refusal would describe a run nobody made.
+  `missing_models` is what genuinely blocks.
+- **Reported only on a group that is actually submitted.** The bypass happens
+  before `judge` because the graph needs it, but the *report* is written when
+  `group.runs` is set, and cleared again when a missing model elsewhere zeroes
+  the whole batch. What it says is "the run goes ahead without this LoRA", which
+  is a lie on a card that is about to be refused for a missing checkpoint — and
+  at the point the bypass runs, most of the refusals are not known yet.
+- **A bypassed run lands on its own card**, the same way a substituted one does,
+  and harder: deleting a node changes the **topology** hash and not only the
+  structural one, so `workflow_key` moves too. The pictures ComfyUI writes back
+  carry the submitted graph, so they are filed on a card for the LoRA-free
+  shape of this workflow rather than on the one that was run, and installing
+  the file later does not re-key them. That is the price of the run happening
+  at all; the alternative is the refusal this section exists to remove. It is
+  a fork of the card, not a lie about provenance: the picture's recipe names
+  the graph that really ran.
 - **A LoRA the REQUEST asked to add is never bypassed.** `_apply_loras` reports
   its own `missing_models` for an adapter it cannot place, which is a refusal:
   the owner asked for that LoRA by name, and running without it silently would

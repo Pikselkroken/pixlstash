@@ -33,7 +33,7 @@ from pixlstash.services.comfyui_recipe_service import (
     unchecked_preflight,
 )
 from pixlstash.services.comfyui_service import graph_has_pixlstash_nodes
-from pixlstash.services.workflow_hash import asset_reference
+from pixlstash.services.workflow_hash import asset_reference, is_link
 from pixlstash.services.workflow_io import api_graph
 from pixlstash.pixl_logging import get_logger
 
@@ -338,6 +338,12 @@ def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
     and a LoRA the *request* asked to add reports the same folder without being
     a slot the graph can do without.
 
+    Three loaders keep their refusal instead, each logged: one whose file this
+    hub can no longer NAME (:data:`FORGOTTEN_MODEL` - the file may be installed
+    and only the name is lost), a stacker whose other LoRA slots are filled
+    (taking the node out would drop the adapters that are here), and one
+    nothing can be rewired around.
+
     **Never silent**: the caller reports what went on the group and on the run
     alike, the way a model substitution is reported, and logs it here.
 
@@ -357,28 +363,46 @@ def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
             continue
         if model_folder(item.get("class_type"), item.get("field")) != "loras":
             continue
+        if item.get("value") == FORGOTTEN_MODEL:
+            # The hub lost this reference's NAME; the file itself may well be
+            # installed. :func:`resolve_references` puts the token in on
+            # purpose so the pre-flight surfaces it, and bypassing would trade
+            # that surfacing for a run quietly made without an adapter the
+            # owner has - then send them to install a file called
+            # "(forgotten model)".
+            logger.info(
+                "Node %s (%s) names a LoRA this hub can no longer name, so it "
+                "keeps its refusal rather than being bypassed.",
+                item.get("node_id"),
+                item.get("class_type"),
+            )
+            continue
         node_id = str(item.get("node_id"))
         node = graph.get(node_id)
         inputs = node.get("inputs") if isinstance(node, dict) else None
-        named = [
-            value
+        # A slot counts as filled whether it names a file or is WIRED from
+        # another node. Converting `lora_name` to an input is an ordinary
+        # ComfyUI gesture, and `preflight_prompt` skips a link (it is computed
+        # at run time, not a filename), so counting only strings would read a
+        # stacker's live second adapter as an empty slot and drop it.
+        filled = [
+            field
             for field, value in (inputs or {}).items()
             if LORA_FILENAME_FIELD_RE.match(str(field))
-            and isinstance(value, str)
-            and value
+            and (is_link(value) or (isinstance(value, str) and value))
         ]
-        if len(named) > 1:
+        if len(filled) > 1:
             # A stacker holding three LoRAs of which one is gone: the node
             # carries the two that ARE here, so taking it out would drop them
             # too. Left to block, which is the honest answer - the owner is
             # missing one file and would lose three adapters.
             logger.info(
-                "Node %s (%s) names %d LoRAs and one of them (%s) is not on "
-                "this ComfyUI, so it is left in place: bypassing it would drop "
-                "the ones that are here.",
+                "Node %s (%s) holds %d LoRA slots and one of them (%s) is not "
+                "on this ComfyUI, so it is left in place: bypassing it would "
+                "drop the ones that are here.",
                 node_id,
                 item.get("class_type"),
-                len(named),
+                len(filled),
                 item.get("value"),
             )
             continue

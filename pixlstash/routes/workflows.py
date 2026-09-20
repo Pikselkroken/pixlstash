@@ -2392,6 +2392,9 @@ def create_router(server) -> APIRouter:
             # slot, and an unreachable ComfyUI cannot resolve a filename slot,
             # which `apply_adapter` would report as a missing node class.
             found: list[run_service.Reason] = []
+            # LoRA loaders taken out of this graph; put on the group only if it
+            # ends up being submitted. See the assignment below.
+            bypassed: list[dict] = []
             if body.loras and slots_in_graph:
                 # NOT gated on `object_info`: skipping the application when
                 # ComfyUI could not be asked is how a consented run silently
@@ -2464,12 +2467,14 @@ def create_router(server) -> APIRouter:
                     # `judge`, so the graph that is judged is the graph that
                     # will be submitted and the loaders that are gone are not
                     # reported as missing models. Skipped when `_apply_loras`
-                    # has already refused: the run is not happening, and
-                    # reporting a bypass beside a refusal says a run went ahead
-                    # without a LoRA when none went ahead at all.
-                    group.bypassed_loras = run_service.bypass_missing_loras(
-                        graph, object_info
-                    )
+                    # has already refused: that run is not happening.
+                    #
+                    # Held in a local and NOT put on the group here. What it
+                    # says is "the run goes ahead without this LoRA", which is
+                    # a lie on a group that is about to be refused for some
+                    # other reason - and `judge` has not run yet, so most of
+                    # the refusals are still unknown at this point.
+                    bypassed = run_service.bypass_missing_loras(graph, object_info)
 
             judged, _preflight = run_service.judge(
                 graph,
@@ -2503,6 +2508,9 @@ def create_router(server) -> APIRouter:
                     ", ".join(r.code for r in found),
                 )
             group.runs = body.count
+            # Reported only now, when this group really is being submitted:
+            # every refusal is in, and what the notice claims is true.
+            group.bypassed_loras = bypassed
             planned.append(group)
             submittable.append((graph, group))
 
@@ -2519,6 +2527,10 @@ def create_router(server) -> APIRouter:
             # leave the owner repeating the gesture to catch what was skipped.
             for group in planned:
                 group.runs = 0
+                # Including the groups that WOULD have run: nothing is
+                # submitted now, so "the run goes ahead without this LoRA" is
+                # no longer true of any of them.
+                group.bypassed_loras = []
             submittable = []
         total = sum(group.runs for group in planned)
         if total > MAX_RUNS_PER_REQUEST:

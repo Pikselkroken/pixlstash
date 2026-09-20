@@ -292,10 +292,12 @@
         <!-- Keyed on the position as well as the code: `reasons` is flat-mapped
              across every group, so two groups refusing for the same reason
              would collide on the code alone. -->
+        <!-- `alert` is assertive and interrupts; a notice about a run that IS
+             going ahead is a `status`. Only a real refusal earns that. -->
         <div
           v-if="runNotes.length"
           class="rund-f rund-f--4 rund-reasons"
-          role="alert"
+          :role="reasons.length ? 'alert' : 'status'"
         >
         <RunReasonNotice
           v-for="(reason, index) in runNotes"

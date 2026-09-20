@@ -76,7 +76,14 @@
         </div>
       </div>
 
-      <div v-if="blockedReasons.length" class="mmd-reasons" role="alert">
+      <!-- `alert` is assertive and interrupts; a notice about a run that IS
+           going ahead is a `status`. Only the presence of a real refusal
+           earns the interruption. -->
+      <div
+        v-if="blockedReasons.length"
+        class="mmd-reasons"
+        :role="anyRefusal ? 'alert' : 'status'"
+      >
       <RunReasonNotice
         v-for="entry in blockedReasons"
         :key="`${entry.key}:${entry.reason.code}`"
@@ -215,6 +222,11 @@ const blocker = computed(() => {
 
 const canRun = computed(() => !submitting.value && !blocker.value);
 
+/** Whether anything on screen is a refusal rather than a notice. */
+const anyRefusal = computed(() =>
+  groups.value.some((group) => (group.reasons || []).length),
+);
+
 /**
  * Every refusal, named by the card it is about so a mixed batch reads - and
  * beside them what a card that IS going to run will do differently (#1463).
@@ -292,7 +304,6 @@ async function load() {
       ...group,
       picture_ids: group.picture_ids || [],
       reasons: group.reasons || [],
-      bypassed_loras: group.bypassed_loras || [],
     }));
     names.value = Object.fromEntries(
       (library.cards || []).map((row) => [row.key, row.name]),

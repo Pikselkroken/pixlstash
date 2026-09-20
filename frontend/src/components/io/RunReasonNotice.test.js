@@ -3,7 +3,10 @@
 // It carries refusals and, since #1463, one thing that is NOT a refusal: a
 // LoRA this ComfyUI does not have, whose loader the run leaves out. Drawing
 // that in the error hue under "can't run" would tell the owner the opposite of
-// what is about to happen, so the tone is what these pin.
+// what is about to happen, so what these pin is the wording and the MODIFIER
+// the hue hangs off. The hue itself is a token in a scoped stylesheet, which
+// jsdom does not apply, so `rrn--notice` is as far as a unit test reaches;
+// which colour that class resolves to is `docs/design/notice-surface.md`.
 
 import { describe, it, expect, vi } from "vitest";
 import { mount } from "@vue/test-utils";
@@ -41,8 +44,9 @@ describe("a refusal", () => {
     expect(wrapper.text()).toContain("models/checkpoints");
   });
 
-  it("keeps the error rail", () => {
+  it("keeps the error rail and its glyph", () => {
     expect(rail(mountNotice(reason))).not.toContain("rrn--notice");
+    expect(mountNotice(reason).text()).toContain("mdi-alert-circle-outline");
   });
 });
 
@@ -67,8 +71,13 @@ describe("a bypassed LoRA, which is not a refusal", () => {
     expect(wrapper.text()).toContain("models/loras");
   });
 
-  it("takes the warning rail rather than the error one", () => {
+  it("takes the notice modifier rather than the bare error surface", () => {
     expect(rail(mountNotice(reason))).toContain("rrn--notice");
+  });
+
+  it("takes the warning glyph, which is not in a stylesheet", () => {
+    // Unlike the hue, this one IS in the markup, so it is worth an assertion.
+    expect(mountNotice(reason).text()).toContain("mdi-alert-outline");
   });
 
   it("counts them when there is more than one", () => {

@@ -8,3 +8,7 @@
 - A missing checkpoint, VAE, text encoder or ControlNet still stops the run:
   the workflow cannot run without those. Neither is a LoRA skipped when its
   loader also holds LoRAs you do have, or when you asked for that LoRA yourself.
+- The pictures a run like that makes are filed under their own workflow, not
+  the one you started from: without the LoRA it is a different workflow, and
+  PixlStash files pictures by what actually ran. Install the file and runs go
+  back to the original.

@@ -634,16 +634,27 @@ Six rules the client must not re-derive:
 3. **A missing model blocks the whole batch**, mixed or not, and so does an
    unreachable ComfyUI. Every group's `runs` goes to zero and nothing is
    submitted — including the groups whose own `reasons` are empty.
-   **A missing LoRA is the exception, and it is not reported as a missing model
-   at all** (#1463). A LoRA is optional: its loader is taken out of the graph
-   (its consumers rewired to its own inputs, ComfyUI's own bypass) and the run
-   goes ahead without the adapter, so nothing blocks and the file is named in
-   `bypassed_loras` instead. Everything else — a checkpoint, a VAE, a text
-   encoder, a ControlNet — still blocks, because the graph cannot run without
-   it. Two cases keep their refusal: a **stacker** holding other LoRAs that
-   *are* installed, where taking the node out would drop those too, and a
-   loader nothing can be rewired around. A LoRA the *request* asked to add is
-   also not bypassed — the owner asked for that one by name.
+   **A missing LoRA is the exception** (#1463). A LoRA is optional, so where
+   its loader *can* be taken out of the graph — consumers rewired to its own
+   inputs, ComfyUI's own bypass — it is, and then it is no longer missing from
+   the graph at all: nothing blocks, `missing_models` does not mention it, and
+   it is named in `bypassed_loras` instead. Everything else — a checkpoint, a
+   VAE, a text encoder, a ControlNet — still blocks, because the graph cannot
+   run without it. **Where the loader cannot be taken out, the LoRA keeps its
+   refusal and is still a `missing_models` entry with folder `loras`**: a
+   **stacker** whose other slots are filled (taking the node out would drop
+   adapters that *are* installed), a loader nothing can be rewired around, and
+   a reference this hub can no longer name (`(forgotten model)` — the file may
+   be installed and only the name is lost). A LoRA the *request* asked to add
+   is also never bypassed: the owner asked for that one by name.
+   **`bypassed_loras` is only ever set on a group that is actually being
+   submitted**, and is cleared again when a missing model elsewhere zeroes the
+   batch — it says "the run goes ahead without this LoRA", which must not
+   appear beside a refusal.
+   **A bypassed run lands on its own card**, as a substituted one does: taking
+   a node out changes the topology, so the pictures it produces carry the
+   submitted graph and are filed under a different `workflow_key` than the card
+   that was run.
 4. **A new run is NOT stacked with the picture it came from** unless the body
    says `stack: true`. This is where it differs from the retired
    `POST /comfyui/run_recipe` (#1410), which stacked by default: that replayed

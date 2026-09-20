@@ -5911,6 +5911,11 @@ def test_a_missing_checkpoint_still_refuses_and_nothing_is_bypassed(runnable):
         payload
     )
     assert payload["groups"][0]["runs"] == 0, payload
+    # And nothing claims a run went ahead without the LoRA. The loader DID
+    # leave the graph - it had to, before `judge` could report honestly - but
+    # the graph is not being submitted, so saying so would describe a run
+    # nobody made.
+    assert payload["groups"][0]["bypassed_loras"] == [], payload
 
     r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
     assert r.json()["status"] == "refused", r.json()
@@ -6006,6 +6011,71 @@ def _stacker_graph(second="here.safetensors"):
     }
 
 
+def test_a_group_refused_for_any_other_reason_claims_no_bypass(runnable):
+    """The ordinary case, and the one the batch rule does not reach.
+
+    `missing_nodes` stops this card without stopping the batch, so nothing
+    downstream clears the claim: if the bypass were reported where it is
+    carried out, the popup would say this run is going ahead without the LoRA
+    beside a red notice saying it cannot run at all. The loader still has to
+    leave the graph first - `judge` has not been called yet, so most of the
+    refusals are unknown at that point.
+    """
+    info = _without_lora(["something-else.safetensors"])
+    del info["KSampler"]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    group = payload["groups"][0]
+
+    assert "missing_nodes" in _reasons(payload), payload
+    # Not a batch blocker, so the zeroing loop never runs over this group.
+    assert "missing_models" not in _reasons(payload), payload
+    assert group["runs"] == 0, payload
+    assert group["bypassed_loras"] == [], payload
+
+
+def test_another_cards_missing_model_unclaims_this_ones_bypass(runnable):
+    """The batch rule has to reach the notice as well as the count.
+
+    The forgotten card is missing a model nothing can supply, which zeroes
+    EVERY group including the one that was going to run - so the card that
+    would have run without its LoRA is not running either, and must stop
+    saying that it is. Measured against the same selection with that card left
+    out, which is the positive control: there, it does run and does say so.
+    """
+    forgotten = runnable.server.vault.db.run_immediate_read_task(
+        lambda session: [
+            p.id
+            for p in session.exec(
+                select(Picture).where(
+                    Picture.workflow_structural_hash == FORGOTTEN_RECIPE
+                )
+            ).all()
+            if not p.deleted
+        ]
+    )
+    assert forgotten, "the fixture's forgotten-card pictures are gone"
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url: (_without_lora(["something-else.safetensors"]), None),
+    )
+
+    alone = _preflight(runnable.owner, picture_ids=[runnable.picture_id])
+    assert alone["runs"] == 1, alone
+    assert alone["groups"][0]["bypassed_loras"], alone
+
+    mixed = _preflight(runnable.owner, picture_ids=[runnable.picture_id, forgotten[0]])
+    assert mixed["runs"] == 0, mixed
+    assert {group["workflow_key"] for group in mixed["groups"]} == {
+        RUN_CARD,
+        FORGOTTEN_CARD,
+    }, mixed
+    assert all(group["bypassed_loras"] == [] for group in mixed["groups"]), mixed
+
+
 def test_a_stacker_still_holding_a_lora_that_is_here_is_not_bypassed():
     """Taking the node out would drop the adapter that IS installed.
 
@@ -6062,6 +6132,41 @@ def test_only_loras_are_bypassed_even_where_another_loader_could_be():
     # The LoRA left and the hypernetwork took its place in the chain, which is
     # what makes the assertion above about the RULE and not about the traversal.
     assert graph["5"]["inputs"]["model"] == ["1", 0]
+
+
+def test_a_stacker_whose_other_slot_is_WIRED_is_not_bypassed():
+    """The guard counts a link as a filled slot, not as an empty one.
+
+    Converting `lora_name` to an input is an ordinary ComfyUI gesture, and the
+    pre-flight skips a link because it is computed at run time. Counting only
+    literal strings therefore read a live second adapter as an empty slot and
+    dropped it - the exact loss the guard beside it exists to prevent.
+    """
+    info = json.loads(json.dumps(STACKER_INFO))
+    info["PrimitiveString"] = {"input": {"required": {}}, "output": ["STRING"]}
+    graph = _stacker_graph(second="")
+    graph["2"]["inputs"]["lora_name_2"] = ["7", 0]
+    graph["7"] = {"class_type": "PrimitiveString", "inputs": {"value": "here.st"}}
+
+    assert bypass_missing_loras(graph, info) == []
+    assert "2" in graph
+    assert graph["7"]["inputs"]["value"] == "here.st", "the wired LoRA is still fed"
+
+
+def test_a_lora_this_hub_can_no_longer_name_is_not_bypassed():
+    """`FORGOTTEN_MODEL` means the NAME is lost, not that the file is.
+
+    `resolve_references` writes the token in so the pre-flight surfaces it.
+    Bypassing would trade that for a run quietly made without an adapter the
+    owner may well have installed - and then tell them to go and install a file
+    called "(forgotten model)".
+    """
+    graph = _stacker_graph(second="")
+    graph["2"]["inputs"]["lora_name"] = FORGOTTEN_MODEL
+
+    assert bypass_missing_loras(graph, STACKER_INFO) == []
+    assert "2" in graph
+    assert graph["3"]["inputs"]["model"] == ["2", 0]
 
 
 def test_a_loader_that_cannot_be_rewired_around_is_left_in_place():
