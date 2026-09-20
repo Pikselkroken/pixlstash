@@ -120,8 +120,9 @@ class RoutePolicy:
             template is a boot failure, not a silent no-op.
         body_ids: For a batch route, the JSON body field holding the id(s) the
             gate must check. A list is checked element by element; a single scalar
-            (e.g. ``run_t2i``'s optional ``source_picture_id``) is checked as one
-            id; ``None`` / absent is a no-op.
+            is checked as one id; ``None`` / absent is a no-op. No route declares
+            the scalar shape since #1410 retired ``run_t2i``; the gate keeps it
+            for the next one that needs it.
         justification: Mandatory for the policies in
             :data:`JUSTIFICATION_REQUIRED`, and for ``resolved_inline`` routes; a
             written reason the route is public, grants local-owner filesystem

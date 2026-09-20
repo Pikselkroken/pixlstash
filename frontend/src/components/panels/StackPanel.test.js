@@ -46,7 +46,7 @@ const member = (key, extra = {}) => ({
   // they are also the fallback case the strip must keep drawing as before.
   //
   // `picture_id` is on each of them because a member card is read through
-  // `GET /workflows/cards/{key}`, which serves the shape the grid does. The
+  // `GET /workflows/{key}`, which serves the shape the grid does. The
   // fixture had the URLs alone, so every test here exercised the INERT cover
   // that shipped before #1455 and none would have noticed a member card
   // losing its click.

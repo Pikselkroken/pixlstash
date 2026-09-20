@@ -277,7 +277,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * **`cards` is one card per STACK, so these lists describe covers.** A
    * checkpoint carried only by a stacked member is absent from the Checkpoint
    * list, and a stack of six on one checkpoint counts 1. That is what the
-   * payload holds: `GET /workflows/cards` sends covers and names the members
+   * payload holds: `GET /workflows` sends covers and names the members
    * in `member_keys`, and a member's card arrives only when somebody opens
    * that stack — so building the lists from what has been opened would grow
    * them as the reader browsed, which is worse than being consistently about

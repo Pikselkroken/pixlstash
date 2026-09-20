@@ -1,7 +1,7 @@
 // Pure helpers behind WorkflowCard and ChipRow, kept out of the components so
 // the fitting arithmetic and the accessible name are testable without layout.
 //
-// THE CARD SHAPE. One card as `GET /workflows/cards` will serve it (plan §6.4,
+// THE CARD SHAPE. One card as `GET /workflows` will serve it (plan §6.4,
 // step B3). It is **snake_case, like every other response this app reads**, and
 // a slot's `mark` uses B1's own vocabulary (#1390: `structural` | `recipe`), so
 // nothing translates between the two and inverts a meaning on the way:

@@ -49,7 +49,7 @@ import RunDialog from "./RunDialog.vue";
 const KEY = "a".repeat(64);
 const OTHER = "b".repeat(64);
 
-/** A parameter as `GET /workflows/cards/{key}` serves it. */
+/** A parameter as `GET /workflows/{key}` serves it. */
 function def(label, inputName, value, slotLabel = "KSampler") {
   return {
     label,

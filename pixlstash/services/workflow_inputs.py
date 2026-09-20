@@ -139,6 +139,12 @@ def validate_requested_modes(
     Raises:
         ValueError: The setup is malformed, names the wrong inputs, holds more
             than one Selection, or has a picture_id that is not an integer.
+
+    **No production caller since #1410**, and kept rather than deleted with its
+    route: the mode rules are still what a card's own inputs write, and
+    ``tests/test_workflow_io.py`` exercises it directly, so it is covered
+    behaviour
+    rather than dead code. Delete the test with it if it goes.
     """
     if not isinstance(requested, list):
         raise ValueError("inputs must be a list")

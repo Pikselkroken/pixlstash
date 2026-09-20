@@ -985,7 +985,7 @@ describe("arriving on ?topology=", () => {
     expect(cursorKey(wrapper)).toBe("b");
   });
 
-  // The grid is not every card: `GET /workflows/cards` leaves out the hidden
+  // The grid is not every card: `GET /workflows` leaves out the hidden
   // ones and the one-offs, which is the ordinary state of a workflow used
   // once. Saying nothing would drop the reader at the top of a grid that does
   // not hold what they clicked, looking as though the link did nothing.

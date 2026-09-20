@@ -243,7 +243,7 @@ class Stack:
 
 @dataclass
 class Grid:
-    """``GET /workflows/cards``: what the Workflows view opens on.
+    """``GET /workflows``: what the Workflows view opens on.
 
     ``cards`` is what the grid draws - visible, in cover-rank order, hidden
     cards and one-offs removed. ``figures`` is every card including those,
@@ -505,7 +505,7 @@ def read_grid(
     include_one_offs: bool = False,
     file_models=None,
 ) -> Grid:
-    """Everything ``GET /workflows/cards`` answers. See the module docstring
+    """Everything ``GET /workflows`` answers. See the module docstring
     for what it costs.
 
     *file_models* is how a card with **no variant** gets its models (#1466):

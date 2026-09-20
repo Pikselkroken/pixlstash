@@ -593,7 +593,7 @@ describe("the more menu and hiding", () => {
   it("hides the card and can still unhide it once it has left the grid", async () => {
     getWorkflowCard.mockResolvedValue(detail());
     patchWorkflowCard.mockResolvedValue(detail({ hidden: true }));
-    // A hidden card is not in `GET /workflows/cards`, which is exactly the
+    // A hidden card is not in `GET /workflows`, which is exactly the
     // case that used to take the footer and its menu off screen.
     listWorkflowCards.mockResolvedValue({ cards: [], one_offs: 0, hidden: 1 });
     const { wrapper } = await mountWith([KEY]);

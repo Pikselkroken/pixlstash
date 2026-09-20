@@ -13,6 +13,15 @@ STACK_TAG_SEPARATOR = "__"
 
 
 def build_stack_filename_prefix(base_prefix: str, stack_id: int, source_id: int) -> str:
+    """Tag a save node's filename so the watch-folder importer can place its output.
+
+    **No caller since #1410**, and held for the same reason as
+    ``comfyui_service._upload_image_to_comfyui``: it is the whole of "stack the
+    outputs with the picture they were made from", which went with the retired
+    run route and which #1457 restores. Its reader,
+    :func:`parse_stack_tags_from_filename`, is still live on the import path, so
+    deleting this would leave a parser for a tag nothing writes.
+    """
     parts = []
     if base_prefix:
         parts.append(base_prefix)
