@@ -4,19 +4,33 @@
 // This file mounts the REAL `VMenu`, because that is the whole question: the
 // stubbed menu in `WorkflowCard.test.js` is always open and never focuses
 // anything, so `role="dialog"` could be deleted with every other test still
-// green. Vuetify's own focus handling only moves focus to the first FOCUSABLE
-// child of the content, and this panel has none — so without the component's
-// own focus call, pressing ⓘ announces "expanded" and then nothing, on content
-// teleported to the end of <body>.
+// green. Vuetify's own focus handling moves focus to the first FOCUSABLE child
+// of the content — which, since F7 put *Show all N pictures* in the panel, is
+// the picture count. So the component's own focus call now has a rival rather
+// than an empty field: without it, pressing ⓘ lands the reader on a link in
+// the middle of the panel, and before F7 it landed them nowhere at all. Both
+// are the same bug, and this test is what stops either.
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
 import { createVuetify } from "vuetify";
 import * as vuetifyComponents from "vuetify/components";
 import * as vuetifyDirectives from "vuetify/directives";
 import { nextTick } from "vue";
 
 import InfoPopover from "./InfoPopover.vue";
+
+const push = vi.fn();
+vi.mock("vue-router", () => ({
+  useRouter: () => ({ push }),
+  useRoute: () => ({ name: "workflows", query: {} }),
+}));
+
+beforeEach(() => {
+  setActivePinia(createPinia());
+  push.mockClear();
+});
 
 const vuetify = createVuetify({
   components: vuetifyComponents,

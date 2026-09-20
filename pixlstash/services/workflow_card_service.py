@@ -6,14 +6,18 @@ queries in one session - one ``GROUP BY workflow_structural_hash``, one
 recipes - and a fourth only on a library where somebody has actually chosen a
 cover. Beside them are eight hub statements, of which one (``card_index``)
 scans the variant table and the rest are small; everything else here is
-arithmetic over their results. An aggregate table would have to be invalidated by every rating,
+arithmetic over their results, plus F7's ghost pass - one grouped count, and
+the five reads ``model_ghost_names`` makes, two of them whole-table scans,
+measured together at 1.3 ms (:func:`_describe_ghosts`).
+An aggregate table would have to be invalidated by every rating,
 every import, every soft delete and every re-run of the card backfill, and
 would be a second source of truth for numbers the vault can already produce
 inside the frame budget.
 
 Measured on the owner's library (13k kept pictures, 629 variants, 245 cards):
 about 75 ms, of which the largest single part is ``describe_differences``
-reducing one graph per stacked card.
+reducing one graph per stacked card. F7's ghost pass adds 1.3 ms to that on a
+hub of the same shape, so the figure stands.
 
 Three orderings are decided here and nowhere else:
 
@@ -52,6 +56,7 @@ from pixlstash.hub.workflow_card_reads import (
     stack_rows,
     variant_documents,
 )
+from pixlstash.hub.workflows import model_ghost_names, picture_ghosts_by_variant
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import WorkflowGraphError
 from pixlstash.services.workflow_identity import (
@@ -175,6 +180,8 @@ class CardFigures:
     differs_by: list[str] = field(default_factory=list)
     models: list[SlotModel] = field(default_factory=list)
     loras: list[SlotModel] = field(default_factory=list)
+    ghosts: int = 0
+    model_ghosts: int = 0
 
     @property
     def rating(self) -> Optional[float]:
@@ -455,9 +462,25 @@ def describe_differences(
             cover_figure.differs_by = union
 
 
-def read_grid(hub: HubDatabase, vault) -> Grid:
+def read_grid(
+    hub: HubDatabase,
+    vault,
+    *,
+    include_hidden: bool = False,
+    include_one_offs: bool = False,
+) -> Grid:
     """Everything ``GET /workflows/cards`` answers. See the module docstring
-    for what it costs."""
+    for what it costs.
+
+    The two flags are the Filters panel's *Show hidden workflows* and the
+    unticked *Hide one-offs* (F7). They widen what is DRAWN; ``hidden`` and
+    ``one_offs`` are counted either way, so the panel can label its own
+    checkboxes with the number it is letting in. Widening here rather than in
+    the client is what keeps the stacking honest: the grouping runs over
+    exactly the cards the grid shows, so letting a hidden member back in makes
+    its stack two again instead of leaving the cover claiming a size its own
+    grid contradicts.
+    """
     cards = card_index(hub)
     activity, candidates, saved_recipes = read_card_grid(vault, COVER_DEPTH)
     figures = _figures(cards, activity, candidates, saved_recipes)
@@ -468,10 +491,18 @@ def read_grid(hub: HubDatabase, vault) -> Grid:
     # other standing alone, with `stack_size` 1. That is the grid telling the
     # truth about what it drew rather than a stack being destroyed - the
     # `workflow_stack_member` rows are untouched and unhiding restores it.
+    #
+    # **Both counts are taken over the same set whatever the flags say** -
+    # hidden over every card, one-offs over the cards that are not hidden -
+    # so ticking one checkbox does not move the other's number underneath it.
     hidden = sum(1 for figure in figures if figure.card.hidden)
-    visible = [figure for figure in figures if not figure.card.hidden]
-    one_offs = sum(1 for figure in visible if figure.one_off)
-    visible = [figure for figure in visible if not figure.one_off]
+    one_offs = sum(1 for figure in figures if figure.one_off and not figure.card.hidden)
+    visible = [
+        figure
+        for figure in figures
+        if (include_hidden or not figure.card.hidden)
+        and (include_one_offs or not figure.one_off)
+    ]
 
     # Over every card and not only the drawn ones: a hidden card still opens
     # on the detail route, and it would otherwise show a cover the owner has
@@ -534,7 +565,16 @@ def read_grid(hub: HubDatabase, vault) -> Grid:
     covered = {key for stack in stacks for key in stack.member_keys[1:]}
     drawn = [figure for figure in visible if figure.card.workflow_key not in covered]
     drawn.sort(key=_rank_order)
-    _describe_slots(hub, figures)
+    # One read of `workflow_recipe_asset` for both passes. Every variant, which
+    # is what the ghost pass needs and a superset of the first variants the
+    # slot pass reads - the two called it separately when the ghost pass
+    # arrived, which was the same table twice for no answer the first read
+    # could not give.
+    names = asset_names(
+        hub, [variant for figure in figures for variant in figure.card.variants]
+    )
+    _describe_slots(hub, figures, names)
+    _describe_ghosts(hub, vault, figures, names)
     return Grid(
         cards=drawn,
         stacks=stacks,
@@ -544,13 +584,16 @@ def read_grid(hub: HubDatabase, vault) -> Grid:
     )
 
 
-def _describe_slots(hub: HubDatabase, figures: list[CardFigures]) -> None:
+def _describe_slots(
+    hub: HubDatabase, figures: list[CardFigures], names: dict[str, list[tuple]]
+) -> None:
     """Fill in each card's models and LoRAs from the cached slot list.
 
-    Two hub reads for the whole grid and no document reduced: the slot list and
+    One hub read for the whole grid and no document reduced: the slot list and
     its marks are what B2 cached per topology precisely so a card read does not
-    have to re-derive them, and the readable filenames come from the one table
-    that holds them.
+    have to re-derive them. ``names`` is :func:`read_grid`'s one
+    :func:`~pixlstash.hub.workflow_card_reads.asset_names` read, the table that
+    holds the readable filenames, shared with :func:`_describe_ghosts`.
 
     **A recipe LoRA is a slot, not a file.** It is drawn as an anonymous dashed
     chip (`utils/workflowCard.js`), because which character LoRA happened to be
@@ -559,10 +602,6 @@ def _describe_slots(hub: HubDatabase, figures: list[CardFigures]) -> None:
     :func:`~pixlstash.hub.workflow_card_reads.asset_names`).
     """
     marks = slot_marks(hub, [figure.card.topology_hash for figure in figures])
-    names = asset_names(
-        hub,
-        [figure.card.variants[0] for figure in figures if figure.card.variants],
-    )
     for figure in figures:
         card = figure.card
         by_widget: dict[str, list[str]] = {}
@@ -603,6 +642,94 @@ def _describe_slots(hub: HubDatabase, figures: list[CardFigures]) -> None:
                         label=str(slot.get("label") or "") or None,
                     )
                 )
+
+
+def _describe_ghosts(
+    hub: HubDatabase,
+    vault,
+    figures: list[CardFigures],
+    names: dict[str, list[tuple]],
+) -> None:
+    """Fill in what each card keeps of something deleted (F7's Ghosts filter).
+
+    Two kinds, counted apart because forgetting them is two different purges in
+    Settings › Privacy: a **picture ghost** is the thumbnail and prompt of a
+    picture this library no longer has, and a **model ghost** is a VALUE naming
+    a model the shelf does not hold - a filename, or a ``*_sha256`` digest,
+    which is what :func:`~pixlstash.hub.workflows.model_ghost_names` judges.
+
+    ``model_ghosts`` is therefore **the number of DISTINCT ghost values this
+    card's variants name**, and not a number of models: the set comprehension
+    dedupes a value repeated across variants (right - one missing file named
+    twice is one thing missing), and a single missing model named both by
+    filename and by digest is two values and counts 2 (unavoidable without
+    resolving a digest to a name the shelf does not have). The Filters row
+    asks only whether a card keeps either kind, so nothing on screen depends
+    on the number; ⓘ, which could say which kind, must not spell it as a count
+    of models.
+
+    **What it costs, measured.** ``picture_ghosts_by_variant`` is one grouped
+    count; ``model_ghost_names`` is five reads including a scan of
+    ``model_file`` and a ``DISTINCT`` over the whole of
+    ``workflow_recipe_asset``. Over a synthetic hub built to the shape quoted
+    in this module's own docstring - 629 variants across 192 topologies, two
+    asset rows each, 20 shelf models over 2 000 files, 400 picture ghosts -
+    the two together are **1.3 ms**, of which the ghost count is 0.2 ms. The
+    whole grid read is about 75 ms, so the pass is under 2% of it.
+
+    That number is also the answer to the second cost, which is the one worth
+    stating: :func:`read_grid`'s other caller is ``_read_detail``, what every
+    workflow write answers with - so a rename now pays these reads too. At
+    1.3 ms it is not worth making conditional, and a detail card carrying
+    ``ghosts: 0`` when the card does hold one would be a wrong answer on a
+    route that is the only way to unhide something. **Caching the name set is
+    therefore NOT worth its invalidation** (a model scan, a folder removal and
+    a workflow import all move it); if the shelf grows a hundredfold and this
+    does become a complaint, that cache is where to look, keyed on something
+    the hub already bumps rather than on a timer.
+
+    **The names come from** ``names`` **- every variant - and not from**
+    :attr:`CardFigures.models` **and** :attr:`~CardFigures.loras`. Those two
+    lists are what the CARD is drawn as: they cover the card's first variant
+    alone, and a recipe LoRA is deliberately anonymous there, so a forgotten
+    character LoRA - the commonest model ghost of all - would never be counted.
+    """
+    # `vault.library_uuid` is a real property returning `Optional[str]`, so a
+    # `getattr` default here would only ever hide a typo in the attribute name.
+    # The `if` below is the part doing work.
+    library_uuid = vault.library_uuid
+    if library_uuid:
+        by_variant = picture_ghosts_by_variant(hub, library_uuid)
+    else:
+        # Every card then reports `ghosts: 0`, and on the Filters panel that
+        # reads as "this library keeps nothing deleted" - a wrong answer
+        # rather than an empty one, so it is said out loud. A vault with no
+        # library identity is a real state (nothing attached yet), which is
+        # why it is a warning and not a raise.
+        by_variant = {}
+        # No path in the message: the vault's identity here IS the missing
+        # uuid, and the impact is the number that tells somebody how much of
+        # the answer is affected.
+        logger.warning(
+            "This vault has no library uuid, so a picture ghost cannot be "
+            "matched to the library that holds it: all %d workflow cards will "
+            "report ghosts: 0 and the Workflows Ghosts filter will read as "
+            "'nothing deleted' rather than 'not known'.",
+            len(figures),
+        )
+    ghost_names = model_ghost_names(hub)
+    for figure in figures:
+        figure.ghosts = sum(
+            by_variant.get(variant, 0) for variant in figure.card.variants
+        )
+        figure.model_ghosts = len(
+            {
+                filename
+                for variant in figure.card.variants
+                for _widget, filename in names.get(variant, ())
+            }
+            & ghost_names
+        )
 
 
 def by_key(figures: list[CardFigures]) -> dict[str, CardFigures]:

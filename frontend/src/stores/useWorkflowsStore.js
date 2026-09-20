@@ -8,7 +8,11 @@ import {
   reorderStack,
   unstackWorkflow,
 } from "../api/workflows";
-import { isStack } from "../utils/workflowCard";
+import {
+  WORKFLOW_SOURCE_LABELS,
+  workflowFilterChips,
+} from "../utils/filterChips";
+import { checkpointModel, isStack } from "../utils/workflowCard";
 import { onSessionReset } from "../utils/apiClient";
 import { errorMessage } from "../utils/apiError";
 
@@ -44,6 +48,32 @@ const SORT_VALUES = {
   pictures: (card) => card.picture_count ?? 0,
 };
 
+/**
+ * What the Filters panel starts on (v1.12 F7).
+ *
+ * `hideOneOffs` is TRUE by default and `showHidden` FALSE, which is the grid
+ * the server draws when it is asked nothing — so the default state of the
+ * panel is no filter at all, and the filter button's count is 0.
+ */
+export const DEFAULT_FILTERS = Object.freeze({
+  hideOneOffs: true,
+  showHidden: false,
+  // "Keeps something deleted": a picture ghost or the name of a model that is
+  // not on the shelf. The card counts the two apart; this row asks for either.
+  ghosts: false,
+  type: null,
+  checkpoint: null,
+  // `imported` (a workflow file on this machine runs it) or `found` (it came
+  // in with the pictures it made).
+  source: null,
+  minRating: null,
+});
+
+/** Does this card keep something deleted? */
+function keepsGhost(card) {
+  return (card.ghosts ?? 0) + (card.model_ghosts ?? 0) > 0;
+}
+
 export const useWorkflowsStore = defineStore("workflows", () => {
   const cards = ref([]);
   const oneOffs = ref(0);
@@ -53,6 +83,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   const error = ref("");
 
   const sortKey = ref("rating");
+  const filters = ref({ ...DEFAULT_FILTERS });
 
   /** The open stack's cover key, or null. At most one, ever. */
   const openStackKey = ref(null);
@@ -81,11 +112,143 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   /** Selected card keys; a member's key mixes freely with a top-level one. */
   const selectedKeys = ref([]);
 
+  /**
+   * The cards the grid draws, after the four narrowing filters.
+   *
+   * **Hide one-offs and Show hidden are NOT here**: they are the server's,
+   * because widening the set changes the stacking (`read_grid`), and a client
+   * that let a hidden member back in would draw it beside a cover still
+   * calling itself a stack of one. The four below only ever remove a card, so
+   * no grouping can disagree with them.
+   */
+  const filteredCards = computed(() => {
+    const view = filters.value;
+    return cards.value.filter((card) => {
+      if (view.ghosts && !keepsGhost(card)) return false;
+      if (view.type != null && card.type !== view.type) return false;
+      if (
+        view.checkpoint != null &&
+        checkpointModel(card)?.name !== view.checkpoint
+      ) {
+        return false;
+      }
+      if (view.source != null) {
+        const imported = view.source === "imported";
+        if (Boolean(card.imported) !== imported) return false;
+      }
+      if (view.minRating != null && (card.rating ?? 0) < view.minRating) {
+        return false;
+      }
+      return true;
+    });
+  });
+
   const sortedCards = computed(() => {
     const value = SORT_VALUES[sortKey.value] ?? SORT_VALUES.rating;
     // A copy: `cards` is the fetch order and a sort in place would make the
     // next resort depend on the last one.
-    return [...cards.value].sort((a, b) => value(b) - value(a));
+    return [...filteredCards.value].sort((a, b) => value(b) - value(a));
+  });
+
+  /**
+   * Every filter that is not on its default, as the chips the strip draws.
+   *
+   * One list for both the strip and the filter button's badge, so the two
+   * cannot disagree about how many filters are on — the same reason
+   * `Toolbar.vue` counts `filterChips(filterStore)` rather than keeping a
+   * tally of its own. The chips' WORDS are `utils/filterChips.js`'s, which is
+   * the module that exists so one filter cannot be spelled two ways; this
+   * store owns the state and the refetch decision, and nothing else.
+   */
+  const filterChips = computed(() =>
+    workflowFilterChips(filters.value, cards.value, setFilters),
+  );
+
+  /**
+   * "12 of 40" — what the grid is drawing of what the server sent.
+   *
+   * The one spelling of it, because the filter panel's header and the chip
+   * strip's tail both show it and a second copy would drift. The server's two
+   * flags are not in it: they change what `cards` IS, so there is no larger
+   * number for the drawn one to be "of".
+   */
+  const filterOfLabel = computed(() => {
+    const shown = filteredCards.value.length;
+    const all = cards.value.length;
+    return shown === all ? `${shown}` : `${shown} of ${all}`;
+  });
+
+  /**
+   * What each pick-one row offers, counted.
+   *
+   * Over `cards` and not `filteredCards`: a count that narrowed as its
+   * neighbours were picked would go to zero on the row you are reading and
+   * read as "this library has none", which is the opposite of true.
+   *
+   * **`cards` is one card per STACK, so these lists describe covers.** A
+   * checkpoint carried only by a stacked member is absent from the Checkpoint
+   * list, and a stack of six on one checkpoint counts 1. That is what the
+   * payload holds: `GET /workflows/cards` sends covers and names the members
+   * in `member_keys`, and a member's card arrives only when somebody opens
+   * that stack — so building the lists from what has been opened would grow
+   * them as the reader browsed, which is worse than being consistently about
+   * the grid. Making them library-wide needs the members in the payload, or a
+   * facet count beside it, and that is a read this step does not add.
+   *
+   * The same seam is why `filteredCards` filters top-level cards only: an
+   * open stack shows its whole stack. Filtering inside the panel would mean a
+   * stack card saying "6 workflows" over a panel drawing two.
+   */
+  const filterOptions = computed(() => {
+    const types = new Map();
+    const checkpoints = new Map();
+    let imported = 0;
+    let ghosts = 0;
+    const ratings = [0, 0, 0, 0, 0];
+    for (const card of cards.value) {
+      if (card.type) {
+        const seen = types.get(card.type) ?? {
+          id: card.type,
+          label: card.type_label ?? card.type,
+          count: 0,
+        };
+        seen.count += 1;
+        types.set(card.type, seen);
+      }
+      const name = checkpointModel(card)?.name;
+      if (name) {
+        checkpoints.set(name, (checkpoints.get(name) ?? 0) + 1);
+      }
+      if (card.imported) imported += 1;
+      if (keepsGhost(card)) ghosts += 1;
+      for (let star = 1; star <= 5; star += 1) {
+        if ((card.rating ?? 0) >= star) ratings[star - 1] += 1;
+      }
+    }
+    return {
+      ghosts,
+      types: [...types.values()].sort((a, b) => b.count - a.count),
+      checkpoints: [...checkpoints.entries()]
+        .map(([id, count]) => ({ id, label: id, count }))
+        .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id)),
+      sources: [
+        {
+          id: "imported",
+          label: WORKFLOW_SOURCE_LABELS.imported,
+          count: imported,
+        },
+        {
+          id: "found",
+          label: WORKFLOW_SOURCE_LABELS.found,
+          count: cards.value.length - imported,
+        },
+      ],
+      ratings: ratings.map((count, index) => ({
+        id: index + 1,
+        label: `${index + 1}★ and up`,
+        count,
+      })),
+    };
   });
 
   /**
@@ -134,7 +297,10 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     error.value = "";
     const mine = epoch;
     try {
-      const body = await listWorkflowCards();
+      const body = await listWorkflowCards({
+        includeHidden: filters.value.showHidden,
+        includeOneOffs: !filters.value.hideOneOffs,
+      });
       if (mine !== epoch) return;
       cards.value = body.cards;
       oneOffs.value = body.one_offs;
@@ -467,8 +633,65 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     if (SORT_KEYS.includes(key)) sortKey.value = key;
   }
 
+  /**
+   * Change some of the filters, re-reading the grid when the server's two move.
+   *
+   * A partial patch, like `setView` on the retired shelf: a checkbox row knows
+   * its own key and nothing about its neighbours' current values.
+   */
+  function setFilters(changes) {
+    const before = filters.value;
+    const next = { ...before, ...changes };
+    filters.value = next;
+    // **A filter that removes the open stack's COVER closes it.** The grid
+    // draws the panel inside the cover's row, so a cover filtered out takes
+    // the panel and the reader's cursor off the screen while `openStackKey`,
+    // `openMembers` and the row's `aria-expanded` all go on saying a stack is
+    // open - and the members, which were never filtered, would come back the
+    // moment an unrelated filter moved. Closing it is the state the screen is
+    // already in.
+    if (
+      openStackKey.value &&
+      !filteredCards.value.some((card) => card.key === openStackKey.value)
+    ) {
+      closeStack();
+    }
+    // **And the selection goes with what left the screen.** The selection bar
+    // and the rail's bulk verbs act on `selectedKeys`, so a filter that takes
+    // a card away would otherwise leave "3 workflows selected" over a grid
+    // drawing one — and Hide or Stack together would act on cards the reader
+    // cannot see. A member of a stack that is still drawn stays selected:
+    // its panel is on screen, and the cards it holds were never filtered.
+    if (selectedKeys.value.length) {
+      const onScreen = new Set(filteredCards.value.map((card) => card.key));
+      for (const list of Object.values(members.value)) {
+        for (const member of list) {
+          if (onScreen.has(list[0]?.key)) onScreen.add(member.key);
+        }
+      }
+      selectedKeys.value = selectedKeys.value.filter((key) =>
+        onScreen.has(key),
+      );
+    }
+    if (
+      next.hideOneOffs !== before.hideOneOffs ||
+      next.showHidden !== before.showHidden
+    ) {
+      // The cached members belong to the stacking the old flags produced, and
+      // letting a hidden card back in re-groups it. `forgetMembers` bumps the
+      // epoch, so the in-flight read cannot write the old grouping back.
+      forgetMembers();
+      fetchCards();
+    }
+  }
+
+  function clearFilters() {
+    setFilters({ ...DEFAULT_FILTERS });
+  }
+
   function reset() {
     epoch += 1;
+    filters.value = { ...DEFAULT_FILTERS };
     cards.value = [];
     oneOffs.value = 0;
     hidden.value = 0;
@@ -495,11 +718,16 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     loaded,
     error,
     sortKey,
+    filters,
     openStackKey,
     members,
     membersLoading,
     selectedKeys,
+    filteredCards,
     sortedCards,
+    filterChips,
+    filterOfLabel,
+    filterOptions,
     openMembers,
     openStackId,
     openStackSize,
@@ -519,6 +747,8 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     selectRange,
     clearSelection,
     setSortKey,
+    setFilters,
+    clearFilters,
     reset,
   };
 });

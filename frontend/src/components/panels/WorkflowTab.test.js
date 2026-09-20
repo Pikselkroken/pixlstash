@@ -36,7 +36,17 @@ vi.mock("../../api/workflows", () => ({
   stackWorkflows: (...args) => stackWorkflows(...args),
 }));
 
+// *Show all N pictures* (F7) leaves this screen for the library.
+const push = vi.fn();
+vi.mock("vue-router", () => ({
+  useRouter: () => ({ push }),
+  useRoute: () => ({ name: "workflows", query: {} }),
+}));
+
 import WorkflowTab from "./WorkflowTab.vue";
+import { useFilterStore } from "../../stores/useFilterStore";
+import { useSearchStore } from "../../stores/useSearchStore";
+import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 
@@ -603,6 +613,61 @@ describe("which card the rail shows", () => {
     await recipe.trigger("click");
     await flush(wrapper);
     expect(store.members).toEqual({});
+  });
+
+  // Half of the chip's round trip: this screen is the only one that knows a
+  // card's key, and `useGridFetch.test.js` holds the half that spends it.
+  it("opens the library on the card's own pictures, as a removable chip", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    const link = wrapper.find('[data-testid="wftab-show-pictures"]');
+    expect(link.text()).toBe("184 pictures");
+    expect(link.attributes("aria-label")).toBe("Show all 184 pictures");
+
+    await link.trigger("click");
+
+    expect(useFilterStore().workflowFilter).toEqual({
+      key: KEY,
+      name: "Cinematic portrait",
+    });
+    expect(push).toHaveBeenCalledWith("/");
+  });
+
+  // The link promises a number it was handed by the card. A reader with a tag
+  // filter on, or a character selected, would be shown fewer than that with
+  // nothing on screen saying why — so the view it lands in gives way.
+  it("clears the filters and the sidebar scope, because it says 'all'", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    const filterStore = useFilterStore();
+    const selectionStore = useSelectionStore();
+    filterStore.tagFilter = ["hat"];
+    filterStore.minScoreFilter = 4;
+    selectionStore.selectedCharacter = 9;
+    selectionStore.selectedSet = 3;
+    useSearchStore().searchQuery = "cats";
+
+    await wrapper.find('[data-testid="wftab-show-pictures"]').trigger("click");
+
+    expect(filterStore.tagFilter).toEqual([]);
+    expect(filterStore.minScoreFilter).toBeNull();
+    expect(selectionStore.selectedCharacter).toBe("ALL");
+    expect(selectionStore.selectedSet).toBeNull();
+    expect(useSearchStore().searchQuery).toBe("");
+    // And the one filter it is FOR survives `resetFilters`, which clears it
+    // too — the order of those two lines is the whole behaviour.
+    expect(filterStore.workflowFilter).toEqual({
+      key: KEY,
+      name: "Cinematic portrait",
+    });
+  });
+
+  // Nothing to show, so nothing to press: a link that filtered the library
+  // down to nothing would read as a broken grid rather than as an empty card.
+  it("leaves the figure as plain text on a card with no pictures", async () => {
+    const { wrapper } = await mountWith([KEY], [card({ picture_count: 0 })]);
+    expect(wrapper.find('[data-testid="wftab-show-pictures"]').exists()).toBe(
+      false,
+    );
+    expect(textOf(wrapper)).toContain("0 pictures");
   });
 
   it("shows a selected stack member, which the grid never lists", async () => {

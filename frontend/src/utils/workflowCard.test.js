@@ -81,6 +81,28 @@ describe("card chips", () => {
       "imported",
     ]);
   });
+
+  // A hidden card is only ever drawn because somebody ticked *Show hidden
+  // workflows* (F7). Unmarked it is indistinguishable from a card that was
+  // never hidden, in the one grid it was deliberately kept out of — and it
+  // leads the row because the row clips to "+N".
+  it("leads with `hidden`, on a lone card and on a stack alike", () => {
+    expect(
+      factChips({ ...STACK, stack_size: 1, differs_by: [], hidden: true }).map(
+        (c) => c.label,
+      ),
+    ).toEqual(["hidden", "txt2img"]);
+    expect(factChips({ ...STACK, hidden: true }).map((c) => c.label)).toEqual([
+      "hidden",
+      "+ face detailer",
+      "+ upscale 2×",
+    ]);
+    // And a card nobody hid says nothing about it.
+    expect(factChips({ ...STACK, hidden: false }).map((c) => c.label)).toEqual([
+      "+ face detailer",
+      "+ upscale 2×",
+    ]);
+  });
 });
 
 describe("cardAccessibleName", () => {

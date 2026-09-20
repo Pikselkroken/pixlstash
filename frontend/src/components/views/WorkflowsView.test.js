@@ -796,6 +796,34 @@ describe("arriving on ?topology=", () => {
     );
   });
 
+  // The verdict is the PAYLOAD's, not the drawn grid's. A client-side filter
+  // hiding the card is one × away from fixed, and calling that "not in this
+  // grid" sends the reader looking for a workflow they already have.
+  it("tells a filtered-out card apart from one the answer never held", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    // Every card is rated 3, so 5★ and up hides all of them — including `d`,
+    // which the link below names and the payload plainly holds.
+    store.setFilters({ minRating: 5 });
+    await flush();
+
+    route.query = { topology: "topology-d" };
+    await flush();
+
+    const note = wrapper.find('[data-testid="wfv-link-filtered"]');
+    expect(note.exists()).toBe(true);
+    expect(note.text()).toContain("in this grid, but a filter is hiding it");
+    expect(wrapper.text()).not.toContain("That workflow is not in this grid");
+
+    // And it is one control away from fixed, which the other note never is.
+    await note.find(".wfv-note-clear").trigger("click");
+    await flush();
+    expect(wrapper.find('[data-testid="wfv-link-filtered"]').exists()).toBe(
+      false,
+    );
+    expect(store.selectedKeys).toEqual(["d"]);
+  });
+
   it("names what is being left out, since that is usually the reason", async () => {
     listWorkflowCards.mockImplementation(() =>
       Promise.resolve({ cards: [...CARDS], one_offs: 12, hidden: 40 }),
@@ -1421,5 +1449,68 @@ describe("the menu's move verbs follow the row too", () => {
       /b2, position \d+ of 3/,
     );
     expect(cursorKey(wrapper)).toBe("b2");
+  });
+});
+
+// The Filters panel's three surfaces on the screen itself (F7). The panel's
+// own rules are in `WorkflowFilterMenu.test.js`; what is asserted here is that
+// the chip strip, the button's badge and the subtitle all read the SAME list,
+// so none of them can go on describing a filter another one has dropped.
+describe("WorkflowsView filters", () => {
+  const filterButton = (wrapper) =>
+    wrapper.findAll("button").find((b) => b.text().includes("Filters"));
+
+  it("has no chips, no badge and no withheld counts on a clean grid", async () => {
+    const wrapper = await grid();
+    expect(wrapper.find(".filter-strip").exists()).toBe(false);
+    expect(filterButton(wrapper).find(".bar-filter-badge").exists()).toBe(
+      false,
+    );
+    expect(wrapper.find(".wfv-sub").text()).toBe("6 workflows");
+  });
+
+  it("draws one chip and one badge per filter that is on", async () => {
+    const wrapper = await grid();
+    useWorkflowsStore().setFilters({ type: "upscale", ghosts: true });
+    await flush();
+
+    expect(filterButton(wrapper).find(".bar-filter-badge").text()).toBe("2");
+    expect(wrapper.findAll(".filter-chip")).toHaveLength(2);
+  });
+
+  it("says which of the two counts is still being withheld", async () => {
+    // On the payload, not on the store: ticking a checkbox re-reads the grid,
+    // and a count written straight onto the store is overwritten by the
+    // answer - which would make this pass for the wrong reason.
+    listWorkflowCards.mockImplementation(() =>
+      Promise.resolve({ cards: [...CARDS], one_offs: 7, hidden: 4 }),
+    );
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await flush();
+    expect(wrapper.find(".wfv-sub").text()).toBe(
+      "6 workflows · 4 hidden · 7 one-offs",
+    );
+
+    // Shown is not withheld: the subtitle must stop counting what the reader
+    // is now looking at, or it captions the grid with its own contents.
+    store.setFilters({ showHidden: true });
+    await flush();
+    expect(wrapper.find(".wfv-sub").text()).toBe("6 workflows · 7 one-offs");
+  });
+
+  it("says so when the filters leave nothing, rather than showing first-run help", async () => {
+    const wrapper = await grid();
+    useWorkflowsStore().setFilters({ minRating: 5 });
+    await flush();
+
+    expect(wrapper.findAll(".wfv-row")).toHaveLength(0);
+    expect(wrapper.find(".wfv-empty").exists()).toBe(false);
+    expect(wrapper.text()).toContain("No workflow matches these filters");
+
+    await wrapper.find(".wfv-note-clear").trigger("click");
+    await flush();
+    expect(wrapper.findAll(".wfv-row")).toHaveLength(6);
   });
 });
