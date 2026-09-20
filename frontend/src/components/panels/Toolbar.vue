@@ -466,6 +466,22 @@
             "
           />
         </v-menu>
+        <!-- ── Generate with no selection (v1.12 F5). The old button here
+             opened the rail run panel, which is gone; this opens the Run
+             popup with its workflow picker unset, which is the same popup
+             every other entry point opens and the one case it was already
+             built for (`kind: "card"`, its own "Results go to" set picker).
+             Without a door on the grid, starting a run from nothing meant
+             navigating to Workflows first. -->
+        <AppBarButton
+          v-if="filterStore.comfyuiConfigured"
+          class="tb-fold-700"
+          icon="image-plus-outline"
+          :disabled="isReadOnly"
+          tooltip="Generate new pictures with a ComfyUI workflow"
+          aria-label="Generate new pictures with a ComfyUI workflow"
+          @click="generateFromNothing"
+        />
         <!-- ── The ⋯ overflow (amendment #2 in docs/design/
              toolbar-responsive-decisions.md): a burger may only collapse
              controls from its OWN visual group, and it stands where those
@@ -478,6 +494,20 @@
              on-screen. -->
         <TbOverflowMenu class="tb-overflow">
           <template #default="{ close }">
+            <button
+              v-if="filterStore.comfyuiConfigured"
+              type="button"
+              role="menuitem"
+              class="ctx-item tb-row-700"
+              :disabled="isReadOnly"
+              @click="
+                close();
+                generateFromNothing();
+              "
+            >
+              <v-icon class="ctx-icon">mdi-image-plus-outline</v-icon>
+              <span>Generate with ComfyUI…</span>
+            </button>
             <button
               type="button"
               role="menuitem"
@@ -576,6 +606,7 @@ import TbGlobalActions from "./TbGlobalActions.vue";
 import TbExportPanel from "./TbExportPanel.vue";
 import TbImportPanel from "./TbImportPanel.vue";
 import TbOverflowMenu from "./TbOverflowMenu.vue";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import UndoControl from "./UndoControl.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -603,6 +634,19 @@ const emit = defineEmits([
   "open-settings",
   "open-duplicates",
 ]);
+
+const runDialog = useRunDialogStore();
+
+/**
+ * Generate with nothing selected: the Run popup, picker unset.
+ *
+ * No pictures, so the card IS the run's source and the popup shows its own
+ * "Results go to" set picker rather than filing beside a source picture.
+ */
+function generateFromNothing() {
+  if (isReadOnly.value) return;
+  runDialog.openRun({ kind: "card", pickWorkflow: true, emptyPrompt: true });
+}
 
 const tbImportMenuOpen = ref(false);
 

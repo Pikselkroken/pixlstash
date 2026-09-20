@@ -76,6 +76,11 @@ function card(overrides = {}) {
   };
 }
 
+/** One addressed value out of a submitted body, by widget name. */
+function sentValue(body, inputName) {
+  return (body.values || []).find((v) => v.input_name === inputName);
+}
+
 const AppDialogStub = {
   name: "AppDialog",
   template: "<div><slot /><footer><slot name='footer' /></footer></div>",
@@ -217,11 +222,14 @@ describe("switching to another stack member", () => {
     expect(wrapper.text()).toContain("Denoise went back to this workflow's own");
 
     // And it is really GONE, not merely announced: a stale address left in
-    // `edits` rides along in `values` for ever and keeps a ↺ chip on a field
-    // that no longer does anything.
+    // `edits` keeps a ↺ chip on a field that no longer does anything.
+    expect(Object.keys(wrapper.vm.edits)).toEqual([]);
     await wrapper.vm.submit();
     await flushPromises();
-    expect(runWorkflowCard.mock.calls[0][0].values).toEqual([]);
+    // The body carries the new card's own parameters, and nothing addressed to
+    // a slot only the old one had.
+    const sent = runWorkflowCard.mock.calls[0][0].values;
+    expect(sent.some((v) => v.input_name === "denoise")).toBe(false);
   });
 
   it("stops reading the picture's own settings once it is another card", async () => {
@@ -314,7 +322,9 @@ describe("a number field that has been emptied", () => {
 
     await wrapper.vm.submit();
     await flushPromises();
-    expect(runWorkflowCard.mock.calls[0][0].values).toEqual([]);
+    // Back to the value it started at, which the body still carries - the point
+    // is that it is 12 and not the 0 an emptied number box coerces to.
+    expect(sentValue(runWorkflowCard.mock.calls[0][0], "steps").value).toBe(12);
   });
 
   it("does not record an unparseable value either", async () => {
@@ -395,9 +405,74 @@ describe("the body it sends", () => {
     await wrapper.vm.submit();
     await flushPromises();
 
-    expect(runWorkflowCard.mock.calls[0][0].values).toEqual([
-      { slot_label: "KSampler", input_name: "steps", value: 16 },
-    ]);
+    expect(sentValue(runWorkflowCard.mock.calls[0][0], "steps")).toEqual({
+      slot_label: "KSampler",
+      input_name: "steps",
+      value: 16,
+    });
+  });
+
+  it("sends what the form SHOWS, not only what was edited", async () => {
+    // The run does not start from this form: `_plan` resolves its own graph and
+    // applies `body.values` alone. The card's defaults are a display figure and
+    // the picture's settings are a fact about the picture; neither reaches the
+    // graph on its own. Sending only the edits ran a graph that disagreed with
+    // the form the owner was looking at.
+    //
+    // Here the picture was made at 12 steps and the card's own default is 8.
+    // The form shows 12, so the run has to do 12 - not the 8 the resolved
+    // source graph would otherwise carry.
+    const wrapper = await mountRun();
+    const steps = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
+    expect(wrapper.vm.currentValue(steps)).toBe(12);
+    expect(wrapper.vm.isEdited(steps)).toBe(false);
+
+    await wrapper.vm.submit();
+    await flushPromises();
+
+    const body = runWorkflowCard.mock.calls[0][0];
+    expect(sentValue(body, "steps")).toEqual({
+      slot_label: "KSampler",
+      input_name: "steps",
+      value: 12,
+    });
+    // And every other parameter on the card, so nothing silently falls back.
+    expect(sentValue(body, "cfg").value).toBe(2.0);
+    expect(sentValue(body, "ckpt_name").value).toBe("realvisXL_v5.safetensors");
+  });
+
+  it("drops a parameter the card has no value for, which RunValue would refuse", async () => {
+    getWorkflowCard.mockResolvedValue({
+      card: card({
+        defaults: [def("Steps", "steps", 8), def("Refiner", "refiner", null)],
+      }),
+    });
+    const wrapper = await mountRun();
+    await wrapper.vm.submit();
+    await flushPromises();
+
+    const body = runWorkflowCard.mock.calls[0][0];
+    expect(sentValue(body, "steps")).toBeTruthy();
+    expect(sentValue(body, "refiner")).toBeUndefined();
+  });
+
+  it("does not put one picture setting into two slots of the same name", async () => {
+    // `recipe.settings` is `{field: value}` with no slot, so a name carried by
+    // two parameters cannot be attributed to either.
+    getWorkflowCard.mockResolvedValue({
+      card: card({
+        defaults: [
+          def("Steps", "steps", 8, "KSampler"),
+          def("Steps (detailer)", "steps", 30, "KSampler2"),
+        ],
+      }),
+    });
+    const wrapper = await mountRun();
+    const body = wrapper.vm.displayedValues();
+
+    // The picture's 12 belongs to neither, so each keeps its own default.
+    expect(body.find((v) => v.slot_label === "KSampler").value).toBe(8);
+    expect(body.find((v) => v.slot_label === "KSampler2").value).toBe(30);
   });
 
   it("sends a 64-bit seed digit for digit, never as a JS Number", async () => {

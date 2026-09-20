@@ -76,6 +76,7 @@
         </div>
       </div>
 
+      <div v-if="blockedReasons.length" class="mmd-reasons" role="alert">
       <RunReasonNotice
         v-for="entry in blockedReasons"
         :key="`${entry.key}:${entry.reason.code}`"
@@ -85,6 +86,7 @@
         @settings="emit('open-settings', 'compute')"
         @retry="load"
       />
+      </div>
       <p v-if="submitError" class="mmd-note mmd-note--bad" role="alert">
         {{ submitError }}
       </p>
@@ -102,11 +104,12 @@
         variant="primary"
         icon-left="play"
         :loading="submitting"
+        :class="{ 'run-refused': !canRun }"
         :aria-disabled="canRun ? undefined : 'true'"
         :aria-describedby="blocker ? blockerId : undefined"
         @click="submit"
       >
-        Make {{ totalRuns }}
+        {{ totalRuns > 0 ? `Make ${totalRuns}` : "Make" }}
       </AppButton>
     </template>
   </AppDialog>
@@ -266,10 +269,6 @@ async function load() {
   loading.value = true;
   loadFailed.value = "";
   submitError.value = "";
-  // Reset with the rest: a count left at 20 from the last selection applies to
-  // this one, and the pre-flight below was taken at the count it is reset to.
-  count.value = 1;
-  seedMode.value = "new";
   try {
     // The caller pre-flighted this selection to decide which popup to open,
     // so it already holds the answer; asking again would cost a second
@@ -335,6 +334,11 @@ watch(
   () => [props.open, props.source],
   ([open]) => {
     if (!open) return;
+    // The controls reset HERE and not in `load()`, which Retry shares: a count
+    // of 8 silently becoming 1 because the owner re-asked an unreachable
+    // ComfyUI is the button quietly changing what it promises.
+    count.value = 1;
+    seedMode.value = "new";
     reused = false;
     void load();
   },
@@ -343,6 +347,13 @@ watch(
 </script>
 
 <style scoped>
+/* `aria-disabled`, so the button keeps focus and its reason stays reachable -
+   but it must not look pressable, or the dead click is a surprise. The same
+   dimming the native disabled state uses. */
+:deep(.run-refused) {
+  opacity: var(--opacity-disabled);
+}
+
 .mmd-lede {
   margin: 0;
   font-size: var(--text-sm);
@@ -400,6 +411,13 @@ watch(
 .mmd-note {
   margin: 0;
   line-height: var(--leading-body);
+}
+
+/* One live region around the refusals: see RunReasonNotice. */
+.mmd-reasons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
 .mmd-controls {

@@ -41,6 +41,14 @@ export const useRunDialogStore = defineStore("runDialog", () => {
   const context = ref({});
 
   let runner = null;
+  /**
+   * Whether a grid is mounted to follow a run's progress.
+   *
+   * `App.vue` mounts `ImageGrid` under `v-else`, so on the Workflows view there
+   * is none: a run started from the Workflow tab has no progress overlay and no
+   * `client_id` worth sending, and the toast is the whole of its feedback.
+   */
+  const hasRunner = ref(false);
 
   function openRun(next) {
     makeMore.value = null;
@@ -64,8 +72,12 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    */
   function attachRunner(handler) {
     runner = handler;
+    hasRunner.value = true;
     return () => {
-      if (runner === handler) runner = null;
+      if (runner === handler) {
+        runner = null;
+        hasRunner.value = false;
+      }
     };
   }
 
@@ -89,6 +101,7 @@ export const useRunDialogStore = defineStore("runDialog", () => {
     source,
     makeMore,
     context,
+    hasRunner,
     openRun,
     openMakeMore,
     close,

@@ -1,7 +1,8 @@
 <template>
-  <!-- `role="alert"`: a refusal is the higher-priority announcement on this
-       surface, and it arrives after the form the reader is already looking at. -->
-  <div class="rrn" role="alert">
+  <!-- No `role` of its own: several of these render at once for a mixed batch,
+       and five simultaneous alerts is five interruptions for one fact. The
+       dialogs wrap the list in a single live region instead. -->
+  <div class="rrn">
     <v-icon class="rrn-glyph" size="18">mdi-alert-circle-outline</v-icon>
     <div class="rrn-body">
       <p class="rrn-text">
@@ -24,8 +25,11 @@
         >
           Settings › Compute
         </AppButton>
+        <!-- Beside Settings, not instead of it: the fix happens in another
+             dialog stacked over this one, and nothing here is told when it is
+             done. Without this the refusal outlived the thing it described. -->
         <AppButton
-          v-else-if="read.fix === FIX_RETRY"
+          v-if="read.retry"
           size="sm"
           icon-left="refresh"
           :loading="busy"
@@ -67,7 +71,6 @@ import { VIcon } from "vuetify/components";
 
 import {
   FIX_DROP_LORA,
-  FIX_RETRY,
   FIX_SETTINGS,
   readReason,
 } from "../../utils/runReasons";

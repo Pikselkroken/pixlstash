@@ -2,11 +2,12 @@
   <button
     class="reset-chip"
     type="button"
-    :aria-label="`Put ${label} back to ${value}`"
+    :aria-label="`Put ${label} back to ${shown}`"
+    :title="`Put ${label} back to ${shown}`"
     @click.stop="emit('reset')"
   >
     <v-icon size="11">mdi-restore</v-icon>
-    <span class="reset-chip-value">{{ value }}</span>
+    <span class="reset-chip-value">{{ shown }}</span>
   </button>
 </template>
 
@@ -19,16 +20,33 @@
  * grid: a chip that could change a cell's height would knock the whole row of
  * fields out of alignment the moment one of them was edited.
  */
+import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
-defineProps({
-  /** The original value, shown on the chip so it can be read without acting. */
-  value: { type: [String, Number, Boolean], required: true },
+const props = defineProps({
+  /**
+   * The original value, shown on the chip so it can be read without acting.
+   *
+   * Nullable: a card default can carry no value at all, and a required prop
+   * would warn and render an empty chip rather than say so.
+   */
+  value: { type: [String, Number, Boolean, null], default: null },
   /** The field's own label, for the accessible name. */
   label: { type: String, required: true },
 });
 
 const emit = defineEmits(["reset"]);
+
+/**
+ * What the chip reads, and what its `title` carries in full.
+ *
+ * The chip is 16px tall and ellipsises, so a prompt's original is a few
+ * truncated words on screen; the `title` is what makes the whole of it
+ * readable before a click that cannot be undone.
+ */
+const shown = computed(() =>
+  props.value === null || props.value === "" ? "no value" : String(props.value),
+);
 </script>
 
 <style scoped>
@@ -60,11 +78,12 @@ const emit = defineEmits(["reset"]);
   inset: -4px 0;
 }
 
-/* The grown hit area is what a pointer gets; the ring has to stay on the chip
-   itself or it draws 4px clear of the thing it is naming. */
+/* The grown hit area is what a pointer gets; the ring stays on the chip itself
+   or it draws clear of the thing it is naming. Tokens, not the values behind
+   them - design-tokens.css calls a hand-restated focus ring a defect. */
 .reset-chip:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-on-surface));
-  outline-offset: 1px;
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
 }
 
 .reset-chip:hover {

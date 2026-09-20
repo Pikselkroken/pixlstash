@@ -231,6 +231,41 @@ describe("a selection every picture of which can run", () => {
     expect(preflightWorkflowRun).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the count and the seed across a Retry", async () => {
+    // Retry shares `load()` with the open. Resetting there turned "Make 16"
+    // into "Make 2" the moment somebody re-asked an unreachable ComfyUI, with
+    // nothing said - the button quietly promising something else.
+    const wrapper = await mountMakeMore();
+    wrapper.vm.count = 8;
+    wrapper.vm.seedMode = "keep";
+    await wrapper.vm.$nextTick();
+    expect(makeButton(wrapper).text()).toBe("Make 16");
+
+    await wrapper.vm.load();
+    await flushPromises();
+
+    expect(wrapper.vm.count).toBe(8);
+    expect(wrapper.vm.seedMode).toBe("keep");
+    expect(makeButton(wrapper).text()).toBe("Make 16");
+  });
+
+  it("reads \"Make\" rather than \"Make 0\" when nothing can run", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      ok: false,
+      runs: 0,
+      groups: [
+        {
+          workflow_key: BAD,
+          picture_ids: [3],
+          runs: 0,
+          reasons: [{ code: "missing_models", models: [{ file: "x", folder: "y" }] }],
+        },
+      ],
+    });
+    const wrapper = await mountMakeMore();
+    expect(makeButton(wrapper).text()).toBe("Make");
+  });
+
   it("starts each open at a count of 1, never the last selection's", async () => {
     const wrapper = await mountMakeMore();
     wrapper.vm.count = 20;

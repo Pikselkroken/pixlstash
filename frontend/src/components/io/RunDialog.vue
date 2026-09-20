@@ -4,9 +4,9 @@
     size="lg"
     :title="title"
     :subtitle="subtitle"
-    :persistent="submitting"
+    :persistent="submitting || dirty"
     @close="onRequestClose"
-    @accept="submit"
+    @keydown.esc="onEscape"
   >
     <p v-if="loadFailed" class="rund-note rund-note--bad" role="alert">
       {{ loadFailed }}
@@ -278,16 +278,24 @@
           </details>
         </div>
 
+        <!-- Keyed on the position as well as the code: `reasons` is flat-mapped
+             across every group, so two groups refusing for the same reason
+             would collide on the code alone. -->
+        <div
+          v-if="reasons.length"
+          class="rund-f rund-f--4 rund-reasons"
+          role="alert"
+        >
         <RunReasonNotice
-          v-for="reason in reasons"
-          :key="reason.code"
-          class="rund-f rund-f--4"
+          v-for="(reason, index) in reasons"
+          :key="`${index}:${reason.code}`"
           :reason="reason"
           :busy="preflighting"
           @settings="emit('open-settings', 'compute')"
-          @retry="runPreflight"
+          @retry="runPreflight()"
           @drop-lora="dropLoras"
         />
+        </div>
         <p v-if="submitError" class="rund-f rund-f--4 rund-note rund-note--bad" role="alert">
           {{ submitError }}
         </p>
@@ -334,6 +342,7 @@
           variant="primary"
           icon-left="play"
           :loading="submitting"
+          :class="{ 'run-refused': !canRun }"
           :aria-disabled="canRun ? undefined : 'true'"
           :aria-describedby="runBlocker ? blockerId : undefined"
           @click="submit"
@@ -372,6 +381,7 @@ import {
   runWorkflowCard,
 } from "../../api/workflows";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorMessage } from "../../utils/apiError";
 import { reasonsBlock } from "../../utils/runReasons";
@@ -406,6 +416,8 @@ const emit = defineEmits(["close", "run", "open-settings"]);
 const MAX_COUNT = 200;
 /** `MAX_SEED_64` in `pixlstash/routes/workflows.py`: ComfyUI's own ceiling. */
 const MAX_SEED = 2n ** 64n - 1n;
+/** `MAX_DEFAULTS` in `pixlstash/routes/workflows.py`: the `values` ceiling. */
+const MAX_VALUES = 200;
 /** The parameters the design pins, in its order, addressed by widget name. */
 const SCALAR_PINNED = ["steps", "cfg", "cfg_scale", "guidance"];
 const SIZE_INPUTS = ["width", "height"];
@@ -413,7 +425,10 @@ const CHECKPOINT_INPUT = "ckpt_name";
 const SEPARATOR = "/";
 
 const blockerId = useId();
+/** Bumped per open, so a slower earlier read cannot write over a later one. */
+let loadToken = 0;
 const notices = useNoticeStore();
+const runDialog = useRunDialogStore();
 const entityLists = useEntityListsStore();
 
 const loading = ref(false);
@@ -455,6 +470,31 @@ const seed = ref("0");
 const loras = ref([]);
 const destinationSetId = ref("");
 
+/**
+ * Whether the form holds work a stray click would destroy.
+ *
+ * `AppDialog` dismisses on a backdrop click and on Escape, and `load()` rebuilds
+ * every field on the next open, so one misplaced click discards an edited
+ * prompt, its LoRAs and every override with no undo. `persistent` is the
+ * mechanism the dialog already has for exactly this.
+ *
+ * It also closes the Enter path: the keyboard contract suppresses `accept` on a
+ * persistent dialog, "so a destructive or in-flight accept only fires from its
+ * own button" - and this button queues up to 200 ComfyUI runs. `@accept` is not
+ * wired at all here for the same reason; Escape is handled below so dismissing
+ * an untouched form still works.
+ */
+const dirty = computed(
+  () =>
+    prompt.value !== basePrompt.value ||
+    negative.value !== baseNegative.value ||
+    Object.keys(edits).length > 0 ||
+    loras.value.length !== initialLoraCount.value,
+);
+
+/** How many LoRA rows the form opened with, for `dirty`. */
+const initialLoraCount = ref(0);
+
 const naming = ref(false);
 const saving = ref(false);
 const recipeName = ref("");
@@ -480,11 +520,19 @@ const workflowKey = computed({
 });
 
 async function switchCard(key, keepEdits) {
+  // The same generation the load uses. A card read still in flight when the
+  // popup is closed and reopened on another source would otherwise resolve
+  // into the new dialog and replace its card, and the pre-flight behind it
+  // would replace the new dialog's refusals with the old gesture's.
+  const token = loadToken;
   try {
     await loadCard(key, { keepEdits });
-    await runPreflight();
+    if (token !== loadToken) return;
+    await runPreflight(token);
   } catch (err) {
-    loadFailed.value = errorMessage(err, "Could not read that workflow.");
+    if (token === loadToken) {
+      loadFailed.value = errorMessage(err, "Could not read that workflow.");
+    }
   }
 }
 
@@ -531,9 +579,14 @@ function baseOf(field) {
   const ownCard = recipe.value?.workflow_key
     ? recipe.value.workflow_key === activeKey.value
     : false;
-  const fromPicture = ownCard
-    ? recipe.value?.settings?.[field.input_name]
-    : undefined;
+  // And only when the name picks out ONE parameter. `recipe.settings` is
+  // `{field: value}` with no slot, so a graph with two samplers both carrying
+  // `steps` would otherwise show the same picture value in both rows and send
+  // it to both.
+  const fromPicture =
+    ownCard && !ambiguousInputs.value.has(field.input_name)
+      ? recipe.value?.settings?.[field.input_name]
+      : undefined;
   return fromPicture !== undefined && fromPicture !== null
     ? fromPicture
     : field.value;
@@ -582,6 +635,17 @@ function resetValue(field) {
   delete edits[key];
   delete editedLabels[key];
 }
+
+/** Input names more than one of this card's parameters carries. */
+const ambiguousInputs = computed(() => {
+  const seen = new Set();
+  const twice = new Set();
+  for (const field of defaults.value) {
+    if (seen.has(field.input_name)) twice.add(field.input_name);
+    seen.add(field.input_name);
+  }
+  return twice;
+});
 
 const byInput = computed(() => {
   const map = {};
@@ -729,16 +793,37 @@ const runBlocker = computed(() => {
   return "";
 });
 const canRun = computed(() => !runBlocker.value && !submitting.value);
-const runLabel = computed(() =>
-  Number.isInteger(count.value) && count.value > 0 ? `Run ${count.value}` : "Run",
-);
+/**
+ * The button's number, from the server where it has answered.
+ *
+ * `RunPreflight.runs` is what `_plan` would actually submit for this body;
+ * `count` is only what this form asked for. They agree on the one-group `target`
+ * path, and the server is the one to believe when they do not.
+ */
+const runLabel = computed(() => {
+  if (!Number.isInteger(count.value) || count.value < 1) return "Run";
+  const planned = plannedRuns.value || count.value;
+  return `Run ${planned}`;
+});
 
 /** The body both the pre-flight and the run take, so the two never disagree. */
 function runBody() {
-  const values = Object.entries(edits).map(([key, value]) => {
-    const [slotLabel, inputName] = splitAddress(key);
-    return { slot_label: slotLabel, input_name: inputName, value };
-  });
+  // **Every parameter the form displays, not only the edited ones.**
+  //
+  // The run does NOT start from what this popup is showing: `_plan` builds the
+  // graph from `resolve_source` - the imported file, the card's best-scored
+  // picture, or the best stored instance - and then applies `body.values` and
+  // nothing else. A card's `defaults` are a *display* figure (the mode over its
+  // best pictures, `card_defaults`), and the opened picture's own settings are
+  // a fact about that picture; neither reaches the graph on its own. Sending
+  // only `edits` therefore ran a graph that disagreed with the form: open a
+  // picture made at 45 steps on a card whose best picture used 20, press Run
+  // untouched, and the form said 45 while the run did 20.
+  //
+  // Safe to send the lot: `_apply_addressed` leaves a wired input alone and
+  // "an input the graph does not have is not invented", so an address this
+  // graph lacks is inert rather than an error.
+  const values = displayedValues();
   const body = {
     // `null` means "leave the graph's own text alone"; `""` means "blank it",
     // and `_apply_prompts` honours both literally. A card or a multi-picture
@@ -761,7 +846,11 @@ function runBody() {
     // The digits as they were typed. A Number here would round a 64-bit
     // seed into a different one on the way out.
     seed: seedMode.value === "fixed" ? String(seed.value).trim() : null,
-    client_id: props.context?.client_id || null,
+    // Only when something is listening. `App.vue` mounts the grid under
+    // `v-else`, so a run started from the Workflows view has no progress
+    // runner attached, and a `client_id` naming a socket nobody reads makes
+    // the run look followable when it is not.
+    client_id: runDialog.hasRunner ? props.context?.client_id || null : null,
   };
   // Exactly one source, which the route checks before it reads anything: with
   // pictures the card is `target`, and without them it IS the source.
@@ -785,9 +874,26 @@ function runBody() {
   return body;
 }
 
-function splitAddress(key) {
-  const at = key.lastIndexOf(SEPARATOR);
-  return [key.slice(0, at), key.slice(at + 1)];
+/**
+ * Every parameter as the form currently shows it, addressed for the run.
+ *
+ * A `null` default is dropped rather than sent: `RunValue.value` is
+ * `bool | int | float | str` and a null is a 422 on the whole request. A card
+ * default with no value is a parameter nobody has a value for, so there is
+ * nothing to override it with.
+ */
+function displayedValues() {
+  const rows = [];
+  for (const field of defaults.value) {
+    const value = currentValue(field);
+    if (value === null || value === undefined) continue;
+    rows.push({
+      slot_label: field.slot_label,
+      input_name: field.input_name,
+      value,
+    });
+  }
+  return rows.slice(0, MAX_VALUES);
 }
 
 function addLora() {
@@ -862,7 +968,8 @@ async function loadCard(key, { keepEdits = false } = {}) {
   card.value = next;
 }
 
-async function runPreflight() {
+async function runPreflight(token = loadToken) {
+  const mine = () => token === loadToken;
   if (!activeKey.value) {
     reasons.value = [];
     return;
@@ -871,6 +978,7 @@ async function runPreflight() {
   preflightError.value = "";
   try {
     const answer = await preflightWorkflowRun(runBody());
+    if (!mine()) return;
     reasons.value = (answer?.groups || []).flatMap((group) => group.reasons || []);
     plannedRuns.value = Number(answer?.runs) || 0;
   } catch (err) {
@@ -879,6 +987,7 @@ async function runPreflight() {
     // shown now rather than after the owner presses Run. Anything else (the
     // network, a 5xx) is the question not being asked, which is not a refusal:
     // the button stays live and the run itself answers.
+    if (!mine()) return;
     reasons.value = [];
     const status = err?.response?.status;
     if (status >= 400 && status < 500) {
@@ -888,12 +997,9 @@ async function runPreflight() {
       console.warn("Could not pre-flight this run:", err);
     }
   } finally {
-    preflighting.value = false;
+    if (mine()) preflighting.value = false;
   }
 }
-
-/** Bumped per open, so a slower earlier read cannot write over a later one. */
-let loadToken = 0;
 
 async function load() {
   const token = (loadToken += 1);
@@ -941,6 +1047,7 @@ async function load() {
     loras.value = loraSlots.value
       .filter((slot) => slot.by === "digest" && slot.value)
       .map((slot) => loraRow(slot, String(slot.value)));
+    initialLoraCount.value = loras.value.length;
     destinationSetId.value =
       readLastSet() || (props.context?.set_id ? String(props.context.set_id) : "");
     void loadAdapters();
@@ -1022,6 +1129,23 @@ function onRequestClose() {
   emit("close");
 }
 
+/**
+ * Escape backs out one level, then closes.
+ *
+ * While naming a recipe the footer is a nested mode; Escape there used to close
+ * the whole popup and lose the run form along with the name. A persistent
+ * dialog suppresses `AppDialog`'s own Escape, so the close is made here.
+ */
+function onEscape(event) {
+  if (submitting.value) return;
+  event.stopPropagation();
+  if (naming.value) {
+    naming.value = false;
+    return;
+  }
+  emit("close");
+}
+
 async function submit() {
   if (!canRun.value) return;
   submitting.value = true;
@@ -1055,6 +1179,13 @@ watch(
 </script>
 
 <style scoped>
+/* `aria-disabled`, so the button keeps focus and its reason stays reachable -
+   but it must not look pressable, or the dead click is a surprise. The same
+   dimming the native disabled state uses. */
+:deep(.run-refused) {
+  opacity: var(--opacity-disabled);
+}
+
 .rund {
   display: grid;
   /* 168px is the design's own source column, and the picture below fills it at
@@ -1161,8 +1292,14 @@ watch(
   flex: 1;
 }
 
+/* The "Strength" header has to sit over the strength box, so the two share one
+   value: changed apart, the label stops lining up with the column it names. */
+.rund-form {
+  --rund-strength-w: 72px;
+}
+
 .rund-l2 {
-  width: 72px;
+  width: var(--rund-strength-w);
   text-align: right;
 }
 
@@ -1173,13 +1310,20 @@ watch(
 .rund-lora,
 .rund-size {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 72px var(--control-h-bar);
+  grid-template-columns: minmax(0, 1fr) var(--rund-strength-w) var(--control-h-bar);
   gap: var(--space-3);
   align-items: center;
 }
 
 .rund-size {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+/* One live region around the refusals: see RunReasonNotice. */
+.rund-reasons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
 .rund-more {

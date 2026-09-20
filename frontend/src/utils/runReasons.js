@@ -20,6 +20,17 @@ export const FIX_SETTINGS = "settings";
 export const FIX_RETRY = "retry";
 export const FIX_DROP_LORA = "drop-lora";
 
+/**
+ * Codes whose fix happens somewhere ELSE, so the popup has to be able to
+ * re-ask once it has been done.
+ *
+ * Settings opens on top of this popup and nothing tells the popup when it
+ * closes, so without a Retry of its own `comfyui_not_configured` stayed on
+ * screen — and the Run button stayed blocked — after the address had been set,
+ * with closing and reopening (and losing the form) the only way out.
+ */
+export const RETRYABLE_CODES = ["comfyui_not_configured", "comfyui_unreachable"];
+
 function names(list, key) {
   return (list || [])
     .map((item) => (typeof item === "string" ? item : item?.[key]))
@@ -34,7 +45,13 @@ function names(list, key) {
  */
 export function readReason(reason) {
   const code = String(reason?.code || "");
-  const read = (text, fix = null, files = []) => ({ code, text, fix, files });
+  const read = (text, fix = null, files = []) => ({
+    code,
+    text,
+    fix,
+    files,
+    retry: RETRYABLE_CODES.includes(code),
+  });
   switch (code) {
     case "comfyui_not_configured":
       return read(

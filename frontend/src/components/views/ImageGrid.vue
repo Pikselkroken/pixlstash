@@ -2041,7 +2041,12 @@ async function makeMoreLikeSelection() {
   const ids = selectedImageIds.value
     .map((id) => Number(getPictureId(id)))
     .filter((id) => Number.isFinite(id) && id > 0);
-  if (!ids.length || isReadOnly.value) return;
+  if (!ids.length || isReadOnly.value || decidingMakeMore) return;
+  // One look-ahead at a time. The menu closes on the click, so a double press
+  // or the entry fired from both menus would otherwise start two pre-flights -
+  // two ComfyUI `/object_info` reads - and whichever answered last would decide
+  // which popup opened.
+  decidingMakeMore = true;
   try {
     const answer = await preflightWorkflowRun({ picture_ids: ids, count: 1 });
     const groups = answer?.groups || [];
@@ -2060,10 +2065,22 @@ async function makeMoreLikeSelection() {
     // The popup asks for itself when it is handed no answer, so a failed
     // look-ahead opens the multi-recipe one rather than swallowing the
     // gesture.
+    // Told, not swallowed: the popup that opens next re-asks and will show the
+    // real refusal, but the reader pressed a menu entry and deserves to know
+    // the first answer never came.
     console.warn("Could not group the selection by recipe:", err);
+    noticeStore.warning(
+      "Could not tell which recipes these pictures use; showing them all together.",
+      { key: "make-more-grouping" },
+    );
     runDialogStore.openMakeMore({ pictureIds: ids });
+  } finally {
+    decidingMakeMore = false;
   }
 }
+
+/** One "Make more" look-ahead at a time; see `makeMoreLikeSelection`. */
+let decidingMakeMore = false;
 
 /** The Run popup with its workflow picker unset, over these pictures. */
 function openRunWithWorkflowPicker(ids) {
@@ -5531,8 +5548,13 @@ watch(
 const detachWorkflowRunner = runDialogStore.attachRunner(handleComfyuiRun);
 onUnmounted(() => {
   detachWorkflowRunner();
-  // No grid, no selection to run on and no runner to follow the run.
+  // No grid, no selection to run on and no runner to follow the run - and no
+  // view either, so the context goes too. Left behind it is the LAST grid's:
+  // a run started afterwards from the Workflows view would file its output
+  // into whichever set happened to be open before, and quote a `client_id`
+  // whose socket nothing is listening on.
   runDialogStore.close();
+  runDialogStore.context = {};
 });
 
 // The locked-delete cards (`showLockedDeleteNotice`) are scoped to the context

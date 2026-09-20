@@ -15,8 +15,10 @@
 - Starting a run is now something only the library's owner can do. *Generate
   variants…* was reachable from a share link; nothing that starts a run is any
   more. A share link can still read a picture's recipe.
-- The old *Generate variants…* dialog, the run panel in the right-hand rail and
-  the toolbar's Generate button are gone: the Run popup replaces all three.
+- The old *Generate variants…* dialog and the run panel in the right-hand rail
+  are gone; the Run popup replaces both. The toolbar's Generate button stays
+  where it was and opens the popup instead, so generating with nothing selected
+  is still one click from the grid.
 - Five things the run panel could do that the Run popup cannot do yet. Nothing
   about the workflows themselves has changed and their setup in Workflows is
   untouched; what is missing is a way to start these particular runs.
