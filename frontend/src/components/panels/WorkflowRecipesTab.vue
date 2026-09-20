@@ -263,7 +263,6 @@
       :loras="savingSource.loras"
       :seed="savingSource.seed"
       :source-picture-id="savingSource.sourcePictureId"
-      :existing="sameStackRecipes"
       @close="savingSource = null"
     />
 
@@ -352,22 +351,6 @@ const looks = ref([]);
 const savingLook = ref("");
 /** What the Save dialog is filled from, or null. */
 const savingSource = ref(null);
-
-/**
- * The rows a name typed in the Save dialog may collide with (#1480).
- *
- * `recipes` is the union of every selected card's stack, and a replace is a
- * `PATCH` on one id: matching a name against another stack's row would
- * overwrite a recipe on a workflow the owner is not saving to. With one card
- * selected the list already IS that stack's, resolved server-side; with
- * several, only the rows filed under this very card are safe to match, which
- * misses its stack siblings and so only ever declines to offer Replace.
- */
-const sameStackRecipes = computed(() => {
-  if (props.workflowKeys.length <= 1) return recipes.value;
-  const key = savingSource.value?.workflowKey;
-  return recipes.value.filter((row) => row.workflow_key === key);
-});
 
 /** The one sentence the live region is saying, or "". */
 const liveMessage = ref("");

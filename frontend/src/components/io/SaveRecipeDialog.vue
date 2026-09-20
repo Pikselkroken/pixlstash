@@ -167,15 +167,6 @@ const props = defineProps({
    */
   settingsAside: { type: String, default: "" },
   sourcePictureId: { type: Number, default: null },
-  /**
-   * The recipes already saved on this card's stack, for the name collision.
-   *
-   * Handed over rather than read here: every caller already holds this list -
-   * the Recipes tab lists it, the lightbox and the Run popup read it to decide
-   * whether the look is already kept - and a read of its own would be a third
-   * round trip answering a question two surfaces have already asked.
-   */
-  existing: { type: Array, default: () => [] },
 });
 
 const emit = defineEmits(["close", "saved"]);
@@ -192,6 +183,19 @@ const saveError = ref("");
 const kept = reactive({});
 /** The card's own name, for "Saved to X". */
 const stackName = ref("");
+/**
+ * The recipes already on this card's STACK, for the name collision.
+ *
+ * Read here rather than handed over by the caller, although two of the three
+ * already hold a list: **`GET /recipes?workflow_key=` resolves the stack
+ * server-side and nothing on the client can.** The Recipes tab's own list is
+ * the union of every selected card's stack, and a `PATCH` matched against a
+ * row of another stack would overwrite a recipe on a workflow nobody was
+ * saving to; narrowing that union by `workflow_key` instead drops the target's
+ * own stack siblings, which is the collision this exists to catch. One read on
+ * a dialog somebody deliberately opened is the cheaper half of that trade.
+ */
+const existing = ref([]);
 
 /** The LoRAs a run will not apply, because the shelf cannot identify them. */
 const unknownLoras = computed(() =>
@@ -217,7 +221,7 @@ const collision = computed(() => {
   const wanted = name.value.trim().toLowerCase();
   if (!wanted) return null;
   return (
-    props.existing.find(
+    existing.value.find(
       (row) => (row.name || "").trim().toLowerCase() === wanted,
     ) || null
   );
@@ -296,6 +300,7 @@ watch(
   () => [props.open, props.workflowKey],
   async () => {
     stackName.value = "";
+    existing.value = [];
     if (!props.open || !props.workflowKey) return;
     const wanted = props.workflowKey;
     try {
@@ -306,15 +311,42 @@ watch(
       // disabled primary, one press after a button that said "Save as recipe".
       // Never over anything the owner has typed.
       if (!name.value) name.value = stackName.value;
+      unproposeATakenName();
     } catch (err) {
       // The line it feeds is not load-bearing: without a name the dialog drops
       // the sentence rather than printing a blank one, and the save is
       // unaffected.
       console.warn("Could not read the card a recipe would be saved to:", err);
     }
+    try {
+      const rows = await listSavedRecipes(wanted);
+      if (wanted !== props.workflowKey) return;
+      existing.value = rows;
+      unproposeATakenName();
+    } catch (err) {
+      // Without the list there is no collision to spot, so the dialog goes on
+      // offering Save - which is what it did before #1480 and is the safe way
+      // round: a failed read must not turn a save into an overwrite.
+      console.warn("Could not read this card's saved recipes:", err);
+    }
   },
   { immediate: true },
 );
+
+/**
+ * Never OPEN on a name that means Replace.
+ *
+ * The box is prefilled with the card's name, so a card whose first recipe took
+ * that name would hand every later save a destructive primary by default, one
+ * Enter away, over a dialog still titled "Save as recipe". A suggestion the
+ * dialog made is withdrawn instead; a name the OWNER types is theirs, and
+ * Replace is what they asked for.
+ */
+function unproposeATakenName() {
+  if (collision.value && name.value === (props.suggestedName || stackName.value)) {
+    name.value = "";
+  }
+}
 
 /**
  * How many kept pictures the saved recipe now accounts for.
@@ -360,32 +392,59 @@ function body() {
   };
 }
 
+/**
+ * The same body, minus what this surface cannot speak for.
+ *
+ * `PATCH /recipes/{id}` writes every field the request carries - its
+ * `exclude_unset` sees the key, not the value - so a `null` here is an
+ * instruction to forget. The Recipes tab and the lightbox open this dialog
+ * with no picture of their own on some paths, and nulling the row's
+ * `source_picture_id` would take away the picture the recipe is drawn from
+ * without anything on screen having mentioned it. Every other field IS on
+ * screen, in the list headed "What the recipe keeps", which is what the
+ * confirm says is overwritten.
+ */
+function replacement() {
+  const changes = body();
+  if (changes.source_picture_id === null) delete changes.source_picture_id;
+  return changes;
+}
+
 async function save() {
   const label = name.value.trim();
   if (!label || !props.workflowKey || saving.value) return;
   const replacing = collision.value;
-  // **The same gate the Recipes tab's Delete has, for the same reason.** A
-  // replace overwrites a saved row's prompt, LoRAs and settings and there is
-  // no undo; naming the row on the button is an affordance, not a second
-  // press. `PATCH /recipes/{id}` keeps the row's id, so its place in the tab
-  // and the pictures it is credited with survive.
-  if (
-    replacing &&
-    !(await confirm({
-      title: `Replace “${replacing.name}”?`,
-      message:
-        "Its prompt, LoRAs and settings are overwritten. This cannot be undone.",
-      confirmLabel: "Replace",
-      danger: true,
-    }))
-  ) {
-    return;
-  }
-  saving.value = true;
   saveError.value = "";
+  // **Set before the await, not after.** The confirm below is the first thing
+  // in this function to yield, and a guard read before it would let a second
+  // press re-enter and queue a second confirm and a second write.
+  saving.value = true;
   try {
+    // **The same gate the Recipes tab's Delete has, for the same reason.** A
+    // replace overwrites a saved row's prompt, LoRAs and settings and there is
+    // no undo; naming the row on the button is an affordance, not a second
+    // press. `PATCH /recipes/{id}` keeps the row's id, so its place in the tab
+    // and the pictures it is credited with survive.
+    //
+    // The rename is named when there is one: the button prints the ROW's
+    // spelling and the write sends the TYPED one, so "Portrait" replaced by
+    // "portrait" is a rename the owner has not been told about anywhere else.
+    if (
+      replacing &&
+      !(await confirm({
+        title: `Replace “${replacing.name}”?`,
+        message:
+          (replacing.name || "").trim() === label
+            ? "Its prompt, LoRAs and settings are overwritten. This cannot be undone."
+            : `It is renamed to “${label}” and its prompt, LoRAs and settings are overwritten. This cannot be undone.`,
+        confirmLabel: "Replace",
+        danger: true,
+      }))
+    ) {
+      return;
+    }
     const saved = replacing
-      ? await editSavedRecipe(replacing.id, body())
+      ? await editSavedRecipe(replacing.id, replacement())
       : await createSavedRecipe({
           workflow_key: props.workflowKey,
           ...body(),

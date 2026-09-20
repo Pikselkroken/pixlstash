@@ -406,8 +406,14 @@ describe("the Recipes tab (v1.12 F6)", () => {
     );
   });
 
-  it("opens on the Workflow tab without that query", async () => {
+  it("leaves the rail alone without that query", async () => {
+    // The control for the check above: `tab` defaults to Workflow, so a
+    // watcher that fired unconditionally would only show up in the RAIL being
+    // forced open on a screen the reader had shut it on.
+    const sidebar = useSidebarStore();
+    sidebar.statsOpen = false;
     const { wrapper } = await mountWith([KEY]);
+    expect(sidebar.statsOpen).toBe(false);
     expect(wrapper.findComponent({ name: "WorkflowRecipesTab" }).exists()).toBe(
       false,
     );

@@ -1,10 +1,11 @@
-- The Run popup now knows when the look in the form is one you have already
-  kept: *Save as recipe* reads *Saved* and names the recipe, exactly as a
-  picture's Recipe tab does. Change the prompt and the save comes back.
-- Naming a recipe something already saved on that workflow now offers
-  **Replace**, naming the recipe it will overwrite, instead of quietly adding
-  a second one with the same name. It asks before overwriting, and the
-  replaced recipe keeps its place in the list and the pictures credited to it.
-- When a picture matches a saved recipe, the recipe's name in the banner is
-  now a link: it opens Workflows on that workflow with the Recipes tab
-  showing, so *Saved* is a way there rather than a full stop.
+- Nothing in PixlStash keeps the same look twice by accident. *Save as recipe*
+  reads **Saved** — in the Run popup as well as on a picture's Recipe tab —
+  whenever pressing it would write a recipe you already have, and naming a
+  recipe something already saved on that workflow offers **Replace**, naming
+  what it would overwrite, instead of adding a second row with the same name.
+  Replace asks first, and the recipe keeps its place in the list and the
+  pictures credited to it. Change anything the recipe holds — the prompt, a
+  LoRA strength, any setting — and it is a new recipe again, so saving is
+  offered as usual.
+- When a picture matches a recipe you kept, the recipe's name in the banner is
+  a link: it opens Workflows on that workflow with the Recipes tab showing.

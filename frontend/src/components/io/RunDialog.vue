@@ -317,7 +317,7 @@
       <!-- Status, never an alert: it says a gesture is already done, and the
            `--bad` spelling beside a real run refusal would read as a second
            thing wrong. -->
-      <p v-if="keptAs" :id="savedReasonId" class="rund-note">
+      <p v-if="keptAs" :id="savedReasonId" class="rund-note rund-kept">
         Already kept as “{{ keptAs.name || "Untitled" }}”.
       </p>
       <p v-if="runBlocker" :id="blockerId" class="rund-note rund-note--bad">
@@ -371,7 +371,6 @@
     :seed="seedMode === 'fixed' ? String(seed).trim() : ''"
     :settings-aside="seedMode === 'keep' ? KEEP_SEED_ASIDE : ''"
     :source-picture-id="pictureIds[0] ?? null"
-    :existing="savedRecipes"
     @close="saveOpen = false"
     @saved="onSaved"
   />
@@ -411,7 +410,7 @@ import {
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorMessage } from "../../utils/apiError";
-import { keepsTheSameLook } from "../../utils/recipeKey";
+import { wouldDuplicate } from "../../utils/recipeKey";
 import { reasonsBlock } from "../../utils/runReasons";
 import SaveRecipeDialog from "./SaveRecipeDialog.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
@@ -833,27 +832,37 @@ const savedForKey = ref("");
 const savedReasonId = useId();
 
 /**
- * What this form would save, in the shape the match takes.
+ * Exactly what pressing Save would write, which is what the match asks about.
  *
- * `recipeLoras`, not the graph's slots: the match has to answer "would saving
- * this now make a duplicate", so it keys on exactly what the save would write
- * - which is the digested rows and no others.
+ * `recipeLoras`, not the graph's slots, because the save writes the digested
+ * rows and no others - and **the negative prompt and the overrides too**,
+ * because this is a form and the save writes those as well. Keying on the
+ * look alone (prompt and LoRA names, which is what credit is grouped by)
+ * would make **Saved** refuse a recipe that differs from the kept one in
+ * every parameter it carries: not a duplicate, a variation, and unsaveable.
+ * `wouldDuplicate` is that question, beside the look's own key in
+ * `utils/recipeKey.js` so the comparisons stay in one file.
  */
-const thisLook = computed(() => ({
+const thisSave = computed(() => ({
   prompt: prompt.value,
+  negative: negative.value,
   loras: recipeLoras.value,
+  overrides: Object.fromEntries(
+    recipeOverrides.value.map((row) => [row.address, row.value]),
+  ),
 }));
 
 /**
- * The saved recipe that already keeps what the form is showing, or null.
+ * The saved recipe a save from this form would duplicate, or null.
  *
- * It comes and goes as the owner types, which is the point: edit the prompt
- * and this is a new look again, so Save comes back.
+ * It comes and goes as the owner types, which is the point: edit the prompt,
+ * a LoRA strength or a parameter and this is a new recipe again, so Save
+ * comes back.
  */
 const keptAs = computed(() => {
   if (!activeKey.value || activeKey.value !== savedForKey.value) return null;
   return (
-    savedRecipes.value.find((row) => keepsTheSameLook(row, thisLook.value)) ||
+    savedRecipes.value.find((row) => wouldDuplicate(row, thisSave.value)) ||
     null
   );
 });
@@ -1548,6 +1557,13 @@ watch(
 
 .rund-sp {
   flex: 1;
+}
+
+/* The footer is one row that does not wrap, so a long recipe name has to be
+   allowed to shrink and wrap rather than push the buttons out of it: a flex
+   item's `min-width: auto` is what would stop it. */
+.rund-kept {
+  min-width: 0;
 }
 
 /* The "Strength" header has to sit over the strength box, so the two share one

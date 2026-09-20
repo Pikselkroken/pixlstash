@@ -476,54 +476,6 @@ describe("WorkflowRecipesTab", () => {
     expect(dialog.props("loras")[0].strength).toBe(0.7);
   });
 
-  it("hands the Save dialog only the rows the save could collide with", async () => {
-    // A replace is a `PATCH` on one id (#1480), and `recipes` here is the
-    // union of every selected card's stack. Matching a typed name against
-    // another stack's row would overwrite a recipe on a workflow the owner is
-    // not saving to, so with several selected only this card's own rows go.
-    listSavedRecipes.mockResolvedValue([
-      recipe(1, "Mine"),
-      recipe(2, "Somebody else's", { workflow_key: "b".repeat(64) }),
-    ]);
-    listUsedLooks.mockResolvedValue([LOOK]);
-    const wrapper = render({ workflowKeys: [KEY, "b".repeat(64)] });
-    await flushPromises();
-    await wrapper
-      .findAll("button")
-      .find((b) => b.text().includes("Save…"))
-      .trigger("click");
-    await flushPromises();
-
-    const existing = wrapper
-      .findComponent({ name: "SaveRecipeDialog" })
-      .props("existing");
-    expect(existing.map((row) => row.name)).toEqual(["Mine"]);
-  });
-
-  it("hands the whole stack's rows when one card is selected", async () => {
-    // One card: the list already IS that stack's, resolved server-side, so
-    // narrowing it by `workflow_key` would miss the stack's own siblings.
-    listSavedRecipes.mockResolvedValue([
-      recipe(1, "Mine"),
-      recipe(2, "A sibling's", { workflow_key: "b".repeat(64) }),
-    ]);
-    listUsedLooks.mockResolvedValue([LOOK]);
-    const wrapper = render();
-    await flushPromises();
-    await wrapper
-      .findAll("button")
-      .find((b) => b.text().includes("Save…"))
-      .trigger("click");
-    await flushPromises();
-
-    expect(
-      wrapper
-        .findComponent({ name: "SaveRecipeDialog" })
-        .props("existing")
-        .map((row) => row.name),
-    ).toEqual(["Mine", "A sibling's"]);
-  });
-
   it("refuses to file a look on a workflow the picture does not name", async () => {
     listSavedRecipes.mockResolvedValue([]);
     listUsedLooks.mockResolvedValue([LOOK]);

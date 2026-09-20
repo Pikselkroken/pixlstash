@@ -1426,7 +1426,7 @@ Load-bearing behaviours:
 - **A pre-flight 4xx is a refusal and is shown at once.** The route answers 400/404/422 on the dry run exactly as on the run, "so the two never disagree". Anything else - the network, a 5xx - is the question not being asked, which is not a refusal: the button stays live and the run itself answers. Over-blocking is its own regression.
 - **`allow_unchecked` is never sent.** An uninspectable ComfyUI blocks, the backend refuses independently, and there is no consent checkbox on this surface. (The same decision `RemixDialog` reached on 2026-07-29 and kept until it was deleted.)
 - **A submit failure is a form error**: the popup stays open with every input intact and the message in a `role="alert"`. A success emits `run` with the prompts, which `App.vue` hands to the grid's `ComfyUiRunner` and reports as a toast whose **Show** action deep-links to the Tasks tab (`sidebarStore.showTasksTab()`).
-- **Save as recipe** opens `io/SaveRecipeDialog.vue` from the footer (F6, #1408; F5 shipped it as an inline name field, which that step replaced). It `POST /recipes` with the prompt, the LoRAs and the edits as `overrides`, addressed `"<slot_label>/<input_name>"` — the form `POST /workflows/run` unpacks back into `values` when that recipe is run. Since #1480 the button reads an inert **Saved** once one of the card's saved recipes already keeps what the form shows, and the popup hands the dialog those same rows as `existing` so a typed name that is already taken offers **Replace** instead of a second identical row.
+- **Save as recipe** opens `io/SaveRecipeDialog.vue` from the footer (F6, #1408; F5 shipped it as an inline name field, which that step replaced). It `POST /recipes` with the prompt, the LoRAs and the edits as `overrides`, addressed `"<slot_label>/<input_name>"` — the form `POST /workflows/run` unpacks back into `values` when that recipe is run. Since #1480 the button reads an inert **Saved** once one of the card's saved recipes would be *duplicated* by this form (`wouldDuplicate`, not `keepsTheSameLook` — an edited parameter is a variation, not a duplicate), and a typed name already on the stack offers **Replace** instead of a second row with the same name.
 
 #### `WorkflowCard.vue`, `ChipRow.vue`, `InfoPopover.vue` (`widgets/`, v1.12 Workflows & Recipes)
 The uniform workflow card and its two parts. Mounted by `WorkflowsView.vue` (F1a, below) and by its `StackPanel`. In this code a `workflow_recipe` / structural hash is a **variant**; a user's Recipe is a **saved recipe**.
@@ -2122,32 +2122,59 @@ new code calls a *variant*. Owner-only, like everything under `/workflows`.
   **Saved**, never a native `disabled`, so the sentence saying why stays
   reachable. `GET /comfyui/pictures/{id}/recipe` now carries `workflow_key` and
   `loras` into the overlay's recipe object for all of it.
-- **The Run popup asks the same question, off the same function** (#1480).
-  F6 left it with no match state at all, so the duplicate the Recipe tab
-  refuses was one press away from the popup's own footer: `RunDialog` reads
-  `listSavedRecipes(activeKey)` once per key and matches `keepsTheSameLook`
-  against `{prompt, loras: recipeLoras}` — what a save would *write*, which is
-  the digested rows only, not every slot the graph carries. The form is
-  editable, so the state comes and goes as the owner types, which is the
-  point. Same spelling as the tab: `aria-disabled` **Saved**, a plain
+- **The Run popup asks a NEIGHBOURING question, and the difference matters**
+  (#1480). F6 left it with no match state at all, so the duplicate the Recipe
+  tab refuses was one press away from the popup's own footer. But the tab is
+  read-only and the popup is a form: a recipe holds a negative prompt, LoRA
+  *strengths*, the parameters the owner changed and a `keep_seed` flag, and
+  **none of those are part of the look**, whose key is prompt and LoRA names
+  because that is what the server groups credit by. Keyed on the look alone,
+  an inert **Saved** refuses to keep a recipe differing from the saved one in
+  every parameter it carries — not a duplicate, a *variation*, and on the one
+  surface that can edit those parameters it was unsaveable. So
+  `utils/recipeKey.js` gained **`wouldDuplicate(recipe, save)`** beside
+  `keepsTheSameLook`: the look first, then everything else the save would
+  write, and never a row that keeps a seed (a save leaves the seed off unless
+  the owner ticks it, so the two are different recipes). `RunDialog` reads
+  `listSavedRecipes(activeKey)` once per key and applies it to what the form
+  would send. Same spelling as the tab: `aria-disabled` **Saved**, a plain
   `.rund-note` sentence (never `--bad`, which would read as a second run
   refusal beside the real one), and the click refused in the handler.
 - **A name already on the stack turns Save into Replace** (#1480). Nothing
   makes a recipe name unique — not the column, not `POST /recipes` — so two
   visits to a card made two rows reading the same thing with no undo.
-  `SaveRecipeDialog` takes the rows as an **`existing` prop** rather than
-  reading them: all three callers already hold the list, and a read of its own
-  would be a third round trip answering a question two of them have asked.
-  The match is case-insensitive and **the row's own spelling is what the
-  button and the warning print**, because that is what is about to go. Replace
-  is `PATCH /recipes/{id}`, so the row keeps its id, its place in the tab and
-  its credited pictures, and it is gated on `useConfirm` — the same gate the
-  tab's Delete has, for the same reason. The Recipes tab narrows its union
-  down to the target card's own rows before handing them over
-  (`sameStackRecipes`): a `PATCH` matched against another stack's row would
-  overwrite a recipe on a workflow nobody was saving to. Both callers holding
-  a list fold the answer back **by id**, so a replacement does not append a
-  second copy of a row that is already there.
+  **`SaveRecipeDialog` reads that list itself**, although two of its three
+  callers already hold one: `GET /recipes?workflow_key=` resolves the stack
+  server-side and nothing on the client can, so the Recipes tab's list — the
+  union of every selected card's stack — is both too wide (a `PATCH` matched
+  against another stack's row overwrites a recipe nobody was saving to) and,
+  narrowed by `workflow_key`, too narrow (it drops the target's own stack
+  siblings, which is the collision this exists to catch). One read on a dialog
+  somebody deliberately opened is the cheaper half of that trade.
+  - The match is case-insensitive and **the row's own spelling is what the
+    button and the warning print**, because that is what is about to go. The
+    write sends the TYPED spelling, so a replace can also rename, and the
+    confirm says so when it does.
+  - **A name the dialog SUGGESTED is withdrawn when it is taken.** The box is
+    prefilled from the card, so a card whose first recipe took that name would
+    hand every later save a destructive primary by default, one Enter away,
+    over a dialog still titled "Save as recipe". A name the *owner* types is
+    theirs and arms Replace as asked.
+  - Replace is `PATCH /recipes/{id}`, gated on `useConfirm` — the same gate
+    the tab's Delete has, for the same reason — so the row keeps its id, its
+    place in the tab and its credited pictures. **`PATCH` writes every field
+    the request carries** (its `exclude_unset` sees the key, not the value),
+    so a `null` is an instruction to forget: `source_picture_id` is dropped
+    from the body when this surface has none, rather than taking away the
+    picture the recipe is drawn from without anything on screen mentioning it.
+    Everything else the body carries IS on screen, in the list headed "What
+    the recipe keeps", which is what the confirm says is overwritten.
+  - `saving` is raised **before** the confirm is awaited, not after: it is the
+    first thing in `save()` to yield, and a guard read before it let a second
+    press queue a second confirm and a second write.
+  - The two surfaces holding a list of their own fold the dialog's answer back
+    **by id**, so a replacement does not append a second copy of a row that is
+    already there.
 - **The banner's name is the way there** (#1480). *Saved* said a recipe keeps
   this look and stopped; the name is now a `<button>` pushing
   `/workflows?topology=<hash>&tab=recipes` — the same gesture *Open* makes for

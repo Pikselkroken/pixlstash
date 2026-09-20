@@ -102,7 +102,12 @@ const globalOpts = {
       AppTextarea: true,
       AppSelect: true,
       AppInput: true,
-      AppButton: { template: "<button><slot /></button>" },
+      // Bound, not merely declared: a stub that swallows `disabled` makes
+      // "not natively disabled" pass however the dialog behaves.
+      AppButton: {
+        props: ["disabled"],
+        template: "<button :disabled='disabled'><slot /></button>",
+      },
       AppBarButton: true,
       RunReasonNotice: true,
       "v-icon": true,
@@ -810,15 +815,47 @@ describe("Save as recipe, when the look is already kept", () => {
     expect(footer(wrapper, "Save as recipe")).toBeTruthy();
   });
 
-  it("hands the dialog the rows a typed name could collide with", async () => {
+  it("offers the save for a variation the kept recipe does not hold", async () => {
+    // **The look's key is prompt and LoRA names, and a recipe is more than
+    // its look.** Keyed on the look alone, an inert Saved refuses to keep a
+    // recipe that differs from the saved one in every parameter it carries -
+    // which is not a duplicate, and on the one surface that can edit those
+    // parameters it left the variation unsaveable.
+    listSavedRecipes.mockResolvedValue([KEPT]);
+    const wrapper = await mountRun();
+    expect(footer(wrapper, "Saved")).toBeTruthy();
+
+    const steps = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
+    wrapper.vm.setValue(steps, 30);
+    await wrapper.vm.$nextTick();
+
+    expect(footer(wrapper, "Saved")).toBeFalsy();
+    expect(footer(wrapper, "Save as recipe")).toBeTruthy();
+  });
+
+  it("stays Saved when the kept recipe holds that very override", async () => {
+    // The other direction, so the check above cannot pass by never matching.
     listSavedRecipes.mockResolvedValue([
-      { id: 1, name: "Something else", prompt: "a different prompt", loras: [] },
+      { ...KEPT, overrides: { "KSampler/steps": 30 } },
     ]);
     const wrapper = await mountRun();
-    await footer(wrapper, "Save as recipe").trigger("click");
-    await flushPromises();
-    const dialog = wrapper.findComponent({ name: "SaveRecipeDialog" });
-    expect(dialog.props("existing")).toHaveLength(1);
-    expect(dialog.props("existing")[0].name).toBe("Something else");
+    // Untouched, the form holds no overrides, so the kept row's one is a
+    // difference and the save is offered.
+    expect(footer(wrapper, "Save as recipe")).toBeTruthy();
+
+    const steps = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
+    wrapper.vm.setValue(steps, 30);
+    await wrapper.vm.$nextTick();
+    expect(footer(wrapper, "Saved")).toBeTruthy();
+  });
+
+  it("offers the save when the kept recipe keeps a seed", async () => {
+    // A save leaves the seed off unless the owner ticks it, so the row this
+    // would write is not the row that exists.
+    listSavedRecipes.mockResolvedValue([
+      { ...KEPT, seed: "418220931", keep_seed: true },
+    ]);
+    const wrapper = await mountRun();
+    expect(footer(wrapper, "Save as recipe")).toBeTruthy();
   });
 });

@@ -331,7 +331,6 @@
     :seed="recipe?.seedText || ''"
     :settings-aside="settingsAside"
     :source-picture-id="Number(pictureId) || null"
-    :existing="savedRecipes"
     @close="saveOpen = false"
     @saved="onSaved"
   />
@@ -1018,19 +1017,22 @@ async function copyPrompt() {
   color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
 }
 
-/* `font: inherit` because this is a `<button>` when it links: nothing resets a
-   button's font app-wide, so without it the name is the browser's own 13.33px
-   sans in the middle of a sentence. */
 .recipe-match-name {
-  font: inherit;
-  font-weight: var(--weight-semibold);
-  padding: 0;
   color: rgb(var(--v-theme-on-dark-surface));
 }
 
-/* Underlined rather than coloured: the banner sits on the dark panel, where
+/* All of this is the LINKED variant's alone, so the plain `<b>` is left
+   exactly as it was. `font: inherit` because the linked name is a `<button>`
+   and nothing resets a button's font app-wide - without it the name is the
+   browser's own 13.33px sans in the middle of a sentence - and the weight is
+   what `font: inherit` has just taken off the `<b>` it replaces.
+
+   Underlined rather than coloured: the banner sits on the dark panel, where
    the theme's link colour is not one of the on-dark tokens. */
 .recipe-match-name--linked {
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  padding: 0;
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;

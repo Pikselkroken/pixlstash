@@ -123,7 +123,6 @@ function render(props = {}) {
             "loras",
             "seed",
             "sourcePictureId",
-            "existing",
           ],
           template: "<div />",
         },
@@ -857,25 +856,6 @@ describe("OverlayRecipePanel", () => {
     expect(name.element.tagName).toBe("B");
     await name.trigger("click");
     expect(nav.push).not.toHaveBeenCalled();
-  });
-
-  it("hands the Save dialog the rows a typed name could collide with", async () => {
-    listSavedRecipes.mockResolvedValue([
-      { id: 1, name: "Something else", prompt: "a different prompt", loras: [] },
-    ]);
-    const wrapper = render({ recipe: { ...ON_A_CARD, loraNames: [] } });
-    await flushPromises();
-    await wrapper
-      .findAll("button")
-      .find((button) => button.text().includes("Save as recipe"))
-      .trigger("click");
-    await flushPromises();
-
-    const existing = wrapper
-      .findComponent({ name: "SaveRecipeDialog" })
-      .props("existing");
-    expect(existing).toHaveLength(1);
-    expect(existing[0].name).toBe("Something else");
   });
 
   it("replaces a row the dialog replaced, rather than listing it twice", async () => {

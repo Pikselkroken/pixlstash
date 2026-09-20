@@ -72,3 +72,53 @@ export function keepsTheSameLook(recipe, look) {
   if (!prompt && !loras) return false;
   return promptKey(recipe?.prompt) === prompt && loraKey(recipe?.loras) === loras;
 }
+
+/**
+ * Whether saving what a form is showing would write a row this one already is.
+ *
+ * **A different question from `keepsTheSameLook`, asked by one surface.** The
+ * look's key is prompt and LoRA file names, because that is what the server
+ * groups credit by; a recipe also holds a negative prompt, the LoRA
+ * strengths, the parameters the owner changed and whether it keeps a seed, and
+ * none of those are part of the look. On a read-only surface the distinction
+ * is idle - the lightbox's Recipe tab cannot edit any of them - but the Run
+ * popup is a form, and there an inert **Saved** keyed on the look alone
+ * refuses to save a recipe that differs from the kept one in every setting it
+ * carries. That is not a duplicate; it is a variation, and it was unsaveable.
+ *
+ * So: the look first, then everything else the save would write. A recipe
+ * keeping a seed never matches, because a save leaves the seed off unless the
+ * owner ticks it and the two are then different recipes.
+ *
+ * @param {Object} recipe - a saved recipe row, as the API serves it.
+ * @param {Object} save - `{prompt, negative, loras, overrides}` as the form
+ *   would send them: `loras` are `{filename, strength}`, `overrides` is the
+ *   `{"<slot>/<input>": value}` map.
+ * @returns {boolean}
+ */
+export function wouldDuplicate(recipe, save) {
+  if (!keepsTheSameLook(recipe, save)) return false;
+  if (recipe?.keep_seed) return false;
+  if ((recipe?.negative || "").trim() !== (save?.negative || "").trim()) {
+    return false;
+  }
+  return extrasKey(recipe) === extrasKey(save);
+}
+
+/** The strengths and the overrides, in one comparable string. */
+function extrasKey(side) {
+  const strengths = (side?.loras || [])
+    .map((lora) => [
+      String(lora?.filename || "")
+        .trim()
+        .toLowerCase()
+        .split(/[\\/]/)
+        .pop(),
+      Number(lora?.strength ?? 1),
+    ])
+    .sort();
+  const overrides = Object.entries(side?.overrides || {})
+    .map(([address, value]) => [address, JSON.stringify(value)])
+    .sort();
+  return JSON.stringify([strengths, overrides]);
+}
