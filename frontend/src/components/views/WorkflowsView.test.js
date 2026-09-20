@@ -61,6 +61,7 @@ vi.mock("../../api/folders", () => ({
 }));
 vi.mock("../../api/comfyui", () => ({ importWorkflow: vi.fn() }));
 
+import WorkflowCard from "../widgets/WorkflowCard.vue";
 import WorkflowsView from "./WorkflowsView.vue";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
@@ -351,10 +352,139 @@ describe("the keyboard crosses the panel boundary", () => {
 
     await wrapper.findAll(".wfv-row")[0].trigger("click");
     await gridEl.trigger("keydown", { key: "ArrowRight" });
+    // Space on the stack card takes the whole stack.
     await gridEl.trigger("keydown", { key: " " });
+    expect(store.selectedKeys).toEqual(["a", "b", "b1", "b2"]);
+
+    // And Space on one of its members takes that member back out, which is
+    // the only way the panel's rows ever mark themselves.
     await gridEl.trigger("keydown", { key: "ArrowDown" });
     await gridEl.trigger("keydown", { key: " " });
-    expect(store.selectedKeys).toEqual(["a", "b", "b1"]);
+    expect(store.selectedKeys).toEqual(["a", "b", "b2"]);
+  });
+});
+
+describe("a stack wears one mark, not one per row", () => {
+  // jsdom applies no SFC `<style>`, so what these pin is the hook each rule is
+  // keyed on — `.stack-panel--selected` on the band, and the `selected` prop
+  // the member cards no longer get while it is there. The colours themselves
+  // are not assertable here and are not asserted.
+  it("the band takes the hook while the whole stack is in, and gives it up when part comes out", async () => {
+    const wrapper = await grid(1008);
+    const store = useWorkflowsStore();
+    await store.openStack("b");
+    await flush();
+
+    const panel = () => wrapper.find('[data-testid="stack-panel"]');
+    // What a member card is TOLD, which is what draws its own mark
+    // (`WorkflowCard.vue`, `.wf-card--selected`): the band's mark replaces it.
+    const markedCards = () =>
+      wrapper
+        .findAll(".stack-panel__member")
+        .filter((row) => row.findComponent(WorkflowCard).props("selected"))
+        .map((row) => row.attributes("data-key"));
+    const selectedRows = () =>
+      wrapper
+        .findAll(".stack-panel__member")
+        .filter((row) => row.attributes("aria-selected") === "true")
+        .map((row) => row.attributes("data-key"));
+
+    expect(panel().classes()).not.toContain("stack-panel--selected");
+
+    // Clicking the stack card selects all three, so the band takes the mark and
+    // the rows give theirs up: the cards stop being told they are selected, and
+    // in List the row rule is switched off by its `:not(.stack-panel--selected)`
+    // scope.
+    await wrapper.findAll(".wfv-row")[1].trigger("click");
+    expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
+    expect(panel().classes()).toContain("stack-panel--selected");
+    expect(markedCards()).toEqual([]);
+    // The rows still SAY they are selected: they are, and a screen reader is
+    // owed that whichever box the olive is painted on.
+    expect(selectedRows()).toEqual(["b", "b1", "b2"]);
+
+    // Take one member back out and the band gives the mark up: two of three
+    // is not "this stack", and only the rows can say which two.
+    await wrapper
+      .findAll(".stack-panel__member")[1]
+      .trigger("click", { ctrlKey: true });
+    expect(store.selectedKeys).toEqual(["b", "b2"]);
+    expect(selectedRows()).toEqual(["b", "b2"]);
+    expect(panel().classes()).not.toContain("stack-panel--selected");
+    // And the two that are still in go back to marking themselves, which is
+    // the only way to see WHICH two.
+    expect(markedCards()).toEqual(["b", "b2"]);
+  });
+
+  it("a stack that is merely open, or partly selected, does not take the hook", async () => {
+    const wrapper = await grid(1008);
+    const store = useWorkflowsStore();
+    const panel = () => wrapper.find('[data-testid="stack-panel"]');
+
+    // A different card selected, then this stack opened: opening is not
+    // selecting, and the wash must not follow the panel around.
+    store.select("a");
+    await store.openStack("b");
+    await flush();
+    expect(panel().classes()).not.toContain("stack-panel--selected");
+
+    // The cover alone is not the stack — this is what separates "every member
+    // is in" from "any member is in", and it is the state a click on the
+    // panel's Cover row leaves behind.
+    await wrapper.findAll(".stack-panel__member")[0].trigger("click");
+    expect(store.selectedKeys).toEqual(["b"]);
+    expect(panel().classes()).not.toContain("stack-panel--selected");
+  });
+
+  it("the cover row inside the panel is separable from the stack it heads", async () => {
+    const wrapper = await grid(1008);
+    const store = useWorkflowsStore();
+    await store.openStack("b");
+    await flush();
+
+    // Same key, two rows: the grid's stack card and the panel's first member.
+    // Clicking the card means the stack; clicking the row means that one
+    // workflow, or the cover is the one card in a stack you cannot single out.
+    await wrapper.findAll(".wfv-row")[1].trigger("click");
+    expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
+    await wrapper.findAll(".stack-panel__member")[0].trigger("click");
+    expect(store.selectedKeys).toEqual(["b"]);
+  });
+
+  it("a Shift range into an open panel does not drag the rest of the stack back in", async () => {
+    const wrapper = await grid(1008);
+    const store = useWorkflowsStore();
+    await store.openStack("b");
+    await flush();
+
+    // Flat order is `a b c d | b b1 b2 · | e f`. Click "c" (index 2), then
+    // Shift-click the panel's `b1` (index 5): the range is c, d, the panel's
+    // COVER row and b1. The stack's CARD row is index 1 and outside it, so
+    // nothing expands and `b2` — which the range never reaches — stays out.
+    // Expanding every key in the store put `b2` back, so Shift undid what a
+    // Ctrl-click had just done.
+    await wrapper.findAll(".wfv-row")[2].trigger("click");
+    await wrapper
+      .findAll(".stack-panel__member")[1]
+      .trigger("click", { shiftKey: true });
+    expect(store.selectedKeys).toEqual(["c", "d", "b", "b1"]);
+
+    // And a range that stays inside the panel takes only the rows it covers.
+    await wrapper.findAll(".stack-panel__member")[1].trigger("click");
+    expect(store.selectedKeys).toEqual(["b1"]);
+    await wrapper
+      .findAll(".stack-panel__member")[2]
+      .trigger("click", { shiftKey: true });
+    expect(store.selectedKeys).toEqual(["b1", "b2"]);
+
+    // A range that DOES cross the stack card takes its whole stack, the same
+    // way it would with the panel shut: "a" is index 0, so the range reaches
+    // the card at index 1 and `b2` comes in through it.
+    await wrapper.findAll(".wfv-row")[0].trigger("click");
+    await wrapper
+      .findAll(".stack-panel__member")[1]
+      .trigger("click", { shiftKey: true });
+    expect(store.selectedKeys).toEqual(["a", "b", "b1", "b2", "c", "d"]);
   });
 });
 
@@ -366,12 +496,12 @@ describe("Esc closes the innermost thing first", () => {
     await flush();
     const gridEl = wrapper.find(".wfv-grid");
     await wrapper.findAll(".wfv-row")[1].trigger("click");
-    expect(store.selectedKeys).toEqual(["b"]);
+    expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
 
     await gridEl.trigger("keydown", { key: "Escape" });
     expect(store.openStackKey).toBe(null);
     // The selection survives the first Escape: it is the outer thing.
-    expect(store.selectedKeys).toEqual(["b"]);
+    expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
     // And the cursor comes back to the card that had the panel.
     expect(cursorKey(wrapper)).toBe("b");
 
@@ -635,6 +765,19 @@ describe("arriving on ?topology=", () => {
 
     expect(useWorkflowsStore().selectedKeys).toEqual(["d"]);
     expect(cursorKey(wrapper)).toBe("d");
+  });
+
+  // The link names ONE workflow — it is pushed by one picture's Recipe panel —
+  // so it selects one card even when that card heads a stack. Whole-stack
+  // selection is a GESTURE on the stack card, which is why `select`'s `whole`
+  // is opt-in: defaulting it to true made this link select "b", "b1" and "b2"
+  // for a picture made by "b" alone.
+  it("selects one workflow, not its stack, when the link lands on a cover", async () => {
+    route.query = { topology: "topology-b" };
+    const wrapper = await grid();
+
+    expect(useWorkflowsStore().selectedKeys).toEqual(["b"]);
+    expect(cursorKey(wrapper)).toBe("b");
   });
 
   // The grid is not every card: `GET /workflows/cards` leaves out the hidden

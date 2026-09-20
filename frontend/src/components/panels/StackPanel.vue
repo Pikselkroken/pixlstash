@@ -5,6 +5,7 @@
   <div
     :id="panelId"
     class="stack-panel"
+    :class="{ 'stack-panel--selected': selected }"
     role="rowgroup"
     :style="notchStyle"
     data-testid="stack-panel"
@@ -66,7 +67,7 @@
           <WorkflowCard
             :card="member"
             member
-            :selected="selectedKeys.includes(member.key)"
+            :selected="!selected && selectedKeys.includes(member.key)"
           />
           <!-- The cover is what the others are compared against, so it is the
                one member whose special row is empty; without the flag its row
@@ -223,9 +224,13 @@
  * container resizes, never stored as a pixel offset, which is what would leave
  * it pointing at the wrong card after a resize.
  *
- * Neutral ground on purpose — `--panel`, a hairline border, `--radius-lg`. The
- * open card is marked by its rotated ▸ alone; an olive wash over the band said
- * "selected" about six cards nobody had selected.
+ * Neutral ground for being merely OPEN — `--panel`, a hairline border,
+ * `--radius-lg` — because the wash it used to wear on opening said "selected"
+ * about six cards nobody had selected, and the open card is marked by its
+ * rotated ▸ alone. The band takes the wash and the ring when `selected` says
+ * those cards are in fact all selected: a stack is selected whole, so one mark
+ * round the band is the mark for the stack, and what the wash stands for is now
+ * exactly what it reads as.
  *
  * **Grid | List** (F2) is remembered for every stack, not per stack, in
  * `useWorkflowPrefsStore`: the switch answers "how do I read a stack" rather
@@ -276,6 +281,13 @@ const props = defineProps({
   columnIndex: { type: Number, default: 0 },
   /** Keys of the selected cards, top-level and member alike. */
   selectedKeys: { type: Array, default: () => [] },
+  /**
+   * The WHOLE stack is selected, so the band wears one mark and its rows wear
+   * none — in Grid, where the mark is the card's own, and in List, where it is
+   * the row's rail. A partly selected stack leaves this false and the rows mark
+   * themselves, which is the only way a reader can see which of them are in.
+   */
+  selected: { type: Boolean, default: false },
   /** The roving cursor's key, when it is inside this panel. */
   cursorKey: { type: String, default: "" },
   /** False while the stack has no id to address a reorder by. */
@@ -548,6 +560,36 @@ const notchStyle = computed(() => {
   color: rgb(var(--v-theme-on-panel));
 }
 
+/* The whole stack selected: one mark round the band, because the stack is what
+   was selected. The shell's mark (`style.css`, "THE SELECTION MARK") — the wash
+   plus `--selection-ring` rather than `--selection-edge`, because what is
+   wanted is a border round the whole stack and not a rail down one side of it.
+
+   The wash is a `background-image` layer over `--panel` rather than a
+   `background`, the same way `--hover-shade` layers over a filled control:
+   replacing the colour would put a translucent olive over whatever is behind
+   the band instead of over its own ground. In List the rows are transparent, so
+   it reads across the whole panel; in Grid the cards are opaque
+   (`WorkflowCard.vue` says why its own mark had to become an overlay), so what
+   shows is the header, the padding and the gutters — a frame around the cards,
+   which is what a stack-level mark should be. The header's `on-panel` text sits
+   on that layer at 4.98:1 light and 4.63:1 dark for the secondary figures
+   (11.22:1 / 7.52:1 at full ink), above the 4.5:1 this system asks of small
+   text. */
+.stack-panel--selected {
+  background-image: linear-gradient(var(--active-wash), var(--active-wash));
+  box-shadow: var(--selection-ring);
+}
+
+/* The notch follows the band. `.tbm-caret` hardcodes
+   `background: rgb(var(--v-theme-panel))` in `App.css`, so without this a
+   selected stack draws a bare panel-coloured caret against a washed band — a
+   visible seam at the one point the design means as the join to the card. That
+   shorthand is lower specificity, so it cannot take this layer back off. */
+.stack-panel--selected .tbm-caret {
+  background-image: linear-gradient(var(--active-wash), var(--active-wash));
+}
+
 /* The shipped `.tbm-caret`, aimed by `--notch` rather than by a modifier: the
    column it points at is a number this component computes, not one of the four
    fixed insets the toolbar menus use. `translateX(-50%)` re-centres it on that
@@ -681,8 +723,12 @@ const notchStyle = computed(() => {
 }
 
 /* The rail, not the card's ring: a row HAS a left edge, and this is the mark
-   every other list in the app wears. */
-.stack-panel__row[aria-selected="true"] {
+   every other list in the app wears. Suppressed while the BAND carries the
+   mark for the whole stack, the same way Grid stops passing `selected` down to
+   the card — or a row the reader had taken back out of the selection would
+   still be railed inside a washed band. */
+.stack-panel:not(.stack-panel--selected)
+  .stack-panel__row[aria-selected="true"] {
   background: var(--active-wash);
   border-left-color: var(--active-bar);
 }

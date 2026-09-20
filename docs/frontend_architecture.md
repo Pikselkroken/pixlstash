@@ -1510,9 +1510,45 @@ watcher the model shelf uses. See §9.1b for the destination itself.
 - **`StackPanel` is one element at `grid-column: 1 / -1`**, so opening a stack
   pushes the later rows down rather than floating over them. Neutral ground —
   `--panel`, a hairline border, `--radius-lg`, `--space-4` below — and **no
-  olive wash**: the open card is marked by its rotated ▸ alone. The notch is
-  the shipped `.tbm-caret` aimed by `--notch`, recomputed from the stack card's
-  COLUMN INDEX on every resize and never stored as a pixel offset.
+  olive wash for merely being open**: the open card is marked by its rotated ▸
+  alone. The notch is the shipped `.tbm-caret` aimed by `--notch`, recomputed
+  from the stack card's COLUMN INDEX on every resize and never stored as a
+  pixel offset.
+- **A stack is selected WHOLE, and wears one mark.** `store.stackKeys(key)`
+  expands a stack card's key into the cover plus its `member_keys`, and `select`
+  takes `whole` to ask for that. The cover key alone — what shipped first — had a
+  card marked "3 workflows" select one of them, the one at the top of the pile,
+  and the open panel then drew the mark on its first row and on none of the
+  others. **`whole` is opt-in (it defaults to `false`), because the caller
+  decides**: the cover key names two rows (see the bullet above), so the grid's
+  stack card passes it and the panel's rows do not, which is what keeps the cover
+  separable from the stack it heads. Defaulting it the other way silently caught
+  a third caller — the `?topology=` deep link, pushed by one picture's Recipe
+  panel, which names ONE workflow and selected the whole stack it sat in.
+  Whole-stack selection is a gesture on the stack card, never a consequence of
+  naming its key. Ctrl removes only a stack that is already in **in full**, or
+  taking one member out and then Ctrl-clicking the cover emptied the selection
+  where it means "make this whole". `selectRange` expands nothing itself:
+  `selectToCursor` expands per row kind, or a Shift range ending two rows into an
+  open panel drags back the members a Ctrl-click just removed.
+- **The mark follows the unit.** `StackPanel` takes `selected` — the view's
+  `openStackSelected`, `every` key of the stack rather than `some`, computed
+  from the stack's key set rather than from the rows on screen so an in-flight
+  member request cannot make a full selection read as partial — and wears the
+  shell's wash + `--selection-ring` round the whole band. Its rows then wear
+  nothing: in Grid it stops passing `selected` down to the member cards, and in
+  List the row's rail rule is scoped `:not(.stack-panel--selected)`. A partly
+  selected stack marks its rows instead, that being the only way to see which of
+  them are in. Rows keep `aria-selected` either way — they are selected
+  whichever box the olive is on. The band's wash is a `background-image` layer
+  over `--panel` (the way `--hover-shade` layers over a filled control), which
+  is also why the `.tbm-caret` notch restates it: the caret hardcodes `--panel`
+  and would otherwise seam. In List the rows are transparent so the wash reads
+  across the panel; in Grid the cards are opaque, so what shows is the header,
+  the padding and the gutters — a frame round the cards. Header text over the
+  wash measures 4.98:1 light / 4.63:1 dark at secondary alpha. The stack's own
+  card in the grid keeps its ordinary card mark; a stack-level shape for it
+  instead is a design decision left open (see the pull request).
 - **ARIA**: one `treegrid`. Cards are `role="row"` with `aria-selected`, stack
   rows add `aria-expanded`/`aria-controls`; the panel is a `rowgroup` holding a
   header row (one gridcell, one `role="toolbar"` named after the stack) and

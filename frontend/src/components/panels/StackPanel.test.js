@@ -28,6 +28,7 @@ vi.mock("vuetify/components", async () => {
 });
 
 import StackPanel from "./StackPanel.vue";
+import WorkflowCard from "../widgets/WorkflowCard.vue";
 import { workflowCoverUrl } from "../../api/workflows";
 import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 
@@ -56,6 +57,9 @@ const MEMBERS = [
     differs_by: ["other checkpoint"],
   }),
 ];
+
+/** The band itself: the component has more than one root node. */
+const band = (wrapper) => wrapper.find('[data-testid="stack-panel"]');
 
 function makePanel(props = {}) {
   return mount(StackPanel, {
@@ -357,6 +361,41 @@ describe("StackPanel", () => {
     expect(wrapper.find('[data-testid="member-menu"]').exists()).toBe(true);
     await wrapper.findAll(".ctx-item")[4].trigger("click");
     expect(wrapper.emitted("hide")).toEqual([["third"]]);
+  });
+
+  it("wears one mark for a whole selected stack, and none on its rows", async () => {
+    const whole = MEMBERS.map((entry) => entry.key);
+    const wrapper = makePanel({ selectedKeys: whole, selected: true });
+
+    // The band takes the hook the wash and the ring are keyed on.
+    expect(band(wrapper).classes()).toContain("stack-panel--selected");
+    // In Grid the member mark is the CARD's own, so the cards stop being told
+    // they are selected — two marks over one stack is what this replaces.
+    for (const card of wrapper.findAllComponents(WorkflowCard)) {
+      expect(card.props("selected")).toBe(false);
+    }
+    // The rows still say so, which is what a screen reader reads.
+    for (const key of whole) {
+      expect(
+        wrapper.find(`[data-key="${key}"]`).attributes("aria-selected"),
+      ).toBe("true");
+    }
+  });
+
+  it("leaves the rows their own marks when only part of the stack is in", async () => {
+    // `selected` false is a PARTIAL selection, and then the rows are the only
+    // thing that can say which members are in.
+    const wrapper = makePanel({
+      selectedKeys: ["cover", "third"],
+      selected: false,
+    });
+    expect(band(wrapper).classes()).not.toContain("stack-panel--selected");
+    expect(
+      wrapper
+        .findAllComponents(WorkflowCard)
+        .filter((card) => card.props("selected"))
+        .map((card) => card.props("card").key),
+    ).toEqual(["cover", "third"]);
   });
 
   it("switches view without touching the selection", async () => {
