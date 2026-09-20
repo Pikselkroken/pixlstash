@@ -43,7 +43,9 @@ describe("squareCropParams", () => {
   });
 
   it("returns null when bitmap dims are missing", () => {
-    expect(squareCropParams({ square_crop_x: 0, square_crop_y: 0 })).toBeNull();
+    expect(
+      squareCropParams({ square_crop_x: 0, square_crop_y: 0 }),
+    ).toBeNull();
     expect(squareCropParams(null)).toBeNull();
   });
 });
@@ -64,7 +66,7 @@ describe("squareCropImgStyle", () => {
     // left = -120/600 = -20% ; top = 0%
     expect(style.left).toBe(`${(-120 / 600) * 100}%`);
     expect(style.top).toBe("0%");
-    expect(style.objectFit).toBe("fill");
+    expect(style.objectFit).toBe("cover");
     expect(style.aspectRatio).toBe("auto");
   });
 
@@ -172,6 +174,44 @@ describe("cropRectForRatio", () => {
     expect(rect.x + rect.w).toBe(800);
   });
 
+  // The LOWER clamp, which is the one the library's commonest picture needs.
+  // `FaceUtils.square_crop_rect` top-anchors every faceless portrait at y=0,
+  // so a cell TALLER than the stored square asks to start above the bitmap:
+  // the 4:5 cell wants 480 rows centred on 192, i.e. y = -48. Without
+  // `Math.max(…, 0)` that negative survives, `cropImgStyle` emits a POSITIVE
+  // `top`, and every mosaic cell paints a band of empty background across the
+  // head of the picture.
+  it("never starts above the bitmap when the square is at the top edge", () => {
+    const params = squareCropParams({ ...PORTRAIT, square_crop_y: 0 });
+
+    expect(cropRectForRatio(params, 4 / 5)).toEqual({
+      x: 0,
+      y: 0,
+      w: 384,
+      h: 480,
+    });
+    // Its neighbour needs no clamping and must NOT be pinned to 0: the 6:5
+    // cell is shorter than the square, so it sits inside it at 192 - 160.
+    expect(cropRectForRatio(params, 6 / 5).y).toBe(32);
+  });
+
+  it("never starts left of the bitmap either", () => {
+    // The same guard on the other axis. A 800×400 bitmap's square is 400 wide
+    // and hard against the LEFT edge, so its centre is 200; a 6:5 cell wants
+    // 480 of width around it, i.e. x = -40.
+    const rect = cropRectForRatio(
+      squareCropParams({
+        thumbnail_width: 800,
+        thumbnail_height: 400,
+        square_crop_x: 0,
+        square_crop_y: 0,
+        square_crop_side: 400,
+      }),
+      6 / 5,
+    );
+    expect(rect).toEqual({ x: 0, y: 0, w: 480, h: 400 });
+  });
+
   it("refuses a ratio that is not a positive number", () => {
     const params = squareCropParams(PORTRAIT);
     expect(cropRectForRatio(params, 0)).toBeNull();
@@ -189,7 +229,33 @@ describe("cropImgStyle", () => {
     expect(style.height).toBe(`${(561 / 320) * 100}%`);
     expect(style.left).toBe("0%");
     expect(style.top).toBe(`${(-152 / 320) * 100}%`);
-    expect(style.objectFit).toBe("fill");
+    expect(style.objectFit).toBe("cover");
+  });
+
+  // `left` and `top` do NOT share a denominator: a percentage `left` resolves
+  // against the cell's width and a percentage `top` against its height, so the
+  // horizontal offset is over `w` and the vertical over `h`. Every other case
+  // here has a crop at x=0, where "%" of anything is 0 and the two are
+  // indistinguishable - so this is the only assertion that can tell them apart.
+  it("divides the horizontal offset by the crop's WIDTH, not its height", () => {
+    // A landscape bitmap in a tall 3:5 cell: 384 tall × 230.4 wide, and the
+    // square's centre at x=280 puts the crop at x = 280 - 115.2 = 164.8.
+    const style = cropImgStyle(
+      {
+        thumbnail_width: 561,
+        thumbnail_height: 384,
+        square_crop_x: 88,
+        square_crop_y: 0,
+        square_crop_side: 384,
+      },
+      3 / 5,
+    );
+    expect(style.left).toBe(`${(-164.8 / 230.4) * 100}%`);
+    expect(style.top).toBe("0%");
+    // Over the height it would read -42.9%, which is the mutation this catches.
+    expect(style.left).not.toBe(`${(-164.8 / 384) * 100}%`);
+    expect(style.width).toBe(`${(561 / 230.4) * 100}%`);
+    expect(style.height).toBe("100%");
   });
 
   it("falls back to CSS cover when the rectangle has not been computed", () => {

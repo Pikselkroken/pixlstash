@@ -35,7 +35,12 @@ export function squareCropParams(img) {
   const th = Number(img.thumbnail_height);
   const cx = Number(img.square_crop_x);
   const cy = Number(img.square_crop_y);
-  if (!(tw > 0) || !(th > 0) || !Number.isFinite(cx) || !Number.isFinite(cy)) {
+  if (
+    !(tw > 0) ||
+    !(th > 0) ||
+    !Number.isFinite(cx) ||
+    !Number.isFinite(cy)
+  ) {
     return null;
   }
   // square_crop_side is normally min(w, h). Derive it if the backend omitted it.
@@ -96,8 +101,16 @@ export function cropRectForRatio(params, ratio) {
  *   left   = -x / w * 100%
  *   top    = -y / h * 100%
  * `w` never exceeds `tw` and `h` never exceeds `th`, so the img covers the cell
- * on both axes however far the cell's real ratio has drifted from `ratio` (a
- * gap between the grid's tracks puts it a fraction of a percent out).
+ * on both axes however far the cell's REAL ratio has drifted from `ratio` - and
+ * it does drift, because a gap between the grid's tracks comes out of the cells
+ * rather than out of the box: 0.8% on the card's narrowest 3:5 cell, 2.1% on
+ * the stack panel's, whose box is a fixed 96×80 with the same 2px gap. The two
+ * denominators differ, so `object-fit` decides what that mismatch costs:
+ * `fill` would ANAMORPHICALLY squeeze the picture by those 2.1%, which is the
+ * one thing the crop it replaces could never do, and `cover` spends it as a
+ * couple of extra cropped pixels instead. Hence `cover`, not `fill`. In the
+ * picture grid's square cells the two are identical, the drift there being
+ * zero.
  *
  * @param {Object} img - Anything carrying the bitmap and crop fields: a grid
  *   image, or one of a workflow card's `covers`.
@@ -115,10 +128,11 @@ export function cropImgStyle(img, ratio = 1) {
     height: `${(th / rect.h) * 100}%`,
     left: `${(-rect.x / rect.w) * 100}%`,
     top: `${(-rect.y / rect.h) * 100}%`,
-    // Both dims are explicit and match the bitmap AR, so aspect-ratio must not
-    // fight them and object-fit is a no-op - set them defensively.
+    // Both dims are explicit, so aspect-ratio must not fight them. `cover`
+    // rather than `fill` for the reason above: it spends a cell whose real
+    // ratio has drifted on a few more cropped pixels instead of on a squeeze.
     aspectRatio: "auto",
-    objectFit: "fill",
+    objectFit: "cover",
     // Rounded corners frame the cell (container), not this oversized img.
     borderRadius: "0",
   };

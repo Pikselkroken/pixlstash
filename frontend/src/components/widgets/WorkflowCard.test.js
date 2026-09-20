@@ -39,6 +39,7 @@ vi.mock("vuetify/components", async () => {
 });
 
 import WorkflowCard from "./WorkflowCard.vue";
+import { coverCellRatio } from "../../utils/workflowCard";
 
 const read = (rel) =>
   readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
@@ -223,6 +224,21 @@ describe("WorkflowCard height", () => {
       expected.map((r) => expect.closeTo(r, 5)),
     );
   });
+
+  // `coverCellRatio` is what the CROP is computed from (#1465), and it is a
+  // hand-copy of the arithmetic above living in a different file. Nothing else
+  // ties the two together: change a track here and the cells change shape while
+  // the crop goes on framing them as the old one, which renders perfectly and
+  // is simply cut in the wrong place. Derived from the stylesheet on one side
+  // and read from the map on the other, so only agreement passes.
+  it.each(["1", "2", "3"])(
+    "crops %s picture(s) to the ratio the tracks actually produce",
+    (count) => {
+      for (const ratio of cellRatios(count)) {
+        expect(coverCellRatio(Number(count))).toBeCloseTo(ratio, 5);
+      }
+    },
+  );
 
   it("spans the big cell over both rows only where there are two rows", () => {
     // The row span is what makes the three-picture mosaic a mosaic: without it
@@ -582,7 +598,7 @@ describe("the cover crop", () => {
 
     expect(style).toContain(`height: ${(561 / 320) * 100}%`);
     expect(style).toContain(`top: ${(-152 / 320) * 100}%`);
-    expect(style).toContain("object-fit: fill");
+    expect(style).toContain("object-fit: cover");
   });
 
   it("crops the mosaic's cells to their own 4:5, not to the 6:5 box", () => {

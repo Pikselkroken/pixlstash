@@ -67,11 +67,7 @@
           />
         </div>
 
-        <p
-          v-if="fellBack.length"
-          class="rund-f rund-f--4 rund-note"
-          role="status"
-        >
+        <p v-if="fellBack.length" class="rund-f rund-f--4 rund-note" role="status">
           {{ fellBackLine }}
         </p>
 
@@ -138,9 +134,8 @@
             <span v-else class="rund-x-gap" />
           </div>
           <p v-if="unresolvedLoras.length" class="rund-note">
-            Not on your model shelf, so
-            {{ unresolvedLoras.length === 1 ? "it stays" : "they stay" }} as the
-            workflow has {{ unresolvedLoras.length === 1 ? "it" : "them" }}:
+            Not on your model shelf, so {{ unresolvedLoras.length === 1 ? "it stays" : "they stay" }}
+            as the workflow has {{ unresolvedLoras.length === 1 ? "it" : "them" }}:
             {{ unresolvedLoras.join(", ") }}.
           </p>
           <AppButton
@@ -249,9 +244,7 @@
             aria-label="Checkpoint"
             mono
             :disabled="submitting"
-            @update:model-value="
-              (v) => setValue(checkpointField, coerce(checkpointField, v))
-            "
+            @update:model-value="(v) => setValue(checkpointField, coerce(checkpointField, v))"
             @keydown.stop
           />
         </div>
@@ -275,11 +268,7 @@
               All {{ defaults.length }} parameters
               <span class="rund-quiet">{{ restFields.length }} more</span>
             </summary>
-            <div
-              v-for="field in restFields"
-              :key="address(field)"
-              class="rund-rest"
-            >
+            <div v-for="field in restFields" :key="address(field)" class="rund-rest">
               <span class="rund-l">
                 {{ field.label }}
                 <RunResetChip
@@ -308,21 +297,17 @@
           class="rund-f rund-f--4 rund-reasons"
           role="alert"
         >
-          <RunReasonNotice
-            v-for="(reason, index) in reasons"
-            :key="`${index}:${reason.code}`"
-            :reason="reason"
-            :busy="preflighting"
-            @settings="emit('open-settings', 'compute')"
-            @retry="runPreflight()"
-            @drop-lora="dropLoras"
-          />
+        <RunReasonNotice
+          v-for="(reason, index) in reasons"
+          :key="`${index}:${reason.code}`"
+          :reason="reason"
+          :busy="preflighting"
+          @settings="emit('open-settings', 'compute')"
+          @retry="runPreflight()"
+          @drop-lora="dropLoras"
+        />
         </div>
-        <p
-          v-if="submitError"
-          class="rund-f rund-f--4 rund-note rund-note--bad"
-          role="alert"
-        >
+        <p v-if="submitError" class="rund-f rund-f--4 rund-note rund-note--bad" role="alert">
           {{ submitError }}
         </p>
       </div>
@@ -359,9 +344,7 @@
           Save as recipe
         </AppButton>
         <span class="rund-sp" />
-        <AppButton :disabled="submitting" @click="onRequestClose"
-          >Cancel</AppButton
-        >
+        <AppButton :disabled="submitting" @click="onRequestClose">Cancel</AppButton>
         <!-- `aria-disabled`, not `disabled`: a natively-disabled button is
              out of the tab order, so a keyboard reader could never reach the
              reason `aria-describedby` points at. `submit()` does the actual
@@ -600,7 +583,7 @@ const sourceName = computed(
 /**
  * The picture beside the form, as a browser can actually load it.
  *
- * A card's `covers` carry an API-RELATIVE `url` (`_covers`, `routes/workflows.py`) and
+ * A card's `covers` carry an API-RELATIVE `url` (`_covers`, `workflows.py`) and
  * an `<img src>` bypasses Axios, so nothing prepends `/api/v1` and nothing
  * appends the share token: used verbatim the browser asks the page origin for
  * a path no route serves and the cover is broken. `workflowCoverUrl` is the
@@ -795,8 +778,7 @@ const adapterOptions = computed(() =>
     .filter((adapter) => adapter?.sha256)
     .map((adapter) => ({
       value: adapter.sha256,
-      label:
-        adapter.display_name || adapter.filename || adapter.sha256.slice(0, 12),
+      label: adapter.display_name || adapter.filename || adapter.sha256.slice(0, 12),
     }))
     .sort((a, b) => a.label.localeCompare(b.label)),
 );
@@ -838,19 +820,13 @@ const seedError = computed(() => {
   if (seedMode.value !== "fixed") return "";
   const text = String(seed.value ?? "").trim();
   if (!/^\d+$/.test(text)) return "A seed is a whole number.";
-  return BigInt(text) > MAX_SEED
-    ? "That is larger than ComfyUI's biggest seed."
-    : "";
+  return BigInt(text) > MAX_SEED ? "That is larger than ComfyUI's biggest seed." : "";
 });
 
 const runBlocker = computed(() => {
   if (!activeKey.value) return "Choose a workflow first.";
   if (seedError.value) return seedError.value;
-  if (
-    !Number.isInteger(count.value) ||
-    count.value < 1 ||
-    count.value > MAX_COUNT
-  )
+  if (!Number.isInteger(count.value) || count.value < 1 || count.value > MAX_COUNT)
     return `Between 1 and ${MAX_COUNT} runs at a time.`;
   if (preflightError.value) return preflightError.value;
   if (reasonsBlock(reasons.value)) return "This run cannot start; see below.";
@@ -922,17 +898,13 @@ function runBody() {
   } else {
     body.workflow_key = activeKey.value;
   }
-  const setId = picksDestination.value
-    ? destinationSetId.value
-    : props.context?.set_id;
+  const setId = picksDestination.value ? destinationSetId.value : props.context?.set_id;
   const destination = {
     set_id: setId ? Number(setId) : null,
-    project_id: picksDestination.value
-      ? null
-      : (props.context?.project_id ?? null),
+    project_id: picksDestination.value ? null : props.context?.project_id ?? null,
     character_id: picksDestination.value
       ? null
-      : (props.context?.character_id ?? null),
+      : props.context?.character_id ?? null,
   };
   if (Object.values(destination).some((value) => value != null)) {
     body.destination = destination;
@@ -981,7 +953,8 @@ function addLora() {
  */
 function loraRow(slot, { added = false } = {}) {
   const graphValue = String(slot.value ?? "");
-  const sha256 = slot.by === "digest" ? graphValue : shelfDigestFor(graphValue);
+  const sha256 =
+    slot.by === "digest" ? graphValue : shelfDigestFor(graphValue);
   const strength = Number(slot.strengths?.model ?? 1);
   return {
     key: `${slot.field}@${slot.node_id}`,
@@ -1013,9 +986,7 @@ function shelfDigestFor(filename) {
   for (const key of [wanted, base]) {
     const hits = adapters.value.filter((adapter) => {
       const name = String(adapter.filename || "").toLowerCase();
-      return (
-        adapter.sha256 && (name === key || name.split(/[\\/]/).pop() === key)
-      );
+      return adapter.sha256 && (name === key || name.split(/[\\/]/).pop() === key);
     });
     if (hits.length === 1) return String(hits[0].sha256);
   }
@@ -1108,9 +1079,7 @@ async function runPreflight(token = loadToken) {
   try {
     const answer = await preflightWorkflowRun(runBody());
     if (!mine()) return;
-    reasons.value = (answer?.groups || []).flatMap(
-      (group) => group.reasons || [],
-    );
+    reasons.value = (answer?.groups || []).flatMap((group) => group.reasons || []);
     plannedRuns.value = Number(answer?.runs) || 0;
   } catch (err) {
     // The route answers 400/404/422 here exactly as it does on the run, "so
@@ -1157,9 +1126,7 @@ async function load() {
     // One picture is a recipe to prefill from; several are a card the server
     // already agreed they share, so the card alone is the honest source.
     if (pictureIds.value.length === 1) {
-      const data = await getPictureRecipe(pictureIds.value[0], {
-        preflight: false,
-      });
+      const data = await getPictureRecipe(pictureIds.value[0], { preflight: false });
       if (!mine()) return;
       recipe.value = data?.reason === "no_prompt_chunk" ? null : data;
     }
@@ -1184,8 +1151,7 @@ async function load() {
     loras.value = loraSlots.value.map((slot) => loraRow(slot));
     initialLoraCount.value = loras.value.length;
     destinationSetId.value =
-      readLastSet() ||
-      (props.context?.set_id ? String(props.context.set_id) : "");
+      readLastSet() || (props.context?.set_id ? String(props.context.set_id) : "");
     void loadAdapters();
     // Both branches need the names: one to pick a set, the other to say which
     // one the output is going into.
@@ -1193,10 +1159,7 @@ async function load() {
     await runPreflight();
   } catch (err) {
     if (mine()) {
-      loadFailed.value = errorMessage(
-        err,
-        "Could not read what this would run.",
-      );
+      loadFailed.value = errorMessage(err, "Could not read what this would run.");
     }
   } finally {
     if (mine()) loading.value = false;
@@ -1247,10 +1210,7 @@ async function saveRecipe() {
       source_picture_id: pictureIds.value[0] ?? null,
     });
     naming.value = false;
-    notices.push({
-      level: "success",
-      text: `Saved “${recipeName.value.trim()}”.`,
-    });
+    notices.push({ level: "success", text: `Saved “${recipeName.value.trim()}”.` });
   } catch (err) {
     notices.push({
       level: "error",
@@ -1296,9 +1256,7 @@ async function submit() {
     const answer = await runWorkflowCard(runBody());
     const prompts = Array.isArray(answer?.prompts) ? answer.prompts : [];
     if (!prompts.length) {
-      reasons.value = (answer?.groups || []).flatMap(
-        (group) => group.reasons || [],
-      );
+      reasons.value = (answer?.groups || []).flatMap((group) => group.reasons || []);
       submitError.value = "Nothing was queued; see the reason below.";
       return;
     }
@@ -1458,9 +1416,7 @@ watch(
 .rund-lora,
 .rund-size {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--rund-strength-w) var(
-      --control-h-bar
-    );
+  grid-template-columns: minmax(0, 1fr) var(--rund-strength-w) var(--control-h-bar);
   gap: var(--space-3);
   align-items: center;
 }

@@ -40,7 +40,7 @@
 //                                       // square rectangle within the bitmap,
 //                                       // which `coverCellStyle` below fits
 //                                       // the cell's own ratio around; all
-//                                       // three are null together until the
+//                                       // three are null until the
 //                                       // picture has been processed (#1465).
 //     stack_size,                       // 2 or more makes the card a stack
 //     member_keys,                      // the stack's OTHER cards, so it is
@@ -96,17 +96,33 @@ const RECIPE = "recipe";
  *   two    (1/2)W × (5/6)W               → 3/5, twice
  *   three  big (2/3)W × (5/6)W           → 4/5
  *          small (1/3)W × (5/12)W        → 4/5
- * The mosaic's three cells are all 4:5, which is why this takes no index. The
- * gap between the tracks puts each a fraction of a percent off, which shifts a
- * crop by well under a pixel and is not worth a `calc` here either.
+ * The mosaic's three cells are all 4:5, which is why this takes no index.
+ *
+ * These are the shapes the tracks would make with NO gap between them. The
+ * `--space-1` gap comes out of the cells rather than out of the box, so a real
+ * cell is a little narrower than its share: 0.8% on the card's narrowest cell
+ * and 2.1% on the stack panel's, whose box is a fixed 96×80 against the same
+ * 2px. Not worth a `calc` here — `cropImgStyle` spends the mismatch on a
+ * couple of cropped pixels rather than on a squeeze, and says so.
  *
  * Both surfaces that draw a strip read this: the card's cover and the stack
- * panel's List row, which draws the same arrangement one size down.
+ * panel's List row, which draws the same arrangement one size down. It is a
+ * hand-copy of arithmetic that lives in two stylesheets, so both are asserted
+ * against it - `WorkflowCard.test.js` derives the card's ratios from its own
+ * `<style>` block and `StackPanel.test.js` does the same for the row's, and
+ * either drifting from this map is a failing test rather than a wrong crop.
+ *
+ * `undefined` for a count that is not 1, 2 or 3, and deliberately no default:
+ * both callers cap the strip at three and return early on none, so there is no
+ * such count to answer for. Should one ever arrive, `cropRectForRatio` refuses
+ * a ratio that is not a positive number and the cell falls back to the
+ * stylesheet's crop, which is the honest answer to "what shape is this cell?"
+ * — a guessed 4:5 would crop it wrongly and look deliberate.
  */
 const COVER_CELL_RATIO = { 1: 6 / 5, 2: 3 / 5, 3: 4 / 5 };
 
 export function coverCellRatio(count) {
-  return COVER_CELL_RATIO[count] ?? COVER_CELL_RATIO[3];
+  return COVER_CELL_RATIO[count];
 }
 
 /**

@@ -329,10 +329,17 @@ class WorkflowCover(BaseModel):
     is not square (6:5, 4:5, 3:5 on a card), so the client fits the cell's
     ratio around this rectangle's centre rather than using it verbatim.
 
-    **Every crop field is nullable and they are null together**, because a
-    picture keeps them NULL until it has been processed. A cover with no
-    rectangle is cropped the way it is today, ``object-fit: cover`` anchored
-    top centre — the fallback is a requirement, not a nicety (#1465).
+    **Every crop field is nullable**, because a picture keeps them NULL until
+    it has been processed. A cover with no rectangle is cropped the way it is
+    today, ``object-fit: cover`` anchored top centre — the fallback is a
+    requirement, not a nicety (#1465).
+
+    They are five independent columns rather than one optional block, so a
+    client decides on ``square_crop_x``/``_y``: ``render_thumbnail`` writes the
+    three crop values together, but nothing here enforces that, and a row
+    carrying an origin without a ``side`` is answered by deriving
+    ``min(width, height)`` — which is what the square-mode grid already does
+    (``squareCropParams``).
     """
 
     url: str

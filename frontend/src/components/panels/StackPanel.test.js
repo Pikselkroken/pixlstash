@@ -30,6 +30,7 @@ vi.mock("vuetify/components", async () => {
 import StackPanel from "./StackPanel.vue";
 import WorkflowCard from "../widgets/WorkflowCard.vue";
 import { workflowCoverUrl } from "../../api/workflows";
+import { coverCellRatio } from "../../utils/workflowCard";
 import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 
 const member = (key, extra = {}) => ({
@@ -534,6 +535,21 @@ describe("StackPanel List thumbnails", () => {
       expected.map((ratio) => expect.closeTo(ratio, 5)),
     );
   });
+
+  // The crop is computed from `coverCellRatio` (#1465), a hand-copy of this
+  // arithmetic in a third file. The card asserts the same agreement against
+  // its own stylesheet; both are needed, because these two stylesheets can
+  // drift from each other as easily as either can from the map — and a crop
+  // computed for the wrong shape renders perfectly and is simply cut in the
+  // wrong place.
+  it.each(["1", "2", "3"])(
+    "crops %s picture(s) to the ratio this strip's tracks produce",
+    (count) => {
+      for (const ratio of cellRatios(count)) {
+        expect(coverCellRatio(Number(count))).toBeCloseTo(ratio, 5);
+      }
+    },
+  );
 
   it("spans the mosaic's big cell over both rows, and only there", () => {
     // Unscoped, this rule puts every arrangement's first cell across two rows
