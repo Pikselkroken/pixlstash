@@ -6231,6 +6231,20 @@ def test_merge_offers_the_surviving_copy_as_the_name_to_load(
     assert aliases["alice-copy.safetensors"] == ["alice.safetensors"]
     assert "alice-copy.safetensors" not in aliases.get("alice.safetensors", [])
 
+    # The KEY is folded and the candidate is not, which is the pairing the swap
+    # depends on: `apply_model_swap` folds its lookup the same way, and ComfyUI
+    # compares the candidate exactly. Asserted on a mixed-case name, because a
+    # shelf of lowercase fixtures cannot tell the two halves apart - and getting
+    # this wrong made the feature a silent no-op for most real filenames.
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET relpath = 'Alice-Kept.safetensors' "
+            "WHERE model_folder_id = 1 AND model_id = ?",
+            (two_copies.model_id,),
+        )
+    aliases = model_name_aliases(shelf_env.server.hub)
+    assert aliases["alice-copy.safetensors"] == ["Alice-Kept.safetensors"]
+
 
 def test_a_name_two_models_share_is_never_offered_as_a_substitution(
     shelf_env, two_copies, fake_trash
@@ -6284,6 +6298,126 @@ def test_merge_will_not_act_on_a_keeper_the_shelf_cannot_find(
         {"id": two_copies.model_id, "reason": "keeper_not_present"}
     ]
     assert two_copies.second.exists(), "a copy went on the word of a missing keeper"
+
+
+def test_merge_refuses_to_remove_the_file_it_is_keeping(
+    shelf_env, two_copies, fake_trash, tmp_path
+):
+    """**The one that would destroy the weights.**
+
+    Two `model_file` rows are one `model` row whenever the bytes match, and a
+    symlink makes them match *because they are the same file* - which is ordinary
+    practice on this shelf, and which `_contained_path` deliberately unlinks the
+    link of rather than the target's. Right for the whole-model delete, where
+    every copy goes anyway; exactly inverted here. Keep the link, remove the
+    target, and the bytes are gone while the shelf still calls the keeper
+    `present`.
+    """
+    target = two_copies.second
+    link = tmp_path / "loras" / "alice-link.safetensors"
+    os.symlink(target, link)
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET relpath = 'alice-link.safetensors' "
+            "WHERE model_folder_id = 1 AND model_id = ?",
+            (two_copies.model_id,),
+        )
+
+    r = _merge(shelf_env, two_copies.model_id, 1, "alice-link.safetensors")
+    assert r.status_code == 200, r.text
+    assert r.json()["merged"] == []
+    assert r.json()["refused"] == [
+        {"id": two_copies.model_id, "reason": "keeper_is_that_copy"}
+    ]
+    assert target.exists(), "the merge deleted the bytes the keeper points at"
+    assert os.path.lexists(link), "the keeper is a dangling link"
+
+    # And the other direction is refused too: keeping the target and removing
+    # the link is the same one file, so there is nothing here to reclaim.
+    r = _merge(shelf_env, two_copies.model_id, 2, "alice-copy.safetensors")
+    assert r.json()["refused"] == [
+        {"id": two_copies.model_id, "reason": "keeper_is_that_copy"}
+    ]
+
+
+def test_merge_refuses_a_body_that_names_one_model_twice(shelf_env, two_copies):
+    """Two keepers for one model is a client bug, not a choice to make for it.
+
+    Planning it twice would remove its copies and then plan it again against rows
+    that had just gone; keeping the first silently would make a destructive
+    decision on a confused client's behalf and report nothing.
+    """
+    r = shelf_env.owner.post(
+        f"{API}/model-files/merge",
+        json={
+            "keep": [
+                {
+                    "model_id": two_copies.model_id,
+                    "folder_id": 1,
+                    "relpath": "alice.safetensors",
+                },
+                {
+                    "model_id": two_copies.model_id,
+                    "folder_id": 2,
+                    "relpath": "alice-copy.safetensors",
+                },
+            ]
+        },
+    )
+    assert r.status_code == 400, r.text
+    assert two_copies.first.exists() and two_copies.second.exists()
+
+
+def test_a_merge_that_half_failed_still_records_what_went(
+    shelf_env, two_copies, monkeypatch, tmp_path
+):
+    """The copies that DID go are recorded, though the model is refused.
+
+    They are gone either way. Leaving them `present` would draw the owner a
+    broken row for a file they successfully removed - and lose, for exactly the
+    copies that were destroyed, the record the whole design rests on.
+    """
+    third = tmp_path / "loras-three"
+    third.mkdir()
+    write_adapter(third / "alice-third.safetensors")
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (id, path, kind, movable, created_at) "
+            "VALUES (4, ?, 'user', 'per_item', '2026-08-09T00:00:00Z')",
+            (str(third),),
+        )
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state, "
+            "seen_at) VALUES (?, 4, 'alice-third.safetensors', 'present', "
+            "'2026-08-09T00:00:00Z')",
+            (two_copies.model_id,),
+        )
+
+    removed: list[str] = []
+
+    def send(path):
+        # The first copy goes; the second one fails, which is `partly_deleted`.
+        if removed:
+            raise OSError("the disk went away")
+        removed.append(path)
+        os.remove(path)
+
+    monkeypatch.setattr(model_files_routes, "send2trash", send)
+
+    r = _merge(shelf_env, two_copies.model_id, 1, "alice.safetensors")
+    assert r.status_code == 200, r.text
+    assert r.json()["merged"] == []
+    assert r.json()["refused"] == [
+        {"id": two_copies.model_id, "reason": "partly_deleted"}
+    ]
+    assert r.json()["files_removed"] == 1
+
+    states = _states(shelf_env.server, two_copies.model_id)
+    assert states[1] == "present", "the keeper was touched"
+    gone = os.path.basename(removed[0])
+    went, stayed = (2, 4) if gone == "alice-copy.safetensors" else (4, 2)
+    assert states[went] == "removed", "the copy that was destroyed still reads present"
+    assert states[stayed] == "present", "a copy that is still there was written off"
 
 
 def test_merge_refuses_a_copy_that_is_not_registered(shelf_env, two_copies, fake_trash):

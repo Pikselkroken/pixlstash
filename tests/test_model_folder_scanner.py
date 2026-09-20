@@ -512,6 +512,80 @@ class TestStates:
         assert result.state == STATE_UNREACHABLE
         assert located(hub)["a.safetensors"]["state"] == STATE_REMOVED
 
+    @SKIP_AS_ROOT
+    def test_an_unreadable_subdirectory_leaves_a_removed_copy_alone(
+        self, hub, scanner, tmp_path
+    ):
+        """The subtree sweep is a second query and needs its own assertion.
+
+        A NAS mounted inside a registered folder flips only the rows under it, by
+        a `relpath LIKE` predicate rather than by folder - so the folder-wide test
+        above does not exercise this branch at all. A `removed` row flipped to
+        `unreachable` here is worse than cosmetic: `unreachable` is in
+        `_KEEPS_A_MODEL_ALIVE`, so it would wrongly block Forget, and the next
+        readable scan's missing sweep - which guards `removed`, not
+        `unreachable` - would write `missing` over it.
+        """
+        folder = tmp_path / "models"
+        (folder / "nas").mkdir(parents=True)
+        write_adapter(folder / "local.safetensors")
+        write_adapter(folder / "nas" / "remote.safetensors", pad=1)
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+        under = os.path.join("nas", "remote.safetensors")
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model_file SET state = ? WHERE relpath = ?",
+                (STATE_REMOVED, under),
+            )
+
+        os.chmod(folder / "nas", 0o000)
+        try:
+            result = scanner.scan_folder(folder_id, str(folder), "user")
+        finally:
+            os.chmod(folder / "nas", 0o755)
+
+        rows = located(hub)
+        assert rows[under]["state"] == STATE_REMOVED
+        assert rows["local.safetensors"]["state"] == STATE_PRESENT
+        assert result.unreachable == 0, "the removed copy was swept as unreachable"
+
+    def test_an_unlistable_root_leaves_a_removed_copy_alone(
+        self, hub, scanner, tmp_path
+    ):
+        """The subtree sweep's other branch, driven directly.
+
+        `_mark_unreachable_subtrees` has two UPDATEs: one keyed on
+        `relpath LIKE prefix` (above) and one with no path predicate at all, for
+        `blocked = {"."}` - the root became unlistable *after* `scan_folder`'s
+        readability check passed, which is a race no test can force and
+        `on_error` genuinely produces (`os.path.relpath(root, root)` is `"."`).
+        Called directly rather than mocked into a scan, because a test that
+        cannot reach the branch is worse than none: a `chmod` before the scan is
+        answered by `_mark_folder_unreachable` instead, and the assertion then
+        passes with this branch's guard deleted.
+        """
+        folder = tmp_path / "models"
+        folder.mkdir()
+        write_adapter(folder / "a.safetensors")
+        write_adapter(folder / "b.safetensors", pad=1)
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model_file SET state = ? WHERE relpath = 'a.safetensors'",
+                (STATE_REMOVED,),
+            )
+
+        touched = scanner._mark_unreachable_subtrees(
+            folder_id, {"."}, scanner_module._utcnow()
+        )
+
+        rows = located(hub)
+        assert rows["a.safetensors"]["state"] == STATE_REMOVED
+        assert rows["b.safetensors"]["state"] == STATE_UNREACHABLE
+        assert touched == 1, "the removed copy was counted as newly unreachable"
+
     def test_a_removed_copy_that_comes_back_is_present_again(
         self, hub, scanner, tmp_path
     ):

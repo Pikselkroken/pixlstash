@@ -261,6 +261,10 @@ class DeleteRefusal(BaseModel):
             "and the shared HuggingFace cache are the two on a stock machine, "
             "and its own download folder is NOT one of them: the leftovers "
             "there are yours), "
+            "`keeper_not_present` and `keeper_is_that_copy` (`/model-files/merge` "
+            "only: the copy named as the keeper is not on the disk, or it is the "
+            "same file as one this would remove - a symlink or a hard link), "
+            "`no_such_copy`, `not_a_duplicate`, "
             "`unreachable_copy` (a copy is on a drive that is not plugged in, "
             "which is not a deletion), `escapes_its_folder` (the row names a "
             "path outside the folder it is registered in, which is a broken "
@@ -462,6 +466,37 @@ def _plan_deletions(hub, ids: list[int]) -> tuple[dict[int, list[dict]], list[di
     return deletable, refused
 
 
+def _same_file(one: str, other: str) -> bool:
+    """Whether two registered paths are ONE file on the disk.
+
+    Asked before a merge removes anything, because the shelf's own identity
+    cannot answer it: two `model_file` rows are one `model` row whenever the
+    bytes match, and a symlink or a hard link makes them match *because they are
+    the same file*. A symlinked model is ordinary practice here - `_present_copy`
+    contains lexically for exactly that reason - so "the same bytes twice" and
+    "one file under two names" look identical on the shelf and are opposites on
+    the disk: removing one of the second kind destroys the copy being kept and
+    leaves a dangling link the shelf still calls `present`.
+
+    ``os.path.samefile`` and not a ``realpath`` comparison, because it compares
+    ``st_dev``/``st_ino`` and therefore catches a hard link too, which resolves
+    to itself. An unstattable path answers True: that is the reading that
+    refuses the merge, and a path we cannot look at is not one to delete on the
+    strength of a guess.
+    """
+    try:
+        return os.path.samefile(one, other)
+    except OSError as exc:
+        logger.warning(
+            "Could not tell whether %s and %s are the same file (%s), so the "
+            "merge treats them as one and removes neither.",
+            one,
+            other,
+            exc,
+        )
+        return True
+
+
 def _plan_merge(hub, keep: list[KeepModelCopy]) -> tuple[dict[int, dict], list[dict]]:
     """Split the requested keepers into copies-to-remove and refusals (#1439).
 
@@ -554,17 +589,30 @@ def _plan_merge(hub, keep: list[KeepModelCopy]) -> tuple[dict[int, dict], list[d
             refused.append({"id": model_id, "reason": "not_a_user_folder"})
         else:
             try:
-                plans[model_id] = {
-                    "keeper": keeper["relpath"],
-                    "remove": [
-                        {
-                            "folder_id": int(row["model_folder_id"]),
-                            "relpath": row["relpath"],
-                            "path": _contained_path(row["folder_path"], row["relpath"]),
-                        }
-                        for row in doomed
-                    ],
-                }
+                kept_path = _contained_path(keeper["folder_path"], keeper["relpath"])
+                removals = [
+                    {
+                        "model_id": model_id,
+                        "folder_id": int(row["model_folder_id"]),
+                        "relpath": row["relpath"],
+                        "path": _contained_path(row["folder_path"], row["relpath"]),
+                    }
+                    for row in doomed
+                ]
+                if any(_same_file(copy["path"], kept_path) for copy in removals):
+                    # The keeper and a doomed copy are ONE file on the disk, so
+                    # removing that one takes the keeper's bytes with it and
+                    # leaves a dangling link the shelf still calls `present`.
+                    logger.error(
+                        "Refusing to merge the copies of model %s: a copy this "
+                        "would remove is the same file on the disk as the one it "
+                        "would keep (%s). Nothing was touched.",
+                        model_id,
+                        kept_path,
+                    )
+                    refused.append({"id": model_id, "reason": "keeper_is_that_copy"})
+                else:
+                    plans[model_id] = {"keeper": keeper["relpath"], "remove": removals}
             except ValueError as exc:
                 logger.error(
                     "Refusing to merge the copies of model %s: a registered copy "
@@ -594,13 +642,26 @@ def _mark_removed(hub, copies: list[dict]) -> None:
     because the scanner will keep finding the file absent and ``missing`` is its
     word for "I looked and it was gone". ``seen_at`` and ``file_mtime`` are left
     alone: when we last saw the file is still true.
+
+    **Scoped by ``model_id`` as well as by the row's primary key.** The unlink
+    cannot run inside the planning transaction - a 24 GB file would hold the
+    hub's write lock for the length of a disk operation - and the scanner does
+    not take ``SHELF_IO_LOCK``, so in that window a scan can re-point this
+    ``(folder_id, relpath)`` at a *different* model (``_upsert_model_file``
+    writes ``model_id = excluded.model_id`` when the owner has replaced the
+    file). Without the extra predicate this would stamp that model's row
+    ``removed`` - a row saying the owner deleted a duplicate, over a file that
+    was somebody else's only copy. With it the write simply matches nothing and
+    the next scan is the authority, which is the same direction
+    :func:`~pixlstash.services.model_shelf_service.purge_deleted_models` fails
+    in.
     """
     with hub.transaction() as conn:
         for copy in copies:
             conn.execute(
                 "UPDATE model_file SET state = ? "
-                "WHERE model_folder_id = ? AND relpath = ?",
-                (STATE_REMOVED, copy["folder_id"], copy["relpath"]),
+                "WHERE model_folder_id = ? AND relpath = ? AND model_id = ?",
+                (STATE_REMOVED, copy["folder_id"], copy["relpath"], copy["model_id"]),
             )
 
 
@@ -1162,11 +1223,22 @@ def create_router(server) -> APIRouter:
     )
     def merge_model_copies(request: Request, payload: MergeCopiesRequest = Body(...)):
         server.auth.ensure_secure_when_required(request)
-        # One keeper per model: two entries for one model would plan it, remove
-        # its copies and then plan it again against rows that had just gone.
+        # One keeper per model, and two entries for one model is refused rather
+        # than picked from: planning it twice would remove its copies and then
+        # plan it again against rows that had just gone, and silently keeping the
+        # first would make a destructive choice on a confused client's behalf and
+        # report nothing.
         keep: dict[int, KeepModelCopy] = {}
         for item in payload.keep:
-            keep.setdefault(item.model_id, item)
+            if item.model_id in keep:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Model {item.model_id} is named twice with different "
+                        "copies to keep. One keeper per model."
+                    ),
+                )
+            keep[item.model_id] = item
         user = server.auth.get_user_for_request(request)
         comfyui_url = (getattr(user, "comfyui_url", None) or "").rstrip("/")
 
@@ -1208,9 +1280,9 @@ def create_router(server) -> APIRouter:
                             )
                         )
                         logger.error(
-                            "Could not remove %s (%s). Model %s keeps every row; "
-                            "%d of its %d redundant copies were already removed, "
-                            "and a rescan of that folder will mark those missing.",
+                            "Could not remove %s (%s). Model %s keeps every copy "
+                            "it still has; the %d of its %d redundant copies that "
+                            "did go are recorded as removed.",
                             paths[done],
                             exc,
                             model_id,
@@ -1218,6 +1290,12 @@ def create_router(server) -> APIRouter:
                             len(paths),
                             exc_info=not isinstance(exc, TrashPermissionError),
                         )
+                        # The copies that went are recorded even though the model
+                        # is refused. They are gone either way, and leaving them
+                        # `present` would draw the owner a broken row for a file
+                        # they successfully removed - and lose, for exactly those
+                        # copies, the record the whole design rests on.
+                        _mark_removed(server.hub, plan["remove"][:done])
                         refused.append({"id": model_id, "reason": reason})
                     else:
                         merged.append(model_id)
