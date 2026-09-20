@@ -212,7 +212,7 @@ describe("OverlayRecipePanel", () => {
       false,
       true,
     ]);
-    expect(chips[3].find(".recipe-chip-quant").text()).toBe("FP8");
+    expect(chips[3].find(".recipe-chip-quant").text()).toBe("FP8 E4M3");
   });
 
   it("keeps the raw filename in the hover text", () => {

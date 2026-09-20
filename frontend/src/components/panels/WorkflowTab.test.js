@@ -254,7 +254,7 @@ describe("the models the panel names", () => {
     getWorkflowCard.mockResolvedValue(detail({ card: quantised }));
     const { wrapper } = await mountWith([KEY], [quantised]);
     const values = wrapper.findAll(".wftab-value").map((el) => el.text());
-    expect(values).toEqual(["t5xxl · FP8", "ae"]);
+    expect(values).toEqual(["t5xxl · FP8 E4M3", "ae"]);
     expect(wrapper.find(".wftab-chip").text()).toContain("detail · Q4_K_M");
   });
 

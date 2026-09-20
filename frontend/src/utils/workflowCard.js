@@ -323,12 +323,21 @@ export function modelDisplayName(model) {
 
 /** The LoRA row: a filled chip per workflow LoRA, a dashed one per recipe slot. */
 export function loraChips(card) {
-  return (card.loras ?? []).map((lora, i) => ({
-    key: `lora-${i}`,
-    label: lora.mark === RECIPE ? "recipe LoRA" : modelDisplayName(lora),
-    icon: lora.mark === RECIPE ? "plus" : "layers",
-    dashed: lora.mark === RECIPE,
-  }));
+  return (card.loras ?? []).flatMap((lora, i) => {
+    const recipe = lora.mark === RECIPE;
+    const quant = recipe ? null : quantBadge(lora.quant);
+    return [
+      {
+        key: `lora-${i}`,
+        label: recipe ? "recipe LoRA" : modelDisplayName(lora),
+        icon: recipe ? "plus" : "layers",
+        dashed: recipe,
+      },
+      ...(quant
+        ? [{ key: `lora-${i}-quant`, label: quant.label, fact: true }]
+        : []),
+    ];
+  });
 }
 
 /**
@@ -376,11 +385,11 @@ export function ratingLabel(rating) {
 export function cardAccessibleName(card, { member = false } = {}) {
   const count = card.picture_count ?? 0;
   const checkpoint = checkpointModel(card);
-  const loras = (card.loras ?? []).map((lora) =>
-    lora.mark === RECIPE
-      ? "recipe LoRA slot"
-      : `${modelDisplayName(lora)}, workflow LoRA`,
-  );
+  const loras = (card.loras ?? []).map((lora) => {
+    if (lora.mark === RECIPE) return "recipe LoRA slot";
+    const quant = quantBadge(lora.quant);
+    return `${modelDisplayName(lora)}, ${quant ? `${quant.title}, ` : ""}workflow LoRA`;
+  });
   const facts = factChips(card).map((chip) => chip.label);
   const parts = [
     card.name,

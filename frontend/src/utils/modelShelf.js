@@ -20,9 +20,9 @@ import { ICON_CARDS, SET_COLORS } from "./setAppearance";
 //
 // Two rules and not one list. A GGUF level (`k`, `s`, `m`, `l`, `0`, `1`) is an
 // ordinary token in a real name, so it is only ever eaten as the tail of an
-// explicit `q<n>` head; the rest (`scaled`, `awq`, `gptq`, `fast`) are
+// explicit `q<n>`, `iq<n>`, or `tq<n>` head; the rest (`scaled`, `awq`, `gptq`, `fast`) are
 // distinctive enough to pop next to any real quant token, and never alone.
-const GGUF_HEAD_RE = /^i?q\d+$/i;
+const GGUF_HEAD_RE = /^(?:i?q|tq)\d+$/i;
 const GGUF_LEVELS = new Set([
   "k",
   "s",
@@ -49,6 +49,7 @@ const QUANT_TOKENS = {
   e4m3fn: "fp8_e4m3",
   e5m2: "fp8_e5m2",
   nvfp4: "nvfp4",
+  mxfp4: "mxfp4",
   fp4: "fp4",
   nf4: "nf4",
   int8: "int8",
@@ -188,6 +189,7 @@ const QUANT_LABELS = {
   fp8_e5m2: ["FP8", "FP8 E5M2"],
   fp8: ["FP8", "8-bit float"],
   nvfp4: ["NVFP4", "NVIDIA FP4"],
+  mxfp4: ["MXFP4", "mixed FP4"],
   fp4: ["FP4", "4-bit float"],
   nf4: ["NF4", "4-bit NormalFloat"],
   int8: ["INT8", "8-bit integer"],
@@ -197,7 +199,7 @@ const QUANT_LABELS = {
 };
 
 /** A GGUF id (`q4_k_m`): the level IS the name a person recognises. */
-const GGUF_ID_RE = /^q\d+(?:_[a-z0-9]+)*$/i;
+const GGUF_ID_RE = /^(?:i?q|tq)\d+(?:_[a-z0-9]+)*$/i;
 
 /**
  * The badge for one model's `quant`, or null when there is nothing to say.

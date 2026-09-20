@@ -366,6 +366,10 @@ QUANT_VOCABULARY = [
     ("Qwen-Image-IQ2_XXS.gguf", "Qwen Image", "iq2_xxs"),
     ("Qwen_Image-Q3_K_XL.gguf", "Qwen Image", "q3_k_xl"),
     ("flux_iq4_nl.gguf", "flux", "iq4_nl"),
+    # Newer llama.cpp GGUF types use a TQ head or one unsegmented FP4 token.
+    ("model-TQ1_0.gguf", "model", "tq1_0"),
+    ("model-TQ2_0.gguf", "model", "tq2_0"),
+    ("model-MXFP4.gguf", "model", "mxfp4"),
     # A modifier next to a real quant token goes with it.
     ("umt5_xxl_fp8_e4m3fn_scaled.safetensors", "umt5 xxl", "fp8_e4m3"),
     # Quant first, then training: real names put the quant last.

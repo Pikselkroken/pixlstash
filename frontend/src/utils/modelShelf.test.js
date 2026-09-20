@@ -129,6 +129,9 @@ const QUANT_VOCABULARY = [
   ["Qwen-Image-IQ2_XXS.gguf", "Qwen Image", "iq2_xxs"],
   ["Qwen_Image-Q3_K_XL.gguf", "Qwen Image", "q3_k_xl"],
   ["flux_iq4_nl.gguf", "flux", "iq4_nl"],
+  ["model-TQ1_0.gguf", "model", "tq1_0"],
+  ["model-TQ2_0.gguf", "model", "tq2_0"],
+  ["model-MXFP4.gguf", "model", "mxfp4"],
   ["umt5_xxl_fp8_e4m3fn_scaled.safetensors", "umt5 xxl", "fp8_e4m3"],
   ["model-step00004500-fp16.safetensors", "model", "fp16"],
   // Mixed case, because every shelf fixture in this repo is lowercase and a
@@ -187,6 +190,17 @@ describe("quantBadge", () => {
     expect(quantBadge("q4_k_m")).toEqual({
       label: "Q4_K_M",
       title: "GGUF Q4_K_M quantisation",
+    });
+  });
+
+  it("keeps current TQ GGUF types distinguishable", () => {
+    expect(quantBadge("tq1_0")).toEqual({
+      label: "TQ1_0",
+      title: "GGUF TQ1_0 quantisation",
+    });
+    expect(quantBadge("mxfp4")).toEqual({
+      label: "MXFP4",
+      title: "mixed FP4",
     });
   });
 

@@ -85,7 +85,9 @@
                    it must not be what the chip ellipsises. The raw filename is
                    still in the hover text, so nothing is hidden. -->
               <span v-if="quantBadge(model.quant)" class="recipe-chip-quant">{{
-                quantBadge(model.quant).label
+                quantBadge(model.quant).label === "FP8"
+                  ? quantBadge(model.quant).title
+                  : quantBadge(model.quant).label
               }}</span>
               <v-icon v-if="model.verified" size="12" class="recipe-chip-badge"
                 >mdi-check-decagram</v-icon

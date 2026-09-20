@@ -790,6 +790,23 @@ describe("WorkflowCard", () => {
     expect(row.findAll(".chip-row > .chip-row__chip")).toHaveLength(1);
   });
 
+  it("draws and speaks structural LoRA precision", () => {
+    const card = mountCard({
+      ...BARE,
+      loras: [{ name: "Foxglove", mark: "structural", quant: "fp8_e4m3" }],
+    });
+    const chips = card
+      .findAll(".wf-card__row")[2]
+      .findAll(".chip-row > .chip-row__chip");
+    expect(chips.map((chip) => chip.find(".chip-row__label").text())).toEqual([
+      "Foxglove",
+      "FP8",
+    ]);
+    expect(card.find("article").attributes("aria-label")).toContain(
+      "LoRAs: Foxglove, FP8 E4M3, workflow LoRA",
+    );
+  });
+
   it("speaks the precision, since every chip on the card is aria-hidden", () => {
     // The accessible name is the whole of what a screen reader gets off this
     // card, so a badge missing from it does not exist for that reader.

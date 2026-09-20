@@ -145,11 +145,12 @@ def clean_asset_name(filename: str) -> str:
 # ``re.ASCII`` for the same reason `_VERSION_SUFFIX_RE` carries it: Python's
 # ``\d`` matches every Unicode decimal and JavaScript's does not, and
 # `frontend/src/utils/modelShelf.js` mirrors this rule token for token.
-# ``iq`` as well as ``q``: the I-quant family (``IQ3_M``, ``IQ4_XS``,
-# ``IQ2_XXS``) is most of what city96 publishes for Flux and Qwen-Image, which
-# is the image-model GGUF this feature is actually for. ``xs``/``xl``/``xxs``/
-# ``nl`` are levels for the same reason ``k``/``s``/``m`` are.
-_GGUF_HEAD_RE = re.compile(r"^i?q\d+$", re.IGNORECASE | re.ASCII)
+# ``iq`` and ``tq`` as well as ``q``: the I-quant family (``IQ3_M``,
+# ``IQ4_XS``, ``IQ2_XXS``) is most of what city96 publishes for Flux and
+# Qwen-Image, while current llama.cpp also serves ``TQ1_0`` and ``TQ2_0``.
+# ``xs``/``xl``/``xxs``/``nl`` are levels for the same reason ``k``/``s``/``m``
+# are.
+_GGUF_HEAD_RE = re.compile(r"^(?:i?q|tq)\d+$", re.IGNORECASE | re.ASCII)
 _GGUF_LEVELS = frozenset({"k", "s", "m", "l", "xs", "xl", "xxs", "nl", "0", "1"})
 
 # Filename spelling -> canonical id. The refinement wins where both are
@@ -167,6 +168,7 @@ _QUANT_TOKENS = {
     "e4m3fn": "fp8_e4m3",
     "e5m2": "fp8_e5m2",
     "nvfp4": "nvfp4",
+    "mxfp4": "mxfp4",
     "fp4": "fp4",
     "nf4": "nf4",
     "int8": "int8",

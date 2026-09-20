@@ -467,7 +467,10 @@ const subtitlePrefix = computed(() => {
 // line already says a second fact about one file.
 function withQuant(text, model) {
   const badge = quantBadge(model?.quant);
-  return badge ? `${text} · ${badge.label}` : text;
+  // FP8's shared compact label loses E4M3 versus E5M2. Other badges already
+  // carry their full identity in their label, and keep this detail row concise.
+  const detail = badge?.label === "FP8" ? badge.title : badge?.label;
+  return detail ? `${text} · ${detail}` : text;
 }
 
 const checkpointLabel = computed(() => {
