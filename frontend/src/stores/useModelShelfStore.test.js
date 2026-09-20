@@ -93,6 +93,20 @@ function adapter(overrides = {}) {
   };
 }
 
+/**
+ * Put the store on the ROW LIST, which is the screen these suites are about.
+ *
+ * Since #1438 the DEFAULT axis is the set grid, and it is a different screen
+ * over the same models: `selectedRows`, `selectVisible` and `modelsBehind` all
+ * read the rows THAT screen draws, so a test that seeds `store.rows` and never
+ * says which screen it is on is asking the grid about a list it does not draw.
+ * `ModelShelf.test.js` makes the same choice in `mountDefaultShelf`, and for the
+ * same reason: a new test lands on the list without having to know this.
+ */
+function onTheRowList() {
+  useModelShelfStore().setView({ groupBy: "none" });
+}
+
 beforeEach(() => {
   setActivePinia(createPinia());
   window.localStorage.clear();
@@ -1060,6 +1074,8 @@ describe("the column widths", () => {
 });
 
 describe("stacks are atomic", () => {
+  beforeEach(onTheRowList);
+
   /** A three-step run plus one loose adapter. */
   function shelfWithARun() {
     const store = useModelShelfStore();
@@ -1151,9 +1167,6 @@ describe("stacks are atomic", () => {
 
   it("selects every member with Select visible", () => {
     const store = shelfWithARun();
-    // On the ROW LIST. `selectVisible` answers the screen it is on, and the
-    // default axis is the set grid, where "shown" is the cards and their trays.
-    store.setView({ groupBy: "none" });
     store.selectVisible();
     expect([...store.selectedIds].sort()).toEqual([1, 2, 3, 4]);
   });
@@ -1232,6 +1245,8 @@ describe("stacks are atomic", () => {
 });
 
 describe("the verbs", () => {
+  beforeEach(onTheRowList);
+
   beforeEach(() => {
     editModels.mockReset();
     forgetModels.mockReset();
@@ -1286,6 +1301,8 @@ describe("the verbs", () => {
 });
 
 describe("Assign", () => {
+  beforeEach(onTheRowList);
+
   beforeEach(() => {
     setAdapterAttachments.mockReset().mockResolvedValue({ attachments: [] });
     listAdapters.mockResolvedValue([]);
@@ -1419,6 +1436,8 @@ describe("Assign", () => {
 });
 
 describe("the thumbnail verb", () => {
+  beforeEach(onTheRowList);
+
   beforeEach(() => {
     setModelIcon.mockReset().mockResolvedValue({ icon_sha256: "a".repeat(64) });
     clearModelIcons.mockReset().mockResolvedValue({ cleared: [] });
@@ -1515,7 +1534,6 @@ describe("the thumbnail verb", () => {
         stack_position: 2,
       }),
     ];
-    store.setView({ groupBy: "none" });
     store.selectVisible();
     expect(store.selectedRows).toHaveLength(1);
 
@@ -1531,7 +1549,6 @@ describe("the thumbnail verb", () => {
     store.rows = Array.from({ length: 501 }, (_, i) =>
       adapter({ id: i + 1, sha256: String(i).padStart(64, "0") }),
     );
-    store.setView({ groupBy: "none" });
     store.selectVisible();
 
     expect(await store.setIconOnSelected(new Blob(["x"]))).toBe(false);
@@ -1575,6 +1592,8 @@ describe("the thumbnail verb", () => {
 });
 
 describe("the receipts", () => {
+  beforeEach(onTheRowList);
+
   it("names the columns it wrote, because there is no undo to inspect", () => {
     expect(editReceipt(12, { base_model: "FLUX.2" })).toBe(
       "Set the base model on 12 models.",
@@ -1666,6 +1685,8 @@ describe("the receipts", () => {
 });
 
 describe("what a verb may reach", () => {
+  beforeEach(onTheRowList);
+
   it("drops a selected row that the filters stop showing", () => {
     // Load-bearing: `selectedRows` reads `visibleRows`, not `rows`. A verb must
     // never act on something the reader cannot see, and with no undo behind any
@@ -2128,6 +2149,8 @@ describe("what the base-model field completes against", () => {
 });
 
 describe("deleting from disk", () => {
+  beforeEach(onTheRowList);
+
   it("sends every member of the selection and says where the files went", async () => {
     const store = useModelShelfStore();
     store.rows = [adapter({ id: 1 })];
@@ -2894,6 +2917,8 @@ describe("the workflow sets", () => {
       no_set: [],
     });
     const store = useModelShelfStore();
+    // The default axis, said out loud: these are the grid's own assertions.
+    store.setView({ groupBy: "workflow_set" });
     await store.fetchRows();
     await store.loadWorkflowSets();
     return store;
@@ -2937,6 +2962,92 @@ describe("the workflow sets", () => {
 
     store.setView({ groupBy: "none" });
     expect(store.selectedRows).toHaveLength(0);
+  });
+
+  it("arms no verb over a model the grid draws nowhere", async () => {
+    // The hazard the hidden verb bar used to stand in for. A selection survives
+    // an axis switch on purpose, so a reader can Ctrl+A the row list, switch to
+    // the grid and find the bar still offering Delete over 1,800 models that
+    // screen shows none of. `selectedRows` reads the rows the SCREEN draws, so
+    // the offer goes with the screen.
+    const store = await shelfWithAHiddenCompanion();
+    store.setView({ groupBy: "none" });
+    store.selectVisible();
+    expect(store.selectedRows.map((r) => r.id).sort()).toEqual([1, 2]);
+
+    // A model on no card at all: `no_set` is drawn as a count, not as a row.
+    fetchWorkflowSets.mockResolvedValue({ combinations: [], no_set: [1, 2] });
+    await store.loadWorkflowSets({ force: true });
+    store.setView({ groupBy: "workflow_set" });
+
+    expect(store.noSetRows.map((r) => r.id).sort()).toEqual([1, 2]);
+    expect(store.selectedRows).toEqual([]);
+    // And the ids are still held, so going back offers them again.
+    expect([...store.selectedIds].sort()).toEqual([1, 2]);
+    store.setView({ groupBy: "none" });
+    expect(store.selectedRows.map((r) => r.id).sort()).toEqual([1, 2]);
+  });
+
+  it("refuses Select all shown rather than clearing what is held", async () => {
+    // A key that says "select" must never be a silent clear. The guard used to
+    // sit at one caller and read `visibleRows`, which is the row list's list -
+    // so on the grid it passed and `selectVisible` then emptied the selection.
+    // The pill's own button never had the guard at all.
+    const store = await shelfWithAHiddenCompanion();
+    store.setView({ groupBy: "none" });
+    store.selectVisible();
+    expect([...store.selectedIds].sort()).toEqual([1, 2]);
+
+    fetchWorkflowSets.mockResolvedValue({ combinations: [], no_set: [] });
+    await store.loadWorkflowSets({ force: true });
+    store.setView({ groupBy: "workflow_set" });
+    expect(store.setGridRows).toEqual([]);
+    // The row list still holds two rows, which is exactly what the old guard
+    // was reading when it let this through.
+    expect(store.visibleRows).toHaveLength(2);
+
+    store.selectVisible();
+    expect([...store.selectedIds].sort()).toEqual([1, 2]);
+  });
+
+  it("takes a run whole from a card named after one step of it", async () => {
+    // The grid has NO run affordance: `shownModelIds` fans a run out into its
+    // members, so a card can be named after step 2 of 6 with nothing on it
+    // saying so. Letting that card mean one file would let Forget destroy half
+    // a run - the partial state `services/stack_membership` forbids - so the
+    // fold pulls the whole run in and the card selects all of it.
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, sha256: "a".repeat(64), stack_id: 7, stack_position: 0 }),
+      adapter({ id: 2, sha256: "b".repeat(64), stack_id: 7, stack_position: 1 }),
+    ]);
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        {
+          // The recipe names the SECOND step, not the cover.
+          key: "2",
+          models: [{ id: 2, name: "step-two.st", kind: "checkpoint" }],
+          recipes: 1,
+          picture_count: 1,
+          covers: [],
+        },
+      ],
+      no_set: [],
+    });
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "workflow_set" });
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+
+    // One card, named after step two; the run behind it is one folded row.
+    expect(store.setGroups).toHaveLength(1);
+    expect(store.setGridRows.map((r) => r.id)).toEqual([1]);
+    expect(store.setGridRows[0].memberIds).toEqual([1, 2]);
+
+    store.selectFromClick(2, {}, [2]);
+    expect([...store.selectedIds].sort()).toEqual([1, 2]);
+    // One row for the bar to count, and both files for a verb to write.
+    expect(store.selectedRows).toHaveLength(1);
+    expect(store.selectedModelIds.sort()).toEqual([1, 2]);
   });
 
   it("answers Select all shown with the grid's models, on the grid", async () => {

@@ -190,15 +190,31 @@ const accessibleName = computed(() => {
 }
 
 /* Open and selected are two states and they read differently on purpose: open is
-   a border in the active ink beside the rotated ▸, selected is the row list's own
-   wash and inset bar. A card can be both, and then it wears both. */
+   a border in the active ink beside the rotated ▸, selected is the shell's own
+   wash and ring. A card can be both, and then it wears both. */
 .msc--open {
   border-color: var(--active-bar);
 }
 
-.msc--on {
+/* The shell's selection mark (`style.css` rule 3): the wash, plus
+   `--selection-ring` because a card has no left edge to rail.
+
+   **An OVERLAY, not the card's own background and shadow**, for the reason
+   `WorkflowCard.vue` records at the same rule: an inset box-shadow paints over
+   an element's background but UNDER its children, and the top 55% of this card
+   is the cover's opaque `<img>`s. Put on the card itself the mark appears along
+   the meta rows and stops dead at the pictures. `pointer-events: none` so ▸
+   underneath still takes its click, and the radius is inherited so the ring
+   follows the card's own corners. */
+.msc--on::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-raised);
+  border-radius: inherit;
   background: var(--active-wash);
-  box-shadow: var(--selection-edge);
+  box-shadow: var(--selection-ring);
+  pointer-events: none;
 }
 
 .msc__cover {

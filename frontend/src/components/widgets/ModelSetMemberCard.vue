@@ -161,11 +161,14 @@ const accessibleName = computed(() =>
   color: rgb(var(--v-theme-on-surface));
 }
 
-/* The file the group is named after. A left rail rather than a fill, because a
-   fill is what SELECTED wears in this tray and the two must not be one treatment:
-   which file names the set is a fact, and whether it is ticked is a gesture. */
+/* The file the group is named after. `--rail-w` and `--active-bar`, the same two
+   values `--selection-edge` resolves to, because a SELECTED row wears that rail
+   and a head row must not jump by a pixel or change hue when it is ticked. The
+   two marks therefore coincide on a selected head, and what tells head from
+   ticked is the `Names this set` pill above - which is text, so it survives
+   greyscale, and is always drawn. */
 .msm--head {
-  box-shadow: inset 3px 0 0 var(--active-bar);
+  box-shadow: inset var(--rail-w) 0 0 var(--active-bar);
 }
 
 /* The evidence could not pin this file down. Dashed, the shelf's own treatment
@@ -175,9 +178,10 @@ const accessibleName = computed(() =>
 }
 
 /* The row list's selected treatment: a wash and an inset bar, never a border,
-   which would shift every glyph in the card by a pixel. `--selection-edge` is
-   the same 3px rail in the same ink that `.msm--head` already draws, so a head
-   card gains the wash on select and its rail does not move. */
+   which would shift every glyph in the card by a pixel. The wash is what this
+   adds to a head row, whose rail is already the same rail - see the note at
+   `.msm--head`. Safe as a plain background here, unlike on the card above: a
+   member draws no pictures, so nothing paints over it. */
 .msm--on {
   background: var(--active-wash);
   box-shadow: var(--selection-edge);

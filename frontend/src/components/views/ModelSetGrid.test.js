@@ -621,6 +621,28 @@ describe("selection and the verbs", () => {
     }
   });
 
+  it("leaves the selection alone when the card's chevron is pressed", async () => {
+    // ▸ is navigation: "show me what is in this set". Its click bubbles out of
+    // the button and into the row, so unguarded it replaced the reader's
+    // selection with that card - arming a model they never pointed at for a
+    // verb that has no undo.
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5"), row(3, "filmgrain_xl")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [
+        combination("1,2", [CKPT, VAE]),
+        combination("4,2", [OTHER_CKPT, VAE]),
+      ],
+    });
+    store.toggleSelected(2);
+    store.toggleSelected(3);
+
+    await wrapper.findAll(".msc__toggle")[0].trigger("click");
+
+    expect(store.openSetKey).toBe("model:1");
+    expect([...store.selectedIds].sort()).toEqual([2, 3]);
+  });
+
   it("offers no selection for a model the shelf has no row for", async () => {
     // A combination can name a file from a block this session never fetched.
     // There is nothing to rename, move or delete for one of those, so the row

@@ -5205,27 +5205,70 @@ describe("the set grid is what the shelf opens on", () => {
     expect(textOf(wrapper.find(".shelf-sub"))).toContain("1 model");
   });
 
+  /**
+   * The shelf on the set grid, with a card actually drawn for model 1.
+   *
+   * Seeded straight onto the store rather than through the api double: this
+   * suite stubs `ModelSetGrid`, so nothing here ever calls `loadWorkflowSets`
+   * and an unseeded grid draws no cards - which is the state that made three of
+   * these assertions pass for the wrong reason.
+   */
+  async function shelfOnTheGrid() {
+    const wrapper = await mountDefaultShelf([
+      adapter({ id: 1, sha256: "a".repeat(64) }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+    ]);
+    const store = useModelShelfStore();
+    store.workflowSets = {
+      combinations: [
+        {
+          key: "1",
+          models: [{ id: 1, name: "a.st", kind: "checkpoint" }],
+          recipes: 1,
+          picture_count: 1,
+          covers: [],
+        },
+      ],
+      noSet: [2],
+    };
+    store.setView({ groupBy: "workflow_set" });
+    await wrapper.vm.$nextTick();
+    return { wrapper, store };
+  }
+
   it("floats the verb bar over the grid, as it does over the list", async () => {
     // It did not, while a card stood for a whole SET: a Delete aimed at one
     // could have taken a shared VAE with it. A card stands for its BASE MODEL
     // now and a tray row for one file, so everything the bar can be aimed at
     // there is one model - which is what its verbs write.
-    const wrapper = await mountDefaultShelf();
-    const store = useModelShelfStore();
-    store.setView({ groupBy: "workflow_set" });
+    // The PILL, not the `.selbar-float` strip it docks in: the strip is the
+    // host's positioning wrapper and is always there, so asserting on it would
+    // be asserting that `isShelfTab` is true.
+    const { wrapper, store } = await shelfOnTheGrid();
+    expect(wrapper.find(".selbar").exists()).toBe(false);
+
     store.toggleSelected(1);
     await wrapper.vm.$nextTick();
+    expect(store.selectedRows.map((row) => row.id)).toEqual([1]);
+    expect(wrapper.find(".selbar").exists()).toBe(true);
 
-    expect(store.selectedRows).toHaveLength(1);
-    expect(wrapper.find(".selbar-float").exists()).toBe(true);
+    // And model 2, which is on NO card, arms nothing while the grid is up.
+    store.clearSelection();
+    store.toggleSelected(2);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".selbar").exists()).toBe(false);
+    // It is still held, and the row list offers it again.
+    store.setView({ groupBy: "none" });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".selbar").exists()).toBe(true);
   });
 
   it("opens the verb menu where the grid says the pointer was", async () => {
-    const wrapper = await mountDefaultShelf();
-    const store = useModelShelfStore();
-    store.setView({ groupBy: "workflow_set" });
+    const { wrapper, store } = await shelfOnTheGrid();
     store.toggleSelected(1);
     await wrapper.vm.$nextTick();
+    const bar = wrapper.findComponent({ name: "ShelfSelectionBar" });
+    expect(bar.vm.contextOpen).toBe(false);
 
     await wrapper
       .findComponent({ name: "ModelSetGrid" })
@@ -5234,41 +5277,42 @@ describe("the set grid is what the shelf opens on", () => {
 
     // One bar for both views, so there is one set of refusals rather than two
     // that can drift. The menu is its own, opened through its exposed method.
-    expect(
-      wrapper.findComponent({ name: "ShelfSelectionBar" }).vm.contextOpen,
-    ).toBe(true);
+    expect(bar.vm.contextOpen).toBe(true);
+    expect(bar.vm.contextAt).toEqual([210, 64]);
   });
 
-  it("keeps Escape and Ctrl+A live on the grid, now the bar is over it", async () => {
-    // They were taken away while nothing on the grid was selectable: Ctrl+A
-    // built a selection with no bar on screen to show it, and Delete then
-    // opened a real confirmation for cards nobody could point at. Both halves
-    // of that reasoning went with the card standing for its base model.
-    const wrapper = await mountDefaultShelf([
-      adapter({ id: 1, sha256: "a".repeat(64) }),
-      adapter({ id: 2, sha256: "b".repeat(64) }),
-    ]);
+  it("takes Ctrl+A to mean the models the GRID draws", async () => {
+    // The key was taken away entirely while nothing on the grid was selectable.
+    // Back on, it has to answer the screen it is on: the row list holds two
+    // rows here and the grid draws one card, so a guard reading `visibleRows`
+    // would pass and then select the wrong set - or, with no card at all,
+    // silently clear what the reader was still holding.
+    const { wrapper, store } = await shelfOnTheGrid();
     document.body.appendChild(wrapper.element);
-    const store = useModelShelfStore();
-    store.setView({ groupBy: "workflow_set" });
-    await wrapper.vm.$nextTick();
 
-    // Ctrl+A on the grid takes what the GRID shows, which with no combinations
-    // read is nothing - the row list's two rows are not on that screen.
     window.dispatchEvent(
       new KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
     );
     await wrapper.vm.$nextTick();
-    expect(store.selectedRows).toHaveLength(0);
+    expect(store.selectedRows.map((row) => row.id)).toEqual([1]);
+    expect(store.visibleRows).toHaveLength(2);
+  });
 
-    // A selection made on the row list and carried over still clears on Escape.
-    store.setView({ groupBy: "none" });
-    store.selectVisible();
-    store.setView({ groupBy: "workflow_set" });
+  it("clears on Escape from the grid, and refuses Delete once it has", async () => {
+    const { wrapper, store } = await shelfOnTheGrid();
+    document.body.appendChild(wrapper.element);
+    store.toggleSelected(1);
     await wrapper.vm.$nextTick();
+    // The pre-state, asserted: without it this test is green whenever the
+    // selection happens to be empty for some other reason.
+    expect(store.selectedRows).toHaveLength(1);
+
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     await wrapper.vm.$nextTick();
     expect(store.selectedRows).toHaveLength(0);
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
+    await wrapper.vm.$nextTick();
     expect(deleteModels).not.toHaveBeenCalled();
     wrapper.unmount();
   });

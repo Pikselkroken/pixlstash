@@ -2296,15 +2296,15 @@ function shelfOwnsTheKey(event) {
  * Shift and Alt do not - those are chords this list does not define and are
  * left to the browser, AltGr+A among them.
  *
- * **With nothing drawn the key is swallowed and the selection left alone.**
- * Two things are true at once there and only one of them is obvious: there is
+ * **With nothing drawn the key is swallowed and the selection left alone**, and
+ * `selectVisible` is where that is decided - see the note at the call. Two
+ * things are true at once there and only one of them is obvious: there is
  * nothing to select, and `selectedIds` may still be full, because it is pruned
  * against a FETCH (`pruneSelection`) and not against the `Show` narrowing that
- * emptied the list. Running `selectVisible()` would then replace a selection
- * the reader still holds with an empty one - a silent clear, from a key that
- * says "select", with no undo and (the pill being gated on `selectedRows`) no
- * control on screen to do it deliberately. The press is still claimed, or
- * declining would hand it back to the native select-all above.
+ * emptied the list. Replacing a selection the reader still holds with an empty
+ * one is a silent clear, from a key that says "select", with no undo and (the
+ * pill being gated on `selectedRows`) no control on screen to do it
+ * deliberately.
  *
  * `event.repeat` is refused for the same reason `useDedupQueueKeyboard` refuses
  * it: a held chord would rebuild a set over every drawn row, up to 1,800 of
@@ -2323,7 +2323,14 @@ function onShelfKeydown(event) {
   if (wantsSelectAll) {
     if (event.repeat) return;
     event.preventDefault();
-    if (store.visibleRows.length) store.selectVisible();
+    // The "nothing drawn, so leave the selection alone" refusal lives in
+    // `selectVisible` now, not here: this guard read `visibleRows`, which is the
+    // ROW LIST's list, and on the set grid that is a different screen - the key
+    // would have passed the guard and then cleared the selection to nothing. The
+    // pill's *Select all shown* never had the guard at all, so moving it into
+    // the store fixed a second caller as well. The press is still claimed either
+    // way, or declining would hand it to the native select-all.
+    store.selectVisible();
     return;
   }
   // Escape and Delete are both about a selection, and the guard above no longer
@@ -3344,22 +3351,24 @@ function startRename(row) {
 function startRenameSelected() {
   const id = store.selectedRows[0]?.id;
   if (id == null) return;
-  if (!isSetGrid.value) {
-    for (const group of shownGroups.value) {
-      const row = group.rows.find((candidate) => candidate.id === id);
-      if (row) {
-        startRename(row);
-        return;
-      }
+  // The set grid has no row to open a field on, ever: a name lives on a card,
+  // and the dashed rule under a row is what makes an inline field honest. It
+  // takes `ShelfEditDialog`'s `rename`, which already owns that one string, so
+  // the verb is live there rather than being a menu item that does nothing.
+  // The row list is left exactly as it was, including its silent no-op when the
+  // selection is held but the row is not drawn - that is a separate question
+  // and not this change's to answer.
+  if (isSetGrid.value) {
+    editVerb.value = "rename";
+    return;
+  }
+  for (const group of shownGroups.value) {
+    const row = group.rows.find((candidate) => candidate.id === id);
+    if (row) {
+      startRename(row);
+      return;
     }
   }
-  // No row to open a field on. On the set grid that is every time - the name
-  // lives on a card, and a card has no dashed rule under it to make an inline
-  // field honest - and on the row list it is the case where the selection is
-  // held but the row is not drawn. `ShelfEditDialog` already owns `rename`, so
-  // the verb stays live rather than being a menu item that silently does
-  // nothing.
-  editVerb.value = "rename";
 }
 
 /**

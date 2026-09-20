@@ -166,7 +166,16 @@
  * whole SET would put a shared VAE behind a Delete aimed at a checkpoint. It
  * stands for its head instead - the file whose name, kind and mark the card
  * already draws - and the other members of the set are selected one at a time in
- * the tray, where each row is one model. Nothing here ever selects a group.
+ * the tray, where each row is one model. Nothing here ever selects a SET.
+ *
+ * **A RUN is the one thing a card can stand for besides one file, and it has to
+ * be.** `shownModelIds` fans a run out into its members, so a card can be named
+ * after step 2 of 6 with nothing on it saying so; the shelf holds runs atomic
+ * everywhere (`services/stack_membership`), and letting a card mean one step
+ * would let Forget destroy half of one from a screen that draws no runs. The
+ * store folds them instead - `setGridRows` pulls a whole run in the moment any
+ * step of it is on a card - so such a card selects the run, the bar counts it as
+ * one row and states its whole size, and the verbs write all of it.
  *
  * Everything else is the row list's own contract, reached through the same store:
  * click replaces, Ctrl/Cmd+click toggles, Shift+click takes the range in DRAWN
@@ -429,7 +438,13 @@ function modelIdOf(entry) {
   return null;
 }
 
-/** Is there a shelf row behind this id for a verb to write? */
+/**
+ * Is there a shelf row behind this id for a verb to write?
+ *
+ * A row that answers `false` still takes the cursor from a click - it is a place
+ * on the screen - but it takes no selection, carries no `aria-selected` and
+ * opens no verb menu, because there is nothing for a verb to write.
+ */
 function selectable(id) {
   return id != null && store.setGridModelIds.has(id);
 }
@@ -455,9 +470,15 @@ function select(id, event) {
   store.selectFromClick(id, { ctrl, shift: event?.shiftKey }, orderedIds.value);
 }
 
-/** A card was clicked: it takes the cursor, and it takes the selection. */
+/**
+ * A card was clicked: it takes the cursor, and it takes the selection.
+ *
+ * The cursor moves either way - a click inside the card is still a statement
+ * about where the reader is - but a click the card's own ▸ owns stops there.
+ */
 function onRowClick(entry, event) {
   cursorId.value = entry.id;
+  if (targetOwnsTheGesture(event)) return;
   select(modelIdOf(entry), event);
 }
 
@@ -556,7 +577,7 @@ function moveCursor(index, extend = false) {
 }
 
 /**
- * What a keydown inside the grid must NOT be treated as a grid gesture.
+ * What an event inside the grid must NOT be treated as a grid gesture.
  *
  * `onKeyDown` is on the grid, so it sees every press inside it, including the
  * ones aimed at the panel's own buttons - *Don't fold* and Close, which are real
@@ -564,10 +585,16 @@ function moveCursor(index, extend = false) {
  * and closed the stack instead of pressing the button, while Space still
  * activated it: the same button answering two keys differently (#1479 review).
  *
- * The row itself is the tab stop and is a plain div, so a press the grid IS
+ * **A CLICK asks the same question and needs the same answer.** The card's ▸ is
+ * a button inside a row that now selects, so its click bubbles out of the button
+ * and into the row: pressing "show me what is in this set" would replace the
+ * reader's selection with that card and arm a model they never pointed at for a
+ * verb with no undo. A disclosure control is navigation, not a pick.
+ *
+ * The row itself is the tab stop and is a plain div, so a gesture the grid IS
  * meant to own never matches this.
  */
-function targetOwnsTheKey(event) {
+function targetOwnsTheGesture(event) {
   return Boolean(
     event.target?.closest?.(
       "button, a[href], input, select, textarea, [role='button']",
@@ -587,7 +614,7 @@ function isMenuKey(event) {
 }
 
 function onKeyDown(event) {
-  if (targetOwnsTheKey(event)) return;
+  if (targetOwnsTheGesture(event)) return;
   const entry = flatRows.value[cursorIndex.value];
   const cols = Math.max(1, columns.value);
   const extend = event.shiftKey;
@@ -613,6 +640,11 @@ function onKeyDown(event) {
       // so a reader can build a selection without a pointer. Enter is NOT this
       // key here - it already opens a tray and asks a model what it has run
       // with, and those are the gestures this grid is read with.
+      //
+      // Refused before it is swallowed: a row with no shelf model behind it has
+      // no answer to Space, and `preventDefault` on a press nothing then handles
+      // takes the page's own scroll away for nothing.
+      if (!selectable(modelIdOf(entry))) return;
       event.preventDefault();
       select(modelIdOf(entry), { ctrlKey: true });
       return;
