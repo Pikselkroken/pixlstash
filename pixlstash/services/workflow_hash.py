@@ -59,13 +59,7 @@ logger = get_logger(__name__)
 # under either rule are stamped, so `WHERE hash_version = 'v1'` names the ones
 # the old rule produced -- which is what this column is for, and the only way
 # to find them later, since nothing re-keys them in place.
-#
-# v3 (#1375): a model named inside a ControlNet compound value became an asset
-# widget of the A1111 reduction (`services/a1111_recipe.py`), so such a picture
-# keys differently from one scanned before it. Nothing re-reads the pictures
-# already filed, which is exactly why the stamp is moved: `WHERE hash_version =
-# 'v2'` is the only way to name the rows the old rule produced.
-HASH_VERSION = "v3"
+HASH_VERSION = "v2"
 
 # How many refinement rounds. The spec says 3 to 4; four is taken because the
 # cost is linear in edges and the extra round is what separates nodes that are

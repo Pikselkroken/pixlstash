@@ -923,7 +923,7 @@ def test_the_stored_row_records_which_rule_keyed_it(hub):
     )
     # The literal the spec names, not the module's own constant: comparing a
     # written value against the thing that wrote it asserts nothing.
-    assert row["hash_version"] == "v3"
+    assert row["hash_version"] == "v2"
     assert row["node_count"] == len(TXT2IMG)
 
 
@@ -3457,6 +3457,86 @@ def test_a_field_that_is_not_a_known_compound_keeps_its_value_whole():
     assert "model: someone, model: someone else" in document
     assert "a castle, model: someone" in document
     assert long_name in document
+
+
+def test_two_units_each_name_their_own_model():
+    """A picture uses several ControlNets, and each names a file of its own."""
+    fields = (
+        A1111_FIELDS + ', ControlNet 0: "Module: canny, Model: control_a, Weight: 1", '
+        'ControlNet 1: "Module: depth, Model: control_b [d14c016b], Weight: 0.5"'
+    )
+    nodes = reduce_a1111({"png": {"parameters": infotext(fields=fields)}}).nodes
+    assets = set(assets_from_reduction(nodes))
+    assert ("controlnet_0_model", "control_a.safetensors") in assets
+    assert ("controlnet_1_model", "control_b.safetensors") in assets
+    document = json.dumps(instance_document_from_reduction(nodes))
+    for leaked in ("control_a", "control_b"):
+        assert leaked not in document
+
+
+def test_a_newline_inside_a_compound_is_not_a_model_name():
+    """A filename holds no newline, and A1111 can put one in a value.
+
+    A1111 escapes a real newline so its infotext stays one line, and
+    `_parse_fields` unescapes it through `json.loads`, so a compound can arrive
+    carrying one. Prose is what would then be filed as a hub-wide, permanent
+    model name -- the leak the allowlist above exists to prevent, arriving by
+    another door.
+    """
+    fields = (
+        A1111_FIELDS + ', ControlNet 0: "Module: canny, '
+        'Model: a line\\nand another, Weight: 1"'
+    )
+    nodes = reduce_a1111({"png": {"parameters": infotext(fields=fields)}}).nodes
+    assert "\n" in dict(nodes["sampler"].instance_widgets)["controlnet_0"], (
+        "the fixture must deliver a real newline, or this asserts nothing"
+    )
+    assert not [name for _, name in assets_from_reduction(nodes) if "line" in name]
+    # Left where it was, rather than cut out of the value.
+    assert "and another" in json.dumps(instance_document_from_reduction(nodes))
+
+
+def test_a_hash_with_no_name_inside_a_compound_files_nothing():
+    """`Model: [d14c016b]` names no file, and inventing `.safetensors` would."""
+    fields = A1111_FIELDS + ', ControlNet 0: "Module: canny, Model: [d14c016b]"'
+    nodes = reduce_a1111({"png": {"parameters": infotext(fields=fields)}}).nodes
+    widgets = dict(nodes["sampler"].instance_widgets)
+    assert "controlnet_0_model" not in widgets
+    assert ".safetensors" not in widgets["controlnet_0"]
+    assert widgets["controlnet_0"] == "Module: canny, Model: [d14c016b]"
+
+
+def test_one_model_is_one_asset_however_the_field_spelled_it():
+    """The flat spelling and the compound one must file the same row.
+
+    `ControlNet Model: x` and `ControlNet 0: "... Model: x ..."` name one file
+    on disk. Filing `x` for one and `x.safetensors` for the other is two rows
+    for one model, so forgetting either leaves the other, and only one matches
+    a shelf filename. `Module` and `upscaler` keep what A1111 wrote: those name
+    a method as often as a file.
+    """
+    flat = A1111_FIELDS + ", ControlNet Model: control_x [d14c016b]"
+    compound = A1111_FIELDS + ', ControlNet 0: "Model: control_x [d14c016b]"'
+
+    def model_names(fields):
+        nodes = reduce_a1111({"png": {"parameters": infotext(fields=fields)}}).nodes
+        return {name for _, name in assets_from_reduction(nodes)}
+
+    assert "control_x.safetensors" in model_names(flat)
+    assert "control_x.safetensors" in model_names(compound)
+    # A method is not a file, and `none` is not a model anybody can forget.
+    kept = A1111_FIELDS + ", ControlNet Module: canny, Hires upscaler: Latent"
+    assert {"canny", "latent"} <= model_names(kept)
+    assert not {
+        n for n in model_names(kept) if n in ("canny.safetensors", "latent.safetensors")
+    }
+    # Not under any spelling: without the guard `_asset_name` makes it
+    # `none.safetensors`, which is a ghost row offering to forget nothing.
+    assert not {
+        n
+        for n in model_names(A1111_FIELDS + ", ControlNet Model: None")
+        if n.startswith("none")
+    }
 
 
 def test_a_line_after_the_fields_line_does_not_lose_the_picture():

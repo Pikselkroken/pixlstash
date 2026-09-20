@@ -3215,17 +3215,32 @@ prompt fragments into `X Values`, sd-dynamic-prompts the raw template into
 `Template` — and reading `model: …` in one of those as a filename would file
 what a person wrote as a hub-wide `workflow_recipe_asset` row that outlives the
 pictures, which is a worse leak than the one being closed. `Model: None`, a
-bare hash and a name past `MAX_FILENAME_LENGTH` are left where they are for the
-same reason. `HASH_VERSION` moves to **v3**, because such a picture now keys
-differently and nothing re-keys a filed row in place: `WHERE hash_version =
-'v2'` names the rows the old rule produced. **No migration re-scans**, unlike
-`0118` and `0119`: re-reading would re-key the picture but leave its old
-instance row behind uncollected — only a picture delete queues the ghost
-cascade — and a stored document is never rewritten by design, so the old name
-goes when the instance row does, with the library's last picture and ghost for
-it. One known limit is left: an embedding is a node only when `TI hashes` was
-written, so the same generation keys as two topologies depending on whether the
-owner had hash summaries switched on. The fields line is the last
+bare hash, a name carrying a newline (A1111 escapes one into its single line and
+`_parse_fields` unescapes it, so a compound can hold one) and a name past
+`MAX_FILENAME_LENGTH` all stay where they are for the same reason: one refusal,
+which leaves the sub-field exactly as it was. **One model is one asset however
+the field spelled it**: the flat `ControlNet Model: x` goes through
+`_asset_name` like the compound, the checkpoint, the LoRAs, the refiner and the
+embeddings, since `x` beside `x.safetensors` is two rows for one file and
+forgetting either leaves the other. Only the keywords naming a *file*
+(`_MODEL_FILE_KEYWORDS`) are normalized — `Hires upscaler: Latent` and
+ControlNet's `Module: canny` name a method, and `latent.safetensors` would be a
+ghost for a model that never existed — and a `None` value files nothing at all.
+Migration `0122` clears the scanned marker on every picture carrying a workflow,
+as `0118` did: nothing re-keys a filed row in place (the finder selects on
+`workflow_hash_version IS NULL`), so without it the fix would reach future
+imports only and every A1111 ControlNet picture already in a library would keep
+the name in its instance document. It is deliberately broad, because no column
+says which recipe came from A1111. `HASH_VERSION` stays **v2**: after the rescan
+nothing is keyed by the old rule for a new stamp to name. Three known limits: a
+model name containing a comma is truncated at it (A1111's grammar is
+comma-separated, so the extension has written a value its own re-import
+misparses too), and the tail stays in the compound; other compounds keep their
+names — `X Values` on a checkpoint-name sweep, and Tiled Diffusion's `Upscaler`
+key, which has ControlNet's shape but values (`Latent`, `None`) that are as
+often not files; and an embedding is a node only when `TI hashes` was written,
+so the same generation keys as two topologies depending on whether the owner had
+hash summaries switched on. The fields line is the last
 line that *parses*, not simply the last, and the **first** occurrence of a
 repeated key wins — A1111 quotes any value holding a comma, so a repeat means
 another tool shredded a compound value into pairs, and taking the last would let

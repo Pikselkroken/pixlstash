@@ -1078,7 +1078,13 @@ def test_0119_hands_back_only_pictures_that_carry_no_workflow():
             )
             conn.commit()
 
-        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        # To 0119 alone: 0122 hands the keyed pictures back for another reason,
+        # and would clear the very stamp this test is about.
+        up = _run_alembic(
+            ["upgrade", "0119_rescan_pictures_for_a1111_recipes"],
+            db_url,
+            _MIGRATIONS_DIR,
+        )
         assert up.returncode == 0, up.stderr
 
         with contextlib.closing(sqlite3.connect(db_path)) as conn:
@@ -1092,6 +1098,62 @@ def test_0119_hands_back_only_pictures_that_carry_no_workflow():
             "shot.webp": None,
             "clip.mp4": "v1",
         }
+
+
+def test_0122_hands_back_every_picture_that_carries_a_workflow():
+    """The ControlNet fix changes what a reduction produces, so it is re-read.
+
+    Nothing re-keys a filed picture in place -- the extraction finder selects on
+    ``workflow_hash_version IS NULL`` -- so without this every A1111 picture
+    already in a library would keep a ControlNet model's name in its instance
+    document, which is #1375 itself. Broad on purpose: no column says which
+    recipe came from A1111, and a picture with no workflow is left alone.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            _insert_minimal_row(
+                conn,
+                "picture",
+                file_path="keyed.png",
+                workflow_instance_hash="an-instance",
+                workflow_hash_version="v2",
+            )
+            _insert_minimal_row(
+                conn, "picture", file_path="plain.png", workflow_hash_version="v2"
+            )
+            conn.execute(
+                "UPDATE alembic_version SET version_num = '0121_add_saved_recipe'"
+            )
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            stamps = dict(
+                conn.execute("SELECT file_path, workflow_hash_version FROM picture")
+            )
+        assert stamps == {"keyed.png": None, "plain.png": "v2"}
+
+        down = _run_alembic(
+            ["downgrade", "0121_add_saved_recipe"], db_url, _MIGRATIONS_DIR
+        )
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            # Re-stamped rather than left unstamped, or an older build would
+            # re-read it on every run forever.
+            assert (
+                conn.execute(
+                    "SELECT workflow_hash_version FROM picture WHERE file_path = ?",
+                    ("keyed.png",),
+                ).fetchone()[0]
+                is not None
+            )
 
 
 def _has_table(conn, name: str) -> bool:

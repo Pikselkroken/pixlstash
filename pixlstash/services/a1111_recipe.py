@@ -36,7 +36,12 @@ sub-fields are taken out of the value into asset widgets of their own, which is
 what keeps the name out of the instance document -- forgetting a model is a row
 delete and never rewrites a stored document. Only the fields
 :data:`_COMPOUND_MODEL_FIELD_RE` names are read this way; any other compound
-keeps its name, which is the old behaviour and the safe direction.
+keeps its name, which is the old behaviour and the safe direction --
+``X Values`` on a checkpoint-name sweep and Tiled Diffusion's ``Upscaler`` key
+are the two that matter, the second having ControlNet's shape but values
+(``Latent``, ``None``) that are as often not files. A name holding a comma is
+truncated at it, because A1111's grammar is comma-separated and the extension
+has written a value its own re-import misparses too.
 
 **A short hash is stored as it is and resolved when read**
 (:func:`pixlstash.services.workflow_hash.digests_with_prefix`). A1111's
@@ -112,6 +117,12 @@ _MODEL_FIELD_RE = re.compile(
 # the spec calls unrecoverable, so a field earns its place here by being known
 # to write a model into a compound.
 _COMPOUND_MODEL_FIELD_RE = re.compile(r"^controlnet\b", re.IGNORECASE)
+
+# Which of `_MODEL_FIELD_RE`'s keywords name a FILE, and so take the filename
+# spelling every other asset here gets. `upscaler` and `module` are left out:
+# `Hires upscaler: Latent` and ControlNet's `Module: canny` name a method, and
+# `latent.safetensors` would be a model ghost for a model that never existed.
+_MODEL_FILE_KEYWORDS = frozenset({"model", "checkpoint", "vae", "lora"})
 
 # A ``Model:`` sub-field inside such a value, at a comma boundary so a key of
 # another name (``Model hash:``, ``Base Model:``) is left where it is.
@@ -393,9 +404,25 @@ def _widgets(fields: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any]]:
             continue
         widget = _widget_name(field)
         widgets[widget] = value
-        if value and _MODEL_FIELD_RE.search(field):
-            match = _NAME_WITH_HASH_RE.match(value)
-            assets[widget] = widgets[widget] = match.group(1) if match else value
+        if value and (model_field := _MODEL_FIELD_RE.search(field)):
+            widgets[widget] = name = _named_model(value)
+            if name.lower() in _NO_MODEL:
+                # `ControlNet Model: None`. A model called `none` is a row on
+                # the ghost screen offering to forget a name of nothing.
+                continue
+            # **One model, one spelling.** `_asset_name` is how a checkpoint, a
+            # LoRA, a refiner, an embedding and a model lifted out of a
+            # compound are all written, and this branch was the only holdout:
+            # `ControlNet Model: x` filed `x` where `ControlNet 0: "... Model:
+            # x ..."` files `x.safetensors`, two rows for one file, so
+            # forgetting one missed the other. Only the keywords that name a
+            # FILE are normalized: `upscaler` and ControlNet's `module` name a
+            # method as often as a file (`Latent`, `canny`), and giving those
+            # an extension would invent a model ghost for something that was
+            # never a model.
+            if model_field.group(2).lower() in _MODEL_FILE_KEYWORDS:
+                name = _asset_name(name) or name
+            assets[widget] = widgets[widget] = name
         # And by the rule a ComfyUI widget of unknown meaning gets: a value
         # with a model extension (ADetailer's `face_yolov8n.pt`).
         elif structural_widget_value(widget, value) is not None:
@@ -409,6 +436,12 @@ def _widgets(fields: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any]]:
                 key = f"{widget}_model" + (f"_{index + 1}" if index else "")
                 assets[key] = widgets[key] = name
     return widgets, assets
+
+
+def _named_model(value: str) -> str:
+    """``name [hash]`` as the name; anything else unchanged."""
+    match = _NAME_WITH_HASH_RE.match(value)
+    return (match.group(1) if match else value).strip()
 
 
 def _nested_model_names(value: str) -> tuple[str, list[str]]:
@@ -425,17 +458,28 @@ def _nested_model_names(value: str) -> tuple[str, list[str]]:
     names: list[str] = []
 
     def take(match: re.Match) -> str:
-        raw = match.group(1).strip()
-        # The same backstop `structural_widget_value` puts under a widget of
-        # unknown meaning: a filename is one path component, and 255 bytes is
-        # the component limit everywhere PixlStash runs. Nothing real trips it,
-        # and it is what stops a crafted value filing a kilobyte as a model.
-        if raw.lower() in _NO_MODEL or len(raw) > MAX_FILENAME_LENGTH:
-            return match.group(0)
-        named = _NAME_WITH_HASH_RE.match(raw)
-        asset = _asset_name(named.group(1) if named else raw)
+        name = _named_model(match.group(1).strip())
+        # BOTH halves of the backstop `structural_widget_value` puts under a
+        # widget of unknown meaning: a filename is one path component, so it
+        # holds no newline and no more than 255 bytes. The newline half is not
+        # theoretical here -- A1111 escapes a real newline into its one-line
+        # infotext and `_parse_fields` unescapes it through `json.loads`, so a
+        # compound can carry one, and prose is exactly what it would file as a
+        # model name. Measured on the name, not on the whole sub-field: the
+        # `[hash]` suffix is not part of it.
+        refused = (
+            name.lower() in _NO_MODEL or "\n" in name or len(name) > MAX_FILENAME_LENGTH
+        )
+        asset = None if refused else _asset_name(name)
         if asset is None:
-            # `Model: [d14c016b]`, a hash with no name, as for `Refiner`.
+            # One refusal, not two: `Model: None`, `Model: [d14c016b]` (a hash
+            # with no name, as for `Refiner`) and a name no filename could be
+            # all leave the sub-field exactly where it was, which is the old
+            # behaviour rather than an invented asset.
+            logger.debug(
+                "Left a `Model:` sub-field where it was: %r names no model file.",
+                name[:64],
+            )
             return match.group(0)
         names.append(asset)
         return ""
