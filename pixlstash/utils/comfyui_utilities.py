@@ -78,8 +78,11 @@ _SETTING_FIELDS = {
     "width": int,
     "height": int,
 }
-# Nodes that carry a raw STRING value (positive-prompt primitive wired into subgraphs)
-_PRIMITIVE_STRING_CLASSES = {
+# Nodes that carry a raw STRING value (positive-prompt primitive wired into
+# subgraphs). Public because `services/workflow_export.py` needs the same list:
+# a prompt sitting in one of these is a prompt, and it is the population that
+# name-based prose detection cannot see.
+PRIMITIVE_STRING_CLASSES = {
     "PrimitiveStringMultiline",
     "TextBox",
     "Textbox",
@@ -320,7 +323,7 @@ def _extract_generation_info_ui(workflow: dict) -> dict:
     if positive_prompt is None:
         for graph in _iter_ui_graphs(workflow):
             for node in graph.get("nodes") or []:
-                if node.get("type") not in _PRIMITIVE_STRING_CLASSES:
+                if node.get("type") not in PRIMITIVE_STRING_CLASSES:
                     continue
                 # Only consider nodes that have at least one outgoing link (are wired up)
                 has_link = any(out.get("links") for out in (node.get("outputs") or []))

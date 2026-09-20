@@ -1,14 +1,22 @@
 <template>
   <article
     class="wf-card"
-    :class="{ 'wf-card--stack': stackMark }"
+    :class="{ 'wf-card--stack': stackMark, 'wf-card--selected': selected }"
     role="group"
     :aria-label="accessibleName"
     data-testid="workflow-card"
   >
-    <div v-if="hasPictures" class="wf-card__cover">
-      <span v-for="i in 3" :key="i" class="wf-card__pic">
-        <img v-if="covers[i - 1]" :src="covers[i - 1]" alt="" loading="lazy" />
+    <!-- One cell per picture, never a fixed three: the cell used to be drawn
+         whether or not there was an image for it, so a workflow with one or two
+         pictures showed its picture beside painted `input-background`
+         rectangles and read as a card that had failed to load (#1456). -->
+    <div
+      v-if="hasPictures"
+      class="wf-card__cover"
+      :class="`wf-card__cover--${coverCells.length}`"
+    >
+      <span v-for="(src, i) in coverCells" :key="i" class="wf-card__pic">
+        <img v-if="src" :src="src" alt="" loading="lazy" />
       </span>
       <span class="wf-card__badge wf-card__badge--end" aria-hidden="true">
         <v-icon size="12">mdi-image-multiple</v-icon>{{ card.picture_count }}
@@ -57,6 +65,7 @@
       aria-hidden="true"
       @click="emit('toggle')"
     >
+      <Tooltip :text="stackLabel" activator="parent" />
       <v-icon size="12">mdi-layers</v-icon>{{ card.stack_size }}
     </button>
 
@@ -128,15 +137,18 @@
 
 <script setup>
 // The uniform workflow card (v1.12 Workflows & Recipes, "The same in all three
-// alternatives"). Every card is exactly --wf-card-h tall whatever it holds: a
-// 2fr/1fr cover, then four single-line rows (name, checkpoint, LoRAs, special
-// facts) that clip to "+N" instead of wrapping. ⓘ is pinned bottom-right.
+// alternatives"). A cover at a fixed 6:5 whose tracks come from the strip it
+// was handed - one picture across the whole box, two as a pair of columns,
+// three as the 2fr/1fr mosaic - then four single-line rows (name, checkpoint,
+// LoRAs, special facts) that clip to "+N" instead of wrapping, exactly
+// --wf-meta-h tall whatever the card holds. ⓘ is pinned bottom-right.
 //
 // ▸ and ⓘ are real buttons at tabindex -1: the grid's roving cursor owns Tab.
 
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
+import { workflowCoverUrl } from "../../api/workflows";
 import {
   cardAccessibleName,
   checkpointModel,
@@ -147,6 +159,7 @@ import {
 import AppButton from "./AppButton.vue";
 import ChipRow from "./ChipRow.vue";
 import InfoPopover from "./InfoPopover.vue";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   /** One workflow card (see utils/workflowCard.js for the shape). */
@@ -157,6 +170,18 @@ const props = defineProps({
   panelId: { type: String, default: "" },
   /** This card is a row inside its own stack's open panel. */
   member: { type: Boolean, default: false },
+  /**
+   * The card is selected.
+   *
+   * **The mark is the CARD's, not its cell's.** Both hosts wrapped a cell
+   * around this component and put the shell's wash and `--selection-ring` on
+   * that - and `.wf-card` paints an opaque `surface` across the whole of it,
+   * so the mark was painted underneath the card and nothing showed. An
+   * `outline` on the cell would not have helped either: children paint above
+   * their parent's border box. It has to be drawn by whatever is on top, and
+   * that is this.
+   */
+  selected: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["toggle", "run"]);
@@ -175,7 +200,48 @@ const stack = computed(() => isStack(props.card));
  * "differs by" chips are exactly what a member row exists to show.
  */
 const stackMark = computed(() => stack.value && !props.member);
-const covers = computed(() => (props.card.covers ?? []).slice(0, 3));
+/**
+ * What the layered badge means, in words.
+ *
+ * The badge is a glyph and a bare number sitting opposite another glyph and
+ * another bare number (the picture count), so which of the two is "how many
+ * workflows" is a guess. The accessible name has said "stack of N workflows"
+ * all along; this is the same sentence for the reader who can see it, and it
+ * costs the card no layout.
+ */
+const stackLabel = computed(
+  () => `${props.card.stack_size} workflows in this stack`,
+);
+/**
+ * The cover thumbnails, made absolute.
+ *
+ * The join is `api/workflows.js`'s, not this component's: `covers` arrives
+ * API-relative and an `<img src>` never reaches the Axios interceptor that
+ * would prefix it. See `workflowCoverUrl` for why that lives on the api layer.
+ *
+ * Empty entries are dropped BEFORE the join, because the join does not guard
+ * them: `workflowCoverUrl(null)` is the truthy string `/api/v1null`, which is
+ * a broken-image glyph rather than a missing picture. Since #1456 the cover's
+ * arrangement is counted from this list, so an entry that cannot be shown must
+ * not be counted either.
+ */
+const covers = computed(() =>
+  (props.card.covers ?? []).filter(Boolean).slice(0, 3).map(workflowCoverUrl),
+);
+/**
+ * The cells the cover draws, which is one per picture it was handed.
+ *
+ * A card can know it has pictures without having their covers yet
+ * (`picture_count` arrives with the card, the strip can be empty). That card
+ * still needs a cover, and the honest placeholder is the arrangement its
+ * pictures are about to land in - not one box the size of the whole cover,
+ * which is the `--empty` cover's own look and says "there is nothing here".
+ */
+const coverCells = computed(() =>
+  covers.value.length
+    ? covers.value
+    : Array(Math.min(props.card.picture_count ?? 1, 3)).fill(""),
+);
 // Ratings run 1-5; 0 or null is "not rated".
 const rating = computed(() => props.card.rating > 0);
 // Pictures, not loaded covers, decide "No pictures yet".
@@ -196,19 +262,24 @@ const accessibleName = computed(() =>
 </script>
 
 <style scoped>
-/* 252 = 1 border + 132 cover + (8 + 4 × 24 + 3 × 2 + 8) meta + 1 border.
-   Both sizes are local on purpose (approved as component-local, not global).
-   The meta block is `flex: none` so a change to that sum shows as a wrong
-   height rather than being absorbed. */
+/* 118 = 8 + 4 × 24 + 3 × 2 + 8: the meta block, which is fixed whatever the
+   card holds and is `flex: none` so a change to that sum shows as a wrong
+   height rather than being absorbed. Local on purpose (approved as
+   component-local, not global).
+
+   The COVER is not fixed. It used to be a flat 132px against a fluid card
+   width, so the cells grew steadily more landscape as the window widened -
+   1.2:1 at the 240px column floor and 1.8:1 by 360px - and nobody had chosen
+   landscape at all; it fell out of mixing a pixel height with an `1fr` width.
+   Pictures here are mostly portrait or square (832×1216, 1024×1024), so that
+   shape threw away most of every cover. */
 .wf-card {
-  --wf-card-h: 252px;
-  --wf-cover-h: 132px;
+  --wf-meta-h: 118px;
 
   position: relative;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  height: var(--wf-card-h);
   overflow: hidden;
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
@@ -216,32 +287,106 @@ const accessibleName = computed(() =>
   color: rgb(var(--v-theme-on-surface));
 }
 
+/* The shell's selection mark (`style.css` rule 3): the wash, plus
+   `--selection-ring` because a card has no left edge to rail.
+
+   **An OVERLAY, not the card's own background and shadow.** An inset
+   box-shadow paints over the element's background but under its children, and
+   most of this card is children - the cover's opaque `<img>`s. Put on
+   the card itself the ring appeared along the text rows and stopped dead at
+   the thumbnails, which is the same mistake as putting it on the cell one
+   level up, made one level down. `.selection-overlay` in `ImageGrid.css` is
+   the shipped answer for marking something with pictures in it: an absolutely
+   positioned layer carrying both halves of the mark, above the content.
+
+   `pointer-events: none` so ▸ and ⓘ underneath still take their clicks, and
+   the radius is inherited so the ring follows the card's own corners. */
+.wf-card--selected::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-raised);
+  border-radius: inherit;
+  background: var(--active-wash);
+  box-shadow: var(--selection-ring);
+  pointer-events: none;
+}
+
+/* 6:5 is the cover at EVERY count; only the tracks inside it change, so cards
+   in a row are still exactly as tall as each other - that is what the old fixed
+   height was protecting, and it survives.
+
+   What the tracks come to, against a cover W wide and (5/6)W tall:
+     one    W × (5/6)W                         = 6/5
+     two    (1/2)W × (5/6)W                    = 3/5, twice
+     three  big (2/3)W × (5/6)W                = 4/5
+            small (1/3)W × (5/12)W             = 4/5
+   The 2px gap puts each a fraction of a pixel off that, which is not worth
+   carrying a `calc` for.
+
+   The crop follows from the shape, since the picture is `cover`-fitted and
+   top-anchored below: an 832×1216 generation keeps its top 57% at 6:5, its top
+   86% at 4:5, and ALL of its height at 3:5 (a cell narrower than the picture
+   trims the sides instead). So the widest cut on this card lands on the card
+   with one picture to show, which is the price of giving it the whole box. */
 .wf-card__cover {
   position: relative;
   flex: none;
   box-sizing: border-box;
   overflow: hidden;
   display: grid;
-  grid-template-columns: 2fr 1fr;
-  grid-template-rows: 1fr 1fr;
   gap: var(--space-1);
-  height: var(--wf-cover-h);
+  aspect-ratio: 6 / 5;
 }
 
+.wf-card__cover--1 {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+}
+
+.wf-card__cover--2 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+}
+
+.wf-card__cover--3 {
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.wf-card__cover--3 .wf-card__pic:first-child {
+  grid-row: 1 / 3;
+}
+
+/* Still painted, because a cell exists before its <img> has loaded. It is no
+   longer a cell that will never hold a picture. */
 .wf-card__pic {
   overflow: hidden;
   background: rgb(var(--v-theme-input-background));
 }
 
-.wf-card__pic:first-child {
-  grid-row: 1 / 3;
-}
+/* TOP-anchored, not centred, and that is the shipped convention rather than a
+   choice made here: the picture grid's own cropped tiles carry
+   `object-position: top center` (`ImageGrid.css`), and `utils/squareCrop.js`
+   documents it as what the app's cover crop means. A centre crop takes the
+   same slice off the top and the bottom of a portrait, and on a picture of a
+   person the top is the face — so every head came off in the two short cells,
+   which are much wider than they are tall.
 
+   It does not make the crop face-AWARE: nothing here knows where the face is.
+   The library DOES know - `render_thumbnail` stores a face-weighted rectangle
+   per picture (`square_crop_x/y/side`, used by `utils/squareCrop.js`) - but the
+   card's `covers` are bare URLs and that rectangle is SQUARE, while these cells
+   are 6:5, 4:5 and 3:5. Making this crop face-aware is a payload change plus a
+   non-square version of that geometry, not a rule in this file (see
+   docs/frontend_architecture.md §5). Top-anchoring is the cheap half that is
+   right most of the time. */
 .wf-card__pic img {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: top center;
 }
 
 /* The shipped scrim badge: a dark chip over an arbitrary photo. */

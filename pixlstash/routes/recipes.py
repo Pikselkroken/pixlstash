@@ -25,7 +25,10 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 
 from pixlstash.hub.workflow_cards import effective_stack_keys, variant_hashes_for_keys
+from pixlstash.hub.workflows import shelf_model_names
+from pixlstash.services.workflow_export import download_name
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.workflow_hash import normalized_filename
 from pixlstash.services import saved_recipe_service
 from pixlstash.services.workflow_events import announce_changed_workflows
 
@@ -148,6 +151,66 @@ class RecipeDeleted(BaseModel):
     """Which recipe went."""
 
     deleted: int
+
+
+class RecipeExport(BaseModel):
+    """``GET /recipes/{id}/export``: the recipe whole, and what it gives away.
+
+    Nothing is withheld, which is the difference from
+    ``GET /workflows/{key}/export``: a recipe IS the prompt and the LoRA names,
+    and one with those taken out would make nothing. ``shares`` is what the
+    dialog lists so the owner agrees to it knowing what it says.
+    """
+
+    filename: str
+    recipe: dict
+    shares: list[str] = Field(default_factory=list)
+
+
+def _shares(recipe: dict, on_the_shelf: set[str]) -> list[str]:
+    """Plainly what the exported file tells whoever opens it.
+
+    The LoRA line names the files, because the file itself names them and an
+    owner deciding whether to send it is owed the same list it is agreeing to.
+    The last line is the guard implementation plan §5.7 asks for on **both**
+    exports: a model this machine no longer holds is one whose name may have
+    been forgotten on purpose, and a recipe carries it in plain text.
+    """
+    shares: list[str] = []
+    if recipe.get("name"):
+        shares.append(f"the name you gave it, {recipe['name']!r}")
+    if recipe.get("prompt"):
+        shares.append("the prompt you wrote")
+    if recipe.get("negative"):
+        shares.append("the negative prompt")
+    names = [
+        str(lora.get("filename"))
+        for lora in recipe.get("loras") or []
+        if isinstance(lora, dict) and lora.get("filename")
+    ]
+    if names:
+        shares.append(f"{len(names)} LoRA file name(s): {', '.join(sorted(names))}")
+    if recipe.get("overrides"):
+        shares.append(f"{len(recipe['overrides'])} parameter setting(s)")
+    if recipe.get("seed") is not None:
+        shares.append("the seed it keeps")
+    if recipe.get("created_at"):
+        shares.append("when you saved it")
+    # Judged against the shelf directly rather than through
+    # `unvouched_model_values`: that one ends in an extension test, which is
+    # right for a graph widget (where a value may be an enum token rather than
+    # a filename) and wrong here, where the field IS a model name — a recipe
+    # saved with "ada" rather than "ada.safetensors" would otherwise be
+    # exported in plain text with nothing said about it.
+    forgotten = sorted(
+        {name for name in names if normalized_filename(name) not in on_the_shelf}
+    )
+    if forgotten:
+        shares.append(
+            "a model name this machine no longer holds, which you may have "
+            f"asked PixlStash to forget: {', '.join(forgotten)}"
+        )
+    return shares
 
 
 def create_router(server) -> APIRouter:
@@ -300,6 +363,40 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="No such recipe.")
         _announce(request, recipe.get("workflow_key"))
         return recipe
+
+    @router.get(
+        "/recipes/{recipe_id}/export",
+        summary="Export a saved recipe",
+        description=(
+            "This recipe as a file: the prompt, the LoRAs with their "
+            "strengths, the settings and the seed, exactly as it was saved. "
+            "It shares everything, and `shares` says so line by line — export "
+            "the workflow instead to give away the graph and nothing else."
+        ),
+        response_model=RecipeExport,
+        responses={404: {"description": "No such recipe."}},
+    )
+    def export_recipe(request: Request, recipe_id: int):
+        server.auth.ensure_secure_when_required(request)
+        row = saved_recipe_service.read_recipe(server.vault, recipe_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such recipe.")
+        recipe = saved_recipe_service.serialize(row)
+        # The row's own id, its place in the tab and the picture it was saved
+        # from are this library's bookkeeping and mean nothing anywhere else.
+        for local in ("id", "position", "source_picture_id", "pictures"):
+            recipe.pop(local, None)
+        shares = _shares(recipe, shelf_model_names(_hub()))
+        logger.info(
+            "Saved recipe %s was exported; it shares %d thing(s).",
+            recipe_id,
+            len(shares),
+        )
+        return RecipeExport(
+            filename=download_name(recipe.get("name")),
+            recipe=recipe,
+            shares=shares,
+        )
 
     @router.delete(
         "/recipes/{recipe_id}",

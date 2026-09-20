@@ -279,6 +279,11 @@ READ_BLOCKED_GET_PREFIXES: tuple[str, ...] = (
     "/api/v1/models/",
     "/api/v1/operations/",
     "/api/v1/pictures/import/",
+    # A saved recipe is the owner's own prompt, and the only GET under this
+    # prefix is `/recipes/{id}/export`, which returns it verbatim (v1.12 B8).
+    # `GET /api/v1/recipes` itself has no trailing slash, so it is held by the
+    # untemplated set above rather than swallowed here.
+    "/api/v1/recipes/",
     "/api/v1/reviews/",
     "/api/v1/snapshots/",
     "/api/v1/workflows/",

@@ -7,6 +7,7 @@ import { useSelectionStore } from "../stores/useSelectionStore.js";
 import { useDedupStore } from "../stores/useDedupStore.js";
 import { useGridFetch } from "./useGridFetch.js";
 import { useSearchStore } from "../stores/useSearchStore.js";
+import { filterChips } from "../utils/filterChips.js";
 import {
   getPictureCount,
   searchPictures,
@@ -229,6 +230,41 @@ describe("useGridFetch streaming path", () => {
     expect(getPictureCount.mock.calls[0][0]).toContain(
       "stack_state=unresolved",
     );
+  });
+
+  // *Show all N pictures* on a workflow card (F7). The chip is set on one
+  // screen and read on another, so the half that could rot in silence is this
+  // one: the strip would go on showing "Workflow: X" over the whole library.
+  it("sends workflow_key on the stream and count requests when a workflow chip is on", async () => {
+    getPictureCount.mockResolvedValue({ count: 2 });
+    streamPictures.mockResolvedValue({ pictures: [{ id: 51 }, { id: 52 }] });
+
+    const { grid } = makeHarness();
+    useFilterStore().workflowFilter = { key: "abc123", name: "Cinematic" };
+
+    await grid.fetchAllGridImages({ force: true });
+
+    expect(streamPictures.mock.calls[0][0]).toContain("workflow_key=abc123");
+    expect(getPictureCount.mock.calls[0][0]).toContain("workflow_key=abc123");
+  });
+
+  it("omits workflow_key once the chip is removed", async () => {
+    getPictureCount.mockResolvedValue({ count: 1 });
+    streamPictures.mockResolvedValue({ pictures: [{ id: 61 }] });
+
+    const { grid } = makeHarness();
+    const filterStore = useFilterStore();
+    filterStore.workflowFilter = { key: "abc123", name: "Cinematic" };
+    // What the chip's × does, through the same list the strip draws from.
+    filterChips(filterStore)
+      .find((chip) => chip.key === "workflow")
+      .remove();
+
+    await grid.fetchAllGridImages({ force: true });
+
+    expect(filterStore.workflowFilter).toBeNull();
+    expect(streamPictures.mock.calls[0][0]).not.toContain("workflow_key");
+    expect(getPictureCount.mock.calls[0][0]).not.toContain("workflow_key");
   });
 
   // "all" is the absence of the filter, not a value the backend knows.

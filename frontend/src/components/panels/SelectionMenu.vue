@@ -227,17 +227,32 @@
         <v-icon class="ctx-icon">mdi-tune-variant</v-icon>
         Filters
       </button>
+      <!-- The two run entries, mirrored word for word in
+           ImageGridContextMenu.vue and asserted by
+           frontend/e2e/specs/menu-parity.spec.js. -->
       <button
         v-if="comfyuiConfigured"
         class="ctx-item"
         :disabled="selectedCount === 0 || isReadOnly"
         @click="
-          $emit('open-comfyui-panel');
+          $emit('make-more');
           $emit('close');
         "
       >
-        <v-icon class="ctx-icon">mdi-image-plus</v-icon>
-        Use as input for…
+        <v-icon class="ctx-icon">mdi-content-copy</v-icon>
+        Make more like these…
+      </button>
+      <button
+        v-if="comfyuiConfigured"
+        class="ctx-item"
+        :disabled="selectedCount === 0 || isReadOnly"
+        @click="
+          $emit('run-workflow');
+          $emit('close');
+        "
+      >
+        <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
+        Run a workflow on these…
       </button>
       <div class="ctx-sep" />
     </template>
@@ -490,7 +505,8 @@ const emit = defineEmits([
   "auto-tag",
   "generate-description",
   "open-plugin-panel",
-  "open-comfyui-panel",
+  "make-more",
+  "run-workflow",
   "reverse-image-search",
   "segment",
   "rotate-left",

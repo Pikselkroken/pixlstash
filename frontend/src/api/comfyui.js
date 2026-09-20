@@ -26,17 +26,6 @@ export async function listWorkflows() {
 }
 
 /**
- * Delete one saved workflow by its file name.
- * @param {string} name - the workflow's `name` as listed (URL-encoded here).
- * @returns {Promise<Object>} the response body.
- */
-export async function deleteWorkflow(name) {
-  return unwrap(
-    apiClient.delete(comfyUrl(`/workflows/${encodeURIComponent(name)}`)),
-  );
-}
-
-/**
  * Each picture input of a saved workflow and how it is filled.
  *
  * `mode` is `selection` (the grid's selection fills it; at most one), `picker`
@@ -75,22 +64,6 @@ export async function getLoraInsertion(name) {
     apiClient.get(
       comfyUrl(`/workflows/${encodeURIComponent(name)}/lora-insertion`),
     ),
-  );
-}
-
-/**
- * Replace how every picture input of a saved workflow is filled.
- *
- * @param {string} name - the workflow's `name` as listed.
- * @param {Array<{node_id: string, mode: string, picture_id?: number}>} inputs -
- *   one entry per picture input.
- * @returns {Promise<{workflow: string, inputs: Array<Object>}>} the stored setup.
- */
-export async function setWorkflowInputs(name, inputs) {
-  return unwrap(
-    apiClient.put(comfyUrl(`/workflows/${encodeURIComponent(name)}/inputs`), {
-      inputs,
-    }),
   );
 }
 

@@ -148,7 +148,8 @@
             @auto-tag="$emit('auto-tag', $event)"
             @generate-description="$emit('generate-description', $event)"
             @open-plugin-panel="openPluginPanel()"
-            @open-comfyui-panel="openComfyuiPanel()"
+            @make-more="$emit('make-more')"
+            @run-workflow="$emit('run-workflow')"
             @reverse-image-search="$emit('reverse-image-search')"
             @segment="$emit('segment')"
             @rotate-left="$emit('rotate-left')"
@@ -235,17 +236,12 @@ import { withRef } from "../../utils/withRef.js";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
-import {
-  FROM_SELECTION,
-  useWorkflowRunStore,
-} from "../../stores/useWorkflowRunStore";
 import SelectionMenu from "./SelectionMenu.vue";
 import TbTagPanel from "./TbTagPanel.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import { isEditableElement } from "../../utils/dom.js";
-import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   selectedCount: Number,
@@ -309,6 +305,8 @@ const emit = defineEmits([
   "rotate-right",
   "selection-menu-open",
   "clear-impossible-tags",
+  "make-more",
+  "run-workflow",
 ]);
 
 const isScrapheapView = computed(() => {
@@ -403,7 +401,6 @@ const pluginParameters = ref({});
 
 // Remembered "stack outputs with originals" prefs (persisted in localStorage).
 const genStackPrefs = useGenStackPrefsStore();
-const workflowRunStore = useWorkflowRunStore();
 const stackFilterOutputs = computed({
   get: () => genStackPrefs.stackFilterOutputs,
   set: (val) => genStackPrefs.setStackFilterOutputs(val),
@@ -525,13 +522,7 @@ function openPluginPanel() {
   });
 }
 
-// Running a workflow opens the run panel in the inspector rail (#1307), which
-// leaves the grid browsable while it is set up.
-function openComfyuiPanel() {
-  workflowRunStore.openFor(FROM_SELECTION);
-}
-
-defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
+defineExpose({ openTagInput, openPluginPanel });
 </script>
 
 <style scoped>

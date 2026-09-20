@@ -1,3 +1,4 @@
+import logging
 import gc
 import uvicorn
 import os
@@ -8,6 +9,7 @@ import socket
 import asyncio
 import threading
 import time
+from functools import lru_cache
 from pathlib import Path
 from importlib.metadata import PackageNotFoundError, version as package_version
 from alembic.util.exc import CommandError as AlembicCommandError
@@ -163,6 +165,36 @@ from pixlstash.utils.request_origin import OriginClientMiddleware
 
 # Logging will be set up after config is loaded
 logger = get_logger(__name__)
+
+
+@lru_cache(maxsize=None)
+def _log_install_detection_once(level: int, message: str, *args: object) -> None:
+    """Log one install-type detection line the first time it is produced.
+
+    :meth:`Server.detect_install_type` explains itself every time it runs, and
+    it runs per request: ``GET /version`` plus every SPA document the frontend
+    fallback answers. Every one of those explanations repeated per request, and
+    every shipped channel hits one of them - the desktop shell exports
+    ``PIXLSTASH_INSTALL_TYPE=electron`` on every launch, so the override line
+    was the flood on ordinary installs long before a dev machine's
+    ``PIXLSTASH_TELEMETRY_DEV`` line was the flood here. A grid of thumbnails
+    buried the log either way.
+
+    The cache key is ``(level, template, *args)``, so this suppresses a repeat
+    of the *same* explanation and nothing else: if the situation genuinely
+    changes - a marker file created under a running server, a different
+    unreadable-path errno - that is a new key and it is still said out loud.
+    Unbounded on purpose: the set of templates is closed (seven today, every
+    one of them in this module) and their arguments come from the environment
+    and one fixed path, so there is nothing here to evict.
+
+    Two consequences worth knowing. Arguments must be hashable **by value**, so
+    callers pass ``str(exc)`` rather than the exception object, which would hash
+    by identity and defeat the whole thing. And "once" is once per *outcome*,
+    not a lock: two concurrent first requests can both miss and both log, which
+    is two lines rather than thousands and is not worth serialising for.
+    """
+    logger.log(level, message, *args, stacklevel=2)
 
 
 class VersionResponse(BaseModel):
@@ -330,7 +362,8 @@ class Server(
         # positive result means an unexpected-but-still-docker deployment.
         try:
             if os.path.exists("/.dockerenv"):
-                logger.info(
+                _log_install_detection_once(
+                    logging.INFO,
                     "Detected Docker via /.dockerenv marker file while "
                     "PIXLSTASH_IN_DOCKER was unset (value=%r); treating install "
                     "as docker.",
@@ -341,10 +374,11 @@ class Server(
             # A failed stat must not crash version reporting; fall through to
             # the non-docker default but record why the fallback signal was
             # inconclusive.
-            logger.warning(
+            _log_install_detection_once(
+                logging.WARNING,
                 "Could not stat /.dockerenv while detecting Docker "
                 "(error=%s); assuming not running in Docker.",
-                exc,
+                str(exc),
             )
         return False
 
@@ -410,7 +444,8 @@ class Server(
         """
         dev_marker = os.environ.get(Server.DEV_MACHINE_ENV_VAR, "").strip().lower()
         if dev_marker in {"1", "true", "yes", "on"}:
-            logger.info(
+            _log_install_detection_once(
+                logging.INFO,
                 "%s=%r declares a development machine; reporting install_type='dev'.",
                 Server.DEV_MACHINE_ENV_VAR,
                 dev_marker,
@@ -437,16 +472,18 @@ class Server(
             declared = False
         except OSError as exc:
             declared = False
-            logger.warning(
+            _log_install_detection_once(
+                logging.WARNING,
                 "Could not read the dev-machine marker at %s (%s). Falling back "
                 "to automatic detection: if this IS a maintainer machine, its "
                 "check-ins will be counted as a real install until the "
                 "directory is readable again.",
                 marker_file,
-                exc,
+                str(exc),
             )
         if declared:
-            logger.info(
+            _log_install_detection_once(
+                logging.INFO,
                 "Found dev machine marker file at %s; reporting install_type='dev'.",
                 marker_file,
             )
@@ -455,12 +492,14 @@ class Server(
         override = os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower()
         if override:
             if override in Server.INSTALL_TYPES:
-                logger.info(
+                _log_install_detection_once(
+                    logging.INFO,
                     "Using PIXLSTASH_INSTALL_TYPE override for install_type=%r.",
                     override,
                 )
                 return override
-            logger.warning(
+            _log_install_detection_once(
+                logging.WARNING,
                 "Ignoring invalid PIXLSTASH_INSTALL_TYPE=%r (allowed: %s); "
                 "falling back to automatic detection.",
                 override,

@@ -322,6 +322,90 @@ def forget_asset_names(hub: HubDatabase, normalized_filename: str) -> int:
     return removed
 
 
+def _shelf_model_names(fetchall: Callable[[str], list]) -> set[str]:
+    """Every model filename the shelf holds, normalized (rule 5).
+
+    Both the recorded filename and every copy's basename, because a copy
+    renamed on disk is the same model. A tombstoned row counts: the shelf still
+    lists it, and re-adding its folder re-links it.
+    """
+    names = {
+        normalized_filename(row[0])
+        for row in fetchall("SELECT filename FROM model WHERE filename IS NOT NULL")
+    }
+    names.update(
+        normalized_filename(row[0])
+        for row in fetchall("SELECT relpath FROM model_file")
+    )
+    return names
+
+
+def _shelf_model_digests(fetchall: Callable[[str], list]) -> list[str]:
+    """Every digest the shelf holds, lowercased and sorted for a prefix search."""
+    return sorted(
+        row[0].lower()
+        for row in fetchall("SELECT sha256 FROM model WHERE sha256 IS NOT NULL")
+    )
+
+
+def shelf_model_names(hub: HubDatabase) -> set[str]:
+    """Every model filename the shelf holds, normalized (rule 5).
+
+    Public for the recipe export, which asks a narrower question than
+    :func:`unvouched_model_values`: a saved recipe's ``filename`` is a model
+    name by construction, so it needs no extension test to be judged - and the
+    extension test is exactly what would let one saved without its suffix be
+    exported with no warning beside it.
+    """
+    return _shelf_model_names(hub.fetchall)
+
+
+def unvouched_model_values(hub: HubDatabase) -> Callable[[str, str], bool]:
+    """Ask, of one widget's value, whether this machine can vouch for the model.
+
+    The question an **export** has to ask before it writes a filename into a
+    file somebody else will read. It is deliberately stricter than
+    :func:`model_ghost_names`, and for the opposite reason: a ghost is judged
+    in order to destroy a name forever, so an unjudgeable one has to be kept,
+    while here a wrong "vouched for" publishes a name the owner asked PixlStash
+    to forget and a wrong "unvouched" only leaves a widget blank in a file they
+    are giving away.
+
+    So the rule is *not on the shelf, not published*:
+
+    * a value :func:`model_ghost_names` already calls a ghost;
+    * any filename with a model extension that no shelf model is called -
+      which is what catches a **forgotten** name. Forgetting deletes the
+      ``workflow_recipe_asset`` rows, so the ghost set cannot see it any more,
+      but a picture's embedded graph still says it in full;
+    * a ``*_sha256`` widget holding a digest no shelf model's digest starts
+      with. Unlike the ghost screen this does not wait for every shelf model to
+      be hashed: a digest names a model on a public registry as surely as a
+      filename does, and the cost of being early here is a blank widget.
+
+    Returns:
+        ``unvouched(widget_name, value) -> bool``, closed over three reads of
+        the hub so a whole graph costs those three and no more.
+    """
+    ghosts = model_ghost_names(hub)
+    shelf_names = _shelf_model_names(hub.fetchall)
+    shelf_digests = _shelf_model_digests(hub.fetchall)
+
+    def unvouched(widget_name: str, value: str) -> bool:
+        if not isinstance(value, str) or not value:
+            return False
+        normalized = normalized_filename(value)
+        if value in ghosts or normalized in ghosts:
+            return True
+        if SHA256_FIELD_RE.search(widget_name or ""):
+            return bool(DIGEST_PREFIX_RE.match(value)) and not digests_with_prefix(
+                value, shelf_digests
+            )
+        return normalized.endswith(MODEL_EXTENSIONS) and normalized not in shelf_names
+
+    return unvouched
+
+
 def _model_ghost_names(fetchall: Callable[[str], list]) -> set[str]:
     """See :func:`model_ghost_names`; ``fetchall`` runs one read and returns rows.
 
@@ -339,18 +423,8 @@ def _model_ghost_names(fetchall: Callable[[str], list]) -> set[str]:
     blank) names no model and is never a ghost; a short hash is a ghost when no
     shelf digest starts with it.
     """
-    shelf_names = {
-        normalized_filename(row[0])
-        for row in fetchall("SELECT filename FROM model WHERE filename IS NOT NULL")
-    }
-    shelf_names.update(
-        normalized_filename(row[0])
-        for row in fetchall("SELECT relpath FROM model_file")
-    )
-    shelf_digests = sorted(
-        row[0].lower()
-        for row in fetchall("SELECT sha256 FROM model WHERE sha256 IS NOT NULL")
-    )
+    shelf_names = _shelf_model_names(fetchall)
+    shelf_digests = _shelf_model_digests(fetchall)
     judge_digests = not fetchall(
         "SELECT 1 FROM model WHERE sha256 IS NULL AND file_kind <> 'engine' LIMIT 1"
     )
@@ -875,6 +949,39 @@ def picture_ghosts_by_topology(hub: HubDatabase, library_uuid: str) -> dict[str,
         (library_uuid,),
     )
     return {row["topology_hash"]: row["ghosts"] for row in rows}
+
+
+def picture_ghosts_by_variant(hub: HubDatabase, library_uuid: str) -> dict[str, int]:
+    """The same ghosts counted per VARIANT, for the Workflows grid's filter.
+
+    A card is a set of variants inside a topology, and a topology can carry
+    several cards - so counting per topology, as the retired shelf's row did,
+    would tell every card of that topology it keeps a ghost its neighbour
+    holds. The ghost row already names the structural hash, so summing a card's
+    own variants attributes each ghost to exactly one card, at the same one
+    query.
+
+    **It does not attribute every ghost.** ``structural_hash`` is nullable
+    here on purpose (see the table), and a ghost whose variant was never filed
+    as a card's belongs to no card either - both land under a key no card's
+    variants can match. So these counts can sum to less than
+    :func:`picture_ghost_count`, which is the number Settings › Privacy shows
+    and the number an erase destroys. That is the same hole
+    :func:`picture_ghosts_by_topology` above carries, for the same reason:
+    this answers "which cards keep something", never "how many ghosts exist".
+    """
+    rows = hub.fetchall(
+        # `structural_hash IS NOT NULL` because it is nullable here: without
+        # the clause the unattributable ghosts group under a `None` key that
+        # no card's variants can match, which is a row carried through the
+        # whole read to be silently dropped at the end.
+        "SELECT structural_hash, COUNT(*) AS ghosts "
+        "FROM workflow_picture_ghost "
+        "WHERE library_uuid = ? AND structural_hash IS NOT NULL "
+        "GROUP BY structural_hash",
+        (library_uuid,),
+    )
+    return {row["structural_hash"]: row["ghosts"] for row in rows}
 
 
 def erase_picture_ghosts(hub: HubDatabase, library_uuid: str) -> int:

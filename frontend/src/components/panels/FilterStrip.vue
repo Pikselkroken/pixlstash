@@ -2,6 +2,7 @@
   <div
     v-if="chips.length"
     class="filter-strip"
+    :class="{ 'filter-strip--inline': inline }"
     role="region"
     aria-label="Active filters"
   >
@@ -34,6 +35,14 @@
 /**
  * The row of active filters under the toolbar: one chip per filter, each with
  * its own ×, and Clear all at the end. It is only there while a filter is on.
+ *
+ * **Two screens, one strip.** Given no `chips` it draws the picture grid's, off
+ * the filter store, positioned under that grid's selection bar. The Workflows
+ * screen (F7) hands its own chips and `inline`, because its toolbar is in the
+ * normal flow and a strip absolutely positioned against a selection bar it
+ * does not have would sit on top of the first row of cards. Everything a chip
+ * needs is in the chip - a `kind`, a `value` and its own `remove` - so nothing
+ * here knows which screen it is on.
  */
 import { computed } from "vue";
 import { useFilterCounts } from "../../composables/useFilterCounts";
@@ -45,13 +54,27 @@ const props = defineProps({
   // The grid's view with no filters, pre-encoded (buildFilterCountBaseQuery).
   countBaseQuery: { type: String, default: null },
   allPicturesView: { type: Boolean, default: true },
+  // `[{key, kind, value, remove}]`. Null means "the picture grid's own".
+  chips: { type: Array, default: null },
+  // What the tail says instead of the picture grid's "N of M".
+  ofLabel: { type: String, default: null },
+  // In the normal flow rather than pinned under the selection bar.
+  inline: { type: Boolean, default: false },
+  // One call that clears everything, for an owner that can do it in one.
+  // Without it Clear all removes the chips one at a time, which is right for
+  // the picture grid (each removal is a cheap store write) and wrong for the
+  // Workflows screen, where two of the filters are the server's and each
+  // removal costs a grid read.
+  onClearAll: { type: Function, default: null },
 });
 
 const store = useFilterStore();
 const gridStore = useGridStore();
 
-const chips = computed(() =>
-  filterChips(store, { allPicturesView: props.allPicturesView }),
+const chips = computed(
+  () =>
+    props.chips ??
+    filterChips(store, { allPicturesView: props.allPicturesView }),
 );
 
 // The view's size, the "of N", from the same cache the menu header reads.
@@ -59,11 +82,16 @@ const { count } = useFilterCounts(() => props.countBaseQuery);
 const total = computed(() => (chips.value.length ? count("") : undefined));
 
 const ofLabel = computed(() => {
+  if (props.ofLabel != null) return props.ofLabel;
   const n = Number(gridStore.matchCount || 0).toLocaleString();
   return total.value == null ? n : `${n} of ${total.value.toLocaleString()}`;
 });
 
 function clearAll() {
+  if (props.onClearAll) {
+    props.onClearAll();
+    return;
+  }
   for (const chip of chips.value) chip.remove();
 }
 </script>
@@ -83,6 +111,13 @@ function clearAll() {
   padding: 0 var(--space-3);
   background: rgba(var(--v-theme-toolbar), 0.95);
   border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+/* After `.filter-strip`, not before: same specificity, so source order is what
+   makes the modifier win. */
+.filter-strip--inline {
+  position: static;
+  width: auto;
+  z-index: auto;
 }
 .filter-strip-chips {
   display: flex;

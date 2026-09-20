@@ -43,6 +43,7 @@ privacy purge that lives with the retention setting in ``routes/config.py``.
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 from copy import deepcopy
@@ -57,8 +58,10 @@ from pixlstash.hub.workflow_card_reads import (
     card_index,
     find_card,
     instance_documents,
+    key_pins,
     keys_in_stack,
     picture_inputs,
+    slot_marks,
 )
 from pixlstash.hub.workflow_card_writes import (
     AUTO_STACK_PREFIX,
@@ -85,6 +88,7 @@ from pixlstash.hub.workflows import (
     recipes_for_topology,
     topology_exists,
     topology_index,
+    unvouched_model_values,
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.a1111_recipe import reduce_a1111
@@ -94,6 +98,8 @@ from pixlstash.services.comfyui_recipe_service import (
     apply_seeds,
     detect_lora_targets,
     detect_seed_targets,
+    insert_adapter,
+    plan_lora_insertion,
 )
 from pixlstash.services.comfyui_service import (
     _extract_output_node_ids,
@@ -102,6 +108,7 @@ from pixlstash.services.comfyui_service import (
 )
 from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
+    BASE_MODEL_KINDS,
     BEST_SCORE,
     card_defaults,
     read_grid,
@@ -118,9 +125,16 @@ from pixlstash.routes.comfyui import (
     _read_object_info,
     _resolve_workflow_path,
     _shelf_adapter,
+    store_workflow_copy,
+    trash_user_workflow,
 )
+from pixlstash.services.workflow_export import download_stem, scrub_for_export
 from pixlstash.services.workflow_identity import RECIPE, STRUCTURAL
-from pixlstash.services.workflow_hash import WorkflowGraphError, structural_document
+from pixlstash.services.workflow_hash import (
+    MODEL_EXTENSIONS,
+    WorkflowGraphError,
+    structural_document,
+)
 from pixlstash.services.workflow_identity import topology_node_labels
 from pixlstash.services.workflow_io import api_graph, detect_workflow_io
 from pixlstash.services.workflow_library_service import (
@@ -273,6 +287,13 @@ class WorkflowSlotModel(BaseModel):
     name: str | None = None
     kind: str
     mark: str | None = None
+    slot_label: str | None = Field(
+        None,
+        description=(
+            "The slot's address, as `PUT /workflows/{key}/slots` marks it. "
+            "Null for a slot the cached list gave no label."
+        ),
+    )
 
 
 class WorkflowDefault(BaseModel):
@@ -319,8 +340,30 @@ class WorkflowCard(BaseModel):
         None, description="The owner's own name, if they gave one."
     )
     type: str | None = None
+    type_label: str | None = Field(
+        None,
+        description=(
+            "`type` spelled the way ComfyUI spells it on its own templates "
+            "(`txt2img` -> `Text to Image`). The card's name row and its type "
+            "chip both read this, so the two cannot say the same fact in two "
+            "vocabularies. Null exactly when `type` is."
+        ),
+    )
     imported: bool = Field(
         False, description="A workflow file on this machine runs this card."
+    )
+    hidden: bool = Field(
+        False,
+        description=(
+            "The owner has hidden this card. **On the GRID** it is true only "
+            "for a card `include_hidden` let in, so a client that did not ask "
+            "never sees it set - but one that did has to mark those cards, or "
+            "the checkbox silently mixes them into the grid they were kept "
+            "out of. **On the detail route it is always the card's own "
+            "state**, with no flag involved: `GET /workflows/cards/{key}` "
+            "opens a hidden card by design, which is how it can be unhidden. "
+            "`WorkflowCardDetail.hidden` is the same fact beside it."
+        ),
     )
     models: list[WorkflowSlotModel] = Field(default_factory=list)
     loras: list[WorkflowSlotModel] = Field(default_factory=list)
@@ -340,6 +383,17 @@ class WorkflowCard(BaseModel):
     topology_hash: str
     variant_count: int = 0
     member_keys: list[str] = Field(default_factory=list)
+    stack_id: str | None = Field(
+        None,
+        description=(
+            "The stack this card sits in, or null when it stands alone. "
+            "Either a stored stack's id or `auto:<core hash>` for an "
+            "automatic grouping nobody has ordered yet - the two are what "
+            "`PUT /workflows/stacks/{stack_id}/order` and "
+            "`POST /workflows/stacks/{stack_id}/unstack` are addressed by, "
+            "and neither can be derived from anything else the card carries."
+        ),
+    )
     last_used: str | None = Field(
         None,
         description=(
@@ -355,6 +409,24 @@ class WorkflowCard(BaseModel):
             "The Bayesian cover rank the grid is ordered by. Not `rating`: "
             "it is smoothed towards the library's mean so cards can be "
             "ordered against each other, and is meaningless on its own."
+        ),
+    )
+    ghosts: int = Field(
+        0,
+        description=(
+            "Picture ghosts this card's variants keep for the active library: "
+            "the thumbnail and prompt of a picture the library no longer has."
+        ),
+    )
+    model_ghosts: int = Field(
+        0,
+        description=(
+            "How many VALUES this card's variants name that the shelf does "
+            "not hold - a model filename, or a `*_sha256` digest, which is "
+            "what the shelf judges. A card naming one missing model by both "
+            "counts 2, so this is not a count of models: read it as "
+            "'something here is gone'. With `ghosts`, what the Filters "
+            "panel's Ghosts row asks about."
         ),
     )
 
@@ -379,6 +451,16 @@ class WorkflowCardDetail(BaseModel):
     notes: str | None = None
     hidden: bool = False
     variants: list[WorkflowVariant] = Field(default_factory=list)
+    pins: list[ParameterAddress] | None = Field(
+        None,
+        description=(
+            "The parameters the owner pinned, addressed as `PUT "
+            "/workflows/{key}/pins` takes them. `null` is a card nobody has "
+            "pinned on, so the client's own default pins apply; `[]` is "
+            "somebody who unpinned everything. Without this the pins were "
+            "write-only and the Workflow tab could not draw the pin it sets."
+        ),
+    )
 
 
 # ── The writes (v1.12 B4) ───────────────────────────────────────────────────
@@ -709,6 +791,49 @@ class RunResult(BaseModel):
     prompts: list[dict] = Field(default_factory=list)
 
 
+class WorkflowExport(BaseModel):
+    """``GET /workflows/{key}/export``: a ComfyUI file, minus every run of it.
+
+    ``removed`` names the CATEGORIES that were taken out and never the values:
+    the point of the route is that those values do not travel, and an answer
+    listing the prompt it withheld would be the leak the scrub exists to stop.
+    """
+
+    filename: str = Field(description="What to call the file when it is saved.")
+    workflow: dict = Field(description="The ComfyUI API-format graph.")
+    removed: list[str] = Field(
+        default_factory=list,
+        description="What the export left out, as categories, never values.",
+    )
+    source: str = Field(
+        description="Where the graph was resolved from: file, picture or instance."
+    )
+
+
+class WorkflowFile(BaseModel):
+    """One workflow file this machine now holds, and the card it landed on."""
+
+    name: str = Field(description="What the file is called in the user folder.")
+    workflow_key: str | None = Field(
+        None,
+        description="The card it was filed on, or null when it could not be filed.",
+    )
+
+
+class InsertedLoader(WorkflowFile):
+    """The file written by ``POST /workflows/{key}/insert-lora-loader``."""
+
+    node_id: str = Field(description="The id the new loader has in the graph.")
+    class_type: str = Field(description="Which loader node was added.")
+
+
+class WorkflowDeleted(BaseModel):
+    """Which file went to the trash, and which card it came off."""
+
+    deleted: str
+    workflow_key: str
+
+
 @dataclass
 class Plan:
     """One run request, resolved: what it would do and what it asked ComfyUI.
@@ -770,28 +895,104 @@ def _cover_urls(covers) -> list[str]:
     return urls
 
 
-# What a card is called when the owner has not named it. The card's name row
-# is its only identifying text and the ⓘ panel puts it in an `aria-label`, so
-# this may not be null: `{{ card.name }}` renders empty and the label reads
-# "About null". The fallback is the workflow FILE that runs it, because that is
-# what a person calls their workflow and it is the one identifying string not
-# already on the card (the checkpoint has its own row, the type its own chip).
+# The last resort, when a card has nothing identifying at all.
+#
+# **It is a last resort and not the ordinary answer.** It used to be reached by
+# every card that was not imported from a file - which is most of a library
+# built from pictures - so a grid of forty workflows read "Untitled workflow"
+# forty times, and the name row, which is the card's only identifying text,
+# identified nothing. Duplicating the checkpoint onto the name row was avoided
+# on the grounds that it has a row of its own; a constant is worse than a
+# duplicate, because a duplicate at least tells two cards apart.
 UNNAMED_CARD = "Untitled workflow"
 
 
-def _display_name(card) -> str:
-    """The owner's name for a card, else the file that runs it, else a stand-in."""
+def _model_stem(name: str) -> str:
+    """A model filename as a person says it: no folders, no extension.
+
+    Against ``MODEL_EXTENSIONS`` rather than "whatever follows the last dot":
+    a version in the name (``juggernaut_v9.1``) is not an extension, and a
+    guess by length gets ``.safetensors`` -- eleven characters, and the one
+    that matters -- exactly wrong.
+    """
+    stem = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    lowered = stem.lower()
+    for ext in MODEL_EXTENSIONS:
+        if lowered.endswith(ext):
+            return stem[: -len(ext)]
+    return stem
+
+
+# ComfyUI's own template names read "Krea 2: Text to Image", and a workflow
+# library is read beside ComfyUI rather than instead of it, so the type is
+# spelled the way the person already sees it spelled.
+#
+# **One map, and it is served rather than mirrored.** The card shows its type
+# twice - in a generated name and in its own chip - and a second copy of these
+# labels on the client is the drift this file has already been bitten by once
+# (`CHECKPOINT_WIDGETS`). `WorkflowCard.type_label` carries the answer, so the
+# chip and the name are the same string by construction.
+_TYPE_LABELS = {
+    "txt2img": "Text to Image",
+    "img2img": "Image to Image",
+    "inpaint": "Inpaint",
+    "outpaint": "Outpaint",
+    "upscale": "Upscale",
+}
+
+
+def _base_model_name(models) -> str | None:
+    """The base model a card is named after, or ``None`` if it loads none."""
+    for kind in BASE_MODEL_KINDS:
+        for slot in models:
+            if slot.kind == kind and slot.name:
+                return slot.name
+    return None
+
+
+def _display_name(card, models=()) -> str:
+    """What a card is called: the owner's name, else its file, else its models.
+
+    That order is how much the name is *theirs*: one they typed, then the file
+    they dropped, then a description built here.
+
+    The built one is **the model first, then what the workflow does** -
+    ``juggernautXL txt2img`` - because the model is what a person calls the
+    workflow and the verb only tells two of them apart once the model already
+    has. It is deliberately not unique: two cards differing only by a
+    post-processing node share a name, and naming THAT difference (the
+    "… + FaceDetailer" half of the intended scheme) needs a per-card
+    derivation the hub does not cache yet (#1454). The card contract, this
+    fallback chain included, is ``docs/integration_architecture.md`` §2.
+    Until then the ⓘ panel carries what actually separates them.
+    """
     if card.name:
         return card.name
     if card.file_name:
         stem = card.file_name.rsplit("/", 1)[-1]
         return stem[: -len(".json")] if stem.lower().endswith(".json") else stem
-    return UNNAMED_CARD
+    base = _base_model_name(models)
+    if not base:
+        # No base model: every name forgotten, or a graph that loads none. The
+        # stand-in, deliberately, rather than the VAE.
+        return UNNAMED_CARD
+    stem = _model_stem(base)
+    if not stem:
+        # These are graph widget values - third-party strings out of whatever
+        # workflow was imported - so the stem can come back empty where the
+        # whole name was an extension (".safetensors") or ended in a separator
+        # ("SDXL/"). An empty name renders the row blank and reads "About null"
+        # in the label, which is the hole `UNNAMED_CARD` exists to close.
+        return UNNAMED_CARD
+    label = _TYPE_LABELS.get(card.workflow_type)
+    return f"{stem}: {label}" if label else stem
 
 
 def _slot_models(slots) -> list[WorkflowSlotModel]:
     return [
-        WorkflowSlotModel(name=slot.name, kind=slot.kind, mark=slot.mark)
+        WorkflowSlotModel(
+            name=slot.name, kind=slot.kind, mark=slot.mark, slot_label=slot.label
+        )
         for slot in slots
     ]
 
@@ -800,9 +1001,11 @@ def _card(figure, defaults=()) -> WorkflowCard:
     """Render one card's figures in the shape ``workflowCard.js`` documents."""
     return WorkflowCard(
         key=figure.card.workflow_key,
-        name=_display_name(figure.card),
+        name=_display_name(figure.card, figure.models),
         type=figure.card.workflow_type,
+        type_label=_TYPE_LABELS.get(figure.card.workflow_type),
         imported=figure.card.imported,
+        hidden=figure.card.hidden,
         models=_slot_models(figure.models),
         loras=_slot_models(figure.loras),
         differs_by=figure.differs_by,
@@ -828,6 +1031,9 @@ def _card(figure, defaults=()) -> WorkflowCard:
         member_keys=[
             key for key in figure.member_keys if key != figure.card.workflow_key
         ],
+        stack_id=figure.stack_id,
+        ghosts=figure.ghosts,
+        model_ghosts=figure.model_ghosts,
     )
 
 
@@ -1048,13 +1254,34 @@ def create_router(server) -> APIRouter:
         description=(
             "Every workflow card this machine holds, in cover-rank order, one "
             "card per stack. Hidden cards and one-offs are counted rather than "
-            "listed."
+            "listed, unless the two flags ask for them."
         ),
         response_model=WorkflowCards,
     )
-    def list_cards(request: Request):
+    def list_cards(
+        request: Request,
+        include_hidden: bool = Query(
+            False,
+            description=(
+                "List hidden cards too - the Filters panel's *Show hidden "
+                "workflows*. `hidden` still counts them either way."
+            ),
+        ),
+        include_one_offs: bool = Query(
+            False,
+            description=(
+                "List one-offs too - *Hide one-offs* unticked. `one_offs` "
+                "still counts them either way."
+            ),
+        ),
+    ):
         server.auth.ensure_secure_when_required(request)
-        grid = read_grid(_hub(), server.vault)
+        grid = read_grid(
+            _hub(),
+            server.vault,
+            include_hidden=include_hidden,
+            include_one_offs=include_one_offs,
+        )
         return WorkflowCards(
             cards=[_card(figure) for figure in grid.cards],
             one_offs=grid.one_offs,
@@ -1089,11 +1316,18 @@ def create_router(server) -> APIRouter:
         if figure is None:
             raise HTTPException(status_code=404, detail="Unknown workflow card.")
         card = figure.card
+        pins = key_pins(hub, workflow_key)
         return WorkflowCardDetail(
             card=_card(figure, card_defaults(hub, server.vault, card)),
             notes=card.notes,
             hidden=card.hidden,
             variants=_card_variants(hub, server.vault, card),
+            pins=None
+            if pins is None
+            else [
+                ParameterAddress(slot_label=slot_label, input_name=input_name)
+                for slot_label, input_name in pins
+            ],
         )
 
     @router.get(
@@ -2292,5 +2526,295 @@ def create_router(server) -> APIRouter:
                 prompts.append(
                     {"workflow_key": group.workflow_key, "prompt_id": prompt_id}
                 )
+
+    # ── The file gestures (v1.12 B8) ──────────────────────────────────────
+    #
+    # Export, Duplicate, Insert loader and Delete: the four gestures that write
+    # or read a FILE, against a card that may never have had one. Each starts
+    # from `_source_graph_for`, so a card the library only knows from its
+    # pictures exports and duplicates like any other - that is most of what
+    # makes them worth having.
+    #
+    # Edited defaults are NOT applied to any of these. A default is an override
+    # the run path puts in at submit time (implementation plan rule 1), and
+    # writing one into a graph would make the workflow and the override the
+    # same thing.
+
+    def _card_source(card):
+        """One card's runnable graph, or the 409 that says why there is none.
+
+        ``RecursionError`` is caught here rather than at each gesture because
+        all three resolve through this one function and share the exposure: an
+        embedded graph comes out of a picture that arrived from somewhere else,
+        so its nesting depth is not ours to trust, and ``sanitize_prompt_graph``
+        deep-copies it before anything of ours has looked at it.
+        ``_store_workflow`` and ``_trash_stored_workflow`` already name this
+        class for the same reason.
+        """
+        try:
+            source, reason = _source_graph_for(card)
+        except RecursionError as exc:
+            logger.warning(
+                "Card %s has a source graph too deeply nested to read: %s",
+                card.workflow_key,
+                exc,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "PixlStash cannot read this workflow: its graph is nested "
+                    "too deeply to walk."
+                ),
+            ) from exc
+        if source is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "PixlStash has no graph for this workflow "
+                    f"({reason.code if reason else run_service.NO_RUNNABLE_SOURCE})."
+                ),
+            )
+        return source
+
+    def _file_stem(card) -> str:
+        """What a file written for this card should be called, without .json.
+
+        Sanitised, because a card's name is the owner's own text and it goes
+        both into a path under the user folder and into a download name the
+        CLIENT writes with — so the cleaning has to hold on the client's
+        platform too, which ``os.path.basename`` on Linux does not do for a
+        Windows separator. ``resolve_path_within`` is still the backstop on
+        this side (``routes/comfyui.py``); this is the half that leaves.
+        """
+        stem = os.path.splitext(card.file_name)[0] if card.file_name else ""
+        return download_stem(stem or _display_name(card)) or "workflow"
+
+    # Which of the two cleanings is the authority: for a file written on THIS
+    # machine it is `_normalize_workflow_name` + `resolve_path_within` in
+    # `routes/comfyui.py`, and `download_stem` above is advisory. For the
+    # export's `filename` there is no server-side backstop at all, because the
+    # client writes that file — so there `download_stem` is the authority.
+
+    def _structural_lora_slots(card, graph: dict) -> set[tuple[str, str]]:
+        """``(node id, widget)`` of every LoRA slot the owner marked structural.
+
+        Everything else the export empties, which is why this reads the
+        STRUCTURAL marks rather than the recipe ones: an unmarked slot, a
+        topology the backfill has not frozen yet and a loader the label map
+        does not reach all then fall on the side that publishes nothing.
+
+        A mark is keyed by ``<node label>/<widget>`` (``workflow_identity``'s
+        own slot label), so the widget is carried through rather than the node
+        alone — a stacker's three slots are three marks on one node.
+        """
+        keep = {
+            label
+            for (topology_hash, label), mark in slot_marks(
+                _hub(), [card.topology_hash]
+            ).items()
+            if topology_hash == card.topology_hash and mark == STRUCTURAL
+        }
+        if not keep:
+            return set()
+        try:
+            labels = topology_node_labels(structural_document(graph))
+        except WorkflowGraphError as exc:
+            # No labels means no node is known to be structural, so every LoRA
+            # slot is emptied. Logged rather than raised: a less useful export
+            # is the right failure here, and `scrub_for_export` refuses the
+            # graph on its own if the reduction is what it needed.
+            logger.info(
+                "Card %s exports with every LoRA slot emptied, its graph will "
+                "not reduce to slot labels: %s",
+                card.workflow_key,
+                exc,
+            )
+            return set()
+        return {
+            (node_id, widget)
+            for node_id, label in labels.items()
+            for widget in ((graph.get(node_id) or {}).get("inputs") or {})
+            if f"{label}/{widget}" in keep
+        }
+
+    @router.get(
+        "/workflows/{workflow_key}/export",
+        summary="Export a workflow",
+        description=(
+            "This workflow as a ComfyUI file somebody else can open: prompts "
+            "and caption targets blank, seeds nulled, the LoRA slots that are "
+            "part of the look emptied, node titles stripped, picture file "
+            "names blanked, and any model name this machine does not hold "
+            "left out. Export a recipe instead to share what was actually run."
+        ),
+        response_model=WorkflowExport,
+        responses={
+            404: {"description": "This machine has no such card."},
+            409: {"description": "There is no graph to export, or it will not read."},
+        },
+    )
+    def export_workflow(request: Request, workflow_key: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        card = _require_card(hub, workflow_key)
+        source = _card_source(card)
+        try:
+            document, removed = scrub_for_export(
+                source.graph,
+                structural_lora_slots=_structural_lora_slots(card, source.graph),
+                unvouched=unvouched_model_values(hub),
+            )
+        except (WorkflowGraphError, RecursionError) as exc:
+            # Refused rather than exported unscrubbed. A graph PixlStash cannot
+            # read is one it can promise nothing about, and the promise is the
+            # route. `RecursionError` is the same answer and the same class of
+            # input: an embedded graph comes out of a picture that arrived from
+            # somewhere else, which is why `_store_workflow` and
+            # `_trash_stored_workflow` both name it too.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "PixlStash cannot read this workflow well enough to make it "
+                    f"safe to share: {exc}"
+                ),
+            ) from exc
+        return WorkflowExport(
+            filename=f"{_file_stem(card)}.json",
+            workflow=document,
+            removed=removed,
+            source=source.origin,
+        )
+
+    @router.post(
+        "/workflows/{workflow_key}/duplicate",
+        summary="Duplicate a workflow",
+        description=(
+            "Write this workflow into the user's workflow folder under a free "
+            "name, so it can be opened and changed in ComfyUI without touching "
+            "the original. A card the library only knows from its pictures "
+            "gets a file this way for the first time."
+        ),
+        response_model=WorkflowFile,
+        status_code=201,
+        responses={
+            404: {"description": "This machine has no such card."},
+            409: {"description": "There is no graph to duplicate."},
+            500: {"description": "The copy could not be written."},
+        },
+    )
+    def duplicate_workflow(request: Request, workflow_key: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        card = _require_card(hub, workflow_key)
+        source = _card_source(card)
+        # Unscrubbed on purpose: this file stays on the owner's machine and is
+        # meant to RUN, and a copy with its models blanked would not.
+        name, key = _store_copy(hub, f"{_file_stem(card)} (copy)", source.graph)
+        _announce(request, sorted({workflow_key, key} - {None}), "imported")
+        return WorkflowFile(name=name, workflow_key=key)
+
+    @router.post(
+        "/workflows/{workflow_key}/insert-lora-loader",
+        summary="Add a LoRA loader to a workflow",
+        description=(
+            "Write a copy of this workflow with a LoRA loader spliced in right "
+            "after the model source, so a workflow that had nowhere to put a "
+            "LoRA now has a slot to swap into. The loader starts at ComfyUI's "
+            "own widget defaults — no LoRA is chosen here — so pick one before "
+            "running the copy as it is. The original file is not changed; the "
+            "copy is a card of its own."
+        ),
+        response_model=InsertedLoader,
+        status_code=201,
+        responses={
+            404: {"description": "This machine has no such card."},
+            409: {"description": "No graph, or nowhere a loader can honestly go."},
+            503: {"description": "ComfyUI could not be reached."},
+        },
+    )
+    def insert_lora_loader(request: Request, workflow_key: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        card = _require_card(hub, workflow_key)
+        source = _card_source(card)
+        # ComfyUI types the links (#1376): an API-format link carries no type,
+        # so without `object_info` an input reading the model could be missed
+        # and that branch would run without the LoRA, silently.
+        object_info, error = _read_object_info(_comfyui_url(_user(request)))
+        if object_info is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "PixlStash could not ask ComfyUI what its nodes hand on, so "
+                    f"it cannot tell where a LoRA loader would go: {error}"
+                ),
+            )
+        graph = deepcopy(source.graph)
+        try:
+            plan = plan_lora_insertion(graph, object_info)
+            loader = insert_adapter(graph, plan, None, object_info)
+        except LookupError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        name, key = _store_copy(hub, f"{_file_stem(card)} (LoRA)", graph)
+        _announce(request, sorted({workflow_key, key} - {None}), "imported")
+        return InsertedLoader(
+            name=name,
+            workflow_key=key,
+            node_id=loader["node_id"],
+            class_type=loader["class_type"],
+        )
+
+    def _store_copy(hub, stem: str, graph: dict) -> tuple[str, str | None]:
+        """Write one graph into the user folder, or raise the 500 that says why."""
+        try:
+            return store_workflow_copy(hub, f"{stem}.json", graph)
+        except (OSError, ValueError) as exc:
+            logger.error(
+                "A workflow copy named %r could not be written to the user folder: %s",
+                stem,
+                exc,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="PixlStash could not write the workflow file.",
+            ) from exc
+
+    @router.delete(
+        "/workflows/{workflow_key}",
+        summary="Delete an imported workflow",
+        description=(
+            "Send this card's workflow file to the system trash and take it "
+            "off the card. Only a file this machine holds can be deleted: a "
+            "workflow the library knows from its pictures has no file, and is "
+            "hidden rather than deleted. The card itself and its pictures stay."
+        ),
+        response_model=WorkflowDeleted,
+        responses={
+            404: {
+                "description": (
+                    "This machine has no such card, or the card names a file "
+                    "the user folder does not hold — a built-in, or one "
+                    "already gone from disk."
+                )
+            },
+            409: {"description": "This card has no workflow file to delete."},
+            500: {"description": "The file could not be moved to the trash."},
+        },
+    )
+    def delete_workflow(request: Request, workflow_key: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        card = _require_card(hub, workflow_key)
+        if not card.file_name:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This workflow has no file on this machine — the library "
+                    "knows it from its pictures. Hide it instead."
+                ),
+            )
+        deleted = trash_user_workflow(hub, card.file_name)
+        _announce(request, [workflow_key], "changed")
+        return WorkflowDeleted(deleted=deleted, workflow_key=workflow_key)
 
     return router

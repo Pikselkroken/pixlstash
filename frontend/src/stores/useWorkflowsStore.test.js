@@ -255,6 +255,85 @@ describe("one stack open at a time", () => {
   });
 });
 
+describe("a stack is selected whole", () => {
+  it("one click on a stack takes its members with it", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    // The cover key alone was the bug: a card marked "3 workflows" selected
+    // one of them, the one at the top of the pile.
+    store.select("the-stack", { whole: true });
+    expect(store.selectedKeys).toEqual(["the-stack", "m1", "m2"]);
+  });
+
+  it("a key means one card unless the caller asks for the stack", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    // A member card is not in `cards` at all.
+    store.select("m1");
+    expect(store.selectedKeys).toEqual(["m1"]);
+
+    // The cover IS, under the very key the panel's first row carries — so
+    // leaving `whole` off is what keeps that row separable from the stack it
+    // heads, and what keeps the `?topology=` deep link naming one workflow.
+    store.select("the-stack");
+    expect(store.selectedKeys).toEqual(["the-stack"]);
+  });
+
+  it("Ctrl adds the whole stack, and takes the whole stack back out", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    store.select("workhorse");
+    store.select("the-stack", { additive: true, whole: true });
+    expect(store.selectedKeys).toEqual(["workhorse", "the-stack", "m1", "m2"]);
+
+    store.select("the-stack", { additive: true, whole: true });
+    expect(store.selectedKeys).toEqual(["workhorse"]);
+  });
+
+  it("Ctrl on a half-selected stack completes it rather than emptying it", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    // The half-selected state you actually reach: select the stack, then take
+    // one member out. Toggling on the CLICKED key alone emptied this, because
+    // the cover is still in — so the gesture that means "make this whole" did
+    // the opposite.
+    store.select("the-stack", { whole: true });
+    store.select("m1", { additive: true });
+    expect(store.selectedKeys).toEqual(["the-stack", "m2"]);
+
+    store.select("the-stack", { additive: true, whole: true });
+    expect(store.selectedKeys).toEqual(["the-stack", "m2", "m1"]);
+
+    // Whole now, so the next Ctrl does empty it.
+    store.select("the-stack", { additive: true, whole: true });
+    expect(store.selectedKeys).toEqual([]);
+  });
+
+  it("the other half-selected state completes too, and no key lands twice", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    store.select("m1");
+    store.select("the-stack", { additive: true, whole: true });
+    expect(store.selectedKeys).toEqual(["m1", "the-stack", "m2"]);
+  });
+
+  it("stackKeys answers nothing for no stack, and itself for an unknown key", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    expect(store.stackKeys(null)).toEqual([]);
+    expect(store.stackKeys("not-a-card")).toEqual(["not-a-card"]);
+    expect(store.stackKeys("never-kept-a-picture")).toEqual([
+      "never-kept-a-picture",
+    ]);
+  });
+});
+
 describe("a session reset stops the old session's answers landing", () => {
   it("drops a fetch and a member request that resolve after the reset", async () => {
     // Without an epoch stamp both of these write the previous credential's
@@ -298,5 +377,120 @@ describe("a session reset stops the old session's answers landing", () => {
     await open;
     expect(store.members).toEqual({});
     expect(store.openStackKey).toBe(null);
+  });
+});
+
+describe("forgetting the members a re-key invalidated", () => {
+  it("collapses the open stack rather than leaving it reporting a failure", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("the-stack");
+    expect(store.members["the-stack"]).toHaveLength(3);
+
+    store.forgetMembers();
+    // Left open with no members, `openMembers` falls back to the cover alone
+    // and `StackPanel` renders `size - members.length` as "2 could not be
+    // read" — a failure message for a deliberate invalidation. Collapsed,
+    // re-expanding re-reads them through the path that already exists.
+    expect(store.members).toEqual({});
+    expect(store.openStackKey).toBe(null);
+    expect(store.openMembers).toEqual([]);
+  });
+
+  it("drops a member read that was already on the wire, and can read again", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    let releaseMember;
+    getWorkflowCard.mockImplementation(
+      (key) =>
+        new Promise((resolve) => {
+          releaseMember = () => resolve({ card: { key, name: "stale" } });
+        }),
+    );
+    // One member, so one promise to release.
+    const open = store.openStack("few-but-loved");
+
+    store.forgetMembers();
+    releaseMember();
+    await open;
+    // The pre-flip members, written back into the map this just emptied:
+    // `openStack`'s completion path guards only on the epoch, so clearing
+    // `inflight` alone would not stop it.
+    expect(store.members).toEqual({});
+
+    // And `inflight` has to be cleared with it, or re-expanding the stack
+    // returns early for ever: the key is still in it and nothing will take
+    // it out, because the old epoch's `finally` is epoch-guarded too.
+    getWorkflowCard.mockImplementation((key) =>
+      Promise.resolve({ card: { key, name: "fresh" } }),
+    );
+    await store.openStack("few-but-loved");
+    expect(store.members["few-but-loved"]?.[1]?.name).toBe("fresh");
+  });
+
+  it("leaves a grid read able to start again", async () => {
+    const store = useWorkflowsStore();
+    let releaseCards;
+    listWorkflowCards.mockReturnValue(
+      new Promise((resolve) => {
+        releaseCards = () => resolve({ cards: CARDS, one_offs: 3, hidden: 1 });
+      }),
+    );
+    const pending = store.fetchCards();
+
+    store.forgetMembers();
+    releaseCards();
+    await pending;
+    // Every caller does `forgetMembers()` then `await fetchCards()`, and
+    // `fetchCards` returns early while `loading` is set. The old epoch's
+    // `finally` will not clear it, so this has to.
+    expect(store.loading).toBe(false);
+
+    listWorkflowCards.mockResolvedValue({
+      cards: CARDS,
+      one_offs: 3,
+      hidden: 1,
+    });
+    await store.fetchCards();
+    expect(store.cards).toHaveLength(4);
+  });
+});
+
+// ── invalidate(): the one door in from outside the view ───────────────────
+//
+// A ghost purge in Settings › Privacy forgets a model name or a picture ghost,
+// which changes what a card names and how many pictures it counts. The shelf
+// had the same door and the same test; both went with it.
+describe("invalidate", () => {
+  it("drops the cached stack members and reads the grid again", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("few-but-loved");
+    expect(store.members["few-but-loved"]).toBeTruthy();
+    expect(store.openStackKey).toBe("few-but-loved");
+    listWorkflowCards.mockClear();
+
+    store.invalidate();
+    await Promise.resolve();
+
+    // The members are forgotten rather than redrawn from stale cards, the
+    // panel is collapsed rather than left open over nothing, and the grid is
+    // re-read - a card can have lost the very name that was purged.
+    expect(store.members).toEqual({});
+    expect(store.openStackKey).toBe(null);
+    expect(listWorkflowCards).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for nothing when the grid has never been read", async () => {
+    // Settings is reachable without ever opening Workflows, and a purge made
+    // there must not fire a request for a screen nobody is looking at.
+    const store = useWorkflowsStore();
+    expect(store.loaded).toBe(false);
+    listWorkflowCards.mockClear();
+
+    store.invalidate();
+    await Promise.resolve();
+
+    expect(listWorkflowCards).not.toHaveBeenCalled();
   });
 });

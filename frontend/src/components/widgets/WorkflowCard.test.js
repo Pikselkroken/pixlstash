@@ -1,15 +1,30 @@
 // The uniform workflow card (v1.12 Workflows & Recipes, F0).
 //
-// jsdom has no layout, so "every card is exactly --wf-card-h" is pinned in two
+// jsdom has no layout, so "the content cannot grow the card" is pinned in two
 // halves: the stylesheet's own sum, resolved against the shipped token values,
 // and the mounted card's structure, which must not change with what it holds
-// (0 or 5 LoRAs, long names). Together they say the content has no way to grow
-// the card: the height is fixed, the four rows are fixed, and a row clips.
+// (0 or 5 LoRAs, long names). Together they say the meta block is fixed, the
+// four rows are fixed, and a row clips.
+//
+// The CARD's total height is deliberately not fixed any more: the cover is a
+// 6:5 box at every column width and at every picture count, so cards still
+// line up - that is what the old fixed height was really protecting. What
+// changes inside it is the tracks, one arrangement per count, so the cell
+// ratios are asserted three times rather than once.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+
+// ⓘ carries *Show all N pictures* (F7), so the card now reaches the filter
+// store and the router through it.
+const push = vi.fn();
+vi.mock("vue-router", () => ({
+  useRouter: () => ({ push }),
+  useRoute: () => ({ name: "workflows", query: {} }),
+}));
 
 vi.mock("vuetify/components", async () => {
   const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
@@ -58,6 +73,11 @@ const CROWDED = {
   stack_size: 6,
 };
 
+beforeEach(() => {
+  setActivePinia(createPinia());
+  push.mockClear();
+});
+
 function mountCard(card, props = {}) {
   return mount(WorkflowCard, {
     props: { card, ...props },
@@ -76,11 +96,23 @@ function tokens() {
   return values;
 }
 
-/** The declarations of one rule in the card's stylesheet. */
-function rule(selector) {
-  const css = read("./WorkflowCard.vue")
+/** The card's own stylesheet, comments stripped. */
+const styleBlock = () =>
+  read("./WorkflowCard.vue")
     .split("<style scoped>")[1]
     .replace(/\/\*[\s\S]*?\*\//g, "");
+
+/** Every selector in the card's stylesheet that matches `pattern`. */
+function selectorsMatching(pattern) {
+  return styleBlock()
+    .split("}")
+    .map((block) => block.split("{")[0].trim())
+    .filter((selector) => pattern.test(selector));
+}
+
+/** The declarations of one rule in the card's stylesheet. */
+function rule(selector) {
+  const css = styleBlock();
   const body = css
     .split("}")
     .find((r) => r.split("{")[0].trim() === selector)
@@ -92,6 +124,30 @@ function rule(selector) {
       .map((d) => d.split(":").map((s) => s.trim()))
       .filter(([k, v]) => k && v),
   );
+}
+
+/**
+ * The cell shapes one cover arrangement produces, as width ÷ height.
+ *
+ * The cover is a 6:5 box at every count, so a column track worth `c` of the
+ * columns' total and `r` of the rows' total is `c·W` wide by `r·(5/6)W` tall.
+ * With two rows the first cell spans both of them - the mosaic's big cell - and
+ * the second column holds one cell per row.
+ */
+function cellRatios(count) {
+  const cover = rule(".wf-card__cover");
+  const tracks = rule(`.wf-card__cover--${count}`);
+  const [w, h] = cover["aspect-ratio"].split("/").map(Number);
+  const coverH = h / w; // the cover's height as a fraction of its width
+  const fr = (key) => tracks[key].split(" ").map((n) => parseFloat(n));
+  const cols = fr("grid-template-columns");
+  const rows = fr("grid-template-rows");
+  const sum = (list) => list.reduce((total, one) => total + one, 0);
+  const shape = (col, rowSpan) =>
+    cols[col] / sum(cols) / ((rowSpan / sum(rows)) * coverH);
+
+  if (rows.length === 1) return cols.map((_, col) => shape(col, sum(rows)));
+  return [shape(0, sum(rows)), ...rows.map((row) => shape(1, row))];
 }
 
 /** Resolve `var(--x)`, `calc(var(--a) + var(--b))` or `1px` to a number. */
@@ -108,13 +164,12 @@ function px(value, t = tokens()) {
 }
 
 describe("WorkflowCard height", () => {
-  it("adds up to exactly --wf-card-h", () => {
+  it("adds the meta block up to exactly --wf-meta-h", () => {
     const t = tokens();
     const card = rule(".wf-card");
     const cover = rule(".wf-card__cover");
     const meta = rule(".wf-card__meta");
 
-    expect(card.height).toBe("var(--wf-card-h)");
     expect(card["box-sizing"]).toBe("border-box");
     expect(card.overflow).toBe("hidden");
     expect(cover.flex).toBe("none");
@@ -122,15 +177,51 @@ describe("WorkflowCard height", () => {
 
     const rows = meta["grid-template-rows"].match(/^repeat\((\d+), (.+)\)$/);
     expect(Number(rows[1])).toBe(4);
-    const border = px(card.border.split(" ")[0]);
     const total =
-      2 * border +
-      px(cover.height) +
-      2 * px(meta.padding) +
-      4 * px(rows[2]) +
-      3 * px(meta["row-gap"]);
-    expect(t["--wf-card-h"]).toBe(252);
-    expect(total).toBe(t["--wf-card-h"]);
+      2 * px(meta.padding) + 4 * px(rows[2]) + 3 * px(meta["row-gap"]);
+    expect(t["--wf-meta-h"]).toBe(118);
+    expect(total).toBe(t["--wf-meta-h"]);
+  });
+
+  // The defect this replaces: a flat `height` on the cover against a fluid
+  // card width, so the cells stretched from 1.2:1 at the 240px column floor
+  // to 1.8:1 by 360px. A ratio holds at every width instead.
+  it("sizes the cover by ratio, not by a pixel height", () => {
+    const cover = rule(".wf-card__cover");
+
+    expect(cover.height).toBeUndefined();
+    expect(cover["aspect-ratio"]).toBe("6 / 5");
+  });
+
+  // The cover is 6:5 at every count and only the tracks inside it change, so
+  // what each arrangement is worth is the shape of the cells it produces. One
+  // assertion per count, because there are three arrangements now: a cell that
+  // is never drawn without a picture in it means the tracks follow the strip
+  // (#1456).
+  it.each([
+    ["1", [1.2]],
+    ["2", [0.6, 0.6]],
+    ["3", [0.8, 0.8, 0.8]],
+  ])("gives %s picture(s) cells of %s (width ÷ height)", (count, expected) => {
+    expect(cellRatios(count)).toEqual(
+      expected.map((r) => expect.closeTo(r, 5)),
+    );
+  });
+
+  it("spans the big cell over both rows only where there are two rows", () => {
+    // The row span is what makes the three-picture mosaic a mosaic: without it
+    // the three cells auto-place as (1,1), (1,2), (2,1) and a whole track row
+    // is empty. The ratios above cannot see that - they read the tracks, not
+    // the placement - so the declaration itself is asserted here, and the
+    // ABSENCE of it anywhere that would reach the other two arrangements.
+    expect(
+      rule(".wf-card__cover--3 .wf-card__pic:first-child")["grid-row"],
+    ).toBe("1 / 3");
+    for (const selector of selectorsMatching(/\.wf-card__pic:first-child$/)) {
+      expect(selector, "spans a cover that has one row").toBe(
+        ".wf-card__cover--3 .wf-card__pic:first-child",
+      );
+    }
   });
 
   it("keeps row 4 clear of the ⓘ button", () => {
@@ -267,6 +358,67 @@ describe("WorkflowCard", () => {
     expect(wrapper.find(".wf-card__cover--empty").exists()).toBe(false);
   });
 
+  // The defect this replaces: three cells were drawn whatever the card had and
+  // only the <img> was conditional, so one picture sat beside two painted
+  // `input-background` rectangles and the card read as one that had failed to
+  // load rather than one showing everything it has (#1456).
+  it.each([
+    [1, ["/a.webp"]],
+    [2, ["/a.webp", "/b.webp"]],
+    [3, ["/a.webp", "/b.webp", "/c.webp"]],
+    [3, ["/a.webp", "/b.webp", "/c.webp", "/d.webp"]],
+  ])("draws %i cell(s), each with a picture in it", (cells, covers) => {
+    const wrapper = mountCard({ ...BARE, covers });
+    const cover = wrapper.find(".wf-card__cover");
+
+    expect(cover.findAll(".wf-card__pic")).toHaveLength(cells);
+    // Not one cell more than there are images: an empty one is the bug.
+    expect(cover.findAll(".wf-card__pic img")).toHaveLength(cells);
+    expect(cover.classes()).toContain(`wf-card__cover--${cells}`);
+  });
+
+  // `picture_count` says there are pictures, so this is not the "No pictures
+  // yet" cover; it must still be a box of the cover's own size rather than a
+  // collapsed nothing, and it should hold the shape the pictures are about to
+  // land in. One cell for every count would make a one-picture-wide card's
+  // placeholder the whole 6:5 box, which is what the `--empty` cover looks
+  // like and reads as "there is nothing here".
+  it.each([
+    [22, 3],
+    [2, 2],
+    [1, 1],
+  ])(
+    "draws a %i-picture card whose covers have not arrived as %i cell(s)",
+    (pictureCount, cells) => {
+      const cover = mountCard({
+        ...BARE,
+        covers: [],
+        picture_count: pictureCount,
+      }).find(".wf-card__cover");
+
+      expect(cover.findAll(".wf-card__pic")).toHaveLength(cells);
+      expect(cover.find(".wf-card__pic img").exists()).toBe(false);
+      expect(cover.classes()).toContain(`wf-card__cover--${cells}`);
+    },
+  );
+
+  it("does not count a cover entry it cannot show", () => {
+    // `workflowCoverUrl` does not guard an empty entry - it would join one into
+    // the truthy `/api/v1null`, a broken-image glyph - and since the
+    // arrangement is counted from this list, such an entry would also buy
+    // itself a cell.
+    const cover = mountCard({
+      ...BARE,
+      covers: ["/a.webp", null, ""],
+    }).find(".wf-card__cover");
+
+    expect(cover.findAll(".wf-card__pic")).toHaveLength(1);
+    expect(cover.classes()).toContain("wf-card__cover--1");
+    expect(cover.find(".wf-card__pic img").attributes("src")).toContain(
+      "/a.webp",
+    );
+  });
+
   it("shows no rating for an unrated workflow", () => {
     const wrapper = mountCard({ ...BARE, rating: 0 });
     expect(wrapper.find(".wf-card__badge--bottom").exists()).toBe(false);
@@ -372,5 +524,124 @@ describe("WorkflowCard", () => {
     expect(text).toContain("+ upscale 2×");
     expect(text).toContain("8 · 2.0");
     expect(text).toMatch(/Saved recipes\s*3/);
+  });
+});
+
+// ── The covers are API-relative and an <img> does not use axios ───────────
+//
+// `GET /workflows/cards` sends `/pictures/thumbnails/{id}.webp?v=…`, and the
+// real route is under `/api/v1`. An `<img src>` never reaches the apiClient
+// interceptor that prepends the prefix, so a card that used the payload
+// verbatim asked the page origin for a path nothing serves — every cover on
+// the Workflows grid broke at once. It shipped that way in F1a because the
+// grid was only reachable by typing `/workflows-next`.
+describe("cover thumbnail URLs", () => {
+  it("prepends the API base, so the src is a route that exists", () => {
+    const wrapper = mountCard({
+      ...CROWDED,
+      covers: ["/pictures/thumbnails/12.webp?v=3"],
+    });
+
+    const src = wrapper.find(".wf-card__pic img").attributes("src");
+    expect(src).toContain("/api/v1/pictures/thumbnails/12.webp?v=3");
+    // The bare payload path is what broke it; it must not be the whole src.
+    expect(src).not.toMatch(/^\/pictures\//);
+  });
+});
+
+// ── The cover crop is top-anchored ───────────────────────────────────────
+//
+// jsdom applies no scoped CSS, so this reads the SFC's own `<style>` text -
+// the shape `Toolbar.test.js` uses to pin a bar recipe. Worth pinning because
+// the defect is invisible to every other test: a centred crop renders, it
+// just takes the heads off, and the two short cells are far wider than tall.
+describe("the cover crop", () => {
+  const styleOf = async (path) => {
+    const { readFileSync } = await import("node:fs");
+    return readFileSync(`${process.cwd()}/${path}`, "utf8");
+  };
+
+  it("anchors to the top, as the picture grid's cropped tiles do", async () => {
+    const source = await styleOf("src/components/widgets/WorkflowCard.vue");
+    const block = source.slice(
+      source.indexOf(".wf-card__pic img {"),
+      source.indexOf("}", source.indexOf(".wf-card__pic img {")),
+    );
+    expect(block).toContain("object-fit: cover");
+    expect(block).toContain("object-position: top center");
+  });
+
+  it("uses the same anchor the shipped grid does", async () => {
+    // One convention, not two: if the grid's moves, this should move with it
+    // rather than quietly becoming the odd one out.
+    const grid = await styleOf("src/components/views/ImageGrid.css");
+    expect(grid).toContain("object-position: top center");
+  });
+});
+
+// ── The stack badge says what its number counts ──────────────────────────
+describe("the layered count", () => {
+  it("says the number is workflows, not pictures", () => {
+    const wrapper = mountCard({ ...CROWDED, stack_size: 3 });
+    const badge = wrapper.find(".wf-card__badge--button");
+
+    expect(badge.text()).toContain("3");
+    // Two glyph-and-number badges sit at opposite ends of the same cover, so
+    // which one counts workflows is otherwise a guess.
+    expect(badge.findComponent({ name: "Tooltip" }).props("text")).toBe(
+      "3 workflows in this stack",
+    );
+  });
+
+  it("puts no layered badge on a card that is not a stack", () => {
+    const wrapper = mountCard({ ...BARE, stack_size: 1 });
+    expect(wrapper.find(".wf-card__badge--button").exists()).toBe(false);
+  });
+});
+
+// ── The selection mark is the card's own ─────────────────────────────────
+//
+// It used to be on the CELL each host wraps around this component, where it
+// could never be seen: `.wf-card` paints an opaque `surface` across the whole
+// cell, so the wash and the ring were drawn underneath the card. Nothing
+// failed - the rule was valid, applied, and invisible - which is exactly why
+// this is pinned on the painted class rather than on the host's markup.
+describe("the selection mark", () => {
+  it("marks the card itself, not something behind it", () => {
+    expect(
+      mountCard(BARE, { selected: true }).find(".wf-card").classes(),
+    ).toContain("wf-card--selected");
+    expect(mountCard(BARE).find(".wf-card").classes()).not.toContain(
+      "wf-card--selected",
+    );
+  });
+
+  it("wears the shell's wash and ring on one overlay", () => {
+    const mark = rule(".wf-card--selected::after");
+
+    expect(mark.background).toBe("var(--active-wash)");
+    expect(mark["box-shadow"]).toBe("var(--selection-ring)");
+  });
+
+  // The whole point: an inset shadow paints over an element's background but
+  // UNDER its children, and the cover's <img>s are children. On the card
+  // itself the ring ran along the text rows and stopped dead at the
+  // thumbnails. Only a layer above the content covers both.
+  it("lies above the cover, so the mark crosses the thumbnails", () => {
+    const mark = rule(".wf-card--selected::after");
+
+    expect(mark.position).toBe("absolute");
+    expect(mark.inset).toBe("0");
+    expect(mark["z-index"]).toBe("var(--z-raised)");
+    // Above the badges, which sit on the cover at a bare z-index of 1.
+    expect(Number(rule(".wf-card__badge--start")["z-index"])).toBeLessThan(10);
+    // And it must not eat the clicks meant for the controls underneath.
+    expect(mark["pointer-events"]).toBe("none");
+  });
+
+  // The reason the mark cannot live on an ancestor either, stated as a fact
+  // about this file so that moving it back up fails here.
+  it("paints an opaque background, which is why an ancestor cannot mark it", () => {
+    expect(rule(".wf-card").background).toBe("rgb(var(--v-theme-surface))");
   });
 });

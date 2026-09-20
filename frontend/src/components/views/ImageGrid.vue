@@ -1,4 +1,9 @@
 <template>
+  <!-- `@close` is CALLED, not bound bare. `closeOverlay`'s first argument
+       decides whether the close returns to the view named by `?from=`, and a
+       bare binding would hand that decision to whatever a future `close` emit
+       happened to carry: a truthy payload would silently send the reader to
+       the shelf, a falsy one silently stop it, with nothing red anywhere. -->
   <ImageOverlay
     ref="imageOverlayRef"
     :open="overlayOpen"
@@ -23,7 +28,7 @@
     :pluginProgressPercent="pluginProgressPercent"
     :comfyuiConfigured="filterStore.comfyuiConfigured"
     :guestScore="overlayGuestScore"
-    @close="closeOverlay"
+    @close="closeOverlay()"
     @apply-score="applyScore"
     @set-guest-score="(img, n) => setGuestScore(img, n)"
     @add-tag="addTagToImage"
@@ -34,8 +39,8 @@
     @run-plugin="handlePluginRunRequest"
     @request-context-menu="handleOverlayContextMenuRequest"
     @character-created="emit('refresh-sidebar')"
-    @open-remix-dialog="openRemixDialog"
-    @use-as-input="useOverlayPictureAsInput"
+    @run-recipe="openRunForPicture"
+    @use-as-input="runWorkflowOnPicture"
   />
   <ImageImporter
     ref="imageImporterRef"
@@ -141,8 +146,8 @@
       @delete-selected="deleteSelected"
       @open-tag-panel="handleContextMenuOpenTagPanel"
       @open-plugin-panel="handleContextMenuOpenPluginPanel"
-      @open-comfyui-panel="handleContextMenuOpenComfyuiPanel"
-      @open-remix-dialog="openRemixDialog"
+      @make-more="makeMoreLikeSelection"
+      @run-workflow="runWorkflowOnSelection"
       @segment="openSegmentDialog"
       @auto-tag="handleAutoTag"
       @generate-description="handleGenerateDescription"
@@ -180,7 +185,7 @@
       @segment="openOverlaySegmentDialog"
       @delete-selected="handleOverlayDelete"
       @remove-from-group="handleOverlayScrapheapRestore"
-      @use-as-input="useOverlayPictureAsInput"
+      @use-as-input="runWorkflowOnPicture"
     />
 
     <!-- ── New person from the context menu (#645) ─────────────
@@ -374,16 +379,6 @@
       "
       anchor="top"
       @abort="abortExport"
-    />
-    <RemixDialog
-      :open="remixDialogOpen"
-      :image="remixImage"
-      :selected-image-ids="selectedImageIds"
-      :client-id="comfyuiClientId || ''"
-      :stack-outputs="genStackPrefs.stackI2IOutputs"
-      @close="remixDialogOpen = false"
-      @run="handleComfyuiRun"
-      @use-batch="handleContextMenuOpenComfyuiPanel"
     />
     <ComfyUiRunner
       ref="comfyuiRunner"
@@ -1207,6 +1202,8 @@
           @rotate-left="rotateSelectedPictures(ROTATE_CCW)"
           @rotate-right="rotateSelectedPictures(ROTATE_CW)"
           @selection-menu-open="toolbarSelectionMenuOpen = $event"
+          @make-more="makeMoreLikeSelection"
+          @run-workflow="runWorkflowOnSelection"
         />
       </template>
     </GridActionPill>
@@ -1248,11 +1245,7 @@ import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
-import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
-import {
-  FROM_SELECTION,
-  useWorkflowRunStore,
-} from "../../stores/useWorkflowRunStore";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionStore";
 import {
   GHOST_PENDING,
@@ -1266,6 +1259,7 @@ import {
   useBottomAnchor,
 } from "../../composables/useBottomAnchor";
 import { FLOATING_BOTTOM_GAP_PX } from "../../utils/floatingBottom";
+import { overlayCloseTarget } from "../../utils/overlayRoute";
 import { markEnd, markStart } from "../../utils/perfMarks";
 import { useScopedNotice } from "../../composables/useScopedNotice";
 import { buildPurgeBadge } from "../../utils/retention.js";
@@ -1313,7 +1307,6 @@ import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import StackBadge from "../widgets/StackBadge.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import ComfyUiRunner from "../io/ComfyUiRunner.vue";
-import RemixDialog from "../io/RemixDialog.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import ShareDialog from "../io/ShareDialog.vue";
 import SnapshotsWithDeletedDialog from "../widgets/SnapshotsWithDeletedDialog.vue";
@@ -1388,6 +1381,7 @@ import {
 } from "../../api/pictureSets";
 import { getSharedPictureIds, revokeTokensByResource } from "../../api/users";
 import { listTaggers } from "../../api/taggers";
+import { preflightWorkflowRun } from "../../api/workflows";
 import {
   faceBoxColor,
   formatUserDate,
@@ -2084,25 +2078,117 @@ function handleComfyuiRun(payload) {
   comfyuiRunner.value?.handleComfyuiRun(payload);
 }
 
-// ── Remix ("Generate variants…") ─────────────────────────────────────────
-// Acts on the RIGHT-CLICKED picture, not the selection - the dialog discloses
-// that and offers a route to the batch panel when a wider selection is live.
-const remixDialogOpen = ref(false);
-const remixImage = ref(null);
+// ── The Run popup (v1.12 F5) ─────────────────────────────────────────────
+// The dialogs themselves are mounted in App.vue - the one parent the grid and
+// the Workflows view share - so the grid only says what to run.
+//
+// **Every close here is `closeOverlay(false)`** (#1446's rule): this component
+// is closing the lightbox to reveal its own result, so it must not honour
+// `?from=`. Doing so would be worse here than on the other such paths - the
+// popup is App's, but the progress runner and the view context are the grid's,
+// and `onUnmounted` closes the popup with them. Leaving for the workflow shelf
+// would unmount this grid and shut the popup the reader had just opened.
 
-function openRemixDialog(pictureId) {
-  const id = pictureId ?? contextMenuImage.value?.id;
-  if (id == null) return;
-  const image =
-    allGridImages.value.find((img) => String(img?.id) === String(id)) ||
-    contextMenuImage.value;
-  if (!image) return;
-  remixImage.value = image;
-  remixDialogOpen.value = true;
+/** Run one picture's own recipe: the lightbox's Recipe tab, and the grid. */
+function openRunForPicture(pictureId) {
+  const id = Number(getPictureId(pictureId ?? contextMenuImage.value?.id));
+  if (!Number.isFinite(id) || id <= 0) return;
+  if (overlayOpen.value) closeOverlay(false);
+  runDialogStore.openRun({ kind: "picture", pictureIds: [id] });
+}
+
+/**
+ * "Make more like these…" - each picture's own recipe again, with a new seed.
+ *
+ * Which popup opens is the SERVER's answer, not a guess from the selection:
+ * the pre-flight groups the pictures by the card each one is on, and one group
+ * is the single Run popup while several are the Make more popup. Asking first
+ * is what keeps "these three are all the same recipe" from being decided by a
+ * client that cannot see a card.
+ */
+async function makeMoreLikeSelection() {
+  const ids = selectedImageIds.value
+    .map((id) => Number(getPictureId(id)))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!ids.length || isReadOnly.value || decidingMakeMore) return;
+  // One look-ahead at a time. The menu closes on the click, so a double press
+  // or the entry fired from both menus would otherwise start two pre-flights -
+  // two ComfyUI `/object_info` reads - and whichever answered last would decide
+  // which popup opened.
+  decidingMakeMore = true;
+  try {
+    const answer = await preflightWorkflowRun({ picture_ids: ids, count: 1 });
+    const groups = answer?.groups || [];
+    if (groups.length === 1 && groups[0].workflow_key) {
+      runDialogStore.openRun({
+        kind: "selection",
+        pictureIds: groups[0].picture_ids?.length ? groups[0].picture_ids : ids,
+        workflowKey: groups[0].workflow_key,
+      });
+      return;
+    }
+    // The answer goes with it: the popup would otherwise ask the identical
+    // question again, and each ask costs the server an /object_info read.
+    runDialogStore.openMakeMore({ pictureIds: ids, preflight: answer });
+  } catch (err) {
+    // The popup asks for itself when it is handed no answer, so a failed
+    // look-ahead opens the multi-recipe one rather than swallowing the
+    // gesture.
+    // Told, not swallowed: the popup that opens next re-asks and will show the
+    // real refusal, but the reader pressed a menu entry and deserves to know
+    // the first answer never came.
+    console.warn("Could not group the selection by recipe:", err);
+    noticeStore.warning(
+      "Could not tell which recipes these pictures use; showing them all together.",
+      { key: "make-more-grouping" },
+    );
+    runDialogStore.openMakeMore({ pictureIds: ids });
+  } finally {
+    decidingMakeMore = false;
+  }
+}
+
+/** One "Make more" look-ahead at a time; see `makeMoreLikeSelection`. */
+let decidingMakeMore = false;
+
+/** The Run popup with its workflow picker unset, over these pictures. */
+function openRunWithWorkflowPicker(ids) {
+  if (isReadOnly.value || !ids.length) return;
+  if (overlayOpen.value) closeOverlay(false);
+  runDialogStore.openRun({
+    kind: "selection",
+    pictureIds: ids,
+    pickWorkflow: true,
+  });
+}
+
+/** "Run a workflow on these…", from either grid menu. */
+function runWorkflowOnSelection() {
+  openRunWithWorkflowPicker(
+    selectedImageIds.value
+      .map((id) => Number(getPictureId(id)))
+      .filter((id) => Number.isFinite(id) && id > 0),
+  );
+}
+
+/**
+ * The lightbox's "Use as input for…" — the same popup, over ONE picture.
+ *
+ * Deliberately not routed through the selection. `openOverlay` never touches
+ * `selectedImageIds`, so in the lightbox that selection is invisible, and a
+ * control whose tooltip says "this picture" must not hand the run fifty
+ * others the reader cannot see. With no id there is nothing to act on, and it
+ * falls back to nothing rather than to that invisible selection.
+ */
+function runWorkflowOnPicture(pictureId) {
+  const id = Number(getPictureId(pictureId));
+  if (!Number.isFinite(id) || id <= 0) return;
+  openRunWithWorkflowPicker([id]);
 }
 
 // What a run with no selection files its output into: the set, project and
-// character in view. Fed to the run panel, which lives in the rail (#1307).
+// character in view. Fed to the Run popup, which App.vue mounts (#1407): the
+// view is the grid's to know, and the popup is not the grid's to own.
 const runViewContext = computed(() => {
   const rawChar = selectionStore.selectedCharacter;
   const specialIds = [
@@ -3144,7 +3230,6 @@ const visibleRangeLabel = computed(() => {
 const tasksStore = useTasksStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const lockedSetsStore = useLockedSetsStore();
-const genStackPrefs = useGenStackPrefsStore();
 const scrapheapRetentionStore = useScrapheapRetentionStore();
 const operationStore = useOperationStore();
 // Every failure path in this component reports through the notice surface. A
@@ -5525,31 +5610,26 @@ const {
   clearSelection,
 } = useMultiSelect();
 
-// The run panel sits in App's rail, outside the grid: it reads the live
-// selection, the view context and the progress runner from here (#1307).
-const workflowRunStore = useWorkflowRunStore();
-watch(
-  selectedImageIds,
-  (ids) => {
-    workflowRunStore.selectionIds = (ids || [])
-      .map((id) => Number(getPictureId(id)))
-      .filter((id) => Number.isFinite(id) && id > 0);
-  },
-  { immediate: true, deep: true },
-);
+// The Run popups are mounted in App.vue, outside the grid: they read the view
+// context a run's output is filed into, and the progress runner, from here.
+const runDialogStore = useRunDialogStore();
 watch(
   runViewContext,
   (context) => {
-    workflowRunStore.context = context;
+    runDialogStore.context = context;
   },
   { immediate: true },
 );
-const detachWorkflowRunner = workflowRunStore.attachRunner(handleComfyuiRun);
+const detachWorkflowRunner = runDialogStore.attachRunner(handleComfyuiRun);
 onUnmounted(() => {
   detachWorkflowRunner();
-  // No grid, no selection to run on and no runner to follow the run.
-  workflowRunStore.close();
-  workflowRunStore.selectionIds = [];
+  // No grid, no selection to run on and no runner to follow the run - and no
+  // view either, so the context goes too. Left behind it is the LAST grid's:
+  // a run started afterwards from the Workflows view would file its output
+  // into whichever set happened to be open before, and quote a `client_id`
+  // whose socket nothing is listening on.
+  runDialogStore.close();
+  runDialogStore.context = {};
 });
 
 // The locked-delete cards (`showLockedDeleteNotice`) are scoped to the context
@@ -5730,12 +5810,46 @@ function moveOverlayTo(id) {
   _pushOverlayRoute(id);
 }
 
-function _removeOverlayRoute() {
+// Closing the lightbox drops `?overlay=` and stays put - except when the
+// picture was opened from a destination that replaces this grid (the workflow
+// library's tiles), which sends the route to come back to as `?from=`. Without
+// it the close left the reader on All Pictures instead of the shelf they came
+// from. `overlayCloseTarget` owns that decision, so it can be read and tested as
+// one thing; `ImageGridOverlayCloseReturn.test.js` mounts this component and
+// pins that the close actually asks it.
+//
+// `returnToOrigin` is what separates the reader closing the lightbox from this
+// component closing it to reveal its own work - see `closeOverlay`.
+// Does `?from=` name somewhere this app can actually go? The catch-all
+// redirects every unmatched path to the home view, so an unresolvable one would
+// close the lightbox onto All Pictures - the exact landing this change exists to
+// prevent - instead of falling back to the plain close. A named match is the
+// test: the only unnamed routes in the table are the two redirects.
+function _isOverlayReturnDestination(path) {
+  try {
+    return Boolean(_overlayRouter.resolve(path).name);
+  } catch (err) {
+    // A malformed path (a bad percent-escape) throws in the resolver rather
+    // than returning nothing. Say so: it means a link somewhere is building
+    // `?from=` wrongly, and the close quietly staying put would hide it.
+    console.warn("[overlay] ignoring an unusable ?from=", path, err);
+    return false;
+  }
+}
+
+function _removeOverlayRoute(returnToOrigin) {
   _overlayRoutePushPending = true;
-  const { overlay: _removed, ...rest } = _overlayRoute.query;
-  _overlayRouter.replace({ query: rest }).finally(() => {
-    _overlayRoutePushPending = false;
-  });
+  _overlayRouter
+    .replace(
+      overlayCloseTarget(
+        _overlayRoute.query,
+        returnToOrigin,
+        _isOverlayReturnDestination,
+      ),
+    )
+    .finally(() => {
+      _overlayRoutePushPending = false;
+    });
 }
 
 watch(
@@ -5748,7 +5862,10 @@ watch(
       }
     } else {
       if (overlayOpen.value) {
-        closeOverlay();
+        // The route has already moved - this is catching up with it, not the
+        // reader closing the lightbox - so it must not act on a `?from=` of its
+        // own accord.
+        closeOverlay(false);
       }
     }
   },
@@ -6577,11 +6694,17 @@ async function openOverlay(img) {
   markEnd("pixlstash:interaction-open-picture");
 }
 
-function closeOverlay() {
+// `returnToOrigin` false for every close this component makes on its own
+// behalf: a reverse-image search, a delete, a restore and "use as input" all
+// close the lightbox precisely so their result is visible in the grid behind
+// it, and honouring `?from=` would send that result to a screen with no grid.
+// The default is the reader's own close (the X, Escape, the `close` emit, which
+// carries no payload), which is the one that goes back where it came from.
+function closeOverlay(returnToOrigin = true) {
   overlayOpen.value = false;
   overlayImageId.value = null;
   overlayInitialExpandedStackIds.value = [];
-  _removeOverlayRoute();
+  _removeOverlayRoute(returnToOrigin);
   if (comfyuiRunner.value?.comfyuiPendingOverlayRefresh) {
     comfyuiRunner.value.comfyuiPendingOverlayRefresh.value = false;
   }
@@ -6728,6 +6851,12 @@ watch(
     () => filterStore.stackStateFilter,
     () => filterStore.sharedOnlyFilter,
     () => filterStore.unassignedOnlyFilter,
+    // *Show all N pictures* (F7). Without it the chip's × emptied the strip
+    // and left the grid on one workflow's pictures until something unrelated
+    // moved: arrival only ever worked by accident, because `router.push("/")`
+    // remounts this component (it is `v-else` in `App.vue`) and a remount
+    // fetches anyway. Removal has no such accident behind it.
+    () => filterStore.workflowFilter,
   ],
   () => {
     _resetGridState();
@@ -7763,7 +7892,7 @@ function handleOverlayReverseImageSearch() {
   faceLikenessSearchFaceId.value = null;
   reverseImageSearchPictureIds.value = [id];
   // Reveal the results behind the lightbox and clear any text search.
-  closeOverlay();
+  closeOverlay(false);
   emit("clear-search", "");
 }
 
@@ -7775,7 +7904,7 @@ function handleOverlayFindSimilarFaces(faceId) {
   // land in the grid BEHIND the lightbox, and while the overlay is open every
   // grid mutation is deferred (§9.1), so without closing it the action looks
   // like it did nothing at all.
-  closeOverlay();
+  closeOverlay(false);
   emit("clear-search", "");
 }
 
@@ -7795,7 +7924,7 @@ async function handleOverlayDelete() {
   // soft-deletes immediately. Either way, close the lightbox so it never shows
   // a picture that has just left the current view.
   await deleteSelected([id]);
-  closeOverlay();
+  closeOverlay(false);
 }
 
 async function handleOverlayScrapheapRestore() {
@@ -7810,7 +7939,7 @@ async function handleOverlayScrapheapRestore() {
     });
   }
   removeImagesById([id]);
-  closeOverlay();
+  closeOverlay(false);
   emit("refresh-sidebar");
   fetchAllGridImages().then(() => {
     loadedRanges.value = [];
@@ -7824,38 +7953,6 @@ function handleContextMenuOpenTagPanel() {
 
 function handleContextMenuOpenPluginPanel() {
   selectionBarRef.value?.openPluginPanel();
-}
-
-function handleContextMenuOpenComfyuiPanel() {
-  workflowRunStore.openFor(FROM_SELECTION);
-}
-
-/**
- * "Use as input for…" — put one picture into the run panel and open it (#1406).
- *
- * The run panel lives in the rail, which the lightbox covers, so the overlay
- * is closed on the way.
- */
-function useOverlayPictureAsInput(pictureId) {
-  const id = pictureId ?? overlayImageId.value;
-  if (id == null) return;
-  if (overlayOpen.value) closeOverlay();
-  // Narrowed to this picture, always.
-  //
-  // `handleImageContextMenu` keeps a selection the right-clicked picture is
-  // already part of, and that rule does NOT carry over here: it holds because
-  // the grid selection is on screen, so the user can see what a menu entry is
-  // about to act on. `openOverlay` never touches `selectedImageIds`, so in the
-  // lightbox that selection is invisible - and both ways in name one picture
-  // ("Run a workflow with THIS picture as its input", and the context menu's
-  // `contextImage.id`). Keeping 50 unseen pictures selected would hand the run
-  // panel all 50 from a control that promised one.
-  selectedImageIds.value = [id];
-  // In lockstep with the ids, as on every other selection path: left behind,
-  // this is the anchor a later shift-click ranges from, pointing at a picture
-  // no longer selected.
-  lastSelectedImageId.value = id;
-  workflowRunStore.openFor(FROM_SELECTION);
 }
 
 function openSegmentDialog() {

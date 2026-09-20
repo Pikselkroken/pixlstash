@@ -57,9 +57,8 @@ import { useModelFoldersStore } from "./useModelFoldersStore";
 import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
 import { useMovesStore } from "./useMovesStore";
-import { useWorkflowShelfStore } from "./useWorkflowShelfStore";
 import { useWorkflowsStore } from "./useWorkflowsStore";
-import { useWorkflowRunStore } from "./useWorkflowRunStore";
+import { useRunDialogStore } from "./useRunDialogStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
@@ -123,37 +122,21 @@ const STORES = [
     name: "useFolderMappingStore",
     use: useFolderMappingStore,
     seed: (s) => {
-      s.save({ taskId: "abc123", path: "/home/me/Pictures", label: "Pictures" });
+      s.save({
+        taskId: "abc123",
+        path: "/home/me/Pictures",
+        label: "Pictures",
+      });
     },
     isEmpty: (s) => s.pending === null,
   },
   {
-    // The topology rows are hub-side facts about this machine, but every count
-    // on them is read across the ACTIVE library's pictures, and the sample ids
-    // the inspector holds ARE that library's pictures. All of it is owner-only,
-    // so none of it may survive a credential change. The view axes are kept:
-    // they are the user's own preference and hold no id.
-    name: "useWorkflowShelfStore",
-    use: useWorkflowShelfStore,
-    seed: (s) => {
-      s.rows = [{ topology_hash: "a".repeat(64), pictures: 1075, variants: 3 }];
-      s.scan = { pictures: 28172, scanned: 28172 };
-      s.selectedHash = "a".repeat(64);
-      s.samples["a".repeat(64)] = [11, 12];
-      s.loaded = true;
-    },
-    isEmpty: (s) =>
-      s.rows.length === 0 &&
-      !s.loaded &&
-      s.selectedHash === null &&
-      Object.keys(s.samples).length === 0,
-  },
-  {
-    // v1.12 F1a, the Workflows GRID. Same reasoning as the shelf above and one
-    // more reason: a card's covers are thumbnail URLs of the ACTIVE library's
-    // pictures, and an open stack's members were read one owner-only detail
-    // request at a time. The sort key is kept - it is the user's own
-    // preference and names nothing.
+    // v1.12 F1a, the Workflows grid. The cards are hub-side facts about this
+    // machine, but every count on them is read across the ACTIVE library's
+    // pictures, a card's covers are thumbnail URLs of those pictures, and an
+    // open stack's members were read one owner-only detail request at a time.
+    // None of it may survive a credential change. The sort key is kept - it is
+    // the user's own preference and names nothing.
     name: "useWorkflowsStore",
     use: useWorkflowsStore,
     seed: (s) => {
@@ -173,17 +156,15 @@ const STORES = [
       Object.keys(s.members).length === 0,
   },
   {
-    // The run panel holds the grid's selection, which names pictures of the
-    // library the old session could see, and is closed with it.
-    name: "useWorkflowRunStore",
-    use: useWorkflowRunStore,
+    // An open Run popup names pictures and a card of the library the old
+    // session could see, and is closed with it.
+    name: "useRunDialogStore",
+    use: useRunDialogStore,
     seed: (s) => {
-      s.open = true;
-      s.selectionIds = [11, 12];
+      s.openRun({ kind: "picture", pictureIds: [11, 12] });
       s.context = { character_id: 3 };
     },
-    isEmpty: (s) =>
-      !s.open && s.selectionIds.length === 0 && !s.context.character_id,
+    isEmpty: (s) => !s.source && !s.makeMore && !s.context.character_id,
   },
   {
     name: "useLockedSetsStore",
@@ -467,6 +448,7 @@ describe("the store matrix is complete", () => {
     "useGenStackPrefsStore.js": "localStorage view preference",
     "useGridStore.js": "grid layout and display toggles",
     "useNoticeStore.js": "transient toast queue",
+    "useWorkflowPrefsStore.js": "localStorage Grid | List preference",
     "useScrapheapRetentionStore.js":
       "server-level policy from server-config.json, identical for every " +
       "credential - no scope dimension, so nothing to leak between them",

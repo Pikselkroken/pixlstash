@@ -391,7 +391,7 @@ describe("OverlayRecipePanel", () => {
       const wrapper = render({ comfyuiConfigured: true });
       const button = wrapper
         .findAll("button")
-        .find((b) => b.text().includes("Use as input"));
+        .find((b) => b.text().includes("Run another workflow"));
       expect(button).toBeDefined();
       expect(button.attributes("aria-disabled")).toBe("true");
     } finally {
@@ -405,7 +405,7 @@ describe("OverlayRecipePanel", () => {
       const wrapper = render({ comfyuiConfigured: true });
       const button = wrapper
         .findAll("button")
-        .find((b) => b.text().includes("Use as input"));
+        .find((b) => b.text().includes("Run another workflow"));
       await button.trigger("click");
       expect(wrapper.emitted("use-as-input")).toBeUndefined();
     } finally {
@@ -426,7 +426,7 @@ describe("OverlayRecipePanel", () => {
       const run = wrapper.find(".recipe-run");
       const input = wrapper
         .findAll("button")
-        .find((b) => b.text().includes("Use as input"));
+        .find((b) => b.text().includes("Run another workflow"));
       const runDesc = run.attributes("aria-describedby");
       const inputDesc = input.attributes("aria-describedby");
       expect(runDesc).toBeTruthy();
@@ -447,7 +447,7 @@ describe("OverlayRecipePanel", () => {
       const wrapper = render({ comfyuiConfigured: true });
       const input = wrapper
         .findAll("button")
-        .find((b) => b.text().includes("Use as input"));
+        .find((b) => b.text().includes("Run another workflow"));
       expect(input.attributes("aria-describedby")).toBe(
         wrapper.find(".recipe-run").attributes("aria-describedby"),
       );
@@ -460,7 +460,7 @@ describe("OverlayRecipePanel", () => {
   it("hides the input action with no ComfyUI to run anything on", () => {
     const wrapper = render({ comfyuiConfigured: false });
     expect(
-      wrapper.findAll("button").some((b) => b.text().includes("Use as input")),
+      wrapper.findAll("button").some((b) => b.text().includes("Run another workflow")),
     ).toBe(false);
   });
 
@@ -470,7 +470,7 @@ describe("OverlayRecipePanel", () => {
     expect(button.attributes("aria-disabled")).toBeUndefined();
     expect(wrapper.find(".recipe-run-reason").exists()).toBe(false);
     await button.trigger("click");
-    expect(wrapper.emitted("generate-variants")).toHaveLength(1);
+    expect(wrapper.emitted("run")).toHaveLength(1);
   });
 
   // An A1111 picture fills the whole tab and still cannot be replayed: there
@@ -487,7 +487,7 @@ describe("OverlayRecipePanel", () => {
       "A1111 or Forge",
     );
     await button.trigger("click");
-    expect(wrapper.emitted("generate-variants")).toBeUndefined();
+    expect(wrapper.emitted("run")).toBeUndefined();
   });
 
   it("names the graph's own reason when the server gave one", () => {
@@ -507,7 +507,7 @@ describe("OverlayRecipePanel", () => {
     });
     const useAsInput = wrapper
       .findAll("button")
-      .find((b) => b.text().includes("Use as input for"));
+      .find((b) => b.text().includes("Run another workflow"));
     expect(useAsInput).toBeDefined();
     await useAsInput.trigger("click");
     expect(wrapper.emitted("use-as-input")).toHaveLength(1);

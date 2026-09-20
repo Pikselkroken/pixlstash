@@ -81,6 +81,28 @@ describe("card chips", () => {
       "imported",
     ]);
   });
+
+  // A hidden card is only ever drawn because somebody ticked *Show hidden
+  // workflows* (F7). Unmarked it is indistinguishable from a card that was
+  // never hidden, in the one grid it was deliberately kept out of — and it
+  // leads the row because the row clips to "+N".
+  it("leads with `hidden`, on a lone card and on a stack alike", () => {
+    expect(
+      factChips({ ...STACK, stack_size: 1, differs_by: [], hidden: true }).map(
+        (c) => c.label,
+      ),
+    ).toEqual(["hidden", "txt2img"]);
+    expect(factChips({ ...STACK, hidden: true }).map((c) => c.label)).toEqual([
+      "hidden",
+      "+ face detailer",
+      "+ upscale 2×",
+    ]);
+    // And a card nobody hid says nothing about it.
+    expect(factChips({ ...STACK, hidden: false }).map((c) => c.label)).toEqual([
+      "+ face detailer",
+      "+ upscale 2×",
+    ]);
+  });
 });
 
 describe("cardAccessibleName", () => {
@@ -117,5 +139,81 @@ describe("ratingLabel", () => {
     expect(ratingLabel(null)).toBeNull();
     // 0 is unrated, not a zero-star rating.
     expect(ratingLabel(0)).toBeNull();
+  });
+});
+
+// ── Which model the card is ABOUT ────────────────────────────────────────
+//
+// Slot order is document order, so "the first slot" is whatever the graph
+// happened to list first. #1449 shipped a Flux card whose name row read
+// `flux1-dev` and whose model row read `ae.safetensors` - its VAE - because
+// the name had learned this and the row had not.
+describe("checkpointModel", () => {
+  const flux = {
+    models: [
+      { name: "ae.safetensors", kind: "vae" },
+      { name: "t5xxl_fp16.safetensors", kind: "clip" },
+      { name: "flux1-dev.safetensors", kind: "unet" },
+    ],
+  };
+
+  it("takes the base model, never the first slot", () => {
+    expect(checkpointModel(flux).name).toBe("flux1-dev.safetensors");
+  });
+
+  it("prefers a checkpoint over a unet where a graph carries both", () => {
+    const both = {
+      models: [
+        { name: "flux1-dev.safetensors", kind: "unet" },
+        { name: "juggernautXL.safetensors", kind: "checkpoint" },
+      ],
+    };
+    expect(checkpointModel(both).kind).toBe("checkpoint");
+  });
+
+  it("is null for a graph that loads no base model at all", () => {
+    // The row then says "No checkpoint" rather than naming an accessory, and
+    // the accessible name leaves the model out instead of announcing a VAE.
+    const accessories = {
+      models: [
+        { name: "ae.safetensors", kind: "vae" },
+        { name: "4x-UltraSharp.pth", kind: "upscale" },
+      ],
+    };
+    expect(checkpointModel(accessories)).toBe(null);
+    expect(cardAccessibleName({ ...accessories, name: "X" })).not.toContain(
+      "ae.safetensors",
+    );
+  });
+
+  it("skips a base slot whose name was forgotten", () => {
+    const forgotten = {
+      models: [
+        { name: null, kind: "checkpoint" },
+        { name: "flux1-dev.safetensors", kind: "unet" },
+      ],
+    };
+    expect(checkpointModel(forgotten).name).toBe("flux1-dev.safetensors");
+  });
+});
+
+// ── One fact, one voice ──────────────────────────────────────────────────
+describe("the type chip", () => {
+  it("reads the served label, so it matches a generated name", () => {
+    const labels = factChips({
+      type: "txt2img",
+      type_label: "Text to Image",
+    }).map((chip) => chip.label);
+
+    expect(labels).toContain("Text to Image");
+    // The card's name row says "realvisxl: Text to Image"; the chip saying
+    // `txt2img` beside it is one fact in two vocabularies.
+    expect(labels).not.toContain("txt2img");
+  });
+
+  it("falls back to the token when the payload has no label", () => {
+    expect(factChips({ type: "inpaint" }).map((c) => c.label)).toContain(
+      "inpaint",
+    );
   });
 });

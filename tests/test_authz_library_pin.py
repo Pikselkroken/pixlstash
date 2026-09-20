@@ -239,22 +239,32 @@ class TestPinnedRoutes:
         request_thread = threading.Thread(target=request)
         switch_thread = threading.Thread(target=switch)
         request_thread.start()
-        assert lookup_entered.wait(timeout=10)
-        switch_thread.start()
-        deadline = time.monotonic() + 5
-        while server.library_coordinator.state is not SwitchState.SWITCHING:
-            assert time.monotonic() < deadline
-            time.sleep(0.01)
-        assert not switch_done.is_set()
-        assert server.vault.image_root == original.path
-
-        release_lookup.set()
-        request_thread.join(timeout=10)
-        switch_thread.join(timeout=20)
-        assert request_done.is_set() and switch_done.is_set()
-        assert errors == []
-        assert server.vault.image_root == target.path
-        server.library_switch.switch_to(original.uuid)
+        try:
+            try:
+                assert lookup_entered.wait(timeout=10)
+                switch_thread.start()
+                deadline = time.monotonic() + 5
+                while server.library_coordinator.state is not SwitchState.SWITCHING:
+                    assert time.monotonic() < deadline
+                    time.sleep(0.01)
+                assert not switch_done.is_set()
+                assert server.vault.image_root == original.path
+            finally:
+                # Inside the try, so an assertion that fires still releases and
+                # joins the paused handler instead of leaving it parked on
+                # release_lookup.wait(10) holding the read task.
+                release_lookup.set()
+                request_thread.join(timeout=10)
+                if switch_thread.ident is not None:  # unstarted if the pause failed
+                    switch_thread.join(timeout=20)
+            assert request_done.is_set() and switch_done.is_set()
+            assert errors == []
+            assert server.vault.image_root == target.path
+        finally:
+            # Likewise for the library itself: a failure here used to skip the
+            # restore and leave the rest of the module on the wrong library.
+            if server.library_registry.active_library().uuid != original.uuid:
+                server.library_switch.switch_to(original.uuid)
 
     def test_a_token_with_no_stamp_at_all_is_refused(self, server):
         """Fails closed: an unstamped token is not treated as universal.

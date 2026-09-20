@@ -1339,18 +1339,26 @@ def test_task_runner_shutdown_stops_scan_after_current_slice():
 
     task = DedupScanTask(FakeDatabase(), scan_id=7)
     runner = TaskRunner(name="dedup-shutdown-test", num_workers=1)
+    shutdown = threading.Thread(target=runner.stop)
     runner.start()
     runner.submit(task)
-    assert slice_started.wait(timeout=1)
+    try:
+        assert slice_started.wait(timeout=1)
 
-    shutdown = threading.Thread(target=runner.stop)
-    shutdown.start()
-    # stop() must wait for the callback that currently owns the DB session.
-    shutdown.join(timeout=0.05)
-    assert shutdown.is_alive()
+        shutdown.start()
+        # stop() must wait for the callback that currently owns the DB session.
+        shutdown.join(timeout=0.05)
+        assert shutdown.is_alive()
+    finally:
+        # Inside the try, so an assertion that fires still releases the paused
+        # slice instead of leaving a runner worker parked on
+        # release_slice.wait(2) and stop() running into the next test.
+        release_slice.set()
+        if shutdown.ident is not None:
+            shutdown.join(timeout=1)
+        else:  # the slice never began, so nothing else will stop the runner
+            runner.stop()
 
-    release_slice.set()
-    shutdown.join(timeout=1)
     assert not shutdown.is_alive()
     assert calls == ["_start_scan_slice", "_mark_pending_after_cancel"]
     assert task.result == {

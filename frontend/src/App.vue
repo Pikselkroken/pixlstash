@@ -21,7 +21,7 @@ import { useFilterStore } from "./stores/useFilterStore";
 import { useGridStore } from "./stores/useGridStore";
 import { useSidebarStore } from "./stores/useSidebarStore";
 import { useUserPrefsStore } from "./stores/useUserPrefsStore";
-import { useWorkflowRunStore } from "./stores/useWorkflowRunStore";
+import { useRunDialogStore } from "./stores/useRunDialogStore";
 import { useFolderMappingStore } from "./stores/useFolderMappingStore";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
@@ -86,26 +86,26 @@ const MovesReview = defineAsyncComponent(
 const ReviewSessionsOverlay = defineAsyncComponent(
   () => import("./components/views/ReviewSessionsOverlay.vue"),
 );
-const WorkflowShelf = defineAsyncComponent(
-  () => import("./components/views/WorkflowShelf.vue"),
-);
-// v1.12 F1a: the new Workflows grid, reachable only by typing
-// `/workflows-next`. Async like the shelf, and for the same reason — nothing
-// that is not on screen belongs in the first chunk.
+// The Workflows grid, on `/workflows` since F1b. Async like every other
+// destination, and for the same reason — nothing that is not on screen
+// belongs in the first chunk.
 const WorkflowsView = defineAsyncComponent(
   () => import("./components/views/WorkflowsView.vue"),
 );
-// The workflow library's right rail. Async like the view it belongs to, and a
-// component of its own rather than a branch inside StatsSidebar: that panel
-// fetches on watchers, so a hidden-but-mounted copy would keep asking for
-// numbers nobody is looking at.
-const WorkflowInspector = defineAsyncComponent(
-  () => import("./components/panels/WorkflowInspector.vue"),
+// Its right rail (v1.12 F3), a component of its own rather than a branch
+// inside StatsSidebar: that panel fetches on watchers, so a
+// hidden-but-mounted copy would keep asking for numbers nobody is looking at.
+const WorkflowTab = defineAsyncComponent(
+  () => import("./components/panels/WorkflowTab.vue"),
 );
-// The run panel takes the stats panel's place in the rail while it is open
-// (#1307), for the same reason the workflow inspector does.
-const WorkflowRunPanel = defineAsyncComponent(
-  () => import("./components/panels/WorkflowRunPanel.vue"),
+// The two Run popups (v1.12 F5). Mounted here rather than in the grid: they
+// are opened from the grid's menus, from the lightbox and from the Workflows
+// view's Workflow tab, and this is the only parent all three share.
+const RunDialog = defineAsyncComponent(
+  () => import("./components/io/RunDialog.vue"),
+);
+const MakeMoreDialog = defineAsyncComponent(
+  () => import("./components/io/MakeMoreDialog.vue"),
 );
 
 // --- Stores ---
@@ -114,7 +114,7 @@ const filterStore = useFilterStore();
 const gridStore = useGridStore();
 const sidebarStore = useSidebarStore();
 const userPrefsStore = useUserPrefsStore();
-const workflowRunStore = useWorkflowRunStore();
+const runDialogStore = useRunDialogStore();
 const projectStore = useProjectStore();
 const wsStore = useWsStore();
 const reviewSessionsStore = useReviewSessionsStore();
@@ -208,7 +208,6 @@ const {
   isInsightsView,
   isMovesView,
   isWorkflowsView,
-  isWorkflowsNextView,
   handleSelectModels,
   handleSelectInsights,
   handleSelectMoves,
@@ -387,6 +386,23 @@ function onRestoreConfirmed() {
   gridStore.wsUpdateKey = Date.now();
   gridStore.refreshGridVersion();
   refreshSidebar();
+}
+
+/**
+ * A Run popup queued something. The prompts go to the grid's ComfyUI runner
+ * for progress, and the toast says where the pictures will turn up: the Tasks
+ * tab, which is where a run this app started is followed.
+ */
+function onRunStarted({ prompts = [], pictureIds = [] } = {}) {
+  runDialogStore.started(prompts, pictureIds);
+  noticeStore.push({
+    level: "success",
+    text:
+      prompts.length === 1
+        ? "Started 1 run in ComfyUI."
+        : `Started ${prompts.length} runs in ComfyUI.`,
+    action: { label: "Show", handler: focusTasksTabPanel },
+  });
 }
 
 /**
@@ -797,18 +813,12 @@ defineExpose({
                 v-else-if="isMovesView"
                 @open-settings="openSettingsDialog"
               />
-              <!-- The workflow library lists graphs the hub knows about rather
+              <!-- The Workflows grid lists graphs the hub knows about rather
                    than pictures in this library, so like the shelf it replaces
                    the grid instead of floating over it, and the grid stays
                    unmounted while it is open. -->
-              <WorkflowShelf
-                v-else-if="isWorkflowsView"
-                @open-settings="openSettingsDialog"
-              />
-              <!-- The same slot, for the grid that replaces the shelf in F1b.
-                   It has no sidebar entry: `/workflows-next` is typed. -->
               <WorkflowsView
-                v-else-if="isWorkflowsNextView"
+                v-else-if="isWorkflowsView"
                 @open-settings="openSettingsDialog"
               />
               <ImageGrid
@@ -858,14 +868,31 @@ defineExpose({
         <!-- One rail, four uses (implementation plan §F2). On the workflow
              library it carries the selected workflow; everywhere else it is the
              statistics panel it has always been. -->
-        <!-- A run outranks the inspector, including on the workflow library:
-             starting one force-opens this rail (`useWorkflowRunStore.openFor`),
-             so with the inspector first the rail opened onto "Pick a workflow"
-             while a run was in progress behind it. -->
-        <WorkflowRunPanel v-if="workflowRunStore.open" />
-        <WorkflowInspector v-else-if="isWorkflowsView" />
+        <!-- Nothing contends for this rail any more. The shelf's own inspector
+             went with the shelf in F1b, and the run panel that used to outrank
+             both became a popup in F5, so `/workflows` is the one branch left
+             ahead of the stats panel. -->
+        <WorkflowTab v-if="isWorkflowsView" />
         <StatsSidebar v-else ref="statsSidebarRef" />
       </div>
+      <RunDialog
+        v-if="runDialogStore.source"
+        open
+        :source="runDialogStore.source"
+        :context="runDialogStore.context"
+        @close="runDialogStore.close()"
+        @run="onRunStarted"
+        @open-settings="openSettingsDialog"
+      />
+      <MakeMoreDialog
+        v-if="runDialogStore.makeMore"
+        open
+        :source="runDialogStore.makeMore"
+        :context="runDialogStore.context"
+        @close="runDialogStore.close()"
+        @run="onRunStarted"
+        @open-settings="openSettingsDialog"
+      />
       <ReviewSessionsOverlay
         v-if="reviewSessionsStore.overlayOpen"
         :inert="librarySwitchOverlayOpen"

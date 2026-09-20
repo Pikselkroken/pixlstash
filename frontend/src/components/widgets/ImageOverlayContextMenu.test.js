@@ -122,7 +122,7 @@ describe("overlay-mode context menu - action set", () => {
     // Overlay mode DOES offer the picture as a workflow's input (#1406), and
     // it is the only ComfyUI entry here: the grid menu's batch "Filters" and
     // the tag/stack entries stay out.
-    expect(labels).toContain("Use as input for…");
+    expect(labels).toContain("Run another workflow…");
     // The add-to-entity controls (project/character/set) are not rendered.
     expect(wrapper.findComponent({ name: "AddToEntityControl" }).exists()).toBe(
       false,
@@ -147,7 +147,7 @@ describe("overlay-mode context menu - action set", () => {
       },
       ...globalStubs,
     });
-    expect(itemLabels(wrapper).join(" | ")).not.toContain("Use as input for…");
+    expect(itemLabels(wrapper).join(" | ")).not.toContain("Run another workflow…");
   });
 
   it("emits the picture's id when the input entry is chosen", async () => {
@@ -165,7 +165,7 @@ describe("overlay-mode context menu - action set", () => {
     });
     const entry = wrapper
       .findAll("button.ctx-item")
-      .find((b) => b.text().includes("Use as input for"));
+      .find((b) => b.text().includes("Run another workflow"));
     expect(entry).toBeTruthy();
     await entry.trigger("click");
     // `delegateWith` closes first, then emits on the next tick.

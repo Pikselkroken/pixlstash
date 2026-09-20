@@ -227,10 +227,12 @@ describe("Toolbar - the shell band's one box recipe", () => {
       "src/components/views/LibraryInsights.vue",
       ".ins-toolbar",
     );
-    // The three bars that gained the app-wide tail in #1415.
+    // The three bars that gained the app-wide tail in #1415. The Workflows
+    // one is `WorkflowsView` since F1b; it copied the shelf's box recipe so
+    // the screen that replaced it sits at the same height.
     const workflows = blockOf(
-      "src/components/views/WorkflowShelf.vue",
-      ".wfshelf-toolbar",
+      "src/components/views/WorkflowsView.vue",
+      ".wfv-toolbar",
     );
     const moves = blockOf(
       "src/components/views/MovesReview.vue",
@@ -320,12 +322,12 @@ describe("Toolbar - the shell band's one box recipe", () => {
     // its count at a fourth ink, the same drift the shelf's --text-xl was
     // (#1415).
     const wfTitle = blockOf(
-      "src/components/views/WorkflowShelf.vue",
-      ".wfshelf-title",
+      "src/components/views/WorkflowsView.vue",
+      ".wfv-title",
     );
     const wfSub = blockOf(
-      "src/components/views/WorkflowShelf.vue",
-      ".wfshelf-sub",
+      "src/components/views/WorkflowsView.vue",
+      ".wfv-sub",
     );
     const mvTitle = blockOf(
       "src/components/views/MovesReview.vue",
@@ -350,8 +352,8 @@ describe("Toolbar - the shell band's one box recipe", () => {
     // toggle that had just narrowed the column by opening the rail (#1415).
     // `min-width: 0` is the half that actually lets a nowrap flex item shrink.
     const wfTail = blockOf(
-      "src/components/views/WorkflowShelf.vue",
-      ".wfshelf-bar-tail",
+      "src/components/views/WorkflowsView.vue",
+      ".wfv-bar-tail",
     );
     for (const identity of [wfTitle, mvTitle]) {
       expect(identity).toContain("min-width: 0");
@@ -541,21 +543,46 @@ describe("Toolbar - the ⋯ overflow mirrors its controls", () => {
     const panel = await openOverflow(wrapper);
     const labels = panel.findAll(".ctx-item").map((b) => b.text());
     expect(labels).toEqual([
+      "Generate with ComfyUI…",
       "Export grid to zip",
       "Import photos…",
-      "Generate with ComfyUI…",
       "View options…",
     ]);
   });
 
-  // The rows honour the SAME v-ifs as the buttons they mirror: no ComfyUI
-  // configured, no row; read-only drops Import (owner-only dialog) and
-  // History (there is no UndoControl to open).
-  it("mirrors the v-ifs: ComfyUI row only when configured", async () => {
+  // The rail panel this used to open is gone (v1.12 F5); the entry stays and
+  // opens the Run popup instead. Without a door here, starting a run with
+  // nothing selected meant navigating to Workflows first - every other entry
+  // point is selection-scoped or needs a picture open.
+  it("opens the Run popup with no selection, picker unset", async () => {
+    const filterStore = useFilterStore();
+    filterStore.comfyuiConfigured = true;
+    const wrapper = mountToolbar();
+    const { useRunDialogStore } = await import("../../stores/useRunDialogStore");
+    const runDialog = useRunDialogStore();
+
+    await wrapper
+      .find('button[aria-label^="Generate new pictures"]')
+      .trigger("click");
+
+    expect(runDialog.source).toMatchObject({
+      kind: "card",
+      pickWorkflow: true,
+    });
+    // No pictures, so the card is the run's own source and the popup picks
+    // where the output is filed.
+    expect(runDialog.source.pictureIds).toEqual([]);
+  });
+
+  it("hides the entry entirely when ComfyUI is not configured", async () => {
     const wrapper = mountToolbar();
     const panel = await openOverflow(wrapper);
-    const labels = panel.findAll(".ctx-item").map((b) => b.text());
-    expect(labels).not.toContain("Generate with ComfyUI…");
+    expect(panel.findAll(".ctx-item").map((b) => b.text())).not.toContain(
+      "Generate with ComfyUI…",
+    );
+    expect(
+      wrapper.find('button[aria-label^="Generate new pictures"]').exists(),
+    ).toBe(false);
   });
 
   it("honours read-only: the Import row is gone", async () => {

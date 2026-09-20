@@ -39,6 +39,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import delete, select
 
+from pixlstash import auth
 from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
@@ -60,6 +61,9 @@ _RECIPE_ROUTES = (
     ("PUT", "/api/v1/recipes/order"),
     ("PATCH", "/api/v1/recipes/{recipe_id}"),
     ("DELETE", "/api/v1/recipes/{recipe_id}"),
+    # Export (v1.12 B8): the one route here that hands back the prompt as a
+    # file, which is the single thing the workflow export exists to strip.
+    ("GET", "/api/v1/recipes/{recipe_id}/export"),
 )
 
 
@@ -316,6 +320,7 @@ def test_no_scoped_token_can_read_or_write_a_saved_recipe(recipe_env):
         ("PUT", f"{API}/recipes/order", {"recipe_ids": [saved["id"]]}),
         ("PATCH", f"{API}/recipes/{saved['id']}", {"name": "stolen"}),
         ("DELETE", f"{API}/recipes/{saved['id']}", None),
+        ("GET", f"{API}/recipes/{saved['id']}/export", None),
     )
     for method, path, body in calls:
         assert_real_route(recipe_env.server.api, method, path)
@@ -1024,3 +1029,191 @@ def test_a_variant_keyed_by_a_superseded_rule_neither_stacks_nor_credits(recipe_
         on_a["id"]: 2,
         on_b["id"]: 2,
     }
+
+
+# ===========================================================================
+# Export (v1.12 B8) — everything, and a list saying so
+# ===========================================================================
+
+
+def test_exporting_a_recipe_hands_back_everything_it_holds(recipe_env):
+    """A recipe export withholds nothing; `shares` is what the dialog lists.
+
+    The opposite of `GET /workflows/{key}/export`, and deliberately: a recipe
+    IS the prompt and the LoRA names, so one with those taken out would make
+    nothing. The contract is that the owner is told what they are agreeing to,
+    not that the file is scrubbed.
+    """
+    saved = _save(
+        recipe_env.owner,
+        CARD_A,
+        loras=_ada(0.8),
+        overrides={"sampler|steps": 30},
+        seed="12345",
+    )
+    r = recipe_env.owner.get(f"{API}/recipes/{saved['id']}/export")
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["recipe"]["prompt"] == PROMPT
+    assert payload["recipe"]["loras"][0]["filename"] == ADA
+    assert payload["recipe"]["loras"][0]["strength"] == 0.8
+    assert payload["recipe"]["overrides"] == {"sampler|steps": 30}
+    assert payload["recipe"]["seed"] == "12345"
+    assert payload["filename"].endswith(".json")
+    # Every one of those facts is named in `shares`, because the dialog shows
+    # that list and nothing else before the owner agrees to the file.
+    shares = " ".join(payload["shares"])
+    assert "the prompt you wrote" in shares
+    assert ADA in shares
+    assert "parameter setting" in shares
+    assert "seed" in shares
+
+
+def test_a_recipe_export_leaves_this_librarys_own_bookkeeping_out(recipe_env):
+    """The row id, its place in the tab and the source picture mean nothing elsewhere."""
+    saved = _save(recipe_env.owner, CARD_A, source_picture_id=None)
+    recipe = recipe_env.owner.get(f"{API}/recipes/{saved['id']}/export").json()[
+        "recipe"
+    ]
+    for local in ("id", "position", "source_picture_id", "pictures"):
+        assert local not in recipe, f"{local} is this library's bookkeeping"
+    # What a recipe genuinely needs to travel is still there.
+    assert recipe["workflow_key"] == CARD_A
+    assert recipe["keep_seed"] is False
+
+
+def test_a_recipe_export_says_when_it_carries_a_name_the_shelf_cannot_vouch_for(
+    recipe_env,
+):
+    """The forgotten-name guard on the recipe side: a warning, not a blank.
+
+    Implementation plan §5.7 asks BOTH exports to check. The workflow export
+    answers by blanking the name; a recipe cannot, because the name is the
+    recipe, so it answers by saying so in the list the owner reads first.
+    """
+    saved = _save(recipe_env.owner, CARD_A, loras=_ada())
+    shares = recipe_env.owner.get(f"{API}/recipes/{saved['id']}/export").json()[
+        "shares"
+    ]
+    assert any("no longer holds" in line and ADA in line for line in shares), shares
+
+    # Put the model on the shelf and the warning goes: the line is about what
+    # this machine holds, not about the recipe naming a LoRA at all.
+    with recipe_env.server.hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE filename = ?", (ADA,))
+        # `kind` and a digest are both NOT NULL for an adapter by CHECK
+        # constraint, so the shelf row is written the way a scan writes one.
+        conn.execute(
+            "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
+            "VALUES ('adapter', 'unknown', ?, ?, 'scanned')",
+            (ADA, _h("ada-digest")),
+        )
+    try:
+        shares = recipe_env.owner.get(f"{API}/recipes/{saved['id']}/export").json()[
+            "shares"
+        ]
+        assert not any("no longer holds" in line for line in shares), shares
+        assert any(ADA in line for line in shares), "the LoRA is still listed"
+    finally:
+        with recipe_env.server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE filename = ?", (ADA,))
+
+
+def test_exporting_a_recipe_that_does_not_exist_is_a_404(recipe_env):
+    assert recipe_env.owner.get(f"{API}/recipes/999999/export").status_code == 404
+
+
+def test_the_export_stays_closed_with_the_gate_rolled_back(recipe_env):
+    """``AUTHZ_GATE_ENFORCING = False`` is a documented rollback (§16.3).
+
+    Every other recipe route is a write, which the READ-token middleware
+    refuses on the verb whatever the gate is doing. This one is a **GET**, and
+    it returns the owner's prompt verbatim — so it is the first route in this
+    module that needs the second belt, ``auth.READ_BLOCKED_GET_PREFIXES``, and
+    the gated ``test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt``
+    is what noticed the prefix was missing.
+    """
+    saved = _save(recipe_env.owner, CARD_A, loras=_ada())
+    path = f"{API}/recipes/{saved['id']}/export"
+    server = recipe_env.server
+    scoped = _bearer(
+        server,
+        _mint(
+            recipe_env.owner,
+            "recipe rollback scoped",
+            resource_type="character",
+            resource_id=recipe_env.character_id,
+        ),
+    )
+    unscoped = _bearer(server, _mint(recipe_env.owner, "recipe rollback unscoped"))
+    previously_enforcing = server.authz._enforcing
+    server.authz._enforcing = False
+    try:
+        for client in (scoped, unscoped):
+            assert client.get(f"{API}/pictures").status_code == 200, (
+                "the token is dead; the refusal below would prove nothing"
+            )
+            assert_real_route(server.api, "GET", path)
+            r = client.get(path)
+            assert r.status_code == 403, f"GET {path}: {r.status_code} {r.text}"
+        # The positive control, with the gate still rolled back: over-blocking
+        # the owner is its own regression.
+        assert recipe_env.owner.get(path).status_code == 200
+    finally:
+        server.authz._enforcing = previously_enforcing
+
+
+def test_the_belt_and_not_only_the_gate_is_what_refuses_the_export(recipe_env):
+    """Take the prefix away and the rollback stops holding.
+
+    Without this the test above passes on the gate alone and says nothing
+    about the belt it is named for.
+    """
+    saved = _save(recipe_env.owner, CARD_A)
+    path = f"{API}/recipes/{saved['id']}/export"
+    server = recipe_env.server
+    scoped = _bearer(
+        server,
+        _mint(
+            recipe_env.owner,
+            "recipe belt probe",
+            resource_type="character",
+            resource_id=recipe_env.character_id,
+        ),
+    )
+    previously_enforcing = server.authz._enforcing
+    previously_blocked = auth.READ_BLOCKED_GET_PREFIXES
+    server.authz._enforcing = False
+    auth.READ_BLOCKED_GET_PREFIXES = tuple(
+        prefix for prefix in previously_blocked if prefix != "/api/v1/recipes/"
+    )
+    try:
+        assert scoped.get(path).status_code == 200, (
+            "with the gate rolled back AND the prefix removed this must be "
+            "reachable — if it is not, the assertion above is passing on "
+            "something else and proves nothing about the belt"
+        )
+    finally:
+        auth.READ_BLOCKED_GET_PREFIXES = previously_blocked
+        server.authz._enforcing = previously_enforcing
+
+
+def test_a_lora_saved_without_its_extension_is_still_warned_about(recipe_env):
+    """`shares` judges the name against the shelf, not against its suffix.
+
+    `unvouched_model_values` ends in an extension test, which is right for a
+    graph widget — where a string may be an enum token rather than a filename —
+    and wrong here, where the field IS a model name. A recipe saved as "ada"
+    rather than "ada.safetensors" would otherwise be exported in plain text
+    with nothing said about it.
+    """
+    bare = ADA.removesuffix(".safetensors")
+    saved = _save(
+        recipe_env.owner,
+        CARD_A,
+        loras=[{"filename": bare, "sha256": None, "strength": 1.0}],
+    )
+    shares = recipe_env.owner.get(f"{API}/recipes/{saved['id']}/export").json()[
+        "shares"
+    ]
+    assert any("no longer holds" in line and bare in line for line in shares), shares
