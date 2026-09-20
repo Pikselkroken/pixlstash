@@ -16,9 +16,12 @@ from pixlstash.database import (
 )
 from pixlstash.db_models import Picture, Tag
 from pixlstash.server import Server
+from pixlstash.task_runner import TaskCancelledError
 from pixlstash.tagger_plugins.florence2 import _words_from_ocr_regions
 from pixlstash.tasks.base_task import TaskPriority
+from pixlstash.tasks.missing_ocr_finder import MissingOcrFinder
 from pixlstash.tasks.ocr_task import OCR_MIN_TEXT_SCORE, OcrTask
+from pixlstash.tasks.task_type import TaskType
 
 RECEIPT = (
     "BAKERY No.4\nHARBOUR ST. 12\n14/09/2026 10:42\nSourdough 6.50\n"
@@ -481,8 +484,6 @@ def test_text_routes_follow_the_token_scope(server, client, pictures):
 
 
 def test_a_failed_batch_is_deferred_but_a_cancelled_one_is_not(server, pictures):
-    from pixlstash.task_runner import TaskCancelledError
-    from pixlstash.tasks.missing_ocr_finder import MissingOcrFinder
 
     _set_files(server, {pictures["unread"]: "/home/me/unread.png"})
     finder = MissingOcrFinder(server.vault.db, engine_getter=lambda: object())
@@ -534,8 +535,6 @@ def test_reading_waits_for_scoring_only_and_runs_with_captioning_off(server, pic
     reading while any picture was uncaptioned, and switching captioning off to
     clear that closed the guard instead.
     """
-    from pixlstash.tasks.missing_ocr_finder import MissingOcrFinder
-    from pixlstash.tasks.task_type import TaskType
 
     assert (
         TaskType.DESCRIPTION
