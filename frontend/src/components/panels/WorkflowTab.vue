@@ -9,7 +9,7 @@
     <!-- The task manager, last tab and on its own: what the app is working on
          is not part of a workflow, so it replaces the body rather than sitting
          under it. Here so that a run started from this screen can be watched
-         from this screen (#1472). -->
+         from this screen. -->
     <TasksPanel v-if="tab === 'tasks'" />
 
     <p v-else-if="!card && !multiple" class="wftab-empty">
@@ -276,7 +276,7 @@ import { modelDisplayName } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
 import Segmented from "../widgets/Segmented.vue";
-import TasksPanel, { TASKS_TAB } from "./TasksPanel.vue";
+import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import WorkflowDefaultRow from "./WorkflowDefaultRow.vue";
 
@@ -305,17 +305,19 @@ const tasksStore = useTasksStore();
 const tab = ref("workflow");
 // Tasks last, and never anything but last: it is the app's business, not this
 // workflow's.
+// A deep link to the Tasks tab, from a notice or a banner (`showTasksTab`).
+// This rail is the one a run is usually started from, so it is the one the
+// toast's *Show* has to land on.
+watch(
+  () => sidebarStore.tasksTabRequest,
+  () => {
+    tab.value = "tasks";
+  },
+);
+
 const tabs = computed(() => [
   { value: "workflow", label: "Workflow", icon: "mdi-sitemap-outline" },
-  {
-    ...TASKS_TAB,
-    ...(tasksStore.hasActiveTasks
-      ? {
-          busy: true,
-          busyTooltip: `${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? "" : "s"}`,
-        }
-      : {}),
-  },
+  tasksTabFor(tasksStore),
 ]);
 
 /** The detail of the selected card, and whether its read is still out. */

@@ -1,7 +1,12 @@
 <template>
-  <!-- Deliberately multi-root: the body it fills is the inspector's own flex
-       column, and `.tm-system-bar`'s `margin-top: auto` pins the system read-out
-       to the bottom of THAT column. A wrapper div would take the pin with it. -->
+  <!-- Deliberately multi-root: these are the inspector body's own flex
+       children, exactly as they were when they lived in `StatsSidebar`. A
+       wrapper div would make them one child and change the spacing in a rail
+       this change is not supposed to touch. It also means `.tm-system-bar`'s
+       `margin-top: auto` still resolves against the body: inert in the stats
+       rail, which never gives `.inspector-body` a height, and a real pin to
+       the bottom on `/workflows`, where `.wftab`'s `:deep(.inspector-body)
+       { flex: 1 }` does. That difference is pre-existing and left alone. -->
   <div v-if="tasksStore.activeEntries.length === 0" class="tm-idle-msg">
     No active tasks
   </div>
@@ -126,21 +131,36 @@
 <script>
 /**
  * The tab that shows this panel, so its word and its glyph are declared once
- * for every inspector that offers it. A host adds `busy` / `busyTooltip` to
- * light it up while work is running.
+ * for every inspector that offers it. `tasksTabFor` lights it up while work is
+ * running, and is what a host imports.
  */
-export const TASKS_TAB = {
+const TASKS_TAB = {
   value: "tasks",
   label: "Tasks",
   icon: "mdi-timeline-clock-outline",
 };
+
+/**
+ * The descriptor an inspector declares for its Tasks tab, lit while the store
+ * has work. One function so the two hosts cannot drift apart on the wording or
+ * on when the light comes on.
+ */
+export function tasksTabFor(tasksStore) {
+  if (!tasksStore.hasActiveTasks) return TASKS_TAB;
+  const n = tasksStore.activeCount;
+  return {
+    ...TASKS_TAB,
+    busy: true,
+    busyTooltip: `${n} active task${n === 1 ? "" : "s"}`,
+  };
+}
 </script>
 
 <script setup>
 // The task manager: the body of the Tasks tab, wherever an inspector offers it.
 //
 // It started inside StatsSidebar and is a component of its own because the
-// Workflows view's inspector offers the same tab (#1472): somebody browsing
+// Workflows view's inspector offers the same tab: somebody browsing
 // workflows or recipes has to be able to watch the work their last run started
 // without leaving the screen to do it. The image overlay is the one inspector
 // that does not offer it - it is a picture's pane, laid over the picture.

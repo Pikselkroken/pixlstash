@@ -408,11 +408,8 @@ describe("with several workflows selected", () => {
     // Generate button is gone, and it was unguarded: `function run() { return; }`
     // kept the whole suite green.
     const { wrapper } = await mountWith([KEY], [card()]);
-    const { useRunDialogStore } =
-      await import("../../stores/useRunDialogStore");
-    const run = wrapper
-      .findAll("button")
-      .find((b) => b.text().includes("Run…"));
+    const { useRunDialogStore } = await import("../../stores/useRunDialogStore");
+    const run = wrapper.findAll("button").find((b) => b.text().includes("Run…"));
 
     await run.trigger("click");
     await flush(wrapper);
@@ -436,8 +433,9 @@ describe("with several workflows selected", () => {
       .find((b) => b.text().includes("Run…"));
     await run.trigger("click");
     await flush(wrapper);
-    const { useRunDialogStore } =
-      await import("../../stores/useRunDialogStore");
+    const { useRunDialogStore } = await import(
+      "../../stores/useRunDialogStore"
+    );
     // Seeded first: `source` is null on a fresh store, so asserting null
     // against an untouched default would pass with `run()` deleted entirely.
     const runDialog = useRunDialogStore();
@@ -717,7 +715,7 @@ describe("which card the rail shows", () => {
 
 describe("the Tasks tab", () => {
   // The rail on /workflows is the only thing on that screen, so without this
-  // tab a run started here cannot be watched from here (#1472).
+  // tab a run started here cannot be watched from here.
   it("offers Tasks last, and shows the task manager instead of the workflow", async () => {
     const { wrapper } = await mountWith([KEY]);
     const band = wrapper.findAll("button.inspector-tab");
@@ -737,6 +735,19 @@ describe("the Tasks tab", () => {
     await flush(wrapper);
     expect(textOf(wrapper)).toContain("Cinematic portrait");
     expect(wrapper.find(".wftab-foot").exists()).toBe(true);
+  });
+
+  it("follows the store's deep link onto the Tasks tab", async () => {
+    // A run started from THIS rail pushes a toast whose *Show* action asks for
+    // the Tasks tab. It used to call a method exposed by `StatsSidebar`, which
+    // is not mounted on /workflows, so the one screen that starts runs was the
+    // one screen where *Show* did nothing at all.
+    const { wrapper } = await mountWith([KEY]);
+    expect(textOf(wrapper)).not.toContain("No active tasks");
+
+    useSidebarStore().showTasksTab();
+    await flush(wrapper);
+    expect(textOf(wrapper)).toContain("No active tasks");
   });
 
   it("pulses the tab while work is running, and only then", async () => {

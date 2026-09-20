@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, computed, nextTick, onMounted, onUnmounted } from "vue";
 import AppInspector from "../widgets/AppInspector.vue";
-import TasksPanel, { TASKS_TAB } from "./TasksPanel.vue";
+import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 import StatsHistogram from "../widgets/StatsHistogram.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { getPictureStats } from "../../api/pictures";
@@ -26,6 +26,10 @@ const projectStore = useProjectStore();
 const userPrefsStore = useUserPrefsStore();
 const sidebarStore = useSidebarStore();
 const wsStore = useWsStore();
+// The Tasks tab's body is `TasksPanel`, shared with the Workflows view's
+// inspector, and `tasksTabFor` is the tab itself. Nothing else about the task
+// manager is left in this file.
+const tasksStore = useTasksStore();
 
 // The two folder facets are derived from the sidebar's folder selection, same
 // as App.vue used to compute them for the old props.
@@ -60,7 +64,7 @@ const activeTab = ref("tags");
 const tabs = computed(() => [
   { value: "tags", label: "Tags", icon: "mdi-tag-multiple-outline" },
   { value: "pictures", label: "Pictures", icon: "mdi-image-multiple-outline" },
-  { ...TASKS_TAB, ...tasksBusy.value },
+  tasksTabFor(tasksStore),
 ]);
 
 // Picture stats
@@ -386,21 +390,6 @@ watch(
 onUnmounted(() => {
   clearTimeout(_wsTagUpdateTimer);
 });
-
-// ─── Tasks tab ────────────────────────────────────────────────────────────────
-// The tab's body is `TasksPanel`, shared with the Workflows view's inspector.
-// What is left here is the tab itself: its busy light, which the tab band draws
-// from the same store the panel reads.
-const tasksStore = useTasksStore();
-
-const tasksBusy = computed(() =>
-  tasksStore.hasActiveTasks
-    ? {
-        busy: true,
-        busyTooltip: `${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? "" : "s"}`,
-      }
-    : {},
-);
 
 // ─── Donut chart ──────────────────────────────────────────────────────────────
 const DONUT_R = 40;
@@ -933,13 +922,15 @@ function handleResolutionBarClick(label) {
   }
 }
 
-// Let a caller (e.g. the "View progress" action on the justified-layout
-// regeneration notice) deep-link to the Tasks tab. Opening the panel itself
-// happens via `sidebarStore.statsOpen`; this only selects the tab.
-function focusTasksTab() {
-  activeTab.value = "tasks";
-}
-defineExpose({ focusTasksTab });
+// A deep link to the Tasks tab (the "View progress" notice action, the
+// thumbnail banner). Opening the rail is the store's half of `showTasksTab`;
+// this is the half only the mounted inspector can do.
+watch(
+  () => sidebarStore.tasksTabRequest,
+  () => {
+    activeTab.value = "tasks";
+  },
+);
 </script>
 
 <template>
@@ -2043,5 +2034,4 @@ defineExpose({ focusTasksTab });
   border-radius: var(--radius-sm);
   cursor: help;
 }
-
 </style>
