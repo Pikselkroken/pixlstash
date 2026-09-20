@@ -376,3 +376,42 @@ describe("forgetting the members a re-key invalidated", () => {
     expect(store.cards).toHaveLength(4);
   });
 });
+
+// ── invalidate(): the one door in from outside the view ───────────────────
+//
+// A ghost purge in Settings › Privacy forgets a model name or a picture ghost,
+// which changes what a card names and how many pictures it counts. The shelf
+// had the same door and the same test; both went with it.
+describe("invalidate", () => {
+  it("drops the cached stack members and reads the grid again", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("few-but-loved");
+    expect(store.members["few-but-loved"]).toBeTruthy();
+    expect(store.openStackKey).toBe("few-but-loved");
+    listWorkflowCards.mockClear();
+
+    store.invalidate();
+    await Promise.resolve();
+
+    // The members are forgotten rather than redrawn from stale cards, the
+    // panel is collapsed rather than left open over nothing, and the grid is
+    // re-read - a card can have lost the very name that was purged.
+    expect(store.members).toEqual({});
+    expect(store.openStackKey).toBe(null);
+    expect(listWorkflowCards).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for nothing when the grid has never been read", async () => {
+    // Settings is reachable without ever opening Workflows, and a purge made
+    // there must not fire a request for a screen nobody is looking at.
+    const store = useWorkflowsStore();
+    expect(store.loaded).toBe(false);
+    listWorkflowCards.mockClear();
+
+    store.invalidate();
+    await Promise.resolve();
+
+    expect(listWorkflowCards).not.toHaveBeenCalled();
+  });
+});

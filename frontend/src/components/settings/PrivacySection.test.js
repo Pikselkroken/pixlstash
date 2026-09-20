@@ -23,9 +23,9 @@ vi.mock("../../stores/useUserPrefsStore", () => ({
   useUserPrefsStore: () => ({ checkForUpdates: false }),
 }));
 vi.mock("../../api/config", () => ({ patchUserConfig: vi.fn() }));
-const shelf = vi.hoisted(() => ({ invalidate: vi.fn() }));
-vi.mock("../../stores/useWorkflowShelfStore", () => ({
-  useWorkflowShelfStore: () => shelf,
+const workflows = vi.hoisted(() => ({ invalidate: vi.fn() }));
+vi.mock("../../stores/useWorkflowsStore", () => ({
+  useWorkflowsStore: () => workflows,
 }));
 vi.mock("../../api/telemetry", () => ({
   getInstallId: vi.fn().mockResolvedValue({ available: false }),
@@ -64,7 +64,7 @@ function button(wrapper, text) {
 
 beforeEach(() => {
   for (const fn of Object.values(api)) fn.mockReset();
-  shelf.invalidate.mockReset();
+  workflows.invalidate.mockReset();
   api.getGhostRetention.mockResolvedValue(payload());
   api.purgePictureGhosts.mockResolvedValue({ ghosts_erased: 12 });
   api.purgeModelGhosts.mockResolvedValue({ names_forgotten: 3 });
@@ -132,7 +132,7 @@ describe("ghost retention", () => {
     await button(wrapper, "Purge 12 ghosts").trigger("click");
     await flushPromises();
     expect(api.purgePictureGhosts).toHaveBeenCalledTimes(1);
-    expect(shelf.invalidate).toHaveBeenCalledTimes(1);
+    expect(workflows.invalidate).toHaveBeenCalledTimes(1);
     expect(api.purgeModelGhosts).not.toHaveBeenCalled();
     expect(button(wrapper, "None kept").attributes("disabled")).toBeDefined();
   });
@@ -154,7 +154,7 @@ describe("ghost retention", () => {
     await button(wrapper, "Forget 3").trigger("click");
     await button(wrapper, "Forget 3 names").trigger("click");
     await flushPromises();
-    expect(shelf.invalidate).not.toHaveBeenCalled();
+    expect(workflows.invalidate).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain("Model ghosts");
     expect(wrapper.find("[role='alert']").text()).toContain(
       "nothing was purged",

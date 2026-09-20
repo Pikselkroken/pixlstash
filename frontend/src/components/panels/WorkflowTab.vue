@@ -230,12 +230,10 @@
 <script setup>
 // The Workflow tab of the Workflows grid's inspector (implementation plan §F3).
 //
-// A sibling of `WorkflowInspector.vue` rather than a reshaping of it, though
-// the plan names that file: the shipped shelf on `/workflows` is still served
-// by it and by the file-keyed routes behind it, and every step of this feature
-// is required to leave the shelf working until F1b swaps the route. F1b
-// deletes `WorkflowShelf.vue`, its store and its inspector together, which is
-// where that file's reshaping actually lands.
+// Built as a sibling of the shipped shelf's own inspector rather than a
+// reshaping of it, because every step of this feature had to leave the shelf
+// on `/workflows` working; F1b (#1404) then deleted the shelf, its store and
+// that inspector together, and this is the rail on `/workflows`.
 //
 // What the rail shows follows the SELECTION, not the open stack: a stack
 // member selected inside its panel shows that member here, which is the only
@@ -340,9 +338,8 @@ const parentStack = computed(() => {
 });
 
 const subtitle = computed(() => {
-  // Plain numbers, as `WorkflowsView`'s own subtitle writes them: the
-  // shelf's grouped spelling lives in `utils/workflowShelf`, which goes with
-  // the shelf in F1b, and this screen never used it.
+  // Plain numbers, as `WorkflowsView`'s own subtitle writes them: the shelf's
+  // grouped spelling went with the shelf in F1b, and this screen never used it.
   const count = card.value?.picture_count ?? 0;
   const pictures = `${count} ${count === 1 ? "picture" : "pictures"}`;
   if (parentStack.value) {

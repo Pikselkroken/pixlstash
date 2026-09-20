@@ -9,6 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { reactive } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 
 vi.mock("vuetify/components", async () => {
@@ -24,13 +25,25 @@ vi.mock("vuetify/components", async () => {
 });
 
 const push = vi.fn();
-vi.mock("vue-router", () => ({ useRouter: () => ({ push }) }));
+// REACTIVE, and not a plain object: the component watches
+// `() => route.query?.topology`, and in the real app `useRoute()` is reactive,
+// so a test whose route is inert silently cannot see a query CHANGE - only
+// whatever was set before mount. That gap hid a bug where the note outlived
+// the query that caused it.
+const route = reactive({ name: "workflows", query: {} });
+vi.mock("vue-router", () => ({
+  useRouter: () => ({ push }),
+  useRoute: () => route,
+}));
 
 const listWorkflowCards = vi.fn();
 const getWorkflowCard = vi.fn();
 vi.mock("../../api/workflows", () => ({
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   getWorkflowCard: (...args) => getWorkflowCard(...args),
+  // `WorkflowCard` renders its covers through this, so a mock without it
+  // throws in the render and every assertion in the file goes with it.
+  workflowCoverUrl: (cover) => cover,
 }));
 const listImportFolders = vi.fn();
 vi.mock("../../api/folders", () => ({
@@ -40,10 +53,12 @@ vi.mock("../../api/comfyui", () => ({ importWorkflow: vi.fn() }));
 
 import WorkflowsView from "./WorkflowsView.vue";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const card = (key, extra = {}) => ({
   key,
   name: key,
+  topology_hash: `topology-${key}`,
   models: [],
   loras: [],
   differs_by: [],
@@ -139,6 +154,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   observers = [];
   push.mockClear();
+  route.query = {};
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -150,11 +166,12 @@ beforeEach(() => {
     },
   );
   listImportFolders.mockResolvedValue({ folders: [] });
-  listWorkflowCards.mockResolvedValue({
-    cards: CARDS,
-    one_offs: 0,
-    hidden: 0,
-  });
+  // A FRESH array per call, as a real response is: the store assigns it to
+  // `cards`, and handing back the same object would make a refetch a no-op
+  // that no watcher on the list could see.
+  listWorkflowCards.mockImplementation(() =>
+    Promise.resolve({ cards: [...CARDS], one_offs: 0, hidden: 0 }),
+  );
   getWorkflowCard.mockImplementation((key) =>
     Promise.resolve({ card: card(key, { stack_size: 3 }) }),
   );
@@ -586,5 +603,345 @@ describe("the empty state", () => {
       name: "import-folder",
       params: { id: "7" },
     });
+  });
+});
+
+// ── The Recipe section's Open ─────────────────────────────────────────────
+//
+// `/workflows?topology=<hash>` is the link a picture's Recipe section pushes.
+// The shelf honoured it and the grid replaced the shelf, so it has to land on
+// the card rather than at the top of the list.
+describe("arriving on ?topology=", () => {
+  it("selects the card that topology made and puts the cursor on it", async () => {
+    route.query = { topology: "topology-d" };
+    const wrapper = await grid();
+
+    expect(useWorkflowsStore().selectedKeys).toEqual(["d"]);
+    expect(cursorKey(wrapper)).toBe("d");
+  });
+
+  // The grid is not every card: `GET /workflows/cards` leaves out the hidden
+  // ones and the one-offs, which is the ordinary state of a workflow used
+  // once. Saying nothing would drop the reader at the top of a grid that does
+  // not hold what they clicked, looking as though the link did nothing.
+  it("says so, rather than nothing, when the grid does not list it", async () => {
+    route.query = { topology: "topology-nothing" };
+    const wrapper = await grid();
+
+    expect(useWorkflowsStore().selectedKeys).toEqual([]);
+    // The grid's own default: the first row holds the only tab stop.
+    expect(cursorKey(wrapper)).toBe("a");
+    expect(wrapper.find(".wfv-note").text()).toContain(
+      "That workflow is not in this grid",
+    );
+  });
+
+  it("names what is being left out, since that is usually the reason", async () => {
+    listWorkflowCards.mockImplementation(() =>
+      Promise.resolve({ cards: [...CARDS], one_offs: 12, hidden: 40 }),
+    );
+    route.query = { topology: "topology-nothing" };
+    const wrapper = await grid();
+
+    const note = wrapper.find(".wfv-note").text();
+    expect(note).toContain("52 are being left out");
+    expect(note).toContain("40 hidden");
+    expect(note).toContain("12 counted as one-offs");
+  });
+
+  // `withheld` is a count, and 1 is the common shape of a small library.
+  it('says "1 is being left out", not "1 are"', async () => {
+    listWorkflowCards.mockImplementation(() =>
+      Promise.resolve({ cards: [...CARDS], one_offs: 0, hidden: 1 }),
+    );
+    route.query = { topology: "topology-nothing" };
+    const wrapper = await grid();
+
+    const note = wrapper.find(".wfv-note").text();
+    expect(note).toContain("1 is being left out");
+    expect(note).not.toContain("1 are being left out");
+    // The live region is built from the same parts and says it too.
+    expect(wrapper.find('[role="status"]').text()).toContain(
+      "1 is being left out",
+    );
+  });
+
+  it("says nothing while the cards are still on the wire", async () => {
+    // "Not here" is false until the grid has been read, and a note that
+    // appears and then corrects itself is worse than one that waits.
+    let land;
+    listWorkflowCards.mockImplementation(
+      () => new Promise((resolve) => (land = resolve)),
+    );
+    route.query = { topology: "topology-d" };
+    const wrapper = mountView();
+    await flush();
+
+    expect(wrapper.find(".wfv-note").exists()).toBe(false);
+
+    land({ cards: [...CARDS], one_offs: 0, hidden: 0 });
+    await flush();
+    expect(wrapper.find(".wfv-note").exists()).toBe(false);
+    expect(useWorkflowsStore().selectedKeys).toEqual(["d"]);
+  });
+
+  // The store outlives the component, so the `immediate` pass runs during
+  // setup against whatever the last visit left in `cards` - before
+  // `onMounted` refetches. A verdict reached there must stay revisable.
+  it("revises a miss decided on a stale card list", async () => {
+    await grid();
+    mounted.pop().unmount(); // leaves `cards` and `loaded` in the store
+
+    // The workflow crossed the one-off threshold while we were away, so the
+    // fresh answer holds a card the stale list does not.
+    const arrived = card("newcomer", { rank: 1 });
+    listWorkflowCards.mockImplementation(() =>
+      Promise.resolve({ cards: [...CARDS, arrived], one_offs: 0, hidden: 0 }),
+    );
+    route.query = { topology: "topology-newcomer" };
+
+    const second = await grid();
+
+    expect(second.find(".wfv-note").exists()).toBe(false);
+    expect(useWorkflowsStore().selectedKeys).toEqual(["newcomer"]);
+  });
+
+  // The sidebar's Workflows entry pushes this same route with no query, so
+  // the query can go without a remount. The note belongs to the link.
+  it("drops the note when the query goes away", async () => {
+    route.query = { topology: "topology-nothing" };
+    const wrapper = await grid();
+    expect(wrapper.find(".wfv-note").exists()).toBe(true);
+
+    route.query = {};
+    await flush();
+
+    expect(wrapper.find(".wfv-note").exists()).toBe(false);
+  });
+
+  // `flatRows` is rebuilt when `columns` lands, and `measure()` runs as a
+  // pre-flush job — so a row looked up BEFORE the tick names a different seat
+  // by the time `moveCursor` reads it.
+  //
+  // The window needs `columns` to move between the watcher's synchronous part
+  // and its `nextTick`, which means the grid must measure a real width on its
+  // FIRST `measure()` — jsdom reports 0, so the prototype is stubbed for this
+  // test alone. With a stack open (which survives unmount) the two disagree by
+  // a whole row: `f` is index 8 at one column, and index 8 at four columns is
+  // `e`.
+  it("lands on the right card when the columns change under it", async () => {
+    await grid();
+    const store = useWorkflowsStore();
+    await store.openStack("b");
+    await flush();
+    mounted.pop().unmount();
+    expect(store.openStackKey).toBe("b");
+
+    const owned = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "clientWidth",
+    );
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get: () => 1008,
+    });
+    try {
+      route.query = { topology: "topology-f" };
+      const second = mountView();
+      await flush();
+
+      expect(cursorKey(second)).toBe("f");
+    } finally {
+      if (owned)
+        Object.defineProperty(HTMLElement.prototype, "clientWidth", owned);
+      else delete HTMLElement.prototype.clientWidth;
+    }
+  });
+
+  it("does not yank focus out of the open Sort popover", async () => {
+    // The cards arrive asynchronously, so this can fire a second after the
+    // screen went interactive — possibly mid-gesture.
+    let land;
+    listWorkflowCards.mockImplementation(
+      () => new Promise((resolve) => (land = resolve)),
+    );
+    route.query = { topology: "topology-d" };
+    const wrapper = mountView();
+    await flush();
+    setWidth(wrapper, 1008);
+
+    wrapper.vm.sortMenuOpen = true;
+    await wrapper.vm.$nextTick();
+    land({ cards: [...CARDS], one_offs: 0, hidden: 0 });
+    await flush();
+
+    // Selected, because that is what the link asked for and it costs no focus.
+    expect(useWorkflowsStore().selectedKeys).toEqual(["d"]);
+    // But the cursor never moved, so nothing was taken off the popover.
+    expect(document.activeElement).not.toBe(
+      wrapper.find('[data-key="d"]').element,
+    );
+  });
+
+  it("does not take focus back after a refetch", async () => {
+    route.query = { topology: "topology-d" };
+    const wrapper = await grid();
+    expect(cursorKey(wrapper)).toBe("d");
+
+    // The reader moves on, and something re-reads the grid under them - a
+    // file added, a LoRA slot flipped. The link must not be applied twice.
+    await wrapper.find('[data-key="f"]').trigger("click");
+    expect(cursorKey(wrapper)).toBe("f");
+
+    await useWorkflowsStore().fetchCards();
+    await flush();
+
+    expect(cursorKey(wrapper)).toBe("f");
+  });
+});
+
+// ── The app-wide toolbar tail ─────────────────────────────────────────────
+//
+// #1415: this view replaces the grid and its toolbar, so without the tail
+// nothing on this screen opens Settings or the right rail - and `WorkflowTab`
+// only renders while that rail is open (`AppInspector` gates it on
+// `sidebarStore.statsOpen`), so F3's whole deliverable is unreachable.
+//
+// Six assertions ported from the retired shelf's suite, which pinned exactly
+// this and went with the shelf. `Toolbar.test.js` does NOT stand in for them:
+// it reads the `<style>` block as text, so it stays green against a component
+// whose template no longer draws the tail at all.
+describe("the app-wide toolbar tail", () => {
+  it("asks App.vue for Settings and toggles the rail itself", async () => {
+    const wrapper = await grid();
+    const sidebar = useSidebarStore();
+
+    await wrapper
+      .find(".wfv-toolbar button[aria-label='Settings']")
+      .trigger("click");
+    expect(wrapper.emitted("open-settings")).toHaveLength(1);
+
+    // From the shut state a fresh session starts in: the first press opens the
+    // rail, the second closes it.
+    sidebar.statsOpen = false;
+    await wrapper.find(".wfv-toolbar .tb-stats-btn").trigger("click");
+    expect(sidebar.statsOpen).toBe(true);
+    await wrapper.find(".wfv-toolbar .tb-stats-btn").trigger("click");
+    expect(sidebar.statsOpen).toBe(false);
+  });
+
+  it("orders the tail separator → TbGlobalActions, last in the bar", async () => {
+    // Placement, not presence: the app-wide chrome sits after this view's own
+    // controls, ruled off from them, at the end - as ModelShelf's bar does.
+    const wrapper = await grid();
+    const bar = wrapper.find(".wfv-toolbar").element;
+    const tail = wrapper.find(".wfv-bar-tail").element;
+    // TbGlobalActions is multi-root; its Settings button is a stable anchor.
+    const settings = wrapper.find(
+      ".wfv-toolbar button[aria-label='Settings']",
+    ).element;
+    const separator = wrapper.find(".wfv-toolbar .bar-separator").element;
+    // "Add…" is the last of this view's own controls.
+    const add = wrapper
+      .findAll(".wfv-toolbar button")
+      .find((button) => button.text().includes("Add")).element;
+    const follows = (a, b) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+    expect(follows(add, separator)).toBe(true);
+    // Adjacency, not merely order: the rule marks the boundary, so nothing may
+    // slip between it and the chrome it rules off.
+    expect(separator.nextElementSibling).toBe(settings);
+    // Nothing of this view's own follows the app-wide chrome. TbGlobalActions
+    // is multi-root, so its stats button is the tail's last element.
+    expect(bar.lastElementChild).toBe(tail);
+    expect(tail.lastElementChild.classList.contains("tb-stats-btn")).toBe(true);
+  });
+
+  // Nothing here writes to the operation log, so undo/redo and the History
+  // popover are not offered at all - the model shelf's exception, for its
+  // reason. `UNDO_BLIND_ROOTS` declines the chord to match.
+  it("mounts no undo control", async () => {
+    const wrapper = await grid();
+    expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(false);
+  });
+
+  // The toggle's tooltip is its accessible name, and the rail on this screen
+  // is the workflow inspector, not the stats sidebar it is everywhere else.
+  it("names the rail it actually opens here", async () => {
+    const wrapper = await grid();
+    const stats = wrapper.find(".wfv-toolbar .tb-stats-btn");
+    expect(stats.attributes("aria-label")).toBe("Show inspector");
+    useSidebarStore().statsOpen = true;
+    await wrapper.vm.$nextTick();
+    expect(stats.attributes("aria-label")).toBe("Hide inspector");
+  });
+
+  // The emit above is only half of it: App.vue has to listen, and nothing else
+  // in this suite fails if that binding is deleted. Asserted against the source
+  // because App.vue needs a mount harness this suite does not have - the same
+  // `readFileSync` shape `Toolbar.test.js` uses for its bar recipe.
+  it("is listened to by App.vue, which owns the Settings dialog", async () => {
+    const { readFileSync } = await import("node:fs");
+    const app = readFileSync(`${process.cwd()}/src/App.vue`, "utf8");
+    const tag = app.slice(
+      app.indexOf("<WorkflowsView"),
+      app.indexOf(">", app.indexOf("<WorkflowsView")),
+    );
+    expect(tag).toContain('@open-settings="openSettingsDialog"');
+  });
+
+  // A run force-opens this rail (`useWorkflowRunStore.openFor`), so the run
+  // panel has to outrank the inspector or the rail opens on "Pick a workflow"
+  // while the run is in progress. Source-asserted for the reason above.
+  it("leaves a running workflow's panel ahead of the inspector", async () => {
+    const { readFileSync } = await import("node:fs");
+    const app = readFileSync(`${process.cwd()}/src/App.vue`, "utf8");
+    const run = app.indexOf("<WorkflowRunPanel");
+    const rail = app.indexOf("<WorkflowTab");
+    expect(run).toBeGreaterThan(-1);
+    expect(run).toBeLessThan(rail);
+    expect(app.slice(run, rail)).toContain('v-if="workflowRunStore.open"');
+    expect(app.slice(rail, rail + 80)).toContain("v-else-if");
+  });
+});
+
+// ── Selection is visible ─────────────────────────────────────────────────
+//
+// `aria-selected` on the row was right all along; what was missing was
+// anything a sighted reader could see, because the mark sat on the cell under
+// an opaque card. These assert the PAINTED class, on both sides of the panel
+// boundary, since a mixed selection has to read as one thing.
+describe("the selection mark", () => {
+  const markedKeys = (wrapper) =>
+    wrapper
+      .findAll(".wf-card--selected")
+      .map((el) => el.element.closest("[data-key]")?.dataset.key);
+
+  it("marks a selected grid card", async () => {
+    const wrapper = await grid();
+
+    await wrapper.find('[data-key="c"]').trigger("click");
+
+    expect(useWorkflowsStore().selectedKeys).toEqual(["c"]);
+    expect(markedKeys(wrapper)).toEqual(["c"]);
+  });
+
+  it("marks selected members inside an open stack", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    await store.openStack("b");
+    await flush();
+
+    await wrapper.find('.stack-panel__member[data-key="b1"]').trigger("click");
+    await flush();
+
+    expect(store.selectedKeys).toEqual(["b1"]);
+    expect(markedKeys(wrapper)).toEqual(["b1"]);
+  });
+
+  it("marks nothing when nothing is selected", async () => {
+    const wrapper = await grid();
+    expect(wrapper.findAll(".wf-card--selected")).toHaveLength(0);
   });
 });

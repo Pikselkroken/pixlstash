@@ -168,7 +168,7 @@
 import { onMounted, computed, ref, watch } from "vue";
 import { VSwitch } from "vuetify/components";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
-import { useWorkflowShelfStore } from "../../stores/useWorkflowShelfStore";
+import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { patchUserConfig } from "../../api/config";
 import { getInstallId, recreateInstallId } from "../../api/telemetry";
 import {
@@ -267,7 +267,7 @@ async function doRecreate() {
 }
 
 // ── Ghosts ──────────────────────────────────────────────────────────────────
-const workflowShelf = useWorkflowShelfStore();
+const workflowsStore = useWorkflowsStore();
 const ghosts = ref(null);
 const ghostBusy = ref(false);
 const ghostError = ref("");
@@ -386,9 +386,9 @@ async function doPurge() {
   ghostBusy.value = true;
   try {
     await PURGES[kind].run(purgeCount.value);
-    // The Workflows view holds the names and ghost counts this just changed,
-    // and keeps a row's variants for the whole session.
-    workflowShelf.invalidate();
+    // The Workflows grid holds the names and picture counts this just
+    // changed, and keeps a stack's members for the whole session.
+    workflowsStore.invalidate();
   } catch (e) {
     console.error(`Failed to purge ${kind} ghosts:`, e);
     ghostError.value =

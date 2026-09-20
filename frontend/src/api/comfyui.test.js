@@ -8,7 +8,6 @@ vi.mock("../utils/apiClient", () => ({
 import { apiClient } from "../utils/apiClient";
 import {
   listWorkflows,
-  deleteWorkflow,
   importWorkflow,
   runImageToImage,
   abortRun,
@@ -28,14 +27,6 @@ describe("api/comfyui", () => {
     const result = await listWorkflows();
     expect(apiClient.get).toHaveBeenCalledWith("/comfyui/workflows");
     expect(result).toEqual({ workflows: [] });
-  });
-
-  it("deleteWorkflow URL-encodes the workflow name", async () => {
-    apiClient.delete.mockResolvedValue({ data: {} });
-    await deleteWorkflow("my flow.json");
-    expect(apiClient.delete).toHaveBeenCalledWith(
-      "/comfyui/workflows/my%20flow.json",
-    );
   });
 
   it("importWorkflow defaults overwrite to false", async () => {

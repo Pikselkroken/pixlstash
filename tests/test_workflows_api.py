@@ -3136,11 +3136,88 @@ def test_a_card_is_never_nameless(workflow_env):
     the row renders empty and the label reads "About null".
 
     The fallback is the workflow file that runs the card, without its
-    extension; a card with neither a name nor a file gets a stand-in.
+    extension; then a description built from what the card loads; and only a
+    card with none of those gets the stand-in.
+
+    **The built one exists because the stand-in used to be the common case.**
+    A name is written only on an explicit rename and most cards come from
+    pictures rather than a dropped file, so a whole grid read "Untitled
+    workflow" and the one identifying row identified nothing.
     """
     cards = _by_key(_cards(workflow_env.owner))
-    # BUSY has no name and no file: the stand-in, not an empty string.
-    assert cards[BUSY_CARD]["name"] == "Untitled workflow"
+    # BUSY has no name and no file, so it is named for what it loads - and the
+    # extension is off, which a guess-by-length gets wrong on `.safetensors`.
+    assert cards[BUSY_CARD]["name"] == "realvisxl: Text to Image"
+
+    # **`type_label` is SERVED, not mirrored.** The card shows its type twice -
+    # in a generated name and in its own chip - and a second copy of these
+    # labels on the client is the drift `CHECKPOINT_WIDGETS` was written to
+    # end. One map, on the wire, so the two strings are equal by construction.
+    busy = cards[BUSY_CARD]
+    assert busy["type"] == "txt2img"
+    assert busy["type_label"] == "Text to Image"
+    assert busy["type_label"] in busy["name"]
+
+    # The stand-in is still the floor, for a card with nothing to be named
+    # after: no name, no file, and every model name forgotten. Asserted on the
+    # helper, because the fixture has no such card and inventing one to prove a
+    # two-line branch costs more than it tells anybody.
+    class _Nameless:
+        name = None
+        file_name = None
+        workflow_type = None
+
+    assert workflows_routes._display_name(_Nameless(), []) == UNNAMED_CARD
+
+    # A graph whose names survive but which loads no checkpoint still gets a
+    # name: the first slot it does load.
+    class _UnetOnly(_Nameless):
+        workflow_type = "txt2img"
+
+    only = [SimpleNamespace(name="flux1-dev.safetensors", kind="unet")]
+    assert (
+        workflows_routes._display_name(_UnetOnly(), only) == "flux1-dev: Text to Image"
+    )
+
+    # **The base model names the card, and nothing else may.** A Flux or SD3
+    # graph has no `checkpoint` kind at all - only `unet` - and slot order is
+    # document order, so a fallback of "the first slot with a name" named such
+    # a card after its VAE or one of its text encoders. Nobody calls a
+    # workflow by its VAE.
+    flux = [
+        SimpleNamespace(name="ae.safetensors", kind="vae"),
+        SimpleNamespace(name="t5xxl_fp16.safetensors", kind="clip"),
+        SimpleNamespace(name="flux1-dev.safetensors", kind="unet"),
+    ]
+    assert (
+        workflows_routes._display_name(_UnetOnly(), flux) == "flux1-dev: Text to Image"
+    )
+
+    # A graph that loads a VAE and an upscaler but no base model at all takes
+    # the stand-in rather than being named after either.
+    accessories = [
+        SimpleNamespace(name="ae.safetensors", kind="vae"),
+        SimpleNamespace(name="4x-UltraSharp.pth", kind="upscale"),
+    ]
+    assert workflows_routes._display_name(_Nameless(), accessories) == UNNAMED_CARD
+
+    # **An empty stem is as nameless as a null one.** These are graph widget
+    # values - third-party strings out of whatever workflow was imported - so
+    # a name that is nothing but an extension, or that ends in a separator,
+    # reaches here and would render the row blank and read "About null".
+    for hostile in (".safetensors", "SDXL/", "loras\\"):
+        slots = [SimpleNamespace(name=hostile, kind="checkpoint")]
+        assert workflows_routes._display_name(_UnetOnly(), slots) == UNNAMED_CARD
+
+    # A checkpoint outranks a unet where a graph carries both.
+    both = [
+        SimpleNamespace(name="flux1-dev.safetensors", kind="unet"),
+        SimpleNamespace(name="juggernautXL.safetensors", kind="checkpoint"),
+    ]
+    assert (
+        workflows_routes._display_name(_UnetOnly(), both)
+        == "juggernautXL: Text to Image"
+    )
     # The hidden card has both a name and a file, and the owner's name wins.
     assert _detail(workflow_env.owner, HIDDEN_CARD)["card"]["name"] == (
         "A workflow I hid"
@@ -4014,8 +4091,13 @@ def test_naming_a_card_shows_on_the_grid_and_clearing_it_goes_back(workflow_env)
 
     r = owner.patch(f"{API}/workflows/{BUSY_CARD}", json={"name": None})
     assert r.status_code == 200, r.text
-    # Back to the fallback, which is the file that runs it or the stand-in.
-    assert r.json()["card"]["name"] == UNNAMED_CARD
+    # Back to the fallback - whatever it is - rather than to null or to the
+    # name that was just cleared. What the fallback SAYS is pinned by
+    # `test_a_card_is_never_nameless`; this asserts the clearing round-trips.
+    cleared = r.json()["card"]["name"]
+    assert cleared and cleared != "My portrait workflow"
+    grid = _by_key(_cards(owner))
+    assert grid[BUSY_CARD]["name"] == cleared
 
 
 def test_hiding_a_card_takes_it_off_the_grid_and_it_still_opens(workflow_env):

@@ -41,8 +41,10 @@
       </v-menu>
 
       <!-- "Add" is today's workflow import, unchanged: the file lands through
-           `POST /comfyui/workflows/import` exactly as a drop on the shipped
-           shelf does. -->
+           `POST /comfyui/workflows/import`, the route the retired shelf's own
+           drop target posted to. The gesture went with the shelf; this screen
+           has no drop handler, so `useWindowFileImport` no longer stands
+           aside for it. -->
       <AppBarButton icon="plus" @click="fileInput?.click()">Add…</AppBarButton>
       <input
         ref="fileInput"
@@ -54,9 +56,39 @@
         aria-hidden="true"
         @change="filesChosen"
       />
+
+      <span class="wfv-spacer"></span>
+      <!-- The app-wide tail, minus undo: this view replaces the grid and its
+           toolbar, so without it neither Settings nor the right rail has a
+           control on the screen — and the rail is where `WorkflowTab` is
+           shown (`AppInspector` gates it on `sidebarStore.statsOpen`), so the
+           rail would be unreachable (#1415). Its own `--space-3` cluster
+           because this bar spaces its controls wider, and `rail-name` because
+           the toggle's tooltip is also its accessible name and this rail is
+           not the stats sidebar. -->
+      <span class="wfv-bar-tail">
+        <TbGlobalActions
+          separator
+          rail-name="inspector"
+          @open-settings="emit('open-settings')"
+        />
+      </span>
     </div>
 
     <p v-if="store.error" class="wfv-error" role="alert">{{ store.error }}</p>
+
+    <!-- A Recipe section's Open that named a workflow this grid does not list.
+         Said on screen and not only in the live region, because the reader
+         made a deliberate gesture and the screen otherwise looks as though it
+         ignored them. -->
+    <p v-if="linkMissed" class="wfv-note">
+      That workflow is not in this grid.
+      <template v-if="withheld"
+        >{{ withheld }} {{ withheld === 1 ? "is" : "are" }} being left out:
+        {{ store.hidden }} hidden and {{ store.oneOffs }} counted as
+        one-offs.</template
+      >
+    </p>
 
     <!-- The §9 empty state: the shipped art, a Tiny5 `--text-2xl` headline and
          one `--text-sm` line, then the routes out as plain buttons. Not the
@@ -178,6 +210,7 @@
             <div class="wfv-cell" role="gridcell">
               <WorkflowCard
                 :card="entry.card"
+                :selected="store.selectedKeys.includes(entry.key)"
                 :expanded="store.openStackKey === entry.key"
                 :panel-id="store.openStackKey === entry.key ? panelId : ''"
                 @toggle="store.toggleStack(entry.key)"
@@ -192,9 +225,8 @@
 
 <script setup>
 /**
- * The Workflows grid (v1.12 Workflows & Recipes, F1a) — on `/workflows-next`,
- * with no sidebar entry, until F1b puts it on `/workflows` and retires the
- * shelf. See `docs/frontend_architecture.md` §5.
+ * The Workflows grid (v1.12 Workflows & Recipes, F1a) — on `/workflows` since
+ * F1b retired the shelf. See `docs/frontend_architecture.md` §5.
  *
  * ONE FLAT LIST. The cards, and — while a stack is open — its members, are one
  * index space, so the roving cursor crosses the panel boundary with the same
@@ -212,7 +244,7 @@ import {
   ref,
   watch,
 } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
 import { importWorkflow } from "../../api/comfyui";
@@ -226,6 +258,7 @@ import {
 import { errorMessage } from "../../utils/apiError";
 import { isStack } from "../../utils/workflowCard";
 import StackPanel from "../panels/StackPanel.vue";
+import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import OptionRows from "../widgets/OptionRows.vue";
@@ -237,17 +270,26 @@ import WorkflowCard from "../widgets/WorkflowCard.vue";
  * They are written onto the grid as `--wf-column-min` and `--wf-gap` rather
  * than read back out of the sheet, so the arithmetic here and the track the
  * browser paints are the same two numbers by construction. `COLUMN_GAP` is
- * `--space-4`; `COLUMN_MIN` is the card's width, the partner of the
- * `--wf-card-h` / `--wf-cover-h` pair `WorkflowCard.vue` keeps locally.
+ * `--space-3` (see below); `COLUMN_MIN` is the card's width, the partner of the
+ * `--wf-meta-h` `WorkflowCard.vue` keeps locally. The card's HEIGHT is not a
+ * number either side holds: the cover is a 6:5 box, so a card is as tall as
+ * its column is wide plus the fixed meta block.
  */
 const COLUMN_MIN = 240;
-const COLUMN_GAP = 12;
+// `--space-3`. It was `--space-4` (12), which is the "comfortable gap inside a
+// group" and is what the reading surfaces use; this is a grid of cards, and
+// its siblings are dense - the picture grid sets its thumbnails `--space-2`
+// apart and the model shelf's rows touch. 8 is the small gap between
+// bordered things, which is what these are.
+const COLUMN_GAP = 8;
 
+// Settings is App.vue's dialog; TbGlobalActions flips the sidebar store itself.
 const emit = defineEmits(["open-settings"]);
 
 const store = useWorkflowsStore();
 const filterStore = useFilterStore();
 const router = useRouter();
+const route = useRoute();
 
 const gridEl = ref(null);
 const fileInput = ref(null);
@@ -260,6 +302,8 @@ const columns = ref(1);
 // outside a screen they cannot get back into.
 const cursorId = ref("");
 const announcement = ref("");
+// A `?topology=` link that named a workflow the grid does not list.
+const linkMissed = ref(false);
 const watchedFolder = ref(null);
 
 const panelId = "wfv-stack-panel";
@@ -433,6 +477,101 @@ onMounted(async () => {
 /** What the owner calls the folder: the host path when the server has one. */
 const watchedPath = computed(
   () => watchedFolder.value?.host_path || watchedFolder.value?.folder || "",
+);
+
+// ── Arriving from a picture's Recipe section (#1313) ──────────────────────
+//
+// `?topology=<hash>` selects the card that topology made and puts the cursor
+// on it, so the link from the lightbox lands on the card rather than at the
+// top of the grid. A topology can hold several cards — a different checkpoint
+// is a different card — so the FIRST in the sorted order is taken: it is the
+// one the reader would have found first anyway.
+//
+// **It can only reach the cards the GRID lists, and that is not every card.**
+// `GET /workflows/cards` leaves out the hidden ones and the one-offs (under
+// three pictures, unrated, not imported, no saved recipe) — which is the
+// ordinary state of a workflow used once, and exactly when "what made this?"
+// is worth asking. A stack is one card here too, grouped by `core_hash`, which
+// strips post-processing, so a member can carry a topology its cover does not.
+// The shelf had no such gap, listing every topology as a row of its own, and
+// closing it needs a topology→card read the API does not have.
+//
+// So a miss SAYS SO rather than doing nothing. Dropping the reader at the top
+// of a grid that does not contain what they clicked, with no word about it, is
+// the silent failure this screen must not have; the subtitle already counts
+// what is being withheld, so the sentence has something true to point at. F7
+// replaces this link with the card's own *Show all N pictures* chip.
+//
+// Honoured once per value rather than on every `cards` change, because the
+// grid is refetched (a file is added, a LoRA slot is flipped) while the query
+// string stays put, and a second application would take focus back off
+// whatever the reader had moved to. `immediate` because the store's cards
+// outlive a route change: a second visit on the same link has nothing left to
+// change for the watcher to see.
+//
+// **Only a HIT is marked honoured.** The store outlives this component, so the
+// `immediate` pass runs during setup against whatever the last visit left in
+// `cards` — before `onMounted` refetches. Marking a MISS honoured there makes
+// a verdict reached on a stale list permanent: a workflow that has since
+// crossed the one-off threshold, or arrived from the watched folder, is in the
+// fresh answer, but the refetch's re-fire returns at the guard above and the
+// screen goes on saying the opposite of what the grid holds. A hit still
+// applies once, which is all the focus protection was ever for; only the "not
+// here" verdict is left open to fresher data.
+let honouredTopology = null;
+
+watch(
+  [() => route.query?.topology, () => store.sortedCards],
+  ([wanted]) => {
+    if (!wanted) {
+      honouredTopology = null;
+      // The query can go without a remount - the sidebar's Workflows entry
+      // pushes this same route with no query - and the note belongs to the
+      // link, not to the screen.
+      linkMissed.value = false;
+      return;
+    }
+    // A repeated `?topology=` makes this an array, which matches no card. It
+    // takes the same path as any other miss rather than a branch of its own.
+    if (honouredTopology === wanted) return;
+    // Nothing to say until the grid has been read: "not here" is false while
+    // the answer is still on the wire.
+    if (!store.loaded) return;
+    const card = store.sortedCards.find(
+      (entry) => entry.topology_hash === wanted,
+    );
+    if (!card) {
+      const plural = withheld.value === 1 ? "is" : "are";
+      announcement.value = withheld.value
+        ? `That workflow is not in the grid. ${withheld.value} ${plural} being left out: ${store.hidden} hidden and ${store.oneOffs} counted as one-offs.`
+        : "That workflow is not in the grid.";
+      linkMissed.value = true;
+      return;
+    }
+    honouredTopology = wanted;
+    linkMissed.value = false;
+    store.select(card.key);
+    // Not while the reader is inside a popover or the file dialog: the cards
+    // arrive asynchronously, so this can fire a second after the screen went
+    // interactive, and yanking focus out from under a gesture in progress is
+    // worse than landing at the top of the grid. `onKeyDown` guards on the
+    // same flag.
+    //
+    // The row is looked up BY ID inside the callback, never as an index
+    // computed out here: `flatRows` is rebuilt by a resort, by a stack opening
+    // and by `columns` landing — which it does between setup and this tick,
+    // since `measure()` runs as a pre-flush job — and an index held across any
+    // of those names a different card, or a `hole`. That is the whole reason
+    // the cursor is an id (see `cursorId`).
+    if (!sortMenuOpen.value) {
+      nextTick(() =>
+        moveCursor(
+          flatRows.value.findIndex((entry) => entry.id === `card:${card.key}`),
+        ),
+      );
+    }
+  },
+  { immediate: true },
 );
 
 function openWatchedFolder() {
@@ -685,8 +824,8 @@ async function filesChosen(event) {
   overflow: hidden;
 }
 
-/* The shelf bar's box recipe, copied from `WorkflowShelf.vue` so the screen
-   that replaces it sits at the same height beside the model shelf: a fixed 36
+/* The retired workflow shelf's box recipe, carried over so the screen that
+   replaced it sits at the same height beside the model shelf: a fixed 36
    with the hairline INSIDE it and no vertical padding. `--bar-height` is 48
    and would not. `container-name` carries the names the shared chrome's own
    `@container` rules are written against — the class attribute alone does
@@ -729,10 +868,34 @@ async function filesChosen(event) {
   text-overflow: ellipsis;
 }
 
+.wfv-spacer {
+  flex: 1;
+}
+
+/* The app-wide tail's own gap: this bar spaces its controls at --space-4, and
+   the tail must land at the --space-3 every other host lays it out at. Never
+   the member that gives — it is the app-wide chrome, and the control that
+   opens the rail must not be the one the edge eats. */
+.wfv-bar-tail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 0 0 auto;
+}
+
 .wfv-error {
   margin: 0;
   padding: var(--space-3) var(--space-5);
   color: rgb(var(--v-theme-error));
+  font-size: var(--text-sm);
+}
+
+/* Not an error - the grid is behaving as designed and the reader simply asked
+   for something it does not draw - so the quiet ink rather than the error one. */
+.wfv-note {
+  margin: 0;
+  padding: var(--space-3) var(--space-5);
+  color: rgba(var(--v-theme-on-surface), 0.6);
   font-size: var(--text-sm);
 }
 
@@ -743,7 +906,21 @@ async function filesChosen(event) {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-5);
+  /* `--space-3`, not the `--space-5` this shipped with. 16 down every side is
+     what Moves and Insights use, and those say in as many words that they are
+     reading surfaces; the picture grid, which this is actually a sibling of,
+     carries no side padding at all and lets the scrollbar's own gutter be the
+     gap. Cards have a border, so bleeding them to the window edge would look
+     like a mistake - 8 is the smallest inset that still reads as deliberate.
+
+     `scrollbar-gutter: stable` is reserved as the model shelf reserves it,
+     though for a smaller reason than the shelf's: nothing here breaks without
+     it - the grid's `clientWidth` shrinks, the `ResizeObserver` fires and the
+     columns recompute correctly - but the whole track jumps sideways the
+     moment the grid crosses one screen. Reserved, the only movement is the
+     vertical one the reader asked for. */
+  scrollbar-gutter: stable;
+  padding: var(--space-3);
 }
 
 /* `--wf-columns` is set from the measured width, so the painted grid and the
@@ -765,12 +942,9 @@ async function filesChosen(event) {
   border-radius: var(--radius-md);
 }
 
-/* The shell's selection mark (`style.css`): the wash plus `--selection-ring`,
-   for a card with no left edge to rail. */
-.wfv-row[aria-selected="true"] .wfv-cell {
-  background: var(--active-wash);
-  box-shadow: var(--selection-ring);
-}
+/* The selection mark is the CARD's own (`WorkflowCard.vue`,
+   `.wf-card--selected`). It was here, on the cell, and never showed: the card
+   paints an opaque surface across the whole cell and covered it. */
 
 .wfv-file-input {
   position: absolute;

@@ -30,6 +30,9 @@ vi.mock("../../api/workflows", () => ({
   setWorkflowDefaults: (...args) => setWorkflowDefaults(...args),
   setWorkflowPins: (...args) => setWorkflowPins(...args),
   setWorkflowSlots: (...args) => setWorkflowSlots(...args),
+  // `WorkflowCard` renders its covers through this, so a mock without it
+  // throws in the render and every assertion in the file goes with it.
+  workflowCoverUrl: (cover) => cover,
   stackWorkflows: (...args) => stackWorkflows(...args),
 }));
 
@@ -45,7 +48,9 @@ const globalOpts = {
   global: {
     stubs: {
       "v-icon": true,
-      "v-menu": { template: "<div><slot name='activator' :props='{}'/><slot/></div>" },
+      "v-menu": {
+        template: "<div><slot name='activator' :props='{}'/><slot/></div>",
+      },
       Tooltip: true,
     },
   },
@@ -58,10 +63,19 @@ function card(overrides = {}) {
     type: "txt2img",
     imported: false,
     models: [
-      { name: "realvisXL_v5.safetensors", kind: "checkpoint", slot_label: "m1" },
+      {
+        name: "realvisXL_v5.safetensors",
+        kind: "checkpoint",
+        slot_label: "m1",
+      },
     ],
     loras: [
-      { name: "lightning-8step", kind: "lora", mark: "structural", slot_label: "l1" },
+      {
+        name: "lightning-8step",
+        kind: "lora",
+        mark: "structural",
+        slot_label: "l1",
+      },
     ],
     differs_by: [],
     picture_count: 184,
@@ -231,7 +245,9 @@ describe("a default's provenance and reset", () => {
     expect(wrapper.findAll('.wfdef [aria-pressed="true"]')).toHaveLength(0);
     // Nothing pinned means nothing above the fold, so every row is inside
     // it — the section must not simply be empty.
-    expect(rowNamed(wrapper, "steps").element.closest("details")).not.toBeNull();
+    expect(
+      rowNamed(wrapper, "steps").element.closest("details"),
+    ).not.toBeNull();
   });
 
   it("pins one parameter without unpinning the rest", async () => {
@@ -304,11 +320,14 @@ describe("marking a LoRA slot", () => {
     // enabled switch on a slot without one is a control that answers a
     // click with nothing at all.
     getWorkflowCard.mockResolvedValue(detail());
-    const { wrapper } = await mountWith([KEY], [
-      card({
-        loras: [{ name: "mystery", kind: "lora", mark: "structural" }],
-      }),
-    ]);
+    const { wrapper } = await mountWith(
+      [KEY],
+      [
+        card({
+          loras: [{ name: "mystery", kind: "lora", mark: "structural" }],
+        }),
+      ],
+    );
     expect(wrapper.findComponent({ name: "Segmented" }).props("disabled")).toBe(
       true,
     );
@@ -318,8 +337,13 @@ describe("marking a LoRA slot", () => {
 
 describe("with several workflows selected", () => {
   it("keeps Run… on screen, refused, with the reason attached", async () => {
-    const { wrapper } = await mountWith([KEY, OTHER], [card(), card({ key: OTHER })]);
-    const run = wrapper.findAll("button").find((b) => b.text().includes("Run…"));
+    const { wrapper } = await mountWith(
+      [KEY, OTHER],
+      [card(), card({ key: OTHER })],
+    );
+    const run = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Run…"));
     expect(run).toBeTruthy();
     expect(run.attributes("aria-disabled")).toBe("true");
     const described = run.attributes("aria-describedby");
@@ -329,22 +353,31 @@ describe("with several workflows selected", () => {
   });
 
   it("does not start a run when Run… is pressed", async () => {
-    const { wrapper } = await mountWith([KEY, OTHER], [card(), card({ key: OTHER })]);
-    const run = wrapper.findAll("button").find((b) => b.text().includes("Run…"));
+    const { wrapper } = await mountWith(
+      [KEY, OTHER],
+      [card(), card({ key: OTHER })],
+    );
+    const run = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Run…"));
     await run.trigger("click");
     await flush(wrapper);
-    const { useWorkflowRunStore } = await import(
-      "../../stores/useWorkflowRunStore"
-    );
+    const { useWorkflowRunStore } =
+      await import("../../stores/useWorkflowRunStore");
     expect(useWorkflowRunStore().open).toBe(false);
   });
 
   it("offers Stack together and Hide, and says how many are selected", async () => {
-    const { wrapper } = await mountWith([KEY, OTHER], [card(), card({ key: OTHER })]);
+    const { wrapper } = await mountWith(
+      [KEY, OTHER],
+      [card(), card({ key: OTHER })],
+    );
     const text = textOf(wrapper);
     expect(text).toContain("2 workflows selected");
     expect(text).toContain("Stack together");
-    const stack = wrapper.findAll("button").find((b) => b.text() === "Stack together");
+    const stack = wrapper
+      .findAll("button")
+      .find((b) => b.text() === "Stack together");
     await stack.trigger("click");
     await flush(wrapper);
     expect(stackWorkflows).toHaveBeenCalledWith([KEY, OTHER]);
@@ -494,7 +527,10 @@ describe("the more menu and hiding", () => {
     patchWorkflowCard
       .mockResolvedValueOnce(detail())
       .mockRejectedValueOnce(new Error("nope"));
-    const { wrapper } = await mountWith([KEY, OTHER], [card(), card({ key: OTHER })]);
+    const { wrapper } = await mountWith(
+      [KEY, OTHER],
+      [card(), card({ key: OTHER })],
+    );
     const hide = wrapper.findAll("button").find((b) => b.text() === "Hide");
     await hide.trigger("click");
     await flush(wrapper);
@@ -540,7 +576,6 @@ describe("which card the rail shows", () => {
     await flush(wrapper);
     expect(store.members).toEqual({});
   });
-
 
   it("shows a selected stack member, which the grid never lists", async () => {
     const member = card({ key: OTHER, name: "SDXL portrait (lightning)" });
