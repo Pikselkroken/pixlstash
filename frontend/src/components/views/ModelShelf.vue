@@ -1348,6 +1348,7 @@
         @make-cover="makeCover"
         @remove-from-stack="confirmRemoveFromStack"
         @move="openMove(store.selectedRows)"
+        @merge-copies="openMergeCopies"
         @open-location="openLocation"
         @set-icon="pickIcon"
         @clear-icons="confirmClearIcons"
@@ -1357,6 +1358,11 @@
     </div>
 
     <ShelfEditDialog :verb="editVerb" @close="editVerb = ''" />
+    <MergeCopiesDialog
+      :open="mergeRow !== null"
+      :row="mergeRow"
+      @close="mergeRow = null"
+    />
     <ShelfMoveDialog
       :open="moveOpen"
       :items="moveItems"
@@ -1484,6 +1490,7 @@ import ShelfSortPanel from "../panels/ShelfSortPanel.vue";
 import ShelfSelectionBar from "../panels/ShelfSelectionBar.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
+import MergeCopiesDialog from "../panels/MergeCopiesDialog.vue";
 import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
@@ -1647,6 +1654,29 @@ async function confirmForget() {
 // Set while the delete prompt is being prepared or shown. The companions read
 // sits before the prompt opens, and a second Delete press in that window would
 // otherwise open a second prompt over the first and strand its promise.
+/**
+ * The row whose copies are being merged, or null.
+ *
+ * Taken from `selectedRows`, which carries the model's WHOLE `locations` array.
+ * The folder-grouped draw narrows it to the one copy that folder holds, and a
+ * dialog offering one of two choices would be the one screen that cannot do its
+ * job (#1439).
+ */
+const mergeRow = ref(null);
+
+/**
+ * Open the keep-one-copy dialog for the single selected duplicate.
+ *
+ * One row, because the keeper is a per-model choice and a batch would be a table
+ * of radio groups. The backend already takes a list, so the batch is a later
+ * screen rather than a later route.
+ */
+function openMergeCopies() {
+  const rows = store.selectedRows;
+  if (rows.length !== 1) return;
+  mergeRow.value = rows[0];
+}
+
 let deletePromptOpen = false;
 
 /**
@@ -2942,11 +2972,18 @@ async function closeFolders() {
 // `not_downloaded` is a fourth thing and wears no status colour either: it is
 // one of PixlStash's own engines that nothing has needed yet, which is the
 // normal state of about half of them. A download glyph, not a broken-file one.
+//
+// `removed` is a fifth, and the only absence that is not an absence to report: a
+// copy the reader deleted themselves to keep another (#1439). Its row is here on
+// purpose - it is what keeps a recipe naming that file resolving to the model -
+// so drawing it with the broken-file glyph would report a fault about the
+// tidy-up the reader just asked for. A merge glyph, and no status colour.
 const LOC_ICON = {
   present: "mdi-check",
   missing: "mdi-file-remove-outline",
   not_downloaded: "mdi-cloud-download-outline",
   unreachable: "mdi-help-circle-outline",
+  removed: "mdi-call-merge",
   forgotten: "mdi-folder-off-outline",
 };
 
@@ -2958,6 +2995,7 @@ const LOC_NOTE = {
   present: "",
   missing: "file is not where it was",
   unreachable: "out of reach",
+  removed: "removed as a duplicate",
   forgotten: "every registered copy forgotten",
 };
 
@@ -2970,6 +3008,7 @@ const LOC_TITLE = {
   // scan could not list lands here too, and naming a cause we did not observe
   // is the same overclaim the muted glyph exists to avoid.
   unreachable: "Out of reach: this location could not be read",
+  removed: "You removed this copy to keep another one",
   forgotten: "Every registered copy has been forgotten",
 };
 

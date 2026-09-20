@@ -956,8 +956,16 @@ export function presentCopies(locations) {
  * state this build does not know still falls through to `missing` rather than
  * being quietly reported as fine.
  *
+ * `removed` is the one absence that is not a fault at all: the reader deleted
+ * that copy themselves to keep another (#1439), and the row is here on purpose.
+ * It is reported only when every copy is one, which is the folder axis's case -
+ * that draw stands for the removed copy alone - because a model that still has a
+ * copy somewhere is `present` and a model with a genuinely missing one must
+ * still say so. Ranked after `unreachable` for that reason: a mix of removed and
+ * missing is a fault, and drawing it as a tidy-up would hide one.
+ *
  * @param {Array<Object>} locations - the row's `locations` array.
- * @returns {"present"|"missing"|"not_downloaded"|"unreachable"|"forgotten"}
+ * @returns {"present"|"missing"|"not_downloaded"|"unreachable"|"removed"|"forgotten"}
  */
 export function locationState(locations) {
   const list = Array.isArray(locations) ? locations : [];
@@ -966,6 +974,7 @@ export function locationState(locations) {
   if (list.some((loc) => loc?.state === "unreachable")) return "unreachable";
   if (list.every((loc) => loc?.state === "not_downloaded"))
     return "not_downloaded";
+  if (list.every((loc) => loc?.state === "removed")) return "removed";
   return "missing";
 }
 
@@ -987,6 +996,10 @@ const COPY_STATE_NOTE = {
   missing: "not where it was",
   unreachable: "out of reach",
   not_downloaded: "not downloaded yet",
+  // A copy removed to keep one of several (#1439). Its own word rather than
+  // `missing`, which is the scanner saying it looked and the file was gone: this
+  // one is gone because the reader said so, and the row is still here on purpose.
+  removed: "removed as a duplicate",
 };
 
 /**
@@ -1309,7 +1322,11 @@ export function companionsSentences(companions, count) {
   const unseen = companions.no_evidence?.length ?? 0;
   if (unseen) {
     const subject =
-      count === 1 ? "this model" : unseen === count ? "these models" : `${unseen} of these models`;
+      count === 1
+        ? "this model"
+        : unseen === count
+          ? "these models"
+          : `${unseen} of these models`;
     said.push(
       `No workflow PixlStash has read uses ${subject}, so which support files ` +
         `${unseen === 1 ? "it needs" : "they need"} is unknown.`,

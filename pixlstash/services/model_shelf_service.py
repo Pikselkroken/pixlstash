@@ -497,6 +497,88 @@ def recipe_asset_index(
     return by_name, by_digest, filenames
 
 
+def model_name_aliases(hub) -> dict[str, list[str]]:
+    """The other names a recipe's model filename can be loaded under (#1439).
+
+    Keyed by a normalized basename (:func:`normalized_filename`, so **lowercase**
+    - the caller has to fold its lookup the same way), valued by the names of
+    that model's copies that are actually **present**: the full relpath as the
+    scanner recorded it and its basename, in the **scanner's own spelling** and
+    never folded. A ComfyUI combo entry is a path relative to one of ComfyUI's
+    own model folders and nothing here knows which prefix it puts in front, so
+    both forms are offered and the caller's ``object_info`` decides; generosity
+    here costs nothing because the verification is downstream. The *case* is not
+    generosity but correctness: ComfyUI compares exactly, so a lowercased
+    candidate is a filename it would refuse.
+
+    **Same model, therefore same bytes.** The hub is content-addressed - one
+    ``model`` row per SHA-256 - so every name under one key names one file's
+    contents, which is what makes this a substitution rather than the suggestion
+    a same-weights-different-precision match would have to stay.
+
+    The keys include names no copy of which is present, which is the whole point:
+    a copy removed to keep one of several (``POST /model-files/merge``) keeps its
+    row in ``state = 'removed'``, and the name a recipe recorded is the one a
+    graph still asks for.
+
+    A candidate equal to the key's own spelling is dropped, but one differing
+    only in case is not: a graph naming ``MyLora.safetensors`` on an install that
+    lists ``mylora.safetensors`` is a real miss (``_match_option`` reports it as
+    "present under a different case") and the correctly-spelled copy is the fix.
+
+    A name two models share is dropped rather than resolved, the same rule
+    ``picture_recipe_service._resolve_against_shelf`` applies to a name that
+    matches two rows: it names neither of them, and swapping to a coin-flip
+    would substitute a different model's weights into somebody's run.
+
+    Returns:
+        ``{lowercased basename: [name, ...]}``, each name as the scanner recorded
+        it, the key's own source spelling excluded, and no entry at all for a
+        model with nothing present to offer.
+    """
+    names_by_model: dict[int, set[str]] = {}
+    present_by_model: dict[int, list[str]] = {}
+    for row in hub.fetchall(
+        "SELECT id, filename FROM model WHERE filename IS NOT NULL"
+    ):
+        names_by_model.setdefault(int(row["id"]), set()).add(row["filename"])
+    for row in hub.fetchall("SELECT model_id, relpath, state FROM model_file"):
+        model_id = int(row["model_id"])
+        names_by_model.setdefault(model_id, set()).add(row["relpath"])
+        if row["state"] != "present":
+            continue
+        offered = present_by_model.setdefault(model_id, [])
+        # The relpath and its basename, both as the scanner spelled them. NOT
+        # `normalized_filename`, which lowercases: that is the right key for a
+        # lookup and the wrong thing to hand ComfyUI, which compares exactly.
+        basename = row["relpath"].replace("\\", "/").rsplit("/", 1)[-1]
+        for name in (row["relpath"], basename):
+            if name not in offered:
+                offered.append(name)
+
+    claimants: dict[str, set[int]] = {}
+    for model_id, names in names_by_model.items():
+        for name in names:
+            claimants.setdefault(normalized_filename(name), set()).add(model_id)
+
+    aliases: dict[str, list[str]] = {}
+    for model_id, names in names_by_model.items():
+        offered = present_by_model.get(model_id)
+        if not offered:
+            continue
+        for name in names:
+            key = normalized_filename(name)
+            if len(claimants[key]) != 1:
+                continue
+            for candidate in offered:
+                if candidate == name:
+                    continue
+                aliases.setdefault(key, [])
+                if candidate not in aliases[key]:
+                    aliases[key].append(candidate)
+    return aliases
+
+
 def models_for_digest(
     value: str, by_digest: dict[str, int], sorted_digests: list[str]
 ) -> set[int]:
@@ -961,10 +1043,19 @@ def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
         # route because the read belongs inside this transaction - the same
         # critical section the state gate runs in.
         #
-        # Only while something still declares it, which is what every non-
-        # `missing` state means here: a declared engine nothing has fetched is
-        # `not_downloaded`, and `declare_folder`'s sweep writes `missing` exactly
-        # when the declaration stopped naming the row. That is the DISCOVERED
+        # Only while something still declares it, which is what `present`,
+        # `unreachable` and `not_downloaded` mean here: a declared engine nothing
+        # has fetched is `not_downloaded`, and `declare_folder`'s sweep writes
+        # `missing` exactly when the declaration stopped naming the row.
+        #
+        # `removed` is excluded with it, and by construction rather than by
+        # argument (#1439). It satisfies "not missing" while meaning the
+        # opposite - the owner deleted that copy on purpose - so left in, an
+        # engine every copy of which had been merged away would stay refused
+        # forever as "something still declares it". It is unreachable today only
+        # because `POST /model-files/merge` refuses an engine outright, which is a
+        # gate in another file; this is the class closed here where the predicate
+        # is, the way the other five were. That is the DISCOVERED
         # roots - a repo dropped by `huggingface-cli delete-cache`, a deleted
         # InsightFace pack - and nothing fetches those back, so refusing them
         # left the owner a row drawn as a fault that no verb on the shelf could
@@ -980,7 +1071,7 @@ def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
             for row in conn.execute(
                 f"SELECT id FROM model WHERE id IN ({placeholders}) AND file_kind = ? "
                 "AND EXISTS (SELECT 1 FROM model_file WHERE model_id = model.id "
-                "AND state <> 'missing')",
+                "AND state NOT IN ('missing', 'removed'))",
                 (*ids, FILE_ENGINE),
             ).fetchall()
         }

@@ -249,8 +249,15 @@ export const useTasksStore = defineStore("tasks", () => {
 
   // ── Polling ───────────────────────────────────────────────────────────────
   const tasksTabOpen = ref(false);
+  // A count, not a flag: more than one inspector can host the Tasks panel, so
+  // a boolean would let one panel's unmount drop the cadence back to idle
+  // while another is still on screen. Today the two hosts are `v-if`/`v-else`
+  // siblings and cannot overlap, but the panel is shared on purpose and the
+  // model-detail and duplicates-evidence panes are next to take it.
+  let openPanels = 0;
   function setTasksTabOpen(open) {
-    tasksTabOpen.value = Boolean(open);
+    openPanels = Math.max(0, openPanels + (open ? 1 : -1));
+    tasksTabOpen.value = openPanels > 0;
     // Opening the tab should switch to the fast cadence immediately rather than
     // waiting out the current idle interval.
     if (tasksTabOpen.value && polling) reschedule(true);

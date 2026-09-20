@@ -357,6 +357,41 @@ def test_a_leftover_that_is_deleted_outside_pixlstash_goes_missing(
     assert state["state"] == "missing"
 
 
+def test_a_copy_the_owner_removed_as_a_duplicate_survives_the_declaration(
+    server_hub, tmp_path
+):
+    """The FOURTH sweep that writes `model_file.state` (#1439).
+
+    The scanner's three were narrowed to skip `removed`; this one runs on every
+    start, and it reaches the same rows: `deletes_unclaimed_files` lets
+    `POST /model-files/merge` remove an unclaimed leftover out of PixlStash's own
+    download folder, which is a root this function declares. Without the
+    predicate the distinction survives the delete and not the next boot - lost to
+    the one thing that runs unattended, which is the whole failure the other
+    three guard against.
+    """
+    leftover = tmp_path / "best.pt"
+    leftover.write_bytes(b"y" * 20)
+    folder_id = declare_builtin_models(server_hub, str(tmp_path))
+    os.unlink(leftover)
+    with server_hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'removed' "
+            "WHERE model_folder_id = ? AND relpath = ?",
+            (folder_id, "best.pt"),
+        )
+
+    declare_builtin_models(server_hub, str(tmp_path))
+
+    state = server_hub.fetchone(
+        "SELECT state FROM model_file WHERE model_folder_id = ? AND relpath = ?",
+        (folder_id, "best.pt"),
+    )
+    assert state["state"] == "removed", (
+        "the declaration re-labelled a deliberately removed copy as missing"
+    )
+
+
 def test_claiming_a_path_the_owner_registered_resets_every_column(server_hub, tmp_path):
     """The upsert has to assert `movable` too, not just `kind` and `owner`.
 

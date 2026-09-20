@@ -676,3 +676,82 @@ describe("the two verbs that act inside a run", () => {
     expect(wrapper.emitted("remove-from-stack")).toHaveLength(1);
   });
 });
+
+describe("Keep one copy", () => {
+  // The gate is the row's own count of copies ON THE DISK, which is what the
+  // shelf calls a duplicate everywhere else: the hub is content-addressed, so a
+  // second `present` copy IS the same bytes written twice.
+  const twice = (id) => ({
+    ...row(id, "present"),
+    locations: [
+      {
+        state: "present",
+        folder_id: 1,
+        folder_path: "/a",
+        relpath: "x.safetensors",
+      },
+      {
+        state: "present",
+        folder_id: 2,
+        folder_path: "/b",
+        relpath: "y.safetensors",
+      },
+    ],
+  });
+
+  it("is offered for one model with two copies on the disk", () => {
+    selectRows([twice(1)]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(wrapper.vm.mergeable).toBe(true);
+  });
+
+  it("is refused for a model with one copy", () => {
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(wrapper.vm.mergeable).toBe(false);
+  });
+
+  it("is refused for a copy that is only registered, not on the disk", () => {
+    // Two rows and one file is not a duplicate: `missing` is a registration,
+    // and offering the verb there would promise to reclaim disk that is not
+    // being used.
+    selectRows([
+      {
+        ...row(1, "present"),
+        locations: [
+          { state: "present", folder_id: 1, folder_path: "/a", relpath: "x" },
+          { state: "missing", folder_id: 2, folder_path: "/b", relpath: "y" },
+        ],
+      },
+    ]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(wrapper.vm.mergeable).toBe(false);
+  });
+
+  it("is refused for a whole run", async () => {
+    // A collapsed run is one ROW and several models, and it carries the cover's
+    // copy count - so the verb would be offered on the run and act on the cover
+    // alone while the pill said six. It deletes bytes; it asks for a model.
+    const cover = twice(1);
+    selectRows([
+      {
+        ...cover,
+        members: [cover, twice(2)],
+        memberIds: [1, 2],
+      },
+    ]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(wrapper.vm.mergeable).toBe(false);
+  });
+
+  it("is refused for two models at once", async () => {
+    // The keeper is a per-model choice; a batch would be a table of radio
+    // groups rather than a dialog.
+    const store = selectRows([twice(1)]);
+    store.rows = [...store.rows, twice(2)];
+    store.toggleSelected(2);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.mergeable).toBe(false);
+  });
+});

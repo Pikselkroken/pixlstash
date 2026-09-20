@@ -27,3 +27,34 @@ export async function addModelFile(path, destinationFolderId = null) {
   }
   return unwrap(apiClient.post("/model-files", body));
 }
+
+/**
+ * Keep one copy of a model and remove the rest (#1439).
+ *
+ * The KEEPER is named, never the copies to remove: that is what makes "keep
+ * one" structural rather than arithmetic, and it is why no call from here can
+ * empty a model. The removed copies keep their shelf rows at `state: 'removed'`,
+ * so a recipe naming one still resolves to the model and a run through PixlStash
+ * is substituted onto the copy that is left.
+ *
+ * @param {Array<{model_id: number, folder_id: number, relpath: string}>} keep -
+ *   one entry per model: the copy that stays.
+ * @param {Object} [options]
+ * @param {boolean} [options.permanent=false] - unlink rather than trash.
+ * @param {boolean} [options.dryRun=false] - plan it and remove nothing, which is
+ *   how the confirmation gets the refusals and the ComfyUI warning first.
+ * @returns {Promise<Object>} `merged`, `files_removed`, `permanent`, `dry_run`,
+ *   `trash_name`, `comfyui_reads`, `refused`.
+ */
+export async function mergeModelCopies(
+  keep,
+  { permanent = false, dryRun = false } = {},
+) {
+  return unwrap(
+    apiClient.post("/model-files/merge", {
+      keep,
+      permanent,
+      dry_run: dryRun,
+    }),
+  );
+}

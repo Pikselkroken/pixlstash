@@ -88,6 +88,12 @@ def topology_activity(session: Session) -> dict[str, WorkflowActivity]:
     has recurred here. ``GET /workflows`` is declared ``OWNER_ONLY`` for exactly
     this reason. A caller that needs a scoped answer adds the narrowing
     parameter then, against a real policy.
+
+    **No production caller since #1410**, and kept rather than deleted with its
+    route: the per-topology count is the vault half the retired list
+    merged, and ``tests/test_workflow_library.py`` exercises it directly, so it
+    is covered behaviour
+    rather than dead code. Delete the test with it if it goes.
     """
     return _activity(session, Picture.workflow_topology_hash)
 
@@ -131,7 +137,14 @@ def recipe_picture_counts(session: Session) -> dict[str, int]:
 
 
 def scan_progress(session: Session) -> ScanProgress:
-    """How many kept pictures exist, and how many have been read for a workflow."""
+    """How many kept pictures exist, and how many have been read for a workflow.
+
+    **No production caller since #1410**, and kept rather than deleted with its
+    route: the three near-empty states it distinguishes went with
+    ``WorkflowScan``, and ``tests/test_workflow_library.py`` exercises it
+    directly, so it is covered behaviour
+    rather than dead code. Delete the test with it if it goes.
+    """
     pictures, scanned = session.exec(
         select(
             func.count(Picture.id),
@@ -153,19 +166,6 @@ def scan_progress(session: Session) -> ScanProgress:
     return ScanProgress(pictures=pictures or 0, scanned=scanned or 0)
 
 
-def topology_picture_ids(session: Session, topology_hash: str, limit: int) -> list[int]:
-    """The newest kept pictures made by one topology, for the rail's tiles."""
-    return list(
-        session.exec(
-            select(Picture.id)
-            .where(Picture.workflow_topology_hash == topology_hash)
-            .where(Picture.deleted.is_(False))
-            .order_by(_USED_AT.desc(), Picture.id.desc())
-            .limit(limit)
-        ).all()
-    )
-
-
 # ---------------------------------------------------------------------------
 # The vault-level entry points the routes call.
 #
@@ -176,15 +176,6 @@ def topology_picture_ids(session: Session, topology_hash: str, limit: int) -> li
 # asks for, and it is why the list's two reads share one session rather than
 # taking two.
 # ---------------------------------------------------------------------------
-
-
-def read_library(vault) -> tuple[dict[str, WorkflowActivity], ScanProgress]:
-    """The list route's whole vault side: per-topology figures and scan state."""
-
-    def _read(session: Session):
-        return topology_activity(session), scan_progress(session)
-
-    return vault.db.run_immediate_read_task(_read)
 
 
 def read_recipe_activity(
@@ -202,11 +193,6 @@ def read_variant_picture_counts(vault) -> dict[str, int]:
     are joined by the hub on the variants it is re-keying.
     """
     return vault.db.run_immediate_read_task(recipe_picture_counts)
-
-
-def read_topology_picture_ids(vault, topology_hash: str, limit: int) -> list[int]:
-    """The inspector's tile ids for one topology."""
-    return vault.db.run_immediate_read_task(topology_picture_ids, topology_hash, limit)
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +241,12 @@ class CoverCandidate:
     The three bitmap fields are here for the cache-buster in the thumbnail URL
     (``ImageUtils.thumbnail_cache_version``), so the covers can be served as
     URLs without a second read per card.
+
+    The three ``square_crop_*`` fields are the stored face-weighted rectangle
+    within that bitmap (``FaceUtils.square_crop_rect``), so a client can crop a
+    cover around the face rather than to a blind top anchor (#1465). They are
+    NULL while a picture is still being processed, which is the client's cue to
+    fall back to the shipped ``object-fit: cover`` framing.
     """
 
     structural_hash: str
@@ -265,6 +257,9 @@ class CoverCandidate:
     thumbnail_width: Optional[int] = None
     thumbnail_height: Optional[int] = None
     orientation: Optional[int] = None
+    square_crop_x: Optional[int] = None
+    square_crop_y: Optional[int] = None
+    square_crop_side: Optional[int] = None
 
 
 def variant_activity(session: Session) -> dict[str, VariantActivity]:
@@ -326,6 +321,9 @@ def variant_cover_candidates(
             Picture.thumbnail_width.label("thumbnail_width"),
             Picture.thumbnail_height.label("thumbnail_height"),
             Picture.orientation.label("orientation"),
+            Picture.square_crop_x.label("square_crop_x"),
+            Picture.square_crop_y.label("square_crop_y"),
+            Picture.square_crop_side.label("square_crop_side"),
             func.row_number()
             .over(partition_by=Picture.workflow_structural_hash, order_by=ordering)
             .label("rank"),
@@ -344,6 +342,9 @@ def variant_cover_candidates(
             ranked.c.thumbnail_width,
             ranked.c.thumbnail_height,
             ranked.c.orientation,
+            ranked.c.square_crop_x,
+            ranked.c.square_crop_y,
+            ranked.c.square_crop_side,
         ).where(ranked.c.rank <= per_variant)
     ).all()
     return [CoverCandidate(*row) for row in rows]
@@ -394,6 +395,9 @@ def cover_pictures_by_pixel_sha(
             Picture.thumbnail_width,
             Picture.thumbnail_height,
             Picture.orientation,
+            Picture.square_crop_x,
+            Picture.square_crop_y,
+            Picture.square_crop_side,
         )
         .where(Picture.pixel_sha.in_(pixel_shas))
         .where(Picture.deleted.is_(False))

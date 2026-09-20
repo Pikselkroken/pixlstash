@@ -574,8 +574,9 @@ class AuthzGate:
     async def _read_body_ids(self, request: Request, field: str) -> list:
         """Extract the id(s) from a JSON body field for a ``body_ids`` batch route.
 
-        Handles a list (checked element by element), a single scalar (``run_t2i``'s
-        optional ``source_picture_id``, §N6), and an absent/``None`` value (no-op).
+        Handles a list (checked element by element), a single scalar (§N6; no
+        route declares that shape since #1410 retired ``run_t2i``), and an
+        absent/``None`` value (no-op).
         Reading the body here is safe: Starlette caches it on ``request._body`` so
         the handler's own ``Body(...)`` parse re-reads the cache.
         """

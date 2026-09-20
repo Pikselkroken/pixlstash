@@ -1,6 +1,7 @@
 import { computed, onScopeDispose, reactive, ref } from "vue";
 import { defineStore } from "pinia";
 import { clearModelIcons, setModelIcon } from "../api/modelIcons";
+import { mergeModelCopies } from "../api/modelFiles";
 import {
   BASE_MODEL_UNASSIGNED,
   deleteModels,
@@ -328,6 +329,111 @@ export function forgetReceipt(gone, kept, vanished = 0, engines = 0) {
       : "Nothing to forget.";
   }
   return [`Forgot ${modelCount(gone)}.`, ...notes].join(" ");
+}
+
+/**
+ * Say what a merge removed, where it put it, and what it left alone.
+ *
+ * The one sentence that has to be there is what SURVIVED: a reader who has just
+ * removed a copy of a 20 GB checkpoint needs to know the shelf still holds the
+ * model, or the receipt reads like the delete they did not ask for.
+ *
+ * The refusals reuse the delete's vocabulary where the reason is the same, and
+ * the two that are this route's own are said in its own words: a keeper the shelf
+ * cannot find is the refusal that saved the reader from a redownload, and "only
+ * one copy" is a list that was a minute old.
+ *
+ * @param {number} gone - models now down to one copy.
+ * @param {Array<{reason: string}>} refused - the server's refusals, verbatim.
+ * @param {boolean} permanent - whether the copies were unlinked or trashed.
+ * @param {string} trash - what the SERVER calls its trash.
+ * @param {number} [filesRemoved=0] - how many files actually moved.
+ */
+export function mergeReceipt(
+  gone,
+  refused,
+  permanent,
+  trash,
+  filesRemoved = 0,
+) {
+  const counts = new Map();
+  for (const item of refused || []) {
+    counts.set(item?.reason, (counts.get(item?.reason) || 0) + 1);
+  }
+  const notes = [];
+  const note = (reason, sentence) => {
+    const n = counts.get(reason);
+    if (n) notes.push(sentence(n));
+    counts.delete(reason);
+  };
+  note(
+    "keeper_not_present",
+    (n) =>
+      `The copy you chose to keep is gone, so ${modelCount(n)} was left alone.`,
+  );
+  note("not_a_duplicate", (n) => `${modelCount(n)} already had only one copy.`);
+  note(
+    "no_such_copy",
+    (n) =>
+      `${modelCount(n)} no longer has the copy you chose. Rescan that folder.`,
+  );
+  note(
+    "keeper_is_that_copy",
+    (n) =>
+      `${modelCount(n)} has two names for one file — a shortcut — so there was nothing to reclaim.`,
+  );
+  note(
+    "not_a_user_folder",
+    (n) =>
+      `${modelCount(n)} keeps a spare copy in a folder PixlStash manages, which it will not delete from.`,
+  );
+  note(
+    "is_a_builtin_engine",
+    (n) =>
+      `${modelCount(n)} ${n === 1 ? "is one" : "are ones"} PixlStash downloaded for itself and would fetch again.`,
+  );
+  note(
+    "unreachable_copy",
+    (n) =>
+      `${modelCount(n)} ${n === 1 ? "has a copy" : "have copies"} on a drive that is not plugged in.`,
+  );
+  note(
+    "trash_unavailable",
+    (n) =>
+      `This server cannot reach a ${trash}, so ${modelCount(n)} ${n === 1 ? "was" : "were"} kept.`,
+  );
+  note(
+    "partly_deleted",
+    (n) => `${modelCount(n)} lost some spare copies before the removal failed.`,
+  );
+  note(
+    "escapes_its_folder",
+    (n) =>
+      `${modelCount(n)} is recorded outside its own folder. Rescan that folder.`,
+  );
+  note(
+    "no_such_model",
+    (n) => `${modelCount(n)} ${n === 1 ? "was" : "were"} already gone.`,
+  );
+  const rest = [...counts.values()].reduce((sum, n) => sum + n, 0);
+  if (rest) {
+    notes.push(`${modelCount(rest)} was left alone; the server said why.`);
+  }
+  if (!gone) {
+    return notes.length
+      ? `Nothing was removed. ${notes.join(" ")}`
+      : "There was nothing to merge.";
+  }
+  const spares =
+    filesRemoved === 1 ? "The spare copy" : `${filesRemoved} spare copies`;
+  const where = filesRemoved
+    ? permanent
+      ? `${spares} ${filesRemoved === 1 ? "is" : "are"} deleted.`
+      : `${spares} ${filesRemoved === 1 ? "is" : "are"} in your ${trash}.`
+    : "";
+  return [`Kept one copy of ${modelCount(gone)}.`, where, ...notes]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /**
@@ -1792,6 +1898,48 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   }
 
   /**
+   * Keep one copy of a model and remove the rest, then say what survived.
+   *
+   * The keeper comes from the gesture - the dialog's own radio - and is passed
+   * straight through, so what the reader chose is what is kept. The model is NOT
+   * removed from the shelf and the removed copy's row is not dropped either, so
+   * the list is re-read rather than the row taken out of it: the row is still
+   * there, with one fewer copy.
+   *
+   * @param {Array<{model_id: number, folder_id: number, relpath: string}>} keep -
+   *   one entry per model: the copy that stays.
+   * @param {Object} [options]
+   * @param {boolean} [options.permanent=false] - unlink rather than trash.
+   * @returns {Promise<boolean>} true when the call was made at all.
+   */
+  async function mergeCopies(keep, { permanent = false } = {}) {
+    const notices = useNoticeStore();
+    if (!keep?.length) return false;
+    try {
+      const body = await mergeModelCopies(keep, { permanent });
+      await fetchRows();
+      const gone = body?.merged?.length ?? 0;
+      notices.push({
+        level: gone ? "success" : "info",
+        text: mergeReceipt(
+          gone,
+          body?.refused ?? [],
+          Boolean(body?.permanent),
+          body?.trash_name || trashName(),
+          body?.files_removed ?? 0,
+        ),
+      });
+      return true;
+    } catch (err) {
+      notices.push({
+        level: "error",
+        text: errorDetail(err) || "Could not remove those copies.",
+      });
+      return false;
+    }
+  }
+
+  /**
    * Attach or detach one character/set across the selected adapters.
    *
    * `PUT /adapters/{sha256}/attachments` REPLACES one adapter's whole set, so
@@ -2041,6 +2189,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     editModelIds,
     forgetSelected,
     deleteSelected,
+    mergeCopies,
     setIconOnSelected,
     clearIconsOnSelected,
     selectedModelIds,

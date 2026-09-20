@@ -207,6 +207,7 @@ const globalOpts = {
       ModelFoldersDialog: true,
       ShelfEditDialog: true,
       ShelfMoveDialog: true,
+      MergeCopiesDialog: true,
       // The host-path picker `Add file` opens. Real, it would drag Vuetify's
       // dialog provider into a suite that installs none; stubbed, it still
       // emits `select`, which is the whole of what this view listens for.

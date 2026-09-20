@@ -125,6 +125,23 @@ export const useSidebarStore = defineStore("sidebar", () => {
     saveStatsOpen(statsOpen.value);
   }
 
+  // "Take me to the task manager", from a notice or a banner. A counter rather
+  // than a flag, so asking twice in a row is two requests and nothing has to
+  // remember to clear it. Whichever inspector is on screen watches it and
+  // selects its own Tasks tab: the rail has more than one occupant, and a
+  // deep link that named one of them by its component ref reached the tab on
+  // every screen except the one that starts the runs.
+  //
+  // Deliberately NOT `saveStatsOpen`, unlike `toggleStats` above: opening the
+  // rail to answer one "show me" is not the reader choosing to keep it open,
+  // and persisting it would leave every later session with a rail they never
+  // asked for.
+  const tasksTabRequest = ref(0);
+  function showTasksTab() {
+    statsOpen.value = true;
+    tasksTabRequest.value += 1;
+  }
+
   // Back-compat helper used elsewhere.
   function persistSidebarDocked(val) {
     setSidebarDocked(val);
@@ -139,6 +156,7 @@ export const useSidebarStore = defineStore("sidebar", () => {
     sidebarVisible,
     sidebarOverlay,
     statsOpen,
+    tasksTabRequest,
     sidebarForcedHidden,
     statsForcedHidden,
     setSidebarDocked,
@@ -146,6 +164,7 @@ export const useSidebarStore = defineStore("sidebar", () => {
     revealSidebar,
     hideAutoSidebar,
     toggleStats,
+    showTasksTab,
     persistSidebarDocked,
   };
 });

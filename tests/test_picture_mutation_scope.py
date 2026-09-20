@@ -772,61 +772,11 @@ def test_assign_face_owner_not_blocked(env, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# ComfyUI source-picture reads (CSO finding S2) - i2i uploads source bytes to
-# the ComfyUI host, so it must be scoped. Owner direction: the guard passes, so
-# the request gets past 403 (then fails downstream because the test env has no
-# ComfyUI / workflow - i.e. NOT 403 is the success assertion).
-# ---------------------------------------------------------------------------
-
-
-def test_comfyui_i2i_scoped_token_blocked(env, scoped):
-    server, client, picture_ids, _ = env
-    anon, tok = scoped
-    # The owner counterpart asserts 404, which a deleted route also returns, so
-    # neither test would notice this route disappearing. Middleware 403s ahead
-    # of routing, so this one would not notice either.
-    assert_real_route(server.api, "POST", f"{API}/comfyui/run_i2i")
-    r = anon.post(
-        f"{API}/comfyui/run_i2i",
-        json={"workflow_name": "nonexistent", "picture_ids": [picture_ids[1]]},
-        headers=_bearer(tok),
-    )
-    assert r.status_code == 403, r.text
-
-
-def test_comfyui_i2i_owner_passes_scope_guard(env, monkeypatch):
-    server, client, picture_ids, _ = env
-    _scope_to(monkeypatch, [comfyui_module], None)
-    r = client.post(
-        f"{API}/comfyui/run_i2i",
-        json={"workflow_name": "nonexistent", "picture_ids": [picture_ids[1]]},
-    )
-    # Owner is not scope-blocked; it falls through to the missing-workflow 404.
-    # Assert that exact status rather than a bare ``!= 403``: the loose form is
-    # also satisfied by a 404 from a renamed route or a 500, so it would keep
-    # passing after the handler it is meant to reach stopped existing.
-    assert r.status_code == 404, r.text
-
-
-def test_comfyui_t2i_source_picture_scoped_token_blocked(env, scoped):
-    server, client, picture_ids, _ = env
-    anon, tok = scoped
-    # This route has no owner counterpart anywhere in the file, so nothing else
-    # would notice it being renamed away; middleware 403s before routing.
-    assert_real_route(server.api, "POST", f"{API}/comfyui/run_t2i")
-    r = anon.post(
-        f"{API}/comfyui/run_t2i",
-        json={"workflow_name": "nonexistent", "source_picture_id": picture_ids[1]},
-        headers=_bearer(tok),
-    )
-    assert r.status_code == 403, r.text
-
-
-# ---------------------------------------------------------------------------
-# Remix recipe routes (v1.9). Both read and replay the graph embedded in one
-# picture's FILE, so both are per-object reads of that picture's contents and
-# both must be scoped. Tested in both directions: over-blocking the owner is
-# its own regression.
+# Remix recipe read (v1.9). It reads the graph embedded in one picture's FILE,
+# so it is a per-object read of that picture's contents and must be scoped.
+# Tested in both directions: over-blocking the owner is its own regression.
+# Its replay sibling, ``POST /comfyui/run_recipe``, was retired by #1410; the
+# run route that replaced it is owner-only and has no scoped direction.
 # ---------------------------------------------------------------------------
 
 
@@ -849,26 +799,3 @@ def test_comfyui_recipe_read_owner_succeeds(env, monkeypatch):
     body = r.json()
     assert body["available"] is False
     assert body["reason"] == "no_prompt_chunk"
-
-
-def test_comfyui_run_recipe_scoped_token_blocked(env, scoped):
-    server, client, picture_ids, _ = env
-    anon, tok = scoped
-    r = anon.post(
-        f"{API}/comfyui/run_recipe",
-        json={"picture_id": picture_ids[1]},
-        headers=_bearer(tok),
-    )
-    assert r.status_code == 403, r.text
-
-
-def test_comfyui_run_recipe_owner_passes_scope_guard(env, monkeypatch):
-    server, client, picture_ids, _ = env
-    _scope_to(monkeypatch, [comfyui_module], None)
-    r = client.post(f"{API}/comfyui/run_recipe", json={"picture_id": picture_ids[1]})
-    # Owner is not scope-blocked; it reaches the handler and is refused for the
-    # real reason - the picture carries no executable graph. Asserting the exact
-    # status and detail rather than a bare `!= 403` keeps this from passing
-    # after the handler it targets stops existing.
-    assert r.status_code == 400, r.text
-    assert "no executable workflow embedded" in r.json()["detail"]

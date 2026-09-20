@@ -66,7 +66,6 @@ from pixlstash.hub.workflows import (
     record_ui_graph,
 )
 from pixlstash.services.workflow_hash import (
-    WorkflowGraphError,
     asset_reference,
     structural_document,
 )
@@ -75,6 +74,7 @@ from pixlstash.utils.known_base_models import fold
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
 from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
 from pixlstash.services.workflow_card_service import SlotModel, model_marks
 from pixlstash.services.workflow_identity import (
@@ -109,12 +109,9 @@ pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 _WORKFLOW_ROUTES = (
     ("GET", "/api/v1/workflows"),
-    ("GET", "/api/v1/workflows/{topology_hash}/variants"),
-    ("GET", "/api/v1/workflows/{topology_hash}/pictures"),
+    ("GET", "/api/v1/workflows/{workflow_key}"),
+    ("GET", "/api/v1/workflows/{workflow_key}/pictures"),
     ("GET", "/api/v1/workflows/recipes/{structural_hash}/graph"),
-    ("GET", "/api/v1/workflows/cards"),
-    ("GET", "/api/v1/workflows/cards/{workflow_key}"),
-    ("GET", "/api/v1/workflows/cards/{workflow_key}/pictures"),
     # The ghost routes. Pinned here as well as refused in the authz test below:
     # every token that test can mint is READ, which the middleware refuses on a
     # DELETE before the gate reads the declaration, so a loosened entry would
@@ -145,9 +142,9 @@ _WORKFLOW_WRITE_ROUTES = (
     ("POST", "/api/v1/workflows/stacks"),
     ("PUT", "/api/v1/workflows/stacks/{stack_id}/order"),
     ("POST", "/api/v1/workflows/stacks/{stack_id}/unstack"),
-    # The run route and its dry run (v1.12 B7). OWNER_ONLY, which NARROWS the
-    # picture-scoped run routes in comfyui.py: those replay one named
-    # picture's own graph, this resolves one from the whole library.
+    # The run route and its dry run (v1.12 B7). OWNER_ONLY: it resolves a card
+    # from the whole library rather than replaying one named picture's own
+    # graph, which is what the picture-scoped run routes #1410 retired did.
     ("POST", "/api/v1/workflows/run"),
     ("POST", "/api/v1/workflows/run/preflight"),
     # The file gestures (v1.12 B8). Each resolves the card's graph out of the
@@ -892,366 +889,35 @@ def test_no_scoped_token_can_read_the_workflow_library(workflow_env):
     assert client.get(f"{API}/pictures").status_code == 200, (
         "the scoped token is dead; the refusals below would prove nothing"
     )
+    # Each path is named with the template that must answer it. Since #1410
+    # moved the cards onto `/workflows/{workflow_key}`, a bare `assert_real_route`
+    # passes for ANY string in that segment, so it would no longer notice the
+    # handler being renamed away - which is the vacuity it exists to refuse.
     paths = (
-        f"{API}/workflows",
-        f"{API}/workflows/{BUSY_TOPOLOGY}/variants",
-        f"{API}/workflows/{BUSY_TOPOLOGY}/pictures",
-        f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph",
-        f"{API}/workflows/cards",
-        f"{API}/workflows/cards/{BUSY_CARD}",
-        f"{API}/workflows/cards/{BUSY_CARD}/pictures",
-        f"{API}/workflows/{BUSY_CARD}/export",
+        (f"{API}/workflows", f"{API}/workflows"),
+        (f"{API}/workflows/{BUSY_CARD}", API + "/workflows/{workflow_key}"),
+        (
+            f"{API}/workflows/{BUSY_CARD}/pictures",
+            API + "/workflows/{workflow_key}/pictures",
+        ),
+        (
+            f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph",
+            API + "/workflows/recipes/{structural_hash}/graph",
+        ),
+        (
+            f"{API}/workflows/{BUSY_CARD}/export",
+            API + "/workflows/{workflow_key}/export",
+        ),
     )
-    for path in paths:
-        assert_real_route(workflow_env.server.api, "GET", path)
+    for path, template in paths:
+        assert_real_route(workflow_env.server.api, "GET", path, template)
         r = client.get(path)
         assert r.status_code == 403, f"GET {path}: {r.status_code} {r.text}"
 
 
 # ===========================================================================
-# The list opens at topology level
+# The stored graph
 # ===========================================================================
-
-
-def test_the_list_is_one_row_per_topology_not_per_recipe(workflow_env):
-    """§F1's whole shape: five recipes, four rows, variants counted not listed."""
-    payload = workflow_env.owner.get(f"{API}/workflows").json()
-    rows = _by_hash(payload)
-    assert set(rows) == {
-        BUSY_TOPOLOGY,
-        BINNED_TOPOLOGY,
-        FORGOTTEN_TOPOLOGY,
-        HIDDEN_TOPOLOGY,
-    }
-    assert rows[BUSY_TOPOLOGY]["variants"] == 2
-    assert rows[BINNED_TOPOLOGY]["variants"] == 1
-
-
-def test_a_row_counts_the_kept_pictures_and_names_when_they_were_made(workflow_env):
-    rows = _by_hash(workflow_env.owner.get(f"{API}/workflows").json())
-    assert rows[BUSY_TOPOLOGY]["pictures"] == 5
-    assert rows[BUSY_TOPOLOGY]["last_used"].startswith("2026-08-13")
-
-
-def test_a_workflow_whose_pictures_are_all_binned_reads_as_none_kept(workflow_env):
-    """It must still list — the graph outliving its pictures is the point of the
-    hub — and it must read as zero rather than as live."""
-    rows = _by_hash(workflow_env.owner.get(f"{API}/workflows").json())
-    assert BINNED_TOPOLOGY in rows
-    assert rows[BINNED_TOPOLOGY]["pictures"] == 0
-    assert rows[BINNED_TOPOLOGY]["last_used"] is None
-
-
-def test_forgotten_model_names_leave_the_row_intact_and_the_assets_empty(
-    workflow_env,
-):
-    """ "Forget this model's name" is a row delete, so the workflow keeps
-    listing, keeps its node count and simply stops saying what it used."""
-    rows = _by_hash(workflow_env.owner.get(f"{API}/workflows").json())
-    row = rows[FORGOTTEN_TOPOLOGY]
-    assert row["assets"] == []
-    assert row["node_count"] == 38
-    assert row["pictures"] == 4
-
-
-def test_forgotten_names_are_counted_so_the_row_can_say_how_many(workflow_env):
-    """The hash does not move when a name goes, so the row still groups; the
-    document's unresolved references are what say three models were there."""
-    rows = _by_hash(workflow_env.owner.get(f"{API}/workflows").json())
-    assert rows[FORGOTTEN_TOPOLOGY]["forgotten_models"] == 3
-    assert rows[BUSY_TOPOLOGY]["forgotten_models"] == 0
-    (variant,) = workflow_env.owner.get(
-        f"{API}/workflows/{FORGOTTEN_TOPOLOGY}/variants"
-    ).json()
-    assert variant["forgotten_models"] == 3
-
-
-def test_a_row_carries_its_ghosts_for_the_filter(workflow_env):
-    """Picture ghosts are this library's; model ghosts are names for models
-    not on the shelf. Each positive sits beside a row that must read zero."""
-    server = workflow_env.server
-    record_picture_ghosts(
-        server.hub,
-        [
-            PictureGhost(
-                library_uuid=server.vault.library_uuid,
-                pixel_sha="sha-binned-ghost",
-                instance_hash=_h("binned-instance"),
-                structural_hash=BINNED_RECIPE,
-                thumbnail=b"thumbnail-bytes",
-            ),
-            PictureGhost(
-                library_uuid=_h("another-library"),
-                pixel_sha="sha-elsewhere",
-                instance_hash=_h("binned-instance"),
-                structural_hash=BUSY_RECIPE_A,
-                thumbnail=b"thumbnail-bytes",
-            ),
-        ],
-    )
-    rows = _by_hash(workflow_env.owner.get(f"{API}/workflows").json())
-    assert rows[BINNED_TOPOLOGY]["ghosts"] == 1
-    assert rows[BUSY_TOPOLOGY]["ghosts"] == 0
-    assert rows[BUSY_TOPOLOGY]["model_ghosts"] == 1
-    assert rows[FORGOTTEN_TOPOLOGY]["model_ghosts"] == 0
-
-    settings = workflow_env.owner.get(f"{API}/server-config/ghost-retention").json()
-    assert settings["picture_ghosts"] == 1
-    assert settings["model_ghosts"] == 1
-
-
-def test_forgetting_model_ghosts_keeps_the_workflow_and_the_shelfs_names(
-    workflow_env,
-):
-    """The purge forgets the LoRA the shelf no longer has, keeps the checkpoint
-    it does, and the workflow stays one row of two variants."""
-    owner = workflow_env.owner
-    r = owner.delete(f"{API}/server-config/ghost-retention/model-ghosts")
-    assert r.status_code == 200, r.text
-    assert r.json()["names_forgotten"] == 1
-
-    row = _by_hash(owner.get(f"{API}/workflows").json())[BUSY_TOPOLOGY]
-    assert [a["name"] for a in row["assets"]] == [_SHELF_FILENAME]
-    assert row["variants"] == 2
-    assert row["model_ghosts"] == 0
-    assert row["forgotten_models"] == 1
-    assert owner.get(f"{API}/server-config/ghost-retention").json()["model_ghosts"] == 0
-
-
-def test_model_ghosts_judge_only_what_the_shelf_can_hold(workflow_env):
-    """The shelf scans ``.safetensors`` alone, so a ``.pth`` is never on it and
-    must never be forgotten as a ghost. A loader digest is judged against the
-    shelf's digests: the unknown one goes, the one on the shelf stays."""
-    server = workflow_env.server
-    on_shelf, unknown = _h("digest-on-shelf"), _h("digest-unknown")
-    with server.hub.transaction() as conn:
-        conn.executemany(
-            "INSERT INTO workflow_recipe_asset "
-            "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
-            [
-                (BUSY_RECIPE_A, "model_name", "4x_ultrasharp.pth"),
-                (BUSY_RECIPE_A, "lora_sha256", unknown),
-                (BUSY_RECIPE_B, "lora_sha256", on_shelf),
-                # An unset loader and a blank download digest name no model.
-                (BUSY_RECIPE_B, "checkpoint_sha256", ""),
-                (BUSY_RECIPE_B, "expected_sha256", "not-a-digest"),
-            ],
-        )
-        conn.execute("DELETE FROM model WHERE sha256 = ?", (on_shelf,))
-        conn.execute(
-            "INSERT INTO model (file_kind, kind, sha256, provenance) "
-            "VALUES ('adapter', 'lora', ?, 'scanned')",
-            (on_shelf,),
-        )
-    try:
-        owner = workflow_env.owner
-        base = f"{API}/server-config/ghost-retention"
-        assert owner.get(base).json()["model_ghosts"] == 2
-        # A confirm for a count that is no longer true destroys nothing.
-        r = owner.delete(f"{base}/model-ghosts", params={"expected": 1})
-        assert r.status_code == 409, r.text
-        assert owner.get(base).json()["model_ghosts"] == 2
-
-        r = owner.delete(f"{base}/model-ghosts", params={"expected": 2})
-        assert r.status_code == 200, r.text
-        assert r.json()["names_forgotten"] == 2
-        left = {
-            row["normalized_filename"]
-            for row in server.hub.fetchall(
-                "SELECT normalized_filename FROM workflow_recipe_asset"
-            )
-        }
-        assert {
-            "4x_ultrasharp.pth",
-            on_shelf,
-            _SHELF_FILENAME,
-            "",
-            "not-a-digest",
-        } <= left
-        assert not {"add_detail.safetensors", unknown} & left
-    finally:
-        with server.hub.transaction() as conn:
-            conn.execute("DELETE FROM model WHERE sha256 = ?", (on_shelf,))
-
-
-def test_digests_wait_while_a_shelf_checkpoint_is_unhashed(workflow_env):
-    """Until the hash finder reads it, a checkpoint's loader digest matches
-    nothing on the shelf, so judging it then would forget a model on disk."""
-    server = workflow_env.server
-    digest = _h("digest-of-unhashed-checkpoint")
-    with server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_recipe_asset "
-            "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
-            (BUSY_RECIPE_B, "checkpoint_sha256", digest),
-        )
-        conn.execute("DELETE FROM model WHERE filename = 'unhashed.safetensors'")
-        conn.execute(
-            "INSERT INTO model (file_kind, filename, provenance) "
-            "VALUES ('checkpoint', 'unhashed.safetensors', 'scanned')"
-        )
-    base = f"{API}/server-config/ghost-retention"
-    try:
-        # Only the seeded LoRA name; the digest is not judged yet.
-        assert workflow_env.owner.get(base).json()["model_ghosts"] == 1
-    finally:
-        with server.hub.transaction() as conn:
-            conn.execute("DELETE FROM model WHERE filename = 'unhashed.safetensors'")
-    # Positive control: with nothing waiting, the same digest is a ghost.
-    assert workflow_env.owner.get(base).json()["model_ghosts"] == 2
-
-
-def test_a_model_back_on_the_shelf_is_not_a_ghost(workflow_env):
-    """A copy's basename counts as much as the recorded filename."""
-    server = workflow_env.server
-    with server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO model (file_kind, filename, provenance) "
-            "VALUES ('checkpoint', NULL, 'scanned')"
-        )
-        model_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        folder_id = conn.execute("SELECT id FROM model_folder LIMIT 1").fetchone()[0]
-        conn.execute(
-            "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
-            "VALUES (?, ?, 'loras/Add_Detail.safetensors', 'present')",
-            (model_id, folder_id),
-        )
-    try:
-        r = workflow_env.owner.delete(
-            f"{API}/server-config/ghost-retention/model-ghosts"
-        )
-        assert r.json()["names_forgotten"] == 0
-    finally:
-        with server.hub.transaction() as conn:
-            conn.execute("DELETE FROM model_file WHERE model_id = ?", (model_id,))
-            conn.execute("DELETE FROM model WHERE id = ?", (model_id,))
-
-
-def test_a_row_carries_each_asset_its_variants_name_exactly_once(workflow_env):
-    """A LIST comparison, not a set, and that is the point of the test.
-
-    The asset table is keyed per recipe, so two variants naming the same
-    checkpoint are two rows. Compared as a set that duplication is invisible —
-    and it is not cosmetic: it is what turns the 159-variant family's Models
-    cell into 159 copies of one filename and its descriptor into a claim that
-    the graph loads 159 adapters at once.
-    """
-    rows = _by_hash(workflow_env.owner.get(f"{API}/workflows").json())
-    assets = rows[BUSY_TOPOLOGY]["assets"]
-    assert [(a["widget"], a["name"]) for a in assets] == [
-        ("ckpt_name", "realvisxl.safetensors"),
-        ("lora_name", "add_detail.safetensors"),
-    ]
-
-
-def test_adapter_slots_count_one_run_not_the_names_across_variants(workflow_env):
-    """What one run loads, which the set of names cannot answer.
-
-    Both of BUSY's recipes name the same checkpoint; only one names an adapter.
-    A topology is the graph alone, so its adapter slots are a property every
-    recipe under it shares — one here, however many files the family has been
-    bound to over its life.
-    """
-    rows = _by_hash(workflow_env.owner.get(f"{API}/workflows").json())
-    assert rows[BUSY_TOPOLOGY]["adapter_slots"] == 1
-    assert rows[FORGOTTEN_TOPOLOGY]["adapter_slots"] == 0
-
-
-def test_the_scan_block_says_which_empty_state_the_list_is_in(workflow_env):
-    """The list cannot tell "not looked yet" from "looked, and nothing" on its
-    own, and three of the four states a new user meets are exactly that.
-
-    The two figures must **differ** here, or the assertion says nothing: with
-    every picture scanned, counting any column at all gives the same answer and
-    the one distinction this block exists to draw goes untested.
-    """
-    scan = workflow_env.owner.get(f"{API}/workflows").json()["scan"]
-    # Six kept pictures, one of them not yet read. The binned picture is in
-    # neither figure: it is not kept.
-    assert scan["pictures"] == 11
-    assert scan["scanned"] == 10
-
-
-# ===========================================================================
-# The variants are the row's expansion
-# ===========================================================================
-
-
-def test_variants_add_up_to_the_row_above_them(workflow_env):
-    variants = workflow_env.owner.get(
-        f"{API}/workflows/{BUSY_TOPOLOGY}/variants"
-    ).json()
-    by_hash = {row["structural_hash"]: row for row in variants}
-    assert set(by_hash) == {BUSY_RECIPE_A, BUSY_RECIPE_B}
-    assert by_hash[BUSY_RECIPE_A]["pictures"] == 3
-    assert by_hash[BUSY_RECIPE_B]["pictures"] == 2
-    row = _by_hash(workflow_env.owner.get(f"{API}/workflows").json())[BUSY_TOPOLOGY]
-    assert sum(v["pictures"] for v in variants) == row["pictures"]
-
-
-def test_a_variant_carries_only_its_own_assets(workflow_env):
-    """The LoRA belongs to one of the two recipes; the expansion is where that
-    difference becomes visible, and it is the reason variants exist at all."""
-    variants = workflow_env.owner.get(
-        f"{API}/workflows/{BUSY_TOPOLOGY}/variants"
-    ).json()
-    by_hash = {row["structural_hash"]: row for row in variants}
-    assert {a["name"] for a in by_hash[BUSY_RECIPE_A]["assets"]} == {
-        "realvisxl.safetensors",
-        "add_detail.safetensors",
-    }
-    assert {a["name"] for a in by_hash[BUSY_RECIPE_B]["assets"]} == {
-        "realvisxl.safetensors"
-    }
-
-
-def test_an_unknown_topology_is_a_404_not_an_empty_list(workflow_env):
-    """A hash from another machine is "this machine does not have it", which an
-    empty 200 would render as "this workflow has no variants"."""
-    r = workflow_env.owner.get(f"{API}/workflows/{_h('nosuchtopology')}/variants")
-    assert r.status_code == 404, r.text
-
-
-def test_a_malformed_hash_is_refused_by_name(workflow_env):
-    r = workflow_env.owner.get(f"{API}/workflows/not-a-hash/variants")
-    assert r.status_code == 422, r.text
-    assert "topology_hash" in r.text
-
-
-# ===========================================================================
-# The rail's tiles, and the graph
-# ===========================================================================
-
-
-def test_picture_ids_are_newest_first_and_exclude_the_scrapheap(workflow_env):
-    """Named for the order, so the order is what is asserted.
-
-    The rail draws six tiles out of a workflow that may have a thousand
-    pictures, so which six is the whole of the choice; a test that only counted
-    them would pass with the sort reversed.
-    """
-    ids = workflow_env.owner.get(f"{API}/workflows/{BUSY_TOPOLOGY}/pictures").json()
-    assert len(ids) == 5
-    dated = {
-        row["file_path"]: row["id"]
-        for row in workflow_env.owner.get(f"{API}/pictures", params={"id": ids}).json()
-    }
-    # busy_four (2026-08-13) is the newest of the five, busy_unrated the oldest.
-    assert ids[0] == dated["busy_four.png"]
-    assert ids[-1] == dated["busy_unrated.png"]
-
-    binned = workflow_env.owner.get(
-        f"{API}/workflows/{BINNED_TOPOLOGY}/pictures"
-    ).json()
-    assert binned == []
-
-
-def test_the_tile_limit_is_the_routes_to_set_not_the_callers(workflow_env):
-    """A tile strip must not be turnable into a library dump by editing a URL."""
-    r = workflow_env.owner.get(
-        f"{API}/workflows/{BUSY_TOPOLOGY}/pictures", params={"limit": 100000}
-    )
-    assert r.status_code == 422, r.text
 
 
 def test_a_recipe_serves_its_stored_graph_and_says_it_will_not_run(workflow_env):
@@ -1275,13 +941,22 @@ def test_an_unknown_recipe_is_a_404(workflow_env):
 # Hardening (#1293): the rollback belt, transport, and the ghost routes
 # ===========================================================================
 
+# `(path, the route template that must answer it)` - see
+# `test_no_scoped_token_can_read_the_workflow_library` for why the template is
+# named rather than left to "some route matched".
 _TEMPLATED_PATHS = (
-    f"{API}/workflows/{BUSY_TOPOLOGY}/variants",
-    f"{API}/workflows/{BUSY_TOPOLOGY}/pictures",
-    f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph",
+    (f"{API}/workflows/{BUSY_CARD}", API + "/workflows/{workflow_key}"),
+    (
+        f"{API}/workflows/{BUSY_CARD}/pictures",
+        API + "/workflows/{workflow_key}/pictures",
+    ),
+    (
+        f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph",
+        API + "/workflows/recipes/{structural_hash}/graph",
+    ),
     # The export (v1.12 B8) hands back a whole graph, so it is the one here
     # with most to lose from the rollback.
-    f"{API}/workflows/{BUSY_CARD}/export",
+    (f"{API}/workflows/{BUSY_CARD}/export", API + "/workflows/{workflow_key}/export"),
 )
 
 
@@ -1307,11 +982,11 @@ def test_the_templated_reads_stay_closed_with_the_gate_rolled_back(workflow_env)
             assert client.get(f"{API}/pictures").status_code == 200, (
                 "the token is dead; the refusals below would prove nothing"
             )
-            for path in _TEMPLATED_PATHS:
-                assert_real_route(server.api, "GET", path)
+            for path, template in _TEMPLATED_PATHS:
+                assert_real_route(server.api, "GET", path, template)
                 r = client.get(path)
                 assert r.status_code == 403, f"GET {path}: {r.status_code} {r.text}"
-        for path in _TEMPLATED_PATHS:
+        for path, _template in _TEMPLATED_PATHS:
             r = workflow_env.owner.get(path)
             assert r.status_code == 200, f"owner GET {path}: {r.status_code} {r.text}"
     finally:
@@ -1325,7 +1000,7 @@ def test_the_workflow_reads_refuse_remote_plaintext_under_require_ssl(
     server = workflow_env.server
     monkeypatch.setitem(server.auth._server_config, "require_ssl", True)
     monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: "8.8.8.8")
-    for path in (f"{API}/workflows", *_TEMPLATED_PATHS):
+    for path in (f"{API}/workflows", *(p for p, _t in _TEMPLATED_PATHS)):
         r = workflow_env.owner.get(path)
         assert r.status_code == 403 and "HTTPS is required" in r.text, (
             f"GET {path}: {r.status_code} {r.text}"
@@ -1470,13 +1145,8 @@ def test_a_hub_attached_vault_registers_the_ghost_cascade(workflow_env):
 
 
 # ===========================================================================
-# How each picture input is filled (#1305)
+# Workflow files on disk — the shared isolation every file gesture needs
 # ===========================================================================
-
-_INPUT_ROUTES = (
-    ("GET", "/api/v1/comfyui/workflows/{workflow_name}/inputs"),
-    ("PUT", "/api/v1/comfyui/workflows/{workflow_name}/inputs"),
-)
 
 
 def _isolate_workflow_folders(tmp_path, monkeypatch) -> None:
@@ -1502,947 +1172,8 @@ def _isolate_workflow_folders(tmp_path, monkeypatch) -> None:
     comfyui_module._describe_workflow.cache_clear()
 
 
-@pytest.fixture
-def edit_workflow(tmp_path, monkeypatch):
-    """One two-input workflow file in a user folder of its own.
-
-    The real user folder is shared by every checkout on the machine, so the
-    routes are pointed at a temporary one rather than written into it.
-    """
-    # Stored the way the placeholder migration leaves a dialog-bound file: the
-    # old token sat on the SECOND input, so a default that just took the lowest
-    # node id would show here.
-    graph, _changed = workflow_bindings.migrate_placeholders(
-        {
-            "1": {"class_type": "LoadImage", "inputs": {"image": "Logo.png"}},
-            "2": {
-                "class_type": "LoadImage",
-                "inputs": {"image": "{{image_path}}"},
-                "_meta": {"title": "Reference"},
-            },
-            "3": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
-        }
-    )
-    (tmp_path / "edit.json").write_text(json.dumps(graph), encoding="utf-8")
-    _isolate_workflow_folders(tmp_path, monkeypatch)
-    return f"{API}/comfyui/workflows/edit.json/inputs"
-
-
-def _picture_with_sha(server, file_path: str, pixel_sha: str) -> int:
-    def write(session):
-        picture = session.exec(
-            select(Picture).where(Picture.file_path == file_path)
-        ).one()
-        picture.pixel_sha = pixel_sha
-        session.add(picture)
-        session.commit()
-        return picture.id
-
-    return server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
-
-
-def _by_node(body) -> dict:
-    return {item["node_id"]: item for item in body["inputs"]}
-
-
-def test_the_input_routes_are_declared_owner_only():
-    for key in _INPUT_ROUTES:
-        assert ROUTE_POLICIES[key].policy is AccessPolicy.OWNER_ONLY, key
-
-
-def test_no_scoped_token_can_read_or_set_a_workflows_inputs(
-    workflow_env, edit_workflow
-):
-    """The setup names Fixed pictures by id, so a share token gets neither half.
-
-    The belts are emptied, and the token's scope is let through the non-GET
-    refusal, so both halves are refused by the gate's declaration rather than
-    by the middleware in front of it: "Owner-level" is the gate's own string.
-    """
-    server = workflow_env.server
-    token = _mint(
-        workflow_env.owner,
-        "inputs scope probe",
-        resource_type="character",
-        resource_id=workflow_env.character_id,
-    )
-    client = _bearer(server, token)
-    assert client.get(f"{API}/pictures").status_code == 200, "the token is dead"
-    assert_real_route(server.api, "GET", edit_workflow)
-    assert_real_route(server.api, "PUT", edit_workflow)
-    body = {
-        "inputs": [
-            {"node_id": "1", "mode": "picker"},
-            {"node_id": "2", "mode": "picker"},
-        ]
-    }
-    previously_enforcing = server.authz._enforcing
-    server.authz._enforcing = True
-    try:
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
-            patch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
-            patch.setattr(auth, "WRITE_ENABLED_SCOPES", frozenset({"READ", "WRITE"}))
-            r = client.get(edit_workflow)
-            assert r.status_code == 403 and "Owner-level" in r.text, r.text
-            r = client.put(edit_workflow, json=body)
-            assert r.status_code == 403 and "Owner-level" in r.text, r.text
-        assert client.put(edit_workflow, json=body).status_code == 403
-        # The refusal wrote nothing: the owner still reads the defaults.
-        owner_view = _by_node(workflow_env.owner.get(edit_workflow).json())
-        assert owner_view["2"]["mode"] == "selection"
-    finally:
-        server.authz._enforcing = previously_enforcing
-
-
-def test_an_unconfigured_workflow_reads_its_defaults_with_titles(
-    workflow_env, edit_workflow
-):
-    r = workflow_env.owner.get(edit_workflow)
-    assert r.status_code == 200, r.text
-    assert r.json()["inputs"] == [
-        {
-            "node_id": "1",
-            "title": "LoadImage",
-            "mode": "picker",
-            "picture_id": None,
-            "picture_missing": False,
-        },
-        {
-            "node_id": "2",
-            "title": "Reference",
-            "mode": "selection",
-            "picture_id": None,
-            "picture_missing": False,
-        },
-    ]
-
-
-def test_a_fixed_picture_is_kept_by_content_and_leaves_the_selection_pill(
-    workflow_env, edit_workflow
-):
-    server, owner = workflow_env.server, workflow_env.owner
-    picture_id = _picture_with_sha(server, "busy_one.png", "sha-fixed-reference")
-    r = owner.put(
-        edit_workflow,
-        json={
-            "inputs": [
-                {"node_id": "1", "mode": "picker"},
-                {"node_id": "2", "mode": "fixed", "picture_id": picture_id},
-            ]
-        },
-    )
-    assert r.status_code == 200, r.text
-    assert _by_node(r.json())["2"]["picture_id"] == picture_id
-    assert (
-        server.hub.fetchone(
-            "SELECT pixel_sha FROM workflow_picture_input WHERE node_id = '2'"
-        )["pixel_sha"]
-        == "sha-fixed-reference"
-    )
-    listed = {
-        item["name"]: item
-        for item in owner.get(f"{API}/comfyui/workflows").json()["workflows"]
-    }
-    assert listed["edit.json"]["has_selection_input"] is False
-
-    # Moving the picture to the Scrapheap leaves the input saying so.
-    def bin_it(session):
-        picture = session.get(Picture, picture_id)
-        picture.deleted = True
-        session.add(picture)
-        session.commit()
-
-    server.vault.db.run_task(bin_it, priority=DBPriority.IMMEDIATE)
-    fixed = _by_node(owner.get(edit_workflow).json())["2"]
-    assert (fixed["picture_id"], fixed["picture_missing"]) == (None, True)
-
-    # Changing the other input keeps the Fixed one's picture, missing or not.
-    r = owner.put(
-        edit_workflow,
-        json={
-            "inputs": [
-                {"node_id": "1", "mode": "selection"},
-                {"node_id": "2", "mode": "fixed"},
-            ]
-        },
-    )
-    assert r.status_code == 200, r.text
-    assert (
-        server.hub.fetchone(
-            "SELECT pixel_sha FROM workflow_picture_input WHERE node_id = '2'"
-        )["pixel_sha"]
-        == "sha-fixed-reference"
-    )
-
-
-def test_leaving_fixed_keeps_the_picture_for_coming_back(workflow_env, edit_workflow):
-    """One arrow key steps an input off Fixed; it must not cost the picture."""
-    server, owner = workflow_env.server, workflow_env.owner
-    picture_id = _picture_with_sha(server, "busy_two.png", "sha-kept-reference")
-
-    def put(mode_2, **extra):
-        r = owner.put(
-            edit_workflow,
-            json={
-                "inputs": [
-                    {"node_id": "1", "mode": "selection"},
-                    {"node_id": "2", "mode": mode_2, **extra},
-                ]
-            },
-        )
-        assert r.status_code == 200, r.text
-        return _by_node(r.json())["2"]
-
-    put("fixed", picture_id=picture_id)
-    stepped_off = put("picker")
-    assert (stepped_off["mode"], stepped_off["picture_id"]) == ("picker", picture_id)
-    back = put("fixed")
-    assert (back["mode"], back["picture_id"], back["picture_missing"]) == (
-        "fixed",
-        picture_id,
-        False,
-    )
-
-
-def test_an_unhashed_picture_is_a_409_and_a_duplicate_resolves_to_its_oldest_copy(
-    workflow_env, edit_workflow
-):
-    server, owner = workflow_env.server, workflow_env.owner
-
-    def ids_by_path(session):
-        return {p.file_path: p.id for p in session.exec(select(Picture)).all()}
-
-    ids = server.vault.db.run_immediate_read_task(ids_by_path)
-    body = {
-        "inputs": [
-            {"node_id": "1", "mode": "selection"},
-            {"node_id": "2", "mode": "fixed", "picture_id": ids["busy_one.png"]},
-        ]
-    }
-    # Seeded pictures carry no pixel_sha: there is nothing to name one by.
-    r = owner.put(edit_workflow, json=body)
-    assert r.status_code == 409, r.text
-
-    older = _picture_with_sha(server, "busy_one.png", "sha-duplicate")
-    newer = _picture_with_sha(server, "busy_three.png", "sha-duplicate")
-    assert older < newer
-    body["inputs"][1]["picture_id"] = newer
-    r = owner.put(edit_workflow, json=body)
-    assert r.status_code == 200, r.text
-    assert _by_node(r.json())["2"]["picture_id"] == older
-
-
-def test_a_bad_setup_writes_nothing(workflow_env, edit_workflow):
-    owner = workflow_env.owner
-    two_selections = {
-        "inputs": [
-            {"node_id": "1", "mode": "selection"},
-            {"node_id": "2", "mode": "selection"},
-        ]
-    }
-    assert owner.put(edit_workflow, json=two_selections).status_code == 400
-    unknown_picture = {
-        "inputs": [
-            {"node_id": "1", "mode": "selection"},
-            {"node_id": "2", "mode": "fixed", "picture_id": 987654},
-        ]
-    }
-    assert owner.put(edit_workflow, json=unknown_picture).status_code == 404
-    # A Fixed input with no picture of its own to keep.
-    no_picture = {
-        "inputs": [
-            {"node_id": "1", "mode": "selection"},
-            {"node_id": "2", "mode": "fixed"},
-        ]
-    }
-    assert owner.put(edit_workflow, json=no_picture).status_code == 400
-    assert (
-        workflow_env.server.hub.fetchone(
-            "SELECT COUNT(*) AS n FROM workflow_picture_input"
-        )["n"]
-        == 0
-    )
-    missing = f"{API}/comfyui/workflows/nosuch.json/inputs"
-    assert owner.get(missing).status_code == 404
-
-
-def test_deleting_a_workflow_forgets_its_setup(workflow_env, edit_workflow):
-    owner = workflow_env.owner
-    r = owner.put(
-        edit_workflow,
-        json={
-            "inputs": [
-                {"node_id": "1", "mode": "picker"},
-                {"node_id": "2", "mode": "selection"},
-            ]
-        },
-    )
-    assert r.status_code == 200, r.text
-    r = owner.delete(f"{API}/comfyui/workflows/edit.json")
-    assert r.status_code == 200, r.text
-    assert (
-        workflow_env.server.hub.fetchone(
-            "SELECT COUNT(*) AS n FROM workflow_picture_input"
-        )["n"]
-        == 0
-    )
-
-
 # ===========================================================================
-# A workflow's parameters and pins (#1306)
-# ===========================================================================
-
-_PARAMETER_ROUTES = (
-    ("GET", "/api/v1/comfyui/workflows/{workflow_name}/parameters"),
-    ("PUT", "/api/v1/comfyui/workflows/{workflow_name}/pins"),
-)
-
-_SAMPLER_INFO = {
-    "KSampler": {
-        "input": {
-            "required": {
-                "seed": [
-                    "INT",
-                    {"min": 0, "max": 2**64 - 1, "control_after_generate": True},
-                ],
-                "steps": ["INT", {"min": 1, "max": 150}],
-                "sampler_name": [["euler", "dpmpp_2m"], {}],
-            }
-        }
-    },
-}
-
-
-@pytest.fixture
-def sampler_workflow(tmp_path, monkeypatch):
-    """One API-format workflow with a prompt a run fills, in its own user folder.
-
-    ComfyUI is replaced by ``object_info``: set ``.info`` to a map, or to an
-    exception for an unreachable ComfyUI.
-    """
-    graph = {
-        "1": {
-            "class_type": "KSampler",
-            "inputs": {
-                "seed": 2**64 - 2,
-                "steps": 20,
-                "sampler_name": "euler",
-                "positive": ["2", 0],
-            },
-        },
-        "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "a cat"}},
-        "3": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
-    }
-    (tmp_path / "sampler.json").write_text(json.dumps(graph), encoding="utf-8")
-    (tmp_path / "canvas.json").write_text(
-        json.dumps({"nodes": [{"id": 1, "type": "KSampler"}], "links": []}),
-        encoding="utf-8",
-    )
-    _isolate_workflow_folders(tmp_path, monkeypatch)
-    comfy = SimpleNamespace(info=_SAMPLER_INFO, asked=0)
-
-    def fake_object_info(_url):
-        comfy.asked += 1
-        if isinstance(comfy.info, Exception):
-            raise comfy.info
-        return comfy.info
-
-    monkeypatch.setattr(comfyui_module, "fetch_object_info", fake_object_info)
-    comfy.parameters = f"{API}/comfyui/workflows/sampler.json/parameters"
-    comfy.pins = f"{API}/comfyui/workflows/sampler.json/pins"
-    return comfy
-
-
-def _parameter(body, node_id: str, name: str) -> dict:
-    return next(
-        p for p in body["parameters"] if (p["node_id"], p["name"]) == (node_id, name)
-    )
-
-
-def _pinned(body) -> list:
-    return [(p["node_id"], p["name"]) for p in body["parameters"] if p["pinned"]]
-
-
-def test_the_parameter_routes_are_declared_owner_only():
-    for key in _PARAMETER_ROUTES:
-        assert ROUTE_POLICIES[key].policy is AccessPolicy.OWNER_ONLY, key
-
-
-def test_no_scoped_token_can_read_parameters_or_set_pins(
-    workflow_env, sampler_workflow
-):
-    """Refused by the gate's declaration, not the middleware in front of it."""
-    server = workflow_env.server
-    token = _mint(
-        workflow_env.owner,
-        "parameters scope probe",
-        resource_type="character",
-        resource_id=workflow_env.character_id,
-    )
-    client = _bearer(server, token)
-    assert client.get(f"{API}/pictures").status_code == 200, "the token is dead"
-    assert_real_route(server.api, "GET", sampler_workflow.parameters)
-    assert_real_route(server.api, "PUT", sampler_workflow.pins)
-    body = {"pins": [{"node_id": "1", "name": "steps"}]}
-    previously_enforcing = server.authz._enforcing
-    server.authz._enforcing = True
-    try:
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
-            patch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
-            patch.setattr(auth, "WRITE_ENABLED_SCOPES", frozenset({"READ", "WRITE"}))
-            r = client.get(sampler_workflow.parameters)
-            assert r.status_code == 403 and "Owner-level" in r.text, r.text
-            r = client.put(sampler_workflow.pins, json=body)
-            assert r.status_code == 403 and "Owner-level" in r.text, r.text
-        # Refused before ComfyUI was asked, and nothing was stored.
-        assert sampler_workflow.asked == 0
-        owner_view = workflow_env.owner.get(sampler_workflow.parameters).json()
-        assert owner_view["pins_saved"] is False
-    finally:
-        server.authz._enforcing = previously_enforcing
-
-
-def test_parameters_are_typed_from_comfyui_and_leave_the_prompt_out(
-    workflow_env, sampler_workflow
-):
-    r = workflow_env.owner.get(sampler_workflow.parameters)
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert (body["readable"], body["typed"], body["comfyui_error"]) == (
-        True,
-        True,
-        None,
-    )
-    steps = _parameter(body, "1", "steps")
-    assert (steps["kind"], steps["value"], steps["min"], steps["max"]) == (
-        "int",
-        20,
-        1,
-        150,
-    )
-    assert _parameter(body, "1", "sampler_name")["options"] == ["euler", "dpmpp_2m"]
-    assert _parameter(body, "1", "seed")["kind"] == "seed"
-    names = {(p["node_id"], p["name"]) for p in body["parameters"]}
-    assert ("2", "text") not in names and ("1", "positive") not in names
-    assert body["pins_saved"] is False
-    assert _pinned(body) == [("1", "seed"), ("1", "steps"), ("1", "sampler_name")]
-
-
-def test_an_unreachable_comfyui_still_shows_the_recorded_values(
-    workflow_env, sampler_workflow
-):
-    """The values survive the outage, and the exception's own text does not.
-
-    ``comfyui_error`` is composed by the route, not taken from the exception:
-    whatever the fetch failed on - a chained error, an internal address, a
-    token echoed back by a proxy - belongs in the log, not in a response.
-    """
-    sampler_workflow.info = RuntimeError(
-        "Could not reach ComfyUI at http://127.0.0.1:8188 (example-secret)"
-    )
-    r = workflow_env.owner.get(sampler_workflow.parameters)
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["typed"] is False
-    assert body["comfyui_error"].startswith("Could not read ComfyUI's node types at")
-    assert "example-secret" not in body["comfyui_error"]
-    steps = _parameter(body, "1", "steps")
-    assert (steps["value"], steps["min"], steps["max"]) == (20, None, None)
-    assert _parameter(body, "1", "sampler_name")["options"] is None
-
-
-def test_a_ui_format_file_is_unreadable_without_asking_comfyui(
-    workflow_env, sampler_workflow
-):
-    r = workflow_env.owner.get(f"{API}/comfyui/workflows/canvas.json/parameters")
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert (body["readable"], body["parameters"]) == (False, [])
-    # Nothing was asked, so nothing is reported offline.
-    assert (body["typed"], body["comfyui_error"]) == (False, None)
-    assert sampler_workflow.asked == 0
-
-
-def test_a_ui_file_the_reduction_refuses_is_still_just_unreadable(
-    workflow_env, sampler_workflow, tmp_path
-):
-    """A subgraph instance with no definition makes detection raise; the form
-    does not need detection for a file it cannot read anyway."""
-    canvas = {
-        "nodes": [{"id": 1, "type": "0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b"}],
-        "links": [],
-        "definitions": {"subgraphs": []},
-    }
-    with pytest.raises(WorkflowGraphError):
-        detect_workflow_io(canvas)
-    (tmp_path / "orphan.json").write_text(json.dumps(canvas), encoding="utf-8")
-    r = workflow_env.owner.get(f"{API}/comfyui/workflows/orphan.json/parameters")
-    assert r.status_code == 200, r.text
-    assert r.json()["readable"] is False
-
-
-def test_a_workflow_with_nothing_to_set_does_not_ask_comfyui(
-    workflow_env, sampler_workflow, tmp_path
-):
-    graph = {"1": {"class_type": "SaveImage", "inputs": {"images": ["2", 0]}}}
-    (tmp_path / "bare.json").write_text(json.dumps(graph), encoding="utf-8")
-    r = workflow_env.owner.get(f"{API}/comfyui/workflows/bare.json/parameters")
-    assert r.status_code == 200, r.text
-    assert (r.json()["parameters"], r.json()["typed"]) == ([], False)
-    assert sampler_workflow.asked == 0
-
-
-def test_pins_are_kept_in_order_and_null_restores_the_defaults(
-    workflow_env, sampler_workflow
-):
-    owner = workflow_env.owner
-    order = [
-        {"node_id": "1", "name": "sampler_name"},
-        {"node_id": "1", "name": "steps"},
-    ]
-    r = owner.put(sampler_workflow.pins, json={"pins": order})
-    assert r.status_code == 200, r.text
-    assert r.json() == {"workflow": "sampler.json", "pins_saved": True, "pins": order}
-    # Saving does not wait on ComfyUI.
-    assert sampler_workflow.asked == 0
-    body = owner.get(sampler_workflow.parameters).json()
-    assert (body["pins_saved"], body["pins"]) == (True, order)
-    assert _pinned(body) == [("1", "steps"), ("1", "sampler_name")]
-
-    r = owner.put(sampler_workflow.pins, json={"pins": []})
-    assert r.json()["pins"] == [] and r.json()["pins_saved"] is True
-    body = owner.get(sampler_workflow.parameters).json()
-    assert (body["pins"], _pinned(body)) == ([], [])
-
-    r = owner.put(sampler_workflow.pins, json={"pins": None})
-    assert (r.json()["pins_saved"], r.json()["pins"]) == (False, None)
-    body = owner.get(sampler_workflow.parameters).json()
-    assert [(p["node_id"], p["name"]) for p in body["pins"]] == [
-        ("1", "seed"),
-        ("1", "steps"),
-        ("1", "sampler_name"),
-    ]
-
-
-def test_a_seed_beyond_float_precision_is_returned_exactly(
-    workflow_env, sampler_workflow
-):
-    body = workflow_env.owner.get(sampler_workflow.parameters).json()
-    seed = _parameter(body, "1", "seed")
-    assert (seed["value"], seed["max"]) == (2**64 - 2, 2**64 - 1)
-
-
-def test_a_bad_pin_writes_nothing(workflow_env, sampler_workflow):
-    owner = workflow_env.owner
-    for body in (
-        {"pins": [{"node_id": "2", "name": "text"}]},
-        {"pins": [{"node_id": "1"}]},
-        {"pins": "steps"},
-        {},
-    ):
-        assert owner.put(sampler_workflow.pins, json=body).status_code == 400, body
-    assert (
-        workflow_env.server.hub.fetchone(
-            "SELECT COUNT(*) AS n FROM workflow_parameter_pins"
-        )["n"]
-        == 0
-    )
-    missing = f"{API}/comfyui/workflows/nosuch.json/parameters"
-    assert owner.get(missing).status_code == 404
-
-
-def test_deleting_a_workflow_forgets_its_pins(workflow_env, sampler_workflow):
-    owner = workflow_env.owner
-    r = owner.put(
-        sampler_workflow.pins, json={"pins": [{"node_id": "1", "name": "steps"}]}
-    )
-    assert r.status_code == 200, r.text
-    r = owner.delete(f"{API}/comfyui/workflows/sampler.json")
-    assert r.status_code == 200, r.text
-    assert (
-        workflow_env.server.hub.fetchone(
-            "SELECT COUNT(*) AS n FROM workflow_parameter_pins"
-        )["n"]
-        == 0
-    )
-
-
-# ===========================================================================
-# Running a workflow (#1307)
-# ===========================================================================
-
-_RUN_ROUTE = ("POST", "/api/v1/comfyui/workflows/{workflow_name}/run")
-
-
-@pytest.fixture
-def fake_comfyui(tmp_path, monkeypatch):
-    """ComfyUI replaced by recorders, and every picture given a file to upload.
-
-    ``uploads`` holds ``(file, upload_name)``, ``submitted`` each graph sent and
-    ``collected`` the arguments each output import started with.
-    """
-    comfy = SimpleNamespace(uploads=[], submitted=[], collected=[])
-    files = tmp_path / "pictures"
-    files.mkdir()
-
-    def resolve(_root, file_path):
-        path = files / file_path
-        path.write_bytes(b"not really a png")
-        return str(path)
-
-    def upload(_url, file_path, upload_name=None):
-        comfy.uploads.append((file_path.rsplit("/", 1)[-1], upload_name))
-        return upload_name
-
-    def submit(_url, workflow, _client_id=None):
-        comfy.submitted.append(json.loads(json.dumps(workflow)))
-        return {"prompt_id": f"prompt-{len(comfy.submitted)}"}
-
-    def collect(*args, **kwargs):
-        comfy.collected.append((args[3:], kwargs.get("view_context")))
-
-    monkeypatch.setattr(
-        comfyui_module.ImageUtils, "resolve_picture_path", staticmethod(resolve)
-    )
-    monkeypatch.setattr(comfyui_module, "_upload_image_to_comfyui", upload)
-    monkeypatch.setattr(comfyui_module, "_submit_comfyui_prompt", submit)
-    monkeypatch.setattr(comfyui_module, "_process_comfyui_outputs", collect)
-    return comfy
-
-
-def _picture_ids(server) -> dict:
-    def ids_by_path(session):
-        return {p.file_path: p.id for p in session.exec(select(Picture)).all()}
-
-    return server.vault.db.run_immediate_read_task(ids_by_path)
-
-
-def _run(owner, name: str, **body):
-    return owner.post(f"{API}/comfyui/workflows/{name}/run", json=body)
-
-
-def _wait_for_collection(comfy, count: int) -> None:
-    deadline = time.monotonic() + 5.0
-    while len(comfy.collected) < count and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert len(comfy.collected) == count, comfy.collected
-
-
-def test_the_run_route_is_declared_owner_only_and_refuses_a_scoped_token(
-    workflow_env, edit_workflow, fake_comfyui
-):
-    assert ROUTE_POLICIES[_RUN_ROUTE].policy is AccessPolicy.OWNER_ONLY
-    server = workflow_env.server
-    token = _mint(
-        workflow_env.owner,
-        "run scope probe",
-        resource_type="character",
-        resource_id=workflow_env.character_id,
-    )
-    client = _bearer(server, token)
-    assert client.get(f"{API}/pictures").status_code == 200, "the token is dead"
-    url = f"{API}/comfyui/workflows/edit.json/run"
-    assert_real_route(server.api, "POST", url)
-    ids = _picture_ids(server)
-    body = {
-        "picture_ids": [ids["busy_one.png"]],
-        "pictures": [{"node_id": "1", "picture_id": ids["busy_two.png"]}],
-        "stack": False,
-    }
-    previously_enforcing = server.authz._enforcing
-    server.authz._enforcing = True
-    try:
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(auth, "WRITE_ENABLED_SCOPES", frozenset({"READ", "WRITE"}))
-            r = client.post(url, json=body)
-            assert r.status_code == 403 and "Owner-level" in r.text, r.text
-        assert fake_comfyui.submitted == []
-        # The in-scope positive control: the owner runs the same body.
-        r = workflow_env.owner.post(url, json=body)
-        assert r.status_code == 200, r.text
-    finally:
-        server.authz._enforcing = previously_enforcing
-
-
-def test_a_selection_runs_once_per_picture_with_the_picker_in_every_run(
-    workflow_env, edit_workflow, fake_comfyui
-):
-    ids = _picture_ids(workflow_env.server)
-    selected = [ids["busy_one.png"], ids["busy_three.png"]]
-    picked = ids["busy_two.png"]
-    r = _run(
-        workflow_env.owner,
-        "edit.json",
-        picture_ids=selected,
-        pictures=[{"node_id": "1", "picture_id": picked}],
-        stack=False,
-    )
-    assert r.status_code == 200, r.text
-    assert [p["picture_id"] for p in r.json()["prompts"]] == selected
-    # Node 2 holds the old binding, so it is the Selection input by default.
-    assert [g["2"]["inputs"]["image"] for g in fake_comfyui.submitted] == [
-        f"pixlstash-{selected[0]}-unhashed.png",
-        f"pixlstash-{selected[1]}-unhashed.png",
-    ]
-    assert {g["1"]["inputs"]["image"] for g in fake_comfyui.submitted} == {
-        f"pixlstash-{picked}-unhashed.png"
-    }
-    # The picker's picture is uploaded once, not once per run.
-    assert [name for name, _ in fake_comfyui.uploads].count("busy_two.png") == 1
-    _wait_for_collection(fake_comfyui, 2)
-    assert sorted(args for args, _ in fake_comfyui.collected) == sorted(
-        (["3"], None, pic_id) for pic_id in selected
-    )
-
-
-def test_a_fixed_input_is_filled_from_the_setup_and_a_lost_one_runs_nothing(
-    workflow_env, edit_workflow, fake_comfyui
-):
-    server, owner = workflow_env.server, workflow_env.owner
-    fixed = _picture_with_sha(server, "busy_two.png", "sha-run-fixed")
-    r = owner.put(
-        edit_workflow,
-        json={
-            "inputs": [
-                {"node_id": "1", "mode": "fixed", "picture_id": fixed},
-                {"node_id": "2", "mode": "selection"},
-            ]
-        },
-    )
-    assert r.status_code == 200, r.text
-    selected = _picture_ids(server)["busy_one.png"]
-    r = _run(owner, "edit.json", picture_ids=[selected], stack=False)
-    assert r.status_code == 200, r.text
-    assert fake_comfyui.submitted[0]["1"]["inputs"]["image"] == (
-        f"pixlstash-{fixed}-sha-run-fixed.png"
-    )
-
-    def bin_it(session):
-        picture = session.get(Picture, fixed)
-        picture.deleted = True
-        session.add(picture)
-        session.commit()
-
-    server.vault.db.run_task(bin_it, priority=DBPriority.IMMEDIATE)
-    r = _run(owner, "edit.json", picture_ids=[selected], stack=False)
-    assert r.status_code == 409, r.text
-    assert len(fake_comfyui.submitted) == 1
-
-
-def test_a_run_that_cannot_be_filled_submits_nothing(
-    workflow_env, edit_workflow, fake_comfyui
-):
-    owner = workflow_env.owner
-    ids = _picture_ids(workflow_env.server)
-    one, two = ids["busy_one.png"], ids["busy_two.png"]
-    picker = [{"node_id": "1", "picture_id": two}]
-    for name, body in (
-        # The picker input was not chosen.
-        ("edit.json", {"picture_ids": [one]}),
-        # A Selection input with nothing selected.
-        ("edit.json", {"pictures": picker}),
-        # A node that is not a picker.
-        (
-            "edit.json",
-            {"picture_ids": [one], "pictures": [*picker, {"node_id": "2"}]},
-        ),
-        (
-            "edit.json",
-            {
-                "picture_ids": [one],
-                "pictures": picker,
-                "seed_mode": "fixed",
-                "seed": "x",
-            },
-        ),
-        ("edit.json", {"picture_ids": ["1"], "pictures": picker}),
-        ("edit.json", {"picture_ids": [one], "pictures": picker, "seed_mode": "fixd"}),
-        ("edit.json", {"picture_ids": [one], "pictures": picker, "stack": "false"}),
-    ):
-        r = _run(owner, name, **body)
-        assert r.status_code == 400, (body, r.text)
-    r = _run(owner, "edit.json", picture_ids=[987654], pictures=picker)
-    assert r.status_code == 404, r.text
-
-    # A picture in the Scrapheap is not one a run may read.
-    def bin_it(session):
-        picture = session.get(Picture, one)
-        picture.deleted = True
-        session.add(picture)
-        session.commit()
-
-    workflow_env.server.vault.db.run_task(bin_it, priority=DBPriority.IMMEDIATE)
-    r = _run(owner, "edit.json", picture_ids=[one], pictures=picker)
-    assert r.status_code == 404, r.text
-    assert fake_comfyui.submitted == [] and fake_comfyui.uploads == []
-
-
-def test_a_workflow_without_a_selection_input_runs_once_and_takes_no_selection(
-    workflow_env, sampler_workflow, fake_comfyui
-):
-    owner = workflow_env.owner
-    one = _picture_ids(workflow_env.server)["busy_one.png"]
-    r = _run(owner, "sampler.json", picture_ids=[one])
-    assert r.status_code == 400, r.text
-    r = _run(owner, "canvas.json")
-    assert r.status_code == 400 and "UI format" in r.text, r.text
-    assert fake_comfyui.submitted == []
-
-    r = _run(
-        owner,
-        "sampler.json",
-        caption="a dog",
-        values=[{"node_id": "1", "name": "steps", "value": 31}],
-        seed_mode="keep",
-        character_id=workflow_env.character_id,
-    )
-    assert r.status_code == 200, r.text
-    (prompt,) = r.json()["prompts"]
-    assert (prompt["picture_id"], prompt["prompt_id"]) == (None, "prompt-1")
-    (graph,) = fake_comfyui.submitted
-    assert graph["1"]["inputs"]["steps"] == 31
-    assert graph["1"]["inputs"]["seed"] == 2**64 - 2
-    assert graph["2"]["inputs"]["text"] == "a dog"
-    _wait_for_collection(fake_comfyui, 1)
-    assert fake_comfyui.collected == [
-        ((["3"], None, None), {"character_id": workflow_env.character_id})
-    ]
-
-    r = _run(owner, "sampler.json", values=[{"node_id": "2", "name": "text"}])
-    assert r.status_code == 400, r.text
-    r = _run(owner, "sampler.json")
-    assert r.status_code == 200, r.text
-    assert fake_comfyui.submitted[-1]["1"]["inputs"]["seed"] != 2**64 - 2
-
-
-def test_the_list_says_which_workflows_can_run(workflow_env, sampler_workflow):
-    listed = {
-        item["name"]: item
-        for item in workflow_env.owner.get(f"{API}/comfyui/workflows").json()[
-            "workflows"
-        ]
-    }
-    assert listed["sampler.json"]["runnable"] is True
-    assert listed["canvas.json"]["runnable"] is False
-
-
-def test_a_selection_run_stacks_each_output_with_its_picture(
-    workflow_env, edit_workflow, fake_comfyui
-):
-    ids = _picture_ids(workflow_env.server)
-    one, two = ids["busy_one.png"], ids["busy_two.png"]
-    r = _run(
-        workflow_env.owner,
-        "edit.json",
-        picture_ids=[one],
-        pictures=[{"node_id": "1", "picture_id": two}],
-    )
-    assert r.status_code == 200, r.text
-    _wait_for_collection(fake_comfyui, 1)
-    ((output_nodes, stack_id, source), _context) = fake_comfyui.collected[0]
-    assert (output_nodes, source) == (["3"], one)
-    assert stack_id is not None
-    assert str(stack_id) in fake_comfyui.submitted[0]["3"]["inputs"]["filename_prefix"]
-
-
-def test_a_template_holding_the_picture_and_the_caption_gets_both(
-    workflow_env, tmp_path, edit_workflow, fake_comfyui
-):
-    # A loader detection does not recognise, bound by the old dialog with both
-    # tokens in one string: filled a role at a time, one would wipe the other.
-    graph, _changed = workflow_bindings.migrate_placeholders(
-        {
-            "7": {
-                "class_type": "MyPictureSource",
-                "inputs": {"image": "{{image_path}} | {{caption}}"},
-            },
-            "3": {"class_type": "SaveImage", "inputs": {"images": ["7", 0]}},
-        }
-    )
-    (tmp_path / "joint.json").write_text(json.dumps(graph), encoding="utf-8")
-    comfyui_module._describe_workflow.cache_clear()
-    one = _picture_ids(workflow_env.server)["busy_one.png"]
-    r = _run(
-        workflow_env.owner, "joint.json", picture_ids=[one], caption="dog", stack=False
-    )
-    assert r.status_code == 200, r.text
-    assert fake_comfyui.submitted[0]["7"]["inputs"]["image"] == (
-        f"pixlstash-{one}-unhashed.png | dog"
-    )
-
-
-def test_a_batch_that_fails_partway_returns_the_runs_it_started(
-    workflow_env, edit_workflow, fake_comfyui, monkeypatch
-):
-    def submit_once(_url, workflow, _client_id=None):
-        if fake_comfyui.submitted:
-            raise HTTPException(status_code=502, detail="ComfyUI prompt failed")
-        fake_comfyui.submitted.append(workflow)
-        return {"prompt_id": "prompt-1"}
-
-    monkeypatch.setattr(comfyui_module, "_submit_comfyui_prompt", submit_once)
-    ids = _picture_ids(workflow_env.server)
-    r = _run(
-        workflow_env.owner,
-        "edit.json",
-        picture_ids=[ids["busy_one.png"], ids["busy_three.png"]],
-        pictures=[{"node_id": "1", "picture_id": ids["busy_two.png"]}],
-        stack=False,
-    )
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["status"] == "partial"
-    assert [p["prompt_id"] for p in body["prompts"]] == ["prompt-1"]
-    assert "ComfyUI prompt failed" in body["error"]
-
-
-def test_a_run_names_the_missing_pictures_and_caps_the_batch(
-    workflow_env, edit_workflow, fake_comfyui, monkeypatch
-):
-    owner = workflow_env.owner
-    ids = _picture_ids(workflow_env.server)
-    one, two, three = ids["busy_one.png"], ids["busy_two.png"], ids["busy_three.png"]
-    picker = [{"node_id": "1", "picture_id": two}]
-    r = _run(owner, "edit.json", picture_ids=[one, 987654], pictures=picker)
-    assert r.status_code == 404 and "987654" in r.json()["detail"], r.text
-
-    monkeypatch.setattr(comfyui_module, "MAX_RUNS_PER_REQUEST", 1)
-    r = _run(owner, "edit.json", picture_ids=[one, three], pictures=picker)
-    assert r.status_code == 400 and "at most 1" in r.json()["detail"], r.text
-    assert fake_comfyui.submitted == []
-    r = _run(owner, "edit.json", picture_ids=[one], pictures=picker, stack=False)
-    assert r.status_code == 200, r.text
-
-
-def test_setup_and_run_resolve_a_duplicated_fixed_picture_to_the_same_copy(
-    workflow_env, edit_workflow, fake_comfyui
-):
-    server, owner = workflow_env.server, workflow_env.owner
-    older = _picture_with_sha(server, "busy_two.png", "sha-run-duplicate")
-    newer = _picture_with_sha(server, "busy_three.png", "sha-run-duplicate")
-    r = owner.put(
-        edit_workflow,
-        json={
-            "inputs": [
-                {"node_id": "1", "mode": "fixed", "picture_id": newer},
-                {"node_id": "2", "mode": "selection"},
-            ]
-        },
-    )
-    assert r.status_code == 200, r.text
-    assert _by_node(r.json())["1"]["picture_id"] == older
-    selected = _picture_ids(server)["busy_one.png"]
-    r = _run(owner, "edit.json", picture_ids=[selected], stack=False)
-    assert r.status_code == 200, r.text
-    assert fake_comfyui.submitted[0]["1"]["inputs"]["image"] == (
-        f"pixlstash-{older}-sha-run-duplicate.png"
-    )
-
-
-# ===========================================================================
-# A LoRA from the shelf, put into the run (#1310)
+# A LoRA from the shelf: the slots a file carries, and where one would go (#1310)
 # ===========================================================================
 
 _SHELF_LORA_SHA = _h("shelf-lora-digest")
@@ -2526,126 +1257,6 @@ def lora_workflow(tmp_path, monkeypatch, workflow_env):
             conn.execute("DELETE FROM model_file WHERE model_id = ?", (model_id,))
             conn.execute("DELETE FROM model_folder WHERE id = ?", (folder_id,))
             conn.execute("DELETE FROM model WHERE id = ?", (model_id,))
-
-
-def _lora_run(workflow_env, **body):
-    ids = _picture_ids(workflow_env.server)
-    return _run(
-        workflow_env.owner,
-        "lora.json",
-        picture_ids=[ids["busy_one.png"]],
-        stack=False,
-        **body,
-    )
-
-
-def test_a_workflow_says_which_lora_slots_a_run_can_swap(
-    workflow_env, lora_workflow, edit_workflow
-):
-    owner = workflow_env.owner
-    r = owner.get(f"{API}/comfyui/workflows/lora.json/inputs")
-    assert r.status_code == 200, r.text
-    assert [(s["node_id"], s["by"], s["value"]) for s in r.json()["lora_slots"]] == [
-        ("2", "filename", "whatever-is-there.safetensors"),
-        ("3", "digest", "0" * 64),
-    ]
-    # The control: the workflow beside it has no loader and says so with an
-    # empty list rather than by leaving the field out.
-    r = owner.get(f"{API}/comfyui/workflows/edit.json/inputs")
-    assert r.status_code == 200 and r.json()["lora_slots"] == [], r.text
-
-
-def test_a_shelf_lora_goes_into_the_named_slot_and_no_other(
-    workflow_env, lora_workflow, fake_comfyui
-):
-    r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="2")
-    assert r.status_code == 200, r.text
-    submitted = fake_comfyui.submitted[0]
-    # The name this ComfyUI lists, matched on the basename the shelf knows.
-    assert submitted["2"]["inputs"]["lora_name"] == _COMFY_LORA_NAME
-    # The other loader keeps the LoRA the workflow chose: swapping both would
-    # load one file twice and lose the other.
-    assert submitted["3"]["inputs"]["adapter_sha256"] == "0" * 64
-
-
-def test_the_pixlstash_loader_takes_the_digest_without_asking_comfyui(
-    workflow_env, lora_workflow, fake_comfyui
-):
-    # Nothing to resolve, so an unreachable ComfyUI is no obstacle either.
-    lora_workflow.info = RuntimeError("Could not reach ComfyUI at http://127.0.0.1:1")
-    r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="3")
-    assert r.status_code == 200, r.text
-    submitted = fake_comfyui.submitted[0]
-    assert submitted["3"]["inputs"]["adapter_sha256"] == _SHELF_LORA_SHA
-    assert submitted["2"]["inputs"]["lora_name"] == "whatever-is-there.safetensors"
-
-
-def test_the_path_this_shelf_scanned_wins_over_another_file_of_that_name(
-    workflow_env, lora_workflow, fake_comfyui
-):
-    lora_workflow.info = {
-        "LoraLoader": {
-            "input": {
-                "required": {"lora_name": [[_COMFY_LORA_NAME, _SHELF_LORA_RELPATH], {}]}
-            }
-        }
-    }
-    r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="2")
-    assert r.status_code == 200, r.text
-    assert fake_comfyui.submitted[0]["2"]["inputs"]["lora_name"] == _SHELF_LORA_RELPATH
-
-
-def test_a_workflow_with_two_loaders_will_not_guess_which_one(
-    workflow_env, lora_workflow, fake_comfyui
-):
-    r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA)
-    assert r.status_code == 400, r.text
-    assert "2 LoRA slots" in r.json()["detail"]
-    assert "2 lora_name, 3 adapter_sha256" in r.json()["detail"]
-
-    r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="4")
-    assert r.status_code == 400 and "not a LoRA loader" in r.text
-    assert fake_comfyui.submitted == [] and fake_comfyui.uploads == []
-
-
-def test_the_chosen_lora_wins_over_one_set_in_the_parameter_form(
-    workflow_env, lora_workflow, fake_comfyui
-):
-    r = _lora_run(
-        workflow_env,
-        adapter_sha256=_SHELF_LORA_SHA,
-        lora_node_id="2",
-        values=[{"node_id": "2", "name": "lora_name", "value": "from-the-form.st"}],
-    )
-    assert r.status_code == 200, r.text
-    assert fake_comfyui.submitted[0]["2"]["inputs"]["lora_name"] == _COMFY_LORA_NAME
-
-
-def test_a_run_without_a_lora_leaves_the_workflows_own_choice(
-    workflow_env, lora_workflow, fake_comfyui
-):
-    r = _lora_run(workflow_env)
-    assert r.status_code == 200, r.text
-    submitted = fake_comfyui.submitted[0]
-    assert submitted["2"]["inputs"]["lora_name"] == "whatever-is-there.safetensors"
-    assert submitted["3"]["inputs"]["adapter_sha256"] == "0" * 64
-
-
-def test_a_workflow_with_no_lora_loader_is_refused_by_name(
-    workflow_env, lora_workflow, edit_workflow, fake_comfyui
-):
-    ids = _picture_ids(workflow_env.server)
-    r = _run(
-        workflow_env.owner,
-        "edit.json",
-        picture_ids=[ids["busy_one.png"]],
-        pictures=[{"node_id": "1", "picture_id": ids["busy_two.png"]}],
-        adapter_sha256=_SHELF_LORA_SHA,
-        stack=False,
-    )
-    assert r.status_code == 400, r.text
-    assert "no LoRA loader" in r.json()["detail"]
-    assert fake_comfyui.submitted == [] and fake_comfyui.uploads == []
 
 
 @pytest.fixture
@@ -2739,243 +1350,17 @@ def test_the_insertion_preview_is_owner_only(
     assert workflow_env.owner.get(path).status_code == 200
 
 
-def test_a_lora_goes_into_a_loader_added_only_when_asked(
-    workflow_env, loaderless_workflow, fake_comfyui
-):
-    ids = _picture_ids(workflow_env.server)
-
-    def run(**body):
-        return _run(
-            workflow_env.owner,
-            "plain.json",
-            picture_ids=[ids["busy_one.png"]],
-            stack=False,
-            adapter_sha256=_SHELF_LORA_SHA,
-            **body,
-        )
-
-    # A bare adapter_sha256 never adds a node to the owner's graph.
-    r = run()
-    assert r.status_code == 400 and "insert_lora_loader" in r.text, r.text
-    assert fake_comfyui.submitted == []
-
-    r = run(insert_lora_loader=True)
-    assert r.status_code == 200, r.text
-    submitted = fake_comfyui.submitted[0]
-    assert submitted["10"]["class_type"] == "LoraLoader"
-    assert submitted["10"]["inputs"]["lora_name"] == _COMFY_LORA_NAME
-    assert submitted["10"]["inputs"]["model"] == ["4", 0]
-    assert submitted["3"]["inputs"]["model"] == ["10", 0]
-    assert submitted["6"]["inputs"]["clip"] == ["10", 1]
-    # The stored file is untouched: the loader is the run's, not the workflow's.
-    r = workflow_env.owner.get(f"{API}/comfyui/workflows/plain.json/lora-insertion")
-    assert r.json()["plan"] is not None
-
-    # No loader, so no slot to name.
-    r = run(insert_lora_loader=True, lora_node_id="4")
-    assert r.status_code == 400 and "no slot to name" in r.text
-
-
-def test_a_lora_the_shelf_or_comfyui_does_not_have_stops_before_any_upload(
-    workflow_env, lora_workflow, fake_comfyui
-):
-    r = _lora_run(workflow_env, adapter_sha256=_h("nothing"), lora_node_id="2")
-    assert r.status_code == 404 and "not on this PixlStash's shelf" in r.text
-
-    # On the shelf, absent from the ComfyUI this would run on: that ComfyUI
-    # lists LoRAs, just not this one under any name the shelf knows it by.
-    lora_workflow.info = {
-        "LoraLoader": {"input": {"required": {"lora_name": [["other.st"], {}]}}}
-    }
-    r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="2")
-    assert r.status_code == 400 and "not on the ComfyUI" in r.text
-
-    # A loader whose file list ComfyUI does not enumerate (an empty combo reads
-    # as "not listed", never as "nothing installed").
-    lora_workflow.info = {
-        "LoraLoader": {"input": {"required": {"lora_name": [[], {}]}}}
-    }
-    r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="2")
-    assert r.status_code == 400 and "will not guess" in r.text
-
-    # A ComfyUI that cannot be asked at all is a 502, not a guess.
-    lora_workflow.info = RuntimeError("Could not reach ComfyUI at http://127.0.0.1:1")
-    r = _lora_run(workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="2")
-    assert r.status_code == 502 and "could not ask ComfyUI" in r.text
-
-    # Nothing reached ComfyUI for any of the three.
-    assert fake_comfyui.submitted == [] and fake_comfyui.uploads == []
-
-
-def test_only_a_file_a_lora_loader_can_load_is_accepted(
-    workflow_env, lora_workflow, fake_comfyui
-):
-    """A checkpoint, a VAE or an engine is refused by name, an unknown is not.
-
-    ``file_kind`` is an allow-list here: the shelf holds five other kinds and
-    writing any of them into ``lora_name`` is a run that fails further in.
-    """
-    hub = workflow_env.server.hub
-    unknown_sha, vae_sha = _h("unclassified-file"), _h("a-vae")
-    with hub.transaction() as conn:
-        conn.executemany(
-            "INSERT INTO model (file_kind, filename, sha256, provenance) "
-            "VALUES (?, ?, ?, 'scanned')",
-            [
-                ("unknown", "mystery.safetensors", unknown_sha),
-                ("vae", "example-vae.safetensors", vae_sha),
-            ],
-        )
-    try:
-        r = _lora_run(
-            workflow_env, adapter_sha256=_h("realvisxl-digest"), lora_node_id="2"
-        )
-        assert r.status_code == 400 and "is a checkpoint" in r.text
-
-        r = _lora_run(workflow_env, adapter_sha256=vae_sha, lora_node_id="2")
-        assert r.status_code == 400 and "is a vae" in r.text
-
-        # Unclassified is first-class on this shelf and usually an adapter the
-        # header reader could not place, so it is offered, not refused: it gets
-        # as far as the name check.
-        r = _lora_run(workflow_env, adapter_sha256=unknown_sha, lora_node_id="2")
-        assert r.status_code == 400 and "not on the ComfyUI" in r.text
-    finally:
-        with hub.transaction() as conn:
-            conn.execute(
-                "DELETE FROM model WHERE sha256 IN (?, ?)", (unknown_sha, vae_sha)
-            )
-    assert fake_comfyui.submitted == [] and fake_comfyui.uploads == []
-
-
-def test_edit_with_comfyui_swaps_the_same_way_the_run_panel_does(
-    workflow_env, lora_workflow, fake_comfyui
-):
-    """run_i2i is the overlay's "Edit with ComfyUI", and it runs a saved file too.
-
-    Same body, same refusals: the swap belongs to every route that runs a
-    workflow, not only to the run panel's own (#1310).
-    """
-    ids = _picture_ids(workflow_env.server)
-    r = workflow_env.owner.post(
-        f"{API}/comfyui/run_i2i",
-        json={
-            "picture_ids": [ids["busy_one.png"]],
-            "workflow_name": "lora.json",
-            "stack": False,
-            "adapter_sha256": _SHELF_LORA_SHA,
-            "lora_node_id": "2",
-        },
-    )
-    assert r.status_code == 200, r.text
-    submitted = fake_comfyui.submitted[0]
-    assert submitted["2"]["inputs"]["lora_name"] == _COMFY_LORA_NAME
-    assert submitted["3"]["inputs"]["adapter_sha256"] == "0" * 64
-
-    # And the same refusal, before anything is uploaded for a second run.
-    fake_comfyui.submitted.clear()
-    fake_comfyui.uploads.clear()
-    r = workflow_env.owner.post(
-        f"{API}/comfyui/run_i2i",
-        json={
-            "picture_ids": [ids["busy_one.png"]],
-            "workflow_name": "lora.json",
-            "stack": False,
-            "adapter_sha256": _SHELF_LORA_SHA,
-        },
-    )
-    assert r.status_code == 400 and "2 LoRA slots" in r.text
-    assert fake_comfyui.submitted == [] and fake_comfyui.uploads == []
-
-
 def test_the_workflow_list_says_which_files_have_a_lora_loader(
-    workflow_env, lora_workflow, edit_workflow
+    workflow_env, loaderless_workflow
 ):
     """The menus that run a workflow read the list, not a request per file."""
     r = workflow_env.owner.get(f"{API}/comfyui/workflows")
     assert r.status_code == 200, r.text
     slots = {w["name"]: w.get("lora_slots") for w in r.json()["workflows"]}
     assert [s["node_id"] for s in slots["lora.json"]] == ["2", "3"]
-    assert slots["edit.json"] == []
-
-
-def test_a_stacker_swaps_the_slot_named_and_leaves_its_other_loras(
-    workflow_env, lora_workflow, fake_comfyui, tmp_path
-):
-    """A slot is a node AND a field: one stacker carries several LoRAs.
-
-    Naming the node alone used to keep every field on it and write the chosen
-    LoRA into all of them - the style and the character both gone, a disabled
-    slot switched on, one file loaded three times.
-    """
-    graph = {
-        "1": {"class_type": "LoadImage", "inputs": {"image": "{{image_path}}"}},
-        "7": {
-            "class_type": "CR LoRA Stack",
-            "inputs": {
-                "lora_name_1": "example-style.safetensors",
-                "lora_name_2": "example-character.safetensors",
-                "lora_name_3": "None",
-            },
-        },
-        "9": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
-    }
-    bound, _changed = workflow_bindings.migrate_placeholders(graph)
-    (tmp_path / "stack.json").write_text(json.dumps(bound), encoding="utf-8")
-    lora_workflow.info = {
-        "CR LoRA Stack": {
-            "input": {
-                "required": {
-                    f"lora_name_{n}": [["None", _COMFY_LORA_NAME], {}]
-                    for n in (1, 2, 3)
-                }
-            }
-        }
-    }
-    ids = _picture_ids(workflow_env.server)
-
-    def run(**body):
-        return _run(
-            workflow_env.owner,
-            "stack.json",
-            picture_ids=[ids["busy_one.png"]],
-            stack=False,
-            adapter_sha256=_SHELF_LORA_SHA,
-            **body,
-        )
-
-    # The node alone is still three slots, and says which.
-    r = run(lora_node_id="7")
-    assert r.status_code == 400, r.text
-    assert "3 LoRA slots" in r.json()["detail"]
-    assert "7 lora_name_1, 7 lora_name_2, 7 lora_name_3" in r.json()["detail"]
-    assert fake_comfyui.submitted == []
-
-    r = run(lora_node_id="7", lora_field="lora_name_2")
-    assert r.status_code == 200, r.text
-    inputs = fake_comfyui.submitted[0]["7"]["inputs"]
-    assert inputs["lora_name_2"] == _COMFY_LORA_NAME
-    assert inputs["lora_name_1"] == "example-style.safetensors"
-    assert inputs["lora_name_3"] == "None"
-
-    r = run(lora_node_id="7", lora_field="lora_name_9")
-    assert r.status_code == 400 and "not a LoRA slot" in r.text
-
-
-def test_an_empty_slot_name_counts_as_not_sent(
-    workflow_env, lora_workflow, fake_comfyui
-):
-    """A client with nothing chosen yet sends "", which must not name node "".
-
-    Two slots and an empty name is still an unnamed choice between two - the
-    refusal that lists them, not "Node  is not a LoRA loader".
-    """
-    r = _lora_run(
-        workflow_env, adapter_sha256=_SHELF_LORA_SHA, lora_node_id="", lora_field=""
-    )
-    assert r.status_code == 400, r.text
-    assert "2 LoRA slots" in r.json()["detail"]
-    assert "is not a LoRA loader" not in r.json()["detail"]
+    # The control: a file with no loader says so with an empty list rather
+    # than by leaving the field out.
+    assert slots["plain.json"] == []
 
 
 def test_a_share_link_sees_no_lora_filenames_on_the_workflow_list(
@@ -2985,8 +1370,8 @@ def test_a_share_link_sees_no_lora_filenames_on_the_workflow_list(
 
     /models/ and /adapters/ keep the model inventory from those tokens, so the
     list must not hand the same filenames and digests out through its slots.
-    Both directions: the scoped token still reads the list (over-blocking is
-    its own regression) and the owner still gets the values from /inputs.
+    The scoped token still reads the list, because over-blocking is its own
+    regression.
     """
     server = workflow_env.server
     token = _mint(
@@ -3004,59 +1389,12 @@ def test_a_share_link_sees_no_lora_filenames_on_the_workflow_list(
     assert "whatever-is-there.safetensors" not in r.text
     assert "0" * 64 not in r.text
 
-    # The owner's own read of the file's setup keeps them.
-    r = workflow_env.owner.get(f"{API}/comfyui/workflows/lora.json/inputs")
-    assert r.status_code == 200, r.text
-    assert "whatever-is-there.safetensors" in {
-        s["value"] for s in r.json()["lora_slots"]
-    }
-    # And the scoped token cannot reach that read at all.
-    r = client.get(f"{API}/comfyui/workflows/lora.json/inputs")
-    assert r.status_code == 403, r.text
-
-
-def test_a_swap_reaches_a_document_stored_with_its_graph_one_level_down():
-    """The import dialog stores {"prompt": graph}; detection reads inside it, so must the write."""
-    graph = {"5": {"class_type": "LoraLoader", "inputs": {"lora_name": "old.st"}}}
-    swap = {
-        "adapter": {"sha256": "b" * 64, "filenames": ["new.st"]},
-        "targets": [
-            {
-                "node_id": "5",
-                "class_type": "LoraLoader",
-                "field": "lora_name",
-                "by": "filename",
-            }
-        ],
-        "object_info": {
-            "LoraLoader": {"input": {"required": {"lora_name": [["new.st"], {}]}}}
-        },
-    }
-    wrapped = {"prompt": graph}
-    comfyui_module._apply_lora_swap(wrapped, swap, "test")
-    assert wrapped["prompt"]["5"]["inputs"]["lora_name"] == "new.st"
-
-    # A slot the instance does not have is refused, never run with its own LoRA.
-    with pytest.raises(HTTPException) as refused:
-        comfyui_module._apply_lora_swap({"prompt": {}}, swap, "test")
-    assert refused.value.status_code == 500
-
-
-def test_a_ui_format_file_is_refused_as_what_it_is_before_the_shelf_is_asked():
-    """No hub here at all: the refusal must come before the lookup, and name the format."""
-    with pytest.raises(HTTPException) as refused:
-        comfyui_module._resolve_lora_swap(
-            None, {"adapter_sha256": "b" * 64}, None, "test", "http://127.0.0.1:1"
-        )
-    assert refused.value.status_code == 400
-    assert "UI format" in refused.value.detail
-
 
 # ===========================================================================
 # The cards (v1.12 B3)
 # ===========================================================================
 #
-# **The payload shape is not this file's to choose.** `GET /workflows/cards` is
+# **The payload shape is not this file's to choose.** `GET /workflows` is
 # consumed by `frontend/src/utils/workflowCard.js`, which is already merged and
 # documents the card at the top of the file, and `docs/frontend_architecture.md`
 # guarantees it needs no mapping layer. The first test below pins the field
@@ -3102,7 +1440,7 @@ _CONTRACT_FIELDS = {
 
 
 def _cards(owner, query: str = "") -> dict:
-    payload = owner.get(f"{API}/workflows/cards{query}")
+    payload = owner.get(f"{API}/workflows{query}")
     assert payload.status_code == 200, payload.text
     return payload.json()
 
@@ -3112,7 +1450,7 @@ def _by_key(payload) -> dict:
 
 
 def _detail(owner, workflow_key) -> dict:
-    r = owner.get(f"{API}/workflows/cards/{workflow_key}")
+    r = owner.get(f"{API}/workflows/{workflow_key}")
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -3135,6 +1473,15 @@ def _picture_ids_by_path(server) -> dict[str, int]:
         }
 
     return server.vault.db.run_task(read, priority=DBPriority.IMMEDIATE)
+
+
+def _cover_urls(card) -> list[str]:
+    """The strip's URLs alone, which is what the ordering tests are about.
+
+    A cover is an object since #1465 -- the URL plus the crop rectangle a
+    client frames it by -- and the crop has its own test below.
+    """
+    return [cover["url"] for cover in card["covers"]]
 
 
 def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
@@ -4005,11 +2352,94 @@ def test_the_cover_strip_is_the_cards_best_three_across_its_variants(workflow_en
     """
     card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
     ids = _picture_ids_by_path(workflow_env.server)
-    assert card["covers"] == [
+    assert _cover_urls(card) == [
         f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
         f"/pictures/thumbnails/{ids['busy_two.png']}.webp?v=0",
         f"/pictures/thumbnails/{ids['busy_three.png']}.webp?v=0",
     ]
+
+
+def test_a_cover_names_the_picture_it_draws(workflow_env):
+    """Every cover carries `picture_id`, and it is the one in its own URL.
+
+    The Workflows grid opens the picture a cover draws (#1455), and the only
+    other way to that id is to parse it back out of the thumbnail path - which
+    is a path shape, not an interface.
+
+    **It is a field ON the cover, not a `cover_ids` list beside `covers`**,
+    which is what it was until #1465 gave each cover an object of its own. Two
+    lists paired by position are two lists that can come apart, and a strip
+    that dropped an entry without its id would open picture 2 from the tile
+    showing picture 3. One object cannot do that - so what is left to assert
+    is that the id and the URL name the same picture, which is checked on
+    every cover of every card the grid serves.
+    """
+    cards = _cards(workflow_env.owner)["cards"]
+    assert cards, "the grid served no cards - the comparison below is vacuous"
+    drawn = 0
+    for card in cards:
+        for cover in card["covers"]:
+            in_url = int(cover["url"].split("/")[-1].split(".webp")[0])
+            assert cover["picture_id"] == in_url, card["key"]
+            drawn += 1
+    assert drawn, "no card in the fixture has a cover - nothing was compared"
+
+
+def test_a_cover_carries_the_stored_crop_rectangle_or_nothing(workflow_env):
+    """The face-weighted rectangle travels with the cover, per picture (#1465).
+
+    Both halves in one test, because the fallback is the half that decides
+    whether this is a regression: a cover whose rectangle has not been computed
+    must send NULLs, so the client can keep the top-anchored ``cover`` crop it
+    has always drawn rather than inventing a framing from a zero.
+
+    The card's other two pictures carry no rectangle and are exactly that case,
+    so the negative is asserted against a sibling in the same strip rather than
+    against an empty library.
+    """
+    ids = _picture_ids_by_path(workflow_env.server)
+    # A portrait bitmap whose stored square sits BELOW the top edge, which is
+    # the picture the issue is about: a blind top anchor would cut through it.
+    rectangle = {
+        "thumbnail_width": 384,
+        "thumbnail_height": 561,
+        "square_crop_x": 0,
+        "square_crop_y": 120,
+        "square_crop_side": 384,
+    }
+
+    def write(session, values):
+        picture = session.get(Picture, ids["busy_one.png"])
+        for field, value in values.items():
+            setattr(picture, field, value)
+        session.add(picture)
+        session.commit()
+
+    workflow_env.server.vault.db.run_task(
+        lambda session: write(session, rectangle), priority=DBPriority.IMMEDIATE
+    )
+    try:
+        covers = _by_key(_cards(workflow_env.owner))[BUSY_CARD]["covers"]
+        assert covers[0] == {
+            "url": (
+                f"/pictures/thumbnails/{ids['busy_one.png']}.webp"
+                f"?v={ImageUtils.thumbnail_cache_version(384, 561, None)}"
+            ),
+            # The picture the cover draws, so a client can open it (#1455).
+            "picture_id": ids["busy_one.png"],
+            **rectangle,
+        }
+        for cover in covers[1:]:
+            assert cover["square_crop_x"] is None
+            assert cover["square_crop_y"] is None
+            assert cover["square_crop_side"] is None
+    finally:
+        # Put the picture back: the module shares one vault, and the bitmap
+        # dimensions are the cache-buster every other cover assertion reads.
+        workflow_env.server.vault.db.run_task(
+            lambda session: write(session, dict.fromkeys(rectangle, None)),
+            priority=DBPriority.IMMEDIATE,
+        )
 
 
 def test_an_owner_chosen_cover_leads_the_strip(workflow_env):
@@ -4036,13 +2466,23 @@ def test_an_owner_chosen_cover_leads_the_strip(workflow_env):
             (workflow_env.server.vault.library_uuid, BUSY_CARD, chosen),
         )
     card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
-    assert card["covers"][0] == (
+    assert _cover_urls(card)[0] == (
         f"/pictures/thumbnails/{ids['busy_four.png']}.webp?v=0"
     )
     # Still three, and the rest keep their order behind it.
-    assert card["covers"][1:] == [
+    assert _cover_urls(card)[1:] == [
         f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
         f"/pictures/thumbnails/{ids['busy_two.png']}.webp?v=0",
+    ]
+    # And each cover's `picture_id` follows the REBUILT strip, not the computed
+    # one (#1455). This is the one card in the fixture whose strip is
+    # deliberately not in id order - busy_four was imported last and now leads
+    # - so it is the only place an id taken before the owner's choice was
+    # applied shows up as wrong rather than as coincidentally right.
+    assert [cover["picture_id"] for cover in card["covers"]] == [
+        ids["busy_four.png"],
+        ids["busy_one.png"],
+        ids["busy_two.png"],
     ]
 
     # Bin the chosen cover and the card falls back to its computed strip rather
@@ -4057,7 +2497,7 @@ def test_an_owner_chosen_cover_leads_the_strip(workflow_env):
 
     workflow_env.server.vault.db.run_task(bin_it, priority=DBPriority.IMMEDIATE)
     card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
-    assert card["covers"] == [
+    assert _cover_urls(card) == [
         f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
         f"/pictures/thumbnails/{ids['busy_two.png']}.webp?v=0",
         f"/pictures/thumbnails/{ids['busy_three.png']}.webp?v=0",
@@ -4092,11 +2532,89 @@ def test_an_empty_chosen_cover_covers_nothing_rather_than_everything(
             (workflow_env.server.vault.library_uuid, HIDDEN_CARD),
         )
     card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
-    assert card["covers"] == [
+    assert _cover_urls(card) == [
         f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
         f"/pictures/thumbnails/{ids['busy_two.png']}.webp?v=0",
         f"/pictures/thumbnails/{ids['busy_three.png']}.webp?v=0",
     ]
+
+
+def test_an_owner_chosen_cover_carries_its_crop_rectangle_too(workflow_env):
+    """The SECOND query that builds a cover, which the strip's test cannot see.
+
+    A chosen cover is resolved by ``pixel_sha`` through
+    ``cover_pictures_by_pixel_sha``, a different ``SELECT`` from the ranked
+    window -- and it unpacks positionally into ``CoverCandidate("", *row[1:])``,
+    so a column added in the wrong place lands in the wrong field silently.
+    Scrambling that select left the strip's own tests green, because they
+    assert URLs and the picture they pick has no rectangle at all.
+
+    The rectangle is deliberately ASYMMETRIC (x != y, side != either), so any
+    permutation of the three shows up rather than cancelling out.
+    """
+    ids = _picture_ids_by_path(workflow_env.server)
+    chosen = _h("chosen-cover-with-a-crop")
+    rectangle = {
+        "thumbnail_width": 512,
+        "thumbnail_height": 384,
+        "square_crop_x": 96,
+        "square_crop_y": 12,
+        "square_crop_side": 384,
+    }
+    library = workflow_env.server.vault.library_uuid
+
+    def write(session, values):
+        picture = session.get(Picture, ids["forgotten.png"])
+        for field, value in values.items():
+            setattr(picture, field, value)
+        session.add(picture)
+        session.commit()
+
+    def read_pixel_sha(session):
+        return session.get(Picture, ids["forgotten.png"]).pixel_sha
+
+    was = workflow_env.server.vault.db.run_task(
+        read_pixel_sha, priority=DBPriority.IMMEDIATE
+    )
+    workflow_env.server.vault.db.run_task(
+        lambda session: write(session, {**rectangle, "pixel_sha": chosen}),
+        priority=DBPriority.IMMEDIATE,
+    )
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_cover (library_uuid, workflow_key, pixel_sha) "
+            "VALUES (?, ?, ?)",
+            (library, FORGOTTEN_CARD, chosen),
+        )
+    try:
+        # Opened rather than listed: FORGOTTEN_CARD is a one-off and the grid
+        # leaves it out. The chosen cover is applied over every figure, which
+        # is the same reason a hidden card opens with the right one.
+        cover = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]["covers"][0]
+        assert cover == {
+            "url": (
+                f"/pictures/thumbnails/{ids['forgotten.png']}.webp"
+                f"?v={ImageUtils.thumbnail_cache_version(512, 384, None)}"
+            ),
+            # The picture the cover draws, so a client can open it (#1455).
+            "picture_id": ids["forgotten.png"],
+            **rectangle,
+        }
+    finally:
+        # The module shares one vault: put the picture back, and take the
+        # owner's choice away again so no later card inherits it.
+        workflow_env.server.vault.db.run_task(
+            lambda session: write(
+                session, {**dict.fromkeys(rectangle, None), "pixel_sha": was}
+            ),
+            priority=DBPriority.IMMEDIATE,
+        )
+        with workflow_env.server.hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_cover "
+                "WHERE library_uuid = ? AND workflow_key = ?",
+                (library, FORGOTTEN_CARD),
+            )
 
 
 def test_a_hidden_card_is_counted_never_listed_and_still_opens(workflow_env):
@@ -4631,7 +3149,7 @@ def test_card_pictures_are_every_variants_newest_kept_pictures(workflow_env):
     """Newest first, both variants, and never the soft-deleted one -- which is
     the newest picture on this card and would otherwise head the list."""
     ids = _picture_ids_by_path(workflow_env.server)
-    r = workflow_env.owner.get(f"{API}/workflows/cards/{BUSY_CARD}/pictures")
+    r = workflow_env.owner.get(f"{API}/workflows/{BUSY_CARD}/pictures")
     assert r.status_code == 200, r.text
     assert r.json() == [
         ids["busy_four.png"],
@@ -4640,9 +3158,7 @@ def test_card_pictures_are_every_variants_newest_kept_pictures(workflow_env):
         ids["busy_one.png"],
         ids["busy_unrated.png"],
     ]
-    limited = workflow_env.owner.get(
-        f"{API}/workflows/cards/{BUSY_CARD}/pictures?limit=1"
-    )
+    limited = workflow_env.owner.get(f"{API}/workflows/{BUSY_CARD}/pictures?limit=1")
     assert limited.json() == [ids["busy_four.png"]]
 
 
@@ -4651,15 +3167,18 @@ def test_an_unknown_card_is_a_404_and_a_malformed_key_a_422(workflow_env):
     read as "this card has nothing" rather than "this machine has no such card".
     """
     unknown = _h("nosuchcard")
-    for path in (
-        f"{API}/workflows/cards/{unknown}",
-        f"{API}/workflows/cards/{unknown}/pictures",
+    for path, template in (
+        (f"{API}/workflows/{unknown}", API + "/workflows/{workflow_key}"),
+        (
+            f"{API}/workflows/{unknown}/pictures",
+            API + "/workflows/{workflow_key}/pictures",
+        ),
     ):
-        assert_real_route(workflow_env.server.api, "GET", path)
+        assert_real_route(workflow_env.server.api, "GET", path, template)
         assert workflow_env.owner.get(path).status_code == 404, path
     for path in (
-        f"{API}/workflows/cards/not-a-digest",
-        f"{API}/workflows/cards/not-a-digest/pictures",
+        f"{API}/workflows/not-a-digest",
+        f"{API}/workflows/not-a-digest/pictures",
     ):
         assert workflow_env.owner.get(path).status_code == 422, path
 
@@ -4988,7 +3507,7 @@ def test_naming_a_card_shows_on_the_grid_and_clearing_it_goes_back(workflow_env)
     assert r.json()["card"]["name"] == "My portrait workflow"
     assert r.json()["notes"] == "cfg 7, always"
 
-    grid = owner.get(f"{API}/workflows/cards").json()
+    grid = owner.get(f"{API}/workflows").json()
     named = {card["key"]: card["name"] for card in grid["cards"]}
     assert named[BUSY_CARD] == "My portrait workflow"
 
@@ -5011,18 +3530,18 @@ def test_naming_a_card_shows_on_the_grid_and_clearing_it_goes_back(workflow_env)
 def test_hiding_a_card_takes_it_off_the_grid_and_it_still_opens(workflow_env):
     """Hiding is a decision about the grid, never a deletion."""
     owner = workflow_env.owner
-    before = owner.get(f"{API}/workflows/cards").json()
+    before = owner.get(f"{API}/workflows").json()
     assert BUSY_CARD in {card["key"] for card in before["cards"]}
 
     assert (
         owner.patch(f"{API}/workflows/{BUSY_CARD}", json={"hidden": True}).status_code
         == 200
     )
-    after = owner.get(f"{API}/workflows/cards").json()
+    after = owner.get(f"{API}/workflows").json()
     assert BUSY_CARD not in {card["key"] for card in after["cards"]}
     assert after["hidden"] == before["hidden"] + 1
 
-    detail = owner.get(f"{API}/workflows/cards/{BUSY_CARD}")
+    detail = owner.get(f"{API}/workflows/{BUSY_CARD}")
     assert detail.status_code == 200
     assert detail.json()["hidden"] is True
 
@@ -5035,7 +3554,7 @@ def test_a_stack_whose_members_are_all_hidden_is_hidden(workflow_env):
     a hidden cover is not drawn.
     """
     owner = workflow_env.owner
-    cover = owner.get(f"{API}/workflows/cards").json()["cards"]
+    cover = owner.get(f"{API}/workflows").json()["cards"]
     assert any(card["stack_size"] == 2 for card in cover), (
         "the fixture's stack is gone; this test would pass on nothing"
     )
@@ -5044,7 +3563,7 @@ def test_a_stack_whose_members_are_all_hidden_is_hidden(workflow_env):
             owner.patch(f"{API}/workflows/{key}", json={"hidden": True}).status_code
             == 200
         )
-    grid = owner.get(f"{API}/workflows/cards").json()
+    grid = owner.get(f"{API}/workflows").json()
     assert not {BUSY_CARD, FORGOTTEN_CARD} & {card["key"] for card in grid["cards"]}
 
 
@@ -5095,7 +3614,7 @@ def test_a_cards_overrides_pins_and_inputs_are_written_whole(workflow_env):
     # And READ BACK on the detail route, which is the only thing that makes
     # the pin a control rather than a write into the dark: the Workflow tab
     # draws the pin it sets from here (v1.12 F3).
-    assert owner.get(f"{API}/workflows/cards/{BUSY_CARD}").json()["pins"] == [
+    assert owner.get(f"{API}/workflows/{BUSY_CARD}").json()["pins"] == [
         {"slot_label": "slot-a", "input_name": "steps"}
     ]
     # `[]` is somebody who unpinned everything; null forgets the choice.
@@ -5103,7 +3622,7 @@ def test_a_cards_overrides_pins_and_inputs_are_written_whole(workflow_env):
     # The same two answers survive the round trip, because a client renders
     # them differently: `[]` shows nothing above "All N", `null` applies its
     # own default pins.
-    assert owner.get(f"{API}/workflows/cards/{BUSY_CARD}").json()["pins"] == []
+    assert owner.get(f"{API}/workflows/{BUSY_CARD}").json()["pins"] == []
     assert (
         json.loads(
             hub.fetchone(
@@ -5120,7 +3639,7 @@ def test_a_cards_overrides_pins_and_inputs_are_written_whole(workflow_env):
         )
         is None
     )
-    assert owner.get(f"{API}/workflows/cards/{BUSY_CARD}").json()["pins"] is None
+    assert owner.get(f"{API}/workflows/{BUSY_CARD}").json()["pins"] is None
 
     # A row that is not a pin list reads as NO CHOICE, never as `[]`. Both
     # halves matter: iterating a stored scalar used to raise out of the
@@ -5135,7 +3654,7 @@ def test_a_cards_overrides_pins_and_inputs_are_written_whole(workflow_env):
                 "ON CONFLICT(workflow_key) DO UPDATE SET pins = excluded.pins",
                 (BUSY_CARD, corrupt),
             )
-        r = owner.get(f"{API}/workflows/cards/{BUSY_CARD}")
+        r = owner.get(f"{API}/workflows/{BUSY_CARD}")
         assert r.status_code == 200, f"{corrupt!r}: {r.text}"
         assert r.json()["pins"] is None, corrupt
     with hub.transaction() as conn:
@@ -5228,7 +3747,7 @@ def test_marking_a_lora_slot_structural_splits_the_card_and_carries_it_over(
     assert set(r.json()["moved"][merged]) == split
 
     for key in split:
-        assert owner.get(f"{API}/workflows/cards/{key}").status_code == 200
+        assert owner.get(f"{API}/workflows/{key}").status_code == 200
         row = _attr_row(server, key)
         assert row is not None, f"{key} lost the owner's attributes in the split"
         assert row["name"] == "Character sheet"
@@ -5241,7 +3760,7 @@ def test_marking_a_lora_slot_structural_splits_the_card_and_carries_it_over(
             is not None
         )
     # And the card they came from is gone rather than left behind empty.
-    assert owner.get(f"{API}/workflows/cards/{merged}").status_code == 404
+    assert owner.get(f"{API}/workflows/{merged}").status_code == 404
 
 
 def test_merging_two_cards_keeps_the_name_of_the_one_with_most_pictures(workflow_env):
@@ -5265,10 +3784,7 @@ def test_merging_two_cards_keeps_the_name_of_the_one_with_most_pictures(workflow
     quiet_key = _flip_key(FLIP_RECIPE_B, [label])
     owner.patch(f"{API}/workflows/{busy_key}", json={"name": "The busy one"})
     owner.patch(f"{API}/workflows/{quiet_key}", json={"name": "The quiet one"})
-    assert (
-        owner.get(f"{API}/workflows/cards/{busy_key}").json()["card"]["picture_count"]
-        == 3
-    )
+    assert owner.get(f"{API}/workflows/{busy_key}").json()["card"]["picture_count"] == 3
 
     r = owner.put(
         f"{API}/workflows/{busy_key}/slots", json={"marks": {label: "recipe"}}
@@ -5582,7 +4098,7 @@ def test_a_split_carries_everything_the_owner_said_and_the_file_with_it(workflow
         "SELECT workflow_key FROM workflow_file WHERE workflow_name = 'flip_a.json'"
     )["workflow_key"] == _flip_key(FLIP_RECIPE_A, [label])
     assert (
-        owner.get(f"{API}/workflows/cards/{_flip_key(FLIP_RECIPE_A, [label])}").json()[
+        owner.get(f"{API}/workflows/{_flip_key(FLIP_RECIPE_A, [label])}").json()[
             "card"
         ]["imported"]
         is True
@@ -5606,14 +4122,8 @@ def test_a_split_sends_the_caller_to_the_half_with_the_pictures(workflow_env):
     assert r.status_code == 200, r.text
     biggest = _flip_key(FLIP_RECIPE_A, [label])
     smallest = _flip_key(FLIP_RECIPE_B, [label])
-    assert (
-        owner.get(f"{API}/workflows/cards/{biggest}").json()["card"]["picture_count"]
-        == 3
-    )
-    assert (
-        owner.get(f"{API}/workflows/cards/{smallest}").json()["card"]["picture_count"]
-        == 1
-    )
+    assert owner.get(f"{API}/workflows/{biggest}").json()["card"]["picture_count"] == 3
+    assert owner.get(f"{API}/workflows/{smallest}").json()["card"]["picture_count"] == 1
     assert r.json()["key"] == biggest
     assert r.json()["moved"][merged] == [biggest, smallest]
 
@@ -5855,7 +4365,7 @@ def test_a_surviving_card_keeps_its_saved_recipes(workflow_env):
     )
     assert r.status_code == 200, r.text
     # The card is still there: B could not be re-keyed onto anything.
-    assert owner.get(f"{API}/workflows/cards/{merged}").status_code == 200
+    assert owner.get(f"{API}/workflows/{merged}").status_code == 200
     listed = owner.get(f"{API}/recipes?workflow_key={merged}").json()
     assert [row["id"] for row in listed] == [recipe_id], (
         "the saved recipe left a card that is still there"
@@ -5937,7 +4447,7 @@ def test_a_re_key_needs_an_open_library_and_says_so(workflow_env, monkeypatch):
         == 422
     ), "a bad slot label must be named even when no library is open"
     # Nothing was written: the card is still on the key it was on.
-    assert owner.get(f"{API}/workflows/cards/{merged}").status_code == 200
+    assert owner.get(f"{API}/workflows/{merged}").status_code == 200
 
 
 def test_a_picture_input_needs_an_open_library_and_says_so(workflow_env, monkeypatch):
@@ -6415,6 +4925,27 @@ def test_several_pictures_with_no_target_group_by_their_recipe(runnable):
     assert sorted(by_key[BUSY_CARD]["picture_ids"]) == sorted(busy[:2])
 
 
+def test_a_picture_selected_twice_is_run_once(runnable):
+    """The de-duplication `_int_list` did for the retired `run_i2i` (#1410).
+
+    A selection can hand the same id in twice, and grouping whatever arrives
+    put it in the group twice - never a second submission, because `count`
+    governs those, but a group REPORTING it covers a picture twice is a wrong
+    answer to "what would this run". Asserted on the pre-flight and the run
+    together, since `RunRequest` is one body for both.
+    """
+    twice = [runnable.picture_id, runnable.picture_id]
+    payload = _preflight(runnable.owner, picture_ids=twice)
+    (group,) = payload["groups"]
+    assert group["picture_ids"] == [runnable.picture_id], payload
+    assert group["runs"] == 1, payload
+
+    r = runnable.owner.post(f"{API}/workflows/run", json={"picture_ids": twice})
+    assert r.status_code == 200, r.text
+    assert r.json()["runs"] == 1, r.json()
+    assert len(runnable.submitted) == 1, "the repeat submitted a second run"
+
+
 def test_a_target_runs_that_card_instead_of_the_ones_selected(runnable):
     """`target` is how a stack's other member is chosen."""
     payload = _preflight(
@@ -6518,6 +5049,136 @@ def test_a_model_this_comfyui_does_not_have_names_the_file_and_the_folder(runnab
     )
 
 
+@pytest.fixture
+def merged_checkpoint(runnable):
+    """The shelf after a duplicate merge: one model, one name gone, one kept.
+
+    ``realvisxl.safetensors`` is the copy that was removed - its ``model_file``
+    row survives at ``state = 'removed'``, which is the whole point - and the
+    keeper is the copy that is still on the disk. One ``model`` row, because the
+    hub is content-addressed: same bytes, one row, two paths.
+
+    A fixture rather than a helper because the rows it writes outlive the test in
+    this module's shared server, and `_seed_hub` deletes that `model` row by
+    filename - which a surviving `model_file` child turns into a foreign-key
+    failure in the NEXT test's setup.
+    """
+    folders: list[int] = []
+
+    def seed(*, keeper: str) -> None:
+        folders.append(_seed_merged_checkpoint(runnable.server, keeper=keeper))
+
+    try:
+        yield seed
+    finally:
+        with runnable.server.hub.transaction() as conn:
+            for folder_id in folders:
+                conn.execute(
+                    "DELETE FROM model_file WHERE model_folder_id = ?", (folder_id,)
+                )
+                conn.execute("DELETE FROM model_folder WHERE id = ?", (folder_id,))
+
+
+def _seed_merged_checkpoint(server, *, keeper: str) -> int:
+    """Write the merged shelf rows; returns the folder id they live under."""
+    with server.hub.transaction() as conn:
+        # The module's own shelf row for that filename, not a second one: two
+        # models of one name is the ambiguity `model_name_aliases` refuses to
+        # resolve, which would make this test pass for the wrong reason.
+        model_id = int(
+            conn.execute(
+                "SELECT id FROM model WHERE filename = ?", (_SHELF_FILENAME,)
+            ).fetchone()[0]
+        )
+        conn.execute(
+            "INSERT INTO model_folder (path, kind, movable) "
+            "VALUES ('/models/checkpoints', 'user', 'per_item')"
+        )
+        folder_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+            "VALUES (?, ?, 'realvisxl.safetensors', 'removed')",
+            (model_id, folder_id),
+        )
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+            "VALUES (?, ?, ?, 'present')",
+            (model_id, folder_id, keeper),
+        )
+    return folder_id
+
+
+def test_a_run_loads_the_copy_that_is_left_and_says_it_did(runnable, merged_checkpoint):
+    """The submit half of "merge duplicates, resolve at use" (#1439).
+
+    The graph names the copy a merge removed; the same bytes are still on the
+    shelf under another name, and this ComfyUI advertises THAT one. So the run
+    goes ahead on the copy that is there instead of refusing with a missing
+    model - and it says so, on the plan and in the submitted graph, because a
+    run that quietly loaded a different file makes its own lineage a lie.
+    """
+    merged_checkpoint(keeper="kept.safetensors")
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    # This install lists only the copy that survived.
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [
+        ["kept.safetensors"],
+        {},
+    ]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    assert _reasons(payload) == set(), payload
+    assert payload["groups"][0]["substitutions"] == [
+        {
+            "node_id": "1",
+            "class_type": "CheckpointLoaderSimple",
+            "field": "ckpt_name",
+            "was": "realvisxl.safetensors",
+            "now": "kept.safetensors",
+        }
+    ], payload
+
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    assert len(runnable.submitted) == 1, "the run was refused over a copy that is there"
+    assert (
+        runnable.submitted[0]["graph"]["1"]["inputs"]["ckpt_name"] == "kept.safetensors"
+    )
+    assert r.json()["groups"][0]["substitutions"][0]["now"] == "kept.safetensors"
+
+
+def test_a_model_no_copy_of_which_is_left_is_still_a_missing_model(
+    runnable, merged_checkpoint
+):
+    """The negative half, and what keeps the swap honest.
+
+    Nothing on this shelf offers a name this ComfyUI advertises, so there is
+    nothing to substitute and the run refuses exactly as it did before - rather
+    than swapping to a file PixlStash believes in and ComfyUI does not list,
+    which would only move the failure to the queue.
+    """
+    merged_checkpoint(keeper="also-not-there.safetensors")
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [
+        ["something-else.safetensors"],
+        {},
+    ]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    assert "missing_models" in _reasons(payload), payload
+    assert payload["groups"][0]["substitutions"] == []
+
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    assert r.json()["status"] == "refused", r.json()
+    assert runnable.submitted == []
+
+
 def test_an_unreachable_comfyui_is_reported_and_a_configured_one_says_so(runnable):
     """The two ComfyUI codes are different questions with different fixes.
 
@@ -6579,6 +5240,31 @@ def test_an_uninspectable_comfyui_runs_only_on_the_owners_acknowledgement(runnab
     assert len(runnable.submitted) == 1, "consent did not let the run through"
     # The reason survives the consent rather than being cleared by it.
     assert r.json()["groups"][0]["reasons"][0]["code"] == "comfyui_not_configured"
+
+
+def test_only_the_literal_true_is_consent(runnable):
+    """R3b, carried over from the route #1410 retired: consent is JSON `true`.
+
+    The string `"false"` is truthy in Python, and `"true"` / `1` / `"yes"` /
+    `"on"` are the sibling spellings a lenient cast would also let through -
+    which is what a plain Pydantic `bool` does. `RunRequest.allow_unchecked`
+    is `StrictBool` so every one of them is a 422, and the run is refused
+    rather than submitted on a word the owner never typed.
+
+    The positive control is next door in
+    `test_an_uninspectable_comfyui_runs_only_on_the_owners_acknowledgement`: a
+    real `true` still runs, because over-blocking is its own regression.
+    """
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
+    )
+    for value in ("false", "true", 1, "yes", "on", [True], {"v": True}):
+        r = runnable.owner.post(
+            f"{API}/workflows/run",
+            json={"workflow_key": RUN_CARD, "allow_unchecked": value},
+        )
+        assert r.status_code == 422, f"{value!r} was accepted: {r.status_code} {r.text}"
+    assert runnable.submitted == [], "an uninspected graph ran on a cast consent"
 
 
 def test_consent_does_not_reach_a_missing_model(runnable):
@@ -6793,7 +5479,8 @@ def test_count_produces_that_many_submissions(runnable):
 
 
 def test_a_new_run_is_not_stacked_with_the_picture_it_came_from(runnable):
-    """The default is unstacked, which is where this differs from run_recipe."""
+    """The default is unstacked, which is where this differs from the retired
+    per-picture replay route (#1410)."""
     stacked: list = []
     runnable.monkeypatch.setattr(
         workflows_routes,
@@ -7447,9 +6134,7 @@ def test_deleting_a_card_the_library_knows_from_its_pictures_is_refused(workflow
     assert r.status_code == 409, r.text
     assert "hide" in r.json()["detail"].lower()
     # Nothing went: the card is still on the grid.
-    assert (
-        workflow_env.owner.get(f"{API}/workflows/cards/{BUSY_CARD}").status_code == 200
-    )
+    assert workflow_env.owner.get(f"{API}/workflows/{BUSY_CARD}").status_code == 200
 
 
 def test_deleting_an_imported_workflow_trashes_it_and_takes_it_off_the_card(
@@ -7475,7 +6160,7 @@ def test_deleting_an_imported_workflow_trashes_it_and_takes_it_off_the_card(
         )
         == []
     )
-    assert runnable.owner.get(f"{API}/workflows/cards/{RUN_CARD}").status_code == 200
+    assert runnable.owner.get(f"{API}/workflows/{RUN_CARD}").status_code == 200
 
 
 # A graph with no LoRA loader at all: the state `no_lora_loader` names and the

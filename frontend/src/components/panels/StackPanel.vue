@@ -83,7 +83,7 @@
           @contextmenu.prevent="openMenu(member, index, $event)"
         >
           <div class="stack-panel__cell" role="gridcell">
-            <WorkflowCard
+              <WorkflowCard
               :card="member"
               member
               :selected="!selected && selectedKeys.includes(member.key)"
@@ -160,11 +160,17 @@
               :class="`stack-panel__thumbs--${thumbsOf(member).length}`"
             >
               <span
-                v-for="(src, i) in thumbsOf(member)"
+                v-for="(cell, i) in thumbsOf(member)"
                 :key="i"
                 class="stack-panel__thumb"
               >
-                <img v-if="src" :src="src" alt="" loading="lazy" />
+                <img
+                  v-if="cell.src"
+                  :src="cell.src"
+                  :style="cell.style"
+                  alt=""
+                  loading="lazy"
+                />
               </span>
             </span>
             <span class="stack-panel__rowname">{{ member.name }}</span>
@@ -283,7 +289,7 @@
  *
  * *Unstack all* and the hidden-member count are still not here. The read side
  * no longer blocks them outright: F7's *Show hidden workflows* asks
- * `GET /workflows/cards` for `include_hidden`, the grouping then runs over the
+ * `GET /workflows` for `include_hidden`, the grouping then runs over the
  * widened set, and a hidden member arrives in `member_keys` and draws here.
  * It is marked by the `hidden` fact chip `utils/workflowCard.js` puts first in
  * `factChips` — **which this panel shows only on a non-cover row** (see
@@ -302,6 +308,7 @@ import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 import {
   cardAccessibleName,
   checkpointModel,
+  coverCellStyle,
   modelDisplayName,
   factChips as cardFactChips,
 } from "../../utils/workflowCard";
@@ -355,6 +362,7 @@ const emit = defineEmits([
   "move",
   "unstack",
   "hide",
+  "open-picture",
 ]);
 
 const prefs = useWorkflowPrefsStore();
@@ -393,38 +401,47 @@ const pending = computed(() => {
 const toolbarName = computed(() => `${props.name || "Stack"} stack`);
 
 /**
- * One member's cover URLs, joined the way `WorkflowCard` joins its own.
+ * One member's cover pictures, the ones this row can actually draw.
  *
- * `covers` arrives API-RELATIVE (`/pictures/thumbnails/{id}.webp?v=…`) and an
+ * An entry without a `url` is dropped rather than counted: a cell it cannot
+ * fill is the thing #1456 removed, and `workflowCoverUrl` gives one "".
+ */
+function coversOf(member) {
+  return (member.covers ?? []).filter((cover) => cover?.url).slice(0, 3);
+}
+
+/**
+ * The cells one row's strip draws: one per picture, as the card's cover does,
+ * each with a URL a browser can load and the crop that keeps the face in it.
+ *
+ * `url` arrives API-RELATIVE (`/pictures/thumbnails/{id}.webp?v=…`) and an
  * `<img src>` bypasses Axios, so nothing prepends `/api/v1` and nothing
  * appends the share token. Used verbatim the browser asks the PAGE origin for
  * a path no route serves and every thumbnail in the list is a broken image —
  * the bug F1b fixed for the card, which this column reintroduced by reading
  * the payload directly. `workflowCoverUrl` is the api layer's one spelling of
  * that join; a second one here is exactly the drift it exists to prevent.
- */
-function coversOf(member) {
-  return (member.covers ?? [])
-    .filter(Boolean)
-    .slice(0, 3)
-    .map(workflowCoverUrl);
-}
-
-/**
- * The cells one row's strip draws: one per picture, as the card's cover does.
  *
- * Empty entries are dropped above rather than counted, because
- * `workflowCoverUrl` does not guard them - it joins one into the truthy
- * `/api/v1null` - and a cell it cannot fill is the thing #1456 removed.
+ * The crop is `coverCellStyle`, the card's own, so a row and a card frame the
+ * same picture the same way. It is null while the picture's rectangle has not
+ * been computed, and the stylesheet's top-anchored `cover` takes over.
+ *
  * A member whose covers have not arrived keeps the arrangement its pictures
  * are about to land in; one with no pictures at all keeps a single cell, so
  * the strip is still a picture-shaped slot in the row.
  */
 function thumbsOf(member) {
   const covers = coversOf(member);
-  return covers.length
-    ? covers
-    : Array(Math.min(member.picture_count || 1, 3)).fill("");
+  if (!covers.length) {
+    return Array(Math.min(member.picture_count || 1, 3)).fill({
+      src: "",
+      style: null,
+    });
+  }
+  return covers.map((cover) => ({
+    src: workflowCoverUrl(cover),
+    style: coverCellStyle(cover, covers.length),
+  }));
 }
 
 /**
@@ -492,6 +509,8 @@ function factChips(member, index) {
 const menuOpen = ref(false);
 const menuAt = ref([0, 0]);
 const menuMember = ref(null);
+/** The cover tile the menu was opened on, or null. See `pictureUnder`. */
+const menuPicture = ref(null);
 const menuIndex = ref(0);
 
 /**
@@ -506,12 +525,36 @@ const menuIndex = ref(0);
  * on open and not on change, so reopening is also the only thing that moves
  * it.
  */
+/**
+ * The cover tile a pointer event landed on, or null.
+ *
+ * A member card's covers are buttons (#1455), so a right-click on the third
+ * thumbnail and one on the row's name are the same `contextmenu` on the same
+ * row — the pointer's position is the only thing that tells them apart. The
+ * tile carries its own id and position, so this is a lookup rather than state.
+ *
+ * Always null in List, which draws its own inert thumbs rather than mounting
+ * a card; the menu then offers the member's cover, which is what "this row's
+ * picture" means when nothing narrower was pointed at.
+ */
+function pictureUnder(event) {
+  const tile = event.target?.closest?.(".wf-card__pic");
+  const id = Number(tile?.dataset.pictureId);
+  if (!tile || !Number.isFinite(id)) return null;
+  return {
+    id,
+    index: Number(tile.dataset.pictureIndex) || 1,
+    total: Number(tile.dataset.pictureTotal) || 1,
+  };
+}
+
 async function openMenu(member, index, event) {
   emit("select", member.key, {});
   menuOpen.value = false;
   await nextTick();
   menuMember.value = member;
   menuIndex.value = index;
+  menuPicture.value = pictureUnder(event);
   menuAt.value = [event.clientX, event.clientY];
   menuOpen.value = true;
 }
@@ -557,7 +600,23 @@ const menuItems = computed(() => {
   if (!member) return [];
   const index = menuIndex.value;
   const last = props.members.length - 1;
+  const picture = menuPicture.value;
+  const openId = picture?.id ?? member.covers?.[0]?.picture_id ?? null;
   return [
+    // **The keyboard's only route to a member's pictures**, and the pointer's
+    // way to say WHICH one. The tiles are at `tabindex="-1"` because the grid
+    // owns Tab, so without this row a member card's covers could be opened by
+    // pointer alone — the same gap the grid's own menu had (#1455).
+    {
+      id: "open-picture",
+      label:
+        picture && picture.total > 1
+          ? `Open picture ${picture.index} of ${picture.total}`
+          : "Open picture",
+      icon: "image-outline",
+      disabled: openId == null,
+      run: () => emit("open-picture", openId),
+    },
     {
       id: "cover",
       label: "Make it the cover",
@@ -901,17 +960,33 @@ const notchStyle = computed(() => {
 /* Still painted, because a cell exists before its `<img>` has loaded — and in
    `--v-theme-input-background`, which is the grey `.wf-card__pic` paints the
    same waiting cell with. At 36px the two were near enough; at 80 a row and
-   its card were visibly two different greys. */
+   its card were visibly two different greys.
+
+   `position: relative` because the crop below positions the `<img>` against
+   this cell; without it the oversized img is laid out against the page. */
 .stack-panel__thumb {
+  position: relative;
   overflow: hidden;
   background: rgb(var(--v-theme-input-background));
 }
 
-/* TOP-anchored, the app's shipped crop (`ImageGrid.css`, `utils/squareCrop.js`,
+/* THE FALLBACK, as on the card: since #1465 `coverCellStyle` crops each cell
+   around the picture's stored face-weighted rectangle with inline width/
+   height/left/top, and this rule is what a picture whose rectangle has not
+   been computed yet still gets.
+
+   TOP-anchored, the app's shipped crop (`ImageGrid.css`, `utils/squareCrop.js`,
    and `WorkflowCard.vue`'s cover): a centre crop takes the same slice off the
-   top and the bottom, so on a picture of a person the head comes off. */
+   top and the bottom, so on a picture of a person the head comes off.
+
+   Absolutely positioned so the cropped case has something to translate
+   against; at 100%/100% and inset 0 it fills the cell exactly as a static img
+   did. */
 .stack-panel__thumb img {
   display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;

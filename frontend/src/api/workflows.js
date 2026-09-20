@@ -3,10 +3,14 @@
 // **Card level, not topology level.** The retired shelf opened at topology and
 // this module fronted its reads; F1b (#1404) deleted the shelf and, with it,
 // the last caller of `listWorkflows`, `listWorkflowVariants`,
-// `listWorkflowPictures` and `getWorkflowGraph`. They are gone from here
-// rather than kept warm for a screen that does not exist: the ROUTES stay, so
-// F6's Export and F7's pictures link re-add the three lines they need against
-// whatever shape those steps actually want.
+// `listWorkflowPictures` and `getWorkflowGraph`. B9 (#1410) then deleted the
+// topology routes themselves and moved the cards onto `/workflows`, so the
+// grid and the detail are what this module fronts, with `exportWorkflow`,
+// `duplicateWorkflow`, `deleteWorkflowFile` and `dissolveStack` at the foot of
+// the file for the grid's own verb menu (#1455). `GET /workflows/{key}/
+// pictures` is served and has no caller in the app - the picture grid reaches
+// a card's pictures through `GET /pictures?workflow_key=`, which filters like
+// every other facet - so there is deliberately no function for it here.
 //
 // Every route here is owner-only: the counts are read across the whole vault,
 // so a scoped session gets 403 rather than a narrowed answer.
@@ -17,7 +21,7 @@ import { unwrap } from "../utils/unwrap";
 /**
  * The URL a browser loads one of a card's `covers` from.
  *
- * `_cover_urls` (`routes/workflows.py`) sends an API-RELATIVE path -
+ * `_covers` (`routes/workflows.py`) sends an API-RELATIVE path in `url` -
  * `/pictures/thumbnails/{id}.webp?v={version}` - and an `<img src>` bypasses
  * Axios entirely, so nothing prepends `/api/v1` and nothing appends the share
  * token. Used verbatim, the browser asks the PAGE origin for a path no route
@@ -28,11 +32,17 @@ import { unwrap } from "../utils/unwrap";
  * exactly the drift the api layer exists to prevent. This is the second
  * spelling of THAT path, so the two live one file apart on purpose.
  *
- * @param {string} cover - a `covers` entry, exactly as the payload sends it.
+ * A `covers` entry is an OBJECT since #1465 - the URL plus the stored crop
+ * rectangle the cell is cropped around - so this reads `url` off it. An entry
+ * without one returns "" rather than the truthy `/api/v1undefined`, which is a
+ * broken-image glyph where the caller meant "no picture".
+ *
+ * @param {Object} cover - a `covers` entry, exactly as the payload sends it.
  * @returns {string}
  */
 export function workflowCoverUrl(cover) {
-  return appendShareToken(`${API_BASE_URL}${cover}`);
+  if (!cover?.url) return "";
+  return appendShareToken(`${API_BASE_URL}${cover.url}`);
 }
 
 /**
@@ -53,7 +63,7 @@ export async function listWorkflowCards({
   if (includeHidden) params.set("include_hidden", "true");
   if (includeOneOffs) params.set("include_one_offs", "true");
   const query = params.size ? `?${params}` : "";
-  const body = await unwrap(apiClient.get(`/workflows/cards${query}`));
+  const body = await unwrap(apiClient.get(`/workflows${query}`));
   return {
     cards: Array.isArray(body?.cards) ? body.cards : [],
     one_offs: body?.one_offs ?? 0,
@@ -69,9 +79,7 @@ export async function listWorkflowCards({
  * @returns {Promise<{card: Object, notes: ?string, hidden: boolean, variants: Array<Object>, pins: ?Array<Object>}>}
  */
 export async function getWorkflowCard(workflowKey) {
-  return unwrap(
-    apiClient.get(`/workflows/cards/${encodeURIComponent(workflowKey)}`),
-  );
+  return unwrap(apiClient.get(`/workflows/${encodeURIComponent(workflowKey)}`));
 }
 
 /**
@@ -215,4 +223,67 @@ export async function preflightWorkflowRun(body) {
  */
 export async function runWorkflowCard(body) {
   return unwrap(apiClient.post("/workflows/run", body));
+}
+
+/**
+ * Dissolve a whole stack: every member stands on its own afterwards.
+ *
+ * The plural counterpart of {@link unstackWorkflow}, and addressed by the
+ * STACK rather than by a card - `stack_id` off any member is what names it.
+ *
+ * @param {string} stackId
+ * @returns {Promise<{stack_id: ?string, keys: Array<string>}>}
+ */
+export async function dissolveStack(stackId) {
+  return unwrap(
+    apiClient.post(`/workflows/stacks/${encodeURIComponent(stackId)}/unstack`),
+  );
+}
+
+/**
+ * This card as a ComfyUI file somebody else can open (v1.12 B8).
+ *
+ * Scrubbed by the server - prompts and seeds blanked, recipe LoRA slots
+ * emptied, model names this machine does not hold left out - so what comes
+ * back is the graph, not a run of it.
+ *
+ * @param {string} workflowKey
+ * @returns {Promise<{filename: string, workflow: Object, removed: Array<string>, source: string}>}
+ */
+export async function exportWorkflow(workflowKey) {
+  return unwrap(
+    apiClient.get(`/workflows/${encodeURIComponent(workflowKey)}/export`),
+  );
+}
+
+/**
+ * Write this workflow into the user's workflow folder under a free name.
+ *
+ * Unscrubbed, unlike the export: the copy stays on this machine and is meant
+ * to run. A card the library only knows from its pictures gets a file of its
+ * own this way, so the answer's `workflow_key` can be a NEW card.
+ *
+ * @param {string} workflowKey
+ * @returns {Promise<{name: string, workflow_key: ?string}>}
+ */
+export async function duplicateWorkflow(workflowKey) {
+  return unwrap(
+    apiClient.post(`/workflows/${encodeURIComponent(workflowKey)}/duplicate`),
+  );
+}
+
+/**
+ * Send this card's workflow file to the system trash.
+ *
+ * Only a card with a file has one: a workflow the library knows from its
+ * pictures answers 409, which is why every caller gates on `imported`. The
+ * card and its pictures stay either way - this deletes a file, not a card.
+ *
+ * @param {string} workflowKey
+ * @returns {Promise<{deleted: string, workflow_key: string}>}
+ */
+export async function deleteWorkflowFile(workflowKey) {
+  return unwrap(
+    apiClient.delete(`/workflows/${encodeURIComponent(workflowKey)}`),
+  );
 }

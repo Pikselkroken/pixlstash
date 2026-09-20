@@ -18,7 +18,7 @@ const listWorkflowCards = vi.fn();
 vi.mock("../../api/workflows", () => ({
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   getWorkflowCard: vi.fn(),
-  workflowCoverUrl: (cover) => cover,
+  workflowCoverUrl: (cover) => cover?.url ?? "",
 }));
 
 import WorkflowFilterMenu from "./WorkflowFilterMenu.vue";

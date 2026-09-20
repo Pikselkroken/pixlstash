@@ -32,7 +32,7 @@ vi.mock("../../api/workflows", () => ({
   setWorkflowSlots: (...args) => setWorkflowSlots(...args),
   // `WorkflowCard` renders its covers through this, so a mock without it
   // throws in the render and every assertion in the file goes with it.
-  workflowCoverUrl: (cover) => cover,
+  workflowCoverUrl: (cover) => cover?.url ?? "",
   stackWorkflows: (...args) => stackWorkflows(...args),
 }));
 
@@ -48,6 +48,7 @@ import { useFilterStore } from "../../stores/useFilterStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 
 const KEY = "a".repeat(64);
@@ -445,20 +446,25 @@ describe("with several workflows selected", () => {
     expect(runDialog.source.pictureIds).toEqual([99]);
   });
 
-  it("offers Stack together and Hide, and says how many are selected", async () => {
+  it("says how many are selected and offers no verbs of its own", async () => {
+    // **The rail counts; the grid's selection pill acts** (#1455). These two
+    // buttons were here first, and once the pill offered the same two they
+    // disagreed within a week: this Hide was hardcoded where the pill's is a
+    // toggle that reads Unhide on an all-hidden selection, and this Stack
+    // said "Stack together" where the pill says "Fuse into one stack" for a
+    // selection that already holds one. Two live controls on one screen, one
+    // of them wrong about what it was about to do.
     const { wrapper } = await mountWith(
       [KEY, OTHER],
       [card(), card({ key: OTHER })],
     );
     const text = textOf(wrapper);
     expect(text).toContain("2 workflows selected");
-    expect(text).toContain("Stack together");
-    const stack = wrapper
-      .findAll("button")
-      .find((b) => b.text() === "Stack together");
-    await stack.trigger("click");
-    await flush(wrapper);
-    expect(stackWorkflows).toHaveBeenCalledWith([KEY, OTHER]);
+    // The reader is told where the verbs went rather than left to find them.
+    expect(text).toContain("bar at the bottom of the grid");
+    const labels = wrapper.findAll("button").map((b) => b.text());
+    expect(labels).not.toContain("Stack together");
+    expect(labels).not.toContain("Hide");
   });
 });
 
@@ -588,7 +594,7 @@ describe("the more menu and hiding", () => {
   it("hides the card and can still unhide it once it has left the grid", async () => {
     getWorkflowCard.mockResolvedValue(detail());
     patchWorkflowCard.mockResolvedValue(detail({ hidden: true }));
-    // A hidden card is not in `GET /workflows/cards`, which is exactly the
+    // A hidden card is not in `GET /workflows`, which is exactly the
     // case that used to take the footer and its menu off screen.
     listWorkflowCards.mockResolvedValue({ cards: [], one_offs: 0, hidden: 1 });
     const { wrapper } = await mountWith([KEY]);
@@ -601,25 +607,7 @@ describe("the more menu and hiding", () => {
     ).toBeTruthy();
   });
 
-  it("says how many of a multi-select hide actually went", async () => {
-    patchWorkflowCard
-      .mockResolvedValueOnce(detail())
-      .mockRejectedValueOnce(new Error("nope"));
-    const { wrapper } = await mountWith(
-      [KEY, OTHER],
-      [card(), card({ key: OTHER })],
-    );
-    const hide = wrapper.findAll("button").find((b) => b.text() === "Hide");
-    await hide.trigger("click");
-    await flush(wrapper);
-    // Both were attempted, the grid was re-read anyway, and the message is
-    // not "none of it worked".
-    expect(patchWorkflowCard).toHaveBeenCalledTimes(2);
-    expect(listWorkflowCards).toHaveBeenCalled();
-    const { useNoticeStore } = await import("../../stores/useNoticeStore");
-    expect(useNoticeStore().notices.at(-1).text).toContain("1 of 2");
   });
-});
 
 describe("which card the rail shows", () => {
   it("keeps showing a card the flip moved out of the grid", async () => {
@@ -722,5 +710,68 @@ describe("which card the rail shows", () => {
     const text = textOf(wrapper);
     expect(text).toContain("SDXL portrait (lightning)");
     expect(text).toContain("In the Cinematic portrait stack");
+  });
+});
+
+describe("the Tasks tab", () => {
+  // The rail on /workflows is the only thing on that screen, so without this
+  // tab a run started here cannot be watched from here.
+  it("offers Tasks last, and shows the task manager instead of the workflow", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    const band = wrapper.findAll("button.inspector-tab");
+    expect(band.map((t) => t.text())).toEqual(["Workflow", "Tasks"]);
+
+    await band[1].trigger("click");
+    await flush(wrapper);
+    const text = textOf(wrapper);
+    // The task manager's own empty state, and none of the workflow.
+    expect(text).toContain("No active tasks");
+    expect(text).not.toContain("Cinematic portrait");
+    // Run… acts on the workflow, so it goes with the workflow: a footer left
+    // behind would run a card the reader can no longer see.
+    expect(wrapper.find(".wftab-foot").exists()).toBe(false);
+
+    await wrapper.findAll("button.inspector-tab")[0].trigger("click");
+    await flush(wrapper);
+    expect(textOf(wrapper)).toContain("Cinematic portrait");
+    expect(wrapper.find(".wftab-foot").exists()).toBe(true);
+  });
+
+  it("follows the store's deep link onto the Tasks tab", async () => {
+    // A run started from THIS rail pushes a toast whose *Show* action asks for
+    // the Tasks tab. It used to call a method exposed by `StatsSidebar`, which
+    // is not mounted on /workflows, so the one screen that starts runs was the
+    // one screen where *Show* did nothing at all.
+    const { wrapper } = await mountWith([KEY]);
+    expect(textOf(wrapper)).not.toContain("No active tasks");
+
+    useSidebarStore().showTasksTab();
+    await flush(wrapper);
+    expect(textOf(wrapper)).toContain("No active tasks");
+  });
+
+  it("pulses the tab while work is running, and only then", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    const tasksStore = useTasksStore();
+    expect(
+      wrapper
+        .findAll("button.inspector-tab")[1]
+        .find(".inspector-tab-pulse")
+        .exists(),
+    ).toBe(false);
+
+    tasksStore.setComfyuiRun("run-1", {
+      status: "running",
+      percent: 10,
+      message: "sampling",
+      label: "Cinematic portrait",
+    });
+    await flush(wrapper);
+    expect(
+      wrapper
+        .findAll("button.inspector-tab")[1]
+        .find(".inspector-tab-pulse")
+        .exists(),
+    ).toBe(true);
   });
 });

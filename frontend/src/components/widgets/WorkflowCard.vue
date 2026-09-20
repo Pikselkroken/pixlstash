@@ -15,8 +15,27 @@
       class="wf-card__cover"
       :class="`wf-card__cover--${coverCells.length}`"
     >
-      <span v-for="(src, i) in coverCells" :key="i" class="wf-card__pic">
-        <img v-if="src" :src="src" alt="" loading="lazy" />
+      <!-- Inert, as they have always been: a cell is a `<span>` and a click
+           on it selects the card like a click anywhere else. The tiles carry
+           their picture's identity only so a RIGHT-CLICK can tell the host
+           which one the pointer was over (#1455) - opening a picture is a
+           context-menu verb, never a click, so nothing here takes a press and
+           nothing is drawn over the picture. -->
+      <span
+        v-for="(cell, i) in coverCells"
+        :key="i"
+        class="wf-card__pic"
+        :data-picture-id="cell.id ?? undefined"
+        :data-picture-index="cell.id == null ? undefined : i + 1"
+        :data-picture-total="cell.id == null ? undefined : coverCells.length"
+      >
+        <img
+          v-if="cell.src"
+          :src="cell.src"
+          :style="cell.style"
+          alt=""
+          loading="lazy"
+        />
       </span>
       <span class="wf-card__badge wf-card__badge--end" aria-hidden="true">
         <v-icon size="12">mdi-image-multiple</v-icon>{{ card.picture_count }}
@@ -173,6 +192,7 @@ import { workflowCoverUrl } from "../../api/workflows";
 import {
   cardAccessibleName,
   checkpointModel,
+  coverCellStyle,
   factChips,
   isStack,
   checkpointUnread,
@@ -244,23 +264,27 @@ const stackLabel = computed(
   () => `${props.card.stack_size} workflows in this stack`,
 );
 /**
- * The cover thumbnails, made absolute.
+ * The cover pictures this card can actually draw.
  *
- * The join is `api/workflows.js`'s, not this component's: `covers` arrives
+ * An entry without a `url` is dropped: `workflowCoverUrl` returns "" for one
+ * and a cell with no picture in it is what #1456 removed, so since then the
+ * cover's arrangement is counted from this list and an entry that cannot be
+ * shown must not be counted either.
+ */
+const covers = computed(() =>
+  (props.card.covers ?? []).filter((cover) => cover?.url).slice(0, 3),
+);
+/**
+ * The cells the cover draws: one per picture it was handed, each with the URL
+ * a browser can load and the crop that keeps the face in the cell.
+ *
+ * The join is `api/workflows.js`'s, not this component's: `url` arrives
  * API-relative and an `<img src>` never reaches the Axios interceptor that
  * would prefix it. See `workflowCoverUrl` for why that lives on the api layer.
  *
- * Empty entries are dropped BEFORE the join, because the join does not guard
- * them: `workflowCoverUrl(null)` is the truthy string `/api/v1null`, which is
- * a broken-image glyph rather than a missing picture. Since #1456 the cover's
- * arrangement is counted from this list, so an entry that cannot be shown must
- * not be counted either.
- */
-const covers = computed(() =>
-  (props.card.covers ?? []).filter(Boolean).slice(0, 3).map(workflowCoverUrl),
-);
-/**
- * The cells the cover draws, which is one per picture it was handed.
+ * `style` is null for a picture whose crop rectangle has not been computed
+ * yet, and the stylesheet's `object-fit: cover` then frames it exactly as it
+ * framed every cover before #1465.
  *
  * A card can know it has pictures without having their covers yet
  * (`picture_count` arrives with the card, the strip can be empty). That card
@@ -268,11 +292,23 @@ const covers = computed(() =>
  * pictures are about to land in - not one box the size of the whole cover,
  * which is the `--empty` cover's own look and says "there is nothing here".
  */
-const coverCells = computed(() =>
-  covers.value.length
-    ? covers.value
-    : Array(Math.min(props.card.picture_count ?? 1, 3)).fill(""),
-);
+const coverCells = computed(() => {
+  const count = covers.value.length;
+  if (!count) {
+    return Array(Math.min(props.card.picture_count ?? 1, 3)).fill({
+      src: "",
+      style: null,
+      id: null,
+    });
+  }
+  return covers.value.map((cover) => ({
+    src: workflowCoverUrl(cover),
+    style: coverCellStyle(cover, count),
+    // `?? null`, so a payload served before #1455 offers the menu no picture
+    // rather than one named `undefined`.
+    id: cover.picture_id ?? null,
+  }));
+});
 // Ratings run 1-5; 0 or null is "not rated".
 const rating = computed(() => props.card.rating > 0);
 // Pictures, not loaded covers, decide "No pictures yet".
@@ -450,13 +486,24 @@ const accessibleName = computed(() =>
 }
 
 /* Still painted, because a cell exists before its <img> has loaded. It is no
-   longer a cell that will never hold a picture. */
+   longer a cell that will never hold a picture.
+
+   `position: relative` because the crop below positions the <img> against this
+   cell; without it the oversized img would be laid out against the page. */
 .wf-card__pic {
+  position: relative;
   overflow: hidden;
   background: rgb(var(--v-theme-input-background));
 }
 
-/* TOP-anchored, not centred, and that is the shipped convention rather than a
+/* THE FALLBACK, not the crop. Since #1465 a cover carries the face-weighted
+   rectangle `render_thumbnail` stored for it and `coverCellStyle` fits the
+   cell's own ratio (6:5, 4:5 or 3:5) around it, as inline width/height/left/
+   top that override everything here but `display`. What is left is the case
+   that rectangle is NULL - a picture still being processed - and for that the
+   crop is what it has always been.
+
+   TOP-anchored, not centred, and that is the shipped convention rather than a
    choice made here: the picture grid's own cropped tiles carry
    `object-position: top center` (`ImageGrid.css`), and `utils/squareCrop.js`
    documents it as what the app's cover crop means. A centre crop takes the
@@ -464,16 +511,14 @@ const accessibleName = computed(() =>
    person the top is the face — so every head came off in the two short cells,
    which are much wider than they are tall.
 
-   It does not make the crop face-AWARE: nothing here knows where the face is.
-   The library DOES know - `render_thumbnail` stores a face-weighted rectangle
-   per picture (`square_crop_x/y/side`, used by `utils/squareCrop.js`) - but the
-   card's `covers` are bare URLs and that rectangle is SQUARE, while these cells
-   are 6:5, 4:5 and 3:5. Making this crop face-aware is a payload change plus a
-   non-square version of that geometry, not a rule in this file (see
-   docs/frontend_architecture.md §5). Top-anchoring is the cheap half that is
-   right most of the time. */
+   Absolutely positioned so the cropped case has something to translate
+   against; at 100%/100% and inset 0 it fills the cell exactly as a static img
+   did, so the fallback is unchanged by it. */
 .wf-card__pic img {
   display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;

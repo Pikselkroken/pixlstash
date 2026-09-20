@@ -26,27 +26,6 @@ export async function listWorkflows() {
 }
 
 /**
- * Each picture input of a saved workflow and how it is filled.
- *
- * `mode` is `selection` (the grid's selection fills it; at most one), `picker`
- * (asked at run time) or `fixed` (one picture, `picture_id`, chosen at setup).
- * `picture_missing` is a fixed input whose picture has left this library.
- *
- * `lora_slots` is every LoRA a run can swap (`by` is `filename` for a core
- * loader, `digest` for a ComfyUI-PixlStash one); empty means the graph has no
- * LoRA loader to swap, and a run adds one only with `insert_lora_loader: true`
- * (see `getLoraInsertion`).
- *
- * @param {string} name - the workflow's `name` as listed.
- * @returns {Promise<{workflow: string, inputs: Array<Object>}>}
- */
-export async function getWorkflowInputs(name) {
-  return unwrap(
-    apiClient.get(comfyUrl(`/workflows/${encodeURIComponent(name)}/inputs`)),
-  );
-}
-
-/**
  * Where a LoRA loader would be added to a saved workflow that has none (#1376).
  *
  * `plan` is `{model, clip, rewires, pixlstash_loader}`: the node the loader
@@ -63,30 +42,6 @@ export async function getLoraInsertion(name) {
   return unwrap(
     apiClient.get(
       comfyUrl(`/workflows/${encodeURIComponent(name)}/lora-insertion`),
-    ),
-  );
-}
-
-/**
- * Run a saved workflow, filling each picture input by its mode.
- *
- * A workflow with a Selection input runs once per id in `picture_ids`; one
- * without takes no `picture_ids` and runs once.
- *
- * @param {string} name - the workflow's `name` as listed.
- * @param {Object} body - `{picture_ids?, pictures?: [{node_id, picture_id}],
- *   caption?, values?, seed_mode?, seed?, stack?, client_id?, set_id?,
- *   project_id?, character_id?, adapter_sha256?}`. `adapter_sha256` puts that
- *   shelf LoRA into every LoRA slot of the graph; a workflow with none refuses
- *   the run.
- * @returns {Promise<{status: string, workflow: string,
- *   prompts: Array<{picture_id: ?number, prompt_id: string}>}>}
- */
-export async function runWorkflow(name, body) {
-  return unwrap(
-    apiClient.post(
-      comfyUrl(`/workflows/${encodeURIComponent(name)}/run`),
-      body,
     ),
   );
 }
@@ -119,22 +74,6 @@ export async function importWorkflow({
       keep_both: keepBoth,
     }),
   );
-}
-
-/**
- * Run an image-to-image workflow over a set of pictures.
- *
- * @param {Object} body
- * @param {Array<number|string>} body.picture_ids
- * @param {string} body.workflow_name
- * @param {string} [body.caption]
- * @param {string} [body.client_id] - ties progress events back to this tab.
- * @param {boolean} [body.stack] - stack the outputs with their source.
- * @returns {Promise<Object>} the response body, whose `prompts` are the queued
- *   ComfyUI prompt ids.
- */
-export async function runImageToImage(body) {
-  return unwrap(apiClient.post(comfyUrl("/run_i2i"), body));
 }
 
 /**
@@ -191,47 +130,6 @@ export async function getPictureRecipe(pictureId, { preflight = true } = {}) {
       ? apiClient.get(url)
       : apiClient.get(url, { params: { preflight: false } }),
   );
-}
-
-/**
- * Re-run a picture's own recipe to generate variants of it.
- *
- * The graph itself is never sent by the client: the backend re-extracts it from
- * the picture on every call, so a run always replays what the picture actually
- * carries rather than a copy the client may have gone stale on.
- *
- * @param {Object} body
- * @param {number|string} body.picture_id - the picture whose recipe to replay.
- * @param {string} body.seed_mode - how the seed is chosen for the variants.
- * @param {number} [body.seed] - the explicit seed, when `seed_mode` needs one.
- * @param {string} [body.client_id] - ties progress events back to this tab.
- * @param {boolean} [body.stack] - stack the outputs with their source.
- * @param {string} [body.adapter_sha256] - a shelf LoRA to put into the graph.
- * @param {boolean} [body.insert_lora_loader] - add a loader where the graph has
- *   none, as `getPictureRecipe`'s `lora_insertion.plan` showed. Needs
- *   `adapter_sha256`; without the flag such a graph is refused.
- * @param {boolean} [body.allow_unchecked] - the user's explicit acknowledgement
- *   that they want to run a graph the server could not inspect. The backend
- *   refuses the run with a 400 without it whenever `preflight.checked` is
- *   false, so this must only ever be sent for a run the user acknowledged, and
- *   never as a constant.
- * @returns {Promise<Object>} the response body:
- *   `{status, prompts: [{picture_id, prompt_id}]}`.
- */
-export async function runRecipe(body) {
-  return unwrap(apiClient.post(comfyUrl("/run_recipe"), body));
-}
-
-/**
- * Run a text-to-image workflow.
- *
- * @param {Object} body - the prompt, workflow name, and the view context
- *   (`set_id`, `project_id`, `character_id`) the outputs should land in.
- * @returns {Promise<Object>} the response body, whose `prompts` are the queued
- *   ComfyUI prompt ids.
- */
-export async function runTextToImage(body) {
-  return unwrap(apiClient.post(comfyUrl("/run_t2i"), body));
 }
 
 /**

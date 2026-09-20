@@ -10,7 +10,7 @@ written (``routes/recipes.py``).
 its counts, its cover strip, its rank, the stack it sits in - is computed per
 request across the whole vault, so anything carried on the wire would be
 something the client has to re-read anyway. The event says which keys changed
-and why; ``GET /workflows/cards`` says what they are now.
+and why; ``GET /workflows`` says what they are now.
 """
 
 from __future__ import annotations

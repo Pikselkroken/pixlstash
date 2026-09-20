@@ -583,7 +583,7 @@ const sourceName = computed(
 /**
  * The picture beside the form, as a browser can actually load it.
  *
- * A card's `covers` are API-RELATIVE (`_cover_urls`, `routes/workflows.py`) and
+ * A card's `covers` carry an API-RELATIVE `url` (`_covers`, `workflows.py`) and
  * an `<img src>` bypasses Axios, so nothing prepends `/api/v1` and nothing
  * appends the share token: used verbatim the browser asks the page origin for
  * a path no route serves and the cover is broken. `workflowCoverUrl` is the

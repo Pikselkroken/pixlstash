@@ -34,7 +34,9 @@ const push = vi.fn();
 // so a test whose route is inert silently cannot see a query CHANGE - only
 // whatever was set before mount. That gap hid a bug where the note outlived
 // the query that caused it.
-const route = reactive({ name: "workflows", query: {} });
+// `path` is read by the cover link's `?from=`, so a route without one silently
+// produces `from: undefined` — which is a link that does not come back.
+const route = reactive({ name: "workflows", path: "/workflows", query: {} });
 vi.mock("vue-router", () => ({
   useRouter: () => ({ push }),
   useRoute: () => route,
@@ -45,15 +47,29 @@ const getWorkflowCard = vi.fn();
 const reorderStack = vi.fn();
 const unstackWorkflow = vi.fn();
 const patchWorkflowCard = vi.fn();
+const stackWorkflows = vi.fn();
+const dissolveStack = vi.fn();
+const duplicateWorkflow = vi.fn();
+const deleteWorkflowFile = vi.fn();
+const exportWorkflow = vi.fn();
 vi.mock("../../api/workflows", () => ({
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   getWorkflowCard: (...args) => getWorkflowCard(...args),
   // `WorkflowCard` renders its covers through this, so a mock without it
   // throws in the render and every assertion in the file goes with it.
-  workflowCoverUrl: (cover) => cover,
+  workflowCoverUrl: (cover) => cover?.url ?? "",
   reorderStack: (...args) => reorderStack(...args),
   unstackWorkflow: (...args) => unstackWorkflow(...args),
   patchWorkflowCard: (...args) => patchWorkflowCard(...args),
+  // The selection bar's verbs. Named here even where nothing in this file
+  // calls them: `vi.mock` replaces the WHOLE module, so a name the store
+  // imports and this factory omits is `undefined` at the call - which fails
+  // as "not a function" inside a handler rather than as a missing mock.
+  stackWorkflows: (...args) => stackWorkflows(...args),
+  dissolveStack: (...args) => dissolveStack(...args),
+  duplicateWorkflow: (...args) => duplicateWorkflow(...args),
+  deleteWorkflowFile: (...args) => deleteWorkflowFile(...args),
+  exportWorkflow: (...args) => exportWorkflow(...args),
 }));
 const listImportFolders = vi.fn();
 vi.mock("../../api/folders", () => ({
@@ -969,7 +985,7 @@ describe("arriving on ?topology=", () => {
     expect(cursorKey(wrapper)).toBe("b");
   });
 
-  // The grid is not every card: `GET /workflows/cards` leaves out the hidden
+  // The grid is not every card: `GET /workflows` leaves out the hidden
   // ones and the one-offs, which is the ordinary state of a workflow used
   // once. Saying nothing would drop the reader at the top of a grid that does
   // not hold what they clicked, looking as though the link did nothing.
@@ -1500,7 +1516,10 @@ describe("reordering a stack from the keyboard", () => {
     // this Unstack and Hide are reachable by pointer only.
     const menu = wrapper.find('[data-testid="member-menu"]');
     expect(menu.exists()).toBe(true);
-    expect(menu.findAll(".ctx-item")).toHaveLength(5);
+    // By id below, not by position: the member menu is a list somebody adds
+    // to, and an index-based assertion quietly starts testing its neighbour
+    // when they do — which is what happened when *Open picture* joined it.
+    expect(menu.findAll(".ctx-item").length).toBeGreaterThan(0);
   });
 
   it("unstacks and hides through the routes those verbs name", async () => {
@@ -1515,7 +1534,7 @@ describe("reordering a stack from the keyboard", () => {
     // the panel's emits: the store reaches for `patchWorkflowCard`, and a
     // mock naming anything else is swallowed by `hideMember`'s own catch and
     // reads as the feature working.
-    await wrapper.findAll(".ctx-item")[3].trigger("click");
+    await wrapper.find('.ctx-item[data-item="unstack"]').trigger("click");
     await flush();
     expect(unstackWorkflow).toHaveBeenCalledWith("b1");
 
@@ -1524,7 +1543,7 @@ describe("reordering a stack from the keyboard", () => {
       .find(".wfv-grid")
       .trigger("keydown", { key: "F10", shiftKey: true });
     await flush();
-    await wrapper.findAll(".ctx-item")[4].trigger("click");
+    await wrapper.find('.ctx-item[data-item="hide"]').trigger("click");
     await flush();
     expect(patchWorkflowCard).toHaveBeenCalledWith("b1", { hidden: true });
     expect(useWorkflowsStore().error).toBe("");
@@ -1689,7 +1708,7 @@ describe("the menu's move verbs follow the row too", () => {
   it("announces and re-seats the cursor after Move later", async () => {
     const wrapper = await openStackB();
     await menuOn(wrapper, "b1");
-    await wrapper.findAll(".ctx-item")[2].trigger("click");
+    await wrapper.find('.ctx-item[data-item="later"]').trigger("click");
     await flush();
 
     expect(reorderStack).toHaveBeenCalledWith("stack-b", ["b", "b2", "b1"]);
@@ -1703,7 +1722,7 @@ describe("the menu's move verbs follow the row too", () => {
   it("announces and re-seats the cursor after Make it the cover", async () => {
     const wrapper = await openStackB();
     await menuOn(wrapper, "b2");
-    await wrapper.findAll(".ctx-item")[0].trigger("click");
+    await wrapper.find('.ctx-item[data-item="cover"]').trigger("click");
     await flush();
 
     expect(reorderStack).toHaveBeenCalledWith("stack-b", ["b2", "b", "b1"]);
@@ -1774,5 +1793,324 @@ describe("WorkflowsView filters", () => {
     await wrapper.find(".wfv-note-clear").trigger("click");
     await flush();
     expect(wrapper.findAll(".wfv-row")).toHaveLength(6);
+  });
+});
+
+// ── Opening a picture is a MENU verb, never a click (#1455) ──────────────
+describe("a cover tile", () => {
+  const WITH_COVERS = [
+    card("p", {
+      rank: 9,
+      picture_count: 2,
+      covers: [
+        { url: "/pictures/thumbnails/11.webp", picture_id: 11 },
+        { url: "/pictures/thumbnails/22.webp", picture_id: 22 },
+      ],
+    }),
+  ];
+
+  async function coverGrid() {
+    listWorkflowCards.mockResolvedValue({
+      cards: WITH_COVERS,
+      one_offs: 0,
+      hidden: 0,
+    });
+    return grid();
+  }
+
+  it("is not a control: clicking one selects the card, as it always did", async () => {
+    const wrapper = await coverGrid();
+    const tiles = wrapper.findAll('.wfv-row[data-key="p"] .wf-card__pic');
+    expect(tiles.length).toBeGreaterThan(0);
+    // No button, no tabstop, nothing drawn over the picture. A cover tile was
+    // briefly all three and it cost the card its ordinary click.
+    for (const tile of tiles) {
+      expect(tile.element.tagName).toBe("SPAN");
+      expect(tile.attributes("tabindex")).toBeUndefined();
+    }
+    expect(wrapper.find(".wf-card__open").exists()).toBe(false);
+
+    await tiles[1].trigger("click");
+    expect(useWorkflowsStore().selectedKeys).toEqual(["p"]);
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("carries its picture's identity, which only a right-click reads", async () => {
+    const wrapper = await coverGrid();
+    const tiles = wrapper.findAll('.wfv-row[data-key="p"] .wf-card__pic');
+    expect(tiles[1].attributes("data-picture-id")).toBe("22");
+    expect(tiles[1].attributes("data-picture-index")).toBe("2");
+    expect(tiles[1].attributes("data-picture-total")).toBe("2");
+  });
+});
+
+// ── The card menu (#1455) ─────────────────────────────────────────────────
+describe("right-clicking a card", () => {
+  const menuLabels = (wrapper) =>
+    wrapper
+      .findAll(".wf-menu .ctx-item")
+      .map((el) => el.find(".ctx-label-text").text());
+
+  it("selects an unselected card, and leaves a selection it is part of alone", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+
+    await wrapper
+      .find('.wfv-row[data-key="c"]')
+      .trigger("contextmenu", { clientX: 10, clientY: 20 });
+    expect(store.selectedKeys).toEqual(["c"]);
+
+    // Select three, then right-click one of them: the other two must survive,
+    // or the commonest gesture in a bulk edit silently drops them.
+    store.selectRange(["a", "c", "d"]);
+    await wrapper
+      .find('.wfv-row[data-key="d"]')
+      .trigger("contextmenu", { clientX: 10, clientY: 20 });
+    expect(store.selectedKeys).toEqual(["a", "c", "d"]);
+  });
+
+  it("takes the whole stack when the card is a stack", async () => {
+    const wrapper = await grid();
+    await wrapper
+      .find('.wfv-row[data-key="b"]')
+      .trigger("contextmenu", { clientX: 1, clientY: 1 });
+    expect(useWorkflowsStore().selectedKeys).toEqual(["b", "b1", "b2"]);
+  });
+
+  it("the ContextMenu key opens the card menu, where it used to open ⓘ", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    // Nothing is open before the key: the menu stub only renders its content
+    // once `modelValue` is set, so an always-open stub would make this pass
+    // vacuously.
+    expect(menuLabels(wrapper)).toHaveLength(0);
+
+    await wrapper.find(".wfv-grid").trigger("keydown", { key: "ContextMenu" });
+    await flush();
+
+    expect(store.selectedKeys).toEqual(["a"]);
+    expect(menuLabels(wrapper)).toContain("Run…");
+  });
+});
+
+// ── Two verbs whose consequences outlive the click (#1455) ────────────────
+describe("the verbs the bar fires", () => {
+  const bar = (wrapper) =>
+    wrapper.findComponent({ name: "WorkflowSelectionBar" });
+
+  it("Delete asks first, and deletes nothing when the answer is no", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.cards = [card("a", { imported: true })];
+    store.selectRange(["a"]);
+
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await bar(wrapper).vm.$emit("delete");
+    await flush();
+    expect(ask).toHaveBeenCalled();
+    expect(deleteWorkflowFile).not.toHaveBeenCalled();
+
+    // And with a yes it goes through, so the refusal above is the ANSWER
+    // being no rather than the verb being unwired.
+    ask.mockReturnValue(true);
+    deleteWorkflowFile.mockResolvedValue({ deleted: "a.json" });
+    await bar(wrapper).vm.$emit("delete");
+    await flush();
+    expect(deleteWorkflowFile).toHaveBeenCalledWith("a");
+    ask.mockRestore();
+  });
+
+  it("Rename with an empty field clears the stored name rather than setting one", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.selectRange(["a"]);
+    patchWorkflowCard.mockResolvedValue({});
+
+    await bar(wrapper).vm.$emit("rename");
+    await flush();
+    // The field opens EMPTY on a card whose name is always resolved, so
+    // pressing Rename without typing must not freeze the generated name into
+    // a stored one — it has to clear the stored name instead.
+    await wrapper
+      .find(".app-dialog__footer button:last-child")
+      .trigger("click");
+    await flush();
+    expect(patchWorkflowCard).toHaveBeenCalledWith("a", { name: null });
+
+    await bar(wrapper).vm.$emit("rename");
+    await flush();
+    await wrapper.find(".app-dialog input").setValue("  Portrait pass  ");
+    await wrapper
+      .find(".app-dialog__footer button:last-child")
+      .trigger("click");
+    await flush();
+    expect(patchWorkflowCard).toHaveBeenLastCalledWith("a", {
+      name: "Portrait pass",
+    });
+  });
+});
+
+// ── What the UX review asked for (#1455) ──────────────────────────────────
+describe("the keyboard can reach everything the pointer can", () => {
+  const bar = (wrapper) =>
+    wrapper.findComponent({ name: "WorkflowSelectionBar" });
+
+  it("opens the cover picture from the menu, not only from the tile", async () => {
+    listWorkflowCards.mockResolvedValue({
+      cards: [
+        card("p", {
+          picture_count: 2,
+          covers: [
+            { url: "/a", picture_id: 7 },
+            { url: "/b", picture_id: 8 },
+          ],
+        }),
+      ],
+      one_offs: 0,
+      hidden: 0,
+    });
+    const wrapper = await grid();
+    useWorkflowsStore().selectRange(["p"]);
+    await flush();
+
+    // The tiles are at `tabindex="-1"` — the grid owns Tab — so this row is
+    // the ONLY way a keyboard reaches the new action (WCAG 2.1.1).
+    await bar(wrapper).vm.$emit("open-cover");
+    expect(push).toHaveBeenCalledWith({
+      name: "all-pictures",
+      query: { overlay: "7", from: "/workflows" },
+    });
+  });
+
+  it("hands focus back to the cursor row when the menu closes", async () => {
+    const wrapper = await grid();
+    await wrapper.find(".wfv-grid").trigger("keydown", { key: "ContextMenu" });
+    await flush();
+    // A context menu's activator is a pair of coordinates, so Vuetify has
+    // nothing to restore focus to and it lands on `document.body` — outside
+    // the grid, with the cursor's row marked and the next arrow key dead.
+    document.body.focus();
+
+    bar(wrapper).vm.$emit("menu-closed");
+    await flush();
+    expect(document.activeElement.getAttribute("data-key")).toBe("a");
+  });
+});
+
+describe("a bulk verb that half worked says so", () => {
+  const bar = (wrapper) =>
+    wrapper.findComponent({ name: "WorkflowSelectionBar" });
+
+  it("names how many went rather than claiming none did", async () => {
+    // This assertion moved here with the verb: it used to live on the rail's
+    // own Hide button, which the pill now owns (#1455). Losing it would lose
+    // the whole reason the loop runs to the end instead of throwing on the
+    // first refusal.
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.selectRange(["a", "c"]);
+    patchWorkflowCard
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error("nope"));
+
+    await bar(wrapper).vm.$emit("hide", false);
+    await flush();
+
+    expect(patchWorkflowCard).toHaveBeenCalledTimes(2);
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    expect(useNoticeStore().notices.at(-1).text).toContain("1 of 2");
+  });
+
+  it("refuses a second press while the first is still out", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.selectRange(["a", "c"]);
+    let release;
+    patchWorkflowCard.mockImplementation(
+      () => new Promise((resolve) => (release = resolve)),
+    );
+
+    bar(wrapper).vm.$emit("hide", false);
+    await flush();
+    // A second press re-issues writes against state the first has already
+    // changed; the 404s that come back are counted as refusals, so the
+    // reader is told it FAILED right after it succeeded.
+    bar(wrapper).vm.$emit("hide", false);
+    await flush();
+    expect(patchWorkflowCard).toHaveBeenCalledTimes(1);
+
+    release({});
+    await flush();
+  });
+});
+
+// ── Right-click names the picture under the pointer ───────────────────────
+describe("the card menu opens the picture you pointed at", () => {
+  const WITH_THREE = [
+    card("p", {
+      rank: 9,
+      picture_count: 3,
+      covers: [
+        { url: "/1", picture_id: 11 },
+        { url: "/2", picture_id: 22 },
+        { url: "/3", picture_id: 33 },
+      ],
+    }),
+  ];
+
+  async function threeGrid() {
+    listWorkflowCards.mockResolvedValue({
+      cards: WITH_THREE,
+      one_offs: 0,
+      hidden: 0,
+    });
+    return grid();
+  }
+
+  const openRow = (wrapper) =>
+    wrapper
+      .findAll('[data-testid="wf-verbs"] .ctx-item')
+      .find((el) => el.attributes("data-verb") === "open-cover");
+
+  it("names and opens the tile that was right-clicked", async () => {
+    const wrapper = await threeGrid();
+    const tiles = wrapper.findAll('.wfv-row[data-key="p"] .wf-card__pic');
+    expect(tiles).toHaveLength(3);
+
+    // Right-click the THIRD thumbnail. The press lands on the <img> inside
+    // the button, which is why the lookup walks up with `closest`.
+    await tiles[2].find("img").trigger("contextmenu", {
+      clientX: 5,
+      clientY: 6,
+    });
+    await flush();
+
+    expect(openRow(wrapper).find(".ctx-label-text").text()).toBe(
+      "Open picture 3 of 3",
+    );
+    await openRow(wrapper).trigger("click");
+    expect(push).toHaveBeenCalledWith({
+      name: "all-pictures",
+      query: { overlay: "33", from: "/workflows" },
+    });
+  });
+
+  it("falls back to the cover when the right-click missed a tile", async () => {
+    const wrapper = await threeGrid();
+    // The name row is part of the card and not a picture, so "this card's
+    // picture" is the cover.
+    await wrapper
+      .find('.wfv-row[data-key="p"] .wf-card__name')
+      .trigger("contextmenu", { clientX: 5, clientY: 6 });
+    await flush();
+
+    expect(openRow(wrapper).find(".ctx-label-text").text()).toBe(
+      "Open cover picture",
+    );
+    await openRow(wrapper).trigger("click");
+    expect(push).toHaveBeenCalledWith({
+      name: "all-pictures",
+      query: { overlay: "11", from: "/workflows" },
+    });
   });
 });

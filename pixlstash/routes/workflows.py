@@ -1,11 +1,11 @@
 """The Workflows view: the library list, the cards, and what the owner writes.
 
-**The list opens at topology level** (workflow implementation plan §F1, design
-`DECISIONS.md`). A topology is the graph alone; the recipes filed under it are
-the same graph bound to different models, and they are the row's *expansion*
-rather than rows of their own. On the owner's library that is ~192 rows instead
-of ~617, and it is the difference between a list somebody reads and a list
-somebody scrolls.
+**The view opens at card level** (workflow implementation plan §F1, design
+`DECISIONS.md`). A card is one workflow as the owner thinks of it; the recipes
+filed under it are the same graph bound to different models, and they are the
+card's *variants* rather than cards of their own. On the owner's library that
+is ~192 cards instead of ~617 rows. B9 (#1410) retired the topology list that
+used to hold `GET /workflows`, and the grid took the route.
 
 **Two databases, no join.** The rows live in the hub and are content-addressed;
 the counts live in whichever vault is attached. Nothing here crosses that
@@ -16,9 +16,9 @@ a workflow this machine does not have. That is the arrangement
 detached library still lists correctly against a hub that has the recipes.
 
 **Every route here is ``OWNER_ONLY``, and that is not the default speaking.**
-``topology_activity`` counts every kept picture in the vault, so handing it to a
-picture-, set- or project-scoped token would disclose the size of the whole
-library one workflow at a time. The same goes for the picture ids the rail's
+The card counts are read across every kept picture in the vault, so handing
+one to a picture-, set- or project-scoped token would disclose the size of the
+whole library one workflow at a time. The same goes for the picture ids the rail's
 tiles are made of. Declared in ``pixlstash/authz/registry.py``, never inline.
 They also refuse remote plaintext under ``require_ssl``, like the model-shelf
 reads that name the same model files.
@@ -52,7 +52,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, StrictBool, ValidationError, field_validator
 
 from pixlstash.hub.workflow_card_reads import (
     asset_names,
@@ -78,17 +78,11 @@ from pixlstash.hub.workflow_card_writes import (
 )
 from pixlstash.hub.workflow_cards import effective_stack_keys
 from pixlstash.hub.workflows import (
-    adapter_slots_by_topology,
-    assets_by_topology,
     assets_for_topology_recipes,
     forgotten_asset_counts,
     get_document,
-    model_ghost_names,
-    picture_ghosts_by_topology,
     recipe_exists,
     recipes_for_topology,
-    topology_exists,
-    topology_index,
     unvouched_model_values,
 )
 from pixlstash.pixl_logging import get_logger
@@ -96,8 +90,10 @@ from pixlstash.services.a1111_recipe import reduce_a1111
 from pixlstash.services.comfyui_recipe_service import (
     MAX_SEED_64,
     apply_adapter,
+    apply_model_swap,
     apply_seeds,
     detect_lora_targets,
+    detect_model_targets,
     detect_seed_targets,
     insert_adapter,
     plan_lora_insertion,
@@ -115,6 +111,7 @@ from pixlstash.services.workflow_card_service import (
     read_grid,
 )
 from pixlstash.services import saved_recipe_service
+from pixlstash.services.model_shelf_service import model_name_aliases
 from pixlstash.services.workflow_events import announce_changed_workflows
 from pixlstash.routes.comfyui import (
     MAX_RUNS_PER_REQUEST,
@@ -143,9 +140,7 @@ from pixlstash.services.workflow_library_service import (
     read_card_picture_ids,
     read_instance_hashes,
     read_kept_pixel_shas,
-    read_library,
     read_recipe_activity,
-    read_topology_picture_ids,
     read_variant_picture_counts,
     stack_for_picture,
 )
@@ -198,64 +193,6 @@ class WorkflowVariant(BaseModel):
     forgotten_models: int = Field(
         0, description="Models this recipe loads whose names were forgotten."
     )
-
-
-class WorkflowSummary(BaseModel):
-    """One row of the list: a topology, and what this library made with it.
-
-    ``assets`` is the **set** of files this topology's variants reach for, not a
-    list per variant, so a family of 159 character LoRAs contributes 159 names
-    and not 159 copies of its checkpoint.
-
-    ``adapter_slots`` is the other half of that, and the two must not be
-    confused: it is how many adapters **one run** loads, which the set cannot
-    answer. A caller describing the row from ``len(assets)`` alone would say
-    that family loads 159 adapters at once.
-    """
-
-    topology_hash: str
-    hash_version: str
-    node_count: int
-    first_seen_at: str
-    variants: int
-    pictures: int = 0
-    last_used: str | None = None
-    assets: list[WorkflowAsset] = Field(default_factory=list)
-    adapter_slots: int = 0
-    forgotten_models: int = Field(
-        0,
-        description=(
-            "Models one variant loads whose names were forgotten: the most any "
-            "variant has, for the reason ``adapter_slots`` is a maximum."
-        ),
-    )
-    ghosts: int = Field(
-        0, description="Picture ghosts the active library holds for this workflow."
-    )
-    model_ghosts: int = Field(
-        0,
-        description="Model names in ``assets`` for models no longer on the shelf.",
-    )
-
-
-class WorkflowScan(BaseModel):
-    """How far the extraction pass has read, so an empty list can say why.
-
-    Three of the four states the list has to survive are "correct and nearly
-    empty" (design `States.dc.html`), and the list alone cannot tell them apart.
-    ``scanned == 0`` is *not looked yet*, ``scanned < pictures`` is *looking*,
-    and equal-with-nothing-listed is *looked, and there is genuinely nothing*.
-    """
-
-    pictures: int
-    scanned: int
-
-
-class WorkflowLibrary(BaseModel):
-    """``GET /workflows``: the whole list, plus the state it was read in."""
-
-    scan: WorkflowScan
-    workflows: list[WorkflowSummary]
 
 
 class WorkflowGraph(BaseModel):
@@ -370,6 +307,50 @@ class WorkflowDefault(BaseModel):
     provenance: str
 
 
+class WorkflowCover(BaseModel):
+    """One picture of a card's cover strip: where to load it, and how to crop it.
+
+    ``url`` is API-relative (``/pictures/thumbnails/{id}.webp?v=…``), so a
+    consumer prefixes the API base and appends the share token itself.
+
+    The rest is the stored face-weighted SQUARE rectangle within that bitmap,
+    under the same names ``GET /pictures/thumbnails/batch`` serves it by, so
+    ``utils/squareCrop.js`` reads a cover with no mapping layer. A cover cell
+    is not square (6:5, 4:5, 3:5 on a card), so the client fits the cell's
+    ratio around this rectangle's centre rather than using it verbatim.
+
+    **Every crop field is nullable**, because a picture keeps them NULL until
+    it has been processed. A cover with no rectangle is cropped the way it is
+    today, ``object-fit: cover`` anchored top centre — the fallback is a
+    requirement, not a nicety (#1465).
+
+    They are five independent columns rather than one optional block, so a
+    client decides on ``square_crop_x``/``_y``: ``render_thumbnail`` writes the
+    three crop values together, but nothing here enforces that, and a row
+    carrying an origin without a ``side`` is answered by deriving
+    ``min(width, height)`` — which is what the square-mode grid already does
+    (``squareCropParams``).
+    """
+
+    url: str
+    picture_id: int = Field(
+        description=(
+            "The picture this cover draws, so a client can OPEN it (#1455). "
+            "The id is inside `url` and parsing it back out is a path shape "
+            "rather than an interface. It sits on the cover rather than in a "
+            "`cover_ids` list beside `covers` - which is what it was before "
+            "this model existed - because two lists paired by position are "
+            "two lists that can come apart, and nothing but their "
+            "construction would keep them in step."
+        )
+    )
+    thumbnail_width: int | None = None
+    thumbnail_height: int | None = None
+    square_crop_x: int | None = None
+    square_crop_y: int | None = None
+    square_crop_side: int | None = None
+
+
 class WorkflowCard(BaseModel):
     """One card of the Workflows grid (v1.12 B3).
 
@@ -413,7 +394,7 @@ class WorkflowCard(BaseModel):
             "never sees it set - but one that did has to mark those cards, or "
             "the checkbox silently mixes them into the grid they were kept "
             "out of. **On the detail route it is always the card's own "
-            "state**, with no flag involved: `GET /workflows/cards/{key}` "
+            "state**, with no flag involved: `GET /workflows/{key}` "
             "opens a hidden card by design, which is how it can be unhidden. "
             "`WorkflowCardDetail.hidden` is the same fact beside it."
         ),
@@ -425,8 +406,9 @@ class WorkflowCard(BaseModel):
     rating: float | None = Field(
         None, description="Mean of the stars this card has; null when it has none."
     )
-    covers: list[str] = Field(
-        default_factory=list, description="Thumbnail URLs, up to three, cover first."
+    covers: list[WorkflowCover] = Field(
+        default_factory=list,
+        description="Up to three cover pictures, the cover first.",
     )
     stack_size: int = 1
     saved_recipe_count: int = 0
@@ -496,7 +478,7 @@ class WorkflowCard(BaseModel):
 
 
 class WorkflowCards(BaseModel):
-    """``GET /workflows/cards``: the grid, and what it left out.
+    """``GET /workflows``: the grid, and what it left out.
 
     ``one_offs`` and ``hidden`` are counts rather than rows on purpose: both
     sets are excluded from ``cards``, and the view offers them as a way back in
@@ -509,7 +491,7 @@ class WorkflowCards(BaseModel):
 
 
 class WorkflowCardDetail(BaseModel):
-    """``GET /workflows/cards/{workflow_key}``: one card opened."""
+    """``GET /workflows/{workflow_key}``: one card opened."""
 
     card: WorkflowCard
     notes: str | None = None
@@ -807,18 +789,40 @@ class RunRequest(BaseModel):
     # NO `inputs` field. A card's picture-input setup is READ here - a fixed
     # input whose picture has gone is `fixed_input_deleted` - but nothing
     # FILLS one yet, because filling it means uploading pictures into
-    # ComfyUI's input folder, which is the whole i2i path the shipped
-    # `/comfyui/workflows/{name}/run` already owns. Taking the field and
-    # ignoring it would be worse than not offering it: a caller would send a
-    # picture and get a run that never read it.
+    # ComfyUI's input folder. `/comfyui/workflows/{name}/run` owned that path
+    # and #1410 retired it, so **nothing in the product fills a picture input
+    # by mode today**; #1457 tracks this route learning to, and
+    # `comfyui_service._upload_image_to_comfyui` is held unused for it. Taking
+    # the field and ignoring it would be worse than not offering it: a caller
+    # would send a picture and get a run that never read it.
 
     # A new run is a new picture, NOT a variant of the one it was made from
     # (v1.12 B7). The shipped run routes stack by default and this one does
     # not: those replay one picture's own recipe, where the output genuinely
     # is another take of that picture, while this runs a card and the pictures
     # that named it are its source rather than its subject.
+    @field_validator("picture_ids")
+    @classmethod
+    def _one_run_per_picture(cls, value: list[int]) -> list[int]:
+        """Drop repeats, keeping first-seen order.
+
+        The retired `run_i2i` de-duplicated its `picture_ids` (`_int_list`) and
+        this route grouped whatever it was handed, so `[5, 5]` put picture 5 in
+        a group twice. It never multiplied the submissions - `count` governs
+        those - but the group REPORTED covering a picture twice, which is a
+        wrong answer to "what would this run", and the pre-flight and the run
+        share this body.
+        """
+        return list(dict.fromkeys(value))
+
     stack: bool = False
-    allow_unchecked: bool = False
+    # `StrictBool`, not `bool`: consent to running a graph nobody could inspect
+    # is the CWE-829 control (review finding R3b), and a lax cast reads `"yes"`,
+    # `"on"`, `"y"` and `1` as an acknowledgement the owner never gave - `"false"`
+    # included, since every non-empty string is truthy. The route #1410 retired
+    # required the literal JSON `true` (`payload.get(...) is True`); this is the
+    # same rule, declared instead of hand-written.
+    allow_unchecked: StrictBool = False
     client_id: str | None = Field(None, max_length=MAX_LABEL_LENGTH)
 
 
@@ -836,6 +840,12 @@ class RunGroup(BaseModel):
     picture_ids: list[int] = Field(default_factory=list)
     runs: int = 0
     reasons: list[dict] = Field(default_factory=list)
+    # A model loaded from a different file than the graph names, because the copy
+    # it names is gone and another copy of the same bytes is not (#1439). Never
+    # silent: a run that quietly loaded a different file makes its own lineage a
+    # lie, so it is reported here on the pre-flight and on the run alike, and
+    # logged. The stored recipe keeps the name it recorded.
+    substitutions: list[dict] = Field(default_factory=list)
 
 
 class RunPreflight(BaseModel):
@@ -943,20 +953,34 @@ def _assets(rows) -> list[WorkflowAsset]:
     ]
 
 
-def _cover_urls(covers) -> list[str]:
-    """Thumbnail URLs for a card's cover strip, cache-busted per bitmap.
+def _covers(covers) -> list[WorkflowCover]:
+    """A card's cover strip: a cache-busted URL plus its stored crop rectangle.
 
     The same URL and the same cache key the grid's own tiles use
     (``routes/pictures/_thumbnails.py``), so a cover the browser already holds
     is not fetched twice and a regenerated bitmap is not served stale.
+
+    The crop rectangle rides along rather than being fetched per cover: the
+    ranked query already reads this row, so the three columns cost nothing
+    beyond the bytes (#1465).
     """
-    urls = []
+    strip = []
     for cover in covers:
         version = ImageUtils.thumbnail_cache_version(
             cover.thumbnail_width, cover.thumbnail_height, cover.orientation
         )
-        urls.append(f"/pictures/thumbnails/{cover.picture_id}.webp?v={version}")
-    return urls
+        strip.append(
+            WorkflowCover(
+                url=f"/pictures/thumbnails/{cover.picture_id}.webp?v={version}",
+                picture_id=cover.picture_id,
+                thumbnail_width=cover.thumbnail_width,
+                thumbnail_height=cover.thumbnail_height,
+                square_crop_x=cover.square_crop_x,
+                square_crop_y=cover.square_crop_y,
+                square_crop_side=cover.square_crop_side,
+            )
+        )
+    return strip
 
 
 # The last resort, when a card has nothing identifying at all.
@@ -1195,7 +1219,7 @@ def _card(figure, defaults=()) -> WorkflowCard:
         differs_by=figure.differs_by,
         picture_count=figure.pictures,
         rating=figure.rating,
-        covers=_cover_urls(figure.covers),
+        covers=_covers(figure.covers),
         stack_size=figure.stack_size,
         saved_recipe_count=figure.saved_recipes,
         defaults=[
@@ -1281,117 +1305,6 @@ def create_router(server) -> APIRouter:
         return hub
 
     @router.get(
-        "/workflows",
-        summary="List workflows",
-        description=(
-            "Every workflow topology this machine knows, with how many of the "
-            "current library's pictures each accounts for. Opens at topology "
-            "level; the recipes under one topology are its variants."
-        ),
-        response_model=WorkflowLibrary,
-    )
-    def list_workflows(request: Request):
-        server.auth.ensure_secure_when_required(request)
-        hub = _hub()
-        topologies = topology_index(hub)
-        assets = assets_by_topology(hub)
-        slots = adapter_slots_by_topology(hub)
-        forgotten = forgotten_asset_counts(hub)
-        ghost_names = model_ghost_names(hub)
-        library_uuid = getattr(server.vault, "library_uuid", None)
-        ghosts = picture_ghosts_by_topology(hub, library_uuid) if library_uuid else {}
-        activity, progress = read_library(server.vault)
-
-        workflows = []
-        for row in topologies:
-            seen = activity.get(row["topology_hash"])
-            row_assets = assets.get(row["topology_hash"], [])
-            workflows.append(
-                WorkflowSummary(
-                    topology_hash=row["topology_hash"],
-                    hash_version=row["hash_version"],
-                    node_count=row["node_count"],
-                    first_seen_at=row["first_seen_at"],
-                    variants=row["variant_count"],
-                    pictures=seen.pictures if seen else 0,
-                    last_used=_iso(seen.last_used) if seen else None,
-                    assets=_assets(row_assets),
-                    adapter_slots=slots.get(row["topology_hash"], 0),
-                    forgotten_models=max(
-                        forgotten.get(row["topology_hash"], {}).values(), default=0
-                    ),
-                    ghosts=ghosts.get(row["topology_hash"], 0),
-                    model_ghosts=len(
-                        {a["normalized_filename"] for a in row_assets} & ghost_names
-                    ),
-                )
-            )
-        return WorkflowLibrary(
-            scan=WorkflowScan(pictures=progress.pictures, scanned=progress.scanned),
-            workflows=workflows,
-        )
-
-    @router.get(
-        "/workflows/{topology_hash}/variants",
-        summary="List a workflow's variants",
-        description=(
-            "The recipes filed under one topology — the same graph bound to "
-            "different models. This is the list row's expansion."
-        ),
-        response_model=list[WorkflowVariant],
-        responses={404: {"description": "This machine has no such topology."}},
-    )
-    def list_variants(request: Request, topology_hash: str):
-        server.auth.ensure_secure_when_required(request)
-        _require_hash(topology_hash, "topology_hash")
-        hub = _hub()
-        if not topology_exists(hub, topology_hash):
-            raise HTTPException(status_code=404, detail="Unknown workflow.")
-        recipes = recipes_for_topology(hub, topology_hash)
-        hashes = [row["structural_hash"] for row in recipes]
-        activity = read_recipe_activity(server.vault, hashes)
-        assets = assets_for_topology_recipes(hub, topology_hash)
-        forgotten = forgotten_asset_counts(hub, topology_hash).get(topology_hash, {})
-        variants = []
-        for row in recipes:
-            seen = activity.get(row["structural_hash"])
-            variants.append(
-                WorkflowVariant(
-                    structural_hash=row["structural_hash"],
-                    node_count=row["node_count"],
-                    first_seen_at=row["first_seen_at"],
-                    pictures=seen.pictures if seen else 0,
-                    last_used=_iso(seen.last_used) if seen else None,
-                    assets=_assets(assets.get(row["structural_hash"], [])),
-                    forgotten_models=forgotten.get(row["structural_hash"], 0),
-                )
-            )
-        return variants
-
-    @router.get(
-        "/workflows/{topology_hash}/pictures",
-        summary="Pictures made with a workflow",
-        description=(
-            "The newest kept pictures this library made with one topology, "
-            "newest first. Ids only: the caller already has the thumbnail route."
-        ),
-        response_model=list[int],
-    )
-    def list_workflow_pictures(
-        request: Request,
-        topology_hash: str,
-        limit: int = Query(
-            6,
-            ge=1,
-            le=MAX_SAMPLE_PICTURES,
-            description="How many ids to return, newest first.",
-        ),
-    ):
-        server.auth.ensure_secure_when_required(request)
-        _require_hash(topology_hash, "topology_hash")
-        return read_topology_picture_ids(server.vault, topology_hash, limit)
-
-    @router.get(
         "/workflows/recipes/{structural_hash}/graph",
         summary="A recipe's stored graph",
         description=(
@@ -1420,20 +1333,16 @@ def create_router(server) -> APIRouter:
         return WorkflowGraph(structural_hash=structural_hash, document=document)
 
     # ── The cards (v1.12 B3) ────────────────────────────────────────────────
-    # Under `/workflows/cards` rather than on `/workflows` itself, because the
-    # shipped topology list keeps working until F1b swaps the route. The detail
-    # and picture routes take the same prefix rather than `/workflows/{key}`:
-    # `/workflows/{key}/pictures` would be permanently shadowed by the
-    # `{topology_hash}/pictures` route above it, and splitting the three across
-    # two prefixes to save one segment on the one that would have fitted reads
-    # worse than keeping them together. B9 moves the prefix, not the shape.
+    # On `/workflows` itself since B9 (#1410) retired the topology list that
+    # used to hold the prefix. The detail and picture routes are
+    # `/workflows/{workflow_key}` and `/workflows/{workflow_key}/pictures`.
     #
     # The payload is `frontend/src/utils/workflowCard.js`'s documented card,
     # which is already merged and already has components reading it; see the
     # `WorkflowCard` model.
 
     @router.get(
-        "/workflows/cards",
+        "/workflows",
         summary="The Workflows grid",
         description=(
             "Every workflow card this machine holds, in cover-rank order, one "
@@ -1474,7 +1383,7 @@ def create_router(server) -> APIRouter:
         )
 
     @router.get(
-        "/workflows/cards/{workflow_key}",
+        "/workflows/{workflow_key}",
         summary="One workflow card",
         description=(
             "A card opened: its variants, and the value each featured "
@@ -1518,7 +1427,7 @@ def create_router(server) -> APIRouter:
         )
 
     @router.get(
-        "/workflows/cards/{workflow_key}/pictures",
+        "/workflows/{workflow_key}/pictures",
         summary="Pictures made with a card",
         description=(
             "The newest kept pictures made by any variant of one card, newest "
@@ -1553,7 +1462,7 @@ def create_router(server) -> APIRouter:
     # Every one of these emits `CHANGED_WORKFLOWS`, which is a "look again"
     # signal and not a card: the counts, covers and stacks a card shows are
     # computed per request over the whole vault, so the client re-reads
-    # `GET /workflows/cards` rather than trusting what a write carried back.
+    # `GET /workflows` rather than trusting what a write carried back.
 
     def _announce(request: Request, keys, reason: str) -> None:
         """Tell every other tab which cards to look at again, and why."""
@@ -2395,6 +2304,11 @@ def create_router(server) -> APIRouter:
             pictures = [pid for _, ids, _ in groups for pid in ids]
             groups = [(target, pictures, [])]
 
+        # Read once for the whole request, and only when there is a ComfyUI to
+        # verify a swap against: two shelf scans per group would be two scans of
+        # `model` and `model_file` for an answer that cannot change mid-request.
+        aliases = model_name_aliases(hub) if object_info is not None else {}
+
         planned: list[RunGroup] = []
         submittable: list[tuple[dict, RunGroup]] = []
         for workflow_key, picture_ids, reasons in groups:
@@ -2488,6 +2402,32 @@ def create_router(server) -> APIRouter:
                         "seed_mode 'new' or 'fixed'."
                     ),
                 )
+
+            # Before `judge`, because the whole point is that the graph it
+            # judges is the graph that will be submitted: a swap applied after it
+            # would be a substitution nothing verified, and one reported as a
+            # missing model the owner then cannot find (#1439). Applied to the
+            # copy being submitted and never written back to the stored recipe,
+            # whose filenames are the picture's provenance.
+            if object_info is not None:
+                group.substitutions = apply_model_swap(
+                    graph,
+                    detect_model_targets(graph, object_info),
+                    aliases,
+                    object_info,
+                )
+                for swap in group.substitutions:
+                    logger.info(
+                        "[workflows] Card %s loads %s in place of %s on node %s "
+                        "(%s.%s): the same model, from the copy this shelf still "
+                        "has.",
+                        workflow_key,
+                        swap["now"],
+                        swap["was"],
+                        swap["node_id"],
+                        swap["class_type"],
+                        swap["field"],
+                    )
 
             judged, _preflight = run_service.judge(
                 graph,
@@ -2598,7 +2538,11 @@ def create_router(server) -> APIRouter:
             "graph at run time and never written back into it. New runs are "
             "NOT stacked with their source unless stack: true. A missing model "
             "blocks the whole batch. See /workflows/run/preflight for the "
-            "reason codes."
+            "reason codes. allow_unchecked consents to running a graph the "
+            "server could not inspect and must be the literal JSON true: any "
+            "other spelling is a 422, and the camelCase allowUnchecked the "
+            "retired run_recipe also took is not a field here, so sending it "
+            "consents to nothing."
         ),
         response_model=RunResult,
     )
