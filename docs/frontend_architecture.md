@@ -3907,9 +3907,13 @@ and at the pointer with them.
 - **`Keep one copy…` is the per-copy delete (#1439)**, and the one destructive
   verb here that is NOT in the danger treatment: it removes a redundant copy and
   keeps the model, which is the opposite of what the red beside it is for. It is
-  in the row context menu only, gated on `mergeable` — one row whose own `copies`
+  gated on `mergeable` — one row, **not a collapsed run**, whose own `copies`
   count (the store's, off the model's whole `locations`, because the folder axis
-  narrows a draw to one of them) is above one. Listed always and disabled with
+  narrows a draw to one of them) is above one. A folded stack satisfies `single`
+  and carries the *cover's* count, so without the `members` check the verb would
+  be offered on a whole run and act on one file of it while the pill said six. It
+  is drawn wherever `VerbMenu` is — the row context menu and the `⋯` overflow —
+  because the gate is `mergeable` rather than `single`. Listed always and disabled with
   its reason, like the two run verbs: a reader whose shelf shows no duplicates is
   the one who most needs to learn the verb exists.
   A removed copy is drawn as itself, not as a fault: `locationState` reports
@@ -3928,9 +3932,26 @@ and at the pointer with them.
   so the refusal and the ComfyUI warning are in front of the reader while they
   decide instead of in the receipt once the bytes have gone — which also means
   the gates are the server's rather than a second implementation of them here.
-  The confirm waits for that answer AND is disabled by a refusal in it: a live
-  button under "that copy is not on the disk any more" invites the reader to
-  press it and read the same sentence back as a failure. And the **ComfyUI warning has two
+  The confirm waits for that answer, is disabled by a refusal in it (a live
+  button under "that copy is gone" invites the reader to press it and read the
+  same sentence back as a failure), and **is disabled when the dry run does not
+  answer at all** — failing open there would leave the press live with the
+  warning never asked, which is the one thing planning first exists to prevent.
+  Each answer is **matched to the keeper that asked for it**: the radio group is
+  arrow-keyed, so walking the copies dispatches a request each and overlap is the
+  ordinary keyboard path, and the last response to land used to win.
+  The wording is deliberately short. Every sentence a reader has to finish before
+  they know which file gets deleted is a sentence they will skip, so the
+  consequence is also **on each row** ("kept" / "goes to Trash") rather than only
+  in the paragraph above them, the three status lines are **one persistent live
+  region** (a region inserted with its text already in it is announced
+  unreliably), and the confirm is `variant="danger"` like every other confirm in
+  the app that destroys a file — the argument that the model survives and the
+  copy is recoverable is true and still lost, because it left this footer
+  pixel-identical to the Move dialog's, which destroys nothing. Focus is handed
+  back on close, since the context menu this opens from is gone by then and
+  Vuetify only restores an `activatorEl`; `:persistent="working"` stops it being
+  dismissed mid-flight. And the **ComfyUI warning has two
   sentences**, because `keeper_advertised` is two situations: that install lists
   the copy being kept, so a run through PixlStash is put on it and only a graph
   queued inside ComfyUI breaks; or it does not, and nothing can be substituted

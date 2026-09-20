@@ -2760,9 +2760,26 @@ follows from it.
   verbatim, including the refusal of a model with an `unreachable` copy (an
   unplugged drive is not a deletion, and the shelf cannot know whether the copy
   on it is one of the two being reduced to one), `_contained_path` containment,
-  `<stem>_samples/` removal under the same contents test, the same
-  `trash_unavailable`/`partly_deleted`/`delete_failed` reporting, and the same
-  `SHELF_IO_LOCK` slot.
+  the same `trash_unavailable`/`partly_deleted`/`delete_failed` reporting, and the
+  same `SHELF_IO_LOCK` slot — which the ComfyUI read is deliberately **outside**,
+  because a 15 s-per-phase HTTP call inside it refuses every move, import, add and
+  delete on the machine for the duration, with a sentence about a move that is not
+  running.
+- **A `<stem>_samples/` directory does NOT go with the copy**, which is the one
+  step of the delete this route drops. That call is licensed by the model going
+  with its previews — the directory is then an orphan no route lists, and one that
+  refuses the owner's whole re-import of that run. Here the model survives, so a
+  run's previews are still the previews of a model on the shelf; and the copy
+  carrying them is usually the *imported* one, which is exactly the copy somebody
+  tidying a folder removes. Destroying them would be a loss the gesture never
+  asked for, and `permanent=true` would `rmtree` them. The cost is the re-import
+  refusal the delete avoids, which is visible and recoverable by hand; this is
+  not. `_warn_about_samples` logs the directory it left, so a refusal days later
+  is traceable to the merge.
+- **A partial failure records the copies that did go.** They are gone either way,
+  and leaving them `present` would draw the owner a broken row for a file they
+  successfully removed — and lose, for exactly the copies that were destroyed, the
+  record the whole design rests on.
 - **`dry_run=true` plans it and removes nothing**, through the same planner. It
   exists so the client's confirmation is built on the server's own answer rather
   than a second implementation of these gates — and above all so the ComfyUI
