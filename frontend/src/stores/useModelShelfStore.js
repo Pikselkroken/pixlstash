@@ -1,4 +1,4 @@
-import { computed, onScopeDispose, reactive, ref } from "vue";
+import { computed, onScopeDispose, reactive, ref, watch } from "vue";
 import { defineStore } from "pinia";
 import { clearModelIcons, setModelIcon } from "../api/modelIcons";
 import { mergeModelCopies } from "../api/modelFiles";
@@ -67,20 +67,32 @@ const VIEW_KEY = "pixlstash:modelShelfView";
 /**
  * Bumped when the shape below changes; a blob from another `v` is discarded.
  *
- * Bumped to 2 for #1438, where `groupBy` changed DEFAULT rather than shape:
- * every blob written before this carries `groupBy: "none"` whether anyone chose
- * it or not, so reading them per field would leave the new default reaching only
- * people who had never opened the shelf. Same trade `FILTERS_SCHEMA_VERSION`
- * documents.
+ * Bumped to 2 for #1438, where `groupBy` changed DEFAULT rather than shape - and
+ * **a version this file recognises rather than one it discards**, which is the
+ * distinction worth keeping. Every blob written under 1 carries
+ * `groupBy: "none"` whether anyone chose it or not, so the new default has to
+ * reach people who already use the shelf; but nothing else in the blob went
+ * stale, and the first version of this change threw the lot away because that is
+ * what a bump conventionally means here. It cost every existing reader their
+ * dragged column widths, their collapsed groups on five axes and their sort, for
+ * a change to one field (#1479 review).
  *
- * **The cost is the WHOLE blob, once.** `storedView` and `storedCollapsed` both
- * fall back whole on a mismatch, so this also forgets the dragged column widths,
- * the collapsed groups on every axis and `folderLayout` - not only the sort. Say
- * that at its real size wherever it is described: a reader who has spent time
- * sizing the Name column deserves to know it is going, and the honest figure is
- * what makes the next person weigh a bump rather than reach for one.
+ * So {@link VIEW_MIGRATIONS} names the fields a version is not allowed to carry
+ * forward, and `storedView` reads every other field out of an older blob exactly
+ * as it reads a current one. A future bump that really is a shape change still
+ * discards: leave its version out of that table and it falls through to the
+ * defaults whole.
  */
 const VIEW_SCHEMA_VERSION = 2;
+
+/**
+ * Per stored version, the `view` fields a read must NOT take from it.
+ *
+ * A blob at version 1 predates the set grid, so its `groupBy` is not evidence of
+ * a choice - `none` was the only thing it could say. Everything else it holds is
+ * still exactly what the reader set.
+ */
+const VIEW_MIGRATIONS = { 1: ["groupBy"] };
 
 /**
  * Ceiling on remembered collapsed groups, per axis, oldest dropped.
@@ -732,9 +744,16 @@ function storedFilters() {
 function storedView() {
   const parsed = readStored(VIEW_KEY);
   const view = defaultView();
-  // A blob an older build wrote is discarded whole rather than half-applied.
-  if (!parsed || parsed.v !== VIEW_SCHEMA_VERSION) return view;
-  if (GROUP_BY_KEYS.includes(parsed.groupBy)) view.groupBy = parsed.groupBy;
+  if (!parsed) return view;
+  // A blob from a version this build does not know is discarded whole rather
+  // than half-applied. One it DOES know is read field by field, minus whatever
+  // that version is not allowed to carry forward.
+  const stale =
+    parsed.v === VIEW_SCHEMA_VERSION ? [] : VIEW_MIGRATIONS[parsed.v];
+  if (!stale) return view;
+  if (!stale.includes("groupBy") && GROUP_BY_KEYS.includes(parsed.groupBy)) {
+    view.groupBy = parsed.groupBy;
+  }
   // Read per field rather than gated behind a schema bump: a blob written
   // before the layout choice existed is still a valid remembered sort, and
   // bumping the version to add one field would throw that away for everyone.
@@ -770,7 +789,13 @@ function storedCollapsed() {
   const parsed = readStored(VIEW_KEY);
   const collapsed = {};
   for (const axis of GROUP_BY_KEYS) collapsed[axis] = new Set();
-  if (!parsed || parsed.v !== VIEW_SCHEMA_VERSION) return collapsed;
+  // Same rule as `storedView`: a known older version is read, an unknown one is
+  // discarded. What a reader collapsed under `Base model` did not stop being
+  // true because the default axis changed.
+  if (!parsed) return collapsed;
+  if (parsed.v !== VIEW_SCHEMA_VERSION && !VIEW_MIGRATIONS[parsed.v]) {
+    return collapsed;
+  }
   for (const axis of GROUP_BY_KEYS) {
     const keys = parsed.collapsed?.[axis];
     if (!Array.isArray(keys)) continue;
@@ -1526,7 +1551,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * `modelsBehind` already use for the same reason.
    */
   const shownModelIds = computed(
-    () => new Set(visibleRows.value.flatMap((row) => row.memberIds ?? [row.id])),
+    () =>
+      new Set(visibleRows.value.flatMap((row) => row.memberIds ?? [row.id])),
   );
 
   /**
@@ -1583,6 +1609,24 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   function toggleSet(key) {
     openSetKey.value = openSetKey.value === key ? "" : key;
   }
+
+  /**
+   * Forget an open stack that no longer exists.
+   *
+   * **A key is not a stack.** Changing the fold re-seeds every stack and
+   * `checkpoint` re-keys them entirely, so an open key can survive the card it
+   * named - and then survives a `groupBy` switch and a post-scan refetch too,
+   * silently reopening the moment some later fold happens to mint the same key
+   * (#1479 review). A `Show` tick that hides a stack's every member does the
+   * same. Reconciled here rather than in the grid because the key lives here and
+   * the grid is not the only thing that can change what it names.
+   */
+  watch(setStacks, (stacks) => {
+    if (!openSetKey.value) return;
+    if (!stacks.some((stack) => stack.key === openSetKey.value)) {
+      openSetKey.value = "";
+    }
+  });
 
   /**
    * What one model has been seen beside, ranked by the recipes backing each.

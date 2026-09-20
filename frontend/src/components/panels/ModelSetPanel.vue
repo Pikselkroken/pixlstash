@@ -19,7 +19,10 @@
 
     <div class="msp__header" role="row" aria-level="2">
       <div role="gridcell">
-        <div class="msp__bar" role="toolbar" :aria-label="`${name} stack`">
+        <!-- No `role="toolbar"`: the bar opens with three runs of static text
+             and holds two buttons, and a toolbar promises a group of controls
+             with its own arrow-key model. The buttons name themselves. -->
+        <div class="msp__bar">
           <span class="msp__name">{{ name }}</span>
           <span class="msp__count num">{{ countLabel }}</span>
           <!-- What a card IS, said once where the reader has just opened one:

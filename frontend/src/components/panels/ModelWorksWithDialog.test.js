@@ -189,6 +189,83 @@ describe("a model no recipe names", () => {
   });
 });
 
+describe("the two shapes it is handed", () => {
+  // A SET MEMBER carries `name` as a string and `kind` as the file kind. A SHELF
+  // ROW carries `name` as `modelName`'s `{text, state}` pair and `kind` as the
+  // adapter's algorithm, with the file kind under `file_kind`. Every test above
+  // fabricates the first, which is why binding `model.name` straight into the
+  // heading shipped a title rendered as JSON from the row list - one of the two
+  // entry points the changelog advertises (#1479 review).
+
+  /** A row as `visibleRows` really serves one. */
+  function shelfRow(overrides = {}) {
+    return {
+      id: 2,
+      sha256: "b".repeat(64),
+      file_kind: "vae",
+      kind: null,
+      display_name: "SDXL VAE",
+      filename: "sdxl_vae.safetensors",
+      name: { text: "SDXL VAE", state: "named" },
+      file_size: 334_000_000,
+      ...overrides,
+    };
+  }
+
+  it("titles itself from a shelf row's name pair, never the object", async () => {
+    const wrapper = await mountDialog(shelfRow(), [
+      combination("1,2", [CKPT, VAE], { recipes: 2 }),
+    ]);
+
+    expect(wrapper.find("h2").text()).toBe("SDXL VAE");
+    expect(wrapper.find("h2").text()).not.toContain("state");
+    // And the kind survives: a row has no `kindLabel`, so it comes off
+    // `file_kind` rather than being dropped.
+    expect(wrapper.find(".sub").text()).toContain("VAE");
+    expect(wrapper.find(".sub").text()).toContain("318.5 MB");
+  });
+
+  it("names an adapter row by its ALGORITHM, as its own Kind column does", async () => {
+    // `LoKr`, not the generic "LoRA" every adapter would otherwise get: the
+    // dialog is opened from a row whose Kind cell says `LoKr`, and the two must
+    // not disagree about the same file. A fixture using `lora` here would leave
+    // the branch unreachable, because the generic word is also "LoRA".
+    const wrapper = await mountDialog(
+      shelfRow({
+        file_kind: "adapter",
+        kind: "lokr",
+        display_name: null,
+        name: { text: "Cyanwood Style", state: "derived" },
+      }),
+      [combination("1,2", [CKPT, VAE], { recipes: 1 })],
+    );
+
+    expect(wrapper.find("h2").text()).toBe("Cyanwood Style");
+    expect(wrapper.find(".sub").text()).toContain("LoKr");
+  });
+
+  it("falls back to the filename when a row has no name at all", async () => {
+    const wrapper = await mountDialog(
+      shelfRow({
+        display_name: null,
+        name: { text: "", state: "needs-a-name" },
+      }),
+      [],
+    );
+
+    expect(wrapper.find("h2").text()).toBe("sdxl_vae.safetensors");
+  });
+
+  it("still reads a set member, whose name is a plain string", async () => {
+    const wrapper = await mountDialog({ ...VAE }, [
+      combination("1,2", [CKPT, VAE], { recipes: 2 }),
+    ]);
+
+    expect(wrapper.find("h2").text()).toBe("sdxl_vae");
+    expect(wrapper.find(".sub").text()).toContain("VAE");
+  });
+});
+
 describe("the dialog itself", () => {
   it("is closed with no model, and asks for the read when one arrives", async () => {
     fetchWorkflowSets.mockResolvedValue({ combinations: [], no_set: [] });

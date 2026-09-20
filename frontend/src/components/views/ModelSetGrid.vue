@@ -60,7 +60,7 @@
             :foldable="store.view.fold !== 'none'"
             :gap="COLUMN_GAP"
             @close="closePanel"
-            @unfold="store.setView({ fold: 'none' })"
+            @unfold="unfold"
             @pick="openWorksWith"
           />
 
@@ -106,8 +106,11 @@
       <section v-if="store.noSetRows.length" class="msg__ghost">
         <h3 class="msg__ghost-title">
           <v-icon size="18">mdi-help-circle-outline</v-icon>
-          In no set — {{ store.noSetRows.length.toLocaleString() }}
-          {{ store.noSetRows.length === 1 ? "model" : "models" }}
+          In no set
+          <span class="msg__ghost-count num"
+            >{{ store.noSetRows.length.toLocaleString() }}
+            {{ store.noSetRows.length === 1 ? "model" : "models" }}</span
+          >
         </h3>
         <!-- The exact claim, and no more. "No recipe names them" would be
              wrong: a recipe on this machine may name one from another library,
@@ -293,10 +296,16 @@ const memberRowIds = computed(() =>
 
 function measure() {
   const width = gridEl.value?.clientWidth ?? 0;
-  columns.value = Math.max(
+  const next = Math.max(
     1,
     Math.floor((width + COLUMN_GAP) / (COLUMN_MIN + COLUMN_GAP)),
   );
+  // Written only when it CHANGED. `columns` decides the height, the height can
+  // decide whether the scroller has a scrollbar, and the scrollbar decides
+  // `clientWidth` - so an unconditional write at a boundary width feeds the
+  // observer its own output and can oscillate (#1479 review). The guard breaks
+  // the loop: the same count re-observed is not a change.
+  if (next !== columns.value) columns.value = next;
 }
 
 let observer = null;
@@ -338,6 +347,27 @@ function headFileOf(key) {
   const stack = store.setStacks.find((candidate) => candidate.key === key);
   const head = headModel(stack?.members?.[0] ?? {});
   return head ? { ...head, kindLabel: memberKindLabel(head) } : null;
+}
+
+/**
+ * Stop folding, and keep the reader where they were.
+ *
+ * Changing the fold re-seeds every stack, so the open key can name a card that
+ * no longer exists - the store reconciles that (`openSetKey`) - and the button
+ * that did it unmounts itself, because it only renders while some folding is in
+ * force. Between the two, focus fell to `<body>` (#1479 review). The cursor is
+ * moved deliberately instead: to the card the open stack became, if the unfold
+ * left one under the same key, and otherwise to the first card on the grid.
+ */
+function unfold() {
+  const wasOpen = store.openSetKey;
+  store.setView({ fold: "none" });
+  nextTick(() => {
+    const at = flatRows.value.findIndex(
+      (entry) => entry.kind === "card" && entry.key === wasOpen,
+    );
+    moveCursor(at >= 0 ? at : (firstStop(0, 1) ?? 0));
+  });
 }
 
 function toggle(entry) {
@@ -424,7 +454,28 @@ function moveCursor(index) {
   nextTick(() => rowElement(entry)?.focus());
 }
 
+/**
+ * What a keydown inside the grid must NOT be treated as a grid gesture.
+ *
+ * `onKeyDown` is on the grid, so it sees every press inside it, including the
+ * ones aimed at the panel's own buttons - *Don't fold* and Close, which are real
+ * focusable controls. Unguarded, Enter on *Don't fold* was `preventDefault`ed
+ * and closed the stack instead of pressing the button, while Space still
+ * activated it: the same button answering two keys differently (#1479 review).
+ *
+ * The row itself is the tab stop and is a plain div, so a press the grid IS
+ * meant to own never matches this.
+ */
+function targetOwnsTheKey(event) {
+  return Boolean(
+    event.target?.closest?.(
+      "button, a[href], input, select, textarea, [role='button']",
+    ),
+  );
+}
+
 function onKeyDown(event) {
+  if (targetOwnsTheKey(event)) return;
   const entry = flatRows.value[cursorIndex.value];
   const cols = Math.max(1, columns.value);
   switch (event.key) {
@@ -451,6 +502,19 @@ function onKeyDown(event) {
       // that answer on this screen: the file buttons inside a combination are
       // at `tabindex="-1"` because the grid owns Tab, so without this the
       // dialog was reachable by pointer alone.
+      //
+      // **The head, deliberately, and not every line.** A pointer can click any
+      // file in a combination; a keyboard reaches the one the set is named
+      // after. That is a decision rather than a side effect of the roving cursor
+      // (#1479 review): giving each line its own stop would put four to six tab
+      // stops inside every card, which is the trap the roving cursor exists to
+      // avoid, and a second cursor level inside a card is a keyboard model this
+      // grid does not have. The head is the file a reader is most likely to be
+      // asking about, and the dialog itself then lists every companion - so the
+      // question "what else ran with this set" is answerable from the keyboard
+      // even where "…with this exact line" is not. If that turns out to be the
+      // wrong trade, the fix is a cursor level inside the card, not one more
+      // special key.
       if (entry?.kind === "card" && entry.card.size > 1) {
         store.toggleSet(entry.key);
       } else if (entry?.kind === "card") {
@@ -527,13 +591,26 @@ function onKeyDown(event) {
   border-radius: var(--radius-lg);
 }
 
+/* The shipped section-label recipe - `--text-2xs`, semibold, `--tracking-label`,
+   uppercase, secondary ink - and not `--text-sm` body weight. This heading names
+   a group exactly as the Works with dialog's own headings do, and this PR was
+   using two recipes for one job (#1479 design note). The count stays in
+   sentence case: a figure is not a label. */
 .msg__ghost-title {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   margin: 0;
-  font-size: var(--text-sm);
+  font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.msg__ghost-count {
+  letter-spacing: normal;
+  text-transform: none;
 }
 
 .msg__ghost-note {

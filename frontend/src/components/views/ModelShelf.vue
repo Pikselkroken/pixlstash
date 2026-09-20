@@ -333,14 +333,25 @@
                 :icon="activeFold.icon"
                 chevron
                 :open="foldMenuOpen"
-                aria-haspopup="menu"
+                aria-haspopup="dialog"
                 :aria-expanded="foldMenuOpen"
                 tooltip="How far apart two sets may be and still share a card"
               >
                 <span class="bar-btn-value">{{ activeFold.label }}</span>
               </AppBarButton>
             </template>
-            <div class="tbm shelf-fold-panel">
+            <!-- `aria-haspopup="dialog"` above, not `menu`, for the reason Sort
+                 and Group declare the same: the panel is a `.tbm` div of grouped
+                 toggles, and claiming a menu would promise roving arrow keys
+                 nothing implements.
+
+                 **`v-if` on the body, not just on the menu.** Vuetify keeps
+                 overlay content mounted after the first activation, so the card
+                 counts below - four full folds of every combination - would be
+                 recomputed on every `Show` tick for the rest of the session once
+                 the menu had been opened once (#1479 review). Gated, they are
+                 computed while the reader is looking at them and never again. -->
+            <div v-if="foldMenuOpen" class="tbm shelf-fold-panel">
               <span class="tbm-caret tbm-caret--end"></span>
               <div class="tbm-header">
                 <v-icon size="18" class="tbm-header-icon">mdi-layers</v-icon>
@@ -542,7 +553,7 @@
            still reads `visibleRows`, so Show and the filters keep applying. -->
       <ModelSetGrid
         v-if="isSetGrid && !store.loading && !store.error"
-        @works-with="worksWithModel = $event"
+        @works-with="showWorksWith"
       />
       <p v-else-if="store.loading" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
@@ -1433,10 +1444,7 @@
       />
     </div>
 
-    <ModelWorksWithDialog
-      :model="worksWithModel"
-      @close="worksWithModel = null"
-    />
+    <ModelWorksWithDialog :model="worksWithModel" @close="closeWorksWith" />
     <ShelfEditDialog :verb="editVerb" @close="editVerb = ''" />
     <MergeCopiesDialog
       :open="mergeRow !== null"
@@ -1681,6 +1689,12 @@ const groupMenuOpen = ref(false);
 const foldMenuOpen = ref(false);
 /** The model whose companions the Works with dialog is answering for, or null. */
 const worksWithModel = ref(null);
+// Held raw like `folderInvoker`: a DOM node, not reactive state. `VDialog`
+// restores focus to its own `activatorEl` and this dialog has none - it opens
+// from a prop - so without this, closing it dropped focus to <body> (WCAG
+// 2.4.3). Both openers are transient: the context-menu item unmounts with the
+// menu, and the grid's file button can go with a re-render.
+const worksWithInvoker = shallowRef(null);
 // The toolbar buttons behind the dialogs its left half opens, so focus has a
 // place to come back to however the reader got there. A menu item cannot be
 // that place - it unmounts with the menu.
@@ -2295,6 +2309,16 @@ function shelfOwnsTheKey(event) {
   // confirmation for rows the reader cannot see and `Escape` would silently
   // clear a selection they did not know they still had.
   if (!isShelfTab.value) return false;
+  // **The set grid is the same hazard one axis over, and it is the DEFAULT
+  // screen.** A card there stands for several models and nothing on it is
+  // selectable, so `ShelfSelectionBar` is not floated over it - which means
+  // Ctrl+A would build a selection with no control on screen showing it, and
+  // Delete would then open a real confirmation for rows nobody can see. The
+  // same reasoning as the line above, reached by the axis rather than the tab:
+  // the bar half of it was ported when the grid landed and the keys half was
+  // not (#1479 review). The selection itself survives in the store, so the
+  // keys work again the moment the row list is back.
+  if (isSetGrid.value) return false;
   if (
     moveOpen.value ||
     addSourceOpen.value ||
@@ -3988,10 +4012,29 @@ function foldCountLabel(key) {
  *
  * The selection bar's own verb, so it reads the selection; the grid hands its
  * file up through `@works-with` instead, because a card there is not a row and
- * there is no selection on that screen to read.
+ * there is no selection on that screen to read. Both land on
+ * {@link showWorksWith}, which is where the focus return is remembered - and
+ * the dialog normalises the two row shapes itself, because a shelf row's `name`
+ * is `modelName`'s `{text, state}` pair and a set member's is a string.
  */
 function openWorksWith() {
-  worksWithModel.value = store.selectedRows[0] ?? null;
+  showWorksWith(store.selectedRows[0] ?? null);
+}
+
+/** Open the dialog, remembering what to hand focus back to. */
+function showWorksWith(model) {
+  if (!model) return;
+  worksWithInvoker.value =
+    document.activeElement === document.body ? null : document.activeElement;
+  worksWithModel.value = model;
+}
+
+function closeWorksWith() {
+  const returnTo = worksWithInvoker.value;
+  worksWithModel.value = null;
+  worksWithInvoker.value = null;
+  // The row or the card the reader was on, then the shelf root - never <body>.
+  nextTick(() => restoreFocus(returnTo, rootEl.value));
 }
 
 const activeSort = computed(

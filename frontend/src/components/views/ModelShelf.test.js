@@ -212,6 +212,7 @@ const globalOpts = {
       // Same reason, for the same provider: it wraps `AppDialog`. Its own suite
       // mounts it against the companions payload.
       ModelWorksWithDialog: {
+        name: "ModelWorksWithDialog",
         props: ["model"],
         template: "<div class='ww-stub'>{{ model?.filename }}</div>",
       },
@@ -747,9 +748,7 @@ describe("location state", () => {
     ]);
     useModelShelfStore().setView({ groupBy: "folder" });
     await wrapper.vm.$nextTick();
-    const titles = wrapper
-      .findAll(".shelf-row-file")
-      .map((el) => tip(el));
+    const titles = wrapper.findAll(".shelf-row-file").map((el) => tip(el));
     expect(titles).toEqual([
       "/home/me/models/a.st",
       "/media/me/spare/a.st · not where it was",
@@ -772,9 +771,9 @@ describe("location state", () => {
       }),
     ]);
     await wrapper.find(".shelf-row").trigger("keydown", { key: "ArrowRight" });
-    expect(
-      tip(wrapper.find(".shelf-row--member .shelf-row-file")),
-    ).toBe("/media/me/spare/b.st");
+    expect(tip(wrapper.find(".shelf-row--member .shelf-row-file"))).toBe(
+      "/media/me/spare/b.st",
+    );
   });
 
   it("offers no tooltip at all when every copy has been forgotten", async () => {
@@ -1681,9 +1680,7 @@ describe("selecting rows", () => {
 
     await rowAt(wrapper, 0).trigger("click");
     await wrapper.vm.$nextTick();
-    expect(tip(wrapper.find(".selbar-count"))).toContain(
-      "1 model selected",
-    );
+    expect(tip(wrapper.find(".selbar-count"))).toContain("1 model selected");
   });
 
   it("drops a selected model that the shelf no longer holds", async () => {
@@ -2348,9 +2345,7 @@ describe("selection and drive bands together", () => {
 
     await rows[0].trigger("click");
     await wrapper.vm.$nextTick();
-    expect(tip(wrapper.find(".selbar-count"))).toContain(
-      "1 model selected",
-    );
+    expect(tip(wrapper.find(".selbar-count"))).toContain("1 model selected");
     // The band is a header, not a row: it must not have become selectable.
     expect(wrapper.find(".shelf-band").attributes("role")).not.toBe("option");
   });
@@ -3185,9 +3180,7 @@ describe("the date column", () => {
     let wrapper = await mountShelf([adapter({ added_at: ADDED })]);
     let cell = wrapper.find(".shelf-col--date");
     expect(cell.text()).toBe("30/07/2026");
-    expect(tip(cell)).toBe(
-      `Date added: ${formatUserDate(ADDED, "eu")}`,
-    );
+    expect(tip(cell)).toBe(`Date added: ${formatUserDate(ADDED, "eu")}`);
 
     prefs.dateFormat = "iso";
     wrapper = await mountShelf([adapter({ added_at: ADDED })]);
@@ -3492,8 +3485,18 @@ describe("the thumbnail verb", () => {
     });
     const wrapper = await mountShelf([
       adapter({ id: 1, stack_id: 9, stack_position: 0 }),
-      adapter({ id: 2, sha256: "b".repeat(64), stack_id: 9, stack_position: 1 }),
-      adapter({ id: 3, sha256: "c".repeat(64), stack_id: 9, stack_position: 2 }),
+      adapter({
+        id: 2,
+        sha256: "b".repeat(64),
+        stack_id: 9,
+        stack_position: 1,
+      }),
+      adapter({
+        id: 3,
+        sha256: "c".repeat(64),
+        stack_id: 9,
+        stack_position: 2,
+      }),
     ]);
     const store = useModelShelfStore();
     store.selectVisible();
@@ -3514,7 +3517,9 @@ describe("the thumbnail verb", () => {
     store.toggleSelected(1);
     await wrapper.vm.$nextTick();
     const clear = () =>
-      wrapper.findAll("button").find((b) => b.text().includes("Clear thumbnail"));
+      wrapper
+        .findAll("button")
+        .find((b) => b.text().includes("Clear thumbnail"));
     expect(clear()).toBeUndefined();
 
     store.rows = [adapter({ id: 1, icon_sha256: "a".repeat(64) })];
@@ -3528,7 +3533,10 @@ describe("the thumbnail verb", () => {
     // route has to copy pixels, and the thumbnail is the copy it sends.
     const bytes = new Blob(["webp"], { type: "image/webp" });
     getPictureThumbnailBlob.mockResolvedValue(bytes);
-    setModelIcon.mockResolvedValue({ model_id: 1, icon_sha256: "c".repeat(64) });
+    setModelIcon.mockResolvedValue({
+      model_id: 1,
+      icon_sha256: "c".repeat(64),
+    });
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const store = useModelShelfStore();
     store.toggleSelected(1);
@@ -3580,7 +3588,10 @@ describe("the thumbnail verb", () => {
     // chooser must land the reader back in the picker rather than on a bare
     // shelf, so the picker is closed by a file ARRIVING, never by the chooser
     // opening.
-    setModelIcon.mockResolvedValue({ model_id: 1, icon_sha256: "d".repeat(64) });
+    setModelIcon.mockResolvedValue({
+      model_id: 1,
+      icon_sha256: "d".repeat(64),
+    });
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const store = useModelShelfStore();
     store.toggleSelected(1);
@@ -4335,7 +4346,9 @@ describe("the app-wide toolbar tail", () => {
   it("asks App.vue for Settings and toggles the stats sidebar itself", async () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const sidebar = useSidebarStore();
-    const settings = wrapper.find(".shelf-toolbar button[aria-label='Settings']");
+    const settings = wrapper.find(
+      ".shelf-toolbar button[aria-label='Settings']",
+    );
 
     await settings.trigger("click");
     expect(wrapper.emitted("open-settings")).toHaveLength(1);
@@ -4460,7 +4473,9 @@ describe("Delete", () => {
 
     expect(fetchModelCompanions).toHaveBeenCalledWith([1]);
     const said = confirmSpy.mock.calls[0][0];
-    expect(said).toContain("ae.safetensors ran only with models you are deleting");
+    expect(said).toContain(
+      "ae.safetensors ran only with models you are deleting",
+    );
     expect(said).toContain("clip_l.safetensors is still used by other models");
     expect(deleteModels).not.toHaveBeenCalled();
     wrapper.unmount();
@@ -4478,7 +4493,13 @@ describe("Delete", () => {
 
     await pressDelete();
     await pressDelete();
-    answer({ orphaned: [], shared: [], unknown: [], in_use: [], no_evidence: [] });
+    answer({
+      orphaned: [],
+      shared: [],
+      unknown: [],
+      in_use: [],
+      no_evidence: [],
+    });
     await pressDelete();
 
     expect(fetchModelCompanions).toHaveBeenCalledTimes(1);
@@ -5146,6 +5167,8 @@ async function mountDefaultShelf(rows = [adapter()]) {
 }
 
 describe("the set grid is what the shelf opens on", () => {
+  const rowAt = (wrapper, i) => wrapper.findAll(".shelf-row")[i];
+
   it("draws the grid rather than the row list, with no axis chosen", async () => {
     const wrapper = await mountDefaultShelf();
     const store = useModelShelfStore();
@@ -5160,9 +5183,7 @@ describe("the set grid is what the shelf opens on", () => {
     const store = useModelShelfStore();
 
     const hasFold = () =>
-      wrapper
-        .findAll("button")
-        .some((b) => textOf(b).includes("Fold:"));
+      wrapper.findAll("button").some((b) => textOf(b).includes("Fold:"));
     // The shipped split-button, which is what `Sort` actually is.
     const hasSort = () => wrapper.find(".bar-split-button").exists();
 
@@ -5202,6 +5223,72 @@ describe("the set grid is what the shelf opens on", () => {
     store.setView({ groupBy: "none" });
     await wrapper.vm.$nextTick();
     expect(wrapper.find(".selbar-float").exists()).toBe(true);
+  });
+
+  it("takes the destructive keys away, exactly as the runs tab does", async () => {
+    // **The same hazard one axis over, and this is the DEFAULT screen.** The key
+    // handler is on the WINDOW and the grid renders inside the shelf tab, so with
+    // the tab guard alone Ctrl+A built a selection with no bar on screen to show
+    // it and Delete then opened the real confirmation for cards nobody can point
+    // at. The bar half of the runs-tab precedent was ported when the grid landed
+    // and the keys half was not (#1479 review).
+    const wrapper = await mountDefaultShelf([
+      adapter({ id: 1, sha256: "a".repeat(64) }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+    ]);
+    document.body.appendChild(wrapper.element);
+    const store = useModelShelfStore();
+
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
+    );
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(0);
+
+    // And with a selection made before the switch, Delete is still refused -
+    // the selection survives, which is what makes it safe to keep.
+    store.selectVisible();
+    expect(store.selectedRows).toHaveLength(2);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await wrapper.vm.$nextTick();
+    expect(deleteModels).not.toHaveBeenCalled();
+    expect(store.selectedRows).toHaveLength(2);
+
+    // The keys come back with the row list, like the bar does.
+    store.setView({ groupBy: "none" });
+    await wrapper.vm.$nextTick();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("titles Works with from the row list with a name, not a serialised object", async () => {
+    // A shelf row's `name` is `modelName`'s `{text, state}` pair; a set member's
+    // is a plain string. Bound straight into the heading, the row list's own
+    // entry point rendered the title as JSON - and every dialog test fabricated
+    // a flat object, so the suite never saw the shape the row list sends
+    // (#1479 review).
+    const wrapper = await mountDefaultShelf([
+      adapter({ id: 1, display_name: "Cyanwood Style" }),
+    ]);
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "none" });
+    await wrapper.vm.$nextTick();
+    await rowAt(wrapper, 0).trigger("click");
+
+    wrapper.findComponent({ name: "ShelfSelectionBar" }).vm.$emit("works-with");
+    await wrapper.vm.$nextTick();
+
+    const handed = wrapper
+      .findComponent({ name: "ModelWorksWithDialog" })
+      .props().model;
+    // The ROW is handed over whole - the dialog is what normalises the two
+    // shapes - so this asserts the shape really does reach it.
+    expect(handed.id).toBe(1);
+    expect(handed.name).toMatchObject({ text: "Cyanwood Style" });
+    wrapper.unmount();
   });
 
   it("hands the grid's file to the one Works with dialog", async () => {

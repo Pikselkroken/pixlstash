@@ -3292,11 +3292,16 @@ component Sort by in the same panel has used for its five keys all along.
 `VIEW_SCHEMA_VERSION` went to 2 for that default, not for a shape change: every
 blob written before it carries `groupBy: "none"` whether anybody chose it or not,
 so reading the field per blob would leave the new default reaching only people
-who had never opened the shelf. **The cost is the whole blob, once**, not only
-the sort: `storedView` and `storedCollapsed` both fall back whole on a version
-mismatch, so the dragged column widths, the collapsed groups on every axis and
-`folderLayout` go with it. That is the trade `FILTERS_SCHEMA_VERSION` already
-documents, stated at its real size.
+who had never opened the shelf. **It MIGRATES rather than discarding**, which is
+new: `VIEW_MIGRATIONS` names the fields a given stored version may not carry
+forward — `{1: ["groupBy"]}` — and `storedView` / `storedCollapsed` read every
+other field out of a version-1 blob exactly as they read a current one, so the
+dragged column widths, the collapsed groups on all five axes, `folderLayout` and
+the sort all survive. The first version of this change bumped and discarded, the
+convention here until now, and charged every existing reader their whole
+remembered view for a change to one field. A future bump that really is a shape
+change still discards: leave its version out of that table and it falls through
+to the defaults whole.
 
 `fold` defaults to `one` (`1 file apart`) and is carried in `view` at all times,
 read only under this axis — the same contract `folderLayout` has under `Folder`.

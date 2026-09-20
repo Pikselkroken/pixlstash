@@ -6,14 +6,13 @@
     :aria-label="accessibleName"
     data-testid="model-set-card"
   >
-    <div v-if="card.covers.length" class="msc__cover">
-      <span v-for="i in 3" :key="i" class="msc__pic">
-        <img
-          v-if="card.covers[i - 1]"
-          :src="card.covers[i - 1]"
-          alt=""
-          loading="lazy"
-        />
+    <div
+      v-if="card.covers.length"
+      class="msc__cover"
+      :class="`msc__cover--${card.covers.length}`"
+    >
+      <span v-for="(src, i) in card.covers" :key="i" class="msc__pic">
+        <img :src="src" alt="" loading="lazy" />
       </span>
       <span class="msc__badge msc__badge--end" aria-hidden="true">
         <v-icon size="12">mdi-image-multiple</v-icon
@@ -212,19 +211,42 @@ const accessibleName = computed(() => {
   box-sizing: border-box;
   overflow: hidden;
   display: grid;
-  grid-template-columns: 2fr 1fr;
-  grid-template-rows: 1fr 1fr;
   gap: var(--space-1);
   aspect-ratio: 6 / 5;
+}
+
+/* The tracks follow the COVER COUNT, they are not a fixed 2fr/1fr mosaic with
+   holes in it. A set with two pictures is two cells and one with a single
+   picture fills the box — `WorkflowCard` learned this and the first copy of its
+   geometry here did not, which is the duplication the #1479 review warned about
+   landing as an actual defect rather than a risk.
+
+   **Not extracted into a shared component, and only because of timing:** #1472
+   is open on `WorkflowCard.vue`'s cover code (face-aware cropping), so lifting
+   the mosaic out from under it would conflict with a PR already in review. The
+   extraction is the right end state and wants to happen after that lands. */
+.msc__cover--1 {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+}
+
+.msc__cover--2 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+}
+
+.msc__cover--3 {
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.msc__cover--3 .msc__pic:first-child {
+  grid-row: 1 / 3;
 }
 
 .msc__pic {
   overflow: hidden;
   background: rgb(var(--v-theme-input-background));
-}
-
-.msc__pic:first-child {
-  grid-row: 1 / 3;
 }
 
 .msc__pic img {

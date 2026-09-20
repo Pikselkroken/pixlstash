@@ -1,7 +1,7 @@
 <template>
   <AppDialog
     :open="Boolean(model)"
-    :title="model?.name || 'Works with'"
+    :title="subject.title"
     :subtitle="subtitle"
     size="md"
     @close="emit('close')"
@@ -110,8 +110,16 @@ import { computed, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
-import { formatModelSize } from "../../utils/modelShelf";
-import { recipeCount, setName } from "../../utils/workflowSets";
+import {
+  adapterKindKey,
+  adapterKindLabel,
+  formatModelSize,
+} from "../../utils/modelShelf";
+import {
+  memberKindLabel,
+  recipeCount,
+  setName,
+} from "../../utils/workflowSets";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import ChipRow from "../widgets/ChipRow.vue";
@@ -129,8 +137,16 @@ const SET_CHIPS = 6;
 
 const props = defineProps({
   /**
-   * The model to answer for: `{id, name, kind, file_size}` is enough, so a
-   * shelf row and a set member both serve. Null closes the dialog.
+   * The model to answer for. Null closes the dialog.
+   *
+   * **Two callers, two shapes, and they disagree about two fields** - which is
+   * why {@link subject} normalises rather than this prop promising one of them.
+   * A SET MEMBER carries `name` as a string and `kind` as the file kind; a
+   * SHELF ROW carries `name` as `modelName`'s `{text, state}` pair and `kind` as
+   * the adapter's algorithm, with the file kind under `file_kind`. Bound
+   * straight into the heading, a shelf row rendered its name as JSON (#1479
+   * review): the one entry point the changelog advertises, titled with a
+   * serialised object.
    */
   model: { type: Object, default: null },
 });
@@ -139,6 +155,40 @@ const emit = defineEmits(["close"]);
 
 const store = useModelShelfStore();
 const expanded = ref(false);
+
+/**
+ * The model, in the one shape this screen reads.
+ *
+ * Normalised HERE rather than at each opener: two callers is already one chance
+ * to differ and a third would be another, and the component that renders the
+ * fields is the one that knows what they have to be. `file_kind` is the
+ * discriminator, because it is the field only a shelf row has.
+ */
+const subject = computed(() => {
+  const model = props.model;
+  if (!model) return { title: "Works with", kindLabel: "", size: null };
+  const fromRow = model.file_kind !== undefined;
+  const name =
+    // `modelName`'s pair, a plain string, or neither.
+    (typeof model.name === "object" ? model.name?.text : model.name) ||
+    model.display_name ||
+    model.filename ||
+    "";
+  return {
+    title: name || "Works with",
+    // A set member is asked for its own label first. For a shelf row the
+    // ALGORITHM wins where there is one - `LoKr` rather than the generic word
+    // `memberKindLabel` gives every adapter - because that is what the row's own
+    // Kind column says, and this dialog is opened from that row.
+    kindLabel:
+      model.kindLabel ||
+      (fromRow
+        ? adapterKindLabel(adapterKindKey(model.kind)) ||
+          memberKindLabel({ kind: model.file_kind })
+        : memberKindLabel(model)),
+    size: model.file_size ?? null,
+  };
+});
 
 // Asked for here rather than by the opener, so every entry point gets the same
 // answer and none of them has to remember to load first. Once per session: the
@@ -164,13 +214,11 @@ const shown = computed(() =>
     : answer.value.companions.slice(0, FIRST_FEW),
 );
 
-const subtitle = computed(() => {
-  const parts = [
-    props.model?.kindLabel || "",
-    formatModelSize(props.model?.file_size),
-  ];
-  return parts.filter(Boolean).join(" · ");
-});
+const subtitle = computed(() =>
+  [subject.value.kindLabel, formatModelSize(subject.value.size)]
+    .filter(Boolean)
+    .join(" · "),
+);
 
 const setsLabel = computed(() => {
   const n = answer.value.sets.length;

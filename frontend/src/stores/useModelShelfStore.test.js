@@ -886,6 +886,59 @@ describe("the view is remembered", () => {
     expect(store.view.sortKey).toBe("added_at");
   });
 
+  it("migrates a blob from before the set grid instead of discarding it", () => {
+    // The default of `groupBy` changed, and nothing else in the blob did. A
+    // version 1 blob could only ever say `none`, so that field is not evidence
+    // of a choice and is the one thing not carried forward; the widths, the
+    // collapsed groups, the sort and the folder layout are exactly what the
+    // reader set and survive. The first version of #1438 bumped the version and
+    // threw all of it away for a change to one field.
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({
+        v: 1,
+        groupBy: "none",
+        sortKey: "name",
+        sortDirection: "asc",
+        folderLayout: "alpha",
+        columnWidths: { kind: 120, base: 84, size: 74, date: 96 },
+        collapsed: { base_model: ["sdxl"] },
+      }),
+    );
+
+    const store = useModelShelfStore();
+
+    expect(store.view.groupBy).toBe("workflow_set");
+    expect(store.view.sortKey).toBe("name");
+    expect(store.view.sortDirection).toBe("asc");
+    expect(store.view.folderLayout).toBe("alpha");
+    expect(store.view.columnWidths.kind).toBe(120);
+    store.setView({ groupBy: "base_model" });
+    expect(store.isCollapsed("sdxl")).toBe(true);
+  });
+
+  it("still discards a blob from a version it does not know", () => {
+    // The migration table names the versions this build can read. A future shape
+    // change that leaves itself out of it falls through to the defaults whole,
+    // which is what a bump is for.
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({
+        v: 99,
+        sortKey: "name",
+        columnWidths: { kind: 120 },
+        collapsed: { base_model: ["sdxl"] },
+      }),
+    );
+
+    const store = useModelShelfStore();
+
+    expect(store.view.sortKey).toBe("added_at");
+    expect(store.view.columnWidths.kind).toBe(64);
+    store.setView({ groupBy: "base_model" });
+    expect(store.isCollapsed("sdxl")).toBe(false);
+  });
+
   it("refuses a grouping or sort key it does not recognise", () => {
     window.localStorage.setItem(
       "pixlstash:modelShelfView",
@@ -946,7 +999,7 @@ describe("the column widths", () => {
     window.localStorage.setItem(
       "pixlstash:modelShelfView",
       JSON.stringify({
-        v: 2,
+        v: 1,
         columnWidths: { kind: null, base: "84", size: 90 },
       }),
     );
@@ -993,7 +1046,7 @@ describe("the column widths", () => {
     // layout is: that blob is still a perfectly good remembered sort.
     window.localStorage.setItem(
       "pixlstash:modelShelfView",
-      JSON.stringify({ v: 2, sortKey: "name", sortDirection: "asc" }),
+      JSON.stringify({ v: 1, sortKey: "name", sortDirection: "asc" }),
     );
     const store = useModelShelfStore();
     expect(store.view.sortKey).toBe("name");
@@ -2518,6 +2571,41 @@ describe("the workflow sets", () => {
     expect(store.setStacks).toHaveLength(1);
   });
 
+  it("discards a read the reader has already overtaken", async () => {
+    // The epoch guard. A `force` read fired while an earlier one is in flight
+    // must win whatever order they resolve in - a session reset or a scan is
+    // what fires the second, and landing the stale answer over it puts the
+    // previous credential's or the pre-scan sets back on screen. Deleting the
+    // guard left the whole store suite green (#1479 review).
+    const store = shelfWithASet();
+    await store.fetchRows();
+
+    let releaseFirst;
+    fetchWorkflowSets.mockImplementationOnce(
+      () => new Promise((resolve) => (releaseFirst = resolve)),
+    );
+    const stale = store.loadWorkflowSets();
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        {
+          key: "9",
+          models: [{ id: 1, name: "used.st", kind: "checkpoint" }],
+          recipes: 1,
+          picture_count: 99,
+          covers: [],
+        },
+      ],
+      no_set: [],
+    });
+    await store.loadWorkflowSets({ force: true });
+    // Now let the OVERTAKEN request answer, with the older payload.
+    releaseFirst({ combinations: [], no_set: [] });
+    await stale;
+
+    expect(store.workflowSets.combinations.map((c) => c.key)).toEqual(["9"]);
+    expect(store.setsLoaded).toBe(true);
+  });
+
   it("drops a second read made while the first is still on the wire", async () => {
     // Reachable: the grid asks on mount and the dialog asks when it opens, and
     // each request is a window over every kept picture in the vault.
@@ -2536,9 +2624,24 @@ describe("the workflow sets", () => {
     // claimed no picture recorded it. That is the one outcome the payload is
     // built to prevent.
     listAdapters.mockResolvedValue([
-      adapter({ id: 1, sha256: "a".repeat(64), filename: "cover.st", stack_id: 9 }),
-      adapter({ id: 2, sha256: "b".repeat(64), filename: "step-two.st", stack_id: 9 }),
-      adapter({ id: 3, sha256: "c".repeat(64), filename: "lonely.st", stack_id: 9 }),
+      adapter({
+        id: 1,
+        sha256: "a".repeat(64),
+        filename: "cover.st",
+        stack_id: 9,
+      }),
+      adapter({
+        id: 2,
+        sha256: "b".repeat(64),
+        filename: "step-two.st",
+        stack_id: 9,
+      }),
+      adapter({
+        id: 3,
+        sha256: "c".repeat(64),
+        filename: "lonely.st",
+        stack_id: 9,
+      }),
     ]);
     fetchWorkflowSets.mockResolvedValue({
       combinations: [
@@ -2570,7 +2673,9 @@ describe("the workflow sets", () => {
     await store.fetchRows();
     await store.loadWorkflowSets();
 
-    expect(store.setStacks.map((stack) => stack.card.name)).toEqual(["used.st"]);
+    expect(store.setStacks.map((stack) => stack.card.name)).toEqual([
+      "used.st",
+    ]);
     expect(store.setStacks[0].card.pictures).toBe(12);
     expect(store.noSetRows.map((row) => row.id)).toEqual([2]);
   });

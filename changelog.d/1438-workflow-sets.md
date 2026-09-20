@@ -15,6 +15,6 @@
   `Folder` and `Feature` groupings are all still there under `Group`, and that
   is where you go to rename, move or delete a model: a card stands for several
   files at once, so the shelf's verbs stay with the list of single ones.
-- Changing the default means the shelf forgets how you last left it once — the
-  grouping, the sort, your dragged column widths and any collapsed groups. It
-  happens on the first open after updating and not again.
+- Changing the default resets your grouping once, on the first open after
+  updating. Everything else you had set — the sort, any column widths you had
+  dragged, collapsed groups, the folder layout — is kept.

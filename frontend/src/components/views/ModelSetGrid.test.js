@@ -152,6 +152,26 @@ describe("the cards", () => {
     expect(cards[0].text()).toContain("realvisXL_v5 · sdxl_vae");
   });
 
+  it("lays the cover out for the pictures it has, never leaving a hole", async () => {
+    // `WorkflowCard` learned this once and the first copy of its geometry here
+    // did not: a fixed 2fr/1fr mosaic drawn for three cells leaves an empty box
+    // when a set has one or two pictures (#1479 review).
+    const oneCover = {
+      ...combination("1,2", [CKPT, VAE]),
+      covers: [{ picture_id: 7, url: "/t/7.webp" }],
+    };
+    const { wrapper } = await mountGrid({
+      rows: [row(1, "realvisXL_v5")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [oneCover],
+    });
+
+    const cover = wrapper.find(".msc__cover");
+    expect(cover.classes()).toContain("msc__cover--1");
+    expect(cover.findAll(".msc__pic")).toHaveLength(1);
+    expect(cover.findAll("img")).toHaveLength(1);
+  });
+
   it("says nothing to fold on a card with one combination under it", async () => {
     const { wrapper } = await mountGrid({
       rows: [row(1, "realvisXL_v5")],
@@ -286,7 +306,8 @@ describe("the models no recipe names", () => {
 
     const ghost = wrapper.find(".msg__ghost");
     expect(ghost.exists()).toBe(true);
-    expect(ghost.text()).toContain("In no set — 1 model");
+    expect(ghost.text()).toContain("In no set");
+    expect(ghost.text()).toContain("1 model");
     // The NARROW claim, and no more: `no_set` means no kept picture here was
     // made with them, which is not "no recipe names them" and is not a verdict.
     expect(ghost.text()).toContain("No kept picture in this library was made");

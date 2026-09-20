@@ -792,6 +792,14 @@ def test_workflow_sets_answers_the_owner_and_refuses_a_share_token(shelf_env):
     )
     client = _bearer(shelf_env.server, token)
     assert client.get(f"{API}/pictures").status_code == 200
+    # **Which layer refused, named.** A 403 here is the READ-token belt's
+    # (`auth.py`'s `READ_BLOCKED_GET_PATHS`), which runs ahead of routing - so it
+    # answers the same way for a path that does not exist, and on its own this
+    # assertion would pass against a renamed route. `assert_real_route` is what
+    # makes it a refusal of THIS route rather than of nothing. The gate holds it
+    # independently (proven by mutation, #1479 security review) and
+    # `test_every_shelf_route_is_declared_owner_only` is what pins the tier.
+    assert_real_route(shelf_env.server.api, "GET", "/api/v1/models/workflow-sets")
     assert client.get(f"{API}/models/workflow-sets").status_code == 403
     assert (
         TestClient(shelf_env.server.api).get(f"{API}/models/workflow-sets").status_code
