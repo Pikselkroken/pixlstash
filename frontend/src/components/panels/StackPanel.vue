@@ -134,8 +134,8 @@
           <span class="stack-panel__thumbs">
             <span v-for="i in 3" :key="i" class="stack-panel__thumb">
               <img
-                v-if="member.covers?.[i - 1]"
-                :src="member.covers[i - 1]"
+                v-if="coversOf(member)[i - 1]"
+                :src="coversOf(member)[i - 1]"
                 alt=""
                 loading="lazy"
               />
@@ -241,6 +241,7 @@
 import { computed, nextTick, ref } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 
+import { workflowCoverUrl } from "../../api/workflows";
 import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 import {
   cardAccessibleName,
@@ -318,6 +319,21 @@ const pending = computed(() => {
 });
 
 const toolbarName = computed(() => `${props.name || "Stack"} stack`);
+
+/**
+ * One member's cover URLs, joined the way `WorkflowCard` joins its own.
+ *
+ * `covers` arrives API-RELATIVE (`/pictures/thumbnails/{id}.webp?v=…`) and an
+ * `<img src>` bypasses Axios, so nothing prepends `/api/v1` and nothing
+ * appends the share token. Used verbatim the browser asks the PAGE origin for
+ * a path no route serves and every thumbnail in the list is a broken image —
+ * the bug F1b fixed for the card, which this column reintroduced by reading
+ * the payload directly. `workflowCoverUrl` is the api layer's one spelling of
+ * that join; a second one here is exactly the drift it exists to prevent.
+ */
+function coversOf(member) {
+  return (member.covers ?? []).slice(0, 3).map(workflowCoverUrl);
+}
 
 /**
  * A List row's accessible name, plus the one thing the row adds: its place.

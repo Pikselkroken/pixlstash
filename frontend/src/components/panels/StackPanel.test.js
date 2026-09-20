@@ -27,6 +27,7 @@ vi.mock("vuetify/components", async () => {
 });
 
 import StackPanel from "./StackPanel.vue";
+import { workflowCoverUrl } from "../../api/workflows";
 import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 
 const member = (key, extra = {}) => ({
@@ -171,11 +172,18 @@ describe("StackPanel", () => {
     expect(rows[0].findAll(".stack-panel__thumb")).toHaveLength(3);
     const images = rows[0].findAll("img");
     expect(images).toHaveLength(2);
-    for (const image of images) {
-      expect(image.attributes("alt")).toBe("");
-      expect(image.attributes("src")).toBeTruthy();
-    }
+    for (const image of images) expect(image.attributes("alt")).toBe("");
     expect(rows[1].findAll("img")).toHaveLength(0);
+
+    // **Joined, not the payload path.** `covers` arrives API-relative and an
+    // `<img src>` bypasses Axios, so the raw value asks the PAGE origin for a
+    // path no route serves — every thumbnail a broken image. `toBeTruthy()`
+    // was here and passed on exactly that. Asserted against the api layer's
+    // own helper so this does not become a second spelling of the prefix, and
+    // against the raw value so the helper cannot be a no-op.
+    const raw = MEMBERS[0].covers[0];
+    expect(images[0].attributes("src")).toBe(workflowCoverUrl(raw));
+    expect(images[0].attributes("src")).not.toBe(raw);
   });
 
   it("keeps the cover's union out of the row's name as well as its cells", async () => {

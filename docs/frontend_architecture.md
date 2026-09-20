@@ -1607,7 +1607,11 @@ watcher the model shelf uses. See §9.1b for the destination itself.
   rating, ⋯ — over a header row of `columnheader`s carrying `.section-label`.
   The trio is three cells always and an `<img>` only where there is a picture,
   so one picture does not stretch across the box and an empty slot is not a
-  broken-image glyph.
+  broken-image glyph. **Its `src` goes through `workflowCoverUrl`**, like the
+  card's own: `covers` arrives API-relative and an `<img src>` bypasses Axios,
+  so the raw value asks the page origin for a path no route serves. Reading
+  the payload directly here reintroduced the broken covers F1b had just fixed
+  for the card, and a `toBeTruthy()` on the `src` passed straight over it.
   **One `grid-template-columns`, declared on the header and the rows alike**:
   each row is its own grid container, so `auto` tracks would be measured per
   row and the columns would step sideways down the list. The checkpoint column
