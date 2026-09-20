@@ -1299,6 +1299,64 @@ class TestModelSwap:
             "an unverified name was written into the graph"
         )
 
+    def test_a_mixed_case_filename_resolves(self):
+        """**The case that made the whole feature a no-op.**
+
+        `model_name_aliases` keys its map with `normalized_filename`, which
+        LOWERCASES; a lookup that merely unified separators found nothing for any
+        name with a capital in it, which is most real model filenames. The
+        candidates are the shelf's own spelling, because ComfyUI compares exactly.
+        """
+        graph = {
+            "4": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": "RealVisXL.safetensors"},
+            }
+        }
+        object_info = {
+            "CheckpointLoaderSimple": {
+                "input": {"required": {"ckpt_name": [["kept/Kept.safetensors"], {}]}}
+            }
+        }
+        swapped = apply_model_swap(
+            graph,
+            detect_model_targets(graph, object_info),
+            # As `model_name_aliases` builds it: a folded key, unfolded names.
+            {"realvisxl.safetensors": ["kept/Kept.safetensors", "Kept.safetensors"]},
+            object_info,
+        )
+        assert [s["now"] for s in swapped] == ["kept/Kept.safetensors"]
+        assert preflight_prompt(graph, object_info)["missing_models"] == []
+
+    def test_a_candidate_is_never_lowercased_on_the_way_in(self):
+        """A folded candidate is a filename ComfyUI would refuse.
+
+        `_match_option` reports a case-only difference as a miss, on purpose - it
+        is a real failure on a case-sensitive host - so writing the lowercased
+        form would be a substitution that fails at the queue instead of here.
+        """
+        graph = {
+            "4": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": "gone.safetensors"},
+            }
+        }
+        object_info = {
+            "CheckpointLoaderSimple": {
+                "input": {"required": {"ckpt_name": [["Kept.safetensors"], {}]}}
+            }
+        }
+        assert (
+            apply_model_swap(
+                graph,
+                detect_model_targets(graph, object_info),
+                {"gone.safetensors": ["kept.safetensors"]},
+                object_info,
+            )
+            == []
+        )
+        assert graph["4"]["inputs"]["ckpt_name"] == "gone.safetensors"
+
     def test_a_model_with_no_other_name_is_left_alone(self):
         graph = json.loads(json.dumps(self.GRAPH))
         assert (

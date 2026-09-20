@@ -471,6 +471,16 @@ def detect_model_targets(prompt_graph: dict, object_info: dict) -> list[dict]:
     return preflight_prompt(prompt_graph, object_info)["missing_models"]
 
 
+def _alias_key(value: str) -> str:
+    """One loader value as :func:`model_name_aliases` keys its map.
+
+    Its keys are ``workflow_hash.normalized_filename`` - a **lowercased**
+    basename - so a lookup that merely unified separators would miss every
+    mixed-case filename, which is most of them.
+    """
+    return _normalize_filename(value).rsplit("/", 1)[-1].lower()
+
+
 def apply_model_swap(
     prompt_graph: dict,
     targets: list[dict],
@@ -520,7 +530,11 @@ def apply_model_swap(
         options = _combo_options(object_info.get(node.get("class_type")), field)
         if not options:
             continue
-        candidates = aliases.get(_normalize_filename(value).rsplit("/", 1)[-1]) or ()
+        # Folded to match `model_name_aliases`' keys, which are
+        # `normalized_filename` - LOWERCASE. Looking up the graph's own
+        # spelling instead finds nothing for any name with a capital in
+        # it, which is most real model filenames.
+        candidates = aliases.get(_alias_key(value)) or ()
         for candidate in candidates:
             match = _match_option(candidate, options)
             if match is not None:
