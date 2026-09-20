@@ -54,6 +54,7 @@ vi.mock("../../api/modelIcons", () => ({
 }));
 
 import ModelSetGrid from "./ModelSetGrid.vue";
+import { pictureThumbnailUrl } from "../../api/pictures";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 
 const globalOpts = {
@@ -96,13 +97,20 @@ function member(id, name, kind, extra = {}) {
   };
 }
 
-function combination(key, models, { recipes = 1, pictures = 1 } = {}) {
+function combination(
+  key,
+  models,
+  { recipes = 1, pictures = 1, covers = [7] } = {},
+) {
   return {
     key,
     models,
     recipes,
     picture_count: pictures,
-    covers: [{ picture_id: 7, url: "/pictures/thumbnails/7.webp?v=1" }],
+    // What the route serves: a picture and its cache key, never a path. An
+    // `<img src>` bypasses the Axios interceptor, so the card is what turns
+    // these into a URL through `pictureThumbnailUrl`.
+    covers: covers.map((id) => ({ picture_id: id, version: `v${id}` })),
   };
 }
 
@@ -156,10 +164,7 @@ describe("the cards", () => {
     // `WorkflowCard` learned this once and the first copy of its geometry here
     // did not: a fixed 2fr/1fr mosaic drawn for three cells leaves an empty box
     // when a set has one or two pictures (#1479 review).
-    const oneCover = {
-      ...combination("1,2", [CKPT, VAE]),
-      covers: [{ picture_id: 7, url: "/t/7.webp" }],
-    };
+    const oneCover = combination("1,2", [CKPT, VAE], { covers: [7] });
     const { wrapper } = await mountGrid({
       rows: [row(1, "realvisXL_v5")],
       support: [row(2, "sdxl_vae", "vae")],
@@ -170,6 +175,29 @@ describe("the cards", () => {
     expect(cover.classes()).toContain("msc__cover--1");
     expect(cover.findAll(".msc__pic")).toHaveLength(1);
     expect(cover.findAll("img")).toHaveLength(1);
+  });
+
+  it("loads a cover through the api layer, base and cache key and all", async () => {
+    // **An `<img src>` never reaches the Axios interceptor.** The payload sends
+    // `{picture_id, version}`, and a card that put a bare path in `src` asked the
+    // PAGE origin for a route it does not serve - every cover broken, and no
+    // fixture noticed because each asserted the string it had just been handed.
+    // So this asserts the URL the BROWSER is given, both on the card and inside
+    // an open stack.
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [combination("1,2", [CKPT, VAE], { covers: [7] })],
+    });
+
+    const expected = pictureThumbnailUrl(7, { version: "v7" });
+    expect(wrapper.find(".msc__cover img").attributes("src")).toBe(expected);
+    expect(expected).toContain("/pictures/thumbnails/7.webp");
+    expect(expected).toContain("v=v7");
+
+    store.toggleSet("1,2");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".combo__strip img").attributes("src")).toBe(expected);
   });
 
   it("says nothing to fold on a card with one combination under it", async () => {

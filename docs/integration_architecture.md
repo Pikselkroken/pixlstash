@@ -498,7 +498,7 @@ and groups nothing; the client folds.**
 
 | Route | Answers | Costs |
 |---|---|---|
-| `GET /models/workflow-sets` | **Which shelf models a kept picture proves ran together** — one entry per *combination* (the exact model ids one or more recipes bound), with its recipe count, its picture count and up to three cover thumbnail URLs, plus `no_set`: the ids in none of those combinations, i.e. the models **no kept
+| `GET /models/workflow-sets` | **Which shelf models a kept picture proves ran together** — one entry per *combination* (the exact model ids one or more recipes bound), with its recipe count, its picture count and up to three cover thumbnails as `{picture_id, version}`, plus `no_set`: the ids in none of those combinations, i.e. the models **no kept
 picture in this library was made with** (engines excluded - see rule 1). | one pass over `workflow_recipe_asset`, plus the `GROUP BY workflow_structural_hash` and the `ROW_NUMBER()` cover window the shelf's `used by` counts and the workflows grid already run |
 
 Rules neither side may drift from:
@@ -526,8 +526,15 @@ Rules neither side may drift from:
    counts every recipe the hub holds. A delete warning must keep a file some
    other library needs; this grid is a picture of what the library in front of
    the reader has made, so a recipe with no kept picture here is not a set.
-6. **Owner-only, and read once.** It sizes the whole vault one card at a time and
-   returns a thumbnail URL per cover, so it is on the shelf's owner tier with no
+6. **A cover is two facts, not a path.** `{picture_id, version}`, and the client
+   builds the URL with `pictureThumbnailUrl` (`api/pictures.js`). An `<img src>`
+   never reaches the Axios interceptor, so a path served from here arrives with
+   no `/api/v1` prefix and no share token appended, and the browser asks the page
+   origin for a route it does not serve — every cover broken. It is also why this
+   route spells no URL of its own beside `routes/workflows.py`'s; that one sends a
+   path and pays for it with `workflowCoverUrl` on the client to put it right.
+7. **Owner-only, and read once.** It sizes the whole vault one card at a time and
+   names a picture per cover, so it is on the shelf's owner tier with no
    per-object scope to narrow it to. The client fetches it when something needs
    it and again after a scan, never on a filter tick.
 

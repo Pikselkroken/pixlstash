@@ -15,8 +15,12 @@
     </div>
 
     <div v-if="card.covers.length" class="combo__strip" aria-hidden="true">
-      <span v-for="url in card.covers" :key="url" class="combo__pic">
-        <img :src="url" alt="" loading="lazy" />
+      <span
+        v-for="cover in card.covers"
+        :key="cover.picture_id"
+        class="combo__pic"
+      >
+        <img :src="coverSrc(cover)" alt="" loading="lazy" />
       </span>
     </div>
 
@@ -87,6 +91,7 @@
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
+import { pictureThumbnailUrl } from "../../api/pictures";
 import Tooltip from "./Tooltip.vue";
 
 /**
@@ -105,6 +110,11 @@ const props = defineProps({
 
 /** A file line was pressed: the grid answers with that model's companions. */
 const emit = defineEmits(["pick"]);
+
+/** The cover's `src`; see `ModelSetCard.coverSrc` for why it is not the payload's. */
+function coverSrc(cover) {
+  return pictureThumbnailUrl(cover.picture_id, { version: cover.version });
+}
 
 // The chips and the note are `aria-hidden`, so this is the only place a screen
 // reader hears them - and the only place it hears which files are in the set.

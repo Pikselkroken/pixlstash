@@ -675,15 +675,26 @@ class WorkflowSetMember(BaseModel):
 
 
 class WorkflowSetCover(BaseModel):
-    """One picture on a combination's cover strip."""
+    """One picture on a combination's cover strip.
+
+    **The two facts a thumbnail needs, not a URL.** Serving a path was the first
+    shape of this and it was wrong twice over: an ``<img src>`` never reaches the
+    Axios interceptor, so nothing prepends the API base and nothing appends a
+    share token, and the browser asked the PAGE origin for a route it does not
+    serve - every cover on the grid broken. The client builds the URL with
+    ``pictureThumbnailUrl`` (``api/pictures.js``), which is the one place that
+    path is spelled, rather than this route inventing a third copy of it beside
+    ``routes/workflows.py``'s.
+    """
 
     model_config = ConfigDict(extra="allow")
 
-    picture_id: int
-    url: str = Field(
+    picture_id: int = Field(description="The picture to load a thumbnail for.")
+    version: str = Field(
         description=(
-            "The same thumbnail URL and cache key the picture grid's own tiles "
-            "use, so a cover the browser already holds is not fetched twice."
+            "The cache key the picture grid's own tiles use, so a cover the "
+            "browser already holds is not fetched twice and a regenerated "
+            "bitmap is not served stale."
         )
     )
 
@@ -809,27 +820,19 @@ def _present_copy(locations: list[dict]) -> Optional[str]:
     return None
 
 
-def _thumbnail_version(cover) -> str:
-    return ImageUtils.thumbnail_cache_version(
-        cover.thumbnail_width, cover.thumbnail_height, cover.orientation
-    )
-
-
 def _cover_strip(covers) -> list[WorkflowSetCover]:
-    """Thumbnail URLs for a set card's cover strip, cache-busted per bitmap.
+    """A set card's cover strip: a picture and the cache key for its bitmap.
 
-    The same URL and the same cache key the picture grid's own tiles use
-    (``routes/pictures/_thumbnails.py``), so a cover the browser already holds
-    is not fetched twice and a regenerated bitmap is not served stale. The
-    workflows grid builds its strip the same way, from the same
-    ``CoverCandidate`` rows.
+    No path. The cache key is the one the picture grid's own tiles use
+    (``routes/pictures/_thumbnails.py``), and the client puts it through
+    ``pictureThumbnailUrl`` - which is where that URL is spelled once, with the
+    API base and the share token an ``<img src>`` cannot get for itself.
     """
     return [
         WorkflowSetCover(
             picture_id=cover.picture_id,
-            url=(
-                f"/pictures/thumbnails/{cover.picture_id}.webp"
-                f"?v={_thumbnail_version(cover)}"
+            version=ImageUtils.thumbnail_cache_version(
+                cover.thumbnail_width, cover.thumbnail_height, cover.orientation
             ),
         )
         for cover in covers

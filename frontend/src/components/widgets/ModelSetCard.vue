@@ -11,8 +11,12 @@
       class="msc__cover"
       :class="`msc__cover--${card.covers.length}`"
     >
-      <span v-for="(src, i) in card.covers" :key="i" class="msc__pic">
-        <img :src="src" alt="" loading="lazy" />
+      <span
+        v-for="cover in card.covers"
+        :key="cover.picture_id"
+        class="msc__pic"
+      >
+        <img :src="coverSrc(cover)" alt="" loading="lazy" />
       </span>
       <span class="msc__badge msc__badge--end" aria-hidden="true">
         <v-icon size="12">mdi-image-multiple</v-icon
@@ -103,6 +107,7 @@
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
+import { pictureThumbnailUrl } from "../../api/pictures";
 import AppButton from "./AppButton.vue";
 import ChipRow from "./ChipRow.vue";
 
@@ -118,6 +123,21 @@ const props = defineProps({
 const emit = defineEmits(["toggle"]);
 
 const stacked = computed(() => props.card.size > 1);
+
+/**
+ * The URL a browser loads one cover from.
+ *
+ * **An `<img src>` never reaches the Axios interceptor**, so nothing prepends
+ * the API base and nothing appends the share token: the payload's
+ * `{picture_id, version}` has to go through the api layer's own builder, or the
+ * browser asks the PAGE origin for a path no route serves and every cover on
+ * this grid breaks. `pictureThumbnailUrl` is where that path is spelled - the
+ * same one the picture grid's tiles use, so a thumbnail the browser already
+ * holds is not fetched twice.
+ */
+function coverSrc(cover) {
+  return pictureThumbnailUrl(cover.picture_id, { version: cover.version });
+}
 
 /**
  * Row 2: the files that identify the set, by their SHELF kind.

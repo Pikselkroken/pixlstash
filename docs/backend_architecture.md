@@ -2934,6 +2934,13 @@ band can only put a row in one place.
   (the rest), and second place is what keeps such a set named after its model
   rather than after whichever VAE sorted first. It is a ranking, not a claim
   about what the file is.
+- **A cover is served as `{picture_id, version}`, never as a URL.** An
+  `<img src>` never reaches the client's Axios interceptor, so a path built in
+  this route would arrive with no API base and no share token and the browser
+  would ask the page origin for a route it does not serve. `pictureThumbnailUrl`
+  (`api/pictures.js`) is the one place that path is spelled, and this route is
+  deliberately not the second - `routes/workflows.py` does send a path, and pays
+  for it with `workflowCoverUrl` on the client to put the base and the token back.
 - **Counts and covers are two vault queries, not one per card.**
   `recipe_picture_counts` is the existing `GROUP BY workflow_structural_hash`;
   the covers come from `variant_cover_candidates`, the workflows grid's own

@@ -872,15 +872,21 @@ def test_workflow_sets_serves_the_whole_card_through_the_route(shelf_env):
         assert all(m["ambiguous"] is False for m in card["models"])
         assert (card["recipes"], card["picture_count"]) == (1, 2)
 
-        # The covers: the higher-scored picture first, and each URL carrying the
-        # SAME cache-buster the picture grid's own tiles use - so a cover the
-        # browser holds is not fetched twice and a regenerated one is not stale.
+        # The covers: the higher-scored picture first, each carrying the SAME
+        # cache key the picture grid's own tiles use - so a cover the browser
+        # holds is not fetched twice and a regenerated one is not served stale.
+        #
+        # **Data, not a path.** This route deliberately serves no URL: an
+        # `<img src>` never reaches the client's Axios interceptor, so a path
+        # built here arrives with no API base and no share token and the browser
+        # asks the page origin for a route it does not serve. The client builds it
+        # with `pictureThumbnailUrl`, the one place that path is spelled.
         assert [c["picture_id"] for c in card["covers"]] == [best, worst]
-        version = ImageUtils.thumbnail_cache_version(320, 240, 1)
-        assert card["covers"][0]["url"] == (
-            f"/pictures/thumbnails/{best}.webp?v={version}"
+        assert card["covers"][0]["version"] == ImageUtils.thumbnail_cache_version(
+            320, 240, 1
         )
-        assert "?v=" in card["covers"][1]["url"]
+        assert card["covers"][1]["version"]
+        assert "url" not in card["covers"][0]
 
         # Every model NOT in the set - and no engine. PixlStash's own downloads
         # can never appear in a generation graph, so "no picture was made with

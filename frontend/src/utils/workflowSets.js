@@ -292,11 +292,15 @@ export function setCard(stack) {
     // the count beside them sums every member, so a mosaic drawn from one of
     // them under-represents its own number. Deduplicated by picture, because two
     // recipes of one combination can nominate the same best picture.
+    //
+    // **The RECORDS, not URLs.** `{picture_id, version}` is what the payload
+    // sends and what the card turns into a `src` with `pictureThumbnailUrl` -
+    // this module stays free of the api layer, and the path stays spelled once.
     covers: [
       ...new Map(
         stack.members
           .flatMap((member) => member.covers ?? [])
-          .map((cover) => [cover.picture_id, cover.url]),
+          .map((cover) => [cover.picture_id, cover]),
       ).values(),
     ].slice(0, COVER_DEPTH),
     size: stack.members.length,
@@ -346,7 +350,7 @@ export function comboCard(combination, seed, index) {
       ...model,
       kindLabel: memberKindLabel(model),
     })),
-    covers: (combination.covers ?? []).map((cover) => cover.url),
+    covers: [...(combination.covers ?? [])],
     picture_count: combination.picture_count ?? 0,
     recipes: combination.recipes ?? 0,
     note:

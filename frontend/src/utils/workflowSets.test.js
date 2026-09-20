@@ -29,7 +29,10 @@ function combination(
     models,
     recipes,
     picture_count: pictures,
-    covers: covers.map((id) => ({ picture_id: id, url: `/t/${id}.webp` })),
+    // `{picture_id, version}`, which is what the route serves. NOT a URL: an
+    // `<img src>` never reaches the Axios interceptor, so the card builds the src
+    // through `pictureThumbnailUrl` and these stay records all the way.
+    covers: covers.map((id) => ({ picture_id: id, version: `v${id}` })),
   };
 }
 
@@ -256,7 +259,10 @@ describe("setCard", () => {
     expect(card.differsBy).toEqual(["+ filmgrain_xl", "sdxl_vae → vae-ft-mse"]);
     expect(card.pictures).toBe(94 + 44 + 28);
     expect(card.recipes).toBe(5 + 3 + 2);
-    expect(card.covers).toEqual(["/t/11.webp", "/t/12.webp", "/t/13.webp"]);
+    expect(card.covers.map((c) => c.picture_id)).toEqual([11, 12, 13]);
+    // Carried whole, version included: the card needs the cache key to build a
+    // src the browser will not serve stale.
+    expect(card.covers[0]).toEqual({ picture_id: 11, version: "v11" });
   });
 
   it("keeps an adapter out of the name even when it would fit", () => {
