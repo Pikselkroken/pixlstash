@@ -509,19 +509,31 @@ describe("the selection mark", () => {
     );
   });
 
-  it("wears the shell's wash and ring, over its own surface", () => {
-    const selected = rule(".wf-card--selected");
+  it("wears the shell's wash and ring on one overlay", () => {
+    const mark = rule(".wf-card--selected::after");
 
-    expect(selected["box-shadow"]).toBe("var(--selection-ring)");
-    // Layered, not replaced: `--active-wash` alone would drop a selected card
-    // onto the page colour and make it read as LESS raised than its
-    // neighbours.
-    expect(selected["background-color"]).toBe("rgb(var(--v-theme-surface))");
-    expect(selected["background-image"]).toContain("var(--active-wash)");
+    expect(mark.background).toBe("var(--active-wash)");
+    expect(mark["box-shadow"]).toBe("var(--selection-ring)");
   });
 
-  // The reason the mark cannot live on an ancestor, stated as a fact about
-  // this file so that moving it back fails here.
+  // The whole point: an inset shadow paints over an element's background but
+  // UNDER its children, and the cover's three <img>s are children. On the card
+  // itself the ring ran along the text rows and stopped dead at the
+  // thumbnails. Only a layer above the content covers both.
+  it("lies above the cover, so the mark crosses the thumbnails", () => {
+    const mark = rule(".wf-card--selected::after");
+
+    expect(mark.position).toBe("absolute");
+    expect(mark.inset).toBe("0");
+    expect(mark["z-index"]).toBe("var(--z-raised)");
+    // Above the badges, which sit on the cover at a bare z-index of 1.
+    expect(Number(rule(".wf-card__badge--start")["z-index"])).toBeLessThan(10);
+    // And it must not eat the clicks meant for the controls underneath.
+    expect(mark["pointer-events"]).toBe("none");
+  });
+
+  // The reason the mark cannot live on an ancestor either, stated as a fact
+  // about this file so that moving it back up fails here.
   it("paints an opaque background, which is why an ancestor cannot mark it", () => {
     expect(rule(".wf-card").background).toBe("rgb(var(--v-theme-surface))");
   });

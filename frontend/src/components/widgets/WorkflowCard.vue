@@ -286,15 +286,26 @@ const accessibleName = computed(() =>
 /* The shell's selection mark (`style.css` rule 3): the wash, plus
    `--selection-ring` because a card has no left edge to rail.
 
-   `background-image` over `background-color` rather than replacing the
-   background: the wash is `rgba(primary, .16)`, so setting it alone would
-   drop the card onto the page colour and a selected card would read as LESS
-   raised than its neighbours. Layered, it stays a surface that has been
-   tinted, which is what the mark means. */
-.wf-card--selected {
-  background-color: rgb(var(--v-theme-surface));
-  background-image: linear-gradient(var(--active-wash), var(--active-wash));
+   **An OVERLAY, not the card's own background and shadow.** An inset
+   box-shadow paints over the element's background but under its children, and
+   most of this card is children - the cover's three opaque `<img>`s. Put on
+   the card itself the ring appeared along the text rows and stopped dead at
+   the thumbnails, which is the same mistake as putting it on the cell one
+   level up, made one level down. `.selection-overlay` in `ImageGrid.css` is
+   the shipped answer for marking something with pictures in it: an absolutely
+   positioned layer carrying both halves of the mark, above the content.
+
+   `pointer-events: none` so ▸ and ⓘ underneath still take their clicks, and
+   the radius is inherited so the ring follows the card's own corners. */
+.wf-card--selected::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-raised);
+  border-radius: inherit;
+  background: var(--active-wash);
   box-shadow: var(--selection-ring);
+  pointer-events: none;
 }
 
 .wf-card__cover {
