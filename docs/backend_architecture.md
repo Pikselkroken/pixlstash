@@ -2961,10 +2961,14 @@ band can only put a row in one place.
   be computed from a page of assets. The read is bounded by the size of the shelf
   and the library rather than by a parameter, which is the same bound
   `fetch_picture_counts` and the workflows grid already accept.
-- **The fold is the client's.** Near-identical combinations are folded into
-  stacks in `frontend/src/utils/workflowSets.js`, so the toolbar can price every
-  fold setting in cards without another request and *Don't fold* costs nothing.
-  The server proposes no grouping at all.
+- **The GROUPING is the client's, and this route stays per-combination.**
+  `frontend/src/utils/workflowSets.js` unions the combinations under each head to
+  make the grid's cards, and keeps the combinations themselves: the *Works with*
+  answer is a pairwise question, and a union would report two VAEs as each
+  other's companions on the strength of sharing a checkpoint. So this route
+  proposes no grouping at all and is not asked to - the per-recipe shape is the
+  evidence, and every claim the UI makes about a pair reads it rather than the
+  union drawn on top.
 
 `model.family`, `model.quant` and `model.weights_id` are the header half,
 written by the scanner from the header it already

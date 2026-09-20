@@ -54,13 +54,13 @@
             :panel-id="PANEL_ID"
             :name="openName"
             :members="openMembers"
-            :columns="columns"
+            :view="store.view.trayView"
+            :columns="trayColumns"
             :column-index="openColumnIndex"
             :cursor-key="cursorKey"
-            :foldable="store.view.fold !== 'none'"
             :gap="COLUMN_GAP"
             @close="closePanel"
-            @unfold="unfold"
+            @view="(value) => store.setView({ trayView: value })"
             @pick="openWorksWith"
           />
 
@@ -69,11 +69,7 @@
             class="msg__row"
             role="row"
             aria-level="1"
-            :aria-expanded="
-              entry.card.size > 1
-                ? String(store.openSetKey === entry.key)
-                : undefined
-            "
+            :aria-expanded="String(store.openSetKey === entry.key)"
             :aria-controls="
               store.openSetKey === entry.key ? PANEL_ID : undefined
             "
@@ -81,7 +77,7 @@
               store.openSetKey === entry.key ? memberRowIds : undefined
             "
             :aria-posinset="entry.cardIndex + 1"
-            :aria-setsize="store.setStacks.length"
+            :aria-setsize="store.setGroups.length"
             :tabindex="index === cursorIndex ? 0 : -1"
             :data-key="entry.key"
             @click="cursorId = entry.id"
@@ -138,14 +134,19 @@
 /**
  * The model shelf's Workflow set axis, as a card grid (#1438).
  *
- * **A card is one combination** - the exact files a picture proves ran together
- * - and near-identical combinations fold into a stack the reader can open. The
- * card's SHAPE and the panel's are the shipped workflow grid's, because a reader
- * should not have to learn a second card; the components are this screen's own,
- * because that grid's card and panel have grown a vocabulary ("Stack of 3
- * workflows", "Saved recipes", a Grid|List preference, a menu of workflow verbs)
- * that would be three wrong words and two dead controls on a set. See
- * `ModelSetCard.vue` and `ModelSetPanel.vue`.
+ * **A card is one base model, and its tray holds the models that have run with
+ * it.** One card per checkpoint - or per diffusion file, where a graph loads one
+ * instead - and ▸ opens the union of everything it has co-occurred with, as cards
+ * or as a comparison list. The card's SHAPE and the tray's are the shipped
+ * workflow grid's, because a reader should not have to learn a second card or a
+ * second switch; the components are this screen's own, because that grid's card
+ * and panel have grown a vocabulary ("Stack of 3 workflows", "Saved recipes", a
+ * menu of workflow verbs) that would be wrong words and dead controls on a set.
+ * See `ModelSetCard.vue` and `ModelSetPanel.vue`.
+ *
+ * **A union is not reproducible, and the tray says so.** Two files in one tray
+ * may never have run together; the exact combinations live behind `Works with`,
+ * which reads the per-recipe evidence rather than the union.
  *
  * **Nothing here is selectable.** The shelf's selection is by `model.id` and
  * carries six verbs, two of which destroy bytes; a card is a SET, so "selected"
@@ -164,11 +165,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
-import {
-  comboCard,
-  headModel,
-  memberKindLabel,
-} from "../../utils/workflowSets";
+
 import ModelSetPanel from "../panels/ModelSetPanel.vue";
 import AppButton from "../widgets/AppButton.vue";
 import ModelSetCard from "../widgets/ModelSetCard.vue";
@@ -200,23 +197,39 @@ const cursorId = ref("");
 const announcement = ref("");
 
 const nothingShown = computed(
-  () => !store.setStacks.length && !store.noSetRows.length,
+  () => !store.setGroups.length && !store.noSetRows.length,
 );
 
-/** The open stack, or null. */
-const openStack = computed(
-  () => store.setStacks.find((stack) => stack.key === store.openSetKey) ?? null,
+/** The open group, or null. */
+const openGroup = computed(
+  () => store.setGroups.find((group) => group.key === store.openSetKey) ?? null,
 );
 
-/** The open stack's combinations, as the panel's cards. */
+/**
+ * The open group's models, head first, each flagged if it is the one the set is
+ * named after - which is what the tray marks rather than re-deriving.
+ */
 const openMembers = computed(() => {
-  const stack = openStack.value;
-  if (!stack) return [];
-  const [seed] = stack.members;
-  return stack.members.map((member, index) => comboCard(member, seed, index));
+  const group = openGroup.value;
+  if (!group) return [];
+  return group.models.map((model) => ({
+    ...model,
+    head: model.id === group.head?.id,
+  }));
 });
 
-const openName = computed(() => openStack.value?.card.name || "Set");
+const openName = computed(() => openGroup.value?.card.name || "Set");
+
+/**
+ * How many columns the TRAY draws its member cards in.
+ *
+ * One column in List, whatever the grid above is doing: the rows are full-width,
+ * and the flat list's column arithmetic has to agree with what is painted or Down
+ * lands on the wrong row.
+ */
+const trayColumns = computed(() =>
+  store.view.trayView === "list" ? 1 : columns.value,
+);
 
 /**
  * The cards, with the open stack's members spliced in at its row's end.
@@ -226,11 +239,11 @@ const openName = computed(() => openStack.value?.card.name || "Set");
  * is drawn in.
  */
 const flatRows = computed(() => {
-  const cards = store.setStacks.map((stack, cardIndex) => ({
+  const cards = store.setGroups.map((group, cardIndex) => ({
     kind: "card",
-    id: `card:${stack.key}`,
-    key: stack.key,
-    card: stack.card,
+    id: `card:${group.key}`,
+    key: group.key,
+    card: group.card,
     cardIndex,
   }));
   const openKey = store.openSetKey;
@@ -247,13 +260,17 @@ const flatRows = computed(() => {
   while (head.length < rowEnd) {
     head.push({ kind: "hole", id: `hole:head:${head.length}` });
   }
-  const block = openMembers.value.map((card, memberIndex) => ({
+  const block = openMembers.value.map((member, memberIndex) => ({
     kind: "member",
-    id: `member:${card.key}`,
-    key: card.key,
+    id: `member:${member.id}`,
+    key: String(member.id),
     memberIndex,
   }));
-  const padded = Math.ceil(Math.max(block.length, 1) / cols) * cols;
+  // The TRAY's own column count, which is 1 in List: the padding has to make the
+  // member block a whole number of the rows that are actually painted, or the
+  // cursor's `index ± columns` walks out of the tray.
+  const trayCols = Math.max(1, trayColumns.value);
+  const padded = Math.ceil(Math.max(block.length, 1) / trayCols) * trayCols;
   while (block.length < padded) {
     block.push({ kind: "hole", id: `hole:block:${block.length}` });
   }
@@ -289,7 +306,7 @@ const cursorKey = computed(() => {
  * what makes the treegrid true.
  */
 const memberRowIds = computed(() =>
-  openMembers.value.map((card) => `${PANEL_ID}-row-${card.key}`).join(" "),
+  openMembers.value.map((member) => `${PANEL_ID}-row-${member.id}`).join(" "),
 );
 
 // ── Columns from the real container width ─────────────────────────────────
@@ -335,45 +352,15 @@ watch(
   () => store.openSetKey,
   (key, previous) => {
     if (key) {
-      announcement.value = `${openName.value} opened, ${openMembers.value.length} combinations`;
+      announcement.value = `${openName.value} opened, ${openMembers.value.length} models`;
       return;
     }
     announcement.value = `${previous ? "Set" : ""} closed`.trim();
   },
 );
 
-/** The file a stack's own card is named after, for the keyboard's Enter. */
-function headFileOf(key) {
-  const stack = store.setStacks.find((candidate) => candidate.key === key);
-  const head = headModel(stack?.members?.[0] ?? {});
-  return head ? { ...head, kindLabel: memberKindLabel(head) } : null;
-}
-
-/**
- * Stop folding, and keep the reader where they were.
- *
- * Changing the fold re-seeds every stack, so the open key can name a card that
- * no longer exists - the store reconciles that (`openSetKey`) - and the button
- * that did it unmounts itself, because it only renders while some folding is in
- * force. Between the two, focus fell to `<body>` (#1479 review). The cursor is
- * moved deliberately instead: to the card the open stack became, if the unfold
- * left one under the same key, and otherwise to the first card on the grid.
- */
-function unfold() {
-  const wasOpen = store.openSetKey;
-  store.setView({ fold: "none" });
-  nextTick(() => {
-    const at = flatRows.value.findIndex(
-      (entry) => entry.kind === "card" && entry.key === wasOpen,
-    );
-    moveCursor(at >= 0 ? at : (firstStop(0, 1) ?? 0));
-  });
-}
-
 function toggle(entry) {
-  if (entry?.kind === "card" && entry.card.size > 1) {
-    store.toggleSet(entry.key);
-  }
+  if (entry?.kind === "card") store.toggleSet(entry.key);
 }
 
 /**
@@ -497,30 +484,17 @@ function onKeyDown(event) {
       return;
     case "Enter":
       event.preventDefault();
-      // A stack opens. Anything else asks "what else has this run with" about
-      // the file the row is named after - which is the ONLY keyboard route to
-      // that answer on this screen: the file buttons inside a combination are
-      // at `tabindex="-1"` because the grid owns Tab, so without this the
-      // dialog was reachable by pointer alone.
-      //
-      // **The head, deliberately, and not every line.** A pointer can click any
-      // file in a combination; a keyboard reaches the one the set is named
-      // after. That is a decision rather than a side effect of the roving cursor
-      // (#1479 review): giving each line its own stop would put four to six tab
-      // stops inside every card, which is the trap the roving cursor exists to
-      // avoid, and a second cursor level inside a card is a keyboard model this
-      // grid does not have. The head is the file a reader is most likely to be
-      // asking about, and the dialog itself then lists every companion - so the
-      // question "what else ran with this set" is answerable from the keyboard
-      // even where "…with this exact line" is not. If that turns out to be the
-      // wrong trade, the fix is a cursor level inside the card, not one more
-      // special key.
-      if (entry?.kind === "card" && entry.card.size > 1) {
+      // A card opens its tray; a member in that tray answers "what else has this
+      // model run with". **Now that a tray row IS one model, the keyboard reaches
+      // every one of them** - the earlier shape had a row per combination and
+      // could only offer the file it was named after, which was a real gap
+      // (#1479 review). The member cards' own name buttons stay at
+      // `tabindex="-1"` because the grid owns Tab; this is how a keyboard gets
+      // there.
+      if (entry?.kind === "card") {
         store.toggleSet(entry.key);
-      } else if (entry?.kind === "card") {
-        openWorksWith(headFileOf(entry.key));
       } else if (entry?.kind === "member") {
-        openWorksWith(openMembers.value[entry.memberIndex]?.files?.[0]);
+        openWorksWith(openMembers.value[entry.memberIndex]);
       }
       return;
     case "Escape":

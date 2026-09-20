@@ -1,382 +1,269 @@
-// The model shelf's Workflow set axis (#1438): folding the combinations
-// `GET /models/workflow-sets` serves into the cards the grid draws.
+// The model shelf's Workflow set axis (#1438): turning the combinations
+// `GET /models/workflow-sets` serves into the groups the grid draws.
 //
-// **A card is one combination** - the exact files a picture proves ran together.
-// That produces near-duplicates by the dozen (one per LoRA tried, one per VAE
-// swapped), so combinations within a chosen distance of each other are folded
-// into one stack, the same gesture the Workflows grid already makes. The fold
-// is the READER's, never the data's: the server groups nothing, the distance is
-// a toolbar control, and *Don't fold* is a real setting rather than a debug
-// switch. Everything here is pure so the arithmetic is testable without a grid.
+// **A card is one base model, and its tray holds the MODELS that have run with
+// it.** One card per checkpoint (or per diffusion file, where a graph loads one
+// instead), carrying the union of everything it has co-occurred with across all
+// of its recipes. So the grid is as long as the list of base models that have
+// made a picture and no longer, and a model appears in every group it has served
+// - a VAE shared by three checkpoints is in three trays, which is the overlap the
+// row list's sticky bands could not express.
 //
-// **Co-occurrence is evidence; its absence is not.** Nothing in this file may
-// hide a combination, and nothing may infer one: two models that have never
-// been seen together are not drawn together, and that is not a claim they
-// cannot work. The models no recipe names come back from the server under
-// `no_set` and are drawn as their own card.
+// **What a union gives up, and why this file keeps the combinations anyway.** A
+// group is not reproducible: two VAEs can both be in one tray having never run
+// together, and the union cannot say which. That is a real cost of grouping this
+// way, and the tray says so in words rather than letting a reader assume
+// otherwise. The per-combination evidence is therefore NOT discarded on the way
+// in - `worksWith` reads it to answer pairwise questions exactly, and a member's
+// own recipe and picture counts come from the combinations that name it. Union
+// for the card, combinations for every claim.
+//
+// **Co-occurrence is evidence; its absence is not.** Nothing here may hide a
+// model and nothing may infer a pairing: two models never seen together are not
+// drawn as a pair, and that is not a claim they cannot work. The models no recipe
+// names arrive from the server under `no_set` and get a card of their own.
 
 import { fileKindLabel } from "./modelShelf";
-
-/** The fold settings the toolbar offers, in the order the menu lists them. */
-export const FOLD_KEYS = ["none", "one", "two", "checkpoint"];
-
-/**
- * What each fold setting is called, and the glyph that stands for it.
- *
- * Named for what they DO to the cards rather than graded as loose/strict:
- * "loose" means nothing before you have seen the result, and the menu states
- * each setting's card count beside it for the same reason.
- */
-export const FOLD_LABELS = {
-  none: { label: "Don't fold", icon: "mdi-selection-off" },
-  one: { label: "1 file apart", icon: "mdi-check" },
-  two: { label: "2 files apart", icon: "mdi-layers" },
-  checkpoint: { label: "By checkpoint only", icon: "mdi-cube-outline" },
-};
 
 /**
  * How many covers a card's mosaic draws.
  *
- * Three, the depth the server serves per combination (`SET_COVER_DEPTH`) and the
- * one the shipped workflow card draws: a folded stack pools its members' covers
- * and then cuts back to this, so a card of six sets is not six bitmaps for three
- * holes.
+ * Three, the depth the server serves per combination (`SET_COVER_DEPTH`): a group
+ * pools its combinations' covers and then cuts back to this, so a group built
+ * from six recipes is not six bitmaps for three cells.
  */
 const COVER_DEPTH = 3;
-
-/** How many files a setting lets two combinations differ by. */
-const FOLD_DISTANCE = { none: 0, one: 1, two: 2 };
-
-/**
- * How far apart two combinations are, in files.
- *
- * `max(added, removed)` and NOT the size of the symmetric difference, because
- * a *swap* is one change and the symmetric difference counts it as two: a set
- * that differs only in which VAE it loaded would otherwise need "2 files apart"
- * to fold, and "1 file apart" would separate the very pair a reader most wants
- * side by side. Adding one file and removing another at once is still one step
- * under this measure, which is the reading the *differs by* chips give it.
- *
- * @param {Set<number>} a
- * @param {Set<number>} b
- * @returns {number}
- */
-export function foldDistance(a, b) {
-  let added = 0;
-  let removed = 0;
-  for (const id of a) if (!b.has(id)) removed += 1;
-  for (const id of b) if (!a.has(id)) added += 1;
-  return Math.max(added, removed);
-}
-
-/** The member ids of one combination, as a Set. */
-function idsOf(combination) {
-  return new Set((combination.models ?? []).map((model) => model.id));
-}
 
 /**
  * The file a combination is named after: the head of the server's own order.
  *
  * The server sorts a combination's members checkpoint-first, then unclassified,
- * then the support files, then the adapters, so the head is the checkpoint
- * where there is one and the diffusion file where there is not (Flux, Wan). No
- * fallback is invented here: reading the head is what makes that rule one
- * decision in one place rather than two that can disagree.
+ * then the support files, then the adapters, so the head is the checkpoint where
+ * there is one and the diffusion file where there is not (Flux, Wan). No fallback
+ * is invented here: reading the head is what makes that rule one decision in one
+ * place rather than two that can disagree.
  */
 export function headModel(combination) {
   return (combination.models ?? [])[0] ?? null;
 }
 
 /**
- * Sort combinations into the order the grid draws them, strongest evidence first.
+ * Sort by the weight of the evidence behind each entry, strongest first.
  *
- * The server already sorts this way; re-applied here because the fold reads the
- * first member of each stack as its SEED, so a caller that filtered or
- * concatenated payloads must not be able to change which combination a stack is
- * measured against.
+ * The server already orders combinations this way; re-applied because a group's
+ * covers and its `sets` list are read in this order, so a caller that filtered or
+ * concatenated payloads must not be able to change what a card leads with.
  */
-function byEvidence(combinations) {
-  return [...combinations].sort(
+function byEvidence(entries) {
+  return [...entries].sort(
     (a, b) =>
-      (b.picture_count ?? 0) - (a.picture_count ?? 0) ||
+      (b.picture_count ?? b.pictures ?? 0) -
+        (a.picture_count ?? a.pictures ?? 0) ||
       (b.recipes ?? 0) - (a.recipes ?? 0) ||
       String(a.key).localeCompare(String(b.key)),
   );
 }
 
 /**
- * Fold combinations into stacks.
+ * Group combinations by the file they are named after.
  *
- * Greedy against each stack's SEED - the most-used combination in it - rather
- * than single-linkage against any member. Single linkage would chain: A folds
- * with B, B with C, and C ends up on a stack it is three files from, under a
- * name that does not describe it. Seeded, every member of a stack is within the
- * chosen distance of the card's own title, which is the promise the *differs
- * by* chips make.
+ * One group per head model, holding the union of every member across its
+ * combinations. Keyed on the head's ID and never its name: two shelf rows can
+ * carry the same basename, and merging them would draw one card claiming both
+ * files' pictures.
  *
- * **A fold never swaps the file the set is named after.** Two combinations join
- * only when they share a head, whatever the distance says: exchanging the
- * checkpoint is one file by the arithmetic and a different set by every other
- * reading, and a card whose name is one checkpoint must not hold another's
- * pictures. Every stack is therefore inside one head's group, which is what
- * keeps `By checkpoint only` the coarsest setting.
- *
- * **The settings are NOT nested partitions, and the menu does not claim they
- * are.** Seeding is what breaks it: the seed set itself changes with the
- * distance, so loosening the fold can move a member onto a different card
- * rather than only merging cards. Three combinations A, B, C under one head
- * with A-B = 2, A-C = 3, B-C = 1 fold to `{A} {B,C}` at one file apart and
- * `{A,B} {C}` at two - B and C pulled apart by a looser setting. That is a real
- * cost of seeding and it is why the menu states a CARD COUNT per setting rather
- * than promising anything about what is inside them: the count is what changes
- * under the reader, and it is the thing they can see.
- *
- * `checkpoint` is not a distance at all: it collapses every combination under
- * the file it is named after, which is the one-card-per-checkpoint reading of
- * the same data. It is offered as a menu row rather than as a second view
- * because that is all it is.
+ * Each member carries the evidence for ITSELF rather than the group's totals -
+ * `recipes` and `pictures` counted over the combinations in this group that name
+ * that model, so a LoRA used once inside a group of forty pictures says "1 recipe"
+ * rather than inheriting the forty. `otherSets` is how many OTHER groups it
+ * appears in, which is what lets a tray mark a shared VAE as shared and a
+ * single-purpose one as its own.
  *
  * @param {Array<Object>} combinations - from `GET /models/workflow-sets`.
- * @param {string} fold - one of {@link FOLD_KEYS}.
- * @returns {Array<{key: string, members: Array<Object>}>} stacks, seed first.
+ * @returns {Array<Object>} groups, strongest evidence first.
  */
-export function foldSets(combinations, fold) {
-  const ordered = byEvidence(combinations ?? []);
-  if (fold === "checkpoint") {
-    const byHead = new Map();
-    for (const combination of ordered) {
-      // Keyed on the head's ID, never its name: two shelf rows can carry the
-      // same basename, and merging them here would draw one card claiming both
-      // files' pictures.
-      const head = headModel(combination);
-      const key = head ? `model:${head.id}` : combination.key;
-      const stack = byHead.get(key);
-      if (stack) stack.members.push(combination);
-      else byHead.set(key, { key, members: [combination] });
+export function setGroups(combinations) {
+  const byHead = new Map();
+  for (const combination of byEvidence(combinations ?? [])) {
+    const head = headModel(combination);
+    if (!head) continue;
+    const key = `model:${head.id}`;
+    let group = byHead.get(key);
+    if (!group) {
+      group = { key, head, combinations: [], recipes: 0, pictures: 0 };
+      byHead.set(key, group);
     }
-    return [...byHead.values()];
+    group.combinations.push(combination);
+    group.recipes += combination.recipes ?? 0;
+    group.pictures += combination.picture_count ?? 0;
   }
 
-  const distance = FOLD_DISTANCE[fold] ?? 0;
-  const stacks = [];
-  for (const combination of ordered) {
-    const ids = idsOf(combination);
-    const head = headModel(combination)?.id ?? null;
-    const home = distance
-      ? stacks.find(
-          (stack) =>
-            stack.head === head && foldDistance(stack.ids, ids) <= distance,
-        )
-      : undefined;
-    if (home) home.members.push(combination);
-    else
-      stacks.push({ key: combination.key, ids, head, members: [combination] });
+  const groups = byEvidence([...byHead.values()]);
+  // How many groups each model is in, counted across all of them before any one
+  // group is shaped: `otherSets` is a fact about the whole grid.
+  const groupsPerModel = new Map();
+  for (const group of groups) {
+    for (const id of memberIds(group)) {
+      groupsPerModel.set(id, (groupsPerModel.get(id) ?? 0) + 1);
+    }
   }
-  return stacks.map(({ key, members }) => ({ key, members }));
+
+  return groups.map((group) => ({
+    ...group,
+    models: members(group, groupsPerModel),
+    covers: pooledCovers(group.combinations),
+  }));
+}
+
+/** Every model id in a group, across its combinations. */
+function memberIds(group) {
+  const ids = new Set();
+  for (const combination of group.combinations) {
+    for (const model of combination.models ?? []) ids.add(model.id);
+  }
+  return ids;
 }
 
 /**
- * What each fold setting would cost in cards, for the menu that offers them.
+ * A group's members, each with its own evidence and how widely it is shared.
  *
- * Counts, not adjectives: the setting changes how many cards are on screen, and
- * a reader cannot judge that from a word. Every option is counted in one pass
- * over the same data so the numbers are consistent with each other.
- *
- * @param {Array<Object>} combinations
- * @returns {Record<string, number>}
+ * Ordered as the server orders a combination's members - the head first, then
+ * unclassified, the support files, the adapters - by reading the best position
+ * each model has taken in any of the group's combinations rather than re-deciding
+ * that ranking here.
  */
-export function foldCounts(combinations) {
-  return Object.fromEntries(
-    FOLD_KEYS.map((key) => [key, foldSets(combinations, key).length]),
-  );
+function members(group, groupsPerModel) {
+  const found = new Map();
+  for (const combination of group.combinations) {
+    (combination.models ?? []).forEach((model, position) => {
+      const seen = found.get(model.id) ?? {
+        ...model,
+        kindLabel: memberKindLabel(model),
+        recipes: 0,
+        pictures: 0,
+        ambiguous: false,
+        position,
+      };
+      seen.recipes += combination.recipes ?? 0;
+      seen.pictures += combination.picture_count ?? 0;
+      // One witness that could not pin the file down is enough to say so; a
+      // cleaner second witness does not unmake the first.
+      seen.ambiguous = seen.ambiguous || Boolean(model.ambiguous);
+      seen.position = Math.min(seen.position, position);
+      found.set(model.id, seen);
+    });
+  }
+  return [...found.values()]
+    .map((model) => ({
+      ...model,
+      otherSets: Math.max((groupsPerModel.get(model.id) ?? 1) - 1, 0),
+    }))
+    .sort(
+      (a, b) =>
+        a.position - b.position ||
+        b.recipes - a.recipes ||
+        a.name.localeCompare(b.name),
+    );
 }
 
 /**
- * How one combination differs from another, as the chips a card wears.
+ * A group's cover strip: its combinations' covers, best first, deduplicated.
  *
- * A combination has no name of its own, so it is titled by its files and told
- * apart by what changed. A one-for-one exchange inside the same kind is drawn
- * as an arrow rather than as an add and a remove, because that is what it is:
- * `sdxl_vae → vae-ft-mse` is one decision and "+ one VAE, − another" is two
- * facts a reader has to put back together.
- *
- * @param {Object} from - the seed.
- * @param {Object} to - the member being described.
- * @returns {Array<string>} chip labels, empty when the two are the same files.
+ * The RECORDS, not URLs. `{picture_id, version}` is what the payload sends and
+ * what the card turns into a `src` with `pictureThumbnailUrl` - this module stays
+ * free of the api layer, and that path stays spelled in one place. Deduplicated by
+ * picture, because two recipes in one group can nominate the same best one.
  */
-export function differences(from, to) {
-  const before = new Map((from.models ?? []).map((m) => [m.id, m]));
-  const after = new Map((to.models ?? []).map((m) => [m.id, m]));
-  const removed = [...before.values()].filter((m) => !after.has(m.id));
-  const added = [...after.values()].filter((m) => !before.has(m.id));
-
-  const labels = [];
-  const takenAway = [...removed];
-  for (const model of added) {
-    // Matched on kind, so a swapped VAE reads as a swap and an added LoRA does
-    // not steal a removed text encoder's place in the sentence.
-    const index = takenAway.findIndex((other) => other.kind === model.kind);
-    if (index === -1) {
-      labels.push(`+ ${model.name}`);
-      continue;
-    }
-    labels.push(`${takenAway.splice(index, 1)[0].name} → ${model.name}`);
-  }
-  for (const model of takenAway) labels.push(`− ${model.name}`);
-  return labels;
+function pooledCovers(combinations) {
+  return [
+    ...new Map(
+      combinations
+        .flatMap((combination) => combination.covers ?? [])
+        .map((cover) => [cover.picture_id, cover]),
+    ).values(),
+  ].slice(0, COVER_DEPTH);
 }
 
-/** "3 recipes", "1 recipe" - the evidence behind one combination. */
+/** "3 recipes", "1 recipe" - the evidence behind a group or one of its members. */
 export function recipeCount(recipes) {
   const n = Number(recipes) || 0;
   return n === 1 ? "1 recipe" : `${n} recipes`;
 }
 
+/** "3 pictures", "1 picture". */
+export function pictureCount(pictures) {
+  const n = Number(pictures) || 0;
+  return n === 1 ? "1 picture" : `${n} pictures`;
+}
+
 /**
- * One stack as `ModelSetCard` draws it.
+ * How widely a member is shared, in the words the tray uses.
  *
- * The card's SHAPE is the shipped workflow card's - a cover mosaic, a layered
- * count, four single-line rows - because a reader should not have to learn a
- * second card. Its DATA is its own: `WorkflowCard`'s ⓘ panel says "Stack of 3
- * workflows" and "Saved recipes" and lists pictures through a workflow, and a
- * set is none of those, so borrowing the component would have put three wrong
- * words on every card. See `ModelSetCard.vue`.
+ * The count rather than the list: a VAE in seventeen groups reads as a number,
+ * and which seventeen is one click away in `Works with`.
+ */
+export function sharingLabel(otherSets) {
+  if (!otherSets) return "Only in this set";
+  return otherSets === 1
+    ? "Also in 1 other set"
+    : `Also in ${otherSets} other sets`;
+}
+
+/**
+ * One group as `ModelSetCard` draws it.
  *
- * The name is the first three members joined, which is the server's order and
- * therefore the checkpoint, the VAE and the text encoder - the files that
- * identify the set. An adapter is drawn as a chip on its own row instead, so a
- * set that differs only by its LoRA does not get a name that hides which LoRA.
+ * Three meta rows, which is what the approved design gives this card: the name
+ * with its kind, the per-kind counts, and the facts. The per-kind row answers the
+ * question a grid is scanned for - what SHAPE is this set, one VAE and two
+ * encoders or none at all - without opening anything.
  *
- * @param {{key: string, members: Array<Object>}} stack
+ * @param {Object} group - one entry from {@link setGroups}.
  * @returns {Object} a card for `ModelSetCard`.
  */
-export function setCard(stack) {
-  const [seed] = stack.members;
-  const pictures = stack.members.reduce(
-    (total, member) => total + (member.picture_count ?? 0),
-    0,
-  );
-  const recipes = stack.members.reduce(
-    (total, member) => total + (member.recipes ?? 0),
-    0,
-  );
-  const folded = stack.members.length > 1;
-  const members = seed.models ?? [];
+export function setCard(group) {
+  const models = group.models ?? [];
   return {
-    key: stack.key,
-    name: setName(seed),
-    // The shelf's own kind words, in the server's order, so the row says what
-    // SHAPE the set is: one VAE and two encoders, or none at all.
-    kinds: members
-      .filter((model) => model.kind !== "adapter")
-      .map((model) => memberKindLabel(model))
-      .filter(Boolean),
-    loras: members
-      .filter((model) => model.kind === "adapter")
-      .map((model) => model.name),
-    differsBy: folded
-      ? [
-          ...new Set(
-            stack.members
-              .slice(1)
-              .flatMap((member) => differences(seed, member)),
-          ),
-        ]
-      : // "Nothing to fold" is said in as many words, so the absence of a deck
-        // is never ambiguous - a stack of one looks exactly like a card that
-        // could have had members and did not.
-        [recipeCount(recipes), "nothing to fold"],
-    pictures,
-    recipes,
-    // Pooled across the whole stack, seed first, not taken from the seed alone:
-    // the count beside them sums every member, so a mosaic drawn from one of
-    // them under-represents its own number. Deduplicated by picture, because two
-    // recipes of one combination can nominate the same best picture.
-    //
-    // **The RECORDS, not URLs.** `{picture_id, version}` is what the payload
-    // sends and what the card turns into a `src` with `pictureThumbnailUrl` -
-    // this module stays free of the api layer, and the path stays spelled once.
-    covers: [
-      ...new Map(
-        stack.members
-          .flatMap((member) => member.covers ?? [])
-          .map((cover) => [cover.picture_id, cover]),
-      ).values(),
-    ].slice(0, COVER_DEPTH),
-    size: stack.members.length,
+    key: group.key,
+    // The head names the card, so a Flux or Wan group with no checkpoint row is
+    // named by its diffusion file without this file inventing a second rule.
+    name: group.head?.name || "Unnamed set",
+    kindLabel: memberKindLabel(group.head),
+    kinds: kindCounts(models.filter((model) => model.id !== group.head?.id)),
+    facts: [
+      models.length === 1 ? "1 model" : `${models.length} models`,
+      recipeCount(group.recipes),
+      pictureCount(group.pictures),
+    ],
+    pictures: group.pictures,
+    recipes: group.recipes,
+    covers: group.covers ?? [],
+    size: models.length,
   };
 }
 
-/** The files that identify a set: its first three members, joined. */
-export function setName(combination) {
-  const named = (combination.models ?? [])
-    .filter((model) => model.kind !== "adapter")
-    .slice(0, 3)
-    .map((model) => model.name);
-  return named.length ? named.join(" · ") : setAllNames(combination);
-}
-
-/** Every member's name, for a set whose files are all adapters. */
-function setAllNames(combination) {
-  return (
-    (combination.models ?? [])
-      .slice(0, 3)
-      .map((model) => model.name)
-      .join(" · ") || "Unnamed set"
-  );
-}
-
 /**
- * One combination as the panel under an open stack draws it.
+ * The per-kind tally the card's second row draws: `VAE 2`, `Text enc 1`.
  *
- * Every file is listed with its kind, not truncated behind a chevron: this is
- * the level at which "run exactly this" is a real offer, and an offer with a
- * hidden line is not one.
- *
- * @param {Object} combination
- * @param {Object} seed - the stack's seed, which this one is described against.
- * @param {number} index - position in the stack; 0 is the seed itself.
- * @returns {Object} the shape `ModelComboCard` reads.
+ * In the members' own order rather than alphabetically, so the row reads in the
+ * sequence the tray does. A count of one is still written out, because `VAE`
+ * alone would read as a label rather than as a tally beside `LoRA 3`.
  */
-export function comboCard(combination, seed, index) {
-  const diff = index === 0 ? [] : differences(seed, combination);
-  return {
-    key: combination.key,
-    // The seed carries its own name; the rest are named by what changed, which
-    // is the only thing that tells two near-identical combinations apart.
-    name: index === 0 ? setName(combination) : `… ${diff.join(", ")}`,
-    seed: index === 0,
-    files: (combination.models ?? []).map((model) => ({
-      ...model,
-      kindLabel: memberKindLabel(model),
-    })),
-    covers: [...(combination.covers ?? [])],
-    picture_count: combination.picture_count ?? 0,
-    recipes: combination.recipes ?? 0,
-    note:
-      index === 0
-        ? `most used · ${recipeCount(combination.recipes)}`
-        : `${diffNote(diff)} · ${recipeCount(combination.recipes)}`,
-  };
-}
-
-/** "1 file from the set above", "the VAE is the only difference". */
-function diffNote(diff) {
-  if (!diff.length) return "the same files";
-  const swap = diff.length === 1 && diff[0].includes("→");
-  if (swap) return "one file swapped";
-  return diff.length === 1
-    ? "1 file from the set above"
-    : `${diff.length} files differ`;
+export function kindCounts(models) {
+  const tally = new Map();
+  for (const model of models) {
+    const label = model.kindLabel || memberKindLabel(model) || "Other";
+    tally.set(label, (tally.get(label) ?? 0) + 1);
+  }
+  return [...tally.entries()].map(([label, count]) => `${label} ${count}`);
 }
 
 /**
- * What a member's kind is called on the card.
+ * What a member's kind is called.
  *
- * `fileKindLabel` names every kind but the adapter, which it leaves blank
- * because the row list names an adapter by its algorithm instead. A set card
- * has no algorithm column, so the word is supplied here rather than leaving the
- * one kind a reader most wants to see unlabelled.
+ * `fileKindLabel` names every kind but the adapter, which it leaves blank because
+ * the row list names an adapter by its algorithm instead. A set has no algorithm
+ * column, so the word is supplied here rather than leaving the one kind a reader
+ * most wants to see unlabelled.
  */
 export function memberKindLabel(model) {
   return (
@@ -387,13 +274,16 @@ export function memberKindLabel(model) {
 /**
  * The companions of one model: everything it has been seen beside, ranked.
  *
- * Ranked by how many recipes back each pairing, which is the only thing
- * co-occurrence can actually measure. The caller draws the bar from `share` and
- * the number from `recipes`: the bar is the ranking, the number is the evidence.
+ * **Read from the COMBINATIONS, never from a group's union.** That is the whole
+ * reason this module keeps them: a union puts every model a checkpoint has ever
+ * loaded into one bag, so answering from it would report two VAEs as companions
+ * of each other on the strength of sharing a checkpoint. Ranked by how many
+ * recipes back each pairing, which is the only thing co-occurrence can measure;
+ * the caller draws the bar from `share` and the number from `recipes`.
  *
- * **A model missing from this list has not been ruled out.** It has simply
- * never been in the same picture's recipe, which is a fact about what has been
- * tried here and not about what works - so every caller says so beside the list.
+ * **A model missing from this list has not been ruled out.** It has simply never
+ * been in the same picture's recipe, which is a fact about what has been tried
+ * here and not about what works - so every caller says so beside the list.
  *
  * @param {Array<Object>} combinations
  * @param {number} modelId
@@ -423,8 +313,6 @@ export function worksWith(combinations, modelId) {
       };
       seen.recipes += combination.recipes ?? 0;
       seen.pictures += combination.picture_count ?? 0;
-      // One witness that could not pin the file down is enough to say so; a
-      // cleaner second witness does not unmake the first.
       seen.ambiguous = seen.ambiguous || Boolean(model.ambiguous);
       found.set(model.id, seen);
     }
@@ -444,4 +332,25 @@ export function worksWith(combinations, modelId) {
     recipes,
     sets,
   };
+}
+
+/**
+ * The files that identify one combination, joined.
+ *
+ * Read by the `Works with` dialog's chips, which name the exact combinations a
+ * model is in - the one place a reader sees a reproducible set rather than a
+ * group's union.
+ */
+export function setName(combination) {
+  const named = (combination.models ?? [])
+    .filter((model) => model.kind !== "adapter")
+    .slice(0, 3)
+    .map((model) => model.name);
+  if (named.length) return named.join(" · ");
+  return (
+    (combination.models ?? [])
+      .slice(0, 3)
+      .map((model) => model.name)
+      .join(" · ") || "Unnamed set"
+  );
 }

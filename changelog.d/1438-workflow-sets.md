@@ -1,9 +1,13 @@
-- The model shelf now opens on **Workflow sets**: a grid of the model
-  combinations your pictures were actually made with. A card is one set of files
-  that ran together — the checkpoint, its VAE, its text encoders, its LoRAs — so
-  you can see what to pair with what instead of guessing. Near-identical sets
-  fold into a stack you can open; the `Fold` control on the toolbar says what
-  each setting costs in cards, and *Don't fold* shows every set.
+- The model shelf now opens on **Workflow sets**: a card for each checkpoint
+  your pictures were made with, and opening one shows every model that has run
+  alongside it — its VAEs, its text encoders, its LoRAs — with how many of your
+  pictures back each one. So you can see what to pair with what instead of
+  guessing. Read a set as cards or as a comparison list, the same switch the
+  Workflows screen's stacks use.
+- Each model in a set says whether it is shared. `Also in 3 other sets` on a VAE
+  three checkpoints have used; `Only in this set` on one that has served just the
+  one. What a set does **not** claim is that its files all ran together at once —
+  it is everything that checkpoint has ever loaded, and the set says so.
 - A model belongs to every set it has run in, so the same VAE appears beside
   each checkpoint it has served. **Works with** shows everything one model has
   been seen alongside, ranked by how many recipes back each pairing: click a

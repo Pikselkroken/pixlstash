@@ -1480,23 +1480,33 @@ proves ran together, with a model free to appear in more than one.
   float `ShelfSelectionBar` over the grid. A selection made in the row list
   survives the switch in the store and is still there on the way back. The
   roving cursor is kept because it is how the panel is reached from a keyboard.
-- **The fold is a toolbar control, and it is the client's.** `Fold:` renders
-  beside `Group:` only while this axis is chosen, the same rule the folder layout
-  follows. `foldSets` (`utils/workflowSets.js`) folds combinations within a
-  chosen distance onto the most-used one in the stack; `foldCounts` prices all
-  four settings off the same payload, so the menu states what each costs in
-  cards and *Don't fold* needs no request. Three rules make it honest: the
-  distance is `max(added, removed)` so a one-for-one swap is ONE step (the
-  symmetric difference would call it two and separate the pair a reader most
-  wants side by side); folding is greedy against the stack's SEED rather than
-  single-linkage, or A-B-C chains onto a card whose name describes none of them;
-  and a fold **never swaps the head**, so every stack is inside one head's group
-  and `By checkpoint only` stays the coarsest setting. The four are **not** nested
-  partitions, and nothing in the UI says they are: seeding means the seed set
-  itself changes with the distance, so loosening can move a member onto a
-  different card rather than only merging cards (`foldSets`' docstring works the
-  three-combination case). That is why the menu states a card COUNT per setting -
-  the count is what changes under the reader, and it is what they can see.
+- **A card is one base model and its tray holds MODELS**, which is the shape the
+  owner asked for over the folded-combinations one this branch first built. One
+  card per checkpoint - or per diffusion file, where a graph loads one instead -
+  carrying the union of everything it has co-occurred with. `setGroups`
+  (`utils/workflowSets.js`) keys on the head's ID and never its name, gives each
+  member its OWN `recipes` / `pictures` counted over the combinations in that
+  group that name it, and counts `otherSets` across the whole grid so a tray can
+  mark a shared VAE as shared. There is no fold control and no fold distance: the
+  grouping has one answer, so there is nothing to tune.
+- **A union is not reproducible, and the tray says so before listing it.** Two
+  files in one tray may never have run together and the union cannot say which.
+  That sentence is in the tray's header, because without it the tray reads as a
+  set you could re-run - the one claim this feature must not make. The
+  per-combination evidence is therefore NOT folded away on the way in:
+  `worksWith` reads it so pairwise answers stay exact, and a member's own counts
+  come from the combinations that name it. Union for the card, combinations for
+  every claim.
+- **Grid | List in the tray is the Workflows stack panel's**, by name, by the
+  `icon-label` Segmented and by the remembered-for-every-tray rule, so a reader
+  learns one switch. The component is not shared because that panel's List
+  columns are workflow columns (`Workflow`, `Checkpoint`, `Differs by`) where a
+  set's are `Model`, `Kind`, `Size`, `Recipes`, `Pictures`, `In other sets`, and
+  it carries a per-member menu of workflow verbs. The remembered choice is
+  `view.trayView` in the shelf's own blob rather than
+  `useWorkflowPrefsStore.stackView`, which documents itself as a Workflows-screen
+  preference; one choice across both trays would be the better product and wants
+  that store renaming rather than this screen reaching into it.
 - **The models with no set get a card too**, dashed, last, and outside the
   treegrid — it is not a set, and inside the grid it would be the last thing the
   arrow keys walk into. Its copy states the narrow fact and not the wide one:

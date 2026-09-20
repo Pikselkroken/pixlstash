@@ -517,11 +517,14 @@ Rules neither side may drift from:
    then `unknown`, then VAE, text encoder, adapter, engine. The head is the file
    the set is named after, which is how a Flux or Wan set with no `checkpoint`
    row gets a name without the client inventing a second fallback rule.
-4. **The fold is the client's.** The server proposes no grouping at all, so the
-   toolbar can price every fold setting in cards off one payload and *Don't
-   fold* costs no request. `utils/workflowSets.js` owns the distance
-   (`max(added, removed)`, so a one-for-one swap is one step), the seeded greedy
-   folding and the rule that a fold never swaps the head.
+4. **The GROUPING is the client's, and the payload stays per-combination.** The
+   server proposes no grouping at all: `setGroups` (`utils/workflowSets.js`) unions
+   the combinations under each head to make the cards, while the combinations
+   themselves stay in hand — `worksWith` needs them to answer a pairwise question
+   exactly, since a union would report two VAEs as each other's companions on the
+   strength of sharing a checkpoint, and each member's own recipe and picture
+   counts come from the combinations that name it. **A client must not collapse
+   this payload to unions on the way in.**
 5. **Scoped to the ACTIVE library**, unlike `POST /models/companions`, which
    counts every recipe the hub holds. A delete warning must keep a file some
    other library needs; this grid is a picture of what the library in front of

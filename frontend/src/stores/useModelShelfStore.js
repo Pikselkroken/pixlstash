@@ -33,13 +33,7 @@ import {
   offlineFolders,
   UNSET_GROUP_KEY,
 } from "../utils/modelShelf";
-import {
-  FOLD_KEYS,
-  foldCounts,
-  foldSets,
-  setCard,
-  worksWith,
-} from "../utils/workflowSets";
+import { setCard, setGroups, worksWith } from "../utils/workflowSets";
 
 /** Where the `Show` selection is remembered between visits. */
 const FILTERS_KEY = "pixlstash:modelShelfFilters";
@@ -127,9 +121,22 @@ export const GROUP_BY_KEYS = [
  * `workflow_set` swaps the list for a card grid, because its groups OVERLAP: a
  * VAE belongs to every set it has run in, and a sticky band can only put a row
  * in one place. The other four stay exactly as they were - `groups` is not asked
- * to express this one, and the grid reads `setStacks` instead.
+ * to express this one, and the grid reads `setGroups` instead.
  */
 export const GRID_GROUP_BY = "workflow_set";
+
+/**
+ * How an open set's tray draws its models.
+ *
+ * The Workflows grid's own two, by name and by behaviour (`STACK_VIEWS`,
+ * `useWorkflowPrefsStore`). Remembered HERE rather than read from that store
+ * because it documents itself as a Workflows-screen preference and its List
+ * columns are workflow columns - `Workflow`, `Checkpoint`, `Differs by` - where a
+ * set's are `Model`, `Kind`, `Size`, `In other sets`. One remembered choice
+ * across both trays would be the better product; it wants that store renaming
+ * rather than this screen reaching into it.
+ */
+export const TRAY_VIEWS = ["grid", "list"];
 
 /**
  * How folder groups are laid out, which is a sub-choice of `Folder` rather than
@@ -629,11 +636,13 @@ function defaultView() {
     sortKey: "added_at",
     sortDirection: "desc",
     folderLayout: "drive",
-    // Carried at all times and only read under `workflow_set`, exactly as
-    // `folderLayout` is only read under `folder`. One file apart rather than
-    // `none`, because an unfolded grid opens on a card per combination tried -
-    // the honest shape, and not the one to meet first.
-    fold: "one",
+    // How an open set's tray draws its models: as cards or as a comparison
+    // list. Carried at all times and only read under `workflow_set`, exactly as
+    // `folderLayout` is only read under `folder`. The same two views the
+    // Workflows grid's stack panel offers, and remembered the same way - for
+    // every tray rather than per tray, because the switch answers "how do I read
+    // a tray" rather than anything about the one in front of you.
+    trayView: "grid",
     columnWidths: { ...DEFAULT_COLUMN_WIDTHS },
   };
 }
@@ -760,7 +769,7 @@ function storedView() {
   if (FOLDER_LAYOUTS.includes(parsed.folderLayout)) {
     view.folderLayout = parsed.folderLayout;
   }
-  if (FOLD_KEYS.includes(parsed.fold)) view.fold = parsed.fold;
+  if (TRAY_VIEWS.includes(parsed.trayView)) view.trayView = parsed.trayView;
   if (SORT_KEYS.includes(parsed.sortKey)) view.sortKey = parsed.sortKey;
   if (parsed.sortDirection === "asc" || parsed.sortDirection === "desc") {
     view.sortDirection = parsed.sortDirection;
@@ -1572,21 +1581,19 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   });
 
   /**
-   * The cards the set grid draws, folded to the reader's chosen distance.
+   * The cards the set grid draws: one per base model that has made a picture.
    *
-   * Each entry carries both the `WorkflowCard` payload and the combinations
-   * behind it, so the panel under an open card needs no second lookup.
+   * Each entry carries the card, the group's members (the union, each with its
+   * own evidence and how widely it is shared) and the combinations behind it - so
+   * the tray under an open card needs no second lookup and nothing has to
+   * re-derive the grouping to answer a question about one member.
    */
-  const setStacks = computed(() =>
-    foldSets(visibleCombinations.value, view.fold).map((stack) => ({
-      key: stack.key,
-      members: stack.members,
-      card: setCard(stack),
+  const setGroupList = computed(() =>
+    setGroups(visibleCombinations.value).map((group) => ({
+      ...group,
+      card: setCard(group),
     })),
   );
-
-  /** What each fold setting would cost in cards, for the menu that offers them. */
-  const setFoldCounts = computed(() => foldCounts(visibleCombinations.value));
 
   /**
    * The shown rows no recipe in this library binds to anything.
@@ -1605,7 +1612,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     );
   });
 
-  /** Open or close one stack's member panel. One at a time, like the grid's. */
+  /** Open or close one group's tray. One at a time, like the workflows grid's. */
   function toggleSet(key) {
     openSetKey.value = openSetKey.value === key ? "" : key;
   }
@@ -1613,17 +1620,16 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /**
    * Forget an open stack that no longer exists.
    *
-   * **A key is not a stack.** Changing the fold re-seeds every stack and
-   * `checkpoint` re-keys them entirely, so an open key can survive the card it
-   * named - and then survives a `groupBy` switch and a post-scan refetch too,
-   * silently reopening the moment some later fold happens to mint the same key
-   * (#1479 review). A `Show` tick that hides a stack's every member does the
-   * same. Reconciled here rather than in the grid because the key lives here and
-   * the grid is not the only thing that can change what it names.
+   * **A key is not a group.** A `Show` tick that hides a group's every member
+   * takes the card away and leaves the key behind, and the key then survives a
+   * `groupBy` switch and a post-scan refetch, silently reopening the moment some
+   * later payload happens to mint it again (#1479 review). Reconciled here rather
+   * than in the grid because the key lives here and the grid is not the only
+   * thing that can change what it names.
    */
-  watch(setStacks, (stacks) => {
+  watch(setGroupList, (groups) => {
     if (!openSetKey.value) return;
-    if (!stacks.some((stack) => stack.key === openSetKey.value)) {
+    if (!groups.some((group) => group.key === openSetKey.value)) {
       openSetKey.value = "";
     }
   });
@@ -2459,8 +2465,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     loadWorkflowSets,
     shownModelIds,
     visibleCombinations,
-    setStacks,
-    setFoldCounts,
+    setGroups: setGroupList,
     noSetRows,
     openSetKey,
     toggleSet,

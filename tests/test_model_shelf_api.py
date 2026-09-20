@@ -32,6 +32,7 @@ the refused token is live.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 import sys
@@ -306,6 +307,9 @@ def shelf_env():
         r = owner.post(f"{API}/picture_sets", json={"name": "Shelf Set"})
         assert r.status_code in {200, 201}, r.text
         set_id = r.json()["picture_set"]["id"]
+
+        # Before any test writes a picture: see `_quiesce_background_work`.
+        _quiesce_background_work(server)
 
         yield SimpleNamespace(
             server=server, owner=owner, character_id=character_id, set_id=set_id
@@ -717,6 +721,39 @@ def test_companions_answers_the_owner_and_refuses_a_share_token(shelf_env):
 # ---------------------------------------------------------------------------
 
 
+def _quiesce_background_work(server):
+    """Take every work finder out of the planner and let the pipeline settle.
+
+    A shared server is warm, and ``MissingComfyUIExtractionFinder`` looks for
+    exactly the rows the workflow-set tests below hand-write: it re-reads the
+    (nonexistent) files and blanks ``workflow_structural_hash``, which is what a
+    set's picture count is grouped by - so a card came back with one picture
+    instead of two, intermittently, depending on whether the sweep had landed. The
+    planner thread and the task runner keep running.
+
+    Lifted from ``tests/test_saved_recipes.py``, which needs it for the same rows
+    and the same reason.
+    """
+    planner = server.vault._work_planner
+    task_types = list(server.vault._planner_work_finders)
+    for task_type in task_types:
+        server.vault._planner_work_finders.pop(task_type)
+    removed = planner.detach_finders(task_types)
+
+    runner = server.vault._task_runner
+    runner.cancel_pending_tasks()
+    deadline = time.monotonic() + 60.0
+    while time.monotonic() < deadline:
+        with runner._active_task_lock:
+            active = list(runner._active_tasks.values())
+        if not active:
+            return removed
+        time.sleep(0.05)
+    raise AssertionError(
+        f"background work did not settle within 60s; still running: {active}"
+    )
+
+
 def _seed_recipe(server, structural_hash: str, assets: list[tuple[str, str]]) -> None:
     """One recipe on the hub, naming *assets* as ``(widget_name, filename)``."""
     with server.hub.transaction() as conn:
@@ -739,13 +776,19 @@ def _seed_recipe(server, structural_hash: str, assets: list[tuple[str, str]]) ->
         )
 
 
+# One counter for the whole module, so every seeded picture gets a path of its
+# own. Two pictures of one recipe sharing a `file_path` is the kind of fixture
+# that passes until something downstream dedupes on it.
+_SEEDED_PICTURES = itertools.count(1)
+
+
 def _seed_picture(server, structural_hash: str, **fields) -> int:
     """One kept picture made by *structural_hash*, with the bitmap fields the
-    cover URL's cache-buster is computed from."""
+    cover URL's cache key is computed from."""
 
     def insert(session: Session):
         picture = Picture(
-            file_path=f"{structural_hash}-{fields.get('score') or 0}.png",
+            file_path=f"{structural_hash}-{next(_SEEDED_PICTURES)}.png",
             deleted=False,
             workflow_structural_hash=structural_hash,
             **fields,

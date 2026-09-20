@@ -5178,23 +5178,20 @@ describe("the set grid is what the shelf opens on", () => {
     expect(wrapper.find(".shelf-row").exists()).toBe(false);
   });
 
-  it("offers Fold and hides Sort, because one steers the grid and one does not", async () => {
+  it("hides Sort, because it steers a list that is not on screen", async () => {
     const wrapper = await mountDefaultShelf();
     const store = useModelShelfStore();
 
-    const hasFold = () =>
-      wrapper.findAll("button").some((b) => textOf(b).includes("Fold:"));
     // The shipped split-button, which is what `Sort` actually is.
     const hasSort = () => wrapper.find(".bar-split-button").exists();
 
-    expect(hasFold()).toBe(true);
     // A live control with no effect reads "Sort: Added" over a grid it cannot
-    // reorder, so it is absent here and back the moment the row list is.
+    // reorder, so it is absent here and back the moment the row list is. The grid
+    // orders itself by the weight of the evidence behind each set.
     expect(hasSort()).toBe(false);
 
     store.setView({ groupBy: "none" });
     await wrapper.vm.$nextTick();
-    expect(hasFold()).toBe(false);
     expect(hasSort()).toBe(true);
   });
 

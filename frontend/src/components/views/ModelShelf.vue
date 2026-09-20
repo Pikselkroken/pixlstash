@@ -312,73 +312,6 @@
             <ShelfSortPanel section="group" />
           </v-menu>
 
-          <!-- Fold is a SUB-CHOICE of the Workflow set axis, so it renders only
-               while that axis is chosen - the same rule the folder layout
-               follows inside the Group panel. It is on the bar rather than
-               buried in that panel because it changes how many cards are on
-               screen, which is the one thing a reader has to be able to see
-               they chose. -->
-          <v-menu
-            v-if="isSetGrid"
-            v-model="foldMenuOpen"
-            location="bottom end"
-            origin="top end"
-            :offset="8"
-            transition="scale-transition"
-          >
-            <template #activator="{ props: menuProps }">
-              <AppBarButton
-                v-bind="menuProps"
-                prefix="Fold:"
-                :icon="activeFold.icon"
-                chevron
-                :open="foldMenuOpen"
-                aria-haspopup="dialog"
-                :aria-expanded="foldMenuOpen"
-                tooltip="How far apart two sets may be and still share a card"
-              >
-                <span class="bar-btn-value">{{ activeFold.label }}</span>
-              </AppBarButton>
-            </template>
-            <!-- `aria-haspopup="dialog"` above, not `menu`, for the reason Sort
-                 and Group declare the same: the panel is a `.tbm` div of grouped
-                 toggles, and claiming a menu would promise roving arrow keys
-                 nothing implements.
-
-                 **`v-if` on the body, not just on the menu.** Vuetify keeps
-                 overlay content mounted after the first activation, so the card
-                 counts below - four full folds of every combination - would be
-                 recomputed on every `Show` tick for the rest of the session once
-                 the menu had been opened once (#1479 review). Gated, they are
-                 computed while the reader is looking at them and never again. -->
-            <div v-if="foldMenuOpen" class="tbm shelf-fold-panel">
-              <span class="tbm-caret tbm-caret--end"></span>
-              <div class="tbm-header">
-                <v-icon size="18" class="tbm-header-icon">mdi-layers</v-icon>
-                <span class="tbm-title">Fold</span>
-              </div>
-              <div class="tbm-section">
-                <!-- Card counts, not adjectives. "Loose" and "strict" mean
-                     nothing before you have seen the result; a number does, and
-                     it is what makes *Don't fold* a real option rather than a
-                     debug switch. -->
-                <OptionRows
-                  :options="foldOptions"
-                  :model-value="store.view.fold"
-                  aria-label="Fold"
-                  @update:model-value="(key) => store.setView({ fold: key })"
-                  @pick="foldMenuOpen = false"
-                >
-                  <template #meta="{ option }">
-                    <span class="shelf-fold-count num">{{
-                      foldCountLabel(option.id)
-                    }}</span>
-                  </template>
-                </OptionRows>
-              </div>
-            </div>
-          </v-menu>
-
           <!-- Hidden on the set grid, not disabled, exactly as the whole
                cluster is hidden on the training-runs tab and for the same
                reason: the five sort keys order the ROW LIST, and that list is
@@ -1593,7 +1526,6 @@ import ModelMark from "../widgets/ModelMark.vue";
 import PicturePicker from "../widgets/PicturePicker.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
-import OptionRows from "../widgets/OptionRows.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
@@ -1655,7 +1587,6 @@ import {
   unstackReceipt,
   sortDirectionLabel,
 } from "../../utils/modelShelf";
-import { FOLD_KEYS, FOLD_LABELS } from "../../utils/workflowSets";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 
 // Settings lives in App.vue's sidebar dialog, so the toolbar's Settings button
@@ -1686,7 +1617,6 @@ const folderMenuFolder = ref(null);
 const folderMenuInvoker = ref(null);
 const addMenuOpen = ref(false);
 const groupMenuOpen = ref(false);
-const foldMenuOpen = ref(false);
 /** The model whose companions the Works with dialog is answering for, or null. */
 const worksWithModel = ref(null);
 // Held raw like `folderInvoker`: a DOM node, not reactive state. `VDialog`
@@ -3955,15 +3885,17 @@ const offlineMountPaths = computed(() =>
  * other: `models` is distinct files on the shelf, `copies` is rows on screen.
  */
 const countLabel = computed(() => {
-  // On the set axis the row count is about a list that is not on screen, and
-  // the two figures a reader needs are how many combinations there are and how
-  // many cards they were folded into.
+  // On the set axis the row count is about a list that is not on screen. The two
+  // figures a reader needs are how many sets there are and how much evidence is
+  // behind them, which is the combination count rather than a second card count.
   if (isSetGrid.value) {
-    const sets = store.visibleCombinations.length;
-    const stacks = store.setStacks.length;
+    const sets = store.setGroups.length;
+    const recipes = store.visibleCombinations.length;
     const setsLabel = sets === 1 ? "1 set" : `${sets.toLocaleString()} sets`;
-    if (sets === stacks) return setsLabel;
-    return `${setsLabel} · ${stacks.toLocaleString()} stacks`;
+    if (!recipes) return setsLabel;
+    return `${setsLabel} · ${recipes.toLocaleString()} ${
+      recipes === 1 ? "combination" : "combinations"
+    }`;
   }
   const models = modelCount(store.visibleRows.length);
   const drawn = store.renderedCount;
@@ -3984,28 +3916,6 @@ const grouped = computed(() => store.view.groupBy !== "none");
 const isSetGrid = computed(
   () => isShelfTab.value && store.view.groupBy === GRID_GROUP_BY,
 );
-
-const activeFold = computed(
-  () => FOLD_LABELS[store.view.fold] || FOLD_LABELS.one,
-);
-
-const foldOptions = FOLD_KEYS.map((key) => ({
-  id: key,
-  label: FOLD_LABELS[key].label,
-  icon: FOLD_LABELS[key].icon,
-}));
-
-/**
- * What one fold setting costs in cards, as the menu row states it.
- *
- * A number rather than a word, because the setting's whole effect is on how many
- * cards are on screen and no adjective conveys that before you have seen it.
- */
-function foldCountLabel(key) {
-  const count = store.setFoldCounts[key] ?? 0;
-  if (key === "none") return count === 1 ? "1 card" : `${count} cards`;
-  return count === 1 ? "1 stack" : `${count} stacks`;
-}
 
 /**
  * Answer "what else has this run with" for one model.

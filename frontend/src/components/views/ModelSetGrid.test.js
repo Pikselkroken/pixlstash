@@ -117,6 +117,7 @@ function combination(
 const CKPT = member(1, "realvisXL_v5", "checkpoint");
 const VAE = member(2, "sdxl_vae", "vae");
 const LORA = member(3, "filmgrain_xl", "adapter");
+const OTHER_CKPT = member(4, "juggernautXL_v9", "checkpoint");
 
 async function mountGrid({
   combinations = [],
@@ -146,29 +147,36 @@ beforeEach(() => {
 });
 
 describe("the cards", () => {
-  it("draws one card per stack, named by the files that identify it", async () => {
+  it("draws one card per base model, named after it", async () => {
     const { wrapper } = await mountGrid({
       rows: [row(1, "realvisXL_v5")],
       support: [row(2, "sdxl_vae", "vae")],
       combinations: [
         combination("1,2", [CKPT, VAE], { recipes: 4, pictures: 12 }),
+        // A second recipe under the SAME checkpoint: one card, not two.
+        combination("1,2,3", [CKPT, VAE, LORA], { recipes: 1, pictures: 3 }),
       ],
     });
 
     const cards = wrapper.findAll('[data-testid="model-set-card"]');
     expect(cards).toHaveLength(1);
-    expect(cards[0].text()).toContain("realvisXL_v5 · sdxl_vae");
+    expect(cards[0].text()).toContain("realvisXL_v5");
+    // The per-kind tally of everything else, and the facts summed over both.
+    expect(cards[0].text()).toContain("VAE 1");
+    expect(cards[0].text()).toContain("LoRA 1");
+    expect(cards[0].text()).toContain("3 models");
+    expect(cards[0].text()).toContain("5 recipes");
+    expect(cards[0].text()).toContain("15 pictures");
   });
 
   it("lays the cover out for the pictures it has, never leaving a hole", async () => {
     // `WorkflowCard` learned this once and the first copy of its geometry here
     // did not: a fixed 2fr/1fr mosaic drawn for three cells leaves an empty box
     // when a set has one or two pictures (#1479 review).
-    const oneCover = combination("1,2", [CKPT, VAE], { covers: [7] });
     const { wrapper } = await mountGrid({
       rows: [row(1, "realvisXL_v5")],
       support: [row(2, "sdxl_vae", "vae")],
-      combinations: [oneCover],
+      combinations: [combination("1,2", [CKPT, VAE], { covers: [7] })],
     });
 
     const cover = wrapper.find(".msc__cover");
@@ -182,8 +190,7 @@ describe("the cards", () => {
     // `{picture_id, version}`, and a card that put a bare path in `src` asked the
     // PAGE origin for a route it does not serve - every cover broken, and no
     // fixture noticed because each asserted the string it had just been handed.
-    // So this asserts the URL the BROWSER is given, both on the card and inside
-    // an open stack.
+    // So this asserts the URL the BROWSER is given, on the card and in the tray.
     const { wrapper, store } = await mountGrid({
       rows: [row(1, "realvisXL_v5")],
       support: [row(2, "sdxl_vae", "vae")],
@@ -195,30 +202,24 @@ describe("the cards", () => {
     expect(expected).toContain("/pictures/thumbnails/7.webp");
     expect(expected).toContain("v=v7");
 
-    store.toggleSet("1,2");
+    store.toggleSet("model:1");
     await wrapper.vm.$nextTick();
-    expect(wrapper.find(".combo__strip img").attributes("src")).toBe(expected);
+    expect(wrapper.find('[data-testid="model-set-panel"]').exists()).toBe(true);
   });
 
-  it("says nothing to fold on a card with one combination under it", async () => {
+  it("says so on a card nothing else has ever run with", async () => {
     const { wrapper } = await mountGrid({
       rows: [row(1, "realvisXL_v5")],
       combinations: [combination("1", [CKPT], { recipes: 3 })],
     });
 
-    expect(wrapper.text()).toContain("nothing to fold");
-    // And no ▸ at all, because there is nothing behind it. The row's existence
-    // is asserted first, so this cannot pass on an absent element, and the two
-    // stack marks are asserted absent rather than only the ARIA attribute.
-    // Not `row`, which is this suite's row-fixture helper.
-    const cardRow = wrapper.find('[role="row"]');
-    expect(cardRow.exists()).toBe(true);
-    expect(cardRow.attributes("aria-expanded")).toBeUndefined();
-    expect(wrapper.find(".msc__toggle").exists()).toBe(false);
-    expect(wrapper.find(".msc__badge--start").exists()).toBe(false);
+    expect(wrapper.text()).toContain("Nothing else has run with it");
+    // The ▸ is still there: a tray of one model is still a tray, and the card
+    // has no other way to show which file it is.
+    expect(wrapper.find(".msc__toggle").exists()).toBe(true);
   });
 
-  it("opens the folded combinations under the card, listing every file", async () => {
+  it("opens a tray of the MODELS that have run with the base model", async () => {
     const { wrapper, store } = await mountGrid({
       rows: [row(1, "realvisXL_v5"), row(3, "filmgrain_xl")],
       support: [row(2, "sdxl_vae", "vae")],
@@ -227,54 +228,95 @@ describe("the cards", () => {
         combination("1,2,3", [CKPT, VAE, LORA], { recipes: 2, pictures: 5 }),
       ],
     });
-    // One card: the two combinations are one file apart, which is the default.
+    // One card for the two combinations.
     expect(wrapper.findAll('[data-testid="model-set-card"]')).toHaveLength(1);
 
-    store.toggleSet("1,2");
+    store.toggleSet("model:1");
     await wrapper.vm.$nextTick();
 
-    const combos = wrapper.findAll('[data-testid="model-combo-card"]');
-    expect(combos).toHaveLength(2);
-    // Every file, not a summary: the second combination lists all three.
-    const files = combos[1].findAll(".combo__filename").map((el) => el.text());
-    expect(files).toEqual(["realvisXL_v5", "sdxl_vae", "filmgrain_xl"]);
-    expect(combos[1].text()).toContain("+ filmgrain_xl");
+    // Three MEMBERS, one per model - not two members, one per combination.
+    const members = wrapper.findAll('[data-testid="model-set-member"]');
+    expect(members).toHaveLength(3);
+    expect(members.map((m) => m.find(".msm__name").text())).toEqual([
+      "realvisXL_v5",
+      "sdxl_vae",
+      "filmgrain_xl",
+    ]);
+    // The head is marked, and the LoRA carries its own evidence.
+    expect(members[0].text()).toContain("Names this set");
+    expect(members[2].text()).toContain("2 recipes");
+    expect(members[2].text()).toContain("5 pictures");
+  });
+
+  it("says what a union cannot claim, before the list of it", async () => {
+    // A group is every model its base model has co-occurred with, so two files in
+    // one tray may never have run together. Without this the tray reads as a
+    // reproducible set, which is the one claim this feature must not make.
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [combination("1,2", [CKPT, VAE])],
+    });
+    store.toggleSet("model:1");
+    await wrapper.vm.$nextTick();
+
+    const note = wrapper.find(".msp__note");
+    expect(note.exists()).toBe(true);
+    expect(note.text()).toContain("not necessarily run with");
+  });
+
+  it("marks a member shared across sets, and one that is not", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5"), row(4, "juggernautXL_v9")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [
+        combination("1,2", [CKPT, VAE], { pictures: 20 }),
+        combination("2,4", [OTHER_CKPT, VAE], { pictures: 5 }),
+      ],
+    });
+    store.toggleSet("model:1");
+    await wrapper.vm.$nextTick();
+
+    const text = wrapper
+      .findAll('[data-testid="model-set-member"]')
+      .map((m) => m.text());
+    // The VAE serves both checkpoints; the checkpoint serves only its own set.
+    expect(text.find((t) => t.includes("sdxl_vae"))).toContain(
+      "Also in 1 other set",
+    );
+    expect(text.find((t) => t.includes("realvisXL_v5"))).toContain(
+      "Only in this set",
+    );
   });
 
   it("flags a member the evidence could not pin down rather than hiding it", async () => {
     const { wrapper, store } = await mountGrid({
       rows: [row(1, "realvisXL_v5")],
       support: [row(2, "sdxl_vae", "vae")],
-      combinations: [
-        combination("1,2", [
-          CKPT,
-          member(2, "sdxl_vae", "vae", { ambiguous: true }),
-        ]),
-      ],
+      combinations: [combination("1,2", [CKPT, { ...VAE, ambiguous: true }])],
     });
-    store.toggleSet("1,2");
+    store.toggleSet("model:1");
     await wrapper.vm.$nextTick();
 
-    const combo = wrapper.find('[data-testid="model-combo-card"]');
-    expect(combo.findAll(".combo__filename").map((el) => el.text())).toContain(
-      "sdxl_vae",
-    );
-    expect(combo.find(".combo__warn").exists()).toBe(true);
+    const members = wrapper.findAll('[data-testid="model-set-member"]');
+    const vae = members.find((m) => m.text().includes("sdxl_vae"));
+    expect(vae.classes()).toContain("msm--unsure");
+    expect(vae.text()).toContain("Which file ran is not recorded");
   });
 
-  it("asks a file what else it has run with, naming that file", async () => {
+  it("asks a model what else it has run with, naming that model", async () => {
     const { wrapper, store } = await mountGrid({
       rows: [row(1, "realvisXL_v5")],
       support: [row(2, "sdxl_vae", "vae")],
       combinations: [combination("1,2", [CKPT, VAE])],
     });
-    store.toggleSet("1,2");
+    store.toggleSet("model:1");
     await wrapper.vm.$nextTick();
 
-    await wrapper.findAll(".combo__filename")[1].trigger("click");
+    await wrapper.findAll(".msm__name")[1].trigger("click");
 
-    // The MODEL, by identity, not a rendered stub: the shelf owns the one
-    // dialog, so what this grid is responsible for is handing up the right file.
+    // The MODEL, by identity: the shelf owns the one dialog, so what this grid is
+    // responsible for is handing up the right file.
     expect(wrapper.emitted("works-with")).toHaveLength(1);
     expect(wrapper.emitted("works-with")[0][0]).toMatchObject({
       id: 2,
@@ -283,43 +325,73 @@ describe("the cards", () => {
     });
   });
 
-  it("reaches the same answer from the keyboard, which has no button to press", async () => {
-    // Every file button inside a combination is at `tabindex="-1"` because the
-    // grid owns Tab, so Enter on a row is the ONLY keyboard route to the
-    // companions of a file. Without it the dialog is pointer-only.
-    const { wrapper } = await mountGrid({
+  it("reaches every model in the tray from the keyboard", async () => {
+    // The member cards' name buttons are at `tabindex="-1"` because the grid owns
+    // Tab, so Enter on a tray row is the keyboard's route to a model's companions.
+    // Now that a row IS one model, every one of them is reachable - the earlier
+    // shape had a row per combination and could only offer its head (#1479).
+    const { wrapper, store } = await mountGrid({
       rows: [row(1, "realvisXL_v5")],
       support: [row(2, "sdxl_vae", "vae")],
       combinations: [combination("1,2", [CKPT, VAE])],
     });
+    store.toggleSet("model:1");
+    await wrapper.vm.$nextTick();
 
-    await wrapper
-      .find('[role="treegrid"]')
-      .trigger("keydown", { key: "Enter" });
+    const grid = wrapper.find('[role="treegrid"]');
+    // Down from the card lands on the first tray row, Down again on the second.
+    await grid.trigger("keydown", { key: "ArrowDown" });
+    await grid.trigger("keydown", { key: "ArrowDown" });
+    await grid.trigger("keydown", { key: "Enter" });
 
-    // A card with nothing to fold answers for the file it is NAMED after.
     expect(wrapper.emitted("works-with")[0][0]).toMatchObject({
-      id: 1,
-      name: "realvisXL_v5",
+      name: "sdxl_vae",
     });
   });
 
-  it("opens and closes a stack from the keyboard", async () => {
+  it("opens and closes a tray from the keyboard", async () => {
     const { wrapper, store } = await mountGrid({
-      rows: [row(1, "realvisXL_v5"), row(3, "filmgrain_xl")],
+      rows: [row(1, "realvisXL_v5")],
       support: [row(2, "sdxl_vae", "vae")],
-      combinations: [
-        combination("1,2", [CKPT, VAE], { pictures: 20 }),
-        combination("1,2,3", [CKPT, VAE, LORA], { pictures: 5 }),
-      ],
+      combinations: [combination("1,2", [CKPT, VAE])],
     });
     const grid = wrapper.find('[role="treegrid"]');
 
     await grid.trigger("keydown", { key: "Enter" });
-    expect(store.openSetKey).toBe("1,2");
+    expect(store.openSetKey).toBe("model:1");
 
     await grid.trigger("keydown", { key: "Escape" });
     expect(store.openSetKey).toBe("");
+  });
+
+  it("draws the tray as a list when the reader asks for one", async () => {
+    // The Workflows stack panel's own switch, so a reader learns it once. The
+    // columns differ because a set's members are models.
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [combination("1,2", [CKPT, VAE])],
+    });
+    store.toggleSet("model:1");
+    store.setView({ trayView: "list" });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.findAll('[data-testid="model-set-member"]')).toHaveLength(0);
+    const heads = wrapper.findAll('[role="columnheader"]').map((h) => h.text());
+    expect(heads).toEqual([
+      "Model",
+      "Kind",
+      "Size",
+      "Recipes",
+      "Pictures",
+      "In other sets",
+    ]);
+    // A row is still a level-2 treegrid row, and clicking it asks the same
+    // question the card's name does.
+    await wrapper.findAll(".msp__row")[1].trigger("click");
+    expect(wrapper.emitted("works-with")[0][0]).toMatchObject({
+      name: "sdxl_vae",
+    });
   });
 });
 

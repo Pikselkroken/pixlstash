@@ -1,7 +1,7 @@
 <template>
   <article
     class="msc"
-    :class="{ 'msc--stack': stacked, 'msc--open': expanded }"
+    :class="{ 'msc--open': expanded }"
     role="group"
     :aria-label="accessibleName"
     data-testid="model-set-card"
@@ -18,6 +18,9 @@
       >
         <img :src="coverSrc(cover)" alt="" loading="lazy" />
       </span>
+      <span class="msc__badge msc__badge--start" aria-hidden="true">
+        <v-icon size="12">mdi-layers</v-icon>{{ card.recipes }} recipes
+      </span>
       <span class="msc__badge msc__badge--end" aria-hidden="true">
         <v-icon size="12">mdi-image-multiple</v-icon
         >{{ card.pictures.toLocaleString() }}
@@ -27,25 +30,11 @@
       <span class="msc__empty-line">No picture to show</span>
     </div>
 
-    <!-- The layered count says there are more sets under this one. Inert
-         decoration, not a second control: `aria-hidden` on a focusable
-         `<button>` is an axe violation whichever way the tab order is set, and
-         the card already has one announced control for this - ▸ below, which the
-         whole name row is beside. The count is in the card's accessible name. -->
-    <span
-      v-if="stacked"
-      class="msc__badge msc__badge--start"
-      aria-hidden="true"
-    >
-      <v-icon size="12">mdi-layers</v-icon>{{ card.size }} sets
-    </span>
-
     <!-- The visible rows are hidden from assistive tech: the card's own label
          already reads all of them, including what "+N" clipped. -->
     <div class="msc__meta">
       <div class="msc__row">
         <AppButton
-          v-if="stacked"
           class="msc__toggle"
           :class="{ 'msc__toggle--open': expanded }"
           variant="ghost"
@@ -55,35 +44,34 @@
           tabindex="-1"
           :tooltip="
             expanded
-              ? 'Hide the sets in this stack'
-              : 'Show the sets in this stack'
+              ? 'Hide the models in this set'
+              : 'Show the models in this set'
           "
           :aria-expanded="String(expanded)"
           :aria-controls="panelId || undefined"
           @click="emit('toggle')"
         />
         <span class="msc__name" aria-hidden="true">{{ card.name }}</span>
+        <span v-if="card.kindLabel" class="msc__kind" aria-hidden="true">{{
+          card.kindLabel
+        }}</span>
       </div>
+      <!-- What SHAPE this set is - one VAE and two encoders, or none at all -
+           which is the question a grid is scanned for. -->
       <div class="msc__row">
         <ChipRow
           v-if="kindChips.length"
           :items="kindChips"
           aria-hidden="true"
         />
-      </div>
-      <div class="msc__row">
-        <ChipRow
-          v-if="loraChips.length"
-          :items="loraChips"
-          aria-hidden="true"
-        />
-        <span v-else class="msc__none" aria-hidden="true">No adapters</span>
+        <span v-else class="msc__none" aria-hidden="true"
+          >Nothing else has run with it</span
+        >
       </div>
       <div class="msc__row msc__row--facts">
-        <span v-if="stacked" class="msc__none" aria-hidden="true"
-          >differs by</span
-        >
-        <ChipRow :items="factChips" aria-hidden="true" />
+        <span class="msc__facts" aria-hidden="true">{{
+          card.facts.join(" · ")
+        }}</span>
       </div>
     </div>
   </article>
@@ -91,6 +79,11 @@
 
 <script setup>
 // One workflow set on the model shelf's set grid (#1438).
+//
+// **A card is one base model** - a checkpoint, or the diffusion file a Flux or
+// Wan graph loads instead - and ▸ opens the tray of models that have run with it.
+// Three meta rows: the name with its kind, the per-kind tally of everything else
+// in the set, and the facts.
 //
 // **Deliberately not `WorkflowCard`.** The shape is the same on purpose - the
 // 2fr/1fr cover mosaic, the scrim badges, the layered stack count, ▸, and four
@@ -114,15 +107,13 @@ import ChipRow from "./ChipRow.vue";
 const props = defineProps({
   /** One card from `setCard` (see `utils/workflowSets.js`). */
   card: { type: Object, required: true },
-  /** This card's member panel is open. */
+  /** This card's tray is open. */
   expanded: { type: Boolean, default: false },
-  /** The id of the panel ▸ opens, for `aria-controls`. */
+  /** The id of the tray ▸ opens, for `aria-controls`. */
   panelId: { type: String, default: "" },
 });
 
 const emit = defineEmits(["toggle"]);
-
-const stacked = computed(() => props.card.size > 1);
 
 /**
  * The URL a browser loads one cover from.
@@ -139,14 +130,7 @@ function coverSrc(cover) {
   return pictureThumbnailUrl(cover.picture_id, { version: cover.version });
 }
 
-/**
- * Row 2: the files that identify the set, by their SHELF kind.
- *
- * The kind rather than the name, because the name row above already spells the
- * first three. What the reader is scanning this row for is the SHAPE of the set
- * - one VAE and two encoders, or none at all - which is the question a grid is
- * read for.
- */
+/** Row 2: the per-kind tally of everything else in the set. */
 const kindChips = computed(() =>
   props.card.kinds.map((entry, i) => ({
     key: `kind-${i}`,
@@ -155,36 +139,15 @@ const kindChips = computed(() =>
   })),
 );
 
-const loraChips = computed(() =>
-  props.card.loras.map((name, i) => ({
-    key: `lora-${i}`,
-    label: name,
-    icon: "layers",
-  })),
-);
-
-const factChips = computed(() =>
-  props.card.differsBy.map((label, i) => ({
-    key: `fact-${i}`,
-    label,
-    fact: true,
-  })),
-);
-
 // "+N" is not a control, so this is the only place a screen reader hears the
 // chips a narrow card clipped - and the only place it hears the whole set.
 const accessibleName = computed(() => {
-  const { name, size, kinds, loras, differsBy, pictures, recipes } = props.card;
+  const { name, kindLabel, kinds, facts } = props.card;
   return [
     name,
-    stacked.value ? `stack of ${size} sets` : null,
-    kinds.length ? `files: ${kinds.join(", ")}` : null,
-    loras.length ? `adapters: ${loras.join(", ")}` : "no adapters",
-    differsBy.length
-      ? `${stacked.value ? "differs by" : ""} ${differsBy.join(", ")}`.trim()
-      : null,
-    pictures === 1 ? "1 picture" : `${pictures} pictures`,
-    recipes === 1 ? "1 recipe" : `${recipes} recipes`,
+    kindLabel,
+    kinds.length ? `with ${kinds.join(", ")}` : "nothing else has run with it",
+    facts.join(", "),
   ]
     .filter(Boolean)
     .join(", ");
@@ -192,7 +155,7 @@ const accessibleName = computed(() => {
 </script>
 
 <style scoped>
-/* 118 = 8 + 4 × 24 + 3 × 2 + 8: the meta block, fixed whatever the card holds
+/* 92 = 8 + 3 × 24 + 2 × 2 + 8: the meta block, fixed whatever the card holds
    and `flex: none` so a change to that sum shows as a wrong height rather than
    being absorbed. The figure and the `6 / 5` cover below are `WorkflowCard`'s
    own, so the two grids' cards are the same shape and a reader moving between
@@ -206,7 +169,7 @@ const accessibleName = computed(() => {
    that, so reintroducing it here would have been the same bug on a second
    screen. */
 .msc {
-  --msc-meta-h: 118px;
+  --msc-meta-h: 92px;
 
   position: relative;
   display: flex;
@@ -350,6 +313,30 @@ const accessibleName = computed(() => {
   text-overflow: ellipsis;
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
+}
+
+.msc__kind {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  height: var(--tag-h-xs);
+  padding: 0 var(--space-2);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-input-background));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  font-size: var(--text-2xs);
+  line-height: var(--leading-snug);
+  white-space: nowrap;
+}
+
+.msc__facts {
+  overflow: hidden;
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
 }
 
 .msc__none {

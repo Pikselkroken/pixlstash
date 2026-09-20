@@ -2568,7 +2568,7 @@ describe("the workflow sets", () => {
     // With the rows in hand, so "once" is not standing in for "the payload was
     // never used": the second call found the first one's answer, not an empty
     // grid.
-    expect(store.setStacks).toHaveLength(1);
+    expect(store.setGroups).toHaveLength(1);
   });
 
   it("discards a read the reader has already overtaken", async () => {
@@ -2664,19 +2664,19 @@ describe("the workflow sets", () => {
     expect(store.visibleRows[0].memberIds).toEqual([1, 2, 3]);
 
     expect(store.visibleCombinations).toHaveLength(1);
-    expect(store.setStacks[0].card.pictures).toBe(500);
+    expect(store.setGroups[0].card.pictures).toBe(500);
     expect(store.noSetRows.map((row) => row.id)).toEqual([3]);
   });
 
-  it("draws a card per stack and one for the models no recipe names", async () => {
+  it("draws a card per base model and one for the models with no set", async () => {
     const store = shelfWithASet();
     await store.fetchRows();
     await store.loadWorkflowSets();
 
-    expect(store.setStacks.map((stack) => stack.card.name)).toEqual([
+    expect(store.setGroups.map((group) => group.card.name)).toEqual([
       "used.st",
     ]);
-    expect(store.setStacks[0].card.pictures).toBe(12);
+    expect(store.setGroups[0].card.pictures).toBe(12);
     expect(store.noSetRows.map((row) => row.id)).toEqual([2]);
   });
 
@@ -2776,7 +2776,7 @@ describe("the workflow sets", () => {
     expect(fetchWorkflowSets).toHaveBeenCalledTimes(2);
   });
 
-  it("prices every fold setting off one payload", async () => {
+  it("groups every combination under its own base model, off one payload", async () => {
     listAdapters.mockResolvedValue([
       adapter({ id: 1, sha256: "a".repeat(64), filename: "ckpt.st" }),
       adapter({ id: 2, sha256: "b".repeat(64), filename: "vae.st" }),
@@ -2812,24 +2812,30 @@ describe("the workflow sets", () => {
     await store.fetchRows();
     await store.loadWorkflowSets();
 
-    expect(store.setFoldCounts).toEqual({
-      none: 2,
-      one: 1,
-      two: 1,
-      checkpoint: 1,
-    });
-    store.setView({ fold: "none" });
-    // By identity: the two cards are the two combinations, each on its own.
-    expect(store.setStacks.map((stack) => stack.key)).toEqual(["1,2", "1,2,3"]);
-    expect(store.setStacks.map((stack) => stack.card.size)).toEqual([1, 1]);
+    // Two combinations, ONE base model: one card, whose tray holds all three
+    // models, with both combinations' evidence summed onto it.
+    expect(store.setGroups).toHaveLength(1);
+    expect(store.setGroups[0].models.map((m) => m.name)).toEqual([
+      "ckpt.st",
+      "vae.st",
+      "lora.st",
+    ]);
+    expect(store.setGroups[0].card.facts).toEqual([
+      "3 models",
+      "7 recipes",
+      "25 pictures",
+    ]);
+    // The LoRA carries its OWN evidence rather than the group's.
+    const lora = store.setGroups[0].models.find((m) => m.name === "lora.st");
+    expect([lora.recipes, lora.pictures]).toEqual([2, 5]);
     expect(fetchWorkflowSets).toHaveBeenCalledTimes(1);
   });
 
-  it("remembers the fold setting between visits", () => {
+  it("remembers how the tray draws its models between visits", () => {
     const store = useModelShelfStore();
-    expect(store.view.fold).toBe("one");
-    store.setView({ fold: "checkpoint" });
+    expect(store.view.trayView).toBe("grid");
+    store.setView({ trayView: "list" });
     setActivePinia(createPinia());
-    expect(useModelShelfStore().view.fold).toBe("checkpoint");
+    expect(useModelShelfStore().view.trayView).toBe("list");
   });
 });
