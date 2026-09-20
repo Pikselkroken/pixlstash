@@ -3904,6 +3904,30 @@ and at the pointer with them.
   (`trash_name`, the SERVER's platform) rather than from the browser: where the
   bytes went is the difference between recoverable and not. Only the pre-action
   label falls back to the browser's own guess, which is cosmetic.
+- **`Keep one copy…` is the per-copy delete (#1439)**, and the one destructive
+  verb here that is NOT in the danger treatment: it removes a redundant copy and
+  keeps the model, which is the opposite of what the red beside it is for. It is
+  in the row context menu only, gated on `mergeable` — one row whose own `copies`
+  count (the store's, off the model's whole `locations`, because the folder axis
+  narrows a draw to one of them) is above one. Listed always and disabled with
+  its reason, like the two run verbs: a reader whose shelf shows no duplicates is
+  the one who most needs to learn the verb exists.
+  `MergeCopiesDialog.vue` is where the choice is made, and three things about it
+  are the issue's rules rather than taste. **Nothing is pre-selected**, as
+  everywhere else on this shelf, because the wrong default here is a 20 GB
+  redownload. **It runs the route's own `dry_run` on every change of the keeper**,
+  so the refusal and the ComfyUI warning are in front of the reader while they
+  decide instead of in the receipt once the bytes have gone — which also means
+  the gates are the server's rather than a second implementation of them here,
+  and the confirm waits for the answer. And the **ComfyUI warning has two
+  sentences**, because `keeper_advertised` is two situations: that install lists
+  the copy being kept, so a run through PixlStash is put on it and only a graph
+  queued inside ComfyUI breaks; or it does not, and nothing can be substituted
+  there at all. One model at a time, deliberately — the keeper is a per-model
+  choice and a batch would be a table of radio groups — while the route already
+  takes a list, so the batch is a later screen and not a later route. No
+  permanent option: the trash is the undo, and a merge is exactly the gesture
+  that wants one.
 - **`Open in file manager` is built (#933), and it is the one verb here that
   acts on the machine rather than on the library.** `POST
   /models/{model_id}/open-location` shows the row's folder in the file manager

@@ -570,6 +570,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/logout                                                                | auth            | Logout                                                      |
 | POST   | /api/v1/model-files                                                           | model_shelf     | Add one model file to the shelf                             |
 | POST   | /api/v1/model-files/delete                                                    | model_shelf     | Delete models from disk                                     |
+| POST   | /api/v1/model-files/merge                                                     | model_shelf     | Keep one copy of a model and remove the rest                |
 | GET    | /api/v1/model-folders                                                         | model_shelf     | List registered model folders                               |
 | POST   | /api/v1/model-folders                                                         | model_shelf     | Register a model folder                                     |
 | GET    | /api/v1/model-folders/devices                                                 | model_shelf     | Capacity of the drives the model folders sit on             |
@@ -2703,6 +2704,104 @@ longer wants was a file manager and then a rescan.
   alone, which is the unlink half of `POST /model-moves` without the copy that
   justifies it.
 
+### `Keep one copy`: merging duplicate models (#1439)
+
+`POST /api/v1/model-files/merge`
+([`routes/model_files.py`](../pixlstash/routes/model_files.py)) is the per-copy
+delete. The shelf has always *shown* duplicates — one `model` row per SHA-256
+with several `model_file` rows, `Show → Copies → Only duplicates`, a `copies`
+count on the row — and the only verb that acted on one removed **every** copy
+and then the row. This keeps the copy the caller names and removes the rest.
+
+The design is **resolve at use, do not rewrite on delete**, and every rule below
+follows from it.
+
+- **The keeper is what the request names**, one entry per model, and every other
+  `present` copy of that model is what goes. That is structural, not arithmetic:
+  no body can empty a model, and one that names a keeper the shelf does not hold
+  as `present` is refused (`keeper_not_present`) rather than acted on — removing
+  every other copy on the word of one that is not there is a 20 GB redownload.
+- **No row is deleted.** The removed copies keep their `model_file` rows at
+  `state = 'removed'`, so the record of *which files were the same model*
+  outlives the files. Three readers depend on it and none needed a line of new
+  code: `recipe_asset_index` still resolves the removed copy's filename to this
+  model, so a picture's recipe panel still names it; `_shelf_model_names` still
+  counts it, so `model_ghost_names` does not offer the owner a name to forget
+  forever; and `model_name_aliases` can say what to load instead. This is the
+  whole reason the delete stops being the thing you have to be right about.
+- **`removed` is its own state, and every scanner sweep skips it.** `missing` is
+  the scanner saying "I looked and the file was gone", and it would keep saying
+  it about this copy for the rest of the folder's life — so without the
+  exclusion the first unattended scan after a merge destroys the distinction.
+  `_known_files` reads `present` rows only, so a file the owner puts back is
+  re-read and re-registered rather than skipped.
+- **Only the copies being REMOVED need a folder whose contents are the owner's.**
+  That is the one place this differs from the whole-model delete, which refuses a
+  model that has *any* copy outside `user`/`managed`. Keeping the copy in the
+  shared HuggingFace cache and removing one from a user folder is a legitimate
+  merge; the reverse is not ours to do. Everything else is the delete's gate
+  verbatim, including the refusal of a model with an `unreachable` copy (an
+  unplugged drive is not a deletion, and the shelf cannot know whether the copy
+  on it is one of the two being reduced to one), `_contained_path` containment,
+  `<stem>_samples/` removal under the same contents test, the same
+  `trash_unavailable`/`partly_deleted`/`delete_failed` reporting, and the same
+  `SHELF_IO_LOCK` slot.
+- **`dry_run=true` plans it and removes nothing**, through the same planner. It
+  exists so the client's confirmation is built on the server's own answer rather
+  than a second implementation of these gates — and above all so the ComfyUI
+  warning arrives before the bytes go.
+- **The warning is asked of ComfyUI, not of the filesystem.** PixlStash holds a
+  ComfyUI **URL** and no path into that install's `models/` tree, so
+  `comfyui_reads` is built from the combo lists it publishes
+  (`advertised_model_names`), matching each doomed copy by relpath and by
+  basename. It carries `keeper_advertised`, because the two cases need different
+  sentences: with the keeper advertised a run **through PixlStash** is put on it
+  and only a graph queued inside ComfyUI breaks, and without it nothing can be
+  substituted there at all. An unset URL or an unreachable ComfyUI warns about
+  nothing, and the client says that the absence of a warning is not a promise.
+
+#### Resolving a model reference at submit
+
+`detect_model_targets`/`apply_model_swap`
+([`services/comfyui_recipe_service.py`](../pixlstash/services/comfyui_recipe_service.py))
+are the detect-then-patch pair `detect_seed_targets`/`apply_seeds` and
+`detect_lora_targets`/`apply_adapter` already are, and they are wired into
+`_plan` in [`routes/workflows.py`](../pixlstash/routes/workflows.py) — one site,
+so `POST /workflows/run/preflight` and `POST /workflows/run` can never disagree.
+
+- **Detect is `preflight_prompt`'s `missing_models` and nothing else**, which is
+  the point: a swap aimed anywhere else would patch a field ComfyUI was happy
+  with or leave one it will refuse.
+- **Applied before `judge`**, so the graph that is verified is the graph that is
+  submitted. Applied after it, the substitution would be one nothing checked and
+  the owner would be shown a missing model they cannot find.
+- **Every candidate is verified against `object_info` before it is written.** A
+  swap PixlStash believes in and ComfyUI does not advertise only moves the
+  failure to the queue. This is why `model_name_aliases` may be generous — it
+  offers each present copy's relpath *and* its basename, because a combo entry is
+  relative to one of ComfyUI's own model folders and nothing on this side knows
+  which prefix it puts in front — and the combo list decides.
+- **Same model, therefore same bytes.** The aliases come from one `model` row's
+  copies, and the hub is content-addressed. A name two models share is dropped
+  rather than resolved, the rule `picture_recipe_service` already applies: it
+  names neither, and a coin flip would load somebody else's weights into a run.
+  Same weights at a different precision (`weights_id`) is **not** in scope; that
+  is a different output and stays a hint the owner accepts.
+- **Never silent, and never written back.** Each substitution is reported on the
+  group as `substitutions` (on the pre-flight and on the run alike) and logged. The
+  stored recipe keeps the filename it recorded, because the structural hash is
+  keyed on the topology assets: a swap written there would make a picture's
+  provenance claim a model it was not made with. The substitution is a fact
+  about *this run*.
+- **The honest limit.** A graph opened in ComfyUI and queued there runs nothing
+  of ours, so it still names the file that went — which is what the merge's
+  `comfyui_reads` warning is for. A graph on the `ComfyUI-PixlStash` loaders
+  survives either way, because those address the shelf by id or digest and ask it
+  at run time. Not wired: the picture-recipe replay routes in
+  [`routes/comfyui.py`](../pixlstash/routes/comfyui.py), which carry their own
+  pre-flight and submit; the card run path is what "run it through PixlStash"
+  means for a workflow.
+
 #### What a delete leaves behind: companions (#1314)
 
 `POST /api/v1/models/companions` answers the question in front of Delete that
@@ -4431,6 +4530,7 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
   - **Updated 2026-08-24 (v1.11 Phase 4b, the move engine) — the locality total is now `48 = 42 local + 6 loopback`.** Re-derived from `ROUTE_POLICIES` rather than added to the line above, which is one branch behind: Phase 2's three folder-structure routes landed in between and took the local tier to 40 without a bullet of their own. This change adds **+2**: `GET` and `PATCH /api/v1/server-config/layout`. **Neither takes a host path at all** — the root is the library's own, and there is no field in which a caller could name another — and the PATCH moves nothing when it is called, because the release's rule is that every path already in the library is true the moment it is written, so choosing a layout reorganises no folder that exists. What puts the pair on this tier is the authority the PATCH *hands out*: from then on a background task (`LayoutMoveTask`) renames the owner's own files into the folder names the layout renders, so the tier that may decide those names is the tier that holds host-filesystem authority. The GET is its control surface by the `GET /model-moves` argument, and is on `READ_BLOCKED_GET_PATHS` so the documented `AUTHZ_GATE_ENFORCING = False` rollback does not hand the shape of the owner's folder tree to every share token. **The move itself is deliberately NOT on this tier.** `POST /api/v1/pictures/layout/move-to-match` is `picture_scoped`, on the `POST /api/v1/pictures/rotate` line: the caller names pictures, the server derives the root from each picture's own row and the destination from a layout only this tier could have set, so what a caller exercises is authority over pictures it already reaches. Its planner refuses a source that resolves outside its root and refuses a symlink outright — `publish_no_clobber` links the *target*, so moving a link would pull a file from anywhere on the machine into the library under the link's name, the #1024 shape one sink over — and a destination whose name is taken is declined rather than overwritten. The loopback count is unchanged: neither route spawns anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_42_local_6_loopback`. Arithmetic, not judgement.
   - **Updated 2026-09-11 (library-root caption sync): the locality total is now `54 = 47 local + 7 loopback`.** `GET` and `PATCH /api/v1/server-config/captions` join the local tier: the root's copy of the four caption-sync fields `PATCH /reference-folders/{folder_id}` already carries there, deciding whether and under what name a file is written beside every picture in the library root. Pinned then by the test's earlier name, `test_host_capability_tier_split_is_47_local_7_loopback`.
   - **Updated 2026-09-13 (temporary vault for the first import): the locality total is now `56 = 49 local + 7 loopback`.** `POST /api/v1/libraries/{library_uuid}/promote` and `POST /api/v1/libraries/{library_uuid}/discard` join the local tier: each writes inside a host folder, as `POST /libraries` does, and closes and reopens the active vault, as `POST /libraries/active` does. Both take a registry uuid, never a path, and refuse a library that is not on its first import. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_49_local_7_loopback`.
+  - **Updated 2026-09-20 (#1439, `Keep one copy`) — the locality total is now `57 = 50 local + 7 loopback`.** `POST /api/v1/model-files/merge` joins the local tier: it keeps the copy the body names and removes every other `present` copy of that model, which is `POST /model-files/delete`'s unlink narrowed to the copies the caller did *not* name — the same authority for the same reason, the destruction itself, and fewer bytes is not a weaker one. It takes no host path (a hub `model.id` and a `(folder_id, relpath)` the scanner wrote), every path is contained by the same `_contained_path`, and **no hub row is deleted**: the removed copies keep their `model_file` rows at `state = 'removed'`, which is what keeps the model's identity — and a recipe's filename — resolving afterwards. It also reads the owner's configured ComfyUI for its advertised model list, the outbound read the run pre-flight already makes on the same credential. Nothing spawns, so the loopback count is unchanged. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_50_local_7_loopback`.
   - **Updated 2026-09-07 (PixlStash Views withdrawn, superseded by the line above) — the locality total is now `52 = 45 local + 7 loopback`.** Re-derived from `ROUTE_POLICIES`, not subtracted from the line above, which had itself gone stale twice in between (`POST /api/v1/pictures/export/folder` and `DELETE /api/v1/folder-structure/commit` both landed without re-deriving it). `GET` and `PATCH /api/v1/server-config/views` are **removed**, along with the feature behind them: the settings section was never wired into the app, so the routes were reachable only by a direct API call and nothing in the product ever set `library_settings.views_root`. Neither route was the *subject* of any assertion in `tests/test_authz_host_capability_16_3.py` — the behavioural §16.3 tests drive `GET /filesystem/browse` and `POST /pictures/{id}/open-location`, and `READ_BLOCKED_GET_PATHS` membership is **derived** from `ROUTE_POLICIES` by `test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt` rather than written down — so the removal costs two counted routes and no coverage. One thing survives the feature: `ReferenceFolderScanTask` still refuses to descend a directory holding a `.pixlstash-views` marker, because the API shipped in v1.11 and a tree it published is still on disk; without the prune every link under one would be indexed as a second copy of a picture. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_45_local_7_loopback`. Arithmetic, not judgement.
 
 **Correction to the historical claim.** The compensating-control line above ("remote `ALL` blocked by `require_local_for_write`") overstates the protection for this class as it stood. The `_require_local_for_write` **method** runs only at `/login` (`auth.py` — password-login path), not per-request on these handlers; the genuine per-request control was the middleware's separate remote-`ALL`-**token** block. A remote **cookie** owner session was therefore *not* locality-gated on these endpoints at all — the exact gap the `LOCAL_OWNER_ONLY` retarget closes (a remote cookie owner is now locality-checked, and the 3 red-line routes are loopback-only).
