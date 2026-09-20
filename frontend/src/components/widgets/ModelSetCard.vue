@@ -1,0 +1,326 @@
+<template>
+  <article
+    class="msc"
+    :class="{ 'msc--stack': stacked, 'msc--open': expanded }"
+    role="group"
+    :aria-label="accessibleName"
+    data-testid="model-set-card"
+  >
+    <div v-if="card.covers.length" class="msc__cover">
+      <span v-for="i in 3" :key="i" class="msc__pic">
+        <img v-if="card.covers[i - 1]" :src="card.covers[i - 1]" alt="" loading="lazy" />
+      </span>
+      <span class="msc__badge msc__badge--end" aria-hidden="true">
+        <v-icon size="12">mdi-image-multiple</v-icon
+        >{{ card.pictures.toLocaleString() }}
+      </span>
+    </div>
+    <div v-else class="msc__cover msc__cover--empty" aria-hidden="true">
+      <span class="msc__empty-line">No picture to show</span>
+    </div>
+
+    <!-- The layered count says there are more sets under this one, and opens
+         them: it is the mark a reader reaches for first. `aria-hidden` and off
+         the tab order like the rest of the card's decoration - ▸ below is the
+         announced control, and hiding this one is only defensible while the two
+         do exactly the same thing. -->
+    <button
+      v-if="stacked"
+      type="button"
+      class="msc__badge msc__badge--start msc__badge--button"
+      tabindex="-1"
+      aria-hidden="true"
+      @click="emit('toggle')"
+    >
+      <v-icon size="12">mdi-layers</v-icon>{{ card.size }} sets
+    </button>
+
+    <!-- The visible rows are hidden from assistive tech: the card's own label
+         already reads all of them, including what "+N" clipped. -->
+    <div class="msc__meta">
+      <div class="msc__row">
+        <AppButton
+          v-if="stacked"
+          class="msc__toggle"
+          :class="{ 'msc__toggle--open': expanded }"
+          variant="ghost"
+          size="sm"
+          icon-left="menu-right"
+          icon-only
+          tabindex="-1"
+          :tooltip="
+            expanded ? 'Hide the sets in this stack' : 'Show the sets in this stack'
+          "
+          :aria-expanded="String(expanded)"
+          :aria-controls="panelId || undefined"
+          @click="emit('toggle')"
+        />
+        <span class="msc__name" aria-hidden="true">{{ card.name }}</span>
+      </div>
+      <div class="msc__row">
+        <ChipRow v-if="kindChips.length" :items="kindChips" aria-hidden="true" />
+      </div>
+      <div class="msc__row">
+        <ChipRow v-if="loraChips.length" :items="loraChips" aria-hidden="true" />
+        <span v-else class="msc__none" aria-hidden="true">No adapters</span>
+      </div>
+      <div class="msc__row msc__row--facts">
+        <span v-if="stacked" class="msc__none" aria-hidden="true">differs by</span>
+        <ChipRow :items="factChips" aria-hidden="true" />
+      </div>
+    </div>
+  </article>
+</template>
+
+<script setup>
+// One workflow set on the model shelf's set grid (#1438).
+//
+// **Deliberately not `WorkflowCard`.** The shape is the same on purpose - the
+// 2fr/1fr cover mosaic, the scrim badges, the layered stack count, ▸, and four
+// single-line rows that clip to "+N" - because a reader should not have to learn
+// a second card. What is NOT shared is the vocabulary: that card's ⓘ panel says
+// "Stack of 3 workflows" and "Saved recipes", and its picture list is keyed on a
+// workflow. A set is neither, so borrowing the component would have put three
+// wrong words on every card to save this file. The tokens, the badge treatment
+// and the row rhythm are copied; nothing that says "workflow" is.
+//
+// There is no ⓘ here either: everything the card knows is already on it, and the
+// detail a reader wants next is the file list, which is one ▸ away.
+
+import { computed } from "vue";
+import { VIcon } from "vuetify/components";
+
+import AppButton from "./AppButton.vue";
+import ChipRow from "./ChipRow.vue";
+
+const props = defineProps({
+  /** One card from `setCard` (see `utils/workflowSets.js`). */
+  card: { type: Object, required: true },
+  /** This card's member panel is open. */
+  expanded: { type: Boolean, default: false },
+  /** The id of the panel ▸ opens, for `aria-controls`. */
+  panelId: { type: String, default: "" },
+});
+
+const emit = defineEmits(["toggle"]);
+
+const stacked = computed(() => props.card.size > 1);
+
+/**
+ * Row 2: the files that identify the set, by their SHELF kind.
+ *
+ * The kind rather than the name, because the name row above already spells the
+ * first three. What the reader is scanning this row for is the SHAPE of the set
+ * - one VAE and two encoders, or none at all - which is the question a grid is
+ * read for.
+ */
+const kindChips = computed(() =>
+  props.card.kinds.map((entry, i) => ({
+    key: `kind-${i}`,
+    label: entry,
+    icon: "cube-outline",
+  })),
+);
+
+const loraChips = computed(() =>
+  props.card.loras.map((name, i) => ({
+    key: `lora-${i}`,
+    label: name,
+    icon: "layers",
+  })),
+);
+
+const factChips = computed(() =>
+  props.card.differsBy.map((label, i) => ({
+    key: `fact-${i}`,
+    label,
+    fact: true,
+  })),
+);
+
+// "+N" is not a control, so this is the only place a screen reader hears the
+// chips a narrow card clipped - and the only place it hears the whole set.
+const accessibleName = computed(() => {
+  const { name, size, kinds, loras, differsBy, pictures, recipes } = props.card;
+  return [
+    name,
+    stacked.value ? `stack of ${size} sets` : null,
+    kinds.length ? `files: ${kinds.join(", ")}` : null,
+    loras.length ? `adapters: ${loras.join(", ")}` : "no adapters",
+    differsBy.length
+      ? `${stacked.value ? "differs by" : ""} ${differsBy.join(", ")}`.trim()
+      : null,
+    pictures === 1 ? "1 picture" : `${pictures} pictures`,
+    recipes === 1 ? "1 recipe" : `${recipes} recipes`,
+  ]
+    .filter(Boolean)
+    .join(", ");
+});
+</script>
+
+<style scoped>
+/* 252 = 1 border + 132 cover + (8 + 4 × 24 + 3 × 2 + 8) meta + 1 border - the
+   shipped workflow card's own two figures, so the two grids' cards are the same
+   height and a reader moving between them meets one rhythm. Both are local, and
+   the meta block is `flex: none` so a change to that sum shows as a wrong
+   height rather than being absorbed. */
+.msc {
+  --msc-h: 252px;
+  --msc-cover-h: 132px;
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  height: var(--msc-h);
+  overflow: hidden;
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+}
+
+/* The open card is marked by its rotated ▸ and a border in the active ink -
+   never a wash, which reads as "selected" and nothing here is. */
+.msc--open {
+  border-color: var(--active-bar);
+}
+
+.msc__cover {
+  position: relative;
+  flex: none;
+  box-sizing: border-box;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: var(--space-1);
+  height: var(--msc-cover-h);
+}
+
+.msc__pic {
+  overflow: hidden;
+  background: rgb(var(--v-theme-input-background));
+}
+
+.msc__pic:first-child {
+  grid-row: 1 / 3;
+}
+
+.msc__pic img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.msc__cover--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4) var(--space-5);
+  background: rgb(var(--v-theme-input-background));
+}
+
+.msc__empty-line {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The shipped scrim badge: a dark chip over an arbitrary photo. */
+.msc__badge {
+  position: absolute;
+  top: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--badge-size);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.msc__badge--start {
+  left: var(--space-3);
+  z-index: 1;
+}
+
+.msc__badge--end {
+  right: var(--space-3);
+}
+
+/* The badge family is inert decoration; this one is a control, so it takes the
+   clicks back and drops the button chrome that would paint a second border over
+   the pill. */
+.msc__badge--button {
+  border: 0;
+  font-family: inherit;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.msc__meta {
+  flex: none;
+  display: grid;
+  grid-template-rows: repeat(4, var(--control-h-sm));
+  row-gap: var(--space-1);
+  padding: var(--space-3);
+}
+
+.msc__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.msc__row > .chip-row {
+  flex: 1;
+}
+
+.msc__row--facts {
+  padding-right: var(--space-3);
+}
+
+.msc__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.msc__none {
+  flex-shrink: 0;
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* ▸ carries full ink: opening a stack is the card's own affordance. */
+.msc__toggle {
+  flex-shrink: 0;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.msc__toggle :deep(.app-btn__icon) {
+  transition: transform var(--dur-1) var(--ease-standard);
+}
+
+.msc__toggle--open :deep(.app-btn__icon) {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msc__toggle :deep(.app-btn__icon) {
+    transition: none;
+  }
+}
+</style>

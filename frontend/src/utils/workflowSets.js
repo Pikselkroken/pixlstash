@@ -213,12 +213,14 @@ export function recipeCount(recipes) {
 }
 
 /**
- * One stack as a `WorkflowCard` (see `utils/workflowCard.js` for the shape).
+ * One stack as `ModelSetCard` draws it.
  *
- * The card is BORROWED rather than rebuilt: the cover mosaic, the layered stack
- * count, the ▸ that opens a panel, the chip rows and the *differs by* row are
- * already what a workflow stack draws, and a second card component would be the
- * same design maintained twice.
+ * The card's SHAPE is the shipped workflow card's - a cover mosaic, a layered
+ * count, four single-line rows - because a reader should not have to learn a
+ * second card. Its DATA is its own: `WorkflowCard`'s ⓘ panel says "Stack of 3
+ * workflows" and "Saved recipes" and lists pictures through a workflow, and a
+ * set is none of those, so borrowing the component would have put three wrong
+ * words on every card. See `ModelSetCard.vue`.
  *
  * The name is the first three members joined, which is the server's order and
  * therefore the checkpoint, the VAE and the text encoder - the files that
@@ -226,7 +228,7 @@ export function recipeCount(recipes) {
  * set that differs only by its LoRA does not get a name that hides which LoRA.
  *
  * @param {{key: string, members: Array<Object>}} stack
- * @returns {Object} a card for `WorkflowCard`.
+ * @returns {Object} a card for `ModelSetCard`.
  */
 export function setCard(stack) {
   const [seed] = stack.members;
@@ -239,29 +241,33 @@ export function setCard(stack) {
     0,
   );
   const folded = stack.members.length > 1;
-  const differsBy = folded
-    ? [
-        ...new Set(
-          stack.members.slice(1).flatMap((member) => differences(seed, member)),
-        ),
-      ]
-    : // "Nothing to fold" is said in as many words, so the absence of a deck is
-      // never ambiguous - a stack of one looks exactly like a card that could
-      // have had members and did not.
-      [recipeCount(recipes), "nothing to fold"];
+  const members = seed.models ?? [];
   return {
     key: stack.key,
     name: setName(seed),
-    type: null,
-    models: (seed.models ?? []).filter((model) => model.kind !== "adapter"),
-    loras: (seed.models ?? [])
+    // The shelf's own kind words, in the server's order, so the row says what
+    // SHAPE the set is: one VAE and two encoders, or none at all.
+    kinds: members
+      .filter((model) => model.kind !== "adapter")
+      .map((model) => memberKindLabel(model))
+      .filter(Boolean),
+    loras: members
       .filter((model) => model.kind === "adapter")
-      .map((model) => ({ name: model.name, mark: "structural" })),
-    differs_by: differsBy,
-    picture_count: pictures,
-    rating: 0,
+      .map((model) => model.name),
+    differsBy: folded
+      ? [
+          ...new Set(
+            stack.members.slice(1).flatMap((member) => differences(seed, member)),
+          ),
+        ]
+      : // "Nothing to fold" is said in as many words, so the absence of a deck
+        // is never ambiguous - a stack of one looks exactly like a card that
+        // could have had members and did not.
+        [recipeCount(recipes), "nothing to fold"],
+    pictures,
+    recipes,
     covers: (seed.covers ?? []).map((cover) => cover.url),
-    stack_size: stack.members.length,
+    size: stack.members.length,
   };
 }
 

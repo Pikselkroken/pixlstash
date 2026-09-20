@@ -140,7 +140,7 @@ describe("the cards", () => {
       combinations: [combination("1,2", [CKPT, VAE], { recipes: 4, pictures: 12 })],
     });
 
-    const cards = wrapper.findAll('[data-testid="workflow-card"]');
+    const cards = wrapper.findAll('[data-testid="model-set-card"]');
     expect(cards).toHaveLength(1);
     expect(cards[0].text()).toContain("realvisXL_v5 · sdxl_vae");
   });
@@ -166,7 +166,7 @@ describe("the cards", () => {
       ],
     });
     // One card: the two combinations are one file apart, which is the default.
-    expect(wrapper.findAll('[data-testid="workflow-card"]')).toHaveLength(1);
+    expect(wrapper.findAll('[data-testid="model-set-card"]')).toHaveLength(1);
 
     store.toggleSet("1,2");
     await wrapper.vm.$nextTick();

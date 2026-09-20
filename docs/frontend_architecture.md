@@ -1446,25 +1446,33 @@ The uniform workflow card and its two parts. Mounted by `WorkflowsView.vue` (F1a
 - **ⓘ's Differs-by chips are the card's fact chip, spelled a second time.** The popover wraps its chips and a `ChipRow` clips to one line, so it cannot mount one; `ChipRow.test.js` holds the two copies to the same geometry instead, because two blocks that must agree and nothing keeping them so is how they drift.
 - **`InfoPopover`** is the app's first shared popover component (Tooltip and HelpTip are hover tips): a `v-menu` holding a `.tbm` panel with `.tbm-caret--icon-sm-end`, `--stats-panel-w` wide, grouped Models, Differs by, Defaults and the saved-recipe count. The trigger comes from its `activator` slot. **The panel takes focus on open** (`tabindex="-1"` plus a focus call): `VMenu` moves focus to the first *focusable* child, which since F7 is the picture count — *Show all N pictures* — so without the focus call a screen-reader user is landed on a link mid-panel, and before F7 was landed nowhere at all on content teleported to the end of `<body>`. Both are the same bug. `InfoPopover.a11y.test.js` mounts the real `VMenu` to hold that, since the stubbed menu elsewhere is always open and focuses nothing.
 
-#### `ModelSetGrid.vue` (`views/`) + `ModelComboCard.vue` (`widgets/`) + `ModelWorksWithDialog.vue` (`panels/`), #1438
+#### `ModelSetGrid.vue` (`views/`) + `ModelSetCard.vue` / `ModelComboCard.vue` (`widgets/`) + `ModelSetPanel.vue` / `ModelWorksWithDialog.vue` (`panels/`), #1438
 
 The model shelf's `Workflow set` axis: a card grid of the sets of files a picture
 proves ran together, with a model free to appear in more than one.
 
-- **The card and the panel are borrowed.** A stack card is `WorkflowCard.vue`
-  and an open stack is `StackPanel.vue` — the cover mosaic, the layered stack
-  count, the ▸, the *differs by* row and the notch that points back at the card
-  are already what a workflow stack draws. `StackPanel` gained a `noun`, a
-  `note`, an `#actions` slot and a `#member` slot for this; everything else
-  about it is unchanged, which is why there is one panel and not two. The
+- **The SHAPE is borrowed; the components are not.** `ModelSetCard.vue` is the
+  shipped workflow card measured out again — the same `252px` / `132px` pair,
+  the same 2fr/1fr cover mosaic, the same scrim badges, the same four
+  single-line rows that clip to `+N` — and `ModelSetPanel.vue` is `StackPanel`'s
+  notched band with the same `rowgroup` / `row` / `gridcell` chain and the same
+  `--notch` arithmetic. Reusing the components themselves was tried and
+  abandoned: `WorkflowCard`'s ⓘ says *"Stack of 3 workflows"* and *"Saved
+  recipes"* and lists pictures through a workflow, and `StackPanel` has grown a
+  Grid|List switch backed by a remembered preference, a per-member `⋯` menu of
+  workflow verbs and a selection contract. A set is none of those, so borrowing
+  would have put three wrong words on every card and two dead controls in every
+  panel to save two files. **`StackPanel.vue` and `WorkflowCard.vue` are
+  untouched by this change**, which is the other half of the trade. The
   workflows grid's flat-list machinery (`{kind: "card"|"member"|"hole"}`, the
-  padding holes, `verticalStop`) is reproduced rather than shared: it is ~60
-  lines that read the store beside them, and a shared version would take four
-  callbacks and a store adapter to say the same thing.
-- **A member card is NOT `WorkflowCard`.** `ModelComboCard.vue` lists every file
-  with its kind, never truncated: that card is the level at which "run exactly
-  this" is a real offer, and `WorkflowCard`'s fixed height clips its fourth row
-  to `+N`. A file's name is a button — it opens *Works with* for that model.
+  padding holes, `verticalStop`) is reproduced for the same reason: ~60 lines
+  that read the store beside them, where a shared version would take four
+  callbacks and a store adapter.
+- **A member card lists every file.** `ModelComboCard.vue` draws each one with
+  its kind, never truncated: that card is the level at which "run exactly this"
+  is a real offer, and an offer with a hidden line is not one — which is why it
+  is not the fixed-height browsing card. A file's name is a button; it opens
+  *Works with* for that model.
 - **Nothing on this screen is selectable.** The shelf's selection is by
   `model.id` and carries six verbs, two of which destroy bytes; a card is a
   SET, so "selected" would have to mean every model in it and a Delete aimed at

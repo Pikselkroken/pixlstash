@@ -33,36 +33,19 @@
         <template v-for="(entry, index) in flatRows" :key="entry.id">
           <!-- The panel is drawn once, in the slot its FIRST member holds; the
                rest of the member entries are index space only. -->
-          <StackPanel
+          <ModelSetPanel
             v-if="entry.kind === 'member' && entry.memberIndex === 0"
             :panel-id="PANEL_ID"
             :name="openName"
             :members="openMembers"
-            :size="openMembers.length"
-            noun="combination"
-            :note="panelNote"
             :columns="columns"
             :column-index="openColumnIndex"
             :cursor-key="cursorKey"
+            :foldable="store.view.fold !== 'none'"
             @close="closePanel"
-          >
-            <template #actions>
-              <!-- The one gesture that belongs to the FOLD rather than to a
-                   card: a reader who distrusts the folding can see every set
-                   without hunting for the toolbar control. -->
-              <AppButton
-                v-if="store.view.fold !== 'none'"
-                variant="outline"
-                size="sm"
-                icon-left="call-split"
-                @click="store.setView({ fold: 'none' })"
-                >Don’t fold</AppButton
-              >
-            </template>
-            <template #member="{ member }">
-              <ModelComboCard :card="member" @pick="openWorksWith" />
-            </template>
-          </StackPanel>
+            @unfold="store.setView({ fold: 'none' })"
+            @pick="openWorksWith"
+          />
 
           <div
             v-else-if="entry.kind === 'card'"
@@ -70,7 +53,7 @@
             role="row"
             aria-level="1"
             :aria-expanded="
-              entry.card.stack_size > 1
+              entry.card.size > 1
                 ? String(store.openSetKey === entry.key)
                 : undefined
             "
@@ -86,7 +69,7 @@
             @dblclick="toggle(entry)"
           >
             <div class="msg__cell" role="gridcell">
-              <WorkflowCard
+              <ModelSetCard
                 :card="entry.card"
                 :expanded="store.openSetKey === entry.key"
                 :panel-id="store.openSetKey === entry.key ? PANEL_ID : ''"
@@ -131,9 +114,12 @@
  *
  * **A card is one combination** - the exact files a picture proves ran together
  * - and near-identical combinations fold into a stack the reader can open. The
- * card, the stack badge, the ▸ and the panel under it are the shipped workflow
- * grid's, borrowed rather than rebuilt: the gesture already exists, and a
- * second card component would be the same design maintained twice.
+ * card's SHAPE and the panel's are the shipped workflow grid's, because a reader
+ * should not have to learn a second card; the components are this screen's own,
+ * because that grid's card and panel have grown a vocabulary ("Stack of 3
+ * workflows", "Saved recipes", a Grid|List preference, a menu of workflow verbs)
+ * that would be three wrong words and two dead controls on a set. See
+ * `ModelSetCard.vue` and `ModelSetPanel.vue`.
  *
  * **Nothing here is selectable.** The shelf's selection is by `model.id` and
  * carries six verbs, two of which destroy bytes; a card is a SET, so "selected"
@@ -153,11 +139,10 @@ import { VIcon } from "vuetify/components";
 
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { comboCard } from "../../utils/workflowSets";
+import ModelSetPanel from "../panels/ModelSetPanel.vue";
 import ModelWorksWithDialog from "../panels/ModelWorksWithDialog.vue";
-import StackPanel from "../panels/StackPanel.vue";
 import AppButton from "../widgets/AppButton.vue";
-import ModelComboCard from "../widgets/ModelComboCard.vue";
-import WorkflowCard from "../widgets/WorkflowCard.vue";
+import ModelSetCard from "../widgets/ModelSetCard.vue";
 
 /**
  * The two numbers the column count is derived from, and the only copy of them.
@@ -203,12 +188,6 @@ const openMembers = computed(() => {
 });
 
 const openName = computed(() => openStack.value?.card.name || "Set");
-
-const panelNote = computed(() =>
-  openMembers.value.length > 1
-    ? "each one is a set of files a picture proves ran together"
-    : "",
-);
 
 /**
  * The cards, with the open stack's members spliced in at its row's end.
@@ -329,7 +308,7 @@ watch(
 );
 
 function toggle(entry) {
-  if (entry?.kind === "card" && entry.card.stack_size > 1) {
+  if (entry?.kind === "card" && entry.card.size > 1) {
     store.toggleSet(entry.key);
   }
 }
@@ -391,7 +370,7 @@ function verticalStop(index, cols, direction) {
  */
 function rowElement(entry) {
   if (!entry) return undefined;
-  const selector = entry.kind === "member" ? ".stack-panel__member" : ".msg__row";
+  const selector = entry.kind === "member" ? ".msp__member" : ".msg__row";
   return Array.from(gridEl.value?.querySelectorAll(selector) ?? []).find(
     (element) => element.dataset.key === entry.key,
   );
@@ -427,12 +406,11 @@ function onKeyDown(event) {
       return;
     case "Enter":
       event.preventDefault();
-      // A stack opens; a card with nothing to fold opens ⓘ, which is the one
-      // escape hatch every card on this grid has.
-      if (entry?.kind === "card" && entry.card.stack_size > 1) {
+      // A stack opens. A card with nothing to fold has nothing to open, and
+      // rather than inventing a gesture for it the key simply does nothing:
+      // everything that card knows is already drawn on it.
+      if (entry?.kind === "card" && entry.card.size > 1) {
         store.toggleSet(entry.key);
-      } else {
-        rowElement(entry)?.querySelector(".wf-card__info")?.click();
       }
       return;
     case "Escape":

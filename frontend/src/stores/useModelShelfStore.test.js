@@ -2520,7 +2520,7 @@ describe("the workflow sets", () => {
     await store.loadWorkflowSets();
 
     expect(store.setStacks.map((stack) => stack.card.name)).toEqual(["used.st"]);
-    expect(store.setStacks[0].card.picture_count).toBe(12);
+    expect(store.setStacks[0].card.pictures).toBe(12);
     expect(store.noSetRows.map((row) => row.id)).toEqual([2]);
   });
 

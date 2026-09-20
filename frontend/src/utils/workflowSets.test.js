@@ -180,18 +180,16 @@ describe("setCard", () => {
   it("names a set by the files that identify it and puts adapters on their own row", () => {
     const card = setCard({ key: "1,2,4,5", members: [WITH_LORA] });
     expect(card.name).toBe("realvisXL_v5 · sdxl_vae · clip_l");
-    expect(card.models.map((m) => m.name)).toEqual([
-      "realvisXL_v5",
-      "sdxl_vae",
-      "clip_l",
-    ]);
-    expect(card.loras).toEqual([{ name: "filmgrain_xl", mark: "structural" }]);
+    // The kind row says what SHAPE the set is; the name row above already
+    // spells the first three files.
+    expect(card.kinds).toEqual(["Checkpoint", "VAE", "Text encoder"]);
+    expect(card.loras).toEqual(["filmgrain_xl"]);
   });
 
   it("says nothing to fold on a stack of one, so a missing deck is never ambiguous", () => {
     const card = setCard({ key: "1,2,4", members: [BASE] });
-    expect(card.stack_size).toBe(1);
-    expect(card.differs_by).toEqual(["5 recipes", "nothing to fold"]);
+    expect(card.size).toBe(1);
+    expect(card.differsBy).toEqual(["5 recipes", "nothing to fold"]);
   });
 
   it("carries the union of the differences and the summed counts on a stack", () => {
@@ -199,9 +197,10 @@ describe("setCard", () => {
       key: "1,2,4",
       members: [BASE, WITH_LORA, SWAPPED_VAE],
     });
-    expect(card.stack_size).toBe(3);
-    expect(card.differs_by).toEqual(["+ filmgrain_xl", "sdxl_vae → vae-ft-mse"]);
-    expect(card.picture_count).toBe(94 + 44 + 28);
+    expect(card.size).toBe(3);
+    expect(card.differsBy).toEqual(["+ filmgrain_xl", "sdxl_vae → vae-ft-mse"]);
+    expect(card.pictures).toBe(94 + 44 + 28);
+    expect(card.recipes).toBe(5 + 3 + 2);
     expect(card.covers).toEqual(["/t/11.webp", "/t/12.webp", "/t/13.webp"]);
   });
 
