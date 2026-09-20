@@ -3804,6 +3804,82 @@ def test_an_empty_chosen_cover_covers_nothing_rather_than_everything(
     ]
 
 
+def test_an_owner_chosen_cover_carries_its_crop_rectangle_too(workflow_env):
+    """The SECOND query that builds a cover, which the strip's test cannot see.
+
+    A chosen cover is resolved by ``pixel_sha`` through
+    ``cover_pictures_by_pixel_sha``, a different ``SELECT`` from the ranked
+    window -- and it unpacks positionally into ``CoverCandidate("", *row[1:])``,
+    so a column added in the wrong place lands in the wrong field silently.
+    Scrambling that select left the strip's own tests green, because they
+    assert URLs and the picture they pick has no rectangle at all.
+
+    The rectangle is deliberately ASYMMETRIC (x != y, side != either), so any
+    permutation of the three shows up rather than cancelling out.
+    """
+    ids = _picture_ids_by_path(workflow_env.server)
+    chosen = _h("chosen-cover-with-a-crop")
+    rectangle = {
+        "thumbnail_width": 512,
+        "thumbnail_height": 384,
+        "square_crop_x": 96,
+        "square_crop_y": 12,
+        "square_crop_side": 384,
+    }
+    library = workflow_env.server.vault.library_uuid
+
+    def write(session, values):
+        picture = session.get(Picture, ids["forgotten.png"])
+        for field, value in values.items():
+            setattr(picture, field, value)
+        session.add(picture)
+        session.commit()
+
+    def read_pixel_sha(session):
+        return session.get(Picture, ids["forgotten.png"]).pixel_sha
+
+    was = workflow_env.server.vault.db.run_task(
+        read_pixel_sha, priority=DBPriority.IMMEDIATE
+    )
+    workflow_env.server.vault.db.run_task(
+        lambda session: write(session, {**rectangle, "pixel_sha": chosen}),
+        priority=DBPriority.IMMEDIATE,
+    )
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_cover (library_uuid, workflow_key, pixel_sha) "
+            "VALUES (?, ?, ?)",
+            (library, FORGOTTEN_CARD, chosen),
+        )
+    try:
+        # Opened rather than listed: FORGOTTEN_CARD is a one-off and the grid
+        # leaves it out. The chosen cover is applied over every figure, which
+        # is the same reason a hidden card opens with the right one.
+        cover = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]["covers"][0]
+        assert cover == {
+            "url": (
+                f"/pictures/thumbnails/{ids['forgotten.png']}.webp"
+                f"?v={ImageUtils.thumbnail_cache_version(512, 384, None)}"
+            ),
+            **rectangle,
+        }
+    finally:
+        # The module shares one vault: put the picture back, and take the
+        # owner's choice away again so no later card inherits it.
+        workflow_env.server.vault.db.run_task(
+            lambda session: write(
+                session, {**dict.fromkeys(rectangle, None), "pixel_sha": was}
+            ),
+            priority=DBPriority.IMMEDIATE,
+        )
+        with workflow_env.server.hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_cover "
+                "WHERE library_uuid = ? AND workflow_key = ?",
+                (library, FORGOTTEN_CARD),
+            )
+
+
 def test_a_hidden_card_is_counted_never_listed_and_still_opens(workflow_env):
     """Hiding is a decision about the grid, not a deletion.
 

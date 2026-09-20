@@ -133,6 +133,14 @@ export function cropImgStyle(img, ratio = 1) {
     // ratio has drifted on a few more cropped pixels instead of on a squeeze.
     aspectRatio: "auto",
     objectFit: "cover",
+    // CENTRED, overriding the stylesheet's `top center`. That anchor is the
+    // right default for a crop nothing has aimed - it is the fallback these
+    // cells still use - but this img's offsets were just computed to put the
+    // face where it should be, so top-anchoring the residual would spend all
+    // of it off the bottom and bias against exactly what the crop preserves.
+    // Split, it is half of ~2% either way. A no-op in the square grid, where
+    // the box matches the bitmap and `cover` has nothing to trim.
+    objectPosition: "center",
     // Rounded corners frame the cell (container), not this oversized img.
     borderRadius: "0",
   };

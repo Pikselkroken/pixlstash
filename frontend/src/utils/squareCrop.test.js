@@ -230,6 +230,10 @@ describe("cropImgStyle", () => {
     expect(style.left).toBe("0%");
     expect(style.top).toBe(`${(-152 / 320) * 100}%`);
     expect(style.objectFit).toBe("cover");
+    // Overriding the cells' `object-position: top center`, which is the right
+    // anchor for a crop nothing aimed and the wrong one for this: the residual
+    // from a drifted cell ratio would come off the bottom, against the face.
+    expect(style.objectPosition).toBe("center");
   });
 
   // `left` and `top` do NOT share a denominator: a percentage `left` resolves

@@ -16,9 +16,12 @@ from pixlstash.database import (
 )
 from pixlstash.db_models import Picture, Tag
 from pixlstash.server import Server
+from pixlstash.task_runner import TaskCancelledError
 from pixlstash.tagger_plugins.florence2 import _words_from_ocr_regions
 from pixlstash.tasks.base_task import TaskPriority
+from pixlstash.tasks.missing_ocr_finder import MissingOcrFinder
 from pixlstash.tasks.ocr_task import OCR_MIN_TEXT_SCORE, OcrTask
+from pixlstash.tasks.task_type import TaskType
 
 RECEIPT = (
     "BAKERY No.4\nHARBOUR ST. 12\n14/09/2026 10:42\nSourdough 6.50\n"
@@ -481,8 +484,6 @@ def test_text_routes_follow_the_token_scope(server, client, pictures):
 
 
 def test_a_failed_batch_is_deferred_but_a_cancelled_one_is_not(server, pictures):
-    from pixlstash.task_runner import TaskCancelledError
-    from pixlstash.tasks.missing_ocr_finder import MissingOcrFinder
 
     _set_files(server, {pictures["unread"]: "/home/me/unread.png"})
     finder = MissingOcrFinder(server.vault.db, engine_getter=lambda: object())
@@ -524,3 +525,46 @@ def test_the_finder_probe_reads_the_partial_index(server):
     )
     assert "ix_picture_ocr_unread" in details, details
     assert "TEMP B-TREE" not in details, details
+
+
+def test_reading_waits_for_scoring_only_and_runs_with_captioning_off(server, pictures):
+    """Reading is neither queued behind captioning nor switched off with it.
+
+    Both together stalled the sweep for good: the planner holds a finder until
+    every finder it depends on reports no work left, so `DESCRIPTION` blocked
+    reading while any picture was uncaptioned, and switching captioning off to
+    clear that closed the guard instead.
+    """
+
+    assert (
+        TaskType.DESCRIPTION
+        not in MissingOcrFinder(
+            server.vault.db, engine_getter=lambda: None
+        ).depends_on()
+    )
+
+    _set_files(server, {pictures["unread"]: "/home/me/unread.png"})
+    captioning_off = SimpleNamespace(tagger_settings={"active_description_plugin": ""})
+    finder = MissingOcrFinder(server.vault.db, engine_getter=lambda: captioning_off)
+
+    task = finder.find_task()
+    assert task is not None
+    assert task.params["picture_ids"] == [pictures["unread"]]
+
+    # No engine is the one thing that does stop it: the task needs one to read.
+    assert (
+        MissingOcrFinder(server.vault.db, engine_getter=lambda: None).find_task()
+        is None
+    )
+
+
+def test_the_bar_only_has_to_clear_zero():
+    """Measured over a library of 12k pictures, not chosen by taste.
+
+    98.1% of them score exactly 0.0: the scorer's hard gates, not this
+    constant, are what select a picture for reading. Dense phone screenshots
+    scored 0.16-0.36 (a screenful of chat text: 0.23), so at 0.25 two of 81
+    screen-sized pictures qualified and a random sample of 1200 produced none.
+    A bar just above zero admits about 1.9% of a library.
+    """
+    assert 0 < OCR_MIN_TEXT_SCORE <= 0.05

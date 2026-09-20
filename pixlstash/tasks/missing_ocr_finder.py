@@ -15,8 +15,22 @@ logger = get_logger(__name__)
 class MissingOcrFinder(SimpleMissingFinder):
     """Find text-heavy pictures with no ``ocr_text`` and create OcrTasks.
 
-    Waits for text scoring, which decides which pictures qualify, and for
-    captioning, which shares the model. Idle while captioning is switched off.
+    Waits for text scoring, which decides which pictures qualify. It does not
+    wait for captioning and is not switched off with it: the planner only gives
+    a finder its turn once every finder it ``depends_on`` has reported no work
+    left, so depending on captioning meant reading never started until the whole
+    library was captioned, and the captioning switch then closed the guard in
+    its place. Reading loads Florence-2 through ``InferenceEngine.read_text``
+    whatever captioning is set to; ``ensure_captioning_ready`` does not consult
+    the setting. Both queue on the GPU, and a background read is
+    ``TaskPriority.LOW``, so captioning keeps the card.
+
+    Background reading therefore has no off switch, and the captioning setting
+    was serving as one: with it unset nothing loaded the checkpoint. The cost
+    is bounded rather than continuous, since the finder runs out of work once
+    the qualifying pictures are read and only wakes for new ones, but a library
+    that wants no model loaded at all cannot say so today. That wants a setting
+    of reading's own rather than captioning's borrowed back.
 
     A task that fails defers its pictures for the rest of the session, the way
     ``MissingCheckpointHashFinder`` does: the pictures stay unread, and without
@@ -33,18 +47,11 @@ class MissingOcrFinder(SimpleMissingFinder):
         return "MissingOcrFinder"
 
     def depends_on(self) -> list[TaskType]:
-        return [TaskType.TEXT_SCORE, TaskType.DESCRIPTION]
+        return [TaskType.TEXT_SCORE]
 
     def _guard(self) -> bool:
-        # Reading shares Florence-2 with captioning; with captioning switched
-        # off the owner has asked for no background model, so none is loaded.
-        engine = self._engine_getter()
-        if engine is None:
-            return False
-        tagger_settings = getattr(engine, "tagger_settings", None)
-        return tagger_settings is None or bool(
-            tagger_settings.get("active_description_plugin")
-        )
+        # An engine is all reading needs: ``read_text`` loads Florence-2 itself.
+        return self._engine_getter() is not None
 
     def _batch_size(self) -> int:
         return OcrTask.BATCH_SIZE

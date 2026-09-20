@@ -628,4 +628,91 @@ describe("StackPanel List thumbnails", () => {
       "rgb(var(--v-theme-input-background))",
     );
   });
+
+  // The CSS half of #1465's crop, pinned here as it is on the card:
+  // `coverCellStyle` emits percentages, and a percentage only means the CELL
+  // if the cell is the containing block and the img is out of flow. Either
+  // rule can be deleted with every mounted assertion still green — the strip
+  // renders, it simply crops against the wrong box or ignores the offsets.
+  it("makes the cell the box the crop is computed against", () => {
+    expect(rule(".stack-panel__thumb").position).toBe("relative");
+    expect(rule(".stack-panel__thumb").overflow).toBe("hidden");
+  });
+
+  it("takes the cropped img out of flow so its offsets apply", () => {
+    const img = rule(".stack-panel__thumb img");
+
+    expect(img.position).toBe("absolute");
+    expect(img.top).toBe("0");
+    expect(img.left).toBe("0");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The collapse is CSS, and nothing that runs proves it.
+//
+// jsdom animates nothing, so deleting the collapse animation leaves the whole
+// suite green: the store's backstop timer still fires, the panel still goes,
+// and the only thing lost is the band shrinking — the point of the change.
+// These read the sheet the way the shape tests above do.
+// ---------------------------------------------------------------------------
+
+/** One `@keyframes` block's body, by name. */
+function keyframes(name) {
+  const css = readSource().split("<style scoped>")[1];
+  const block = css.match(
+    new RegExp(`@keyframes ${name}\\s*\\{([\\s\\S]*?)\\n\\}`),
+  );
+  expect(block, name).toBeTruthy();
+  return block[1];
+}
+
+describe("the band grows and shrinks", () => {
+  it("is one collapsing grid row, open by default and closing on the class", () => {
+    const panel = rule(".stack-panel");
+    expect(panel.display).toBe("grid");
+    expect(panel["grid-template-rows"]).toBe("1fr");
+    expect(panel.animation).toContain("stack-panel-open");
+    expect(panel.animation).toContain("var(--dur-2)");
+
+    // `min-height: 0` or a grid item refuses to be shorter than its content
+    // and the track never collapses. `clip`, not `hidden`: hidden makes this a
+    // programmatic scroll container that `moveCursor`'s `.focus()` can move,
+    // with no scrollbar and no way back.
+    const body = rule(".stack-panel__body");
+    expect(body["min-height"]).toBe("0");
+    expect(body.overflow).toBe("clip");
+  });
+
+  it("qualifies the closing rule so it cannot lose to source order", () => {
+    // Both rules set `animation`. As two single-class selectors the collapse
+    // would win only because it is written second, and a sheet reordered later
+    // would silently put the open animation back on a panel that is closing.
+    const closing = rule(".stack-panel.stack-panel--closing");
+    expect(closing.animation).toContain("stack-panel-collapse");
+    expect(closing.animation).toContain("var(--dur-2)");
+    expect(closing.animation).toContain("forwards");
+  });
+
+  it("travels to 0fr both ways, and fades neither", () => {
+    for (const name of ["stack-panel-open", "stack-panel-collapse"]) {
+      const body = keyframes(name);
+      expect(body).toContain("grid-template-rows: 0fr");
+      // The margin goes with the row, or what is left after the panel has
+      // finished shrinking is 12px of empty grid.
+      expect(body).toContain("margin-bottom: 0");
+      // No `opacity`: `.tbm-caret` masks the panel's top border with the
+      // panel's own colour, and fading the band fades the mask, so the border
+      // shows through the notch for as long as it runs.
+      expect(body).not.toContain("opacity");
+    }
+  });
+
+  it("reports the end of the collapse to the store", () => {
+    // The class is what plays it; this is what ends it. `.self`, or a
+    // descendant's animation would be read as the band having finished.
+    const template = readSource().split("<script setup>")[0];
+    expect(template).toContain("@animationend.self");
+    expect(template).toContain("emit('collapsed')");
+  });
 });

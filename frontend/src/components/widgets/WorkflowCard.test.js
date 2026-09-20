@@ -684,6 +684,26 @@ describe("the fallback crop", () => {
     const grid = await styleOf("src/components/views/ImageGrid.css");
     expect(grid).toContain("object-position: top center");
   });
+
+  // The CSS half of #1465's crop, which is load-bearing and was invisible to
+  // every other test in this file: `coverCellStyle` emits percentages, and a
+  // percentage only means the CELL if the cell is the containing block and the
+  // img is taken out of flow. Delete `relative` and the img sizes against the
+  // whole cover instead, so every cell crops wrongly; delete `absolute` and
+  // the inline `left`/`top` are inert and the heads are still cut. Both render
+  // perfectly either way, which is why they are pinned here.
+  it("makes the cell the box the crop is computed against", () => {
+    expect(rule(".wf-card__pic").position).toBe("relative");
+    expect(rule(".wf-card__pic").overflow).toBe("hidden");
+  });
+
+  it("takes the cropped img out of flow so its offsets apply", () => {
+    const img = rule(".wf-card__pic img");
+
+    expect(img.position).toBe("absolute");
+    expect(img.top).toBe("0");
+    expect(img.left).toBe("0");
+  });
 });
 
 // ── The stack badge says what its number counts ──────────────────────────
