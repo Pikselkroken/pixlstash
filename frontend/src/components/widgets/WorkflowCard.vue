@@ -37,7 +37,21 @@
       <span v-if="card.type" class="wf-card__type" aria-hidden="true">{{
         card.type
       }}</span>
-      <span class="wf-card__empty-line" aria-hidden="true"
+      <!-- The models this card's own file names, drawn the way the shelf draws
+           a model (#1466). A card with no pictures AND no recipe has nothing
+           else that identifies it, and this is the one thing about it that was
+           read rather than guessed at. `aria-hidden` like the rest of the
+           cover: the card's own label already names every model. -->
+      <ul v-if="coverMarks.length" class="wf-card__marks" aria-hidden="true">
+        <li v-for="mark in coverMarks" :key="mark.key" class="wf-card__mark">
+          <Tooltip :text="mark.label" activator="parent" :describe="false" />
+          <ModelMark :row="mark.row" />
+        </li>
+        <li v-if="coverOverflow" class="wf-card__mark-more">
+          +{{ coverOverflow }}
+        </li>
+      </ul>
+      <span v-else class="wf-card__empty-line" aria-hidden="true"
         >No pictures yet</span
       >
       <AppButton
@@ -99,13 +113,15 @@
           :items="checkpointChips"
           aria-hidden="true"
         />
-        <span v-else class="wf-card__none" aria-hidden="true"
-          >No checkpoint</span
-        >
+        <span v-else class="wf-card__none" aria-hidden="true">{{
+          unread ? "Checkpoint not read" : "No checkpoint"
+        }}</span>
       </div>
       <div class="wf-card__row">
         <ChipRow v-if="loras.length" :items="loras" aria-hidden="true" />
-        <span v-else class="wf-card__none" aria-hidden="true">No LoRAs</span>
+        <span v-else class="wf-card__none" aria-hidden="true">{{
+          unread ? "LoRAs not read" : "No LoRAs"
+        }}</span>
       </div>
       <div class="wf-card__row wf-card__row--facts">
         <span
@@ -156,11 +172,18 @@ import {
   isStack,
   loraChips,
   modelDisplayName,
+  modelsUnread,
 } from "../../utils/workflowCard";
 import AppButton from "./AppButton.vue";
 import ChipRow from "./ChipRow.vue";
 import InfoPopover from "./InfoPopover.vue";
+import ModelMark from "./ModelMark.vue";
 import Tooltip from "./Tooltip.vue";
+
+// How many marks the empty cover draws before it counts the rest. Four squares
+// at --entity-thumb and their gaps are what fits on one line of a card at the
+// 240px column floor; a fifth wraps.
+const COVER_MARKS = 4;
 
 const props = defineProps({
   /** One workflow card (see utils/workflowCard.js for the shape). */
@@ -249,10 +272,60 @@ const rating = computed(() => props.card.rating > 0);
 const hasPictures = computed(
   () => covers.value.length > 0 || (props.card.picture_count ?? 0) > 0,
 );
+/**
+ * The models an empty cover draws, as `ModelMark` rows (#1466).
+ *
+ * The slot IS the row: `name`, `title`, `icon` and `base_model` are what the
+ * mark reads, under the names the shelf gives them, so nothing is mapped on
+ * the way. `filename` because `modelName` falls through `display_name` to it,
+ * which is what puts the initials on a model the shelf has never scanned.
+ *
+ * **Only a card with no recipe** (`variant_count: 0`), which is the card that
+ * had no cover at all before #1466: it has no pictures by construction, since
+ * a picture arrives attached to a recipe. Every other pictureless card keeps
+ * the shipped empty cover — a card whose pictures were all binned is a
+ * different state from one nothing has ever run, and widening this to both
+ * would be a change to a screen this issue was not about.
+ */
+const coverModels = computed(() =>
+  (props.card.variant_count ?? 1) === 0
+    ? [...(props.card.models ?? []), ...(props.card.loras ?? [])].filter(
+        (model) => model.name,
+      )
+    : [],
+);
+const coverMarks = computed(() =>
+  coverModels.value.slice(0, COVER_MARKS).map((model, i) => ({
+    // Indexed, because one workflow may load the same file twice and two
+    // identical keys silently collapse into one mark.
+    key: `mark-${i}`,
+    label: modelDisplayName(model),
+    // Both base-model spellings, because `baseModelKey` prefers the folded
+    // one: passing only the raw would colour the same model differently here
+    // and on the shelf.
+    row: {
+      display_name: model.title,
+      filename: model.name,
+      base_model: model.base_model,
+      base_model_folded: model.base_model_folded,
+      icon_sha256: model.icon,
+    },
+  })),
+);
+const coverOverflow = computed(() =>
+  Math.max(coverModels.value.length - COVER_MARKS, 0),
+);
+const unread = computed(() => modelsUnread(props.card));
 const checkpointChips = computed(() => {
   const model = checkpointModel(props.card);
   return model
-    ? [{ key: "checkpoint", label: modelDisplayName(model), icon: "cube-outline" }]
+    ? [
+        {
+          key: "checkpoint",
+          label: modelDisplayName(model),
+          icon: "cube-outline",
+        },
+      ]
     : [];
 });
 const loras = computed(() => loraChips(props.card));
@@ -463,6 +536,27 @@ const accessibleName = computed(() =>
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   font-size: var(--text-2xs);
   line-height: var(--leading-snug);
+}
+
+/* The model marks on an empty cover: a plain row of the shelf's own identity
+   slot, at the shared --entity-thumb rather than a local size. */
+.wf-card__marks {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wf-card__mark {
+  position: relative;
+  display: inline-flex;
+}
+
+.wf-card__mark-more {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .wf-card__empty-line {

@@ -56,6 +56,30 @@ const BARE = {
   covers: ["/a.webp", "/b.webp", "/c.webp"],
 };
 
+// A card whose whole content is a stored editor-format workflow file (#1466):
+// no variant, so no recipe to read models off, and no pictures to cover it.
+const FILE_ONLY = {
+  key: "w9",
+  name: "z image",
+  models: [
+    {
+      name: "z_image_bf16.safetensors",
+      title: "Z Image",
+      icon: null,
+      base_model: null,
+      kind: "unet",
+    },
+  ],
+  loras: [],
+  imported: true,
+  picture_count: 0,
+  covers: [],
+  variant_count: 0,
+};
+
+// The same card on a file the recovery could read nothing out of.
+const UNREAD = { ...FILE_ONLY, key: "w10", models: [] };
+
 const CROWDED = {
   ...BARE,
   key: "w5",
@@ -485,6 +509,44 @@ describe("WorkflowCard", () => {
         "true",
       );
     }
+  });
+
+  it("covers a card with no recipe with the models its file names", () => {
+    const wrapper = mountCard(FILE_ONLY);
+    const marks = wrapper.findAll(".wf-card__mark");
+    expect(marks).toHaveLength(1);
+    // The shelf's own identity slot, on its initials because this model
+    // reached no shelf row with a picture on it.
+    expect(marks[0].find(".mmark-initials").text()).toBe("ZI");
+    expect(wrapper.find(".wf-card__empty-line").exists()).toBe(false);
+    // "Run it…" stays: the cover says what the workflow loads, not that it ran.
+    expect(wrapper.find(".wf-card__cover--empty").text()).toContain("Run it");
+    // And the row names the model rather than claiming there is none. The
+    // SHELF's name for it, as every other card's model row does (#1454).
+    expect(wrapper.findAll(".wf-card__row")[1].text()).toContain("Z Image");
+    expect(wrapper.findAll(".wf-card__row")[1].text()).not.toContain(
+      "z_image_bf16",
+    );
+  });
+
+  it("leaves every other pictureless cover exactly as it was", () => {
+    // A card whose pictures were all binned is a different state from one
+    // nothing has ever run, and it keeps the shipped empty cover. Without the
+    // `variant_count` gate this card would draw marks too.
+    const wrapper = mountCard({ ...BARE, covers: [], picture_count: 0 });
+    expect(wrapper.findAll(".wf-card__mark")).toHaveLength(0);
+    expect(wrapper.find(".wf-card__empty-line").text()).toBe("No pictures yet");
+  });
+
+  it("says a card's models were not read rather than that it has none", () => {
+    const wrapper = mountCard(UNREAD);
+    expect(wrapper.findAll(".wf-card__mark")).toHaveLength(0);
+    // The last resort: the shipped empty cover, unchanged.
+    expect(wrapper.find(".wf-card__empty-line").text()).toBe("No pictures yet");
+    const rows = wrapper.findAll(".wf-card__row");
+    expect(rows[1].text()).toBe("Checkpoint not read");
+    expect(rows[2].text()).toBe("LoRAs not read");
+    expect(wrapper.attributes("aria-label")).toContain("models not read");
   });
 
   it("hides the pictureless cover's own words too", () => {

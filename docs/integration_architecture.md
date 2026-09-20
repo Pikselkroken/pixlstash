@@ -747,7 +747,9 @@ the two sides have agreed:
    serves that document.** It was merged before this route existed and
    `frontend_architecture.md` promises it needs no mapping layer, so the field
    names are the ones written down there — `key`, `name`, `type`, `imported`,
-   `models`, `loras`, `differs_by`, `picture_count`, `rating`, `covers`,
+   `models`, `loras` (each slot `{name, title, icon, base_model,
+   base_model_folded, kind, mark?, slot_label?}`), `differs_by`,
+   `picture_count`, `rating`, `covers`,
    `stack_size`, `saved_recipe_count`, `defaults` — and `mark` carries B1's own
    `structural` | `recipe` vocabulary rather than a translation of it, which is
    how the solid/dashed meaning would get inverted. The route adds
@@ -842,6 +844,36 @@ the two sides have agreed:
    imported as a file, and with no saved recipe on it. The fourth clause is
    B6's: saving a look is the plainest statement that somebody means to run a
    workflow again, so a card carrying one is never folded into the count.
+
+6. **A card can have no variant at all, and `variant_count: 0` is how a client
+   knows (#1466).** ComfyUI saves in *editor* format unless somebody
+   deliberately exports the API one, and an editor-format file names its widget
+   values by position: filing it writes a topology and no recipe, so its card
+   key is the topology's alone and no `workflow_variant` row carries it. Such a
+   card is a stored workflow file and nothing else — no pictures, no cached
+   slot list, and a null `core_hash`, so it stacks with nothing.
+
+   **Its `models` and `loras` are recovered from the file, not read off a
+   recipe**, and they carry the same fields as any other card's: `name` is the
+   graph's own string, `title`, `icon` and the two `base_model` spellings are
+   the model shelf's where the shelf holds the file, and `kind` is the loader's real slot
+   (`unet` for a Flux graph, never `checkpoint` by default). `slot_label` is
+   null on every one of them, because a slot label is an address inside a
+   stored topology and this card has none — so nothing here can be the target
+   of `PUT /workflows/{key}/slots`. A LoRA recovered this way is `structural`:
+   it is in the file, which is what the mark means.
+
+   **Empty is "not read", never "has none".** The recovery reads a real file
+   and reads nothing at all from a template-style export whose loaders were
+   never filled in, so a `variant_count: 0` card with no models is one nobody
+   has read. A client must not render that as "no checkpoint"; `modelsUnread`
+   in `utils/workflowCard.js` is the shipped reading of the pair.
+
+   `icon`, `base_model` and `base_model_folded` are served on **every** card's
+   slots, not only
+   these: they are what the model shelf draws a model with, and a card that has
+   to draw itself out of its models rather than its pictures would otherwise
+   need a second request per model to do it.
 
 **A saved workflow's picture inputs (#1305)** are the one write the view makes,
 and they live on the ComfyUI routes because they belong to the file, not to a

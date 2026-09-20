@@ -57,8 +57,14 @@ from pixlstash.hub.workflow_card_reads import (
     variant_documents,
 )
 from pixlstash.hub.workflow_card_writes import set_stack_order
+from pixlstash.hub import workflow_cards
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, effective_stack_keys
-from pixlstash.hub.workflows import PictureGhost, get_document, record_picture_ghosts
+from pixlstash.hub.workflows import (
+    PictureGhost,
+    get_document,
+    record_picture_ghosts,
+    record_ui_graph,
+)
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
     asset_reference,
@@ -3146,10 +3152,17 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
     # not on the shelf. It is served on every slot all the same, because the
     # card's name row is built from it and a client showing `name` instead
     # would describe one model twice (#1416).
+    # `icon` and `base_model` are the shelf's picture and the colour a generated
+    # mark takes from it (#1466): null on this slot for the same reason `title`
+    # is, and served on every slot so a card that has to draw itself out of its
+    # models rather than its pictures needs no second request to do it.
     assert card["loras"] == [
         {
             "name": None,
             "title": None,
+            "icon": None,
+            "base_model": None,
+            "base_model_folded": None,
             "kind": "lora",
             "mark": "recipe",
             "slot_label": lora_label,
@@ -3576,6 +3589,245 @@ def test_the_grid_is_one_card_per_key_not_one_per_variant(workflow_env):
     assert cards[BUSY_CARD]["variant_count"] == 2
     assert cards[BUSY_CARD]["topology_hash"] == BUSY_TOPOLOGY
     assert _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]["variant_count"] == 1
+
+
+# An **editor-format** workflow (#1466): the format ComfyUI saves by default,
+# which names its widget values by POSITION and so is filed as a topology with
+# no recipe at all. `_SHELF_FILENAME` is the one model the seed puts on the
+# shelf and `add_detail.safetensors` is deliberately NOT on it (it is the
+# module's model ghost), so one name here resolves to a shelf row and the
+# other cannot - which is what makes a null `title` mean something.
+_EDITOR_UNRESOLVED = "add_detail.safetensors"
+_EDITOR_WORKFLOW = {
+    "nodes": [
+        {
+            "id": 1,
+            "type": "UNETLoader",
+            "inputs": [],
+            "outputs": [{"name": "MODEL", "links": [1]}],
+            "widgets_values": [_SHELF_FILENAME],
+        },
+        {
+            "id": 2,
+            "type": "LoraLoader",
+            "inputs": [{"name": "model", "link": 1}],
+            "outputs": [{"name": "MODEL", "links": [2]}],
+            "widgets_values": [_EDITOR_UNRESOLVED, 1.0, 1.0],
+        },
+        {
+            "id": 3,
+            "type": "SaveImage",
+            "inputs": [{"name": "images", "link": 2}],
+            "outputs": [],
+            "widgets_values": ["out"],
+        },
+    ],
+    "links": [[1, 1, 0, 2, 0, "*"], [2, 2, 0, 3, 0, "*"]],
+}
+_EDITOR_ICON = _h("editor-card-icon")
+
+
+def _file_a_workflow(server, tmp_path, monkeypatch, name, workflow, keys=None) -> str:
+    """Store *workflow* as a user file and file it. Returns its card key.
+
+    Filed the way the import route files one: an editor-format document goes
+    through `record_ui_graph`, which writes a topology and nothing else, and
+    `record_file` keys the file on it.
+    """
+    (tmp_path / name).write_text(json.dumps(workflow), encoding="utf-8")
+    monkeypatch.setattr(
+        comfyui_module, "_workflow_dirs", lambda: [("user", str(tmp_path))]
+    )
+    comfyui_module._describe_workflow.cache_clear()
+    workflows_routes._file_model_widgets.cache_clear()
+    if keys is not None:
+        return workflow_cards.record_file(server.hub, name, *keys)
+    topology = record_ui_graph(server.hub, workflow)
+    return workflow_cards.record_file(server.hub, name, topology)
+
+
+def _give_the_shelf_model_an_icon(server) -> None:
+    """Put a chosen picture on the seeded shelf row, re-seeded next test."""
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET icon_sha256 = ? WHERE filename = ?",
+            (_EDITOR_ICON, _SHELF_FILENAME),
+        )
+
+
+def test_an_editor_format_file_is_a_card_of_its_own(
+    workflow_env, tmp_path, monkeypatch
+):
+    """#1466: filed with no variant, it used to land on no card at all.
+
+    ComfyUI saves in editor format unless somebody deliberately exports the
+    API one, so this is most of what an owner drops into the folder. The file
+    row existed, the folder had the file, and the grid - which starts at the
+    variant table - had nothing to join it to.
+    """
+    key = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
+    )
+
+    cards = _by_key(_cards(workflow_env.owner))
+    assert set(cards) == {BUSY_CARD, key}
+    card = cards[key]
+    # Topology and file name only: no recipe, no pictures, and so no automatic
+    # group to fall into.
+    assert (card["variant_count"], card["picture_count"]) == (0, 0)
+    assert (card["stack_size"], card["stack_id"]) == (1, None)
+    assert (card["imported"], card["name"]) == (True, "editor")
+    # And it opens on its own route, which is what every write answers with.
+    assert _detail(workflow_env.owner, key)["card"]["key"] == key
+
+
+def test_an_editor_format_cards_models_are_read_off_its_own_file(
+    workflow_env, tmp_path, monkeypatch
+):
+    """The models of a card that has no recipe to read them from (#1466).
+
+    Recovered from the file's own widget values, each resolved against the
+    model shelf. The two names are chosen to run both sides of that: the UNET
+    is the seeded shelf model and carries its title and its picture, the LoRA
+    is this module's model ghost and carries neither.
+    """
+    _give_the_shelf_model_an_icon(workflow_env.server)
+    key = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
+    )
+
+    card = _by_key(_cards(workflow_env.owner))[key]
+    # `unet`, not `checkpoint`: the recovery keeps the widget each name came
+    # off, and a Flux or Z-Image graph carries no checkpoint at all.
+    assert card["models"] == [
+        {
+            "name": _SHELF_FILENAME,
+            "title": _SHELF_TITLE,
+            "icon": _EDITOR_ICON,
+            "base_model": None,
+            "base_model_folded": None,
+            "kind": "unet",
+            "mark": None,
+            # No label: a slot label is an address inside a stored topology,
+            # and this card has none to address.
+            "slot_label": None,
+        }
+    ]
+    # STRUCTURAL, because a LoRA named in the file is one the workflow loads -
+    # `recipe` is a slot some recipe fills, and this card has no recipe. Null
+    # title and null icon are the state: the shelf does not hold this file.
+    assert card["loras"] == [
+        {
+            "name": _EDITOR_UNRESOLVED,
+            "title": None,
+            "icon": None,
+            "base_model": None,
+            "base_model_folded": None,
+            "kind": "lora",
+            "mark": "structural",
+            "slot_label": None,
+        }
+    ]
+
+
+def test_a_card_with_a_recipe_never_reads_its_models_off_the_file(
+    workflow_env, tmp_path, monkeypatch
+):
+    """The guard on the recovery, exercised from the side that could be wrong.
+
+    BUSY has a recipe, so its models come from the cached slot list. Giving it
+    a FILE that names something else must change nothing: reading a card's
+    models off a file it happens to own would overwrite what its pictures
+    actually ran with, and would put a filesystem read on every card of the
+    grid besides.
+    """
+    other = json.loads(json.dumps(_EDITOR_WORKFLOW))
+    other["nodes"][0]["widgets_values"] = ["not-the-recipes-model.safetensors"]
+    _file_a_workflow(
+        workflow_env.server,
+        tmp_path,
+        monkeypatch,
+        "busy.json",
+        other,
+        keys=(BUSY_TOPOLOGY, BUSY_RECIPE_A),
+    )
+
+    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    assert [model["name"] for model in card["models"]] == [_SHELF_FILENAME]
+    assert [lora["mark"] for lora in card["loras"]] == ["recipe"]
+
+
+def test_a_file_that_says_nothing_about_its_models_leaves_them_unread(
+    workflow_env, tmp_path, monkeypatch
+):
+    """A template-style export, whose loaders were never filled in (#1466).
+
+    The card still exists - that is the whole point - and its models are
+    EMPTY, which a client reads beside `variant_count: 0` as "nobody has read
+    this workflow's models" rather than as "it has none".
+    """
+    empty = json.loads(json.dumps(_EDITOR_WORKFLOW))
+    for node in empty["nodes"]:
+        node["widgets_values"] = []
+    key = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "template.json", empty
+    )
+
+    card = _by_key(_cards(workflow_env.owner))[key]
+    assert (card["models"], card["loras"]) == ([], [])
+    assert card["variant_count"] == 0
+    # A file that is not there at all answers the same way rather than raising.
+    monkeypatch.setattr(comfyui_module, "_workflow_dirs", lambda: [])
+    workflows_routes._file_model_widgets.cache_clear()
+    assert _by_key(_cards(workflow_env.owner))[key]["models"] == []
+
+
+def test_the_shelfs_picture_needs_one_candidate_where_its_name_needs_agreement(
+    workflow_env,
+):
+    """`model_marks`' rule beside `model_titles`', which it is not.
+
+    Two shelf rows answering to one basename are two files. They can still
+    agree on a name - and then the card may show it - but a thumbnail is a
+    picture *of one of them*, so an ambiguous name takes none.
+    """
+    hub = workflow_env.server.hub
+    _give_the_shelf_model_an_icon(workflow_env.server)
+    mark = workflow_card_service.model_marks(hub, [_SHELF_FILENAME])[_SHELF_FILENAME]
+    assert (mark.title, mark.icon) == (_SHELF_TITLE, _EDITOR_ICON)
+
+    with hub.transaction() as conn:
+        # A second file of the same basename, named the same and with a
+        # picture of its own. Deleted with its twin by the next re-seed.
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, display_name, icon_sha256, "
+            "provenance) VALUES ('checkpoint', ?, ?, ?, 'scanned')",
+            (_SHELF_FILENAME, _SHELF_TITLE, _h("the-other-copys-icon")),
+        )
+    mark = workflow_card_service.model_marks(hub, [_SHELF_FILENAME])[_SHELF_FILENAME]
+    assert mark.title == _SHELF_TITLE, "two rows agreeing on a name still name it"
+    assert mark.icon is None, "but neither one's picture is the model's"
+    # A name this shelf has never seen is absent, not present-and-empty.
+    assert workflow_card_service.model_marks(hub, ["nothing-here.safetensors"]) == {}
+
+
+def test_two_names_for_one_shelf_model_both_keep_its_picture(workflow_env):
+    """One model answers to several names, and each of them is a slot value.
+
+    Its own filename, every copy's basename and its digest all resolve to the
+    same row, so one card can name it twice - and an index keyed by MODEL
+    rather than by name silently drops one of them, leaving a model whose
+    picture the shelf holds drawing initials.
+    """
+    hub = workflow_env.server.hub
+    _give_the_shelf_model_an_icon(workflow_env.server)
+    digest = hub.fetchone(
+        "SELECT sha256 FROM model WHERE filename = ?", (_SHELF_FILENAME,)
+    )["sha256"]
+
+    marks = workflow_card_service.model_marks(hub, [_SHELF_FILENAME, digest])
+    assert set(marks) == {_SHELF_FILENAME, digest}
+    assert [mark.icon for mark in marks.values()] == [_EDITOR_ICON, _EDITOR_ICON]
 
 
 def test_a_card_adds_up_every_variants_kept_pictures_and_ratings(workflow_env):

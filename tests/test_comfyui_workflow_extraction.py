@@ -16,6 +16,7 @@ from pixlstash.utils.comfyui_utilities import (
     extract_comfy_workflow_info,
     extract_generation_info,
     find_comfy_workflow,
+    loaded_model_widgets,
 )
 
 WORKFLOWS_DIR = pathlib.Path(__file__).parent / "comfyui_workflows"
@@ -60,6 +61,76 @@ def test_extract_generation_info(workflow_file: pathlib.Path) -> None:
     assert actual_prompt == expected["positive_prompt"], (
         f"positive_prompt mismatch for {workflow_file.name}"
     )
+
+
+@pytest.mark.parametrize("workflow_file", _workflow_files(), ids=lambda p: p.name)
+def test_loaded_model_widgets_agrees_with_the_csv_and_keeps_the_widget(
+    workflow_file: pathlib.Path,
+) -> None:
+    """The same names as the CSV, each still saying which loader it came off.
+
+    `extract_generation_info` folds checkpoints and UNETs into one `models`
+    list; a workflow card built out of these has to tell a `checkpoint` slot
+    from a `unet` one (#1466), so this reader keeps the widget. The names must
+    not drift from the ones already pinned in `expected_results.csv`, which is
+    what the two halves of this assertion hold together.
+    """
+    expected = _load_expected()[workflow_file.name]
+    found = loaded_model_widgets(json.loads(workflow_file.read_text()))
+
+    loras = [name for widget, name in found if widget == "lora_name"]
+    models = [name for widget, name in found if widget != "lora_name"]
+    assert "|".join(models) == expected["models"]
+    assert "|".join(loras) == expected["loras"]
+    assert {widget for widget, _ in found} <= {
+        "ckpt_name",
+        "unet_name",
+        "lora_name",
+    }
+
+
+def test_loaded_model_widgets_says_nothing_rather_than_guessing() -> None:
+    """A template-style export, and the shapes a malformed file can take.
+
+    An editor-format loader whose widget was never filled in carries no value
+    at all, and this reader must come back EMPTY rather than inventing one:
+    the caller reads empty as "this document did not say", which is a
+    different answer from "this workflow loads no models".
+    """
+    template = {
+        "nodes": [
+            {"id": 1, "type": "CheckpointLoaderSimple", "widgets_values": []},
+            {"id": 2, "type": "LoraLoader", "widgets_values": []},
+        ],
+        "links": [],
+    }
+    assert loaded_model_widgets(template) == []
+
+    # A muted (2) and a bypassed (4) loader load nothing when the graph runs.
+    silenced = {
+        "nodes": [
+            {
+                "id": 1,
+                "type": "CheckpointLoaderSimple",
+                "mode": 0,
+                "widgets_values": ["base.safetensors"],
+            }
+        ],
+        "links": [],
+    }
+    for mode in (2, 4):
+        silenced["nodes"][0]["mode"] = mode
+        assert loaded_model_widgets(silenced) == []
+
+    # API format, where the value is a named input rather than a position.
+    assert loaded_model_widgets(
+        {"1": {"class_type": "UNETLoader", "inputs": {"unet_name": "flux.safetensors"}}}
+    ) == [("unet_name", "flux.safetensors")]
+
+    # And nothing that is not a graph at all.
+    assert loaded_model_widgets({}) == []
+    assert loaded_model_widgets({"nodes": [None, 7]}) == []
+    assert loaded_model_widgets([]) == []
 
 
 @pytest.mark.parametrize("workflow_file", _workflow_files(), ids=lambda p: p.name)

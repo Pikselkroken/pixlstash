@@ -612,6 +612,71 @@ def test_a_ui_file_lands_on_a_card_with_no_assets(hub):
     assert (row["topology_hash"], row["structural_hash"]) == (topology, None)
     assert row["workflow_key"] == key == workflow_cards.topology_only_key(topology)
 
+    # ...and the grid can read that card (#1466). No variant carries this key,
+    # so a card index that started at the variant table had nothing to join
+    # the file row to and the workflow appeared nowhere at all.
+    cards = card_index(hub)
+    assert [card.workflow_key for card in cards] == [key]
+    assert (cards[0].topology_hash, cards[0].file_name) == (topology, "ui.json")
+    assert (cards[0].variants, cards[0].slots) == ([], [])
+    # NULL is "stacks with nothing", which is the right answer for a card
+    # whose models nobody has read.
+    assert cards[0].core_hash is None
+    assert cards[0].imported is True
+
+    # A file that DOES reduce keeps its own card, and the two do not merge.
+    keys = record_api_graph(hub, _graph())
+    workflow_cards.record_file(
+        hub, "api.json", keys.topology_hash, keys.structural_hash
+    )
+    assert len(hub.fetchall("SELECT workflow_name FROM workflow_file")) == 2
+    assert sorted(card.file_name for card in card_index(hub)) == [
+        "api.json",
+        "ui.json",
+    ]
+
+
+def test_a_files_card_is_derived_rather_than_read_back(hub):
+    """The key `card_index` puts a file-only card on is computed, not stored.
+
+    ``workflow_file.workflow_key`` is a digest written at filing time, and the
+    re-key pass reaches a row only through its ``structural_hash`` - which an
+    editor-format file has none of. A stale stored key would surface the card
+    twice over: once under the key nothing else uses any more, with the
+    attribute rows for it already swept.
+    """
+    ui = {
+        "nodes": [
+            {
+                "id": 1,
+                "type": "UNETLoader",
+                "inputs": [],
+                "outputs": [{"name": "MODEL", "links": [1]}],
+                "widgets_values": ["base.safetensors"],
+            },
+            {
+                "id": 2,
+                "type": "SaveImage",
+                "inputs": [{"name": "images", "link": 1}],
+                "outputs": [],
+                "widgets_values": ["out"],
+            },
+        ],
+        "links": [[1, 1, 0, 2, 0, "*"]],
+    }
+    topology = record_ui_graph(hub, ui)
+    workflow_cards.record_file(hub, "ui.json", topology)
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_file SET workflow_key = ? WHERE workflow_name = 'ui.json'",
+            ("0" * 64,),
+        )
+
+    cards = card_index(hub)
+    assert [card.workflow_key for card in cards] == [
+        workflow_cards.topology_only_key(topology)
+    ]
+
 
 def test_replacing_a_file_moves_it_to_the_new_card(hub):
     """A name is the owner's; the row says what is in the file now."""

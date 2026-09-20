@@ -4,8 +4,10 @@
 queries in one session - one ``GROUP BY workflow_structural_hash``, one
 ``ROW_NUMBER()`` window and one ``GROUP BY workflow_key`` over the saved
 recipes - and a fourth only on a library where somebody has actually chosen a
-cover. Beside them are eight hub statements, of which one (``card_index``)
-scans the variant table and the rest are small; everything else here is
+cover. Beside them are ten hub statements, of which two are ``card_index``'s
+(a scan of the variant table, and one grouped read of ``workflow_file`` for
+the cards that have no variant at all, #1466) and one more is only issued
+where a slot name actually reaches the shelf; everything else here is
 arithmetic over their results, plus F7's ghost pass - one grouped count, and
 the five reads ``model_ghost_names`` makes, two of them whole-table scans,
 measured together at 1.3 ms (:func:`_describe_ghosts`).
@@ -66,6 +68,7 @@ from pixlstash.services.workflow_hash import WorkflowGraphError
 from pixlstash.services.workflow_identity import (
     CHECKPOINT_WIDGETS,
     RECIPE,
+    STRUCTURAL,
     differs_by_reduced,
     reduce_stored_document,
     topology_node_labels,
@@ -78,6 +81,8 @@ from pixlstash.services.workflow_library_service import (
     read_instance_hashes,
 )
 from pixlstash.services.workflow_parameters import FEATURED_NAMES
+from pixlstash.utils.known_base_models import fold
+from pixlstash.utils.sql_chunking import chunked
 
 logger = get_logger(__name__)
 
@@ -169,6 +174,14 @@ class SlotModel:
     # is the ordinary case: it means only that this machine has not scanned the
     # file, never that the slot is empty.
     title: Optional[str] = None
+    # The rest of what the shelf draws this model with (:class:`ShelfMark`):
+    # its chosen picture, and the base model - in both spellings - that a
+    # generated mark takes its colour from. All null far more often than not,
+    # and a card that has to draw itself out of its models rather than its
+    # pictures (#1466) is the one reader of them.
+    icon: Optional[str] = None
+    base_model: Optional[str] = None
+    base_model_folded: Optional[str] = None
 
 
 @dataclass
@@ -444,6 +457,19 @@ def describe_differences(
     for stack in stacks:
         cover = for_key.get(stack.cover_key)
         union: list[str] = []
+        if cover is None and len(stack.member_keys) > 1:
+            # Nothing to compare the members against, so the whole stack shows
+            # no chips. Said out loud rather than fallen through silently: a
+            # manual stack can now be covered by a card with no recipe at all
+            # (#1466), which has no document to reduce, and a stack that
+            # quietly stopped explaining itself is a bug that looks like a
+            # design.
+            logger.info(
+                "Stack %s is covered by card %s, which has no document to "
+                "reduce, so its members show no difference chips.",
+                stack.stack_id,
+                stack.cover_key,
+            )
         for key in stack.member_keys[1:]:
             member = for_key.get(key)
             if cover is None or member is None:
@@ -477,9 +503,19 @@ def read_grid(
     *,
     include_hidden: bool = False,
     include_one_offs: bool = False,
+    file_models=None,
 ) -> Grid:
     """Everything ``GET /workflows/cards`` answers. See the module docstring
     for what it costs.
+
+    *file_models* is how a card with **no variant** gets its models (#1466):
+    ``(file name) -> [(widget name, filename)]``, or ``None`` to leave those
+    cards without any. Passed in rather than done here because reading a
+    stored workflow file is I/O against a folder this layer does not know -
+    the same split ``routes/workflows.py::_source_graph_for`` already keeps,
+    where the route owns the read and the service owns what is made of it. It
+    is called once per such card and for no other, so a grid with none pays
+    nothing at all.
 
     The two flags are the Filters panel's *Show hidden workflows* and the
     unticked *Hide one-offs* (F7). They widen what is DRAWN; ``hidden`` and
@@ -582,7 +618,7 @@ def read_grid(
     names = asset_names(
         hub, [variant for figure in figures for variant in figure.card.variants]
     )
-    _describe_slots(hub, figures, names)
+    _describe_slots(hub, figures, names, _recovered_slots(figures, file_models))
     _describe_ghosts(hub, vault, figures, names)
     return Grid(
         cards=drawn,
@@ -617,9 +653,28 @@ def model_titles(hub: HubDatabase, names: list[str]) -> dict[str, str]:
     card after the wrong model is worse than naming it after its file, so the
     entry is dropped and the caller keeps the filename.
     """
+    candidates, titles = _shelf_candidates(hub, names)
+    found: dict[str, str] = {}
+    for value, models in candidates.items():
+        claimed = {titles.get(model_id) for model_id in models}
+        if len(claimed) == 1 and None not in claimed:
+            found[value] = claimed.pop()
+    return found
+
+
+def _shelf_candidates(
+    hub: HubDatabase, names: list[str]
+) -> tuple[dict[str, set[int]], dict[int, Optional[str]]]:
+    """``({name: every shelf model it could be}, {model id: its title})``.
+
+    The resolution :func:`model_titles` and :func:`model_marks` share; the
+    first says why all three spellings of an asset value are tried, why the
+    index rather than a hand-written join answers it, and why the answer is a
+    set. A name with no candidate at all is left out.
+    """
     wanted = {name.lower() for name in names if name}
     if not wanted:
-        return {}
+        return {}, {}
     by_name, by_digest, _filenames = recipe_asset_index(hub)
     sorted_digests = sorted(by_digest)
     # Every model, named or not: the unnamed ones are what make a shared name
@@ -629,24 +684,130 @@ def model_titles(hub: HubDatabase, names: list[str]) -> dict[str, str]:
         row["id"]: (row["display_name"] or "").strip() or None
         for row in hub.fetchall("SELECT id, display_name FROM model")
     }
-    found: dict[str, str] = {}
+    candidates: dict[str, set[int]] = {}
     for value in wanted:
-        candidates = set(by_name.get(value, ()))
-        candidates |= models_for_digest(value, by_digest, sorted_digests)
+        models = set(by_name.get(value, ()))
+        models |= models_for_digest(value, by_digest, sorted_digests)
         # A shelf id is the one asset value that is not a name at all
         # (`SHELF_ID_FIELD`), and the node refuses anything but digits.
         if value.isdigit() and int(value) in titles:
-            candidates.add(int(value))
-        if not candidates:
+            models.add(int(value))
+        if models:
+            candidates[value] = models
+    return candidates, titles
+
+
+@dataclass(frozen=True)
+class ShelfMark:
+    """What the shelf draws a model with, for a card that has no picture.
+
+    ``icon`` is ``model.icon_sha256``. The base model comes in **both**
+    spellings the shelf serves it in, because a client hashes the mark's
+    colour out of ``folded or raw`` (``utils/modelShelf.baseModelKey``): one
+    field would give the same model two colours in two places, which is the
+    one thing a mark exists not to do. ``base_model_folded`` is null whenever
+    ``known_base_models`` does not recognise the string, raw included.
+
+    All of it is null far more often than not: PixlStash generates no sample
+    for a checkpoint it registers in place, and most adapters carry no base
+    model either, so a mark with none of it is the ordinary case rather than
+    a failure.
+    """
+
+    title: Optional[str] = None
+    icon: Optional[str] = None
+    base_model: Optional[str] = None
+    base_model_folded: Optional[str] = None
+
+
+def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
+    """``{slot name: ShelfMark}`` - how the shelf would draw each model.
+
+    :func:`model_titles`' resolution, carrying the model's picture as well as
+    its name, for the one place a card is drawn out of its models rather than
+    out of its pictures (#1466).
+
+    **The picture needs a single candidate, where the title only needs
+    agreement.** Two shelf rows that agree on a name are still two files, and
+    a thumbnail is a picture *of one of them*: showing the wrong file's
+    sample is a claim the title rule never makes. So an ambiguous name keeps
+    whatever title the agreement rule allows and takes no icon, which leaves
+    the client on the initials it derives from the filename.
+
+    A name this shelf has never seen is absent rather than present-and-empty,
+    so a caller can tell "not on this machine" from "here, with no picture".
+    """
+    candidates, titles = _shelf_candidates(hub, names)
+    if not candidates:
+        return {}
+    # ``{model id: every name that resolved to it}`` and not the inverse: one
+    # model answers to its own filename, to each copy's basename and to its
+    # digest, so two slot values of one card can land on one row. Keyed the
+    # other way round, the second would overwrite the first and a model whose
+    # picture the shelf holds would draw initials instead.
+    single: dict[int, list[str]] = {}
+    for value, models in candidates.items():
+        if len(models) == 1:
+            single.setdefault(next(iter(models)), []).append(value)
+    pictures: dict[str, tuple] = {}
+    for batch in chunked(sorted(single)):
+        placeholders = ",".join("?" * len(batch))
+        for row in hub.fetchall(
+            "SELECT id, icon_sha256, base_model "
+            f"FROM model WHERE id IN ({placeholders})",
+            tuple(batch),
+        ):
+            for value in single[row["id"]]:
+                pictures[value] = (
+                    row["icon_sha256"],
+                    row["base_model"],
+                    fold(row["base_model"]),
+                )
+    marks = {}
+    for value, models in candidates.items():
+        # `model_titles`' rule, applied to the candidates already in hand
+        # rather than by calling it: that would re-run `recipe_asset_index`,
+        # which is three scans of the shelf, for an answer this function has
+        # already paid for.
+        claimed = {titles.get(model_id) for model_id in models}
+        title = claimed.pop() if len(claimed) == 1 and None not in claimed else None
+        marks[value] = ShelfMark(title, *pictures.get(value, (None, None, None)))
+    return marks
+
+
+def _recovered_slots(figures: list[CardFigures], file_models) -> dict[str, list]:
+    """``{workflow_key: [(widget name, filename)]}`` for the cards with no recipe.
+
+    A card with no variant is a stored workflow file and nothing else (#1466),
+    so the cached slot list ``_describe_slots`` reads - which is written per
+    recipe - has nothing to say about it and its rows would read "no
+    checkpoint" about a workflow nobody had looked at. *file_models* is
+    :func:`read_grid`'s reader; see there for why the I/O is the caller's.
+
+    Best effort by construction, and **empty is "not read"**: the recovery
+    reads an editor-format file's widget values by position and reads nothing
+    at all from a template-style export whose loaders were never filled in. A
+    card that recovers nothing keeps no models, and its client is told which
+    of the two it is by ``variant_count: 0``.
+    """
+    if file_models is None:
+        return {}
+    found = {}
+    for figure in figures:
+        card = figure.card
+        if card.variants or not card.file_name:
             continue
-        claimed = {titles.get(model_id) for model_id in candidates}
-        if len(claimed) == 1 and None not in claimed:
-            found[value] = claimed.pop()
+        loaded = file_models(card.file_name)
+        if loaded:
+            found[card.workflow_key] = loaded
     return found
 
 
 def _describe_slots(
-    hub: HubDatabase, figures: list[CardFigures], names: dict[str, list[tuple]]
+    hub: HubDatabase,
+    figures: list[CardFigures],
+    names: dict[str, list[tuple]],
+    recovered: Optional[dict[str, list]] = None,
 ) -> None:
     """Fill in each card's models and LoRAs from the cached slot list.
 
@@ -662,18 +823,26 @@ def _describe_slots(
     off here rather than paired to a slot the hub cannot address (see
     :func:`~pixlstash.hub.workflow_card_reads.asset_names`).
 
-    A second hub read puts the shelf's own name beside each filename, once for
-    the whole grid rather than per card. It is a join inside one database and
-    not a derivation, which is why it can be afforded on a grid read at all.
+    A second hub read puts the shelf's own name - and its picture, for a card
+    that has to draw itself out of its models (#1466) - beside each filename,
+    once for the whole grid rather than per card. It is a join inside one
+    database and not a derivation, which is why it can be afforded on a grid
+    read at all.
+
+    *recovered* is :func:`_recovered_slots`' answer for the cards that have no
+    cached slot list because they have no recipe. It is empty for every other
+    card, and a card is in exactly one of the two branches below.
     """
     marks = slot_marks(hub, [figure.card.topology_hash for figure in figures])
     # Off `read_grid`'s shared `names` rather than a read of its own: that one
     # covers EVERY variant where this pass only draws the first, so it is a
     # superset and resolving a few filenames no chip shows is cheaper than a
     # second pass over the same table.
-    titles = model_titles(
+    recovered = recovered or {}
+    marks_by_name = model_marks(
         hub,
-        [filename for pairs in names.values() for _, filename in pairs],
+        [filename for pairs in names.values() for _, filename in pairs]
+        + [filename for pairs in recovered.values() for _, filename in pairs],
     )
     for figure in figures:
         card = figure.card
@@ -705,9 +874,11 @@ def _describe_slots(
                         kind="lora",
                         mark=mark,
                         label=str(slot.get("label") or "") or None,
-                        title=titles.get((name or "").lower())
-                        if mark != RECIPE
-                        else None,
+                        **(
+                            {}
+                            if mark == RECIPE
+                            else _mark_fields(marks_by_name.get((name or "").lower()))
+                        ),
                     )
                 )
             else:
@@ -717,9 +888,50 @@ def _describe_slots(
                         name=name,
                         kind=_SLOT_KINDS.get(widget, widget or "model"),
                         label=str(slot.get("label") or "") or None,
-                        title=titles.get((name or "").lower()),
+                        **_mark_fields(marks_by_name.get((name or "").lower())),
                     )
                 )
+
+        # A card with no recipe has no cached slots at all, so this is the
+        # other branch of the same `if` rather than an addition to it: the
+        # loop above ran zero times. **No `label`** - a slot label is an
+        # address inside a stored topology and these slots have none, so
+        # inventing one would hand a client a target for
+        # `PUT /workflows/{key}/slots` that nothing could resolve. And every
+        # LoRA here is STRUCTURAL: it is in the file, which is exactly what
+        # the mark means; `recipe` is a slot some recipe fills, and this card
+        # has no recipe.
+        for widget, filename in recovered.get(card.workflow_key, ()):
+            fields = _mark_fields(marks_by_name.get(filename.lower()))
+            if widget == "lora_name":
+                figure.loras.append(
+                    SlotModel(name=filename, kind="lora", mark=STRUCTURAL, **fields)
+                )
+            else:
+                figure.models.append(
+                    SlotModel(
+                        name=filename,
+                        kind=_SLOT_KINDS.get(widget, widget or "model"),
+                        **fields,
+                    )
+                )
+
+
+def _mark_fields(mark: Optional[ShelfMark]) -> dict:
+    """The shelf's fields for one model, as :class:`SlotModel` keywords.
+
+    An empty dict for a model the shelf does not hold, so the slot keeps the
+    dataclass's own defaults rather than being told three times that a file
+    this machine has never scanned has no title, no picture and no base model.
+    """
+    if mark is None:
+        return {}
+    return {
+        "title": mark.title,
+        "icon": mark.icon,
+        "base_model": mark.base_model,
+        "base_model_folded": mark.base_model_folded,
+    }
 
 
 def _describe_ghosts(
