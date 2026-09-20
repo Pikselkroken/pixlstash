@@ -20,7 +20,11 @@
          server's flags, so ticking one re-reads the grid; the third only ever
          removes a card and is applied here. -->
     <div class="tbm-section">
-      <label v-for="row in CHECKS" :key="row.key" class="fm-check wff-check">
+      <label
+        v-for="row in CHECKS"
+        :key="row.key"
+        class="tbm-check fm-check wff-check"
+      >
         <input
           type="checkbox"
           :checked="store.filters[row.key]"
@@ -133,18 +137,11 @@ const counts = computed(() => ({
   width: var(--filter-submenu-w);
   max-width: 94vw;
 }
+/* `.tbm-check` brings the checkbox itself and `.fm-check` the menu row, as
+   `FilterChecklistMenu` pairs them. All this adds is the vertical centring the
+   Ghosts row's second line would otherwise lose. */
 .wff-check {
   align-items: center;
-  gap: var(--space-3);
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-.wff-check input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  accent-color: rgb(var(--v-theme-primary));
-  cursor: pointer;
-  flex-shrink: 0;
 }
 /* The rule below the name, as drawn: the row stays one line and the reason
    sits under it in secondary ink. */
