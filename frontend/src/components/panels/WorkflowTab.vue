@@ -303,8 +303,6 @@ const runDialog = useRunDialogStore();
 const tasksStore = useTasksStore();
 
 const tab = ref("workflow");
-// Tasks last, and never anything but last: it is the app's business, not this
-// workflow's.
 // A deep link to the Tasks tab, from a notice or a banner (`showTasksTab`).
 // This rail is the one a run is usually started from, so it is the one the
 // toast's *Show* has to land on.
@@ -315,6 +313,8 @@ watch(
   },
 );
 
+// Tasks last, and never anything but last: it is the app's business, not this
+// workflow's.
 const tabs = computed(() => [
   { value: "workflow", label: "Workflow", icon: "mdi-sitemap-outline" },
   tasksTabFor(tasksStore),

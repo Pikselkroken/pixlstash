@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
-import TasksPanel from "./TasksPanel.vue";
+import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 import { useTasksStore } from "../../stores/useTasksStore";
 
 const globalOpts = { global: { stubs: { "v-icon": true, Tooltip: true } } };
@@ -24,6 +24,32 @@ function textOf(wrapper) {
 
 beforeEach(() => {
   setActivePinia(createPinia());
+});
+
+describe("the tab the hosts declare", () => {
+  // Both inspectors take their descriptor from here, so this is the only place
+  // its wording is decided — and the only place it can be wrong. Asserting the
+  // tooltip as a hand-written prop on AppInspector tested the band, not this.
+  it("counts in words, and says one task in the singular", () => {
+    const tasksStore = useTasksStore();
+    expect(tasksTabFor(tasksStore)).toEqual({
+      value: "tasks",
+      label: "Tasks",
+      icon: "mdi-timeline-clock-outline",
+    });
+
+    tasksStore.setComfyuiRun("run-1", { label: "One" });
+    expect(tasksTabFor(tasksStore)).toMatchObject({
+      busy: true,
+      busyTooltip: "1 active task",
+    });
+
+    tasksStore.setComfyuiRun("run-2", { label: "Two" });
+    expect(tasksTabFor(tasksStore)).toMatchObject({
+      busy: true,
+      busyTooltip: "2 active tasks",
+    });
+  });
 });
 
 describe("the task manager's poll cadence", () => {
@@ -41,6 +67,23 @@ describe("the task manager's poll cadence", () => {
 
     wrapper.unmount();
     expect(spy).toHaveBeenLastCalledWith(false);
+    expect(tasksStore.tasksTabOpen).toBe(false);
+  });
+
+  // The store counts panels rather than holding a flag: one host's unmount
+  // must not drop the cadence back to idle under another host that is still
+  // showing the panel. Not reachable while the two inspectors are `v-if` /
+  // `v-else` siblings; the panel is shared on purpose, so it is asserted.
+  it("stays fast while any panel is still mounted", () => {
+    const tasksStore = useTasksStore();
+    const first = mount(TasksPanel, globalOpts);
+    const second = mount(TasksPanel, globalOpts);
+    expect(tasksStore.tasksTabOpen).toBe(true);
+
+    first.unmount();
+    expect(tasksStore.tasksTabOpen).toBe(true);
+
+    second.unmount();
     expect(tasksStore.tasksTabOpen).toBe(false);
   });
 });
@@ -89,9 +132,9 @@ describe("what the task manager shows", () => {
     const wrapper = mount(TasksPanel, globalOpts);
     // ImageImporter finds the row by this attribute; a renamed one would land
     // the chip nowhere and the flight would read as "the import went missing".
-    expect(
-      wrapper.find('[data-import-task-row="import-7"]').exists(),
-    ).toBe(true);
+    expect(wrapper.find('[data-import-task-row="import-7"]').exists()).toBe(
+      true,
+    );
     expect(textOf(wrapper)).toContain("5 / 20");
   });
 
@@ -104,10 +147,12 @@ describe("what the task manager shows", () => {
       ram_percent: 19.2,
     };
     const wrapper = mount(TasksPanel, globalOpts);
-    const items = wrapper.findAll(".tm-system-item").map((i) => [
-      i.find(".tm-system-label").text(),
-      i.find(".tm-system-value").text(),
-    ]);
+    const items = wrapper
+      .findAll(".tm-system-item")
+      .map((i) => [
+        i.find(".tm-system-label").text(),
+        i.find(".tm-system-value").text(),
+      ]);
     // No VRAM reading at all is a fact about the machine, not a zero.
     expect(items).toEqual([
       ["CPU", "42%"],
