@@ -127,7 +127,7 @@ frontend/src/
 └── components/
     ├── TitleBar.vue             # Shared library chrome plus Electron title bar: active-library entry point, breadcrumb, window controls, update alert
     ├── WordmarkLogo.vue         # "PixlStash" brand wordmark in the Tiny5 pixel font (two-tone via --wordmark-accent)
-    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayRecipePanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, DuplicateQueue, ModelShelf, LibraryInsights, MovesReview, TrainingRuns, WorkflowShelf, LoginScreen
+    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayRecipePanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, DuplicateQueue, ModelShelf, LibraryInsights, MovesReview, TrainingRuns, WorkflowsView, LoginScreen
     ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbTagPanel/TbExportPanel/TbImportPanel/FilterMenu/FilterStrip/UndoControl, SelectionBar, SelectionMenu, StatsSidebar, ProjectFiles, …
     ├── reviews/     # Tag-review surfaces (see below)
     │   ├── ReviewSessionView.vue      # One open review session: header, rail, and card queue
@@ -232,8 +232,7 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useReviewSessionsStore` | `useReviewSessionsStore.js` | Tag-review state: the tag-health board, the rail of open review sessions (each = one tag + frozen scope + one scan's results), and the per-session binary/pair card queues. Per-item decisions write through `/tag_suggestions`; session bookkeeping talks to `/reviews`, the board to `/tag_health`. Also owns the opt-in gamification — variable-ratio sticker awards with monotonic XP / level / streak counters; the sticker vocabulary is imported from `setAppearance.js` so sets and stickers never drift. |
 | `useLockedSetsStore` | `useLockedSetsStore.js` | Which pictures are frozen by a locked picture set. Fed by `GET /picture_sets/locked-members`; refreshed on app start and on the same sidebar-refresh / `pictures_changed` ws triggers the sidebar uses. Single source of the lock-tooltip copy reused by the grid badge, overlay chip, and context-menu gating. |
 | `useModelShelfStore` | `useModelShelfStore.js` | The model shelf's rows and its `Show` selection. `rows` are the raw `/adapters` + `/checkpoints` payload, **every block fetched so far rather than the shown set**: a fetch replaces the blocks it asked for and leaves the rest standing, because the option vocabularies (`adapterKindOptions`, `capabilityOptions`, `baseModelOptions`) are derived from `rows`, so an overwriting narrowed fetch deleted the kind checkboxes that unticking Adapters is documented to *grey*, and dropped base models that stayed selected and persisted with no box left to untick them. `visibleRows` layers the resolved name, the reduced location state and `copies` (how many of the row's registered copies are `present`) on top and applies the kind, capability and base-model narrowing **client-side**, so a multi-select base-model filter is not one request per option. The capability filter matches **has this capability**, not *is this kind*: a model serving two features survives a tick of either, and like the kind boxes it narrows only the block it hangs under (engines), never the whole shelf. `groups` sorts `visibleRows` client-side on the five ruled `SortKey` values and cuts them into one level of groups (`none` / `base_model` / `folder` / `feature`), always returning at least one group so the flat and grouped lists are one piece of markup; sorting never refetches, because every field the keys read is already on the payload and three server-sorted blocks would be destroyed by the merge above. **Two axes fan a row out across several groups** — `folder` (a file copied into two folders occupies both) and `feature` (a multi-capability model is listed under each feature it serves, which is the design rule) — so `rowKey` carries the group on every grouped axis, not just the ones that need it: one key across several draws put `tabindex="0"` on all of them at once. **Under `folder` the key carries the COPY, not the folder**, because the hub is content-addressed and the same bytes can be registered twice *inside one folder* under two names — the exact collision the previous sentence describes, reached on the axis it was written for. `relpath` is half the `model_file` key and so unique within a folder by construction. A row that cannot answer the key sorts last in BOTH directions, and the unset group sorts last whatever the direction; an adapter declares no capability and groups under **its algorithm** (`LoRA`, `LoKr`, …) rather than under one "No feature recorded" bucket that held most of the shelf. One vocabulary spells it and one fold keys it, both in `utils/modelShelf.js`: `adapterKindKey` trims and lower-cases the free-text column, `adapterKindLabel` names the folded value, and the group key, the group header, the row's Kind cell, the nested `Show` checkboxes AND the `adapterKinds` filter behind them all read those two rather than `row.kind`. **The fold has to reach the filter, not just the label.** `LoRA` is reachable from the edit dialog, which trims but does not case-fold, so faceting on the raw column offered two checkboxes drawn with the same label that each ticked half the rows — while the axis folded them into one visible group. **And the fold has to reach the remembered selection too**, which `storedFilters` does on read: a shipped build persisted the raw column, so a blob holding `LoRA` would match nothing and appear in no checkbox — an empty shelf with the Adapters box reading fully on and nothing on screen naming the filter doing it. Folded rather than discarded by a `FILTERS_SCHEMA_VERSION` bump, which throws the whole blob away when the selection is still exactly what the user chose. The key is the folded value and never the label, because the key is what `modelShelfView.collapsed.feature` remembers a collapse by; it is prefixed `kind:` to keep an algorithm out of the capability keyspace. Group headers are uppercased by `.shelf-group-label` like every other header on the axis, so the header reads `LORA` where the cell reads `LoRA`: one vocabulary stops a *second spelling* existing, it does not exempt the axis from the shelf-wide case rule. Everything that is not an adapter with an algorithm still falls through to "No feature recorded", which is the whole of the rest: a checkpoint, an unclassified file, an engine declaring no capability and any `file_kind` this build does not know have no algorithm at all; an adapter whose `kind` folds to the empty string has none either (the hub CHECK makes it NOT NULL, not non-empty, so a whitespace-only one is reachable over the raw API); and an adapter whose `kind` is the literal `unknown` has the classifier's refusal rather than an algorithm (`KIND_UNKNOWN`, `utils/adapter_header.py`) — heading that `UNKNOWN` would stand a second shrug beside the real one and call it a feature. The `Show` facet still offers `Unknown` as a box, because "which of these could we not identify" is a real selection even where it is not a real feature. `view` (`groupBy`, `sortKey`, `sortDirection`) and the per-axis collapsed sets persist under `pixlstash:modelShelfView`, a SECOND key so `resetFilters` cannot take the sort order with it. `filters` (`adapters`, `adapterKinds`, `checkpoints`, `unclassified`, `engines`, `capabilities`, `baseModels`, `duplicatesOnly`) persists to `localStorage` under `pixlstash:modelShelfFilters` — not to `/users/me/config`, which is a fixed `User` model and would need a backend column. **`duplicatesOnly` is the one field `storedFilters` deliberately does not read back**: "only the files written twice" is a question somebody asks once while reclaiming disk, and remembered across a restart it is a shelf that opens showing four rows of an eighteen-hundred-row library with nothing on screen saying why. An empty `adapterKinds` / `capabilities` / `baseModels` array means **unconstrained**, the standard multi-select convention and the only reading under which a fresh install shows anything. `activeCount` counts filter SECTIONS that deviate from their default, not ticked boxes, or a mild narrowing would read as `9`. Only the four top-level type toggles refetch, and they narrow client-side too; the rest only narrow what is already loaded. Each fetch takes the next `epoch` and only the newest may write `rows` or clear `loading`, so a slower earlier flight cannot land last and show adapters only while Checkpoints is ticked; `resetForSession` bumps the same counter, so a read on the wire when the credential changed is discarded. `ModelShelf.vue` watches `loaded` and refetches when a session reset clears it, which the store cannot do itself because session-reset handlers run *before* the new credential is installed. **Session reset drops `rows` but keeps `filters`:** the models are hub-side facts about this machine, but every row carries the characters and sets in the ACTIVE LIBRARY that use it, while the selection and the view axes are the user's own preferences and hold no ids. `offlineMounts` and the `New` badge's `newIds` are both derived here and both documented under §9.1a, "The three kinds of absence": `offlineMounts` reads `rows` rather than `visibleRows` on purpose, and `newIds` is a per-fetch id diff that only `fetchRows({ markNew: true })` fills and every other fetch clears. |
-| `useWorkflowShelfStore` | `useWorkflowShelfStore.js` | The workflow library's rows, view axes, selection and expansion (§9.1b). `rows` are the whole `/workflows` payload — ~192 topologies with their asset names is one small response — so `visibleRows` (filter then sort) and `groups` (band) are re-reads of an array already in hand and **no axis refetches**. `state` reduces the `scan` block to which of the four states the list is in, because three of them are "correct and nearly empty" and the list alone cannot tell them apart. `variants[topology_hash]` is filled the first time a row is opened and then kept: the largest family in the owner's library holds 159 recipes, so re-fetching on every toggle would make the one row most worth exploring the one worst to explore. `samples[topology_hash]` is the inspector's tile ids, fetched once per workflow. Selection is **single** — the rail describes one workflow — and a selected row that a refetch no longer lists is cleared, or the rail would describe something the list does not show. `view` (`groupBy`, `sortKey`, `descending`, `show`) and the collapsed bands persist under `pixlstash:workflowShelfView`; one key rather than the shelf's two, because there is no "clear the filters" button here to take the sort order with it. Each fetch takes the next `epoch` and only the newest may write, and `resetForSession` bumps the same counter: the topologies are hub-side facts but every count on them is read across the ACTIVE library's pictures and the sample ids ARE that library's pictures, so **session reset drops all of it and keeps only the view axes**, which are the user's own preference and hold no id. |
-| `useWorkflowsStore` | `useWorkflowsStore.js` | The Workflows GRID's cards (v1.12 F1a) — `GET /workflows/cards`, one card per stack — and, separately from `useWorkflowShelfStore`, which still owns the topology list on `/workflows`. `sortKey` is one of `rating` / `used` / `pictures`; *Your ratings* orders by **`rank`**, the Bayesian cover rank, not by the `rating` the card displays, or a 5.0 from one picture would lead a 4.8 from ninety. **`openStackKey` is a single key, so at most one stack is ever open** — deliberately unlike the picture grid, where any number expand at once: a workflow panel is a full-width band that pushes every later row down, and a second one puts itself a screen and a half below the card that opened it. `members[coverKey]` is the stack's cards, cover first, fetched one detail request per member (the grid lists the cover alone) and then KEPT, so reopening after a resize re-requests nothing. `selectedKeys` mixes top-level cards and members freely. Session reset drops all of it: every count on a card is read across the active library's pictures. |
+| `useWorkflowsStore` | `useWorkflowsStore.js` | The Workflows grid's cards (v1.12 F1a) — `GET /workflows/cards`, one card per stack, on `/workflows` since F1b retired the shelf's topology list. `sortKey` is one of `rating` / `used` / `pictures`; *Your ratings* orders by **`rank`**, the Bayesian cover rank, not by the `rating` the card displays, or a 5.0 from one picture would lead a 4.8 from ninety. **`openStackKey` is a single key, so at most one stack is ever open** — deliberately unlike the picture grid, where any number expand at once: a workflow panel is a full-width band that pushes every later row down, and a second one puts itself a screen and a half below the card that opened it. `members[coverKey]` is the stack's cards, cover first, fetched one detail request per member (the grid lists the cover alone) and then KEPT, so reopening after a resize re-requests nothing. `selectedKeys` mixes top-level cards and members freely. `invalidate()` is the one door in from outside the view — a ghost purge in Settings › Privacy — and forgets the members, then re-reads the grid **only if it had been read**, so a purge made by somebody who never opened Workflows fires no request. Session reset drops all of it: every count on a card is read across the active library's pictures. |
 | `useModelFoldersStore` | `useModelFoldersStore.js` | The registered model folders and the scans running against them. Fetched by the shelf (folder headers, drive bands) and re-read when `ModelFoldersDialog` opens. It is a **store rather than dialog state** because a scan outlives the panel that started it, and because `POST .../rescan` answers 202 as soon as the thread starts, so completion has to be waited for: the store polls `GET /model-folders` every 3s and treats `last_checked` advancing as done, then refreshes `useModelShelfStore` and says what landed. It **gives up after 10 minutes**, because the scanner logs an exception without stamping `last_checked` and a crashed scan is otherwise indistinguishable from a slow one. `forget` captures the row's fields BEFORE the request, which is what makes the notice's `Add it back` possible and therefore what lets removal skip a confirmation prompt. **Session reset drops it whole:** absolute host paths are owner-only, and a session that lost its credential has no standing to keep polling. |
 | `useGenStackPrefsStore` | `useGenStackPrefsStore.js` | Remembered client prefs for whether newly generated / filtered images stack with their source: `stackI2IOutputs` (ComfyUI image-to-image) and `stackFilterOutputs` (plugin "Filters" runs), both default ON and persisted to `localStorage`. |
 | `useEntityListsStore` | `useEntityListsStore.js` | The character / picture-set / project **lists** themselves (`characters`, `pictureSets`, `projects`) plus `fetchedAt` and `pending` per kind. One cache for the three surfaces that need them — the `SideBar` tree, the image context menu's Person/Set/Project flyouts, and the tag-review scope pickers. **Stale-while-revalidate:** a caller renders the cached list immediately and calls `refresh(kind)` *without awaiting it*, so opening a flyout never waits on the network; concurrent callers share one in-flight request (`inFlight`, modelled on `useDedupStore.scopeCounts`). `invalidate(kinds)` is **refetch-only** — a `characters_changed` ws event or a local assignment says "ask again", it never writes the store from a payload (`origin_client_id` is echo-matching, not authority; see §9 and integration_architecture.md §8.1). **These are `SCOPED_LIST` routes, so their content is an authorization decision:** the cache is in-memory only (never `localStorage`/`sessionStorage`), `reset()` drops it on every auth-context transition via the single `onSessionReset` chokepoint in `apiClient` (logout / login / share-token entry / vault switch), and an epoch guard discards any response that was in flight across that transition. Revalidate-on-open is mandatory rather than an optimisation: a share/scoped session receives no ws events (the stream is owner-only), so it is that session's only invalidation path. **The sidebar's row counts ride along on these lists (`include_counts=true`, issue #651):** every character row carries `image_count` and `project_image_count` (scoped to the character's OWN `project_id`, or to "in no project" when it has none) and every project row carries `image_count`, which is what replaced `SideBar.fetchSidebarData`'s one-`/{id}/summary`-per-row fan-out. They live on the shared list rather than in a second counts-bearing cache on purpose (two shapes for one entity would mean two caches, two invalidation paths and two epochs), and the flyout / scope-picker consumers simply ignore the extra fields. Because both scopes are on every row and neither depends on the sidebar's current project selection, one cached response serves both sidebar view modes. Distinct from `useEntityNamesStore`, which holds id→name maps only. |
@@ -1064,7 +1063,7 @@ minimum is its min-content, so a long plugin name would otherwise widen its own
 `1fr` track and push the pane sideways; the field ellipsises it instead.
 
 #### `ComfyuiHostSection.vue`
-The ComfyUI host and port (`comfyui_url` in the user config), on the Compute tab. Props: `open`, `first`. Emits `update:comfyui-configured`. There is no workflow import or list in Settings: a workflow is added by dropping it on the Workflows view or into the watched `workflows/` folder, and deleted from `WorkflowInspector`.
+The ComfyUI host and port (`comfyui_url` in the user config), on the Compute tab. Props: `open`, `first`. Emits `update:comfyui-configured`. There is no workflow import or list in Settings: a workflow is added through *Add…* on the Workflows view or into the watched `workflows/` folder. Deleting an imported workflow file has no UI between F1b and F5 — the shelf's inspector was the only one and went with the shelf; `DELETE /comfyui/workflows/{name}` is still there.
 
 #### `SnapshotsSection.vue`
 Snapshots tab content. Props: `open: Boolean`. Lists and manages snapshots (reuses `utils/snapshots.js` helpers).
@@ -1446,8 +1445,9 @@ Load-bearing behaviours, each of which is a deliberate decision rather than an i
 #### `WorkflowCard.vue`, `ChipRow.vue`, `InfoPopover.vue` (`widgets/`, v1.12 Workflows & Recipes)
 The uniform workflow card and its two parts. Mounted by `WorkflowsView.vue` (F1a, below) and by its `StackPanel`. In this code a `workflow_recipe` / structural hash is a **variant**; a user's Recipe is a **saved recipe**.
 
-- **The card shape is snake_case and uses B1's slot vocabulary** (`mark: "structural" | "recipe"`, #1390), documented at the top of `utils/workflowCard.js`, so `GET /workflows/cards` (B3) needs no mapping layer and cannot invert the solid/dashed meaning in translation. `models` carries **every** non-LoRA slot (checkpoint, unet, vae, clip), because a stack whose difference reads "other models" has to have those models behind it in ⓘ; a card row still names the checkpoint only.
-- **`WorkflowCard`** takes one `card`, `expanded`, `panelId` and `member`; emits `toggle` (▸) and `run` (*Run it…* on a card with no pictures). **Every card is exactly `--wf-card-h` (252px)**: a `--wf-cover-h` (132px) 2fr/1fr cover, then four `--control-h-sm` rows (name, checkpoint, LoRAs, special facts) that clip rather than wrap. Both heights are component-local by design decision. Cover and meta are fixed-height `flex: none` boxes, so content cannot grow the card and a change to the sum shows as a wrong height. jsdom has no layout, so `WorkflowCard.test.js` resolves the stylesheet against the token sheet and asserts the sum and that row 4's right padding keeps it clear of ⓘ; the content cases (0 and 5 LoRAs, long names) were measured once in Chromium, not in CI.
+- **The card shape is snake_case and uses B1's slot vocabulary** (`mark: "structural" | "recipe"`, #1390), documented at the top of `utils/workflowCard.js`, so `GET /workflows/cards` (B3) needs no mapping layer and cannot invert the solid/dashed meaning in translation. `models` carries **every** non-LoRA slot (checkpoint, unet, vae, clip), because a stack whose difference reads "other models" has to have those models behind it in ⓘ; a card row still names the BASE MODEL only — the checkpoint, or the `unet` a Flux or SD3 graph carries instead. `checkpointModel` walks `BASE_MODEL_KINDS` and never falls back to "the first slot": slot order is document order, and that fallback showed a Flux card its VAE. The list is kept identical to the server's (`workflow_card_service.BASE_MODEL_KINDS`, derived from `CHECKPOINT_WIDGETS`) and asserted by `test_base_model_kinds_agree_across_the_stack`, because the server names the card from the same order and a disagreement makes one card say two things.
+- **`WorkflowCard`** takes one `card`, `expanded`, `panelId`, `member` and `selected`; emits `toggle` (▸) and `run` (*Run it…* on a card with no pictures). **The CONTENT cannot grow the card, but its column can**: a 2fr/1fr cover at `aspect-ratio: 6 / 5`, then four `--control-h-sm` rows (name, base model, LoRAs, special facts) that clip rather than wrap, summing to a fixed `--wf-meta-h` (118px). The cover is a ratio and not a pixel height because it used to be a flat 132px against a fluid card width, so its cells drifted from 1.2:1 at the 240px column floor to 1.8:1 by 360px — nobody had chosen landscape; it fell out. 6:5 is the number that puts **every cell at 4:5**, the big one included, since it spans two columns and two rows and so keeps the cover's own proportion. Cards still line up because every card in a row is the same width, which is what the old fixed total was really protecting. jsdom has no layout, so `WorkflowCard.test.js` resolves the stylesheet against the token sheet and asserts the meta sum, both cell ratios, and that row 4's right padding keeps it clear of ⓘ; the content cases (0 and 5 LoRAs, long names) were measured once in Chromium, not in CI.
+- **`selected` is the card's own mark, and it is an overlay.** The shell's wash plus `--selection-ring` (`style.css` rule 3) on a `::after` at `--z-raised`, `pointer-events: none`. It was twice put somewhere it could not be seen: on the grid cell, which `.wf-card`'s opaque `surface` covers entirely, and then on the card itself, where an inset shadow paints under the element's children and the cover's three `<img>`s are children — so the ring ran along the text rows and stopped dead at the thumbnails. `.selection-overlay` in `ImageGrid.css` is the shipped answer for marking something with pictures in it.
 - **A stack** (`stackSize` ≥ 2) adds ▸ before the name and a layered count on the cover; its facts row reads "differs by". ▸ and ⓘ are real `AppButton`s at `tabindex="-1"`: the Workflows grid's roving cursor owns Tab. **The layered count is a button too** (#1402) — it is the mark that says there are cards under this one, so it opens the stack as well — but it stays `aria-hidden` and off the tab order: ▸ is the announced control and a second one saying the same thing is noise, not access.
 - **"+N" is not a control.** The card's `aria-label` (`cardAccessibleName`) carries every chip, saying "workflow LoRA" or "recipe LoRA slot" because the solid/dashed border is not announced, and ratings as "4.8 of 5".
 - **`ChipRow`** measures its chips from a hidden natural-width copy, shows as many as fit (`fitChipCount`, which always keeps one and ellipsizes it rather than showing a bare "+N"), and emits `overflow` with the hidden count (F2's List column is the second consumer).
@@ -1459,23 +1459,48 @@ The uniform workflow card and its two parts. Mounted by `WorkflowsView.vue` (F1a
 
 #### `WorkflowsView.vue` (`views/`) + `StackPanel.vue` (`panels/`), v1.12 F1a
 
-The Workflows grid, on the **temporary route `/workflows-next` with no sidebar
-entry** (`WORKFLOWS_NEXT_ROUTE`, `router/routeNames.js`). The shipped
-`WorkflowShelf` keeps `/workflows` until F1b moves this view onto it and
-deletes the temporary route. Owner-only, and bounced for a READ session by the
-same watcher the shelf uses.
+The Workflows grid, **on `/workflows`** (`WORKFLOW_ROUTES`,
+`router/routeNames.js`) since F1b (#1404) retired the shelf and its temporary
+`/workflows-next` route. Owner-only, and bounced for a READ session by the same
+watcher the model shelf uses. See §9.1b for the destination itself.
 
 - **Toolbar**: Sort (Your ratings / Recently used / Picture count) in the
-  shipped `.tbm` popover, and *Add…*, which is today's workflow import
-  (`POST /comfyui/workflows/import`) rather than anything new.
+  shipped `.tbm` popover, *Add…*, which is today's workflow import
+  (`POST /comfyui/workflows/import`) rather than anything new, and then the
+  app-wide tail — `[separator] [TbGlobalActions]` in its own `--space-3`
+  cluster, `rail-name="inspector"`. Replacing the grid replaces the grid's
+  toolbar, so without the tail nothing on this screen opens Settings or the
+  right rail, and the rail is where `WorkflowTab` is drawn (#1415).
+- **`?topology=<hash>` is honoured here**, as it was on the shelf: the link a
+  picture's Recipe section pushes selects the first card in sort order whose
+  `topology_hash` matches and moves the cursor onto it. Once per VALUE, not
+  once per change of the list: the grid is refetched while the query string
+  stays put, and a second application would take focus off whatever the reader
+  had moved to. `immediate`, because the store's cards outlive a route change
+  and a second visit on the same link has nothing left for the watcher to see.
+  **It can only reach the cards the grid lists, and that is not every card.**
+  `GET /workflows/cards` leaves out the hidden ones and the one-offs (under
+  three pictures, unrated, not imported, no saved recipe) — the ordinary state
+  of a workflow used once, which is exactly when the link is worth clicking.
+  A stack is one card here too, grouped by `core_hash`, so a member can carry
+  a topology its cover does not. The shelf had no such gap, listing every
+  topology as a row; closing it needs a topology→card read the API does not
+  have. **So a miss says so** — `.wfv-note` plus the live region, naming what
+  is being withheld — rather than dropping the reader at the top of a grid
+  that does not hold what they clicked, which is the silent failure this
+  screen must not have. It waits for `store.loaded`, because "not here" is
+  false while the answer is on the wire, and it does not move the cursor while
+  the Sort popover is open, because the cards land asynchronously and can
+  arrive mid-gesture. F7 replaces the link with the card's own *Show all N
+  pictures* chip.
 - **`--wf-columns` is computed, not `auto-fill`.** A `ResizeObserver` reads the
   grid's `clientWidth` and the count is `floor((width + gap) / (min + gap))`;
   the grid is then TOLD to draw that many columns. The cursor arithmetic, the
   panel's notch and the painted layout therefore cannot disagree, and the count
   is testable without a browser. Two consequences worth keeping: **`.wfv-scroll`
   carries the padding, not the grid**, because `clientWidth` includes an
-  element's own padding and a padded grid measures 32px wider than the track
-  its columns actually have; and `COLUMN_MIN` / `COLUMN_GAP` are written onto
+  element's own padding and a padded grid measures its inset wider than the
+  track its columns actually have (16px at `--space-3` a side); and `COLUMN_MIN` / `COLUMN_GAP` are written onto
   the element as `--wf-column-min` / `--wf-gap` rather than read back out of
   the sheet, so the arithmetic and the painted track are the same two numbers
   by construction. `StackPanel` is **passed** the count as a prop and
@@ -1554,10 +1579,10 @@ same watcher the shelf uses.
 - **A failed member request is recorded, not cached as the answer.** Writing
   the cover alone into `members` satisfied the "already have them" guard, so
   one dropped request left the panel reading "N could not be read" for the rest
-  of the session however often it was reopened. Three states, as
-  `useWorkflowShelfStore.loadSamples` settles the same hazard: in `inflight`,
-  answered in `members`, failed in `membersFailed`, and a reopen clears the
-  third and asks again. The store also carries an **epoch stamp** bumped by
+  of the session however often it was reopened. Three states — in `inflight`,
+  answered in `members`, failed in `membersFailed` — and a reopen clears the
+  third and asks again; the retired shelf's sample tiles settled the same
+  hazard the same way. The store also carries an **epoch stamp** bumped by
   `reset()`, so a fetch still in flight when the credential changes cannot
   write the old session's cards, or their cover thumbnail URLs, into the new
   one.
@@ -1576,15 +1601,104 @@ same watcher the shelf uses.
   toolbar subtitle reads "N workflows · N hidden · N one-offs" from the
   payload's own `hidden` / `one_offs`, and the empty state says which of the
   two it is in rather than announcing "Nothing found yet" over a subtitle
-  reporting forty hidden cards. The inspector rail is not mounted on this route
-  either; selection lives in the store ready for it.
+  reporting forty hidden cards. The inspector rail is mounted by
+  `WorkflowTab.vue` below; selection lives in the store and the rail follows
+  it.
+
+#### `WorkflowTab.vue` + `WorkflowDefaultRow.vue` (`panels/`), v1.12 F3
+
+The Workflows grid's right rail: one `AppInspector` tab, **Workflow**, mounted
+by `App.vue` on `/workflows` in place of `StatsSidebar`. There is **no Run
+tab** — Run… is an action, so it belongs in the footer and opens a popup (F5).
+
+- **Built as a sibling of the shelf's own inspector, not a reshaping of it**,
+  though the implementation plan names that file: every step of this feature
+  had to leave the shipped shelf working, and F1b (#1404) then deleted the
+  shelf, its store and its inspector together.
+- **The rail follows the SELECTION, not the open stack.** A member is never in
+  `store.cards` — the grid lists one card per stack — so the fetched
+  `store.members` lists are searched too; without that, selecting a row inside
+  an open stack panel emptied the rail. The header then reads "In the X
+  stack · N pictures" for a member and "Showing the cover · N pictures" for a
+  stack's cover.
+- **The LoRA slot's `Segmented` re-keys the card.** `PUT /workflows/{key}/slots`
+  answers with the key the card moved to, and the rail follows it: staying on
+  the key it sent leaves the panel reading a card the hub no longer has. The
+  slot is addressed by `slot_label`, which the card payload carries for this.
+  A flip also **forgets the store's cached stack members** — every card of the
+  topology may have moved — and the rail falls back to the card the detail
+  read brought back when the successor key is not in the grid at all, which
+  is what a merge into somebody else's stack looks like.
+  `useWorkflowsStore.forgetMembers()` **collapses the open stack and bumps the
+  epoch**, taking `reset()`'s shape: left open with no members `StackPanel`
+  renders the shortfall as "N could not be read", a failure message for a
+  deliberate invalidation; and `openStack`'s completion path is epoch-guarded
+  only, so a member read already on the wire would write the pre-flip members
+  straight back. `loading` is cleared with the epoch because the old epoch's
+  `finally` will not, and every caller follows it with `fetchCards()`, which
+  early-returns while `loading` is set.
+- **Defaults are whole-set writes.** Resetting one value sends every other
+  edited value back untouched, which is the only way "reset one" exists on a
+  route that replaces the set. The pin is the same shape. The detail route
+  carries `pins`, and `null` (nobody has chosen) is not `[]` (everything
+  unpinned): `null` applies the component's own `DEFAULT_PINS`, which is the
+  design's choice of steps, cfg, guidance, width and height. `key_pins`
+  answers `null` for an unreadable row too, never `[]` — reporting corruption
+  as "the owner unpinned everything" would put a card's whole parameter list
+  behind a collapsed disclosure and look deliberate.
+- **One write at a time, and every answer is checked against the selection
+  before it is used.** `detail` carries the card, its defaults and its pins
+  together, so two writes in flight means the slower answer discards the
+  faster one's change; `queueWrite()` runs them in turn. **Queued, not
+  refused**: the gesture that starts the second write is routinely the one
+  that ends the first — clicking a pin is what blurs the notes box — so
+  refusing would drop that click and leave the pin looking dead. The multi-
+  select Hide loops one card at a time for a second reason: there is no bulk
+  route, and each PATCH runs a whole `read_grid()` inside `_read_detail`.
+  And the selection moves while a write is out — clicking another card is exactly what blurs the
+  notes box and fires its save — so `stillOn()` drops an answer for a card
+  that has gone. The notes box is drawn only once *this* card's detail has
+  arrived, because the draft otherwise holds the last card's text and blurring
+  it writes that onto this one.
+- **What is drawn but not writable yet, and why.** The checkpoint and VAE are
+  fields rather than selects: no route changes a card's model file. A LoRA's
+  strength is **not drawn at all** — `_describe_slots` reads `asset_names`,
+  which is filenames, and `FEATURED_NAMES` excludes `strength_model`, and an
+  empty bordered field reads as a control that is broken rather than as "not
+  recorded". It arrives with the data. The ⋯ menu holds
+  Hide/Unhide alone: Duplicate and Open in ComfyUI have no route at all;
+  *Export workflow* has to write a runnable ComfyUI file and the only graph
+  read that exists, `GET /workflows/recipes/{structural_hash}/graph`, answers
+  `runnable: false` by construction; *Delete* is only
+  `DELETE /comfyui/workflows/{name}`, keyed by filename, and the card payload
+  carries no filename. The **picture-input UI has not moved here**: what is
+  missing is not the stored overrides — `picture_inputs()` reads those and the
+  run pre-flight already calls it — but the list of picture inputs a card
+  *has*, which is derived from the graph and is served only by the file-keyed
+  `GET /comfyui/workflows/{name}/inputs`. Without it there is nothing to draw
+  a mode control against.
+- **The "N pictures" figure is plain text, not a link.** F7 wires the chip;
+  `GET /workflows/cards/{key}/pictures` exists, but the picture grid has no
+  client-side `workflow_key` filter yet, so a link would leave the rail and
+  land on an unfiltered library.
+- **One tab, and no way out to the pictures.** §F2's rule for the shipped
+  shelf's rail — "the second tab is always the way out to the pictures, which
+  is what stops the rail being terminal" — does not survive this design: round
+  2 draws **Recipes | Workflow** and no Pictures tab, and the way to a card's
+  pictures becomes the header figure above once F7 wires it. Until then this
+  rail is terminal, which is a known cost of shipping F3 before F7 rather than
+  an oversight.
+- **Run… with several selected stays on screen and refuses**: `aria-disabled`
+  plus `aria-describedby` pointing at "Run one workflow at a time". A control
+  that disappears teaches nobody why. The multi-selection also gets *Stack
+  together* and *Hide*. Until F5 lands, Run… opens the shipped run panel.
 
 #### Shared shell pieces (issue #1301)
 Four pieces every screen builds on, to the design system's shell contract (`ui_kits/app/unified-shell.html`, rules 2, 3, 8 and 9). Reuse them; do not re-roll them.
 
 - **Section label: the global `.section-label`** (`style.css`). The one name for a group: `--text-2xs`, semibold, uppercase, `--tracking-label`, ink at `--opacity-text-secondary`. The lightbox panels add `.section-label--on-dark`, because that surface is dark in both themes. Inspector sections, the lightbox's Description / Faces / Tags / Metadata, and the dedup menu titles are built on it, and a local rule keeps only layout. `.tbm-label` and `.shortcuts-section` still carry their own copies of the rule, now at the same ink. Settings keeps its 14px section and field titles for now: it has two heading levels, and a single 11px label would flatten them, so it waits for the Settings screen's own design.
 - **Selection mark: `--active-wash` plus `--selection-edge` or `--selection-ring`** (`style.css`, on the theme classes). The edge (`--rail-w`) is for rows, list cards and grid tiles; the 2px ring is for cells and cards with no left edge. Words stay `--active-text`. Drop targets and the undo range preview borrow the vocabulary but are not selections, and spell their own shadows. The sidebar's rows keep the transparent-border rail from `visual-language.md` §5, which is the same mark drawn as a border. The lightbox keeps `dark-surface-primary`, because its surface is dark in both themes and `--active-bar` is not.
-- **Inspector: `widgets/AppInspector.vue`.** The right-edge pane, `--stats-panel-w` on the sidebar surface, collapsing to zero width in place. Props: `open`, `label` (the `aria-label`), `tabs` (`[{ value, label, icon, disabled, tooltip }]`) and `v-model` for the active tab. A `#tab="{ tab }"` slot replaces a tab's content (Stats uses it for the Tasks pulse). The tab band is `--toolbar-height`, so it shares the toolbar's bottom rule, and has no title row. Inside, a group is `.inspector-section` with a `.section-label`, and values sit in `dl.inspector-kv` (two columns, name over value). `StatsSidebar`, `WorkflowInspector` and the image overlay's sidebar are built on it. The overlay passes `lightbox`: the pane is a translucent `dark-surface` laid over the canvas (dark in both themes), its content stays mounted while closed (hidden with `v-show`, because the overlay reaches into the description panel as it opens), and it is a fixed-height column whose sections bound and scroll themselves rather than the pane scrolling. Its Metadata box uses the inspector's tab band one level down and `dl.inspector-kv` for the picture information. The model detail and duplicates evidence panes do not exist yet, and take this component when they are built (#1321, #1319).
+- **Inspector: `widgets/AppInspector.vue`.** The right-edge pane, `--stats-panel-w` on the sidebar surface, collapsing to zero width in place. Props: `open`, `label` (the `aria-label`), `tabs` (`[{ value, label, icon, disabled, tooltip }]`) and `v-model` for the active tab. A `#tab="{ tab }"` slot replaces a tab's content (Stats uses it for the Tasks pulse). The tab band is `--toolbar-height`, so it shares the toolbar's bottom rule, and has no title row. Inside, a group is `.inspector-section` with a `.section-label`, and values sit in `dl.inspector-kv` (two columns, name over value). `StatsSidebar`, `WorkflowTab` and the image overlay's sidebar are built on it. The overlay passes `lightbox`: the pane is a translucent `dark-surface` laid over the canvas (dark in both themes), its content stays mounted while closed (hidden with `v-show`, because the overlay reaches into the description panel as it opens), and it is a fixed-height column whose sections bound and scroll themselves rather than the pane scrolling. Its Metadata box uses the inspector's tab band one level down and `dl.inspector-kv` for the picture information. The model detail and duplicates evidence panes do not exist yet, and take this component when they are built (#1321, #1319).
 - **Selection pill: the global `.selbar`** (`App.css`). `--panel`, a 1px `--border`, `--radius-pill`, `--elevation-4`. Count first, then round `AppBarButton` verbs split by `.selbar-sep`, destructive last. `GridActionPill`, `ShelfSelectionBar` and the training runs all wear it. Each host positions it (`GridActionPill` centres itself; the shelves use `.selbar-float`), at `--z-floating`. The dedup queue's `.qselchip` is not this pill: it states the bulk scope of the row verdicts and carries no verbs, so moving it would change the flow.
 
 #### `GridActionPill.vue` (`panels/`, ~200 lines)
@@ -2398,7 +2512,7 @@ undo" or else offered to revert a library edit made elsewhere — a recovery
 control that never answers for what is in front of it, next to shelf actions
 that say in as many words that they cannot be undone. **`Ctrl+Z` declines here
 too** (`useGlobalKeydown`, the `UNDO_BLIND_ROOTS` check beside the existing
-modal guard — `.shelf, .wfshelf, .mv, .ins`, every destination that replaces
+modal guard — `.shelf, .wfv, .mv, .ins`, every destination that replaces
 the grid and narrates nothing; the shelf was guarded alone until #1415 and the
 other three took the chord silently):
 the shelf mounts no `ActionReceipt` either, and `UndoControl` is the app's only
@@ -4360,7 +4474,7 @@ underneath its own dialog) that the fallback exists to catch.
 
 ### 9.1b The workflow library destination
 
-`/workflows` mounts `WorkflowShelf.vue` in place of `ImageGrid` (`App.vue`,
+`/workflows` mounts `WorkflowsView.vue` in place of `ImageGrid` (`App.vue`,
 `isWorkflowsView`), on exactly the `/models` pattern above and for the same
 reason: it lists **graphs the hub knows about** — the workflows that made the
 pictures — and no picture selection can express that. It is excluded from
@@ -4379,25 +4493,31 @@ a pasted `/workflows` URL is bounced to the library by the same watcher that
 bounces `/models` — a guard cannot do it, because the router's first navigation
 resolves before the session context is fetched.
 
-**And like the shelf its bar carries the shell chrome.** Replacing the grid
-replaces the grid's toolbar, so `.wfshelf-toolbar` ends in
+**What the screen IS lives in §5** (`WorkflowsView.vue` + `StackPanel.vue`, and
+`WorkflowTab.vue` for the rail): one card per workflow, one stack open at a
+time, Sort in the shipped popover, `?topology=<hash>` honoured from a picture's
+Recipe section. This section is the destination — the route, the chrome and
+what reaches in from outside it.
+
+**Like the model shelf, its bar carries the shell chrome.** Replacing the grid
+replaces the grid's toolbar, so `.wfv-toolbar` ends in
 `[separator] [TbGlobalActions]`, with `TbGlobalActions` emitting `open-settings`
 up to `App.vue`. **A run outranks the inspector in the rail**
-(`WorkflowRunPanel` is the `v-if`, the inspector the `v-else-if`): starting one
+(`WorkflowRunPanel` is the `v-if`, `WorkflowTab` the `v-else-if`): starting one
 force-opens the rail from `useWorkflowRunStore.openFor`, and with the inspector
 first the rail opened onto "Pick a workflow" while the run was in progress.
 Without the tail nothing on this screen opened Settings or the right
-rail, and the rail is where `WorkflowInspector`'s content is shown
+rail, and the rail is where the inspector's content is shown
 (`AppInspector` gates it on `sidebarStore.statsOpen`), so the inspector was
 unreachable (#1415). The pair sits in its own `--space-3` cluster (`flex: 0 0 auto`, so the chrome
 is never what the edge eats), because the bar spaces its own controls wider and
 the whole point of every host mounting the same component is that the tail is
 identical in each; the separator is `TbGlobalActions`' own `separator` prop
-rather than a fourth hand-rolled copy. `.wfshelf-toolbar` now declares
+rather than a fourth hand-rolled copy. `.wfv-toolbar` declares
 `container-type: inline-size; container-name: shelfbar toolbar` like the other
-hosts — the tokens were on the element with no container behind them — and the
-title gives first (`min-width: 0; flex-shrink: 6`) at the same size and ink as
-every other bar's identity pair, which `Toolbar.test.js` pins. It passes `rail-name="inspector"`: the
+hosts, and the title gives first (`min-width: 0; flex-shrink: 6`) at the same
+size and ink as every other bar's identity pair, which `Toolbar.test.js` pins —
+against this file since F1b, having been written against the shelf's bar. It passes `rail-name="inspector"`: the
 toggle's tooltip is also its accessible name, and this rail is not the stats
 sidebar it is called in the views that have one. **Moves and Insights carried
 the same gap and were fixed with it** (#1415) — the population was three
@@ -4407,113 +4527,115 @@ App.vue already routes. `UndoControl` is left off for the
 model shelf's reason: nothing here writes to the operation log — and `Ctrl+Z`
 now declines on all three (`useGlobalKeydown`'s `UNDO_BLIND_ROOTS`).
 
-**The list opens at topology level.** One row is one graph, whatever it was
-bound to; the recipes filed under it are the same graph with different models and
-are the row's *expansion*. A row's `assets` are therefore the **set** of files
-its variants name between them, and the descriptor a row is identified by reads
-`adapter_slots` — how many adapters *one run* loads — never a count of that set:
-built from the set, the 159-LoRA family's only identifying line reads "159
-LoRAs" for a graph that loads one. A variant row has no slot count and needs
-none, because every name on a recipe is a file that run actually loaded. On the owner's library that is ~192 rows against ~617
-recipes, and the largest family holds 159 variants — which is why the variants
-are fetched when a row is opened, once, and kept: re-fetching on every toggle
-would make the one row most worth exploring the one row least pleasant to
-explore. `useWorkflowShelfStore` fetches the list whole and shapes it in
-`utils/workflowShelf.js`, so Group, Sort and Show are re-reads of an array
-already in hand and cost no request.
-
-**The saved workflow files sit in their own band above the graphs** (§F3,
-#1305). They are what runs, and a file is not a topology until a picture made
-with it has been read, so they are buttons in a list of their own rather than
-rows of the treegrid, though on the same keyboard model: one tab stop, `role="listbox"`
-with `aria-selected` options, Up / Down / Home / End to walk and Enter or Space
-to pick. The column strip is sticky inside the scroll so it heads the graphs and
-not the files. `useWorkflowShelfStore` holds them (`files`,
-`selectedFile`) from `GET /comfyui/workflows`, and a file and a graph share one
-selection: choosing either clears the other.
-
-Selecting a file puts **Pictures in** in the inspector: one entry per picture
-input, the graph's title with its node id beside it (two inputs are often both
-"Load Image"), and a `Segmented` Selection / Picker / Fixed. The setup is read
-on every selection, because a file can be replaced under its name. Choosing
-Selection moves it off whichever input held it, in the same write. Choosing
-Fixed opens `PicturePicker` and writes nothing until a picture is chosen, unless
-the input still holds the picture it had before it left Fixed; the picker stays
-open when the write fails. **The control is never disabled during a write**,
-which would drop keyboard focus: a change shows at once, one made while a write
-is out is queued and only the newest is sent, and a failed write puts back the
-last setup the server confirmed. An unchanged Fixed input is sent without
-a picture, so the server keeps its own. The selection pill, the overlay's
-ComfyUI menu and Remix's templates leave out a workflow whose
-`has_selection_input` is false; an absent field reads as offered, the backend's
-own default, and the pill also refuses to run a chosen workflow that has left
-its list.
-
-**Dropping a file adds a saved workflow.** Each `.json` in a drag carrying `Files`
-is posted to `POST /comfyui/workflows/import` unchanged, with `keep_both`; the
-list and the saved-workflow band are refetched, and the row named by the response's `topology_hash` selected,
-so a copy of a workflow the library already has lands on that row rather than
-adding one. A new workflow has no pictures, so when Show or Ghosts would hide
-that row the view widens to every workflow rather than select something
-invisible. A notice per file says whether it was added or already there.
-Anything else in the drop is not this view's: `useWindowFileImport` listens in
-the capture phase and stands aside only for a drop of JSON files alone onto
-`.wfshelf`, so pictures dropped here still import and are not reported twice.
-There is no Replace here: a drop always keeps both, so replacing a
-workflow means deleting it (the inspector's **Delete workflow**) and dropping
-the new file. Naming a workflow
-is a later step, running one is the run panel below, and forgetting
-ghosts is the two counted purges in Settings › Privacy (`PrivacySection`, beside
-the Off / Covered only / On retention control); the row menu offers only what
-can be read today.
-**Ghosts** is a toggle beside Group / Sort / Show rather than a fourth Show
-position, because a workflow still in use can hold ghosts too and the two axes
-combine. It keeps rows where `hasGhosts` (a picture ghost in this library or a
-model name no longer on the shelf), persists as `view.ghosts`, and its badge
-counts across the whole list so it says there is something to find before it is
-on. A row whose model names were forgotten reads "3 models, names forgotten"
-from `forgotten_models` rather than going blank, and so does the inspector.
-
 **A purge elsewhere invalidates this view.** `PrivacySection` calls
-`useWorkflowShelfStore().invalidate()` after a successful purge: the variants are
-otherwise kept for the whole session and would go on showing names that were
-just forgotten, so they are dropped with the open rows and the list is re-read.
-**`state` is read from the whole list, not the filtered one**, so filters that
-match nothing (the Ghosts toggle after a purge, most often) draw "No workflows
-match" with a "Show every workflow" button instead of the library's
-no-workflows state.
+`useWorkflowsStore().invalidate()` after a successful purge: forgetting a model
+name or a picture ghost changes what a card names and how many pictures it
+counts, and a grid left alone would go on showing what was just purged. The
+cached stack members go with it, and the grid is re-read **only if it had been
+read**, so a purge made by somebody who has never opened Workflows fires no
+request.
 
 **The retention control is never disabled while it saves.** A natively disabled
 radio drops keyboard focus on the first arrow press; a pick made mid-save is
 queued and only the newest is sent, and a failed save puts back the last
 position the server confirmed.
 
-**The right rail is the same inspector, in its fourth use** (§F2), and both are
-`AppInspector`. On this route
-`App.vue` mounts `WorkflowInspector.vue` INSTEAD of `StatsSidebar.vue`, not
-beside it: the statistics panel fetches on watchers, so a hidden-but-mounted copy
-would keep asking for numbers nobody is looking at. The tab strip names the
-**subject** — `Workflow`, where `Model` and `Pictures` sit — and the second tab
-is always the way out to the pictures, which is what stops the rail being
-terminal. It dims rather than disappearing when a workflow has outlived
-everything it made, so the panel keeps its shape. A selected saved workflow that
-is not built in carries **Delete workflow**, which confirms and calls
-`DELETE /comfyui/workflows/{name}`: the server writes the file back to the
-watched folder and moves it to the system trash (the server machine's), and the
-file list is re-read whether or not the delete succeeded.
+#### What F1b removed, and what is owed back
 
-**Its tiles have three states and the store records all three separately**, because
-two bugs have now lived in that one branch. A failed fetch used to be cached as
-an empty array, so the rail said "nothing this workflow made is still in the
-library" — the one thing it must not say wrongly — until a session reset; leaving
-the key unset instead fixed that and broke the other half, since absent then
-meant both *not asked yet* and *asked and failed*, and the panel said "Reading
-its pictures…" for ever with the failure's own sentence unreachable. So:
-`samplesLoading` is in flight, a key in `samples` is the answer, and
-`samplesFailed` is a request that came back empty-handed and offers a retry.
-`WorkflowInspector.test.js` pins all three. A tile opens the picture
-through `?overlay=<id>` on the library route, which is the shipped way a
-reloaded lightbox restores itself rather than a second route into the viewer.
+The shelf was a topology list with its own store, its own shaping helpers and
+its own inspector; F1b (#1404) deleted `WorkflowShelf.vue`,
+`useWorkflowShelfStore.js`, `utils/workflowShelf.js` and the shelf's
+`WorkflowInspector.vue`, and put the grid on `/workflows`. The implementation
+plan sequences the replacements after this step, so the following are **gone
+from the UI today and are not oversights**:
+
+- **Group / Show / Ghosts.** Stacks are the grouping now, and the rest become
+  the F7 Filters panel (Hide one-offs, Show hidden workflows, Ghosts row,
+  Type / Checkpoint / Source / Min rating). Until then the grid's subtitle says
+  what is being left out ("40 hidden · 12 one-offs") and there is no way to ask
+  for it, which the empty state says in as many words.
+- **The saved workflow files band, and *Pictures in*.** Setting a picture
+  input's mode (Selection / Picker / Fixed) and deleting an imported workflow
+  were the shelf inspector's, keyed by FILENAME through
+  `/comfyui/workflows/{name}/…`. The card payload carries no filename and the
+  grid is keyed by card, so there was nothing to move them onto. Stored modes
+  are still honoured — `picture_inputs()` reads them and the run pre-flight
+  calls it — and `WorkflowRunPanel` still offers a `PicturePicker` per run, so
+  running is unaffected; what is missing is changing the stored setup and
+  deleting a file. F5 rebuilds both on the key-based routes.
+- **Drag-and-drop of a `.json` onto the view.** *Add…* in the toolbar posts to
+  the same `POST /comfyui/workflows/import`, so the capability is not lost,
+  only the gesture. `useWindowFileImport` no longer has to stand aside for this
+  screen.
+- **The way out to a workflow's pictures.** The shelf inspector's second tab
+  was Pictures, and its tiles opened one through `?overlay=<id>`; §F2 called
+  that tab "what stops the rail being terminal". `WorkflowTab` declares one
+  tab and `WorkflowCard`'s covers are not clickable, so a reader can see that
+  a workflow made 90 pictures and reach none of them. F7 wires the header
+  figure as the *Show all N pictures* chip. **This is the sharpest of the
+  losses here** — it is a route out of a screen, not a control on it.
+- **"Export the graph…" and "Copy its identity"**, the shelf row menu's two
+  verbs. Export is owed back by F6/B8, which has to write a *runnable* file
+  and therefore needs `GET /workflows/recipes/{structural_hash}/graph` to stop
+  answering `runnable: false`; the card payload has no filename, so neither
+  verb had anything to hang on in the grid.
+- **The base-model widget list on the client.** `utils/workflowShelf.js` kept a
+  `BASE_WIDGETS` beside the server's `CHECKPOINT_WIDGETS` and the two drifted in
+  both directions (#1416); a guardrail held them equal. The grid reads the slot
+  `kind` the server derives, so the client list — and the guardrail — are gone.
+  **The drift is not**: `_SLOT_KINDS` (`workflow_card_service.py`) answers the
+  same question on the server, already disagrees with `CHECKPOINT_WIDGETS`, and
+  is the one a card is labelled from. See `docs/backend_architecture.md`.
+- **The client calls only the shelf made**: `listWorkflows`,
+  `listWorkflowVariants`, `listWorkflowPictures` and `getWorkflowGraph`
+  (`api/workflows.js`), and `setWorkflowInputs` and `deleteWorkflow`
+  (`api/comfyui.js`), went with it rather than being kept warm for a screen
+  that does not exist. **The routes stay** — `DELETE /comfyui/workflows/{name}`
+  included — so F5/F6/F7 re-add the lines they need against the shape they
+  want. A function whose only test is its own unit test is not covered, it is
+  only green.
+
+#### `?from=`: the way back, built here and currently unused
+
+**#1446 built the return journey for the shelf's picture tiles, and F1b
+deleted the tiles.** The mechanism it added is generic and survives whole; what
+is gone is the only thing that *pushed* `?from=`. It is documented here rather
+than dropped because F7's *Show all N pictures* chip is the same journey — a
+card's pictures opened from a destination that replaces the grid — so the chip
+needs a caller, not a design.
+
+The problem it solves is structural and has not changed: the lightbox is
+mounted inside `ImageGrid`, which this destination replaces, so anything here
+opening a picture has nowhere to open it but the **picture-grid** route — and
+closing it there leaves the reader on All Pictures, a view they never asked
+for, with Workflows two clicks away.
+
+- **`overlayCloseTarget` (`utils/overlayRoute.js`) is the one decision
+  `ImageGrid._removeOverlayRoute` makes.** `?from=` is a same-document absolute
+  path to replace the route with; anything else (a protocol, a
+  protocol-relative host, a repeated parameter) is ignored and the close drops
+  `?overlay=` and stays put as it always did. **That fallback is what the app
+  does today**, since nothing sets `?from=` any more.
+- **Everything else in the query goes with the route being left — except
+  `?token=`**, which belongs to the session: this close does not run through
+  `useAppNavigation.withShareToken`, so it carries the share token itself or
+  the visitor lands on a URL that 401s on the next reload.
+- **The path only, not the full one.** `?topology=` is a one-shot instruction
+  from a Recipe link that this view honours on mount, so carrying it back would
+  re-select the workflow that link named over whichever one the reader has
+  since chosen. That reasoning survives the shelf: the grid honours the same
+  query.
+
+**Only the reader's own close goes back, and that rule is live regardless.**
+`closeOverlay(returnToOrigin = true)` takes the default from the overlay's
+`close` emit (the X, Escape), which carries no payload; every close `ImageGrid`
+makes on its own behalf passes `false` — the reverse-image and face-likeness
+searches, the lightbox delete and scrapheap restore, "use as input", and the
+route watcher catching up with a navigation that has already happened. Those
+close the lightbox *precisely* to show their result in the grid behind it, so
+navigating away would land them on a screen that has no grid. `from` is dropped
+either way: it is one close's instruction, not a property of the route that
+later closes inherit.
 
 **Running a workflow is the run panel in the rail** (#1307,
 `WorkflowRunPanel.vue`). The selection pill's ComfyUI entry (and the context
@@ -4521,7 +4643,7 @@ menu's, and Remix's "use the batch panel") opens it for workflows with a
 Selection input; the toolbar's Generate button opens it for workflows with none.
 Both used to be menus that closed on run; the panel is the rail instead, so the
 grid stays browsable, and App.vue mounts it **in place of** `StatsSidebar` while
-`useWorkflowRunStore().open`, as it mounts `WorkflowInspector` on `/workflows`.
+`useWorkflowRunStore().open`, as it mounts `WorkflowTab` on `/workflows`.
 The panel lives outside the grid while the selection and the ComfyUI progress
 runner are the grid's, so **ImageGrid feeds the store**: the live selection ids,
 the view context (`client_id`, set, project, character) and the runner, which it

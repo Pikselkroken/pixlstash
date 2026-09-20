@@ -34,7 +34,7 @@ export const SHELF_NO_UNDO_KEY = "shelf-no-undo";
  * shelf was guarded alone and the other three were not, so the chord reverted
  * a library action with nothing on screen to say it had happened (#1415).
  */
-const UNDO_BLIND_ROOTS = ".shelf, .wfshelf, .mv, .ins";
+const UNDO_BLIND_ROOTS = ".shelf, .wfv, .mv, .ins";
 
 export function useGlobalKeydown({
   gridContainer,

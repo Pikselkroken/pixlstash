@@ -55,6 +55,7 @@ from pixlstash.hub.workflow_card_reads import (
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import WorkflowGraphError
 from pixlstash.services.workflow_identity import (
+    CHECKPOINT_WIDGETS,
     RECIPE,
     differs_by_reduced,
     reduce_stored_document,
@@ -117,16 +118,43 @@ _SLOT_KINDS = {
     "control_net_name": "controlnet",
 }
 
+# The slot kinds that name the BASE MODEL, most preferred first.
+#
+# **Derived from `CHECKPOINT_WIDGETS`, never hand-copied.** That set, in
+# `workflow_identity`, is where "what counts as a base model" is actually
+# decided - it is what makes `differs_by` say *other checkpoint* - and a second
+# copy of the answer is the exact drift `CHECKPOINT_WIDGETS` itself was written
+# to end (#1416). A sixth widget added there is a base model here the same day,
+# with no edit and nothing to remember.
+#
+# `checkpoint` then `unet` by hand because those two have a real order: a graph
+# carrying both is led by its checkpoint. The rest are alphabetical, which is
+# arbitrary and says so - they are alternative spellings of the same slot and
+# no graph carries two of them.
+BASE_MODEL_KINDS = ("checkpoint", "unet") + tuple(
+    sorted(
+        _SLOT_KINDS.get(widget, widget)
+        for widget in CHECKPOINT_WIDGETS - {"ckpt_name", "unet_name"}
+    )
+)
+
 _EPOCH = datetime.min
 
 
 @dataclass(frozen=True)
 class SlotModel:
-    """One model a card names: its file, and which slot it sits in."""
+    """One model a card names: its file, and which slot it sits in.
+
+    ``label`` is the slot's address - the same one ``PUT /workflows/{key}/
+    slots`` marks and ``workflow_default_override`` is keyed on. It travels
+    with the slot because a client that draws a LoRA's Workflow/Recipe switch
+    has nothing else to name the slot it just flipped.
+    """
 
     name: Optional[str]
     kind: str
     mark: Optional[str] = None
+    label: Optional[str] = None
 
 
 @dataclass
@@ -527,7 +555,10 @@ def _describe_slots(hub: HubDatabase, figures: list[CardFigures]) -> None:
                 name = next_name(widget)
                 figure.loras.append(
                     SlotModel(
-                        name=None if mark == RECIPE else name, kind="lora", mark=mark
+                        name=None if mark == RECIPE else name,
+                        kind="lora",
+                        mark=mark,
+                        label=str(slot.get("label") or "") or None,
                     )
                 )
             else:
@@ -535,6 +566,7 @@ def _describe_slots(hub: HubDatabase, figures: list[CardFigures]) -> None:
                     SlotModel(
                         name=next_name(widget),
                         kind=_SLOT_KINDS.get(widget, widget or "model"),
+                        label=str(slot.get("label") or "") or None,
                     )
                 )
 

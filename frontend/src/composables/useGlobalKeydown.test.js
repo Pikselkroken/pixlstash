@@ -104,7 +104,7 @@ describe("the undo chord", () => {
   // destinations that mount neither a receipt nor an UndoControl were not - so
   // the chord reverted a library action there with nothing on screen to say so.
   it.each([
-    ["the workflow library", "wfshelf"],
+    ["the Workflows grid", "wfv"],
     ["Moves", "mv"],
     ["Insights", "ins"],
   ])("declines on %s too, for the shelf's reason", (_name, className) => {

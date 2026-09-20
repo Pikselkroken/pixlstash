@@ -43,9 +43,9 @@ const props = defineProps({
   separator: { type: Boolean, default: false },
   // What the right rail IS on this screen, because the toggle's tooltip is
   // also its accessible name (AppBarButton promotes an icon-only button's
-  // tooltip to `aria-label`). One rail, more than one panel: on the workflow
-  // library it carries WorkflowInspector, so a reader there was offered "Show
-  // stats sidebar" for a control that opens the inspector (#1415).
+  // tooltip to `aria-label`). One rail, more than one panel: on the Workflows
+  // grid it carries the workflow inspector, so a reader there was offered
+  // "Show stats sidebar" for a control that opens the inspector (#1415).
   railName: { type: String, default: "stats sidebar" },
 });
 

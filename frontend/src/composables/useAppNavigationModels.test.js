@@ -116,38 +116,6 @@ describe("the model shelf and a READ session", () => {
     });
   }
 
-  // v1.12 F1a. `/workflows-next` reads `GET /workflows/cards`, which is
-  // owner-only like everything behind the shelf, so it joins the same bounce
-  // — and it is deliberately NOT in `WORKFLOW_ROUTES`, which is what lights
-  // the sidebar entry and mounts the shipped shelf.
-  it(`keeps a READ session off /workflows-next, which has no sidebar entry`, () => {
-    sessionContext.value = UNSCOPED_READ;
-    nav.route.name = "workflows-next";
-    nav.route.query = { token: SHARE_TOKEN };
-    const { wrapper, api } = mountNav();
-
-    expect(api.isWorkflowsNextView.value).toBe(false);
-    // And not by mounting the shipped shelf in its place.
-    expect(api.isWorkflowsView.value).toBe(false);
-    expect(nav.replace).toHaveBeenCalledWith(BOUNCE_TARGET);
-
-    wrapper.unmount();
-  });
-
-  it("shows /workflows-next to the owner, and only that route", () => {
-    sessionContext.value = null;
-    nav.route.name = "workflows-next";
-    const { wrapper, api } = mountNav();
-
-    expect(api.isWorkflowsNextView.value).toBe(true);
-    // The two Workflows screens are separate destinations: the temporary route
-    // must not also mount the shelf, or both would be on screen at once.
-    expect(api.isWorkflowsView.value).toBe(false);
-    expect(nav.replace).not.toHaveBeenCalled();
-
-    wrapper.unmount();
-  });
-
   it("bounces a READ session that navigates to /models after mount", async () => {
     // The share session is already in the app when the URL changes - a pasted
     // link, a Back into a models entry left in history.

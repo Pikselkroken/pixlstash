@@ -57,7 +57,6 @@ import { useModelFoldersStore } from "./useModelFoldersStore";
 import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
 import { useMovesStore } from "./useMovesStore";
-import { useWorkflowShelfStore } from "./useWorkflowShelfStore";
 import { useWorkflowsStore } from "./useWorkflowsStore";
 import { useWorkflowRunStore } from "./useWorkflowRunStore";
 
@@ -128,32 +127,12 @@ const STORES = [
     isEmpty: (s) => s.pending === null,
   },
   {
-    // The topology rows are hub-side facts about this machine, but every count
-    // on them is read across the ACTIVE library's pictures, and the sample ids
-    // the inspector holds ARE that library's pictures. All of it is owner-only,
-    // so none of it may survive a credential change. The view axes are kept:
-    // they are the user's own preference and hold no id.
-    name: "useWorkflowShelfStore",
-    use: useWorkflowShelfStore,
-    seed: (s) => {
-      s.rows = [{ topology_hash: "a".repeat(64), pictures: 1075, variants: 3 }];
-      s.scan = { pictures: 28172, scanned: 28172 };
-      s.selectedHash = "a".repeat(64);
-      s.samples["a".repeat(64)] = [11, 12];
-      s.loaded = true;
-    },
-    isEmpty: (s) =>
-      s.rows.length === 0 &&
-      !s.loaded &&
-      s.selectedHash === null &&
-      Object.keys(s.samples).length === 0,
-  },
-  {
-    // v1.12 F1a, the Workflows GRID. Same reasoning as the shelf above and one
-    // more reason: a card's covers are thumbnail URLs of the ACTIVE library's
-    // pictures, and an open stack's members were read one owner-only detail
-    // request at a time. The sort key is kept - it is the user's own
-    // preference and names nothing.
+    // v1.12 F1a, the Workflows grid. The cards are hub-side facts about this
+    // machine, but every count on them is read across the ACTIVE library's
+    // pictures, a card's covers are thumbnail URLs of those pictures, and an
+    // open stack's members were read one owner-only detail request at a time.
+    // None of it may survive a credential change. The sort key is kept - it is
+    // the user's own preference and names nothing.
     name: "useWorkflowsStore",
     use: useWorkflowsStore,
     seed: (s) => {

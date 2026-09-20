@@ -99,11 +99,8 @@ jobs:
             echo "Release ref/tag mismatch: $RELEASE_REF / $RELEASE_TAG" >&2
             exit 1
           fi
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+|[.-]dev[.-]?[0-9]+)?$ ]]; then
-            echo "Release tag has an unsupported format: $RELEASE_TAG" >&2
-            exit 1
-          fi
-          [ "$RELEASE_TAG" = "v$EXPECTED_VERSION" ] || { echo "tag/version mismatch"; exit 1; }
+          python -m pip install --upgrade packaging
+          python scripts/check_release_tag.py "$RELEASE_TAG" "$EXPECTED_VERSION"
           echo "validated_release_tag=true" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

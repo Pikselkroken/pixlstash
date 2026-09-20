@@ -2733,39 +2733,42 @@ def test_frontend_import_extensions_match_the_staging_allowlist():
     )
 
 
-def test_base_model_widgets_agree_across_the_stack():
-    """One list of "this widget names the base model", not two that drift.
+def test_base_model_kinds_agree_across_the_stack():
+    """One order for "which model is this card about", not two that drift.
 
-    `CHECKPOINT_WIDGETS` decides whether `differs_by` says `other checkpoint`
-    or falls back to `other models`; `BASE_WIDGETS` decides whether the
-    Workflows list calls an asset the base model and heads the row with it.
-    They answer the same question and had drifted in BOTH directions -
-    `diffusion_model` and `model_path` only on the client, `checkpoint_id`
-    (#1416) only on the server - so one workflow read as having a base model
-    on one side and a changed one on the other. A comment saying "keep these
-    in sync" is what let that happen; this is the thing holding them together.
+    The server names a card after its base model; the client's
+    ``checkpointModel`` picks the model row the card SHOWS and reads it to a
+    screen reader. Both walk a preference order over slot kinds, and when they
+    disagree one card says two things: #1449 shipped with the name row reading
+    ``flux1-dev`` and the model row reading ``ae.safetensors``, its VAE,
+    because the client still took "the first slot".
+
+    A guardrail of this shape guarded ``BASE_WIDGETS`` until F1b deleted the
+    shelf that held it, and it was removed on the grounds that no second list
+    was left. One is: this is that list, and this is that guardrail.
+
+    The server's own copy needs no assertion - it is derived from
+    ``CHECKPOINT_WIDGETS`` at import - so a widget added there reaches the
+    server for free and fails HERE until the client follows.
     """
-    from pixlstash.services.workflow_identity import CHECKPOINT_WIDGETS
+    from pixlstash.services.workflow_card_service import BASE_MODEL_KINDS
 
-    shelf_js = (
-        REPO_ROOT / "frontend" / "src" / "utils" / "workflowShelf.js"
-    ).read_text(encoding="utf-8")
-    match = re.search(
-        r"const BASE_WIDGETS = new Set\(\[(.*?)\]\);", shelf_js, re.DOTALL
+    card_js = (REPO_ROOT / "frontend" / "src" / "utils" / "workflowCard.js").read_text(
+        encoding="utf-8"
     )
+    match = re.search(r"const BASE_MODEL_KINDS = \[(.*?)\];", card_js, re.DOTALL)
     assert match, (
-        "BASE_WIDGETS is gone from frontend/src/utils/workflowShelf.js - the "
-        "Models column is classifying base models against something else, and "
-        "this guardrail can no longer see what."
+        "BASE_MODEL_KINDS is gone from frontend/src/utils/workflowCard.js - the "
+        "model row is choosing its slot against something else, and this "
+        "guardrail can no longer see what."
     )
-    frontend_widgets = set(re.findall(r'"([^"]+)"', match.group(1)))
+    frontend_kinds = tuple(re.findall(r'"([^"]+)"', match.group(1)))
 
-    assert frontend_widgets == set(CHECKPOINT_WIDGETS), (
-        "the base-model widget lists disagree: "
-        f"client-only={sorted(frontend_widgets - CHECKPOINT_WIDGETS)}, "
-        f"server-only={sorted(CHECKPOINT_WIDGETS - frontend_widgets)}. "
-        "A client-only widget heads a row with a model the chip calls "
-        "unchanged; a server-only one is a base model the list never names."
+    assert frontend_kinds == tuple(BASE_MODEL_KINDS), (
+        "the base-model preference orders disagree: "
+        f"client={list(frontend_kinds)}, server={list(BASE_MODEL_KINDS)}. "
+        "ORDER matters as much as membership: a graph carrying both a "
+        "checkpoint and a unet is named after one and draws the other."
     )
 
 

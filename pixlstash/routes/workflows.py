@@ -58,6 +58,7 @@ from pixlstash.hub.workflow_card_reads import (
     card_index,
     find_card,
     instance_documents,
+    key_pins,
     keys_in_stack,
     picture_inputs,
     slot_marks,
@@ -107,6 +108,7 @@ from pixlstash.services.comfyui_service import (
 )
 from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
+    BASE_MODEL_KINDS,
     BEST_SCORE,
     card_defaults,
     read_grid,
@@ -128,7 +130,11 @@ from pixlstash.routes.comfyui import (
 )
 from pixlstash.services.workflow_export import download_stem, scrub_for_export
 from pixlstash.services.workflow_identity import RECIPE, STRUCTURAL
-from pixlstash.services.workflow_hash import WorkflowGraphError, structural_document
+from pixlstash.services.workflow_hash import (
+    MODEL_EXTENSIONS,
+    WorkflowGraphError,
+    structural_document,
+)
 from pixlstash.services.workflow_identity import topology_node_labels
 from pixlstash.services.workflow_io import api_graph, detect_workflow_io
 from pixlstash.services.workflow_library_service import (
@@ -281,6 +287,13 @@ class WorkflowSlotModel(BaseModel):
     name: str | None = None
     kind: str
     mark: str | None = None
+    slot_label: str | None = Field(
+        None,
+        description=(
+            "The slot's address, as `PUT /workflows/{key}/slots` marks it. "
+            "Null for a slot the cached list gave no label."
+        ),
+    )
 
 
 class WorkflowDefault(BaseModel):
@@ -327,6 +340,15 @@ class WorkflowCard(BaseModel):
         None, description="The owner's own name, if they gave one."
     )
     type: str | None = None
+    type_label: str | None = Field(
+        None,
+        description=(
+            "`type` spelled the way ComfyUI spells it on its own templates "
+            "(`txt2img` -> `Text to Image`). The card's name row and its type "
+            "chip both read this, so the two cannot say the same fact in two "
+            "vocabularies. Null exactly when `type` is."
+        ),
+    )
     imported: bool = Field(
         False, description="A workflow file on this machine runs this card."
     )
@@ -387,6 +409,16 @@ class WorkflowCardDetail(BaseModel):
     notes: str | None = None
     hidden: bool = False
     variants: list[WorkflowVariant] = Field(default_factory=list)
+    pins: list[ParameterAddress] | None = Field(
+        None,
+        description=(
+            "The parameters the owner pinned, addressed as `PUT "
+            "/workflows/{key}/pins` takes them. `null` is a card nobody has "
+            "pinned on, so the client's own default pins apply; `[]` is "
+            "somebody who unpinned everything. Without this the pins were "
+            "write-only and the Workflow tab could not draw the pin it sets."
+        ),
+    )
 
 
 # ── The writes (v1.12 B4) ───────────────────────────────────────────────────
@@ -821,28 +853,104 @@ def _cover_urls(covers) -> list[str]:
     return urls
 
 
-# What a card is called when the owner has not named it. The card's name row
-# is its only identifying text and the ⓘ panel puts it in an `aria-label`, so
-# this may not be null: `{{ card.name }}` renders empty and the label reads
-# "About null". The fallback is the workflow FILE that runs it, because that is
-# what a person calls their workflow and it is the one identifying string not
-# already on the card (the checkpoint has its own row, the type its own chip).
+# The last resort, when a card has nothing identifying at all.
+#
+# **It is a last resort and not the ordinary answer.** It used to be reached by
+# every card that was not imported from a file - which is most of a library
+# built from pictures - so a grid of forty workflows read "Untitled workflow"
+# forty times, and the name row, which is the card's only identifying text,
+# identified nothing. Duplicating the checkpoint onto the name row was avoided
+# on the grounds that it has a row of its own; a constant is worse than a
+# duplicate, because a duplicate at least tells two cards apart.
 UNNAMED_CARD = "Untitled workflow"
 
 
-def _display_name(card) -> str:
-    """The owner's name for a card, else the file that runs it, else a stand-in."""
+def _model_stem(name: str) -> str:
+    """A model filename as a person says it: no folders, no extension.
+
+    Against ``MODEL_EXTENSIONS`` rather than "whatever follows the last dot":
+    a version in the name (``juggernaut_v9.1``) is not an extension, and a
+    guess by length gets ``.safetensors`` -- eleven characters, and the one
+    that matters -- exactly wrong.
+    """
+    stem = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    lowered = stem.lower()
+    for ext in MODEL_EXTENSIONS:
+        if lowered.endswith(ext):
+            return stem[: -len(ext)]
+    return stem
+
+
+# ComfyUI's own template names read "Krea 2: Text to Image", and a workflow
+# library is read beside ComfyUI rather than instead of it, so the type is
+# spelled the way the person already sees it spelled.
+#
+# **One map, and it is served rather than mirrored.** The card shows its type
+# twice - in a generated name and in its own chip - and a second copy of these
+# labels on the client is the drift this file has already been bitten by once
+# (`CHECKPOINT_WIDGETS`). `WorkflowCard.type_label` carries the answer, so the
+# chip and the name are the same string by construction.
+_TYPE_LABELS = {
+    "txt2img": "Text to Image",
+    "img2img": "Image to Image",
+    "inpaint": "Inpaint",
+    "outpaint": "Outpaint",
+    "upscale": "Upscale",
+}
+
+
+def _base_model_name(models) -> str | None:
+    """The base model a card is named after, or ``None`` if it loads none."""
+    for kind in BASE_MODEL_KINDS:
+        for slot in models:
+            if slot.kind == kind and slot.name:
+                return slot.name
+    return None
+
+
+def _display_name(card, models=()) -> str:
+    """What a card is called: the owner's name, else its file, else its models.
+
+    That order is how much the name is *theirs*: one they typed, then the file
+    they dropped, then a description built here.
+
+    The built one is **the model first, then what the workflow does** -
+    ``juggernautXL txt2img`` - because the model is what a person calls the
+    workflow and the verb only tells two of them apart once the model already
+    has. It is deliberately not unique: two cards differing only by a
+    post-processing node share a name, and naming THAT difference (the
+    "… + FaceDetailer" half of the intended scheme) needs a per-card
+    derivation the hub does not cache yet (#1454). The card contract, this
+    fallback chain included, is ``docs/integration_architecture.md`` §2.
+    Until then the ⓘ panel carries what actually separates them.
+    """
     if card.name:
         return card.name
     if card.file_name:
         stem = card.file_name.rsplit("/", 1)[-1]
         return stem[: -len(".json")] if stem.lower().endswith(".json") else stem
-    return UNNAMED_CARD
+    base = _base_model_name(models)
+    if not base:
+        # No base model: every name forgotten, or a graph that loads none. The
+        # stand-in, deliberately, rather than the VAE.
+        return UNNAMED_CARD
+    stem = _model_stem(base)
+    if not stem:
+        # These are graph widget values - third-party strings out of whatever
+        # workflow was imported - so the stem can come back empty where the
+        # whole name was an extension (".safetensors") or ended in a separator
+        # ("SDXL/"). An empty name renders the row blank and reads "About null"
+        # in the label, which is the hole `UNNAMED_CARD` exists to close.
+        return UNNAMED_CARD
+    label = _TYPE_LABELS.get(card.workflow_type)
+    return f"{stem}: {label}" if label else stem
 
 
 def _slot_models(slots) -> list[WorkflowSlotModel]:
     return [
-        WorkflowSlotModel(name=slot.name, kind=slot.kind, mark=slot.mark)
+        WorkflowSlotModel(
+            name=slot.name, kind=slot.kind, mark=slot.mark, slot_label=slot.label
+        )
         for slot in slots
     ]
 
@@ -851,8 +959,9 @@ def _card(figure, defaults=()) -> WorkflowCard:
     """Render one card's figures in the shape ``workflowCard.js`` documents."""
     return WorkflowCard(
         key=figure.card.workflow_key,
-        name=_display_name(figure.card),
+        name=_display_name(figure.card, figure.models),
         type=figure.card.workflow_type,
+        type_label=_TYPE_LABELS.get(figure.card.workflow_type),
         imported=figure.card.imported,
         models=_slot_models(figure.models),
         loras=_slot_models(figure.loras),
@@ -1140,11 +1249,18 @@ def create_router(server) -> APIRouter:
         if figure is None:
             raise HTTPException(status_code=404, detail="Unknown workflow card.")
         card = figure.card
+        pins = key_pins(hub, workflow_key)
         return WorkflowCardDetail(
             card=_card(figure, card_defaults(hub, server.vault, card)),
             notes=card.notes,
             hidden=card.hidden,
             variants=_card_variants(hub, server.vault, card),
+            pins=None
+            if pins is None
+            else [
+                ParameterAddress(slot_label=slot_label, input_name=input_name)
+                for slot_label, input_name in pins
+            ],
         )
 
     @router.get(

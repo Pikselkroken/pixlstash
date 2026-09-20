@@ -9,10 +9,6 @@ import { errorMessage } from "../utils/apiError";
 /**
  * The Workflows grid (v1.12 F1a) — the cards, the sort, and which stack is open.
  *
- * Separate from `useWorkflowShelfStore`, which owns the shipped topology list
- * on `/workflows`: the two read different routes and answer different
- * questions, and F1b replaces the shelf rather than merging the two.
- *
  * **One stack open at a time**, deliberately unlike the picture grid, where any
  * number of stacks can be expanded at once. A workflow stack's panel is a
  * full-width band that pushes every later row down, so two open panels put the
@@ -199,6 +195,58 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     openStackKey.value = null;
   }
 
+  /**
+   * Forget the fetched stack members, keeping the selection and the cards.
+   *
+   * For the one gesture that invalidates them wholesale: marking a LoRA slot
+   * re-keys every card of the topology, so the cards cached under a cover key
+   * can name workflows the hub no longer has. `fetchCards` does not clear
+   * them — it only re-reads the grid, which lists covers — so an open stack
+   * would keep drawing its pre-flip members until the session reset.
+   *
+   * **The open stack is collapsed, not re-read.** Left open with no members,
+   * `openMembers` falls back to the cover alone and `StackPanel` reports the
+   * difference as "N could not be read" — a failure message for a deliberate
+   * invalidation, with no way out but collapsing it by hand. Worse when the
+   * flip re-keyed the cover out of the grid: `openMembers` is then empty, the
+   * panel is not drawn at all, and the row keeps `aria-expanded="true"`.
+   * Re-expanding fetches fresh members through the path that already exists.
+   *
+   * **The epoch is bumped for the reason `reset` bumps it**: `openStack`'s
+   * completion path guards only on `mine === epoch`, so a member read that
+   * was on the wire writes the PRE-flip members straight back into the map
+   * this function just emptied. Clearing `inflight` alone would not stop it,
+   * and would let a second open re-issue reads the first is still making.
+   * `loading` goes with it because the old epoch's `finally` will not clear
+   * it — and every caller here follows this with `fetchCards()`, which
+   * early-returns to nothing while `loading` is set.
+   */
+  function forgetMembers() {
+    epoch += 1;
+    loading.value = false;
+    members.value = {};
+    inflight.value = new Set();
+    membersFailed.value = new Set();
+    closeStack();
+  }
+
+  /**
+   * Forget what was read and read the grid again, after something OUTSIDE this
+   * view changed what the cards say.
+   *
+   * The one caller is a ghost purge in Settings › Privacy: forgetting a model
+   * name or a picture ghost changes what a card names and how many pictures it
+   * counts, and a grid left alone would go on showing what was just purged.
+   * The cached stack members go with it for `forgetMembers`' own reason.
+   *
+   * **Only re-read when the grid has been read**, so a purge made by somebody
+   * who has never opened Workflows fires no request.
+   */
+  function invalidate() {
+    forgetMembers();
+    if (loaded.value) fetchCards();
+  }
+
   function toggleStack(coverKey) {
     if (openStackKey.value === coverKey) closeStack();
     else openStack(coverKey);
@@ -269,6 +317,8 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     fetchCards,
     openStack,
     closeStack,
+    forgetMembers,
+    invalidate,
     toggleStack,
     select,
     selectRange,
