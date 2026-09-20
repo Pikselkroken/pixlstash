@@ -4996,6 +4996,29 @@ def test_an_editor_graph_that_will_not_rebuild_is_not_a_source(runnable):
     assert payload["groups"][0]["source"] != "picture", payload
 
 
+def test_the_run_reads_object_info_itself_rather_than_a_cached_map(runnable):
+    """A run decides what executes, so it asks ComfyUI now.
+
+    The recipe READ may serve a map up to a minute old - that is what makes
+    stepping the filmstrip affordable - and a run that reused it could submit
+    a graph against node definitions that have since changed. Ported here from
+    the recipe route's own file when #1410 retired `POST /comfyui/run_recipe`;
+    the property belongs to whichever route runs things.
+    """
+    asked = []
+
+    def spy(url, **kwargs):
+        asked.append(kwargs)
+        return json.loads(json.dumps(RUN_OBJECT_INFO)), None
+
+    runnable.monkeypatch.setattr(workflows_routes, "_read_object_info", spy)
+    _only_an_editor_graph(runnable.monkeypatch)
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    assert r.status_code == 200, r.text
+    assert asked, "the run must read /object_info"
+    assert all(not call.get("cached") for call in asked), asked
+
+
 def test_a_missing_node_pack_is_reported_by_name(runnable):
     info = json.loads(json.dumps(RUN_OBJECT_INFO))
     info.pop("LoraLoader")

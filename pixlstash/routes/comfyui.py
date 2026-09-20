@@ -881,12 +881,13 @@ def _load_embedded_api_prompt(
     *object_info*.
 
     **The rebuild lives here rather than in a handler on purpose.** Every route
-    that runs a picture's own graph comes through this function, and the one
-    that could not run an editor graph - the card run's embedded-picture tier
-    in ``routes/workflows.py`` - is precisely the caller that outlives
-    ``POST /comfyui/run_recipe``. Teaching the handler instead would have left
-    the surviving path unable to run what the Recipe tab offers, so the offer
-    would have quietly stopped meaning anything the day that route retired.
+    that runs a picture's own graph comes through this function. It was written
+    that way while ``POST /comfyui/run_recipe`` still existed and could have
+    held it; #1410 has since retired that route, and the card run's
+    embedded-picture tier in ``routes/workflows.py`` is now the only caller -
+    so a rebuild written into the handler would have been deleted along with
+    it, and the offer the Recipe tab makes would have quietly stopped meaning
+    anything.
 
     ``object_info`` of ``None`` is "ComfyUI was not asked", which is a refusal
     and not a licence to guess: reading a positional widget array at all needs
@@ -896,10 +897,11 @@ def _load_embedded_api_prompt(
         ``(graph, [])`` when there is something to submit, ``(None, problems)``
         otherwise. **The two "no"s are different and the caller picks.** An
         empty ``problems`` means the picture carries no workflow - A1111, a
-        stripped PNG, a photo - and a caller walking candidates should move on
-        to the next one. A non-empty one means this picture HAS a workflow that
-        would not rebuild, which a caller replaying *this* picture owes its
-        reader as a sentence.
+        stripped PNG, a photo - and the resolver moves on to the next candidate
+        without a word. A non-empty one means this picture HAS a workflow that
+        would not rebuild, which is worth saying: the resolver logs it against
+        that candidate, and the recipe read hands the same sentences to the
+        Recipe tab as ``conversion_problems``.
 
     Raises:
         HTTPException: 404 when the picture or its file cannot be resolved,
