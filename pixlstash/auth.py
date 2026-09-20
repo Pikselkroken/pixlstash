@@ -248,6 +248,15 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/users/me/shared-resource-ids",
         "/api/v1/users/me/token",
         "/api/v1/workflows",
+        # The looks the owner's pictures were made with (v1.12 F6): their
+        # prompts verbatim, across a whole stack. `/api/v1/recipes/` is in the
+        # prefix belt below and refuses this today, but a prefix is the
+        # templated half — an UNTEMPLATED owner-class GET is only held under
+        # the documented `AUTHZ_GATE_ENFORCING = False` rollback if its own
+        # path is in this frozenset, which is the rule
+        # `test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt`
+        # derives rather than writes down.
+        "/api/v1/recipes/used",
     }
 )
 
