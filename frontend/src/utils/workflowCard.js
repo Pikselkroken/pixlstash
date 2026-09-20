@@ -47,8 +47,13 @@
 //                                       // `PUT /workflows/{key}/slots` marks
 //     differs_by: [string],             // a stack: the union over its members
 //     picture_count, rating,            // rating 1-5; 0 or null is unrated
-//     covers: [{ url, thumbnail_width, thumbnail_height,
+//     covers: [{ url, picture_id, thumbnail_width, thumbnail_height,
 //                square_crop_x, square_crop_y, square_crop_side }],
+//                                       // `picture_id` is the picture the
+//                                       // cover DRAWS, so a client can open
+//                                       // it (#1455): the id is inside the
+//                                       // url and parsing it back out is a
+//                                       // path shape, not an interface.
 //                                       // up to 3, the cover first. `url` is
 //                                       // API-RELATIVE, so a consumer putting
 //                                       // one in an <img src> has to prepend
