@@ -559,12 +559,13 @@ def test_reading_waits_for_scoring_only_and_runs_with_captioning_off(server, pic
     )
 
 
-def test_the_bar_sits_below_a_real_screenshot():
+def test_the_bar_only_has_to_clear_zero():
     """Measured over a library of 12k pictures, not chosen by taste.
 
-    Dense phone screenshots scored 0.16-0.36 (a screenful of chat text: 0.23),
-    while the photographs that clear the scorer's hard gates at all topped out
-    near 0.16. At 0.25 two of 81 screen-sized pictures qualified and a random
-    sample of 1200 produced none, so reading had almost nothing to read.
+    98.1% of them score exactly 0.0: the scorer's hard gates, not this
+    constant, are what select a picture for reading. Dense phone screenshots
+    scored 0.16-0.36 (a screenful of chat text: 0.23), so at 0.25 two of 81
+    screen-sized pictures qualified and a random sample of 1200 produced none.
+    A bar just above zero admits about 1.9% of a library.
     """
-    assert OCR_MIN_TEXT_SCORE < 0.16
+    assert 0 < OCR_MIN_TEXT_SCORE <= 0.05
