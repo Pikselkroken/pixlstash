@@ -1196,7 +1196,6 @@ _PROJECT_REFS_IN_OPAQUE_BODY = frozenset(
             "/api/v1/picture_sets/{id}",
             "payload.project_ids|payload.project_id",
         ),
-        ("POST", "/api/v1/comfyui/run_t2i", "payload.project_id"),
     }
 )
 

@@ -70,7 +70,7 @@ describe("listWorkflowCards", () => {
   it("asks for the plain grid with no query at all", async () => {
     get.mockResolvedValue(answer);
     await listWorkflowCards();
-    expect(get).toHaveBeenCalledWith("/workflows/cards");
+    expect(get).toHaveBeenCalledWith("/workflows");
   });
 
   it("puts each Filters checkbox on the URL under the name the route takes", async () => {
@@ -80,14 +80,14 @@ describe("listWorkflowCards", () => {
     // against each other.
     get.mockResolvedValue(answer);
     await listWorkflowCards({ includeOneOffs: true });
-    expect(get).toHaveBeenCalledWith("/workflows/cards?include_one_offs=true");
+    expect(get).toHaveBeenCalledWith("/workflows?include_one_offs=true");
 
     await listWorkflowCards({ includeHidden: true });
-    expect(get).toHaveBeenCalledWith("/workflows/cards?include_hidden=true");
+    expect(get).toHaveBeenCalledWith("/workflows?include_hidden=true");
 
     await listWorkflowCards({ includeHidden: true, includeOneOffs: true });
     expect(get).toHaveBeenCalledWith(
-      "/workflows/cards?include_hidden=true&include_one_offs=true",
+      "/workflows?include_hidden=true&include_one_offs=true",
     );
   });
 
@@ -96,7 +96,7 @@ describe("listWorkflowCards", () => {
   it("sends nothing for a flag that is off", async () => {
     get.mockResolvedValue(answer);
     await listWorkflowCards({ includeHidden: false, includeOneOffs: false });
-    expect(get).toHaveBeenCalledWith("/workflows/cards");
+    expect(get).toHaveBeenCalledWith("/workflows");
   });
 
   it("hands back the counts, which are not the length of `cards`", async () => {

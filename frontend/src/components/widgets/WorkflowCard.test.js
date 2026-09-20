@@ -649,7 +649,7 @@ describe("WorkflowCard", () => {
 
 // ── The covers are API-relative and an <img> does not use axios ───────────
 //
-// `GET /workflows/cards` sends `/pictures/thumbnails/{id}.webp?v=…`, and the
+// `GET /workflows` sends `/pictures/thumbnails/{id}.webp?v=…`, and the
 // real route is under `/api/v1`. An `<img src>` never reaches the apiClient
 // interceptor that prepends the prefix, so a card that used the payload
 // verbatim asked the page origin for a path nothing serves — every cover on

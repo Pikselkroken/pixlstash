@@ -504,13 +504,10 @@ and a `409` means the set changed and nothing was forgotten.
 
 | Route | Purpose | Response |
 |---|---|---|
-| `GET /api/v1/workflows` | The whole list, at topology level | `{scan: {pictures, scanned}, workflows: [WorkflowSummary]}` |
-| `GET /api/v1/workflows/{topology_hash}/variants` | One row's expansion | `[WorkflowVariant]` |
-| `GET /api/v1/workflows/{topology_hash}/pictures?limit=` | Ids for the inspector's tiles, newest first | `[int]` |
+| `GET /api/v1/workflows?include_hidden=&include_one_offs=` | The card grid, in cover-rank order, one card per stack | `{cards: [WorkflowCard], one_offs, hidden}`. The two flags are the Workflows Filters panel's *Show hidden workflows* and an unticked *Hide one-offs* (F7); both default false, so the grid a client asks nothing for is unchanged. **They widen what is LISTED, never what is counted**: `one_offs` and `hidden` are taken over the same sets whatever the flags say, so a client can label the checkbox that is letting them in. **The widening belongs here and not in the client** because the grouping runs over exactly the cards the grid lists — a hidden member let back in makes its stack two again, where a client-side filter would draw it beside a cover still declaring `stack_size: 1`. Each card also carries `ghosts` (picture ghosts this library holds for the card's own variants) and `model_ghosts` (VALUES its variants name that the shelf does not hold - a filename or a `*_sha256` digest, so a model missing under both spellings counts 2 and this is not a count of models), which is what the panel's Ghosts row asks about; both are per CARD, not per topology, because a topology can carry several cards and only one of them may hold the ghost. **Neither is a library total.** A picture ghost whose `structural_hash` is null, or whose variant belongs to no card, is attributed to nobody, so these can sum to less than the `picture_ghosts` figure Settings › Privacy shows; the card fields answer "which cards keep something", never "how many ghosts exist". `hidden` is on the card too. **On this route** it is true only for a card `include_hidden` let in, so a client that did not ask never sees it set — but one that did **must mark those cards**, or the checkbox silently mixes them into the grid they were deliberately kept out of. **On `GET /workflows/{workflow_key}` it is always the card's own state**, with no flag involved: the detail route opens a hidden card by design, which is the only way one can be unhidden. **`name` is never null**: the owner's name, else the workflow FILE that runs it without its extension, else `"<model>: <Type> + <post-processing>"` built here (`Krea 2: Text to Image + FaceDetailer`), else `"Untitled workflow"`. The built one takes the first of `BASE_MODEL_KINDS` — derived from `CHECKPOINT_WIDGETS`, so a VAE or a text encoder can never name a card — and names it the way the model shelf does (`model.display_name`, a hub-to-hub join) rather than by its filename stem, which is what turns `realvisxl` into `Krea 2`. `specials` carries the same post-processing the suffix spells, and **null there is not `[]`**: null means the card's document has not been read for it yet, `[]` means it has and the graph has none. Every slot in `models` and `loras` carries `title`, the shelf's name for that file (null where the shelf has not scanned it), and **a client shows `title` in preference to `name`** — the generated name row was built from it, so a chip reading `realvisxl.safetensors` under a row reading `Krea 2` is one model described twice, the pair that drifted in #1416. The suffix is on the generated name only, never appended to a name the owner chose or to a workflow file's. The character-LoRA half of #1454 is deliberately absent: a card does not know which character LoRA was used, and cannot. `type_label` is `type` as ComfyUI spells it (`txt2img` → `Text to Image`), served rather than mirrored so a card's name row and its type chip cannot say one fact in two vocabularies. `covers` are objects, not strings (#1465): `{url, picture_id, thumbnail_width, thumbnail_height, square_crop_x, square_crop_y, square_crop_side}`. `picture_id` is the picture the cover DRAWS, so a client can open it (#1455) without parsing the id back out of `url`, which is a path shape rather than an interface; it rides on the cover rather than in a parallel `cover_ids` list because two lists paired by position are two lists that can come apart. `url` is **API-relative** — an `<img src>` bypasses the client's interceptor, so a consumer prefixes the API base and appends the share token itself — and the rest is the stored face-weighted SQUARE rectangle within that bitmap, under the names `GET /pictures/thumbnails/batch` already uses, so `utils/squareCrop.js` reads a cover with no mapping layer. The crop fields are null until the picture has been processed, and a consumer must then fall back to plain `object-fit: cover` rather than inventing a framing from a missing number. **They are three independently nullable ints, not one optional block**: `render_thumbnail` does write all three together, but nothing in the schema enforces it, so a consumer decides on `square_crop_x`/`_y` and derives `side = min(width, height)` when only that one is missing — which is what `squareCropParams` does, and what the square-mode grid has always done |
+| `GET /api/v1/workflows/{workflow_key}` | One card opened | `{card, notes, hidden, variants: [WorkflowVariant], pins}`. `pins` is `null` when nobody has pinned on the card (the client applies its own default pins) and `[]` when everything is unpinned; the two are different answers. A card's `models` and `loras` each carry `slot_label`, the address `PUT /workflows/{key}/slots` marks |
+| `GET /api/v1/workflows/{workflow_key}/pictures?limit=` | Ids for one card's pictures, newest first | `[int]` |
 | `GET /api/v1/workflows/recipes/{structural_hash}/graph` | One recipe's stored graph | `{structural_hash, document, runnable}` |
-| `GET /api/v1/workflows/cards?include_hidden=&include_one_offs=` | The card grid, in cover-rank order, one card per stack | `{cards: [WorkflowCard], one_offs, hidden}`. The two flags are the Workflows Filters panel's *Show hidden workflows* and an unticked *Hide one-offs* (F7); both default false, so the grid a client asks nothing for is unchanged. **They widen what is LISTED, never what is counted**: `one_offs` and `hidden` are taken over the same sets whatever the flags say, so a client can label the checkbox that is letting them in. **The widening belongs here and not in the client** because the grouping runs over exactly the cards the grid lists — a hidden member let back in makes its stack two again, where a client-side filter would draw it beside a cover still declaring `stack_size: 1`. Each card also carries `ghosts` (picture ghosts this library holds for the card's own variants) and `model_ghosts` (VALUES its variants name that the shelf does not hold - a filename or a `*_sha256` digest, so a model missing under both spellings counts 2 and this is not a count of models), which is what the panel's Ghosts row asks about; both are per CARD, not per topology, because a topology can carry several cards and only one of them may hold the ghost. **Neither is a library total.** A picture ghost whose `structural_hash` is null, or whose variant belongs to no card, is attributed to nobody, so these can sum to less than the `picture_ghosts` figure Settings › Privacy shows; the card fields answer "which cards keep something", never "how many ghosts exist". `hidden` is on the card too. **On this route** it is true only for a card `include_hidden` let in, so a client that did not ask never sees it set — but one that did **must mark those cards**, or the checkbox silently mixes them into the grid they were deliberately kept out of. **On `GET /workflows/cards/{workflow_key}` it is always the card's own state**, with no flag involved: the detail route opens a hidden card by design, which is the only way one can be unhidden. **`name` is never null**: the owner's name, else the workflow FILE that runs it without its extension, else `"<model>: <Type> + <post-processing>"` built here (`Krea 2: Text to Image + FaceDetailer`), else `"Untitled workflow"`. The built one takes the first of `BASE_MODEL_KINDS` — derived from `CHECKPOINT_WIDGETS`, so a VAE or a text encoder can never name a card — and names it the way the model shelf does (`model.display_name`, a hub-to-hub join) rather than by its filename stem, which is what turns `realvisxl` into `Krea 2`. `specials` carries the same post-processing the suffix spells, and **null there is not `[]`**: null means the card's document has not been read for it yet, `[]` means it has and the graph has none. Every slot in `models` and `loras` carries `title`, the shelf's name for that file (null where the shelf has not scanned it), and **a client shows `title` in preference to `name`** — the generated name row was built from it, so a chip reading `realvisxl.safetensors` under a row reading `Krea 2` is one model described twice, the pair that drifted in #1416. The suffix is on the generated name only, never appended to a name the owner chose or to a workflow file's. The character-LoRA half of #1454 is deliberately absent: a card does not know which character LoRA was used, and cannot. `type_label` is `type` as ComfyUI spells it (`txt2img` → `Text to Image`), served rather than mirrored so a card's name row and its type chip cannot say one fact in two vocabularies. `covers` are objects, not strings (#1465): `{url, picture_id, thumbnail_width, thumbnail_height, square_crop_x, square_crop_y, square_crop_side}`. `picture_id` is the picture the cover DRAWS, so a client can open it (#1455) without parsing the id back out of `url`, which is a path shape rather than an interface; it rides on the cover rather than in a parallel `cover_ids` list because two lists paired by position are two lists that can come apart. `url` is **API-relative** — an `<img src>` bypasses the client's interceptor, so a consumer prefixes the API base and appends the share token itself — and the rest is the stored face-weighted SQUARE rectangle within that bitmap, under the names `GET /pictures/thumbnails/batch` already uses, so `utils/squareCrop.js` reads a cover with no mapping layer. The crop fields are null until the picture has been processed, and a consumer must then fall back to plain `object-fit: cover` rather than inventing a framing from a missing number. **They are three independently nullable ints, not one optional block**: `render_thumbnail` does write all three together, but nothing in the schema enforces it, so a consumer decides on `square_crop_x`/`_y` and derives `side = min(width, height)` when only that one is missing — which is what `squareCropParams` does, and what the square-mode grid has always done |
-| `GET /api/v1/workflows/cards/{workflow_key}` | One card opened | `{card, notes, hidden, variants: [WorkflowVariant], pins}`. `pins` is `null` when nobody has pinned on the card (the client applies its own default pins) and `[]` when everything is unpinned; the two are different answers. A card's `models` and `loras` each carry `slot_label`, the address `PUT /workflows/{key}/slots` marks |
-| `GET /api/v1/workflows/cards/{workflow_key}/pictures?limit=` | Ids for one card's pictures, newest first | `[int]` |
 
 The writes (v1.12 B4), every one of them `OWNER_ONLY` and every one of them
 raising a `workflows_changed` event (§8) on the way out:
@@ -572,9 +569,10 @@ Six rules the client must not re-derive:
    unreachable ComfyUI. Every group's `runs` goes to zero and nothing is
    submitted — including the groups whose own `reasons` are empty.
 4. **A new run is NOT stacked with the picture it came from** unless the body
-   says `stack: true`. This is where it differs from `POST /comfyui/run_recipe`,
-   which stacks by default: that replays one picture's own graph, so the output
-   genuinely is another take of it, while this runs a card.
+   says `stack: true`. This is where it differs from the retired
+   `POST /comfyui/run_recipe` (#1410), which stacked by default: that replayed
+   one picture's own graph, so the output genuinely was another take of it,
+   while this runs a card.
 5. **`allow_unchecked` is the consent rule and it does something.** Without it
    an uninspectable ComfyUI (`comfyui_unreachable` / `comfyui_not_configured`)
    blocks the batch and nothing is submitted. With it the runs go ahead **and
@@ -886,126 +884,43 @@ the two sides have agreed:
    to draw itself out of its models rather than its pictures would otherwise
    need a second request per model to do it.
 
-**A saved workflow's picture inputs (#1305)** are the one write the view makes,
-and they live on the ComfyUI routes because they belong to the file, not to a
-topology:
+**The file-keyed workflow routes are retired (#1410).** `GET` / `PUT
+/api/v1/comfyui/workflows/{workflow_name}/inputs` (#1305), `GET .../parameters`
+and `PUT .../pins` (#1306), `POST .../run` (#1307), and `POST
+/api/v1/comfyui/run_i2i`, `run_t2i` and `run_recipe` are gone. They addressed a
+workflow by **file name**; a card is content-addressed and carries its own
+defaults, pins, inputs and slots, so the contract for all of it is the card
+routes above plus `POST /api/v1/workflows/run` (§2.2 and §11.2). The hub's
+file-keyed `workflow_picture_input` and `workflow_parameter_pins` tables stop
+being read; the hub is append-only, so they are not dropped.
 
-| Route | Purpose | Response |
-|---|---|---|
-| `GET /api/v1/comfyui/workflows/{workflow_name}/inputs` | How each picture input is filled, and which LoRA slots a run can swap | `{workflow, inputs: [{node_id, title, mode, picture_id, picture_missing}], lora_slots: [{node_id, class_type, field, value, by}]}` |
-| `PUT /api/v1/comfyui/workflows/{workflow_name}/inputs` | Replace that setup, body `{inputs: [{node_id, mode, picture_id?}]}` | the same shape |
-
-`mode` is `selection`, `picker` or `fixed`. The body names every detected input
-exactly once and holds at most one `selection` (400 otherwise). A `fixed` entry
-with a `picture_id` chooses that picture (404 if it is not a kept picture, 409 if
-it is not hashed yet); without one it keeps the picture already stored (400 if
-there is none). `picture_missing` is a Fixed input whose picture is no longer in
-this library. Both are `OWNER_ONLY`: the setup names pictures by id. `lora_slots`
-(#1310) is every LoRA slot a run can swap, `{node_id, class_type, field, value,
-by}`, `by` being `filename` for a core loader and `digest` for a
-ComfyUI-PixlStash one; a stacker's slots share a `node_id` and differ by `field`.
-Empty means the graph has no LoRA loader, and the `PUT` answers with the same
-field.
-
-**A saved workflow's parameters (#1306)** sit beside its inputs, for the same
-reason:
-
-| Route | Purpose | Response |
-|---|---|---|
-| `GET /api/v1/comfyui/workflows/{workflow_name}/parameters` | The form's controls, typed from ComfyUI | `{workflow, readable, typed, comfyui_error, pins_saved, pins: [{node_id, name}], parameters: [{node_id, node_title, class_type, name, kind, value, typed, min, max, step, options, multiline, pinned}]}` |
-| `PUT /api/v1/comfyui/workflows/{workflow_name}/pins` | Replace the pins, body `{pins: [{node_id, name}] \| null}` | `{workflow, pins_saved, pins: [{node_id, name}] \| null}` |
-
-`kind` is `int`, `float`, `seed`, `boolean`, `string`, `choice` or `model`.
-`comfyui_error` set means ComfyUI could not be reached: every parameter's `typed`
-is false, `value` is the file's own and `min`/`max`/`step`/`options` are `null`.
-Top-level `typed` is whether `object_info` was read; it is also false, with no
-error, for a file with nothing to set, which is never sent to ComfyUI.
-`readable: false` is a UI-format file, with no parameters. `pins` is what shows before "All N parameters", in order;
-`null` pins restore the defaults. A seed `value` or `max` can exceed 2^53, which a
-plain JavaScript number rounds. Both are `OWNER_ONLY`: the read makes the server ask the
-owner's ComfyUI.
-
-**Running a saved workflow (#1307)** is one route beside those two:
-
-| Route | Purpose | Response |
-|---|---|---|
-| `POST /api/v1/comfyui/workflows/{workflow_name}/run` | Fill each picture input by its mode and submit | `{status, workflow, prompts: [{picture_id, prompt_id}]}` |
-
-The body is `{picture_ids?, pictures?: [{node_id, picture_id}], caption?,
-values?: [{node_id, name, value}], seed_mode?, seed?, stack?, client_id?,
-set_id?, project_id?, character_id?, adapter_sha256?, lora_node_id?, lora_field?,
-insert_lora_loader?}`. `picture_ids` is the selection: a workflow
-with a Selection input needs at least one and submits **one run per picture**,
-stacking each output with the picture it read (`picture_id` in `prompts`); one
-without refuses a selection and runs once (`picture_id: null`), filing its output
-into the view context instead. Every Picker input must be named once in
-`pictures`; a Fixed input is read from the stored setup and is 409 when its
-picture has left the library. `values` are checked against the untyped
-`/parameters` description, by broad type only (400 on a mismatch; ranges and
-options are ComfyUI's to refuse);
-`seed_mode` is `random` (the default, every sampler re-rolled), `fixed` with a
-`seed`, or `keep`, which leaves the seeds as the file and `values` have them.
-At most 200 selected pictures per request (400 above it), and a picture id that
-is not a kept picture is a 404 naming the ids. `adapter_sha256` (#1310) puts
-that shelf LoRA into **one** slot of `lora_slots`, named by `lora_node_id` and
-`lora_field` when there is more than one (an empty string counts as not sent), and
-written the way its own loader reads it - a filename this ComfyUI lists (matched
-by name, since `object_info` carries no digests), or the digest for a
-ComfyUI-PixlStash loader. It is applied after `values`, so it wins over a
-`lora_name` set there. One slot and not all of them, because a graph chaining two
-LoRAs would otherwise load the chosen one twice: whatever `lora_node_id` and
-`lora_field` leave must be exactly one slot, and a 400 lists the slots when it is
-not (`7 lora_name_1, 7 lora_name_2`) or names the node or field that matched
-nothing. **A workflow with no LoRA loader (#1376)** gets one added, but only
-with `insert_lora_loader: true` - a bare `adapter_sha256` there is a 400 naming
-the flag, naming a slot is a 400 too, and so is the flag without an
-`adapter_sha256`. The surfaces send it only after showing
-the splice from `GET /comfyui/workflows/{workflow_name}/lora-insertion`
-(`OWNER_ONLY`, it asks the owner's ComfyUI): `{workflow, has_lora_loader, plan,
+**Where a LoRA loader would go (#1376)** is the one ComfyUI-file read that
+survives beside the list and the import.
+`GET /api/v1/comfyui/workflows/{workflow_name}/lora-insertion` (`OWNER_ONLY`,
+it asks the owner's ComfyUI) answers `{workflow, has_lora_loader, plan,
 reason}`, `plan` being `{model: {node_id, class_type, output}, clip: … | null,
 rewires: [{node_id, class_type, field, type}], pixlstash_loader}` and `null`
 with a `reason` when no loader can go in (several models or text encoders, a
 second model chain of another kind, a node already loading a LoRA some way of
 its own, a CLIP source that reads the model, no model, a node this ComfyUI
 lacks or that does not say what it hands on, ComfyUI unreachable).
-`has_lora_loader` is `null` for a UI-format file. `pixlstash_loader` says the
-digest loader could be the one inserted, which leaves the outputs unreplayable
-by a later replay of the same recipe; the recipe read reports it `false`, since
-that route never inserts it. `GET /comfyui/pictures/{id}/recipe` carries
-the same `{plan, reason}` as `lora_insertion` when its `lora_slots` is empty. The
-run recomputes the plan rather than trusting one sent back. The loader added is
-`LoraLoader` (`LoraLoaderModelOnly` where nothing reads a CLIP) when this ComfyUI
-lists the file, else `PixlStashAdapterLoader` by digest when that pack is
-installed (never on `run_recipe`, whose variant it would make unreplayable),
-else a 400. A graph already loading a LoRA no slot is seen for (a wired
-`lora_name`, rgthree's stacker) is refused rather than stacked on. The loader is the run's, never written into the stored file.
-Also a 400: a name this ComfyUI does not have, one
-naming several of its files, and a loader that does not enumerate them. A
-ComfyUI that cannot be reached to ask is a 502. A hash the shelf does not have is
-a 404; a checkpoint, VAE, text encoder or engine is a 400 naming the kind (only
-an adapter and an unclassified file are loadable), and no hub attached is a 503. A
-UI-format file is refused as that before the shelf is asked, and a loader class
-this ComfyUI lacks is named as the missing node. A slot the submitted instance
-turns out not to have is a **500**, never a run with the graph's own LoRA. The
-same body works on `POST /comfyui/run_i2i` and `POST /comfyui/run_recipe`, which
-carry their slots on `GET /comfyui/workflows` (per row) and
-`GET /comfyui/pictures/{id}/recipe` respectively. **The list's slots carry no
-`value`**: that route is `ANY_TOKEN` and deliberately readable by share-link
-tokens, and a slot's value is a LoRA filename or digest - the owner's model
-inventory, which `/models/` and `/adapters/` keep from those tokens. The
-owner-only inputs read carries the values. On a replay the
-swap is applied **before** the pre-flight, so a recipe whose own LoRA has left
-this ComfyUI runs when another is put in its place - and is still refused
-without one. Every refusal comes before
-anything is uploaded or submitted. A ComfyUI failure
-partway through a batch answers 200 with `status: "partial"`, the `prompts` that
-did start and an `error`: those runs are queued and importing, so the client
-follows them and says the rest did not start. Each picture is
-uploaded to ComfyUI once per request, named by its id and content, and outputs are
-collected from the detected save nodes and arrive as `picture_imported` (§8),
-with the `prompts` handed to `ComfyUiRunner` for progress. A UI-format file is a
-400. `OWNER_ONLY`, because a Fixed picture comes from the setup rather than the
-body.
+`has_lora_loader` is `null` for a UI-format file, which may carry a loader
+nobody can read. `pixlstash_loader` says the digest loader could be the one
+inserted, which leaves the outputs unreplayable by a later replay of the same
+recipe. `GET /api/v1/comfyui/pictures/{id}/recipe` carries the same `{plan,
+reason}` as `lora_insertion` when its `lora_slots` is empty. A run recomputes
+the plan rather than trusting one sent back, and the loader is the run's, never
+written into the stored file.
+
+**The list's LoRA slots carry no `value`** (#1310). Each row of
+`GET /api/v1/comfyui/workflows` reports `lora_slots` as `{node_id, class_type,
+field, by}`, `by` being `filename` for a core loader and `digest` for a
+ComfyUI-PixlStash one; a stacker's slots share a `node_id` and differ by
+`field`, and an empty list means the graph has no loader. That route is
+`ANY_TOKEN` and deliberately readable by share-link tokens, and a slot's value
+is a LoRA filename or digest - the owner's model inventory, which `/models/`
+and `/adapters/` keep from those tokens. The owner-only card detail read and
+the picture-scoped `GET /api/v1/comfyui/pictures/{id}/recipe` carry the values.
 
 `GET /api/v1/comfyui/workflows` carries `has_selection_input` and `runnable`
 (a save node, in API format). The selection path offers a runnable workflow
@@ -1260,7 +1175,7 @@ Per-type payload specifics (all carry the envelope fields above):
 | `plugin_progress` | Image plugin run progress | `plugin`, `progress`, `total`, `picture_id` | Update `wsPluginProgress` for the plugin progress UI |
 | `vram_oom` | A GPU task ran out of VRAM: emitted before each retry, then once more to close the sequence | `attempt` (the attempt this frame is about, 1-based), `max_attempts`, `gave_up`, `recovered`, `task_type` (diagnostic only) | One keyed notice (`vram-oom`), updated in place by the later frames. Exactly one closing frame: `recovered` (that attempt succeeded) or `gave_up` (the sequence ended without the work). **`gave_up` with `attempt < max_attempts` is an early stop** — the task died of something else, or the app is shutting down — and the SPA promises no later retry for it; only an exhausted sequence says the work will be tried again. The retry frames carry an explicit timeout longer than the backend's pause, or the card would expire between frames and stop coalescing. |
 | `external_moves_pending` | A reference-folder scan queued one or more moves the owner made outside PixlStash for reconciliation (v1.11 Phase 5) | — (no count; the queue is reclassified live, so a number on the wire could already be stale) | Debounced (3s) re-fetch of `GET /moves/pending`, so a burst of scans settling around the same time re-fetches once |
-| `workflows_changed` | A workflow card changed (v1.12 B4): a workflow file imported or dropped in the watched inbox, a card named/annotated/hidden, its parameter defaults, pins or picture inputs written, its LoRA slots re-marked, a stack written, or a saved recipe written | `keys: string[]` (the card keys touched; may be empty), `reason: "imported" \| "changed" \| "stacks" \| "recipes"` | **Nothing listens yet.** F1b (#1404) put the grid on `/workflows`, so the screen now exists, but it re-reads on its own gestures rather than on this event; live refresh is F2's (#1405). So this row is still the contract a client will be written against rather than behaviour that has shipped. When it is: re-fetch `GET /workflows/cards` (or the one card, when `keys` names it). **Deliberately carries no card**: a card's counts, cover strip, rank and stack are computed per request across the whole vault, so anything on the wire would be re-read anyway. `reason` is a hint about what moved, not a contract — the value set is a closed allowlist on the backend (`WORKFLOW_CHANGE_REASONS`, module level in `ws/broadcaster.py`) that **degrades an unknown value to `changed`** rather than rejecting it, so a client must treat any value as "look again" |
+| `workflows_changed` | A workflow card changed (v1.12 B4): a workflow file imported or dropped in the watched inbox, a card named/annotated/hidden, its parameter defaults, pins or picture inputs written, its LoRA slots re-marked, a stack written, or a saved recipe written | `keys: string[]` (the card keys touched; may be empty), `reason: "imported" \| "changed" \| "stacks" \| "recipes"` | **Nothing listens yet.** F1b (#1404) put the grid on `/workflows`, so the screen now exists, but it re-reads on its own gestures rather than on this event; live refresh is F2's (#1405). So this row is still the contract a client will be written against rather than behaviour that has shipped. When it is: re-fetch `GET /workflows` (or the one card, when `keys` names it). **Deliberately carries no card**: a card's counts, cover strip, rank and stack are computed per request across the whole vault, so anything on the wire would be re-read anyway. `reason` is a hint about what moved, not a contract — the value set is a closed allowlist on the backend (`WORKFLOW_CHANGE_REASONS`, module level in `ws/broadcaster.py`) that **degrades an unknown value to `changed`** rather than rejecting it, so a client must treat any value as "look again" |
 | `snapshot_created` / `snapshot_deleted` | Vault snapshot created or deleted | snapshot info (id, kind, …) | Refresh the snapshots panel |
 | `restore_started` / `restore_completed` / `restore_failed` | Vault restore lifecycle | restore info | Drive the restore progress/result UI |
 
@@ -1567,16 +1482,16 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
 
   `unchecked_fields > 0` means the check was partial (a field ComfyUI does not enumerate, or a `remote` combo it fills lazily) and must not read as a clean bill of health. It is **not** the same state as `checked:false` and must not be gated the same way.
 
-- **Run** `POST /api/v1/comfyui/run_recipe` with `{picture_id, seed_mode, seed?, client_id?, stack?, allow_unchecked?}`, or `POST /api/v1/comfyui/run_i2i` for template mode (which now takes the same `seed_mode`/`seed` pair as `run_t2i`). Both return `{status, prompts:[{picture_id, prompt_id}]}`; the SPA passes `prompts` to `ComfyUiRunner` so its ComfyUI-WebSocket progress tracking picks the run up.
+- **Run** `POST /api/v1/workflows/run` (§11.1). The per-picture replay routes this step used to name — `POST /api/v1/comfyui/run_recipe` and `POST /api/v1/comfyui/run_i2i` — were retired in #1410; the consent and seed rules below are unchanged and are now that route's. It returns `{status, prompts:[{picture_id, prompt_id}]}`; the SPA passes `prompts` to `ComfyUiRunner` so its ComfyUI-WebSocket progress tracking picks the run up.
 
-**The client never sends a graph.** `run_recipe` re-extracts the prompt chunk from the picture's file on every call. That keeps the picture-scoped authz declaration a complete access control for the endpoint, and it means a stale client cannot replay something the file no longer contains.
+**The client never sends a graph.** The run route re-extracts the prompt chunk from the picture's file on every call. That keeps the picture-scoped authz declaration a complete access control for the endpoint, and it means a stale client cannot replay something the file no longer contains.
 
 **But the graph is still untrusted input, and the contract reflects that** (review finding R3, CWE-829). It is authored by whoever made the image file; replaying it executes it on the owner's ComfyUI, bounded only by their installed node packs. The owner is the trust anchor, so the two sides split the job:
 
-- **Server side.** `run_recipe` returns **400** when `preflight.checked` is false and the body carries no `allow_unchecked: true`. The refusal is enforced on the server, not only in the dialog — a UI-only gate is not a gate. `allow_unchecked` is accepted as `allow_unchecked` or `allowUnchecked`, matching the existing `client_id`/`clientId` pair, and an accepted override is logged with the node classes that ran.
+- **Server side.** The run returns **400** when `preflight.checked` is false and the body carries no `allow_unchecked: true`. The refusal is enforced on the server, not only in the dialog — a UI-only gate is not a gate. `allow_unchecked` is accepted as `allow_unchecked` or `allowUnchecked`, matching the existing `client_id`/`clientId` pair, and an accepted override is logged with the node classes that ran.
 - **Client side.** The SPA must render `node_classes` before the run button is usable, must send `allow_unchecked` **only** for a run the user explicitly acknowledged (never as a constant, never when `preflight.checked` is true), and must surface `source_is_imported` as information rather than a gate (it is the Source row in the disclosure; it was a banner until 2026-08-06, which fired on the common watched-folder case). The gate is deliberately narrow: an acknowledgement in front of a common state becomes a reflex and stops protecting the rare one. **The v1.12 Run popup goes one step further and never sends `allow_unchecked` at all** — an uninspectable ComfyUI blocks the run, and the backend refuses independently — so `allow_unchecked` now has no caller in this app and remains for programmatic ones.
 
-**Seed ranges differ between the routes** — 32-bit for the template paths, 64-bit for replay (the shipped Flux2 Klein template's own `noise_seed` exceeds 2³²). The dialog caps its input at `Number.MAX_SAFE_INTEGER` regardless, because above 2⁵³ a JavaScript number cannot carry the value the user typed.
+**A fixed seed takes the full 64-bit range** (the shipped Flux2 Klein template's own `noise_seed` exceeds 2³²; the retired template paths checked 32 bits). The dialog caps its input at `Number.MAX_SAFE_INTEGER` regardless, because above 2⁵³ a JavaScript number cannot carry the value the user typed.
 
 ---
 

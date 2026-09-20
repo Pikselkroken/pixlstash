@@ -3,12 +3,12 @@
 // **Card level, not topology level.** The retired shelf opened at topology and
 // this module fronted its reads; F1b (#1404) deleted the shelf and, with it,
 // the last caller of `listWorkflows`, `listWorkflowVariants`,
-// `listWorkflowPictures` and `getWorkflowGraph`. They are gone from here
-// rather than kept warm for a screen that does not exist: the ROUTES stay, so
-// F6's Export and F7's pictures link re-add the three lines they need against
-// whatever shape those steps actually want. `exportWorkflow`,
-// `duplicateWorkflow`, `deleteWorkflowFile` and `dissolveStack` at the foot of
-// this file are that, added for the grid's own verb menu (#1455).
+// `listWorkflowPictures` and `getWorkflowGraph`. B9 (#1410) then deleted the
+// topology routes themselves and moved the cards onto `/workflows`, so the
+// grid, the detail and the picture ids are what this module fronts.
+// `exportWorkflow`, `duplicateWorkflow`, `deleteWorkflowFile` and
+// `dissolveStack` at the foot of this file were added for the grid's own verb
+// menu (#1455).
 //
 // Every route here is owner-only: the counts are read across the whole vault,
 // so a scoped session gets 403 rather than a narrowed answer.
@@ -61,7 +61,7 @@ export async function listWorkflowCards({
   if (includeHidden) params.set("include_hidden", "true");
   if (includeOneOffs) params.set("include_one_offs", "true");
   const query = params.size ? `?${params}` : "";
-  const body = await unwrap(apiClient.get(`/workflows/cards${query}`));
+  const body = await unwrap(apiClient.get(`/workflows${query}`));
   return {
     cards: Array.isArray(body?.cards) ? body.cards : [],
     one_offs: body?.one_offs ?? 0,
@@ -77,9 +77,7 @@ export async function listWorkflowCards({
  * @returns {Promise<{card: Object, notes: ?string, hidden: boolean, variants: Array<Object>, pins: ?Array<Object>}>}
  */
 export async function getWorkflowCard(workflowKey) {
-  return unwrap(
-    apiClient.get(`/workflows/cards/${encodeURIComponent(workflowKey)}`),
-  );
+  return unwrap(apiClient.get(`/workflows/${encodeURIComponent(workflowKey)}`));
 }
 
 /**

@@ -1449,29 +1449,9 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Delete workflow; DELETE blocked for READ tokens; owner only",
     ),
-    ("GET", "/api/v1/comfyui/workflows/{workflow_name}/inputs"): RoutePolicy(
-        _OWNER,
-        justification="Workflow setup; names the Fixed pictures by id; owner only",
-    ),
-    ("PUT", "/api/v1/comfyui/workflows/{workflow_name}/inputs"): RoutePolicy(
-        _OWNER,
-        justification="Workflow setup; PUT blocked for READ tokens; owner only",
-    ),
-    ("GET", "/api/v1/comfyui/workflows/{workflow_name}/parameters"): RoutePolicy(
-        _OWNER,
-        justification="Workflow parameters; reaches the owner's ComfyUI; owner only",
-    ),
     ("GET", "/api/v1/comfyui/workflows/{workflow_name}/lora-insertion"): RoutePolicy(
         _OWNER,
         justification="LoRA loader insertion; reaches the owner's ComfyUI; owner only",
-    ),
-    ("PUT", "/api/v1/comfyui/workflows/{workflow_name}/pins"): RoutePolicy(
-        _OWNER,
-        justification="Workflow pins; PUT blocked for READ tokens; owner only",
-    ),
-    ("POST", "/api/v1/comfyui/workflows/{workflow_name}/run"): RoutePolicy(
-        _OWNER,
-        justification="Run a workflow; reads Fixed pictures across the library; owner only",
     ),
     ("POST", "/api/v1/comfyui/abort"): RoutePolicy(
         _OWNER,
@@ -1481,21 +1461,12 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Import workflow; POST blocked for READ tokens; owner only",
     ),
-    ("POST", "/api/v1/comfyui/run_i2i"): RoutePolicy(
-        _PIC, body_ids="picture_ids"
-    ),  # loops enforce_picture_scope over body picture_ids
-    ("POST", "/api/v1/comfyui/run_t2i"): RoutePolicy(
-        _PIC, body_ids="source_picture_id"
-    ),  # NEEDS REVIEW: single optional body id, enforce_picture_scope only when present
     ("GET", "/api/v1/comfyui/pictures/{picture_id}/workflow"): RoutePolicy(
         _PIC, id_param="picture_id"
     ),
     ("GET", "/api/v1/comfyui/pictures/{picture_id}/recipe"): RoutePolicy(
         _PIC, id_param="picture_id"
     ),
-    ("POST", "/api/v1/comfyui/run_recipe"): RoutePolicy(
-        _PIC, body_ids="picture_id"
-    ),  # required single body id; re-extracts the graph from the scoped picture
     # ── snapshots.py (all require_unscoped_owner) ───────────────────────────
     ("GET", "/api/v1/snapshots"): RoutePolicy(
         _OWNER, justification="require_unscoped_owner"
@@ -1727,30 +1698,21 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     # ── workflows.py (workflow implementation plan §F1/§F2, the library view) ─
     # OWNER_ONLY throughout, and it is a decision rather than a default. The
-    # list's picture counts are `topology_activity`, which reads every
-    # non-deleted picture in the vault and groups them: a picture-, set- or
-    # project-scoped token holding it would learn the size of the whole library,
-    # one workflow at a time, which is the whole-library disclosure class §16
-    # exists for. The ids route is the same disclosure in a narrower shape --
-    # picture ids the caller's scope may not contain -- and the two hub reads
-    # beside them return the model filenames a graph names, which on a real
-    # shelf name people. Nothing here is a host path or a host capability, so
-    # none of it climbs to the §16.3 tier; nothing here mutates either, so there
-    # is no write side to declare yet.
-    ("GET", "/api/v1/workflows"): RoutePolicy(_OWNER),
-    ("GET", "/api/v1/workflows/{topology_hash}/variants"): RoutePolicy(_OWNER),
-    ("GET", "/api/v1/workflows/{topology_hash}/pictures"): RoutePolicy(_OWNER),
-    ("GET", "/api/v1/workflows/recipes/{structural_hash}/graph"): RoutePolicy(_OWNER),
-    # The card routes (v1.12 B3). Same tier and the same reason: the grid is
-    # `variant_activity` and a `ROW_NUMBER()` window over every non-deleted
+    # grid (v1.12 B3, on `GET /workflows` since B9 retired the topology list)
+    # is `variant_activity` and a `ROW_NUMBER()` window over every non-deleted
     # picture in the vault, so it hands out whole-library counts AND the
     # picture ids of every card's cover strip; the detail adds the parameter
     # values the owner's best pictures were made with, read out of stored
-    # instance documents. Nothing here is a host path or a host capability, and
-    # nothing here mutates.
-    ("GET", "/api/v1/workflows/cards"): RoutePolicy(_OWNER),
-    ("GET", "/api/v1/workflows/cards/{workflow_key}"): RoutePolicy(_OWNER),
-    ("GET", "/api/v1/workflows/cards/{workflow_key}/pictures"): RoutePolicy(_OWNER),
+    # instance documents; and the hub read beside them returns the model
+    # filenames a graph names, which on a real shelf name people. A picture-,
+    # set- or project-scoped token holding any of it would learn the size of
+    # the whole library, one workflow at a time, which is the whole-library
+    # disclosure class §16 exists for. Nothing here is a host path or a host
+    # capability, so none of it climbs to the §16.3 tier; nothing here mutates.
+    ("GET", "/api/v1/workflows"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/workflows/{workflow_key}"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/workflows/{workflow_key}/pictures"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/workflows/recipes/{structural_hash}/graph"): RoutePolicy(_OWNER),
     # The card writes (v1.12 B4). OWNER_ONLY throughout and, unlike the reads
     # above it, this tier is not even a judgement about disclosure: every one
     # of them is the owner editing their own library - what a workflow is
@@ -1761,7 +1723,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # PATCH, PUT and POST before the gate reads a declaration.
     #
     # Two of them answer with the card they changed, which is the same
-    # whole-library disclosure `GET /workflows/cards/{workflow_key}` is owner
+    # whole-library disclosure `GET /workflows/{workflow_key}` is owner
     # only for, and `PUT .../slots` is the one that mutates identity: it
     # re-keys every card of a topology and carries the owner's attributes
     # across. Nothing here is a host path or a host capability.

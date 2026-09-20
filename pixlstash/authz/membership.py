@@ -443,12 +443,12 @@ def enforce_project_filter_scope(server, request: Request) -> None:
     * **Body / form.** ``POST /pictures/import``, ``POST /pictures/import/staging``,
       ``POST /reviews``, ``POST /tag_suggestions/bulk-accept`` and
       ``POST /tag_suggestions/scan`` declare a project in their payload, and
-      ``PATCH /pictures/project``, ``POST /characters``, ``POST /picture_sets``,
-      ``PATCH /picture_sets/{id}`` and ``POST /comfyui/run_t2i`` read one out of an
-      untyped ``payload: dict`` body. **The second list is hand-made and cannot be
+      ``PATCH /pictures/project``, ``POST /characters``, ``POST /picture_sets``
+      and ``PATCH /picture_sets/{id}`` read one out of an untyped
+      ``payload: dict`` body. **The second list is hand-made and cannot be
       shown complete** - a ``dict`` annotation declares no keys, so nothing can
       enumerate what those handlers read; treat it as "the ones we know about",
-      not "the ones there are". None of the ten is reachable by a resource-scoped
+      not "the ones there are". None of the nine is reachable by a resource-scoped
       token today, but only because a resource-scoped token can only be minted
       ``READ`` (§16.2 item 4) and the auth middleware blocks a non-``GET`` for a
       ``READ`` token unless the path is in ``auth.READ_SAFE_POST_PATHS`` - which

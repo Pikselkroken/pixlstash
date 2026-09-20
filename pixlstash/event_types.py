@@ -33,6 +33,6 @@ class EventType(Enum):
     # A workflow card changed: imported, edited, re-keyed by a slot-mark flip,
     # restacked, or a saved recipe written (v1.12 B4). A "look again" signal
     # like EXTERNAL_MOVES_PENDING - it names the keys it touched and why, and
-    # the client re-fetches GET /workflows/cards rather than trusting a card
+    # the client re-fetches GET /workflows rather than trusting a card
     # carried on the wire.
     CHANGED_WORKFLOWS = auto()

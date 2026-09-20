@@ -1,7 +1,7 @@
 """Detection of a workflow's inputs and outputs (#1302), import as-is (#1303),
 and the watched workflows folder (#1304)."""
 
-import asyncio
+import copy
 import json
 import os
 import pathlib
@@ -317,27 +317,24 @@ def _request(client_id=None):
     return SimpleNamespace(state=SimpleNamespace(origin_client_id=client_id))
 
 
-def test_run_i2i_refuses_a_migrated_workflow_without_an_image_binding(
-    tmp_path, monkeypatch
-):
-    # The #1350 case, kept by its bindings: a caption-only workflow with a fixed
-    # reference LoadImage. Detection would fill that LoadImage; the migrated
-    # bindings say the selected picture never had a place in this graph.
-    graph = _t2i_graph()
-    graph["2"]["inputs"]["text"] = "{{caption}}"
-    graph["7"] = _node("LoadImage", image="pose.png")
-    migrated, changed = workflow_bindings.migrate_placeholders(graph)
-    assert changed
-    (tmp_path / "fixed.json").write_text(json.dumps(migrated), encoding="utf-8")
-    monkeypatch.setattr(comfyui_module, "_workflow_dirs", lambda: [("user", tmp_path)])
+def _fill_run_inputs(workflow, image, caption):
+    """What the retired run routes did with a graph's bindings (#1410).
 
-    endpoint = _route(comfyui_module.create_router(MagicMock()), "/comfyui/run_i2i")
-    with pytest.raises(HTTPException) as refused:
-        asyncio.run(
-            endpoint(MagicMock(), {"workflow_name": "fixed", "picture_ids": [1]})
-        )
-    assert refused.value.status_code == 400
-    assert "no picture input" in refused.value.detail
+    ``routes/comfyui._fill_run_inputs`` was deleted with ``run_i2i``/``run_t2i``;
+    the behaviour under test here was always ``workflow_bindings``', so this is
+    the two calls it wrapped and nothing else. A binding that does not resolve
+    raises ``BindingError`` rather than the route's 400.
+    """
+    instance = copy.deepcopy(workflow)
+    workflow_bindings.fill(
+        instance,
+        workflow_bindings.run_targets(workflow),
+        {
+            workflow_bindings.IMAGE: image,
+            workflow_bindings.CAPTION: caption or None,
+        },
+    )
+    return instance
 
 
 def test_migration_binds_tokens_and_restores_neutral_values():
@@ -376,7 +373,7 @@ def test_migration_binds_tokens_and_restores_neutral_values():
         b for b in migrated[workflow_bindings.BINDINGS_KEY] if not b["recovered"]
     ]
     assert template["template"] == "photo of {{caption}}, sharp"
-    filled = comfyui_module._fill_run_inputs(migrated, "up.png", "a cat")
+    filled = _fill_run_inputs(migrated, "up.png", "a cat")
     assert filled["3"]["inputs"]["text"] == "photo of a cat, sharp"
     assert filled["2"]["inputs"]["text"] == "a cat"
     assert filled["7"]["inputs"]["image"] == "up.png"
@@ -586,11 +583,11 @@ def test_two_picture_inputs_fill_nothing_and_ui_files_are_not_filled():
 def test_run_fill_keeps_the_prompt_when_no_caption_is_given():
     graph = _t2i_graph()
     graph["7"] = _node("LoadImage", image="a.png")
-    filled = comfyui_module._fill_run_inputs(graph, "upload.png", "")
+    filled = _fill_run_inputs(graph, "upload.png", "")
     assert filled["7"]["inputs"]["image"] == "upload.png"
     assert filled["2"]["inputs"]["text"] == "a cat"
     assert graph["7"]["inputs"]["image"] == "a.png"
-    filled = comfyui_module._fill_run_inputs(graph, None, "a dog")
+    filled = _fill_run_inputs(graph, None, "a dog")
     assert filled["2"]["inputs"]["text"] == "a dog"
     assert filled["3"]["inputs"]["text"] == "blurry"
 
@@ -600,9 +597,8 @@ def test_a_binding_that_no_longer_resolves_is_refused():
     graph[workflow_bindings.BINDINGS_KEY] = [
         {"role": "image", "node": "9", "path": ["9", "inputs", "image"]}
     ]
-    with pytest.raises(HTTPException) as refused:
-        comfyui_module._fill_run_inputs(graph, "upload.png", "")
-    assert refused.value.status_code == 400
+    with pytest.raises(workflow_bindings.BindingError):
+        _fill_run_inputs(graph, "upload.png", "")
     # A path that is not a list must not index the document as a key.
     targets = {"image": [{"path": "1", "template": None}], "caption": []}
     with pytest.raises(workflow_bindings.BindingError):
@@ -621,7 +617,7 @@ def test_two_positive_prompts_fill_neither():
     graph["4"]["inputs"]["positive"] = ["9", 0]
     assert detect_workflow_io(graph).positive_prompts == ("2", "8")
     assert workflow_bindings.run_targets(graph)["caption"] == []
-    filled = comfyui_module._fill_run_inputs(graph, None, "a dog")
+    filled = _fill_run_inputs(graph, None, "a dog")
     assert filled["8"]["inputs"]["text"] == "oil painting"
 
 
@@ -629,9 +625,9 @@ def test_a_string_holding_both_tokens_gets_both_values():
     graph = _t2i_graph()
     graph["2"]["inputs"]["text"] = "file {{image_path}} of {{caption}}"
     migrated, _ = workflow_bindings.migrate_placeholders(graph)
-    filled = comfyui_module._fill_run_inputs(migrated, "up.png", "a cat")
+    filled = _fill_run_inputs(migrated, "up.png", "a cat")
     assert filled["2"]["inputs"]["text"] == "file up.png of a cat"
-    filled = comfyui_module._fill_run_inputs(migrated, "up.png", "")
+    filled = _fill_run_inputs(migrated, "up.png", "")
     assert filled["2"]["inputs"]["text"] == "file up.png of "
 
 
@@ -1212,29 +1208,3 @@ def test_the_list_says_which_workflows_the_selection_pill_may_offer(
         # A loader detection misses keeps its binding.
         "custom.json": True,
     }
-
-
-def test_run_i2i_refuses_a_workflow_with_no_selection_input(tmp_path, monkeypatch):
-    (tmp_path / "edit.json").write_text(
-        json.dumps(_two_input_graph()), encoding="utf-8"
-    )
-    monkeypatch.setattr(comfyui_module, "_workflow_dirs", lambda: [("user", tmp_path)])
-    stored = {
-        "edit.json": [
-            {"node_id": "76", "mode": PICKER, "pixel_sha": None},
-            {"node_id": "81", "mode": PICKER, "pixel_sha": None},
-        ]
-    }
-    monkeypatch.setattr(comfyui_module, "input_modes_by_workflow", lambda *_: stored)
-    router = comfyui_module.create_router(MagicMock())
-    endpoint = next(
-        route.endpoint
-        for route in router.routes
-        if getattr(route, "path", None) == "/comfyui/run_i2i"
-    )
-    with pytest.raises(HTTPException) as refused:
-        asyncio.run(
-            endpoint(MagicMock(), {"workflow_name": "edit", "picture_ids": [1]})
-        )
-    assert refused.value.status_code == 400
-    assert "selection" in refused.value.detail

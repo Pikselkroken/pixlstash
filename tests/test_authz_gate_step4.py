@@ -16,7 +16,7 @@ Two layers:
   ``token_scope`` injected by a tiny scope-setter dependency. This proves the
   gate's Step-4 contract in isolation (no auth middleware), which is the ONLY way
   to exercise the *latent* routes whose scoped tokens the auth middleware blocks
-  today: the ``body_ids`` batch routes, ``run_t2i``'s single/optional body id, and
+  today: the ``body_ids`` batch routes, a single/optional scalar body id, and
   the ``tag_suggestions`` ``id_resolver`` routes (§N4). It also proves the
   ``SCOPED_LIST`` unaudited-leaks-nothing rule and the ``resolved_inline`` (§N3)
   skip.
@@ -213,9 +213,15 @@ def test_body_ids_batch_checks_every_id():
     assert r.status_code == 200, r.text
 
 
-def test_body_ids_single_optional_scalar_run_t2i():
-    """§N6: run_t2i's ``source_picture_id`` is a single, optional scalar - the gate
-    tolerates absent (no-op) and checks a present one."""
+def test_body_ids_single_optional_scalar():
+    """§N6: a ``body_ids`` field may be a single, optional scalar - the gate
+    tolerates absent (no-op) and checks a present one.
+
+    No declared route uses this shape since #1410 retired ``run_t2i``, which is
+    the reason it is exercised on a decoy: the gate's handling has to keep
+    working for the next declaration that needs it, and nothing else would
+    catch it going away.
+    """
     registry = {
         ("POST", "/api/v1/step4-decoy/t2i"): RoutePolicy(
             AccessPolicy.PICTURE_SCOPED, body_ids="source_picture_id"

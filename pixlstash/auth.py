@@ -247,20 +247,12 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/users/me/shared-resource-ids",
         "/api/v1/users/me/token",
         "/api/v1/workflows",
-        # Already refused at runtime by the `/api/v1/workflows/` prefix below,
-        # and listed here anyway: the rule this frozenset is checked against is
-        # arithmetic over the registry (every untemplated owner-class GET), not
-        # "every one a prefix does not already happen to catch". An exception
-        # for prefix-covered paths would put the judgement back in, and the
-        # next such route would be a review's job to notice rather than the
-        # build's.
-        "/api/v1/workflows/cards",
     }
 )
 
 # The templated half of the same belt. A GET whose path starts with one of these
 # is refused to every scoped token, so a templated owner-class route such as
-# ``/workflows/{topology_hash}/variants`` survives the gate rollback too. A
+# ``/workflows/{workflow_key}/pictures`` survives the gate rollback too. A
 # prefix may only stand for routes that are ALL owner-class GETs:
 # ``tests/test_architecture_guardrails.py::
 # test_read_blocked_get_prefixes_cover_only_owner_class_gets`` fails the build
@@ -270,8 +262,8 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
 # templated owner-class GET that no prefix covers.
 READ_BLOCKED_GET_PREFIXES: tuple[str, ...] = (
     "/api/v1/adapters/",
-    # The workflow list itself (no trailing slash) stays ANY_TOKEN; what sits
-    # under it is a file's setup, which names pictures by id.
+    # The workflow list itself (no trailing slash) stays ANY_TOKEN; the only
+    # GET under it reaches the owner's ComfyUI to plan a LoRA insertion.
     "/api/v1/comfyui/workflows/",
     "/api/v1/dedup/",
     "/api/v1/model-folders/",

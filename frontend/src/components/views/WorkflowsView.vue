@@ -759,7 +759,7 @@ const watchedPath = computed(
 // one the reader would have found first anyway.
 //
 // **It can only reach the cards the GRID lists, and that is not every card.**
-// `GET /workflows/cards` leaves out the hidden ones and the one-offs (under
+// `GET /workflows` leaves out the hidden ones and the one-offs (under
 // three pictures, unrated, not imported, no saved recipe) — which is the
 // ordinary state of a workflow used once, and exactly when "what made this?"
 // is worth asking. A stack is one card here too, grouped by `core_hash`, which
