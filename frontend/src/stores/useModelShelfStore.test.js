@@ -2924,19 +2924,26 @@ describe("the workflow sets", () => {
     return store;
   }
 
-  it("counts a tray's models as actionable, hidden from the row list or not", async () => {
+  it("only counts a tray's models as actionable while its tray is open", async () => {
     const store = await shelfWithAHiddenCompanion();
-    expect([...store.setGridModelIds].sort()).toEqual([1, 2]);
+    expect([...store.setGridModelIds].sort()).toEqual([1]);
 
     store.setFilters({ support: false });
     expect(store.visibleRows.map((r) => r.id)).toEqual([1]);
-    // Still on the card, so still something a verb can be aimed at.
+    // Open the card: its hidden companion is now visibly represented in the
+    // tray and is safe to select.
+    store.toggleSet("model:1");
     expect([...store.setGridModelIds].sort()).toEqual([1, 2]);
+
+    // Closing it removes the only representation of the companion again.
+    store.toggleSet("model:1");
+    expect([...store.setGridModelIds].sort()).toEqual([1]);
   });
 
   it("hands the verbs a model picked off a card the row list is hiding", async () => {
     const store = await shelfWithAHiddenCompanion();
     store.setFilters({ support: false });
+    store.toggleSet("model:1");
     store.toggleSelected(2);
 
     // `selectedRows` is built from `visibleRows`, which does not hold it - so
@@ -2957,6 +2964,7 @@ describe("the workflow sets", () => {
     // something the reader can SEE, and off the grid they cannot see it.
     const store = await shelfWithAHiddenCompanion();
     store.setFilters({ support: false });
+    store.toggleSet("model:1");
     store.toggleSelected(2);
     expect(store.selectedRows).toHaveLength(1);
 
@@ -3072,6 +3080,7 @@ describe("the workflow sets", () => {
   it("answers Select all shown with the grid's models, on the grid", async () => {
     const store = await shelfWithAHiddenCompanion();
     store.setFilters({ support: false });
+    store.toggleSet("model:1");
 
     store.selectVisible();
     expect([...store.selectedIds].sort()).toEqual([1, 2]);

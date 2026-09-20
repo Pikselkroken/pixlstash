@@ -1624,15 +1624,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   });
 
   /**
-   * Every model the set grid can act on: the cards' base models and their trays.
+   * Every model the set grid can show in an OPEN tray, as well as its card heads.
    *
    * **Not the same set as `shownModelIds`, which is why it exists.** A
    * combination survives the `Show` narrowing when ANY of its members is visible
    * and is then drawn WHOLE, so a tray routinely holds files the row list is
-   * hiding - untick Adapters and a checkpoint's card still lists the LoRAs that
-   * ran with it. Those are on screen, the reader can point at them, and without
-   * this the verb bar would take the click and then show nothing, because
-   * `selectedRows` is built from `visibleRows`.
+   * hiding - untick Adapters and a checkpoint's OPEN card still lists the
+   * LoRAs that ran with it. Those are on screen, the reader can point at them,
+   * and without this the verb bar would take the click and then show nothing,
+   * because `selectedRows` is built from `visibleRows`.
    *
    * Intersected with `rows` because a verb writes a SHELF ROW: a combination can
    * name a model from a block this session has never fetched, and there is
@@ -1645,6 +1645,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     const known = new Set(rows.value.map((row) => row.id));
     const ids = new Set();
     for (const group of setGroupList.value) {
+      // A closed tray is not on screen. Keeping all its members here made
+      // Select all and the verb bar reach files with no selected representation.
+      if (group.key !== openSetKey.value) {
+        if (known.has(group.head?.id)) ids.add(group.head.id);
+        continue;
+      }
       for (const model of group.models ?? []) {
         if (known.has(model.id)) ids.add(model.id);
       }
@@ -1959,6 +1965,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * be recovered from what is selected afterwards.
    */
   const anchorId = ref(null);
+  // A set-grid head occurs once as a card and once in its open tray. Its model
+  // id alone cannot say which occurrence established a range anchor.
+  const anchorOccurrence = ref(null);
 
   function isSelected(id) {
     return selectedIds.value.has(id);
@@ -1977,6 +1986,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     else next.add(id);
     selectedIds.value = next;
     anchorId.value = id;
+    anchorOccurrence.value = id;
   }
 
   /**
@@ -2022,7 +2032,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return row?.memberIds?.length ? row.memberIds : [id];
   }
 
-  function selectFromClick(id, { ctrl = false, shift = false } = {}, order) {
+  function selectFromClick(
+    id,
+    { ctrl = false, shift = false } = {},
+    order,
+    occurrence = id,
+  ) {
     const behind = modelsBehind(id);
     if (ctrl) {
       // Toggled as a unit: a run is in the selection or it is not.
@@ -2034,11 +2049,17 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       }
       selectedIds.value = next;
       anchorId.value = id;
+      anchorOccurrence.value = occurrence;
       return;
     }
     const sequence = Array.isArray(order) ? order : [];
-    const from = sequence.indexOf(anchorId.value);
-    const to = sequence.indexOf(id);
+    const idOf = (item) => (typeof item === "object" ? item.id : item);
+    const occurrenceOf = (item) =>
+      typeof item === "object" ? item.occurrence : item;
+    const from = sequence.findIndex(
+      (item) => occurrenceOf(item) === anchorOccurrence.value,
+    );
+    const to = sequence.findIndex((item) => occurrenceOf(item) === occurrence);
     if (shift && from >= 0 && to >= 0) {
       const [start, end] = from <= to ? [from, to] : [to, from];
       // An OPEN run is in the sequence member by member, so its cover must
@@ -2047,7 +2068,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       // its third, through the cover. A CLOSED run has only its cover in the
       // sequence and still expands to the whole thing, which is what makes a
       // range over collapsed rows take whole runs.
-      const drawn = new Set(sequence);
+      const drawn = new Set(sequence.map(idOf));
       const withinRange = (rowId) => {
         const behind = modelsBehind(rowId);
         return behind.length > 1 &&
@@ -2058,12 +2079,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       // The anchor stays where it was: dragging a range out and back with
       // repeated Shift+clicks has to measure from the same end each time.
       selectedIds.value = new Set(
-        sequence.slice(start, end + 1).flatMap(withinRange),
+        sequence.slice(start, end + 1).map(idOf).flatMap(withinRange),
       );
       return;
     }
     selectedIds.value = new Set(behind);
     anchorId.value = id;
+    anchorOccurrence.value = occurrence;
   }
 
   /**
@@ -2089,11 +2111,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       drawn.flatMap((row) => row.memberIds ?? [row.id]),
     );
     anchorId.value = drawn[0]?.id ?? null;
+    anchorOccurrence.value = anchorId.value;
   }
 
   function clearSelection() {
     if (selectedIds.value.size) selectedIds.value = new Set();
     anchorId.value = null;
+    anchorOccurrence.value = null;
   }
 
   /**
@@ -2496,6 +2520,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     newIds.value = new Set();
     selectedIds.value = new Set();
     anchorId.value = null;
+    anchorOccurrence.value = null;
     loaded.value = false;
     error.value = "";
     loading.value = false;

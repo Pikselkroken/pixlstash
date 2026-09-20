@@ -397,6 +397,45 @@ describe("the cards", () => {
       name: "sdxl_vae",
     });
   });
+
+  it("moves one list-tray row at a time even under a multi-column card grid", async () => {
+    // Make the outer grid four columns wide. The list tray remains one column,
+    // which is the mismatch that used to make Down skip its members.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor() {}
+        observe(element) {
+          Object.defineProperty(element, "clientWidth", {
+            configurable: true,
+            value: 1000,
+          });
+        }
+        disconnect() {}
+      },
+    );
+    try {
+      const { wrapper, store } = await mountGrid({
+        rows: [row(1, "realvisXL_v5")],
+        support: [row(2, "sdxl_vae", "vae"), row(3, "clip", "text_encoder")],
+        combinations: [combination("1,2,3", [CKPT, VAE, LORA])],
+      });
+      store.toggleSet("model:1");
+      store.setView({ trayView: "list" });
+      await wrapper.vm.$nextTick();
+
+      const grid = wrapper.find('[role="treegrid"]');
+      await grid.trigger("keydown", { key: "ArrowDown" });
+      await grid.trigger("keydown", { key: "ArrowDown" });
+      await grid.trigger("keydown", { key: "Enter" });
+
+      expect(wrapper.emitted("works-with")[0][0]).toMatchObject({
+        name: "sdxl_vae",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe("the models no recipe names", () => {
@@ -573,6 +612,28 @@ describe("selection and the verbs", () => {
     expect([...store.selectedIds]).toEqual([1]);
     await grid.trigger("keydown", { key: "ArrowDown", shiftKey: true });
     expect([...store.selectedIds].sort()).toEqual([1, 2]);
+  });
+
+  it("measures a Shift range from the clicked tray occurrence, not its card", async () => {
+    // A occurs both as the first card and the first tray row. B and C are
+    // visible cards between those occurrences, but were not in this range.
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "a"), row(2, "b"), row(3, "c")],
+      support: [row(4, "d", "vae")],
+      combinations: [
+        combination("1,4", [member(1, "a", "checkpoint"), member(4, "d", "vae")]),
+        combination("2", [member(2, "b", "checkpoint")]),
+        combination("3", [member(3, "c", "checkpoint")]),
+      ],
+    });
+    store.toggleSet("model:1");
+    await wrapper.vm.$nextTick();
+
+    const members = wrapper.findAll(".msp__member");
+    await members[0].trigger("click");
+    await members[1].trigger("click", { shiftKey: true });
+
+    expect([...store.selectedIds].sort()).toEqual([1, 4]);
   });
 
   it("renames what the cursor is on when F2 is pressed", async () => {

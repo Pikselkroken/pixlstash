@@ -450,24 +450,32 @@ function selectable(id) {
 }
 
 /**
- * The model ids in DRAWN order, which is what a Shift-range spans.
+ * The drawn occurrences, in order, which is what a Shift-range spans.
  *
  * Read off `flatRows`, so a range that crosses an open tray takes the cards
  * before it, the tray's own rows, and the cards after - the order on screen and
- * not the order the payload arrived in. De-duplicated because a set's head is
- * drawn twice while its tray is open, once as the card and once as the row
- * marked *Names this set*, and a range measured over a doubled id skips
- * whichever copy it did not count.
+ * not the order the payload arrived in. Occurrences stay distinct: a set's
+ * head is drawn twice while its tray is open, and a Shift-range starts from the
+ * occurrence the reader clicked. The store deduplicates model ids only after it
+ * has sliced that occurrence range.
  */
-const orderedIds = computed(() => [
-  ...new Set(flatRows.value.map(modelIdOf).filter((id) => selectable(id))),
-]);
+const orderedEntries = computed(() =>
+  flatRows.value
+    .map((entry) => ({ id: modelIdOf(entry), occurrence: entry.id }))
+    .filter((entry) => selectable(entry.id)),
+);
 
 /** Click, Ctrl+click, Shift+click - the row list's own three gestures. */
 function select(id, event) {
   if (!selectable(id)) return;
   const ctrl = Boolean(event?.ctrlKey || event?.metaKey);
-  store.selectFromClick(id, { ctrl, shift: event?.shiftKey }, orderedIds.value);
+  const entry = flatRows.value[cursorIndex.value];
+  store.selectFromClick(
+    id,
+    { ctrl, shift: event?.shiftKey },
+    orderedEntries.value,
+    entry?.id,
+  );
 }
 
 /**
@@ -479,7 +487,7 @@ function select(id, event) {
 function onRowClick(entry, event) {
   cursorId.value = entry.id;
   if (targetOwnsTheGesture(event)) return;
-  select(modelIdOf(entry), event);
+  selectEntry(entry, event);
 }
 
 /**
@@ -508,7 +516,19 @@ function onRowMenu(entry, event) {
 /** A tray row was clicked. The tray reports the member; the cursor follows it. */
 function onMemberClick({ member, event }) {
   cursorId.value = `member:${member.id}`;
-  select(member.id, event);
+  selectEntry(flatRows.value[cursorIndex.value], event);
+}
+
+function selectEntry(entry, event) {
+  const id = modelIdOf(entry);
+  if (!selectable(id)) return;
+  const ctrl = Boolean(event?.ctrlKey || event?.metaKey);
+  store.selectFromClick(
+    id,
+    { ctrl, shift: event?.shiftKey },
+    orderedEntries.value,
+    entry?.id,
+  );
 }
 
 function onMemberMenu({ member, event }) {
@@ -572,7 +592,7 @@ function moveCursor(index, extend = false) {
   const entry = flatRows.value[index];
   if (!entry || entry.kind === "hole") return;
   cursorId.value = entry.id;
-  if (extend) select(modelIdOf(entry), { shiftKey: true });
+  if (extend) selectEntry(entry, { shiftKey: true });
   nextTick(() => rowElement(entry)?.focus());
 }
 
@@ -629,11 +649,21 @@ function onKeyDown(event) {
       return;
     case "ArrowDown":
       event.preventDefault();
-      moveCursor(verticalStop(cursorIndex.value + cols, cols, 1), extend);
+      moveCursor(
+        entry?.kind === "member" && store.view.trayView === "list"
+          ? firstStop(cursorIndex.value + 1, 1)
+          : verticalStop(cursorIndex.value + cols, cols, 1),
+        extend,
+      );
       return;
     case "ArrowUp":
       event.preventDefault();
-      moveCursor(verticalStop(cursorIndex.value - cols, cols, -1), extend);
+      moveCursor(
+        entry?.kind === "member" && store.view.trayView === "list"
+          ? firstStop(cursorIndex.value - 1, -1)
+          : verticalStop(cursorIndex.value - cols, cols, -1),
+        extend,
+      );
       return;
     case " ":
       // Space toggles, exactly as it does on a row: the keyboard's Ctrl+click,
