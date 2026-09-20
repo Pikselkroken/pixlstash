@@ -235,8 +235,12 @@
  * *Unstack all* and the hidden-member count are still not here. The read side
  * no longer blocks them outright: F7's *Show hidden workflows* asks
  * `GET /workflows/cards` for `include_hidden`, the grouping then runs over the
- * widened set, and a hidden member arrives in `member_keys` and draws here
- * wearing the `hidden` fact chip. What is still missing is the COUNT — the
+ * widened set, and a hidden member arrives in `member_keys` and draws here.
+ * It is marked by the `hidden` fact chip `utils/workflowCard.js` puts first in
+ * `factChips` — **which this panel shows only on a non-cover row** (see
+ * `factChips` below), and which #1458 and #1459 are both rewriting how member
+ * rows draw, so recheck that the mark survives once they land. What is still
+ * missing either way is the COUNT — the
  * payload says which cards are hidden, never how many a stack is holding back
  * while the box is unticked — so the header cannot say "2 hidden · Show".
  * Hide is offered because it is a write the panel can make; Unhide is not.

@@ -120,6 +120,66 @@ function without(list, value) {
  *   All Pictures, so a stale flag elsewhere is not shown as a filter.
  * @returns {Array<{ key: string, kind: string, value: string, remove: Function }>}
  */
+/** The Workflows Filters panel's two Source answers (v1.12 F7). */
+export const WORKFLOW_SOURCE_LABELS = Object.freeze({
+  imported: "Imported file",
+  found: "Found in your pictures",
+});
+
+/**
+ * The Workflows screen's active filters as chips (v1.12 F7).
+ *
+ * Here rather than in `useWorkflowsStore` for this module's own reason: it is
+ * where a filter's chip words live, so a screen cannot spell one filter two
+ * ways. The picture grid's `filterChips` above reads a STORE; this reads the
+ * plain `filters` object and the cards, because a workflow chip's label can
+ * need the payload (a type's `type_label`) and because the caller applies the
+ * change through `setFilters`, which has a refetch decision to make that no
+ * chip should know about.
+ *
+ * @param {object} filters - `useWorkflowsStore().filters`.
+ * @param {Array<object>} cards - the payload's cards, for label lookups.
+ * @param {(changes: object) => void} setFilters - the store's own setter.
+ * @returns {Array<{key: string, kind: string, value: string, remove: Function}>}
+ */
+export function workflowFilterChips(filters, cards, setFilters) {
+  const chips = [];
+  const push = (key, kind, value, reset) =>
+    chips.push({ key, kind, value, remove: () => setFilters(reset) });
+
+  if (!filters.hideOneOffs) {
+    push("one-offs", "Showing", "one-offs", { hideOneOffs: true });
+  }
+  if (filters.showHidden) {
+    push("hidden", "Showing", "hidden workflows", { showHidden: false });
+  }
+  if (filters.ghosts) {
+    push("ghosts", "Keeps", "something deleted", { ghosts: false });
+  }
+  if (filters.type != null) {
+    // The SERVED label, as the card's own type chip uses, so the strip and
+    // the card cannot say one type in two vocabularies.
+    const label =
+      (cards ?? []).find((card) => card.type === filters.type)?.type_label ??
+      filters.type;
+    push("type", "Type", label, { type: null });
+  }
+  if (filters.checkpoint != null) {
+    push("checkpoint", "Checkpoint", filters.checkpoint, { checkpoint: null });
+  }
+  if (filters.source != null) {
+    push("source", "Source", WORKFLOW_SOURCE_LABELS[filters.source], {
+      source: null,
+    });
+  }
+  if (filters.minRating != null) {
+    push("min-rating", "Rated", `${filters.minRating}★ and up`, {
+      minRating: null,
+    });
+  }
+  return chips;
+}
+
 export function filterChips(store, { allPicturesView = true } = {}) {
   const chips = [];
   const push = (key, kind, value, remove) =>

@@ -3464,6 +3464,12 @@ def test_a_hidden_card_is_counted_never_listed_and_still_opens(workflow_env):
     body = _detail(workflow_env.owner, HIDDEN_CARD)
     assert body["hidden"] is True
     assert body["card"]["name"] == "A workflow I hid"
+    # And the card's own `hidden` is its state here, with NO flag involved:
+    # the detail route opens a hidden card by design, because that is the only
+    # way one can be unhidden. The grid's rule - true only for a card
+    # `include_hidden` let in - is the grid's, and the two are documented
+    # apart because one contract for both would be wrong about this route.
+    assert body["card"]["hidden"] is True
 
 
 def test_a_one_off_is_counted_and_an_imported_file_takes_it_out_of_the_count(

@@ -653,6 +653,34 @@ describe("arriving on ?topology=", () => {
     );
   });
 
+  // The verdict is the PAYLOAD's, not the drawn grid's. A client-side filter
+  // hiding the card is one × away from fixed, and calling that "not in this
+  // grid" sends the reader looking for a workflow they already have.
+  it("tells a filtered-out card apart from one the answer never held", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    // Every card is rated 3, so 5★ and up hides all of them — including `d`,
+    // which the link below names and the payload plainly holds.
+    store.setFilters({ minRating: 5 });
+    await flush();
+
+    route.query = { topology: "topology-d" };
+    await flush();
+
+    const note = wrapper.find('[data-testid="wfv-link-filtered"]');
+    expect(note.exists()).toBe(true);
+    expect(note.text()).toContain("in this grid, but a filter is hiding it");
+    expect(wrapper.text()).not.toContain("That workflow is not in this grid");
+
+    // And it is one control away from fixed, which the other note never is.
+    await note.find(".wfv-note-clear").trigger("click");
+    await flush();
+    expect(wrapper.find('[data-testid="wfv-link-filtered"]').exists()).toBe(
+      false,
+    );
+    expect(store.selectedKeys).toEqual(["d"]);
+  });
+
   it("names what is being left out, since that is usually the reason", async () => {
     listWorkflowCards.mockImplementation(() =>
       Promise.resolve({ cards: [...CARDS], one_offs: 12, hidden: 40 }),

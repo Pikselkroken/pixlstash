@@ -347,10 +347,14 @@ class WorkflowCard(BaseModel):
     hidden: bool = Field(
         False,
         description=(
-            "The owner has hidden this card. Only ever true when the caller "
-            "asked for the hidden ones (`include_hidden`), so a client that "
-            "did not is unaffected - but one that did has to mark them, or "
-            "the checkbox silently mixes them into the grid."
+            "The owner has hidden this card. **On the GRID** it is true only "
+            "for a card `include_hidden` let in, so a client that did not ask "
+            "never sees it set - but one that did has to mark those cards, or "
+            "the checkbox silently mixes them into the grid they were kept "
+            "out of. **On the detail route it is always the card's own "
+            "state**, with no flag involved: `GET /workflows/cards/{key}` "
+            "opens a hidden card by design, which is how it can be unhidden. "
+            "`WorkflowCardDetail.hidden` is the same fact beside it."
         ),
     )
     models: list[WorkflowSlotModel] = Field(default_factory=list)

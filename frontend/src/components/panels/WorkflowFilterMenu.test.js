@@ -181,10 +181,18 @@ describe("the Workflows filter panel", () => {
     expect(rowCount(wrapper, "hideOneOffs")).toBe(String(store.oneOffs));
     expect(rowCount(wrapper, "showHidden")).toBe(String(store.hidden));
     // And not the number of cards on screen, which is the wrong source it
-    // would be natural to reach for.
-    expect(rowCount(wrapper, "hideOneOffs")).not.toBe(
-      String(store.filteredCards.length),
-    );
+    // would be natural to reach for. Asserted by making the two collide:
+    // `not.toBe` between 7 and 3 is true of almost any implementation, so the
+    // grid is given exactly `oneOffs` cards and the row must still read 7
+    // because it read the payload rather than counted the screen.
+    expect(store.filteredCards).toHaveLength(3);
+    store.cards = Array.from({ length: store.oneOffs }, (_, i) => ({
+      ...CARDS[0],
+      key: `pad-${i}`,
+    }));
+    await flushPromises();
+    expect(store.filteredCards).toHaveLength(store.oneOffs);
+    expect(rowCount(wrapper, "hideOneOffs")).toBe("7");
   });
 
   it("keeps a workflow that holds a ghost of either kind", async () => {
@@ -350,5 +358,32 @@ describe("the open stack and the filters", () => {
 
     expect(store.openStackKey).toBe(STACKED[0].key);
     expect(store.openMembers).toHaveLength(2);
+  });
+});
+
+// The selection survives a filter only for the cards still on screen. The
+// selection bar and the rail's bulk verbs read `selectedKeys`, so a stale one
+// offers Hide and Stack together on cards nobody can see — which #1460's
+// selection bar has no way to notice on its own.
+describe("the selection and the filters", () => {
+  it("drops selected cards the filter took off the screen", async () => {
+    const { store } = await mountMenu();
+    store.selectedKeys = [CARDS[0].key, CARDS[1].key, CARDS[2].key];
+
+    store.setFilters({ type: "upscale" });
+
+    expect(store.selectedKeys).toEqual([CARDS[1].key]);
+  });
+
+  it("keeps a selected member of a stack that is still drawn", async () => {
+    const cover = { ...CARDS[0], stack_size: 2, member_keys: [CARDS[1].key] };
+    const { store } = await mountMenu({ cards: [cover, ...CARDS.slice(1)] });
+    store.members = { [cover.key]: [cover, CARDS[1]] };
+    store.selectedKeys = [CARDS[1].key, CARDS[2].key];
+
+    // Keeps the cover, drops "Sketch to image".
+    store.setFilters({ type: "txt2img" });
+
+    expect(store.selectedKeys).toEqual([CARDS[1].key]);
   });
 });

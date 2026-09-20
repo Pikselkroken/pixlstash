@@ -897,8 +897,13 @@ def picture_ghosts_by_variant(hub: HubDatabase, library_uuid: str) -> dict[str, 
     this answers "which cards keep something", never "how many ghosts exist".
     """
     rows = hub.fetchall(
+        # `structural_hash IS NOT NULL` because it is nullable here: without
+        # the clause the unattributable ghosts group under a `None` key that
+        # no card's variants can match, which is a row carried through the
+        # whole read to be silently dropped at the end.
         "SELECT structural_hash, COUNT(*) AS ghosts "
-        "FROM workflow_picture_ghost WHERE library_uuid = ? "
+        "FROM workflow_picture_ghost "
+        "WHERE library_uuid = ? AND structural_hash IS NOT NULL "
         "GROUP BY structural_hash",
         (library_uuid,),
     )

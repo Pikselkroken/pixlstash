@@ -7,7 +7,8 @@ recipes - and a fourth only on a library where somebody has actually chosen a
 cover. Beside them are eight hub statements, of which one (``card_index``)
 scans the variant table and the rest are small; everything else here is
 arithmetic over their results, plus F7's ghost pass - one grouped count, and
-the five reads ``model_ghost_names`` makes, two of them whole-table scans.
+the five reads ``model_ghost_names`` makes, two of them whole-table scans,
+measured together at 1.3 ms (:func:`_describe_ghosts`).
 An aggregate table would have to be invalidated by every rating,
 every import, every soft delete and every re-run of the card backfill, and
 would be a second source of truth for numbers the vault can already produce
@@ -15,9 +16,8 @@ inside the frame budget.
 
 Measured on the owner's library (13k kept pictures, 629 variants, 245 cards):
 about 75 ms, of which the largest single part is ``describe_differences``
-reducing one graph per stacked card. **That figure predates F7's ghost pass**
-and has not been re-measured with it; the pass adds two whole-table scans of
-hub tables, so treat 75 ms as a floor rather than the number.
+reducing one graph per stacked card. F7's ghost pass adds 1.3 ms to that on a
+hub of the same shape, so the figure stands.
 
 Three orderings are decided here and nowhere else:
 
@@ -657,23 +657,36 @@ def _describe_ghosts(
     picture this library no longer has, and a **model ghost** is a VALUE naming
     a model the shelf does not hold - a filename, or a ``*_sha256`` digest,
     which is what :func:`~pixlstash.hub.workflows.model_ghost_names` judges.
-    So a card that names a missing model by both counts two, and
-    ``model_ghosts`` is "how many of this card's model values are ghosts"
-    rather than a number of models. The Filters row asks only whether a card
-    keeps either kind, so nothing on screen depends on the distinction; ⓘ,
-    which could say which kind, must not spell it as a model count.
 
-    **Its cost is the reason it is the last thing** ``read_grid`` **does.**
-    ``picture_ghosts_by_variant`` is one grouped count, but
-    ``model_ghost_names`` is five reads including a scan of ``model_file`` and
-    a ``DISTINCT`` over the whole of ``workflow_recipe_asset``. That is paid by
-    the grid AND by :func:`read_grid`'s other caller, ``_read_detail``, which
-    is what every workflow write answers with - so a rename now pays a
-    shelf-wide scan it did not before. It is left that way rather than made
-    conditional because a detail card carrying ``ghosts: 0`` when the card does
-    hold one is a wrong answer, and a card is the same object on both routes.
-    If a write's latency becomes the complaint, the fix is to cache the ghost
-    name set per hub generation, not to let one route lie.
+    ``model_ghosts`` is therefore **the number of DISTINCT ghost values this
+    card's variants name**, and not a number of models: the set comprehension
+    dedupes a value repeated across variants (right - one missing file named
+    twice is one thing missing), and a single missing model named both by
+    filename and by digest is two values and counts 2 (unavoidable without
+    resolving a digest to a name the shelf does not have). The Filters row
+    asks only whether a card keeps either kind, so nothing on screen depends
+    on the number; ⓘ, which could say which kind, must not spell it as a count
+    of models.
+
+    **What it costs, measured.** ``picture_ghosts_by_variant`` is one grouped
+    count; ``model_ghost_names`` is five reads including a scan of
+    ``model_file`` and a ``DISTINCT`` over the whole of
+    ``workflow_recipe_asset``. Over a synthetic hub built to the shape quoted
+    in this module's own docstring - 629 variants across 192 topologies, two
+    asset rows each, 20 shelf models over 2 000 files, 400 picture ghosts -
+    the two together are **1.3 ms**, of which the ghost count is 0.2 ms. The
+    whole grid read is about 75 ms, so the pass is under 2% of it.
+
+    That number is also the answer to the second cost, which is the one worth
+    stating: :func:`read_grid`'s other caller is ``_read_detail``, what every
+    workflow write answers with - so a rename now pays these reads too. At
+    1.3 ms it is not worth making conditional, and a detail card carrying
+    ``ghosts: 0`` when the card does hold one would be a wrong answer on a
+    route that is the only way to unhide something. **Caching the name set is
+    therefore NOT worth its invalidation** (a model scan, a folder removal and
+    a workflow import all move it); if the shelf grows a hundredfold and this
+    does become a complaint, that cache is where to look, keyed on something
+    the hub already bumps rather than on a timer.
 
     **The names come from** ``names`` **- every variant - and not from**
     :attr:`CardFigures.models` **and** :attr:`~CardFigures.loras`. Those two
@@ -681,8 +694,29 @@ def _describe_ghosts(
     alone, and a recipe LoRA is deliberately anonymous there, so a forgotten
     character LoRA - the commonest model ghost of all - would never be counted.
     """
-    library_uuid = getattr(vault, "library_uuid", None)
-    by_variant = picture_ghosts_by_variant(hub, library_uuid) if library_uuid else {}
+    # `vault.library_uuid` is a real property returning `Optional[str]`, so a
+    # `getattr` default here would only ever hide a typo in the attribute name.
+    # The `if` below is the part doing work.
+    library_uuid = vault.library_uuid
+    if library_uuid:
+        by_variant = picture_ghosts_by_variant(hub, library_uuid)
+    else:
+        # Every card then reports `ghosts: 0`, and on the Filters panel that
+        # reads as "this library keeps nothing deleted" - a wrong answer
+        # rather than an empty one, so it is said out loud. A vault with no
+        # library identity is a real state (nothing attached yet), which is
+        # why it is a warning and not a raise.
+        by_variant = {}
+        # No path in the message: the vault's identity here IS the missing
+        # uuid, and the impact is the number that tells somebody how much of
+        # the answer is affected.
+        logger.warning(
+            "This vault has no library uuid, so a picture ghost cannot be "
+            "matched to the library that holds it: all %d workflow cards will "
+            "report ghosts: 0 and the Workflows Ghosts filter will read as "
+            "'nothing deleted' rather than 'not known'.",
+            len(figures),
+        )
     ghost_names = model_ghost_names(hub)
     for figure in figures:
         figure.ghosts = sum(

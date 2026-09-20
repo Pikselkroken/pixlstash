@@ -60,6 +60,12 @@ const props = defineProps({
   ofLabel: { type: String, default: null },
   // In the normal flow rather than pinned under the selection bar.
   inline: { type: Boolean, default: false },
+  // One call that clears everything, for an owner that can do it in one.
+  // Without it Clear all removes the chips one at a time, which is right for
+  // the picture grid (each removal is a cheap store write) and wrong for the
+  // Workflows screen, where two of the filters are the server's and each
+  // removal costs a grid read.
+  onClearAll: { type: Function, default: null },
 });
 
 const store = useFilterStore();
@@ -82,6 +88,10 @@ const ofLabel = computed(() => {
 });
 
 function clearAll() {
+  if (props.onClearAll) {
+    props.onClearAll();
+    return;
+  }
   for (const chip of chips.value) chip.remove();
 }
 </script>

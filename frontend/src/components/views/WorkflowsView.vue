@@ -101,10 +101,14 @@
       </span>
     </div>
 
+    <!-- `on-clear-all` because two of these filters are the server's: removing
+         the chips one at a time would be two `setFilters`, and so two grid
+         reads, where the panel's own Clear all is one. -->
     <FilterStrip
       inline
       :chips="store.filterChips"
       :of-label="store.filterOfLabel"
+      :on-clear-all="store.clearFilters"
       class="wfv-strip"
     />
 
@@ -121,6 +125,20 @@
         {{ withheldHidden }} hidden and {{ withheldOneOffs }} counted as
         one-offs.</template
       >
+    </p>
+
+    <!-- A `?topology=` link whose card the payload holds and a filter hides.
+         Not the note above: that one is about what the SERVER left out and
+         offers no way in, and this one is one control away from fixed. -->
+    <p v-if="linkFiltered" class="wfv-note" data-testid="wfv-link-filtered">
+      That workflow is in this grid, but a filter is hiding it.
+      <button
+        class="wfv-note-clear"
+        type="button"
+        @click="store.clearFilters()"
+      >
+        Clear all
+      </button>
     </p>
 
     <!-- The fifth kind of empty: the library HAS workflows and the filters
@@ -366,6 +384,8 @@ const cursorId = ref("");
 const announcement = ref("");
 // A `?topology=` link that named a workflow the grid does not list.
 const linkMissed = ref(false);
+// The same link, but the card IS in the payload and a filter is hiding it.
+const linkFiltered = ref(false);
 const watchedFolder = ref(null);
 
 const panelId = "wfv-stack-panel";
@@ -617,16 +637,33 @@ watch(
     const card = store.sortedCards.find(
       (entry) => entry.topology_hash === wanted,
     );
+    // **The verdict is read off the payload, not off what is drawn.** With a
+    // client-side filter on, `sortedCards` can be missing a card the answer
+    // plainly contains, and saying "not in this grid" about it sends the
+    // reader looking for a workflow that is one × away. The two are different
+    // states with different ways out, so they are said differently.
     if (!card) {
+      const filtered = store.cards.some(
+        (entry) => entry.topology_hash === wanted,
+      );
+      if (filtered) {
+        announcement.value =
+          "That workflow is in this grid, but a filter is hiding it.";
+        linkFiltered.value = true;
+        linkMissed.value = false;
+        return;
+      }
       const plural = withheld.value === 1 ? "is" : "are";
       announcement.value = withheld.value
-        ? `That workflow is not in the grid. ${withheld.value} ${plural} being left out: ${store.hidden} hidden and ${store.oneOffs} counted as one-offs.`
+        ? `That workflow is not in the grid. ${withheld.value} ${plural} being left out: ${withheldHidden.value} hidden and ${withheldOneOffs.value} counted as one-offs.`
         : "That workflow is not in the grid.";
       linkMissed.value = true;
+      linkFiltered.value = false;
       return;
     }
     honouredTopology = wanted;
     linkMissed.value = false;
+    linkFiltered.value = false;
     store.select(card.key);
     // Not while the reader is inside a popover or the file dialog: the cards
     // arrive asynchronously, so this can fire a second after the screen went

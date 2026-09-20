@@ -8,6 +8,10 @@ import {
   reorderStack,
   unstackWorkflow,
 } from "../api/workflows";
+import {
+  WORKFLOW_SOURCE_LABELS,
+  workflowFilterChips,
+} from "../utils/filterChips";
 import { checkpointModel, isStack } from "../utils/workflowCard";
 import { onSessionReset } from "../utils/apiClient";
 import { errorMessage } from "../utils/apiError";
@@ -63,12 +67,6 @@ export const DEFAULT_FILTERS = Object.freeze({
   // in with the pictures it made).
   source: null,
   minRating: null,
-});
-
-/** The Source row's two answers, in the words the card row already uses. */
-export const SOURCE_LABELS = Object.freeze({
-  imported: "Imported file",
-  found: "Found in your pictures",
 });
 
 /** Does this card keep something deleted? */
@@ -158,41 +156,13 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * One list for both the strip and the filter button's badge, so the two
    * cannot disagree about how many filters are on — the same reason
    * `Toolbar.vue` counts `filterChips(filterStore)` rather than keeping a
-   * tally of its own.
+   * tally of its own. The chips' WORDS are `utils/filterChips.js`'s, which is
+   * the module that exists so one filter cannot be spelled two ways; this
+   * store owns the state and the refetch decision, and nothing else.
    */
-  const filterChips = computed(() => {
-    const view = filters.value;
-    const chips = [];
-    const chip = (key, kind, value, reset) =>
-      chips.push({ key, kind, value, remove: () => setFilters(reset) });
-    if (!view.hideOneOffs) {
-      chip("one-offs", "Showing", "one-offs", { hideOneOffs: true });
-    }
-    if (view.showHidden) {
-      chip("hidden", "Showing", "hidden workflows", { showHidden: false });
-    }
-    if (view.ghosts) {
-      chip("ghosts", "Keeps", "something deleted", { ghosts: false });
-    }
-    if (view.type != null) {
-      const label =
-        cards.value.find((card) => card.type === view.type)?.type_label ??
-        view.type;
-      chip("type", "Type", label, { type: null });
-    }
-    if (view.checkpoint != null) {
-      chip("checkpoint", "Checkpoint", view.checkpoint, { checkpoint: null });
-    }
-    if (view.source != null) {
-      chip("source", "Source", SOURCE_LABELS[view.source], { source: null });
-    }
-    if (view.minRating != null) {
-      chip("min-rating", "Rated", `${view.minRating}★ and up`, {
-        minRating: null,
-      });
-    }
-    return chips;
-  });
+  const filterChips = computed(() =>
+    workflowFilterChips(filters.value, cards.value, setFilters),
+  );
 
   /**
    * "12 of 40" — what the grid is drawing of what the server sent.
@@ -262,10 +232,14 @@ export const useWorkflowsStore = defineStore("workflows", () => {
         .map(([id, count]) => ({ id, label: id, count }))
         .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id)),
       sources: [
-        { id: "imported", label: SOURCE_LABELS.imported, count: imported },
+        {
+          id: "imported",
+          label: WORKFLOW_SOURCE_LABELS.imported,
+          count: imported,
+        },
         {
           id: "found",
-          label: SOURCE_LABELS.found,
+          label: WORKFLOW_SOURCE_LABELS.found,
           count: cards.value.length - imported,
         },
       ],
@@ -628,6 +602,23 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       !filteredCards.value.some((card) => card.key === openStackKey.value)
     ) {
       closeStack();
+    }
+    // **And the selection goes with what left the screen.** The selection bar
+    // and the rail's bulk verbs act on `selectedKeys`, so a filter that takes
+    // a card away would otherwise leave "3 workflows selected" over a grid
+    // drawing one — and Hide or Stack together would act on cards the reader
+    // cannot see. A member of a stack that is still drawn stays selected:
+    // its panel is on screen, and the cards it holds were never filtered.
+    if (selectedKeys.value.length) {
+      const onScreen = new Set(filteredCards.value.map((card) => card.key));
+      for (const list of Object.values(members.value)) {
+        for (const member of list) {
+          if (onScreen.has(list[0]?.key)) onScreen.add(member.key);
+        }
+      }
+      selectedKeys.value = selectedKeys.value.filter((key) =>
+        onScreen.has(key),
+      );
     }
     if (
       next.hideOneOffs !== before.hideOneOffs ||

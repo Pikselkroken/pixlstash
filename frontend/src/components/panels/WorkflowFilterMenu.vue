@@ -129,7 +129,6 @@ const counts = computed(() => ({
   showHidden: store.hidden,
   ghosts: store.filterOptions.ghosts,
 }));
-
 </script>
 
 <style scoped>

@@ -6701,6 +6701,12 @@ watch(
     () => filterStore.stackStateFilter,
     () => filterStore.sharedOnlyFilter,
     () => filterStore.unassignedOnlyFilter,
+    // *Show all N pictures* (F7). Without it the chip's × emptied the strip
+    // and left the grid on one workflow's pictures until something unrelated
+    // moved: arrival only ever worked by accident, because `router.push("/")`
+    // remounts this component (it is `v-else` in `App.vue`) and a remount
+    // fetches anyway. Removal has no such accident behind it.
+    () => filterStore.workflowFilter,
   ],
   () => {
     _resetGridState();
