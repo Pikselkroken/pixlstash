@@ -108,6 +108,16 @@ export async function getPictureWorkflow(pictureId) {
  * ComfyUI server. `preflight.checked === false` means ComfyUI could not be
  * reached at all - it does NOT mean the recipe passed its checks.
  *
+ * A picture carrying only ComfyUI's **editor** graph and not the API one the
+ * server ran answers here too: the editor graph is rebuilt into an API prompt
+ * against `/object_info` and the answer is the same shape, with
+ * `converted_from_editor_graph: true`. A rebuild that could not be exact is
+ * not approximated - it answers `available: false` with `reason:
+ * "editor_graph"`, its prompt and models still filled in, and
+ * `conversion_problems` holding one sentence per thing that could not be read.
+ * That is the one answer `preflight: false` still costs a ComfyUI read for,
+ * because without the node list there is nothing to report at all.
+ *
  * `node_classes` is the distinct list of ComfyUI node classes the graph would
  * execute. It is read from the file, so it is populated even when the
  * pre-flight could not run, which is exactly when the user has nothing else to

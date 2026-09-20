@@ -453,7 +453,7 @@ Two routes, and the split is by **question**, not by caller:
 
 | Route | Answers | Costs |
 |---|---|---|
-| `GET /comfyui/pictures/{id}/recipe` | **What the picture was made with** — prompts, models with strengths, settings, seed, the shelf rows, the resolution lock, `workflow_key`, `topology_hash`. Reads the graph that *executed*, and answers for A1111 pictures through their infotext. | one file read; a ComfyUI `/object_info` read **only** when the pre-flight is asked for |
+| `GET /comfyui/pictures/{id}/recipe` | **What the picture was made with** — prompts, models with strengths, settings, seed, the shelf rows, the resolution lock, `workflow_key`, `topology_hash` (**derived from the graph this answer shows**, not from the picture's stored column, which describes whichever chunk the extraction pass read). Reads the graph that *executed*; for a picture carrying only the editor `workflow` chunk it rebuilds that into one first (`converted_from_editor_graph: true`), and answers for A1111 pictures through their infotext. | one file read; a ComfyUI `/object_info` read when the pre-flight is asked for, **and for an editor-graph picture either way** (from a one-minute cache) |
 | `GET /comfyui/pictures/{id}/workflow` | **The graph's bytes**, in the editor's format — what Copy, Download and paste-into-ComfyUI need. | one file read |
 
 `?preflight=false` on the recipe read skips the ComfyUI round-trip. The
@@ -461,7 +461,18 @@ lightbox's Recipe tab asks that way, because it re-reads on every filmstrip step
 and a round-trip per arrow-key is not affordable; the Remix dialog keeps the
 default, because it is about to run the recipe and needs to know whether it can.
 `preflight.checked` is then `false`, which already means *the question was not
-asked* — never that the recipe passed. The tab fetches the graph route
+asked* — never that the recipe passed. **The one exception is a picture whose
+only graph is the editor `workflow` chunk**: rebuilding that needs
+`/object_info`, so without it there is nothing to report at all rather than
+merely nothing to judge, and the flag cannot switch the read off. The map is
+reused for a minute, so the filmstrip still steps for the cost of one file
+read — and the graph is still not *judged* against it, so `preflight.checked`
+stays `false` on a request that asked for no check. A ComfyUI that cannot be
+reached at all answers `reason: "comfyui_unreachable"` rather than
+`"editor_graph"`: one is a machine to start and the other is a fact about the
+file, and reporting the second for the first reads as permanent.
+
+The tab fetches the graph route
 separately and **only when the workflow box is opened**: the graph is the one
 large thing here.
 
@@ -923,11 +934,13 @@ the two sides have agreed:
    of `PUT /workflows/{key}/slots`. A LoRA recovered this way is `structural`:
    it is in the file, which is what the mark means.
 
-   **Empty is "not read", never "has none".** The recovery reads a real file
-   and reads nothing at all from a template-style export whose loaders were
-   never filled in, so a `variant_count: 0` card with no models is one nobody
-   has read. A client must not render that as "no checkpoint"; `modelsUnread`
-   in `utils/workflowCard.js` is the shipped reading of the pair.
+   **An empty row is "not read", never "has none" — and that is per ROW.**
+   The recovery finds loaders by class, over `MODEL_FILENAME_FIELDS`, and no
+   list of classes is every loader there is: a graph can have its LoRAs
+   recovered and its base model missed, so a non-empty `models` does not mean
+   the card was read either. A client renders any empty row on a
+   `variant_count: 0` card as unread; `checkpointUnread` and `lorasUnread` in
+   `utils/workflowCard.js` are the shipped reading of it.
 
    `icon`, `base_model` and `base_model_folded` are served on **every** card's
    slots, not only
@@ -1521,7 +1534,8 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
   **Three distinct negative answers, and the SPA must not collapse them**, because they send the user to three different places:
   | Response | Meaning | UI |
   |---|---|---|
-  | `available:false`, `reason:"no_prompt_chunk"` | Ordinary photo, stripped metadata, or a UI-graph-only file | Recipe mode disabled: "No executable workflow embedded" |
+  | `available:false`, `reason:"no_prompt_chunk"` | Ordinary photo or stripped metadata: nothing was made in ComfyUI here. **The lightbox hides its Recipe tab entirely on this answer** | Recipe mode disabled: "No executable workflow embedded" |
+  | `available:false`, `reason:"editor_graph"` | The file carries ComfyUI's editor graph and PixlStash could not rebuild it exactly — a node class this ComfyUI does not have, a widget array it cannot account for, a subgraph. `conversion_problems` is one sentence per reason | Recipe mode disabled, the recipe still shown (prompt, models, seed read off the editor graph), with `conversion_problems` printed under the refusal |
   | `available:false`, `reason:"a1111"`, `source:"a1111"` | A1111 output: its recipe is readable (prompts, settings, LoRAs, seed) but is not a graph ComfyUI can be handed | Recipe mode disabled, the recipe still shown. A client that does not know this value falls through to the row above, which stays true |
   | `available:false`, `reason:"no_seed_input"` | The graph has no seed to change, so a re-run would be byte-identical (and would be deduped on `pixel_sha`, emitting no event — the user would see nothing at all) | Recipe mode disabled, with that reason |
   | `preflight.ok:false` | Checked, and this ComfyUI cannot run it | Recipe mode disabled, naming the missing node types / models / input images |

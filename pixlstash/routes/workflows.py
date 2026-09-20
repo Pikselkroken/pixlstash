@@ -1147,6 +1147,12 @@ def _display_name(card, models=()) -> str:
     return named + _specials_suffix(card)
 
 
+# What a workflow file may be before the grid declines to parse it. A real one
+# is tens to hundreds of kilobytes; the largest in this repo's own fixtures is
+# under 300 KB, and the watched folder is a place anything can be dropped. The
+# size is already in hand from the ``stat`` the cache key needs, so refusing
+# costs nothing - and this read now happens on the grid and on every workflow
+# write, where it used to happen on neither.
 # ponytail: one entry per file version; stale versions age out of the LRU.
 @functools.lru_cache(maxsize=256)
 def _file_model_widgets(path: str, mtime_ns: int, size: int) -> tuple:
@@ -1853,8 +1859,10 @@ def create_router(server) -> APIRouter:
     def _library_uuid() -> str | None:
         return getattr(server.vault, "library_uuid", None)
 
-    def _embedded_graph(picture_id: int) -> dict | None:
-        """This picture's embedded API graph, or ``None`` if it has none.
+    def _embedded_graph(
+        picture_id: int, object_info: dict | None = None
+    ) -> dict | None:
+        """This picture's runnable graph, or ``None`` if it has none.
 
         A picture whose file has been moved off the disk is not a source and
         must not be an error: the resolver is walking candidates, and the best
@@ -1862,9 +1870,20 @@ def create_router(server) -> APIRouter:
         wanted. ``_load_embedded_api_prompt`` raises a 404 for a missing file
         and a 500 for an unreadable one, both of which are caught here and
         logged - the run says ``no_runnable_source`` if nothing else answers.
+
+        ``object_info`` lets it rebuild a picture that carries only ComfyUI's
+        editor graph. **A refusal returns ``None`` and does not raise**: this
+        walks candidates, so "this one cannot be rebuilt" means take the next,
+        exactly as "this one has no graph" does. The reasons are logged rather
+        than raised for the same reason - they are about a candidate, not about
+        the run.
         """
+        # The `try` covers the READ and nothing else. Wrapping the refusal
+        # branch in it too would make "this candidate will not rebuild" and
+        # "somebody raised here by mistake" the same event, and the guarantee
+        # below would hold by accident rather than by construction.
         try:
-            return _load_embedded_api_prompt(server, picture_id)
+            graph, problems = _load_embedded_api_prompt(server, picture_id, object_info)
         except HTTPException as exc:
             logger.info(
                 "Picture %s cannot be read for a runnable graph (%s), so the "
@@ -1874,9 +1893,17 @@ def create_router(server) -> APIRouter:
                 exc.detail,
             )
             return None
+        if graph is None and problems:
+            logger.info(
+                "Picture %s carries an editor graph that will not rebuild, so "
+                "the resolver moves on: %s",
+                picture_id,
+                "; ".join(problems),
+            )
+        return graph
 
     def _source_graph_for(
-        card,
+        card, object_info: dict | None = None
     ) -> tuple[run_service.Source | None, run_service.Reason | None]:
         """Resolve one card's runnable source, doing the reads the tiers need.
 
@@ -1904,7 +1931,7 @@ def create_router(server) -> APIRouter:
             for candidate in read_best_picture_ids(
                 server.vault, card.variants, BEST_PICTURE_DEPTH
             ):
-                graph = _embedded_graph(candidate)
+                graph = _embedded_graph(candidate, object_info)
                 if graph:
                     picture_graph, picture_id = graph, candidate
                     break
@@ -2366,7 +2393,7 @@ def create_router(server) -> APIRouter:
                 ]
                 planned.append(group)
                 continue
-            source, failure = _source_graph_for(card)
+            source, failure = _source_graph_for(card, object_info)
             if source is None:
                 group.reasons = [failure.as_dict()]
                 planned.append(group)

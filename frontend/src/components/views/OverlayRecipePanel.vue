@@ -215,6 +215,15 @@
         <p v-if="runReason" :id="runReasonId" class="recipe-run-reason">
           {{ runReason }}
         </p>
+        <ul
+          v-if="conversionProblems.length"
+          :id="problemsId"
+          class="recipe-run-problems"
+        >
+          <li v-for="problem in conversionProblems" :key="problem">
+            {{ problem }}
+          </li>
+        </ul>
         <!-- Only when it is not the sentence above: the two refusals coincide
              on a read-only session, and printing it twice would read as two
              separate problems. -->
@@ -236,7 +245,7 @@
             class="recipe-run"
             block
             :aria-disabled="runReason ? 'true' : undefined"
-            :aria-describedby="runReason ? runReasonId : undefined"
+            :aria-describedby="runDescribedBy"
             @click="onRun"
           >
             <Tooltip :text="runTooltip" activator="parent" :describe="false" />
@@ -311,6 +320,7 @@ const emit = defineEmits(["run", "use-as-input"]);
 
 const runReasonId = useId();
 const inputReasonId = useId();
+const problemsId = useId();
 
 /**
  * Why this recipe cannot be run again, or null when it can.
@@ -331,7 +341,37 @@ const RUN_REASONS = {
     "same picture.",
   pixlstash_nodes:
     "This graph calls back into PixlStash, so PixlStash will not replay it.",
+  editor_graph:
+    "This picture carries only ComfyUI's editor view of its workflow, and " +
+    "PixlStash could not rebuild that into a graph ComfyUI can run.",
+  // Not `editor_graph`: nothing is wrong with this workflow, ComfyUI was not
+  // running to be asked about it. Saying the first about the second reads as
+  // permanent and sends the reader looking at their file.
+  comfyui_unreachable:
+    "PixlStash needs ComfyUI to read this picture's workflow, and could not " +
+    "reach it. Start ComfyUI and open this picture again.",
 };
+
+/**
+ * What stopped the rebuild, one sentence each.
+ *
+ * Printed under the refusal because every one of them is actionable in a way
+ * the refusal itself is not: an uninstalled node pack is a thing to go and
+ * install, and "could not rebuild it" on its own sends the reader nowhere.
+ */
+const conversionProblems = computed(() => props.recipe?.conversionProblems || []);
+
+/**
+ * Whether this recipe's graph was never resolved, so the fields read off a
+ * resolved graph are *unknown* rather than *absent*.
+ *
+ * Only the editor-graph refusal: an A1111 picture's fields ARE read, and an
+ * ordinary ComfyUI one's are too.
+ */
+const UNRESOLVED_REASONS = new Set(["editor_graph", "comfyui_unreachable"]);
+const unreadable = computed(() =>
+  UNRESOLVED_REASONS.has(props.recipe?.reason),
+);
 
 const runReason = computed(() => {
   if (!props.recipe) return null;
@@ -398,6 +438,21 @@ const useAsInputReason = computed(() =>
  * agree; when they differ each button gets its own, so neither is described by
  * a sentence about the other.
  */
+/**
+ * What describes the Run button, refusal AND reasons.
+ *
+ * `aria-describedby` takes a list, and shipping only the sentence gives a
+ * screen-reader user the half that - by the list's own reason for existing -
+ * sends them nowhere: they hear that the rebuild failed and never which node
+ * class is missing.
+ */
+const runDescribedBy = computed(() => {
+  if (!runReason.value) return undefined;
+  return conversionProblems.value.length
+    ? `${runReasonId} ${problemsId}`
+    : runReasonId;
+});
+
 const inputReasonIsOwn = computed(
   () => !!useAsInputReason.value && useAsInputReason.value !== runReason.value,
 );
@@ -530,18 +585,37 @@ const settingRows = computed(() => {
   }
 
   // Always shown: "no negative prompt" and "no seed" are both worth reading.
+  //
+  // **"none" is a claim about the graph, so it is only made about a graph that
+  // was read.** The negative prompt and the sampler settings come off the
+  // resolved API graph; a picture whose editor graph would not rebuild has no
+  // resolved graph, so PixlStash did not read them rather than found them
+  // absent. Printing "none" there tells the reader the workflow has no
+  // negative prompt, which is a different and possibly false thing. The seed
+  // IS read off the editor graph directly, so it keeps its own answer.
   rows.push({
     label: "Seed",
     value: recipe.seedText || "none",
     absent: !recipe.seedText,
     mono: Boolean(recipe.seedText),
   });
-  rows.push({
-    label: "Negative",
-    value: recipe.negativePrompt || "none",
-    absent: !recipe.negativePrompt,
-    note: recipe.negativePrompt || null,
-  });
+  rows.push(
+    unreadable.value
+      ? {
+          label: "Negative",
+          value: "not read",
+          absent: true,
+          note:
+            "PixlStash could not rebuild this workflow, so its negative " +
+            "prompt and settings were not read off it.",
+        }
+      : {
+          label: "Negative",
+          value: recipe.negativePrompt || "none",
+          absent: !recipe.negativePrompt,
+          note: recipe.negativePrompt || null,
+        },
+  );
   return rows;
 });
 
@@ -943,6 +1017,21 @@ async function copyPrompt() {
 /* The same secondary ink the rest of the pane's prose uses. */
 .recipe-run-reason {
   margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+
+/* The same voice as the refusal above it, indented as its detail rather than
+   set apart as a warning: these are things to go and fix, not an alarm. */
+.recipe-run-problems {
+  margin: 0;
+  padding-left: var(--space-4);
+  /* The footer is `flex: none` against the scrolling body, so an unbounded
+     list would push the prompt and the models off the pane. One uninstalled
+     pack is one sentence, but two packs is easily a dozen. */
+  max-height: var(--space-9);
+  overflow-y: auto;
   font-size: var(--text-xs);
   line-height: var(--leading-snug);
   color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));

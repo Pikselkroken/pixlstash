@@ -70,12 +70,13 @@ from pixlstash.services.workflow_hash import (
     structural_document,
 )
 from pixlstash.services import workflow_card_service
+from pixlstash.utils.known_base_models import fold
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
 from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
-from pixlstash.services.workflow_card_service import SlotModel, model_titles
+from pixlstash.services.workflow_card_service import SlotModel, model_marks
 from pixlstash.services.workflow_identity import (
     FACE_DETAILER,
     UPSCALE,
@@ -839,6 +840,19 @@ def _bearer(server, token: str) -> TestClient:
 # ===========================================================================
 # Declarations — the registry entry is the route's only authorization
 # ===========================================================================
+
+
+def _titles(hub, names):
+    """``model_marks`` narrowed to the title.
+
+    Was ``model_titles`` in the service until #1483: a public function with no
+    production caller, kept alive by these tests alone. The narrowing it did
+    is one line and belongs to the one caller that wants it - here - while the
+    rule itself stays stated once, in ``model_marks``.
+    """
+    return {
+        name: mark.title for name, mark in model_marks(hub, names).items() if mark.title
+    }
 
 
 def test_the_workflow_scan_records_instances_for_the_open_library(workflow_env):
@@ -1794,7 +1808,7 @@ def test_a_card_says_the_post_processing_it_carries_and_when_it_cannot(
 def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
     workflow_env,
 ):
-    """`model_titles` over filename, digest and shelf id, and the ambiguity.
+    """the title rule over filename, digest and shelf id, and the ambiguity.
 
     A card's slot name is whichever of those three `structural_widget_value`
     kept, and the card cannot say which - so a lookup that guessed one column
@@ -1805,7 +1819,7 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
         "SELECT id, sha256 FROM model WHERE filename = ?", (_SHELF_FILENAME,)
     )
     # All three name the same model, so all three resolve to the same title.
-    found = model_titles(hub, [_SHELF_FILENAME, row["sha256"], str(row["id"])])
+    found = _titles(hub, [_SHELF_FILENAME, row["sha256"], str(row["id"])])
     assert found == {
         _SHELF_FILENAME: _SHELF_TITLE,
         row["sha256"]: _SHELF_TITLE,
@@ -1815,14 +1829,14 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
     # rather than the digest. `structural_widget_value` keeps 10 and 12 hex
     # characters as readily as 64, so a lookup matching only the long form
     # leaves every A1111-sourced card wearing a raw hex blob for a name.
-    assert model_titles(hub, [row["sha256"][:10]]) == {row["sha256"][:10]: _SHELF_TITLE}
-    assert model_titles(hub, [row["sha256"][:12]]) == {row["sha256"][:12]: _SHELF_TITLE}
+    assert _titles(hub, [row["sha256"][:10]]) == {row["sha256"][:10]: _SHELF_TITLE}
+    assert _titles(hub, [row["sha256"][:12]]) == {row["sha256"][:12]: _SHELF_TITLE}
     # A model the shelf has never scanned has no entry, which is how a card
     # keeps its filename stem rather than being renamed after something else.
-    assert model_titles(hub, ["add_detail.safetensors"]) == {}
-    assert model_titles(hub, []) == {}
+    assert _titles(hub, ["add_detail.safetensors"]) == {}
+    assert _titles(hub, []) == {}
     # A digest names only the model that carries it, never the row beside it.
-    assert model_titles(hub, [_h("nothing-on-this-shelf")]) == {}
+    assert _titles(hub, [_h("nothing-on-this-shelf")]) == {}
 
     # The rest mutates the shelf, which this module shares: the autouse reset
     # deletes the seeded row BY FILENAME, so a renamed one survives it and the
@@ -1838,7 +1852,7 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
                 "UPDATE model SET filename = 'RealVisXL.safetensors' WHERE id = ?",
                 (row["id"],),
             )
-        assert model_titles(hub, [_SHELF_FILENAME]) == {_SHELF_FILENAME: _SHELF_TITLE}
+        assert _titles(hub, [_SHELF_FILENAME]) == {_SHELF_FILENAME: _SHELF_TITLE}
 
         # **A SECOND COPY under a different spelling resolves too.**
         # `model.filename` is frozen at first sight while `model_file` holds a
@@ -1854,7 +1868,7 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
                 "VALUES (?, ?, 'SDXL/RealVisXL_v5.0.safetensors', 'present')",
                 (row["id"], folder),
             )
-        assert model_titles(hub, ["realvisxl_v5.0.safetensors"]) == {
+        assert _titles(hub, ["realvisxl_v5.0.safetensors"]) == {
             "realvisxl_v5.0.safetensors": _SHELF_TITLE
         }
 
@@ -1868,7 +1882,7 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
                 "'Something Else', 'scanned')",
                 (second,),
             )
-        assert model_titles(hub, [_SHELF_FILENAME]) == {}
+        assert _titles(hub, [_SHELF_FILENAME]) == {}
         # **An UNNAMED rival is an ambiguity too, and this is the one a filter
         # on `display_name` in SQL hides**: the rival never reaches the check,
         # so the named row wins by default and a card using the unnamed file is
@@ -1877,14 +1891,14 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
             conn.execute(
                 "UPDATE model SET display_name = NULL WHERE sha256 = ?", (second,)
             )
-        assert model_titles(hub, [_SHELF_FILENAME]) == {}
+        assert _titles(hub, [_SHELF_FILENAME]) == {}
         # ... while two rows agreeing are not an ambiguity at all.
         with hub.transaction() as conn:
             conn.execute(
                 "UPDATE model SET display_name = ? WHERE sha256 = ?",
                 (_SHELF_TITLE, second),
             )
-        assert model_titles(hub, [_SHELF_FILENAME]) == {_SHELF_FILENAME: _SHELF_TITLE}
+        assert _titles(hub, [_SHELF_FILENAME]) == {_SHELF_FILENAME: _SHELF_TITLE}
     finally:
         with hub.transaction() as conn:
             conn.execute("DELETE FROM model_file WHERE model_id = ?", (row["id"],))
@@ -1982,6 +1996,10 @@ _EDITOR_WORKFLOW = {
     "links": [[1, 1, 0, 2, 0, "*"], [2, 2, 0, 3, 0, "*"]],
 }
 _EDITOR_ICON = _h("editor-card-icon")
+# A base model spelled the way a safetensors header spells it, so `fold` has a
+# real fold to do rather than passing a canonical label through untouched.
+_EDITOR_BASE_MODEL = "flux.1-dev"
+_EDITOR_BASE_MODEL_FOLDED = fold(_EDITOR_BASE_MODEL)
 
 
 def _file_a_workflow(server, tmp_path, monkeypatch, name, workflow, keys=None) -> str:
@@ -2003,12 +2021,18 @@ def _file_a_workflow(server, tmp_path, monkeypatch, name, workflow, keys=None) -
     return workflow_cards.record_file(server.hub, name, topology)
 
 
-def _give_the_shelf_model_an_icon(server) -> None:
-    """Put a chosen picture on the seeded shelf row, re-seeded next test."""
+def _give_the_shelf_model_a_picture(server) -> None:
+    """Put a chosen picture and a base model on the seeded shelf row.
+
+    Both re-seeded before the next test. The base model is a string
+    `known_base_models` recognises, so `fold` has something to fold: an
+    unrecognised one folds to null and would leave the whole wiring saying
+    nothing.
+    """
     with server.hub.transaction() as conn:
         conn.execute(
-            "UPDATE model SET icon_sha256 = ? WHERE filename = ?",
-            (_EDITOR_ICON, _SHELF_FILENAME),
+            "UPDATE model SET icon_sha256 = ?, base_model = ? WHERE filename = ?",
+            (_EDITOR_ICON, _EDITOR_BASE_MODEL, _SHELF_FILENAME),
         )
 
 
@@ -2048,7 +2072,7 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
     is the seeded shelf model and carries its title and its picture, the LoRA
     is this module's model ghost and carries neither.
     """
-    _give_the_shelf_model_an_icon(workflow_env.server)
+    _give_the_shelf_model_a_picture(workflow_env.server)
     key = _file_a_workflow(
         workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
     )
@@ -2056,13 +2080,18 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
     card = _by_key(_cards(workflow_env.owner))[key]
     # `unet`, not `checkpoint`: the recovery keeps the widget each name came
     # off, and a Flux or Z-Image graph carries no checkpoint at all.
+    # `base_model` is the shelf's raw column and `base_model_folded` its
+    # canonical label: a client hashes a generated mark's colour out of
+    # `folded or raw`, so the same model has to arrive here spelled the way it
+    # arrives on the shelf or one file gets two colours in two places.
+    assert _EDITOR_BASE_MODEL_FOLDED not in (None, _EDITOR_BASE_MODEL)
     assert card["models"] == [
         {
             "name": _SHELF_DERIVED,
             "title": _SHELF_TITLE,
             "icon": _EDITOR_ICON,
-            "base_model": None,
-            "base_model_folded": None,
+            "base_model": _EDITOR_BASE_MODEL,
+            "base_model_folded": _EDITOR_BASE_MODEL_FOLDED,
             "kind": "unet",
             # Null and not an empty string: neither the shelf's column nor the
             # filename records a precision for this file.
@@ -2132,6 +2161,87 @@ def test_a_slots_quant_comes_from_the_shelf_first_and_the_filename_after(
     assert "f8" not in card["name"] and "fp8" not in card["name"]
 
 
+def test_an_editor_format_card_answers_the_same_on_its_own_route(
+    workflow_env, tmp_path, monkeypatch
+):
+    """The detail route reads the file too, and every write answers with it.
+
+    `_read_detail` is the write path's seam: PATCH, the defaults, the pins and
+    the slot marks all answer with it, so a card that had its models on the
+    grid and lost them the moment somebody renamed it would be the bug nobody
+    reported.
+    """
+    _give_the_shelf_model_a_picture(workflow_env.server)
+    key = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
+    )
+
+    on_the_grid = _by_key(_cards(workflow_env.owner))[key]
+    opened = _detail(workflow_env.owner, key)["card"]
+    assert opened["models"] == on_the_grid["models"]
+    assert opened["loras"] == on_the_grid["loras"]
+
+    # ...and after a write, which answers with that same read.
+    r = workflow_env.owner.patch(
+        f"{API}/workflows/{key}", json={"name": "Editor workflow"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["card"]["models"] == on_the_grid["models"]
+
+
+def test_two_files_of_one_topology_make_one_card(workflow_env, tmp_path, monkeypatch):
+    """A card key is a content address, so two copies of one graph share it.
+
+    The dedup guard: the same key must not arrive twice from the file pass, and
+    it must not arrive from the file pass at all once a variant already carries
+    it.
+    """
+    key = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
+    )
+    # The same graph under a second name, which files a second row on one key.
+    same = json.loads(json.dumps(_EDITOR_WORKFLOW))
+    assert (
+        _file_a_workflow(
+            workflow_env.server, tmp_path, monkeypatch, "editor-copy.json", same
+        )
+        == key
+    )
+
+    cards = _by_key(_cards(workflow_env.owner))
+    assert set(cards) == {BUSY_CARD, key}
+    # `MIN(workflow_name)`, the same rule the variant half of `card_index`
+    # uses, so a card names itself the same way on two reads of one hub. That
+    # is SQLite's byte order, where `editor-copy.json` sorts under
+    # `editor.json` because `-` precedes `.`.
+    assert cards[key]["name"] == "editor-copy"
+
+
+def test_a_loader_this_build_does_not_know_leaves_the_row_silent(
+    workflow_env, tmp_path, monkeypatch
+):
+    """No list of loader classes is every loader there is (#1466 review).
+
+    The recovery finds a LoRA it knows and misses the base model beside it, so
+    `models` is empty while `loras` is not. The row must still decline to say
+    "No checkpoint" — `variant_count: 0` is what a client branches on, and the
+    payload has to leave it that choice rather than implying an answer.
+    """
+    graph = json.loads(json.dumps(_EDITOR_WORKFLOW))
+    graph["nodes"][0]["type"] = "SomeThirdPartyCheckpointLoader"
+    key = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "custom.json", graph
+    )
+
+    card = _by_key(_cards(workflow_env.owner))[key]
+    assert card["models"] == []
+    # The DERIVED name: a slot's `name` is what the card calls the file, not
+    # the raw widget value it came off.
+    assert [lora["name"] for lora in card["loras"]] == ["add detail"]
+    # Non-empty models is NOT what tells a client the card was read.
+    assert card["variant_count"] == 0
+
+
 def test_a_card_with_a_recipe_never_reads_its_models_off_the_file(
     workflow_env, tmp_path, monkeypatch
 ):
@@ -2187,14 +2297,14 @@ def test_a_file_that_says_nothing_about_its_models_leaves_them_unread(
 def test_the_shelfs_picture_needs_one_candidate_where_its_name_needs_agreement(
     workflow_env,
 ):
-    """`model_marks`' rule beside `model_titles`', which it is not.
+    """`model_marks`' rule beside the narrowed title view, which it is not.
 
     Two shelf rows answering to one basename are two files. They can still
     agree on a name - and then the card may show it - but a thumbnail is a
     picture *of one of them*, so an ambiguous name takes none.
     """
     hub = workflow_env.server.hub
-    _give_the_shelf_model_an_icon(workflow_env.server)
+    _give_the_shelf_model_a_picture(workflow_env.server)
     mark = workflow_card_service.model_marks(hub, [_SHELF_FILENAME])[_SHELF_FILENAME]
     assert (mark.title, mark.icon) == (_SHELF_TITLE, _EDITOR_ICON)
 
@@ -2222,7 +2332,7 @@ def test_two_names_for_one_shelf_model_both_keep_its_picture(workflow_env):
     picture the shelf holds drawing initials.
     """
     hub = workflow_env.server.hub
-    _give_the_shelf_model_an_icon(workflow_env.server)
+    _give_the_shelf_model_a_picture(workflow_env.server)
     digest = hub.fetchone(
         "SELECT sha256 FROM model WHERE filename = ?", (_SHELF_FILENAME,)
     )["sha256"]
@@ -4781,9 +4891,9 @@ def test_a_kept_pictures_embedded_graph_is_the_second_source(runnable, monkeypat
     embedded["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
     read: list[int] = []
 
-    def fake_embedded(server, picture_id):
+    def fake_embedded(server, picture_id, object_info=None):
         read.append(picture_id)
-        return embedded
+        return embedded, []
 
     monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", fake_embedded)
     r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
@@ -4803,7 +4913,7 @@ def test_a_picture_whose_file_has_gone_falls_through_instead_of_erroring(
     is exactly when the next tier is wanted.
     """
 
-    def gone(server, picture_id):
+    def gone(server, picture_id, object_info=None):
         raise HTTPException(status_code=404, detail="Picture file missing")
 
     monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", gone)
@@ -4955,6 +5065,123 @@ def test_a_picture_on_no_card_reports_a1111_or_nothing_to_run(runnable, monkeypa
     monkeypatch.setattr(workflows_routes, "reduce_a1111", lambda metadata: object())
     payload = _preflight(runnable.owner, picture_ids=[unscanned.id])
     assert _reasons(payload) == {"a1111"}, payload
+
+
+# The editor serialisation of RUN_DOCUMENT's loader, sampler and writer, with
+# the widget values positional the way ComfyUI's editor writes them. Convertible
+# against RUN_OBJECT_INFO, which is what makes it a source.
+RUN_EDITOR_GRAPH = {
+    "last_node_id": 4,
+    "last_link_id": 0,
+    "links": [],
+    "nodes": [
+        {
+            "id": 1,
+            "type": "CheckpointLoaderSimple",
+            "mode": 0,
+            "inputs": [],
+            "outputs": [],
+            "widgets_values": ["realvisxl.safetensors"],
+        },
+        {
+            "id": 3,
+            "type": "KSampler",
+            "mode": 0,
+            "inputs": [],
+            "outputs": [],
+            "widgets_values": [123, 20, 7.0],
+        },
+        {
+            "id": 4,
+            "type": "SaveImage",
+            "mode": 0,
+            "inputs": [],
+            "outputs": [],
+            "widgets_values": ["ComfyUI"],
+        },
+    ],
+}
+
+
+def _only_an_editor_graph(monkeypatch, graph=None):
+    """Every picture answers with an editor `workflow` chunk and no API one.
+
+    Patched on `comfyui_module`, not on `workflows_routes`: the reader lives in
+    `routes/comfyui.py` and `_load_embedded_api_prompt` resolves it in ITS
+    namespace, so patching the name this module imported would leave the real
+    file read in place and the test would pass or fail for the wrong reason.
+    """
+    payload = {"png": {"workflow": json.dumps(graph or RUN_EDITOR_GRAPH)}}
+    monkeypatch.setattr(
+        comfyui_module,
+        "_read_embedded_metadata",
+        lambda server, pid: json.loads(json.dumps(payload)),
+    )
+
+
+def test_a_picture_whose_only_graph_is_the_editors_is_still_a_source(runnable):
+    """The card run rebuilds an editor graph, like the recipe replay does.
+
+    **This is the path that outlives `POST /comfyui/run_recipe`.** The rebuild
+    lives in `_load_embedded_api_prompt`, which both callers come through, so
+    retiring that route cannot take the capability with it - and this test is
+    in the run route's own file so the coverage does not go either.
+    """
+    _only_an_editor_graph(runnable.monkeypatch)
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["groups"][0]["source"] == "picture", body
+    assert body["groups"][0]["reasons"] == [], body
+    assert len(runnable.submitted) == 1, runnable.submitted
+    graph = runnable.submitted[0]["graph"]
+    # The rebuild, read off `/object_info` rather than guessed: the widget
+    # array `[123, 20, 7.0]` lands on seed, steps and cfg in that order.
+    assert set(graph) == {"1", "3", "4"}, graph
+    assert graph["3"]["class_type"] == "KSampler"
+    assert graph["3"]["inputs"]["steps"] == 20
+    assert graph["3"]["inputs"]["cfg"] == 7.0
+    assert graph["1"]["inputs"]["ckpt_name"] == "realvisxl.safetensors"
+    assert graph["4"]["inputs"]["filename_prefix"] == "ComfyUI"
+
+
+def test_an_editor_graph_that_will_not_rebuild_is_not_a_source(runnable):
+    """A refusal makes the resolver move on; it must not fail the run.
+
+    The other half of the contract `_load_embedded_api_prompt` returns problems
+    for: this caller is walking candidates, so "this one cannot be rebuilt"
+    means take the next tier, while the recipe replay - which is replaying that
+    one picture - answers 400 and names what stopped it.
+    """
+    broken = json.loads(json.dumps(RUN_EDITOR_GRAPH))
+    broken["nodes"][1]["widgets_values"] = [123, 20, 7.0, "one too many"]
+    _only_an_editor_graph(runnable.monkeypatch, broken)
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    # The instance tier answers instead, and nothing raised on the way past.
+    assert payload["groups"][0]["source"] != "picture", payload
+
+
+def test_the_run_reads_object_info_itself_rather_than_a_cached_map(runnable):
+    """A run decides what executes, so it asks ComfyUI now.
+
+    The recipe READ may serve a map up to a minute old - that is what makes
+    stepping the filmstrip affordable - and a run that reused it could submit
+    a graph against node definitions that have since changed. Ported here from
+    the recipe route's own file when #1410 retired `POST /comfyui/run_recipe`;
+    the property belongs to whichever route runs things.
+    """
+    asked = []
+
+    def spy(url, **kwargs):
+        asked.append(kwargs)
+        return json.loads(json.dumps(RUN_OBJECT_INFO)), None
+
+    runnable.monkeypatch.setattr(workflows_routes, "_read_object_info", spy)
+    _only_an_editor_graph(runnable.monkeypatch)
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    assert r.status_code == 200, r.text
+    assert asked, "the run must read /object_info"
+    assert all(not call.get("cached") for call in asked), asked
 
 
 def test_a_missing_node_pack_is_reported_by_name(runnable):
@@ -5603,7 +5830,9 @@ def test_keeping_a_seed_a_stored_recipe_does_not_have_is_refused(runnable):
     embedded["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
     embedded["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
     runnable.monkeypatch.setattr(
-        workflows_routes, "_load_embedded_api_prompt", lambda server, pid: embedded
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (embedded, []),
     )
     r = runnable.owner.post(
         f"{API}/workflows/run",
@@ -5926,7 +6155,9 @@ def exportable(runnable):
     """
     graph = _embedded_export_graph()
     runnable.monkeypatch.setattr(
-        workflows_routes, "_load_embedded_api_prompt", lambda server, pid: graph
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
     )
     return SimpleNamespace(graph=graph, **vars(runnable))
 
@@ -5985,7 +6216,9 @@ def test_a_structural_lora_that_is_on_the_shelf_travels_with_the_workflow(
     """The positive control: a lightning LoRA IS the workflow, so it is kept."""
     graph = _embedded_export_graph(lora=RUN_ADAPTER_FILENAME)
     monkeypatch.setattr(
-        workflows_routes, "_load_embedded_api_prompt", lambda server, pid: graph
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
     )
     _mark_slot(runnable.server, _lora_slot_label(graph), "structural")
     payload = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/export").json()
@@ -6020,7 +6253,10 @@ def test_an_export_refuses_a_graph_it_cannot_read_rather_than_publishing_it(
         "_load_embedded_api_prompt",
         # Node-shaped enough to survive `sanitize_prompt_graph` and refused by
         # the reducer: `inputs` is not a mapping.
-        lambda server, pid: {"1": {"class_type": "KSampler", "inputs": ["nope"]}},
+        lambda server, pid, object_info=None: (
+            {"1": {"class_type": "KSampler", "inputs": ["nope"]}},
+            [],
+        ),
     )
     r = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/export")
     assert r.status_code == 409, r.text
@@ -6161,7 +6397,10 @@ def loaderless(runnable, tmp_path):
     runnable.monkeypatch.setattr(
         workflows_routes,
         "_load_embedded_api_prompt",
-        lambda server, pid: json.loads(json.dumps(LOADERLESS_DOCUMENT)),
+        lambda server, pid, object_info=None: (
+            json.loads(json.dumps(LOADERLESS_DOCUMENT)),
+            [],
+        ),
     )
     runnable.monkeypatch.setattr(
         workflows_routes,
@@ -6219,7 +6458,7 @@ def test_inserting_a_loader_into_a_workflow_that_has_one_is_refused_with_the_rea
     runnable.monkeypatch.setattr(
         workflows_routes,
         "_load_embedded_api_prompt",
-        lambda server, pid: _embedded_export_graph(),
+        lambda server, pid, object_info=None: (_embedded_export_graph(), []),
     )
     r = runnable.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
     assert r.status_code == 409, r.text
@@ -6232,7 +6471,10 @@ def test_inserting_a_loader_without_comfyui_is_a_503_not_a_guess(runnable, tmp_p
     runnable.monkeypatch.setattr(
         workflows_routes,
         "_load_embedded_api_prompt",
-        lambda server, pid: json.loads(json.dumps(LOADERLESS_DOCUMENT)),
+        lambda server, pid, object_info=None: (
+            json.loads(json.dumps(LOADERLESS_DOCUMENT)),
+            [],
+        ),
     )
     runnable.monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
@@ -6584,9 +6826,10 @@ def test_a_graph_too_deeply_nested_to_walk_is_refused_not_a_500(runnable, monkey
     monkeypatch.setattr(
         workflows_routes,
         "_load_embedded_api_prompt",
-        lambda server, pid: {
-            "1": {"class_type": "KSampler", "inputs": {"whatever": nested}}
-        },
+        lambda server, pid, object_info=None: (
+            {"1": {"class_type": "KSampler", "inputs": {"whatever": nested}}},
+            [],
+        ),
     )
     r = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/export")
     assert r.status_code == 409, r.text

@@ -175,10 +175,15 @@ def _file_only_cards(hub: HubDatabase, keyed: set[str]) -> list[Card]:
     """
     found = {}
     for row in hub.fetchall(
+        # NOT EXISTS rather than NOT IN: `workflow_variant.structural_hash` is
+        # a TEXT primary key, which SQLite does not imply NOT NULL on, and one
+        # NULL there makes a NOT IN predicate NULL for every row - silently
+        # returning no file-only cards at all. No writer does it today; this
+        # costs the same and cannot be made to.
         "SELECT f.topology_hash AS topology_hash, "
         "MIN(f.workflow_name) AS workflow_name FROM workflow_file f "
-        "WHERE f.structural_hash IS NULL OR f.structural_hash NOT IN "
-        "(SELECT structural_hash FROM workflow_variant WHERE key_version = ?) "
+        "WHERE NOT EXISTS (SELECT 1 FROM workflow_variant v "
+        "WHERE v.structural_hash = f.structural_hash AND v.key_version = ?) "
         "GROUP BY f.topology_hash ORDER BY f.topology_hash",
         (WORKFLOW_KEY_VERSION,),
     ):
