@@ -341,6 +341,15 @@ const RUN_REASONS = {
  */
 const conversionProblems = computed(() => props.recipe?.conversionProblems || []);
 
+/**
+ * Whether this recipe's graph was never resolved, so the fields read off a
+ * resolved graph are *unknown* rather than *absent*.
+ *
+ * Only the editor-graph refusal: an A1111 picture's fields ARE read, and an
+ * ordinary ComfyUI one's are too.
+ */
+const unreadable = computed(() => props.recipe?.reason === "editor_graph");
+
 const runReason = computed(() => {
   if (!props.recipe) return null;
   // Order matters, because these are ranked by what the reader can do about
@@ -519,18 +528,37 @@ const settingRows = computed(() => {
   }
 
   // Always shown: "no negative prompt" and "no seed" are both worth reading.
+  //
+  // **"none" is a claim about the graph, so it is only made about a graph that
+  // was read.** The negative prompt and the sampler settings come off the
+  // resolved API graph; a picture whose editor graph would not rebuild has no
+  // resolved graph, so PixlStash did not read them rather than found them
+  // absent. Printing "none" there tells the reader the workflow has no
+  // negative prompt, which is a different and possibly false thing. The seed
+  // IS read off the editor graph directly, so it keeps its own answer.
   rows.push({
     label: "Seed",
     value: recipe.seedText || "none",
     absent: !recipe.seedText,
     mono: Boolean(recipe.seedText),
   });
-  rows.push({
-    label: "Negative",
-    value: recipe.negativePrompt || "none",
-    absent: !recipe.negativePrompt,
-    note: recipe.negativePrompt || null,
-  });
+  rows.push(
+    unreadable.value
+      ? {
+          label: "Negative",
+          value: "not read",
+          absent: true,
+          note:
+            "PixlStash could not rebuild this workflow, so its negative " +
+            "prompt and settings were not read off it.",
+        }
+      : {
+          label: "Negative",
+          value: recipe.negativePrompt || "none",
+          absent: !recipe.negativePrompt,
+          note: recipe.negativePrompt || null,
+        },
+  );
   return rows;
 });
 

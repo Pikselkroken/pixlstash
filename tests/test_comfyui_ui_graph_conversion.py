@@ -418,6 +418,159 @@ class TestItConvertsExactly:
         assert prompt["12"]["inputs"] == {}
         assert "6" not in prompt
 
+    def test_a_getnode_fetches_what_its_setnode_was_given(self):
+        """KJNodes `SetNode`/`GetNode` are a wire drawn in two halves.
+
+        A `GetNode` has no input of its own, so the ordinary chase finds
+        nothing and the sampler below would be left with no model at all. The
+        editor pairs them by the name in their widget, and so does this.
+        """
+        graph = _graph(
+            [
+                _node(
+                    4,
+                    "CheckpointLoaderSimple",
+                    outputs=[{"name": "MODEL", "type": "MODEL", "links": [1]}],
+                    widgets=["sd_xl_base_1.0.safetensors"],
+                ),
+                _node(
+                    20,
+                    "SetNode",
+                    inputs=[{"name": "MODEL", "type": "MODEL", "link": 1}],
+                    outputs=[],
+                    widgets=["the_model"],
+                ),
+                _node(
+                    21,
+                    "GetNode",
+                    inputs=[],
+                    outputs=[{"name": "MODEL", "type": "MODEL", "links": [2]}],
+                    widgets=["the_model"],
+                ),
+                _node(
+                    3,
+                    "KSampler",
+                    inputs=[{"name": "model", "type": "MODEL", "link": 2}],
+                    widgets=[1, "fixed", 20, 7.0],
+                ),
+            ],
+            [[1, 4, 0, 20, 0, "MODEL"], [2, 21, 0, 3, 0, "MODEL"]],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert problems == []
+        # Neither half is a node ComfyUI would run.
+        assert set(prompt) == {"4", "3"}
+        assert prompt["3"]["inputs"]["model"] == ["4", 0]
+
+    def test_a_getnode_that_pairs_with_nothing_stops_it(self):
+        """Not "drop the edge": that is a graph with no model, run anyway."""
+        graph = _graph(
+            [
+                _node(
+                    21,
+                    "GetNode",
+                    outputs=[{"name": "MODEL", "type": "MODEL", "links": [2]}],
+                    widgets=["never_set"],
+                ),
+                _node(
+                    3,
+                    "KSampler",
+                    inputs=[{"name": "model", "type": "MODEL", "link": 2}],
+                    widgets=[1, "fixed", 20, 7.0],
+                ),
+            ],
+            [[2, 21, 0, 3, 0, "MODEL"]],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert (
+            "fetches 'never_set', which this editor graph files under 0"
+            in (problems[0])
+        )
+
+    def test_a_setnode_with_nothing_wired_into_it_stops_it(self):
+        """The name pairs, and there is still nothing behind it.
+
+        Separate from the unpaired case: here the `SetNode` exists and is
+        unique, so a converter that stopped at "one match" would go on to
+        resolve an empty input list to nothing and drop the edge in silence.
+        """
+        graph = _graph(
+            [
+                _node(20, "SetNode", inputs=[], outputs=[], widgets=["the_model"]),
+                _node(
+                    21,
+                    "GetNode",
+                    outputs=[{"name": "MODEL", "type": "MODEL", "links": [2]}],
+                    widgets=["the_model"],
+                ),
+                _node(
+                    3,
+                    "KSampler",
+                    inputs=[{"name": "model", "type": "MODEL", "link": 2}],
+                    widgets=[1, "fixed", 20, 7.0],
+                ),
+            ],
+            [[2, 21, 0, 3, 0, "MODEL"]],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert (
+            "the node filing 'the_model' has 0 wires into it, so there is no "
+            "one thing to fetch" in problems
+        )
+
+    def test_two_setnodes_under_one_name_stop_it(self):
+        """First-wins would pick one of two wires and report an exact rebuild."""
+        graph = _graph(
+            [
+                _node(
+                    4,
+                    "CheckpointLoaderSimple",
+                    outputs=[{"name": "MODEL", "type": "MODEL", "links": [1]}],
+                    widgets=["sd_xl_base_1.0.safetensors"],
+                ),
+                _node(
+                    41,
+                    "CheckpointLoaderSimple",
+                    outputs=[{"name": "MODEL", "type": "MODEL", "links": [3]}],
+                    widgets=["sd_xl_base_1.0.safetensors"],
+                ),
+                _node(
+                    20,
+                    "SetNode",
+                    inputs=[{"name": "MODEL", "type": "MODEL", "link": 1}],
+                    widgets=["the_model"],
+                ),
+                _node(
+                    22,
+                    "SetNode",
+                    inputs=[{"name": "MODEL", "type": "MODEL", "link": 3}],
+                    widgets=["the_model"],
+                ),
+                _node(
+                    21,
+                    "GetNode",
+                    outputs=[{"name": "MODEL", "type": "MODEL", "links": [2]}],
+                    widgets=["the_model"],
+                ),
+                _node(
+                    3,
+                    "KSampler",
+                    inputs=[{"name": "model", "type": "MODEL", "link": 2}],
+                    widgets=[1, "fixed", 20, 7.0],
+                ),
+            ],
+            [
+                [1, 4, 0, 20, 0, "MODEL"],
+                [3, 41, 0, 22, 0, "MODEL"],
+                [2, 21, 0, 3, 0, "MODEL"],
+            ],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert "files under 2 matching nodes" in problems[0]
+
     def test_editor_annotations_are_dropped_rather_than_refused(self):
         graph = _graph(
             [
@@ -453,12 +606,13 @@ class TestItRefusesRatherThanGuesses:
         assert prompt is None
         assert problems == ["this ComfyUI has no node class 'SomeCustomPackNode'"]
 
-    def test_an_unexplained_widget_value_stops_it(self):
-        """One value too many means every later value in the node is suspect.
+    def test_a_value_of_the_wrong_type_stops_it_where_it_lands(self):
+        """The check the arithmetic one cannot make.
 
-        This is the case a lenient converter gets wrong silently: the sampler
-        below would read steps as 20 and cfg as 7.5 while the real graph ran 7.5
-        steps at some other cfg.
+        A pack that DROPS one widget and ADDS another leaves the count
+        unchanged, so counting alone converts clean and every value after the
+        change lands on the wrong input. Here the string reaches `steps`, which
+        takes an INT, and that is caught at the slot rather than at the total.
         """
         graph = _graph(
             [_node(3, "KSampler", widgets=[1, "fixed", "extra", 20, 7.5])], []
@@ -466,8 +620,37 @@ class TestItRefusesRatherThanGuesses:
         prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
         assert prompt is None
         assert problems == [
+            "KSampler (node 3) has 'extra' where its 'steps' input takes a "
+            "INT, so its widget values do not line up with the node this "
+            "ComfyUI has"
+        ]
+
+    def test_an_unexplained_widget_value_stops_it(self):
+        """One value too many means every later value in the node is suspect.
+
+        Every value here is of a type its input could hold, so the total is
+        the only thing left to notice - which is why both checks exist.
+        """
+        graph = _graph([_node(3, "KSampler", widgets=[1, "fixed", 20, 7.5, 99])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert problems == [
             "KSampler (node 3) carries 5 widget values, and its inputs account for 4"
         ]
+
+    def test_a_same_type_swap_is_the_residual_this_cannot_catch(self):
+        """Stated as a test so the limit is written down, not implied.
+
+        `steps` and a hypothetical second INT trading places keeps the count
+        and every type, and a positional array carries no names to tell them
+        apart. Nothing here claims otherwise.
+        """
+        graph = _graph([_node(3, "KSampler", widgets=[1, "fixed", 7, 20.0])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert problems == []
+        # Read as declared, which is all the file allows.
+        assert prompt["3"]["inputs"]["steps"] == 7
+        assert prompt["3"]["inputs"]["cfg"] == 20.0
 
     def test_it_refuses_without_object_info(self):
         """ComfyUI unreachable is a refusal, not a licence to guess the order."""

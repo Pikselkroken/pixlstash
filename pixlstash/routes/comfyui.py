@@ -870,17 +870,48 @@ def _read_embedded_metadata(server, pic_id: int) -> dict:
         ) from exc
 
 
-def _load_embedded_api_prompt(server, pic_id: int) -> dict | None:
-    """Return the picture's embedded API-format ``prompt`` graph, or ``None``.
+def _load_embedded_api_prompt(
+    server, pic_id: int, object_info: dict | None = None
+) -> tuple[dict | None, list[str]]:
+    """The graph a replay of *pic_id* would submit, and why there is none.
 
-    ``None`` covers every honest "there is nothing to replay" case: a UI-graph
-    only file, A1111 metadata, a stripped PNG, or a JPEG. It is not an error.
+    The embedded API-format ``prompt`` chunk when the file has one, and
+    otherwise the editor ``workflow`` chunk rebuilt into one against
+    *object_info*.
+
+    **The rebuild lives here rather than in a handler on purpose.** Every route
+    that runs a picture's own graph comes through this function, and the one
+    that could not run an editor graph - the card run's embedded-picture tier
+    in ``routes/workflows.py`` - is precisely the caller that outlives
+    ``POST /comfyui/run_recipe``. Teaching the handler instead would have left
+    the surviving path unable to run what the Recipe tab offers, so the offer
+    would have quietly stopped meaning anything the day that route retired.
+
+    ``object_info`` of ``None`` is "ComfyUI was not asked", which is a refusal
+    and not a licence to guess: reading a positional widget array at all needs
+    ComfyUI's own node definitions.
+
+    Returns:
+        ``(graph, [])`` when there is something to submit, ``(None, problems)``
+        otherwise. **The two "no"s are different and the caller picks.** An
+        empty ``problems`` means the picture carries no workflow - A1111, a
+        stripped PNG, a photo - and a caller walking candidates should move on
+        to the next one. A non-empty one means this picture HAS a workflow that
+        would not rebuild, which a caller replaying *this* picture owes its
+        reader as a sentence.
 
     Raises:
         HTTPException: 404 when the picture or its file cannot be resolved,
             500 when the file exists but its metadata cannot be read.
     """
-    return find_comfy_api_prompt(_read_embedded_metadata(server, pic_id))
+    metadata = _read_embedded_metadata(server, pic_id)
+    prompt_graph = find_comfy_api_prompt(metadata)
+    if prompt_graph:
+        return prompt_graph, []
+    editor_graph = find_comfy_workflow(metadata)
+    if not is_ui_graph(editor_graph):
+        return None, []
+    return convert_ui_graph_to_api(editor_graph, object_info)
 
 
 def _picture_workflow_key(server, pic_id: int) -> str | None:

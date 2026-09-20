@@ -554,6 +554,31 @@ describe("OverlayRecipePanel", () => {
     expect(wrapper.find(".recipe-prompt").text()).toBe(RECIPE.positive_prompt);
   });
 
+  it("says the negative prompt was not read, never that there is none", () => {
+    // "none" is a claim about the workflow. This workflow was not read, so
+    // making it would be telling the reader something PixlStash does not know.
+    const wrapper = render({ recipe: { ...EDITOR_REFUSAL, negativePrompt: null } });
+    const negative = settingsOf(wrapper).find(([label]) => label === "Negative");
+    expect(negative).toBeDefined();
+    expect(negative[1]).toBe("not read");
+  });
+
+  it("still says none on a graph it DID read", () => {
+    // The control: over-reporting "not read" would hide a real fact, which is
+    // its own regression.
+    const wrapper = render({ recipe: { ...RECIPE, negativePrompt: null } });
+    const negative = settingsOf(wrapper).find(([label]) => label === "Negative");
+    expect(negative[1]).toBe("none");
+  });
+
+  it("keeps the seed it did read off a refused editor graph", () => {
+    // The seed comes off the editor graph directly, so it is known even when
+    // the rebuild failed - blanket "not read" would throw that away.
+    const wrapper = render({ recipe: EDITOR_REFUSAL });
+    const seed = settingsOf(wrapper).find(([label]) => label === "Seed");
+    expect(seed[1]).toBe(RECIPE.seedText);
+  });
+
   it("prints no problem list for every other recipe", () => {
     const wrapper = render({ recipe: RECIPE, canGenerateVariants: true });
     expect(wrapper.find(".recipe-run-problems").exists()).toBe(false);

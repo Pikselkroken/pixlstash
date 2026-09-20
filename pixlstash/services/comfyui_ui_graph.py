@@ -33,6 +33,8 @@ from __future__ import annotations
 
 import logging
 
+from pixlstash.services.workflow_hash import UI_PASSTHROUGH_CLASSES
+
 logger = logging.getLogger(__name__)
 
 # Input types whose value is a widget in the editor rather than a wire. A combo
@@ -55,9 +57,34 @@ _EXTRA_WIDGET_OPTIONS = (
 # so they are dropped rather than refused.
 _ANNOTATION_CLASSES = frozenset({"Note", "MarkdownNote"})
 
-# A drawn link. The server has no such class; a wire through one resolves to
-# whatever feeds it.
-_PASSTHROUGH_CLASSES = frozenset({"Reroute"})
+# Drawn links. `UI_PASSTHROUGH_CLASSES` is the repo's own list of what is
+# "present in the UI graph, absent from the executed API graph" and is imported
+# rather than restated: a second, smaller copy here read `Reroute` only, so a
+# graph wired through a KJNodes `GetNode` converted with nothing feeding the
+# node downstream of it.
+#
+# **Checked before `/object_info`, deliberately.** KJNodes registers `GetNode`
+# and `SetNode` server-side, so they ARE in the map on a machine that has the
+# pack - and the editor still resolves them away before submitting. Emitting
+# one because ComfyUI declares it would put a node in the prompt that the
+# editor never sends.
+_SET_NODE = "SetNode"
+_GET_NODE = "GetNode"
+
+# Widget values that are a type the input cannot hold. The positional array
+# carries no names, so this is the only thing that catches a node whose widget
+# list has been re-ordered by a pack update: the COUNT still matches when one
+# widget is dropped and another added, and the values land on the wrong inputs.
+# A swap between two widgets of the SAME type is invisible to this and to any
+# other check the array allows - the honest residual, not a claim of safety.
+_TYPE_HOLDS = {
+    "INT": lambda value: isinstance(value, int) and not isinstance(value, bool),
+    "FLOAT": lambda value: (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+    ),
+    "STRING": lambda value: isinstance(value, str),
+    "BOOLEAN": lambda value: isinstance(value, bool),
+}
 
 # Node.mode in the editor graph: 2 is muted, 4 is bypassed. Neither runs.
 _MODE_MUTED = 2
@@ -133,6 +160,19 @@ def _node_class(node: dict) -> str:
     return str(node.get("type") or "")
 
 
+def _constant_name(node: dict) -> str | None:
+    """The name a KJNodes ``SetNode``/``GetNode`` files its wire under."""
+    values = node.get("widgets_values")
+    if isinstance(values, list) and values and isinstance(values[0], str):
+        return values[0]
+    if isinstance(values, dict):
+        for key in ("Constant", "constant", "name"):
+            value = values.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
 def _index_links(workflow: dict) -> dict[object, tuple[object, int]]:
     """``{link_id: (origin_node_id, origin_slot)}`` for both link spellings."""
     links: dict[object, tuple[object, int]] = {}
@@ -164,6 +204,17 @@ class _Converter:
                 continue
             self.nodes[node_id] = node
         self.links = _index_links(workflow)
+        # `{name: [SetNode, ...]}`, so a `GetNode` can be resolved to whatever
+        # feeds the `SetNode` it names. A list, not a single node: two SetNodes
+        # under one name is a graph nobody can read unambiguously, and that is
+        # a refusal rather than a first-wins guess.
+        self.set_nodes: dict[str, list[dict]] = {}
+        for node in self.nodes.values():
+            if _node_class(node) != _SET_NODE:
+                continue
+            name = _constant_name(node)
+            if name:
+                self.set_nodes.setdefault(name, []).append(node)
 
     def _resolve(self, link_id, depth: int = 0) -> list | None:
         """``[node_id, slot]`` for a wire, chasing reroutes and bypasses.
@@ -186,7 +237,9 @@ class _Converter:
         node_class = _node_class(node)
         if mode == _MODE_MUTED:
             return None
-        if mode == _MODE_BYPASSED or node_class in _PASSTHROUGH_CLASSES:
+        if node_class == _GET_NODE:
+            return self._chase_through_set_node(node, depth)
+        if mode == _MODE_BYPASSED or node_class in UI_PASSTHROUGH_CLASSES:
             return self._chase_through(node, origin_slot, depth)
         if node_class not in self.object_info:
             self.problems.append(f"this ComfyUI has no node class {node_class!r}")
@@ -221,6 +274,36 @@ class _Converter:
             if wanted == "*" or candidate.get("type") in (wanted, "*"):
                 return self._resolve(candidate["link"], depth + 1)
         return None
+
+    def _chase_through_set_node(self, node: dict, depth: int) -> list | None:
+        """Follow a ``GetNode`` to whatever feeds the ``SetNode`` it names.
+
+        A ``GetNode`` has no input of its own - it fetches a wire the editor
+        filed under a name - so the ordinary chase finds nothing and the node
+        downstream of it silently loses its input. Pairing is by that name,
+        exactly as the editor pairs them, and anything that is not one name
+        matching one ``SetNode`` with one wire into it is refused.
+        """
+        name = _constant_name(node)
+        candidates = self.set_nodes.get(name or "", [])
+        if not name or len(candidates) != 1:
+            self.problems.append(
+                f"node {node.get('id')} fetches {name!r}, which this editor "
+                f"graph files under {len(candidates)} matching nodes"
+            )
+            return None
+        wired = [
+            entry
+            for entry in candidates[0].get("inputs") or []
+            if isinstance(entry, dict) and entry.get("link") is not None
+        ]
+        if len(wired) != 1:
+            self.problems.append(
+                f"the node filing {name!r} has {len(wired)} wires into it, so "
+                "there is no one thing to fetch"
+            )
+            return None
+        return self._resolve(wired[0]["link"], depth + 1)
 
     def _connected_inputs(self, node: dict) -> dict[str, object]:
         return {
@@ -282,7 +365,18 @@ class _Converter:
                     inputs[name] = widget_values[name]
                 continue
             if consumed < len(positional):
-                inputs[name] = positional[consumed]
+                value = positional[consumed]
+                holds = (
+                    _TYPE_HOLDS.get(type_field) if isinstance(type_field, str) else None
+                )
+                if holds is not None and not holds(value):
+                    self.problems.append(
+                        f"{where} has {value!r} where its {name!r} input takes "
+                        f"a {type_field}, so its widget values do not line up "
+                        "with the node this ComfyUI has"
+                    )
+                    return None
+                inputs[name] = value
             consumed += 1 + _extra_widget_slots(options)
         if by_name:
             declared_names = {name for name, _t, _o, _r in declared}
@@ -319,7 +413,7 @@ class _Converter:
                 continue
             if (node.get("mode") or 0) in (_MODE_MUTED, _MODE_BYPASSED):
                 continue
-            if node_class in _PASSTHROUGH_CLASSES:
+            if node_class in UI_PASSTHROUGH_CLASSES:
                 continue
             if node_class not in self.object_info:
                 self.problems.append(f"this ComfyUI has no node class {node_class!r}")
