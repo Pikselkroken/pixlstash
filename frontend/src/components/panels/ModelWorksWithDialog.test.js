@@ -1,0 +1,221 @@
+// "Works with" for one model (#1438).
+//
+// Two assertions carry this screen. The ranking has to be by RECIPES, because
+// that is the only thing co-occurrence measures - a list ordered by pictures
+// would put a prolific one-off above the pairing the library actually leans on.
+// And the closing notice has to be there whenever a companion list is: without
+// it a short list reads as a compatibility verdict, which is the one claim this
+// feature must not make.
+
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { mount } from "@vue/test-utils";
+import { setActivePinia, createPinia } from "pinia";
+
+const fetchWorkflowSets = vi.fn();
+
+vi.mock("../../api/modelShelf", () => ({
+  BASE_MODEL_UNASSIGNED: "UNASSIGNED",
+  listAdapters: vi.fn().mockResolvedValue([]),
+  listCheckpoints: vi.fn().mockResolvedValue([]),
+  listBaseModelCompletions: vi.fn().mockResolvedValue([]),
+  editModels: vi.fn(),
+  forgetModels: vi.fn(),
+  deleteModels: vi.fn(),
+  setAdapterAttachments: vi.fn(),
+  fetchWorkflowSets: (...args) => fetchWorkflowSets(...args),
+}));
+
+vi.mock("../../api/modelIcons", () => ({
+  setModelIcon: vi.fn(),
+  clearModelIcons: vi.fn(),
+  modelIconUrl: (sha) => `/api/v1/model-icons/${sha}`,
+}));
+
+import ModelWorksWithDialog from "./ModelWorksWithDialog.vue";
+import { useModelShelfStore } from "../../stores/useModelShelfStore";
+
+const globalOpts = {
+  global: {
+    stubs: {
+      "v-icon": true,
+      Tooltip: true,
+      ChipRow: {
+        props: ["items"],
+        template:
+          "<div class='chips'><span v-for='i in items' :key='i.key'>{{ i.label }}</span></div>",
+      },
+      // The shell teleports and is AppDialog's own contract; the body slot has
+      // to render or there is nothing here to assert against.
+      AppDialog: {
+        props: ["open", "title", "subtitle"],
+        template:
+          "<div v-if='open'><h2>{{ title }}</h2><p class='sub'>{{ subtitle }}</p><slot /></div>",
+      },
+    },
+  },
+};
+
+function member(id, name, kind) {
+  return { id, name, kind, filename: name, file_size: 1000, ambiguous: false };
+}
+
+const CKPT = member(1, "realvisXL_v5", "checkpoint");
+const OTHER = member(9, "juggernautXL_v9", "checkpoint");
+const VAE = member(2, "sdxl_vae", "vae");
+const CLIP = member(4, "clip_l", "text_encoder");
+
+function combination(key, models, { recipes = 1, pictures = 1 } = {}) {
+  return { key, models, recipes, picture_count: pictures, covers: [] };
+}
+
+async function mountDialog(model, combinations) {
+  fetchWorkflowSets.mockResolvedValue({ combinations, no_set: [] });
+  const wrapper = mount(ModelWorksWithDialog, {
+    ...globalOpts,
+    props: { model },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await wrapper.vm.$nextTick();
+  return wrapper;
+}
+
+beforeEach(() => {
+  setActivePinia(createPinia());
+  window.localStorage.clear();
+  fetchWorkflowSets.mockReset().mockResolvedValue({ combinations: [], no_set: [] });
+});
+
+describe("the companion list", () => {
+  const SETS = [
+    // `clip_l` shares 6 recipes with the VAE and `realvisXL_v5` only 2, but the
+    // checkpoint's pictures dwarf the encoder's: ordered by pictures the two
+    // would swap, which is what makes this fixture worth having.
+    combination("1,2,4", [CKPT, VAE, CLIP], { recipes: 2, pictures: 500 }),
+    combination("2,4,9", [OTHER, VAE, CLIP], { recipes: 4, pictures: 10 }),
+  ];
+
+  it("ranks by recipes, which is the only thing co-occurrence measures", async () => {
+    const wrapper = await mountDialog({ ...VAE }, SETS);
+
+    const names = wrapper.findAll(".ww__name").map((el) => el.text());
+    expect(names).toEqual(["clip_l", "juggernautXL_v9", "realvisXL_v5"]);
+    expect(wrapper.findAll(".ww__figures")[0].text()).toContain("6 recipes");
+  });
+
+  it("states the sets it is in above the companions", async () => {
+    const wrapper = await mountDialog({ ...VAE }, SETS);
+
+    expect(wrapper.text()).toContain("In 2 sets");
+    expect(wrapper.find(".chips").text()).toContain("realvisXL_v5 · sdxl_vae");
+  });
+
+  it("never lists the model itself", async () => {
+    const wrapper = await mountDialog({ ...VAE }, SETS);
+
+    expect(wrapper.findAll(".ww__name").map((el) => el.text())).not.toContain(
+      "sdxl_vae",
+    );
+  });
+
+  it("closes with the notice that a missing companion is untested", async () => {
+    const wrapper = await mountDialog({ ...VAE }, SETS);
+
+    expect(wrapper.find(".ww__notice").text()).toContain("Nothing is ruled out");
+  });
+
+  it("offers the rest behind one press rather than drawing twenty", async () => {
+    const many = [
+      combination(
+        "1,2,4,9,10,11",
+        [
+          CKPT,
+          VAE,
+          CLIP,
+          OTHER,
+          member(10, "extra_a", "adapter"),
+          member(11, "extra_b", "adapter"),
+        ],
+        { recipes: 3 },
+      ),
+    ];
+    const wrapper = await mountDialog({ ...VAE }, many);
+
+    expect(wrapper.findAll(".ww__name")).toHaveLength(4);
+    await wrapper.find("button").trigger("click");
+    expect(wrapper.findAll(".ww__name")).toHaveLength(5);
+  });
+});
+
+describe("a model no recipe names", () => {
+  it("says so without implying anything about what it works with", async () => {
+    const wrapper = await mountDialog({ ...VAE }, [
+      combination("1,4", [CKPT, CLIP]),
+    ]);
+
+    expect(wrapper.text()).toContain("No recipe in this library names this file");
+    expect(wrapper.text()).toContain("only a record of what has been tried");
+    // And no notice: there is no list for it to qualify, and the sentence above
+    // already carries the caveat.
+    expect(wrapper.find(".ww__notice").exists()).toBe(false);
+  });
+
+  it("reports a failed read rather than an empty answer", async () => {
+    fetchWorkflowSets.mockRejectedValue(new Error("hub is busy"));
+    const wrapper = mount(ModelWorksWithDialog, {
+      ...globalOpts,
+      props: { model: { ...VAE } },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find('[role="alert"]').text()).toContain("hub is busy");
+  });
+});
+
+describe("the dialog itself", () => {
+  it("is closed with no model, and asks for the read when one arrives", async () => {
+    fetchWorkflowSets.mockResolvedValue({ combinations: [], no_set: [] });
+    const wrapper = mount(ModelWorksWithDialog, {
+      ...globalOpts,
+      props: { model: null },
+    });
+    expect(wrapper.text()).toBe("");
+    expect(fetchWorkflowSets).not.toHaveBeenCalled();
+
+    await wrapper.setProps({ model: { ...VAE } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(fetchWorkflowSets).toHaveBeenCalledTimes(1);
+    expect(wrapper.find("h2").text()).toBe("sdxl_vae");
+  });
+
+  it("collapses the list again when it is pointed at another model", async () => {
+    const store = useModelShelfStore();
+    // Six files, so the anchor has five companions and *Show all* is offered.
+    const many = [
+      combination(
+        "1,2,4,9,10,11",
+        [
+          CKPT,
+          VAE,
+          CLIP,
+          OTHER,
+          member(10, "extra_a", "adapter"),
+          member(11, "extra_b", "adapter"),
+        ],
+        { recipes: 3 },
+      ),
+    ];
+    const wrapper = await mountDialog({ ...VAE }, many);
+    await wrapper.find("button").trigger("click");
+    expect(wrapper.findAll(".ww__name")).toHaveLength(5);
+
+    await wrapper.setProps({ model: { ...CLIP } });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.findAll(".ww__name")).toHaveLength(4);
+    // Read once: the store's guard drops the repeat, so switching model is free.
+    expect(fetchWorkflowSets).toHaveBeenCalledTimes(1);
+    expect(store.setsLoaded).toBe(true);
+  });
+});

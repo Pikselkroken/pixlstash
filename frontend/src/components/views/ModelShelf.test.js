@@ -208,6 +208,10 @@ const globalOpts = {
       ShelfEditDialog: true,
       ShelfMoveDialog: true,
       MergeCopiesDialog: true,
+
+      // Same reason, for the same provider: it wraps `AppDialog`. Its own suite
+      // mounts it against the companions payload.
+      ModelWorksWithDialog: true,
       // The host-path picker `Add file` opens. Real, it would drag Vuetify's
       // dialog provider into a suite that installs none; stubbed, it still
       // emits `select`, which is the whole of what this view listens for.
@@ -259,6 +263,11 @@ async function mountShelf(
   listEngines.mockResolvedValue([]);
   listUnclassified.mockResolvedValue(unclassified);
   listSupport.mockResolvedValue([]);
+  // The ROW LIST is what this suite is about, and since #1438 the default axis
+  // is the set grid, which replaces it. Chosen here rather than per test, so a
+  // new test lands on the list without having to know that; the grid's own
+  // screen is covered by `ModelSetGrid.test.js`.
+  useModelShelfStore().setView({ groupBy: "none" });
   const wrapper = mount(ModelShelf, { ...globalOpts, ...extra });
   await new Promise((resolve) => setTimeout(resolve, 0));
   await wrapper.vm.$nextTick();

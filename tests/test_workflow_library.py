@@ -75,6 +75,7 @@ from pixlstash.services.workflow_hash import (
 from pixlstash.services.model_shelf_service import (
     fetch_companions,
     fetch_picture_counts,
+    fetch_workflow_sets,
 )
 from pixlstash.services.workflow_library_service import (
     scan_progress,
@@ -2137,6 +2138,229 @@ def test_a_digest_the_shelf_cannot_match_yet_makes_its_companions_unknown(hub):
 
 # ---------------------------------------------------------------------------
 # B4 — purge reaches the hub, and the covered-ghost cascade
+# ---------------------------------------------------------------------------
+# #1438 - the workflow sets the shelf's card grid draws
+# ---------------------------------------------------------------------------
+
+
+def sets_of(store):
+    """``fetch_workflow_sets`` keyed by combination, so an assertion names files."""
+    found = fetch_workflow_sets(store.hub, SimpleNamespace(db=store.vault))
+    return {
+        frozenset(member["name"] for member in combination["models"]): combination
+        for combination in found["combinations"]
+    }, found["no_set"]
+
+
+def picture_from(store, name, graph):
+    """One kept picture made by *graph*, read for its recipe keys."""
+    written = write_png(Path(store.image_root), name, api=graph)
+    picture_id = add_picture(store, written)
+    run_extraction(store, [picture_id])
+    return picture_id
+
+
+@pytest.fixture
+def set_shelf(store):
+    """Two checkpoints, a shared text encoder, two VAEs and one LoRA.
+
+    The same shape ``companions_shelf`` uses, written against the module's
+    vault-bearing ``store`` because a set is counted in pictures and that
+    fixture has none. A fixture rather than a helper because ``model`` is NOT
+    in this section's wipe (``WORKFLOW_WIPE_ORDER``): a second call would trip
+    the adapter's UNIQUE sha256, and rows left standing would put a previous
+    test's files in the next test's ``no_set``.
+    """
+    ids = {
+        name: shelf_file(store.hub, f"{name}.safetensors", kind)
+        for name, kind in (
+            ("ckpt_a", "checkpoint"),
+            ("ckpt_b", "checkpoint"),
+            ("vae_a", "vae"),
+            ("vae_b", "vae"),
+            ("clip_shared", "text_encoder"),
+            ("lora_a", "adapter"),
+            ("never_run", "checkpoint"),
+        )
+    }
+    try:
+        yield ids
+    finally:
+        with store.hub.transaction() as conn:
+            conn.execute("DELETE FROM model")
+
+
+def test_a_set_is_the_files_one_recipe_bound_and_a_model_is_in_every_set_it_ran_in(
+    store, set_shelf
+):
+    """The grid's whole claim: a card is one combination, and membership overlaps.
+
+    `clip_shared` runs in both sets and `vae_a` in one, so the same text encoder
+    is a member of two cards while nothing about it is stored twice.
+    """
+    ids = set_shelf
+    picture_from(
+        store,
+        "set-a.png",
+        generation_graph(
+            "ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+        ),
+    )
+    picture_from(
+        store,
+        "set-b.png",
+        generation_graph(
+            "ckpt_b.safetensors", "vae_b.safetensors", "clip_shared.safetensors"
+        ),
+    )
+
+    combinations, no_set = sets_of(store)
+
+    a = frozenset(
+        {"ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"}
+    )
+    b = frozenset(
+        {"ckpt_b.safetensors", "vae_b.safetensors", "clip_shared.safetensors"}
+    )
+    assert set(combinations) == {a, b}
+    assert combinations[a]["picture_count"] == 1 and combinations[a]["recipes"] == 1
+    # The checkpoint is the file the set is named after, whatever it sorts as.
+    assert combinations[a]["models"][0]["name"] == "ckpt_a.safetensors"
+    assert combinations[a]["key"] == ",".join(
+        str(i) for i in sorted([ids["ckpt_a"], ids["vae_a"], ids["clip_shared"]])
+    )
+    # Membership is not exclusive: one file, two cards.
+    assert (
+        sum(
+            1
+            for combination in combinations.values()
+            if any(m["id"] == ids["clip_shared"] for m in combination["models"])
+        )
+        == 2
+    )
+    # And the absence of evidence is drawn rather than dropped.
+    assert ids["never_run"] in no_set
+    assert ids["ckpt_a"] not in no_set
+
+
+def test_two_recipes_naming_the_same_files_are_one_set_with_both_witnesses(
+    store, set_shelf
+):
+    """Two graphs, the same three files: one card carrying both witnesses.
+
+    The second graph drops the negative-prompt node and rewires the sampler,
+    which forks the recipe (``test_node_deleted_forks_the_recipe``) without
+    touching a single filename. The combination is the fact and the recipe is
+    one witness of it, so the counts add up rather than the card splitting.
+    """
+    graph = generation_graph(
+        "ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+    )
+    picture_from(store, "same-1.png", graph)
+    rewired = json.loads(json.dumps(graph))
+    del rewired["3"]
+    rewired["5"]["inputs"]["negative"] = ["2", 0]
+    picture_from(store, "same-2.png", rewired)
+
+    combinations, _ = sets_of(store)
+
+    key = frozenset(
+        {"ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"}
+    )
+    assert set(combinations) == {key}
+    assert combinations[key]["recipes"] == 2
+    assert combinations[key]["picture_count"] == 2
+    # Covers come back as `CoverCandidate` rows; the route turns them into URLs.
+    assert [cover.picture_id for cover in combinations[key]["covers"]]
+
+
+def test_adding_a_lora_is_a_second_set_not_a_change_to_the_first(store, set_shelf):
+    """Two sets, because a card is the files a picture proves ran together - the
+    fold that puts them on one stack is the reader's, not the data's."""
+    picture_from(
+        store,
+        "plain.png",
+        generation_graph(
+            "ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+        ),
+    )
+    picture_from(
+        store,
+        "with-lora.png",
+        generation_graph(
+            "ckpt_a.safetensors",
+            "vae_a.safetensors",
+            "clip_shared.safetensors",
+            lora="lora_a.safetensors",
+        ),
+    )
+
+    combinations, _ = sets_of(store)
+
+    plain = frozenset(
+        {"ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"}
+    )
+    assert set(combinations) == {plain, plain | {"lora_a.safetensors"}}
+
+
+def test_a_recipe_whose_pictures_are_all_deleted_is_no_set_and_its_models_say_so(
+    store, set_shelf
+):
+    """The grid draws what the library HAS made. A recipe the hub still holds
+    with nothing kept behind it is not a set - and its models must then appear
+    under `no_set` rather than falling off the screen between the two."""
+    ids = set_shelf
+    picture_id = picture_from(
+        store,
+        "gone.png",
+        generation_graph(
+            "ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+        ),
+    )
+    store.vault.run_task(
+        lambda session: (
+            setattr(session.get(Picture, picture_id), "deleted", True),
+            session.commit(),
+        )
+    )
+
+    combinations, no_set = sets_of(store)
+
+    assert combinations == {}
+    assert {ids["ckpt_a"], ids["vae_a"], ids["clip_shared"]} <= set(no_set)
+
+
+def test_a_member_two_shelf_rows_could_be_is_flagged_rather_than_hidden(
+    store, set_shelf
+):
+    """`unknown` stays a first-class answer: the set is still drawn, and the
+    member that could be either file says so."""
+    twin_1 = shelf_file(store.hub, "twin.safetensors", "vae")
+    twin_2 = shelf_file(store.hub, "twin.safetensors", "vae")
+    picture_from(
+        store,
+        "ambiguous.png",
+        generation_graph(
+            "ckpt_a.safetensors", "twin.safetensors", "clip_shared.safetensors"
+        ),
+    )
+
+    combinations, _ = sets_of(store)
+
+    key = next(iter(combinations))
+    assert {twin_1, twin_2} <= {member["id"] for member in combinations[key]["models"]}
+    flagged = {
+        member["id"] for member in combinations[key]["models"] if member["ambiguous"]
+    }
+    assert flagged == {twin_1, twin_2}
+    # The checkpoint was named unambiguously and must not be tarred with it.
+    assert all(
+        not member["ambiguous"]
+        for member in combinations[key]["models"]
+        if member["kind"] == "checkpoint"
+    )
+
+
 # ---------------------------------------------------------------------------
 #
 # The same feature has to survive one deletion and not another, so both

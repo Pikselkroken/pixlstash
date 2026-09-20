@@ -538,6 +538,14 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # nothing, so it sits with the shelf reads rather than with the delete's
     # §16.3 tier.
     ("POST", "/api/v1/models/companions"): RoutePolicy(_OWNER),
+    # The set grid (#1438): which shelf models a kept picture proves ran
+    # together, read off the same `workflow_recipe_asset` self-join as the
+    # companions route above. It counts pictures of the ACTIVE library, so it
+    # sizes the whole vault the way the shelf's own `used by` counts already do
+    # - owner tier for the same reason those are, and no per-object scope to
+    # narrow it to: a set is a fact about the machine's models, not about a
+    # picture a token was granted.
+    ("GET", "/api/v1/models/workflow-sets"): RoutePolicy(_OWNER),
     # The shelf's sixth verb, and the one route on this block that spawns a
     # process on the host's desktop. Same authority - and same red-line tier -
     # as POST /pictures/{id}/open-location: what it can do is bounded by what

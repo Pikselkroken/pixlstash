@@ -6,6 +6,7 @@ import {
   BASE_MODEL_UNASSIGNED,
   deleteModels,
   editModels,
+  fetchWorkflowSets,
   forgetModels,
   listAdapters,
   listBaseModelCompletions,
@@ -32,6 +33,13 @@ import {
   offlineFolders,
   UNSET_GROUP_KEY,
 } from "../utils/modelShelf";
+import {
+  FOLD_KEYS,
+  foldCounts,
+  foldSets,
+  setCard,
+  worksWith,
+} from "../utils/workflowSets";
 
 /** Where the `Show` selection is remembered between visits. */
 const FILTERS_KEY = "pixlstash:modelShelfFilters";
@@ -56,8 +64,17 @@ const FILTERS_SCHEMA_VERSION = 1;
  */
 const VIEW_KEY = "pixlstash:modelShelfView";
 
-/** Bumped when the shape below changes; a blob from another `v` is discarded. */
-const VIEW_SCHEMA_VERSION = 1;
+/**
+ * Bumped when the shape below changes; a blob from another `v` is discarded.
+ *
+ * Bumped to 2 for #1438, where `groupBy` changed DEFAULT rather than shape:
+ * every blob written before this carries `groupBy: "none"` whether anyone chose
+ * it or not, so reading them per field would leave the new default reaching
+ * only people who had never opened the shelf. Same trade
+ * `FILTERS_SCHEMA_VERSION` documents, and the cost is the same: a remembered
+ * sort is forgotten once.
+ */
+const VIEW_SCHEMA_VERSION = 2;
 
 /**
  * Ceiling on remembered collapsed groups, per axis, oldest dropped.
@@ -78,7 +95,23 @@ const COMPLETION_RETRY_MS = 30_000;
  * several features is listed under EACH of them, which `groupsOf` already
  * supports because `folder` needed the same fan-out for a file copied twice.
  */
-export const GROUP_BY_KEYS = ["none", "base_model", "folder", "feature"];
+export const GROUP_BY_KEYS = [
+  "none",
+  "workflow_set",
+  "base_model",
+  "folder",
+  "feature",
+];
+
+/**
+ * The one axis that is not a band over the row list.
+ *
+ * `workflow_set` swaps the list for a card grid, because its groups OVERLAP: a
+ * VAE belongs to every set it has run in, and a sticky band can only put a row
+ * in one place. The other four stay exactly as they were - `groups` is not asked
+ * to express this one, and the grid reads `setStacks` instead.
+ */
+export const GRID_GROUP_BY = "workflow_set";
 
 /**
  * How folder groups are laid out, which is a sub-choice of `Folder` rather than
@@ -571,10 +604,18 @@ export function assignReceipt(done, failed, entityName, attaching) {
  */
 function defaultView() {
   return {
-    groupBy: "none",
+    // The set grid, not the flat list: "which of these work together" is the
+    // question the shelf is actually asked, and a grouping that answers it only
+    // once somebody finds the menu is not the default it deserves.
+    groupBy: GRID_GROUP_BY,
     sortKey: "added_at",
     sortDirection: "desc",
     folderLayout: "drive",
+    // Carried at all times and only read under `workflow_set`, exactly as
+    // `folderLayout` is only read under `folder`. One file apart rather than
+    // `none`, because an unfolded grid opens on a card per combination tried -
+    // the honest shape, and not the one to meet first.
+    fold: "one",
     columnWidths: { ...DEFAULT_COLUMN_WIDTHS },
   };
 }
@@ -694,6 +735,7 @@ function storedView() {
   if (FOLDER_LAYOUTS.includes(parsed.folderLayout)) {
     view.folderLayout = parsed.folderLayout;
   }
+  if (FOLD_KEYS.includes(parsed.fold)) view.fold = parsed.fold;
   if (SORT_KEYS.includes(parsed.sortKey)) view.sortKey = parsed.sortKey;
   if (parsed.sortDirection === "asc" || parsed.sortDirection === "desc") {
     view.sortDirection = parsed.sortDirection;
@@ -1014,6 +1056,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         : new Set();
       loaded.value = true;
       pruneSelection();
+      // A scan can add a model, and a model with no card is what the reader of
+      // the set grid is looking for. Only a scan: an ordinary filter tick must
+      // not re-run a window over every picture in the vault.
+      if (markNew && setsLoaded.value) loadWorkflowSets({ force: true });
     } catch (err) {
       if (startedAt !== epoch) return;
       error.value = errorDetail(err) || err?.message || String(err);
@@ -1405,6 +1451,119 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * "offline", and the banner's count must not shrink when the reader narrows
    * the list.
    */
+  // ── The workflow sets (#1438) ─────────────────────────────────────────────
+  //
+  // Its own payload and its own epoch, because it is a DIFFERENT read from the
+  // row list: `fetchRows` runs on every `Show` checkbox and this one is a window
+  // over every kept picture in the vault. Fetched once when something needs it
+  // and again after a scan, never per filter tick.
+  const workflowSets = ref({ combinations: [], noSet: [] });
+  const setsLoading = ref(false);
+  const setsError = ref("");
+  const setsLoaded = ref(false);
+  let setsEpoch = 0;
+
+  /** The stack whose member panel is open, by its card key. */
+  const openSetKey = ref("");
+
+  /**
+   * Read which models have run together, once.
+   *
+   * `force` is what a scan passes: a scan can add a model, and a model with no
+   * card is exactly what the reader is looking at. Nothing else refetches -
+   * the fold, the sort and every filter are applied to what is in hand, so
+   * changing them costs no request.
+   *
+   * A failure leaves the previous payload standing and reports itself; the grid
+   * renders the error ahead of the cards, as the row list already does.
+   *
+   * @param {{force?: boolean}} [options]
+   */
+  async function loadWorkflowSets({ force = false } = {}) {
+    if (setsLoaded.value && !force) return;
+    const startedAt = (setsEpoch += 1);
+    setsLoading.value = true;
+    setsError.value = "";
+    try {
+      const body = await fetchWorkflowSets();
+      if (startedAt !== setsEpoch) return;
+      workflowSets.value = {
+        combinations: body.combinations,
+        noSet: body.no_set,
+      };
+      setsLoaded.value = true;
+    } catch (err) {
+      if (startedAt !== setsEpoch) return;
+      setsError.value = errorDetail(err) || err?.message || String(err);
+    } finally {
+      if (startedAt === setsEpoch) setsLoading.value = false;
+    }
+  }
+
+  /**
+   * The combinations the current `Show` selection leaves on screen.
+   *
+   * A combination survives when ANY of its members is visible, and then it is
+   * drawn WHOLE. Narrowing a card's member list to the ticked kinds would be a
+   * lie about the combination - the files ran together and the card's offer is
+   * "run exactly this" - so the filter decides which cards are shown and never
+   * what a shown card contains.
+   */
+  const visibleCombinations = computed(() => {
+    const shown = new Set(visibleRows.value.map((row) => row.id));
+    return workflowSets.value.combinations.filter((combination) =>
+      (combination.models ?? []).some((model) => shown.has(model.id)),
+    );
+  });
+
+  /**
+   * The cards the set grid draws, folded to the reader's chosen distance.
+   *
+   * Each entry carries both the `WorkflowCard` payload and the combinations
+   * behind it, so the panel under an open card needs no second lookup.
+   */
+  const setStacks = computed(() =>
+    foldSets(visibleCombinations.value, view.fold).map((stack) => ({
+      key: stack.key,
+      members: stack.members,
+      card: setCard(stack),
+    })),
+  );
+
+  /** What each fold setting would cost in cards, for the menu that offers them. */
+  const setFoldCounts = computed(() => foldCounts(visibleCombinations.value));
+
+  /**
+   * The shown rows no recipe in this library binds to anything.
+   *
+   * Drawn as a card of its own rather than omitted: absence of co-occurrence is
+   * not evidence, and a grid that quietly dropped them would be asserting the
+   * opposite. Intersected with `visibleRows` so `Show` applies to this card too.
+   */
+  const noSetRows = computed(() => {
+    const loose = new Set(workflowSets.value.noSet);
+    return visibleRows.value.filter((row) => loose.has(row.id));
+  });
+
+  /** Open or close one stack's member panel. One at a time, like the grid's. */
+  function toggleSet(key) {
+    openSetKey.value = openSetKey.value === key ? "" : key;
+  }
+
+  /**
+   * What one model has been seen beside, ranked by the recipes backing each.
+   *
+   * Read from the whole payload rather than from `visibleCombinations`: the
+   * question is what this file has run with, and a `Show` checkbox is about what
+   * the grid draws. Hiding a companion because its kind is unticked would turn a
+   * view setting into a claim about the evidence.
+   *
+   * @param {number} modelId
+   */
+  function worksWithModel(modelId) {
+    return worksWith(workflowSets.value.combinations, modelId);
+  }
+
   const offlineMounts = computed(() => offlineFolders(rows.value));
 
   /**
@@ -1446,8 +1605,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * Never refetches: every field the five sort keys read is already on the list
    * payload, so a direction flip is a resort of what is in hand.
    *
-   * @param {Object} patch - any of `groupBy`, `folderLayout`, `sortKey`,
-   *   `sortDirection`.
+   * @param {Object} patch - any of `groupBy`, `folderLayout`, `fold`,
+   *   `sortKey`, `sortDirection`.
    */
   function setView(patch) {
     // A NEW sort key arrives at its own end unless the caller named one. Here
@@ -2148,6 +2307,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     // the stamp beside it would otherwise say "already fetched" forever.
     fetchedCompletions.value = [];
     invalidateBaseModelCompletions();
+    // The sets go with the rows, for the reason the completions do: they are
+    // derived from this machine's models and this library's pictures, and the
+    // credential that could read both has just changed.
+    setsEpoch += 1;
+    workflowSets.value = { combinations: [], noSet: [] };
+    setsLoaded.value = false;
+    setsLoading.value = false;
+    setsError.value = "";
+    openSetKey.value = "";
   }
 
   const unsubscribeSessionReset = onSessionReset(resetForSession);
@@ -2206,6 +2374,18 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     loadBaseModelCompletions,
     visibleRows,
     groups,
+    workflowSets,
+    setsLoading,
+    setsError,
+    setsLoaded,
+    loadWorkflowSets,
+    visibleCombinations,
+    setStacks,
+    setFoldCounts,
+    noSetRows,
+    openSetKey,
+    toggleSet,
+    worksWithModel,
     offlineMounts,
     renderedCount,
     activeCount,

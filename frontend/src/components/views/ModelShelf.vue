@@ -312,6 +312,62 @@
             <ShelfSortPanel section="group" />
           </v-menu>
 
+          <!-- Fold is a SUB-CHOICE of the Workflow set axis, so it renders only
+               while that axis is chosen - the same rule the folder layout
+               follows inside the Group panel. It is on the bar rather than
+               buried in that panel because it changes how many cards are on
+               screen, which is the one thing a reader has to be able to see
+               they chose. -->
+          <v-menu
+            v-if="isSetGrid"
+            v-model="foldMenuOpen"
+            location="bottom end"
+            origin="top end"
+            :offset="8"
+            transition="scale-transition"
+          >
+            <template #activator="{ props: menuProps }">
+              <AppBarButton
+                v-bind="menuProps"
+                prefix="Fold:"
+                :icon="activeFold.icon"
+                chevron
+                :open="foldMenuOpen"
+                aria-haspopup="menu"
+                :aria-expanded="foldMenuOpen"
+                tooltip="How far apart two sets may be and still share a card"
+              >
+                <span class="bar-btn-value">{{ activeFold.label }}</span>
+              </AppBarButton>
+            </template>
+            <div class="tbm shelf-fold-panel">
+              <span class="tbm-caret tbm-caret--end"></span>
+              <div class="tbm-header">
+                <v-icon size="18" class="tbm-header-icon">mdi-layers</v-icon>
+                <span class="tbm-title">Fold</span>
+              </div>
+              <div class="tbm-section">
+                <!-- Card counts, not adjectives. "Loose" and "strict" mean
+                     nothing before you have seen the result; a number does, and
+                     it is what makes *Don't fold* a real option rather than a
+                     debug switch. -->
+                <OptionRows
+                  :options="foldOptions"
+                  :model-value="store.view.fold"
+                  aria-label="Fold"
+                  @update:model-value="(key) => store.setView({ fold: key })"
+                  @pick="foldMenuOpen = false"
+                >
+                  <template #meta="{ option }">
+                    <span class="shelf-fold-count num">{{
+                      foldCountLabel(option.id)
+                    }}</span>
+                  </template>
+                </OptionRows>
+              </div>
+            </div>
+          </v-menu>
+
           <v-menu
             v-model="sortMenuOpen"
             :close-on-content-click="false"
@@ -474,7 +530,11 @@
           @click="offlineDismissed = true"
         />
       </p>
-      <p v-if="store.loading" class="shelf-state">Reading the shelf…</p>
+      <!-- The set grid, ahead of every row-list state: its groups OVERLAP, so
+           it is a different screen rather than a banded version of this one. It
+           still reads `visibleRows`, so Show and the filters keep applying. -->
+      <ModelSetGrid v-if="isSetGrid && !store.loading && !store.error" />
+      <p v-else-if="store.loading" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
         {{ store.error }}
       </p>
@@ -1337,7 +1397,12 @@
          a row was clicked. This wrapper is the float; the pill owns its own
          shape. `pointer-events` is off on the strip and back on for the pill,
          so the rows underneath it stay clickable. -->
-    <div v-if="isShelfTab" class="selbar-float">
+    <!-- Not over the set grid: a card there is a SET, and the bar's verbs are
+         per model - two of them destroy bytes. A selection made in the row list
+         survives the switch in the store, so it is still there when the reader
+         goes back; it simply has no floating bar over a screen where the thing
+         under the pointer is not what the bar would act on. -->
+    <div v-if="isShelfTab && !isSetGrid" class="selbar-float">
       <ShelfSelectionBar
         ref="selBarRef"
         @rename="startRenameSelected"
@@ -1354,9 +1419,14 @@
         @clear-icons="confirmClearIcons"
         @forget="confirmForget"
         @delete="confirmDelete"
+        @works-with="openWorksWith"
       />
     </div>
 
+    <ModelWorksWithDialog
+      :model="worksWithModel"
+      @close="worksWithModel = null"
+    />
     <ShelfEditDialog :verb="editVerb" @close="editVerb = ''" />
     <MergeCopiesDialog
       :open="mergeRow !== null"
@@ -1493,6 +1563,8 @@ import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import MergeCopiesDialog from "../panels/MergeCopiesDialog.vue";
 import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
+import ModelWorksWithDialog from "../panels/ModelWorksWithDialog.vue";
+import ModelSetGrid from "./ModelSetGrid.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import TbOverflowMenu from "../panels/TbOverflowMenu.vue";
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
@@ -1503,6 +1575,7 @@ import ModelMark from "../widgets/ModelMark.vue";
 import PicturePicker from "../widgets/PicturePicker.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
+import OptionRows from "../widgets/OptionRows.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
@@ -1519,6 +1592,7 @@ import {
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import {
   DEFAULT_COLUMN_WIDTHS,
+  GRID_GROUP_BY,
   MAX_COLUMN_WIDTH,
   MIN_COLUMN_WIDTHS,
   useModelShelfStore,
@@ -1563,6 +1637,7 @@ import {
   unstackReceipt,
   sortDirectionLabel,
 } from "../../utils/modelShelf";
+import { FOLD_KEYS, FOLD_LABELS } from "../../utils/workflowSets";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 
 // Settings lives in App.vue's sidebar dialog, so the toolbar's Settings button
@@ -1593,6 +1668,9 @@ const folderMenuFolder = ref(null);
 const folderMenuInvoker = ref(null);
 const addMenuOpen = ref(false);
 const groupMenuOpen = ref(false);
+const foldMenuOpen = ref(false);
+/** The model whose companions the Works with dialog is answering for, or null. */
+const worksWithModel = ref(null);
 // The toolbar buttons behind the dialogs its left half opens, so focus has a
 // place to come back to however the reader got there. A menu item cannot be
 // that place - it unmounts with the menu.
@@ -3843,6 +3921,16 @@ const offlineMountPaths = computed(() =>
  * other: `models` is distinct files on the shelf, `copies` is rows on screen.
  */
 const countLabel = computed(() => {
+  // On the set axis the row count is about a list that is not on screen, and
+  // the two figures a reader needs are how many combinations there are and how
+  // many cards they were folded into.
+  if (isSetGrid.value) {
+    const sets = store.visibleCombinations.length;
+    const stacks = store.setStacks.length;
+    const setsLabel = sets === 1 ? "1 set" : `${sets.toLocaleString()} sets`;
+    if (sets === stacks) return setsLabel;
+    return `${setsLabel} · ${stacks.toLocaleString()} stacks`;
+  }
   const models = modelCount(store.visibleRows.length);
   const drawn = store.renderedCount;
   if (drawn === store.visibleRows.length) return models;
@@ -3851,6 +3939,44 @@ const countLabel = computed(() => {
 
 /** True while the list is cut into groups, i.e. headers are drawn. */
 const grouped = computed(() => store.view.groupBy !== "none");
+
+/**
+ * True while the set grid has the content area instead of the row list.
+ *
+ * The one axis whose groups overlap, so the one that cannot be a band: see
+ * `GRID_GROUP_BY`. Gated on the tab as well, because the training runs own the
+ * area on the other one.
+ */
+const isSetGrid = computed(
+  () => isShelfTab.value && store.view.groupBy === GRID_GROUP_BY,
+);
+
+const activeFold = computed(
+  () => FOLD_LABELS[store.view.fold] || FOLD_LABELS.one,
+);
+
+const foldOptions = FOLD_KEYS.map((key) => ({
+  id: key,
+  label: FOLD_LABELS[key].label,
+  icon: FOLD_LABELS[key].icon,
+}));
+
+/**
+ * What one fold setting costs in cards, as the menu row states it.
+ *
+ * A number rather than a word, because the setting's whole effect is on how many
+ * cards are on screen and no adjective conveys that before you have seen it.
+ */
+function foldCountLabel(key) {
+  const count = store.setFoldCounts[key] ?? 0;
+  if (key === "none") return count === 1 ? "1 card" : `${count} cards`;
+  return count === 1 ? "1 stack" : `${count} stacks`;
+}
+
+/** Answer "what else has this run with" for one model. */
+function openWorksWith() {
+  worksWithModel.value = store.selectedRows[0] ?? null;
+}
 
 const activeSort = computed(
   () => SORT_LABELS[store.view.sortKey] || SORT_LABELS.added_at,

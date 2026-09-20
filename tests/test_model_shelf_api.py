@@ -78,6 +78,7 @@ _SHELF_ROUTES = (
     ("GET", "/api/v1/checkpoints"),
     ("GET", "/api/v1/models/base-models"),
     ("POST", "/api/v1/models/companions"),
+    ("GET", "/api/v1/models/workflow-sets"),
 )
 
 
@@ -699,6 +700,36 @@ def test_companions_answers_the_owner_and_refuses_a_share_token(shelf_env):
         TestClient(shelf_env.server.api)
         .post(f"{API}/models/companions", json=body)
         .status_code
+        == 401
+    )
+
+
+def test_workflow_sets_answers_the_owner_and_refuses_a_share_token(shelf_env):
+    """Both directions on the read behind the set grid. The grouping itself is
+    exercised in depth in `tests/test_workflow_library.py`; this pins that the
+    route resolves, is gated, and draws the models no recipe names.
+
+    The seeded shelf has no pictures and no recipes, so every model is in no
+    set - which is the honesty rule's own case: nothing is omitted for lacking
+    a pairing.
+    """
+    r = shelf_env.owner.get(f"{API}/models/workflow-sets")
+    assert r.status_code == 200, r.text
+    answer = r.json()
+    assert answer["combinations"] == []
+    assert set(answer["no_set"]) == set(shelf_env.model_ids.values())
+
+    token = _mint(
+        shelf_env.owner,
+        "workflow sets character token",
+        resource_type="character",
+        resource_id=shelf_env.character_id,
+    )
+    client = _bearer(shelf_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200
+    assert client.get(f"{API}/models/workflow-sets").status_code == 403
+    assert (
+        TestClient(shelf_env.server.api).get(f"{API}/models/workflow-sets").status_code
         == 401
     )
 

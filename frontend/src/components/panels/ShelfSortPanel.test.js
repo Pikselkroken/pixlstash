@@ -30,7 +30,12 @@ describe("the folder layout sub-choice", () => {
     const wrapper = mount(ShelfSortPanel, globalOpts);
     const store = useModelShelfStore();
 
-    expect(store.view.groupBy).toBe("none");
+    // The default axis is the set grid since #1438; what this pins is that the
+    // layout sub-choice belongs to Folder and to nothing else.
+    expect(store.view.groupBy).toBe("workflow_set");
+    expect(layoutSection(wrapper).exists()).toBe(false);
+
+    store.setView({ groupBy: "none" });
     expect(layoutSection(wrapper).exists()).toBe(false);
 
     store.setView({ groupBy: "base_model" });

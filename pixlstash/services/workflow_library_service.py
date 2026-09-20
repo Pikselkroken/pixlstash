@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from math import inf
 from typing import Optional
 
 from sqlalchemy import and_, case, func, nullslast, or_
@@ -260,6 +261,33 @@ class CoverCandidate:
     square_crop_x: Optional[int] = None
     square_crop_y: Optional[int] = None
     square_crop_side: Optional[int] = None
+
+
+# What a NULL date sorts as when the ranking above is re-expressed in Python.
+_EPOCH = datetime.min
+
+
+def cover_order(candidate: CoverCandidate) -> tuple:
+    """The window's ORDER BY, re-expressed so a per-card pick matches it.
+
+    Sorted **descending**, like the window is. Used wherever a cover strip is
+    picked in memory out of the top rows of several variants -- the workflows
+    grid and the model shelf's workflow sets -- which is why it lives beside
+    the row it orders rather than in either caller.
+
+    **NULL sorts below every value, including a negative one**, because that is
+    what ``nullslast`` on a descending column does and the two passes have to
+    agree. ``smart_score or 0.0`` would not: this repo writes ``-1.0`` into a
+    metric whose calculation failed (CLAUDE.md's own convention), so a picture
+    whose quality score failed would outrank an unscored one in SQL and lose to
+    it here, and a card's cover would depend on which pass last touched it.
+    """
+    return (
+        -inf if candidate.score is None else candidate.score,
+        -inf if candidate.smart_score is None else candidate.smart_score,
+        candidate.used_at or _EPOCH,
+        candidate.picture_id,
+    )
 
 
 def variant_activity(session: Session) -> dict[str, VariantActivity]:

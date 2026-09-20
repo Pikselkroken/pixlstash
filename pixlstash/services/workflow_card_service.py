@@ -41,7 +41,6 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
-from math import inf
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
@@ -76,6 +75,7 @@ from pixlstash.services.workflow_identity import (
 from pixlstash.services.workflow_library_service import (
     CoverCandidate,
     VariantActivity,
+    cover_order,
     read_card_grid,
     read_chosen_covers,
     read_instance_hashes,
@@ -151,8 +151,6 @@ BASE_MODEL_KINDS = ("checkpoint", "unet") + tuple(
         for widget in CHECKPOINT_WIDGETS - {"ckpt_name", "unet_name"}
     )
 )
-
-_EPOCH = datetime.min
 
 
 @dataclass(frozen=True)
@@ -264,24 +262,6 @@ class Grid:
         )
 
 
-def _cover_order(candidate: CoverCandidate) -> tuple:
-    """The window's ORDER BY, re-expressed so the per-card pick matches it.
-
-    **NULL sorts below every value, including a negative one**, because that is
-    what ``nullslast`` on a descending column does and the two passes have to
-    agree. ``smart_score or 0.0`` would not: this repo writes ``-1.0`` into a
-    metric whose calculation failed (CLAUDE.md's own convention), so a picture
-    whose quality score failed would outrank an unscored one in SQL and lose to
-    it here, and a card's cover would depend on which pass last touched it.
-    """
-    return (
-        -inf if candidate.score is None else candidate.score,
-        -inf if candidate.smart_score is None else candidate.smart_score,
-        candidate.used_at or _EPOCH,
-        candidate.picture_id,
-    )
-
-
 def _figures(
     cards: list[Card],
     activity: dict[str, VariantActivity],
@@ -310,7 +290,7 @@ def _figures(
                 ):
                     figure.last_used = seen.last_used
             strip.extend(by_variant.get(structural_hash, ()))
-        strip.sort(key=_cover_order, reverse=True)
+        strip.sort(key=cover_order, reverse=True)
         figure.covers = strip[:COVER_DEPTH]
         figures.append(figure)
     return figures

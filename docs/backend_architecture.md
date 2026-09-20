@@ -591,6 +591,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/models/companions                                                     | model_shelf     | What deleting models would leave behind                     |
 | POST   | /api/v1/models/forget                                                         | model_shelf     | Forget models whose files are gone                          |
 | POST   | /api/v1/models/icons/clear                                                    | model_shelf     | Clear the icon on one or more models                        |
+| GET    | /api/v1/models/workflow-sets                                                  | model_shelf     | Which models have actually run together                     |
 | POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                          |
 | POST   | /api/v1/models/{model_id}/open-location                                       | model_shelf     | Open a model's folder in the host file manager              |
 | GET    | /api/v1/models/{model_id}/samples                                             | model_shelf     | The training previews stored beside one imported checkpoint |
@@ -2889,6 +2890,60 @@ models, and nothing on disk says which.
 - **Not yet read:** ComfyUI's own history and saved workflows. Models used only in graphs that never produced a picture
   PixlStash filed are invisible here, which the `no_evidence` answer says out
   loud rather than hiding.
+
+#### Workflow sets: which models have actually run together (#1438)
+
+`GET /api/v1/models/workflow-sets` is the **same self-join, read the other way
+round**. Companions asks "what would this delete leave behind"; this asks "which
+of these files have run together", which is the question the shelf's four
+single-axis groupings could not answer: a checkpoint, its VAE and its text
+encoders are a set, the same VAE belongs to several sets at once, and a sticky
+band can only put a row in one place.
+
+- **One entry per *combination*: the model ids one recipe resolves to.** Several
+  recipes naming the same files are one combination with their recipe and
+  picture counts summed, because the combination is the fact and the recipe is
+  one witness of it. A prompt edit keeps the recipe; a rewiring forks it; neither
+  changes the files, so both land on one card.
+- **The resolution is shared, not copied.** `resolve_recipe_models` was lifted
+  out of `fetch_companions` and both call it, so the delete warning and the grid
+  cannot come to disagree about what a recipe names. It returns
+  `(recipe_models, ambiguous, unresolved)` — the members per recipe, the members
+  reached only through a name or digest prefix several rows answer to, and the
+  recipes naming a digest no row matches while some row still waits for its hash
+  (`hub/workflows._model_ghost_names`' rule).
+- **Scoped to the ACTIVE library, unlike companions.** The two differ because
+  they answer different questions: a delete warning must keep a file some other
+  library needs, so it counts every recipe on the hub; this grid is a picture of
+  what the library in front of the reader has made, so a recipe with no kept
+  picture here is not a set. A combination with a zero picture count is dropped,
+  and its members then appear under `no_set` — read off the combinations that
+  *survived*, never off the pre-filter grouping, or a model would be in neither
+  list and so on no screen at all.
+- **A member the evidence cannot pin down is flagged, never hidden.** `ambiguous`
+  is OR-ed across a combination's witnesses: one recipe that could only match a
+  basename is enough to make the membership a guess, and a cleaner second
+  witness does not unmake the first. The card draws it as a filename-only match,
+  because `unknown` is a first-class answer on this shelf.
+- **Members arrive in ONE order and the client reads its head.** Checkpoint,
+  then `unknown`, then VAE, text encoder, adapter, engine. The head is what the
+  set is named after, so a Flux or Wan set with no `checkpoint` row is named by
+  its diffusion file without the client inventing a second fallback rule.
+- **Counts and covers are two vault queries, not one per card.**
+  `recipe_picture_counts` is the existing `GROUP BY workflow_structural_hash`;
+  the covers come from `variant_cover_candidates`, the workflows grid's own
+  `ROW_NUMBER()` window, and the per-combination pick re-sorts them with
+  `cover_order` — moved out of `workflow_card_service` to
+  `workflow_library_service`, beside the `CoverCandidate` it orders, so both
+  grids treat a NULL score the same way the window did.
+- **Nothing is stored.** Membership overlaps and is derived per request; no
+  column on `model` names a set, and there is no table to migrate. The cost is
+  one pass over `workflow_recipe_asset` plus the two vault queries, which is the
+  cost `fetch_picture_counts` already pays on every shelf list.
+- **The fold is the client's.** Near-identical combinations are folded into
+  stacks in `frontend/src/utils/workflowSets.js`, so the toolbar can price every
+  fold setting in cards without another request and *Don't fold* costs nothing.
+  The server proposes no grouping at all.
 
 `model.family`, `model.quant` and `model.weights_id` are the header half,
 written by the scanner from the header it already
