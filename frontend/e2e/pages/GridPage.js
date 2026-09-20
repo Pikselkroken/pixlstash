@@ -27,13 +27,15 @@ export class GridPage {
     this.sortDirectionButton = page.locator('.gb-sort-panel .tbm-ghost').first()
     this.viewMenuButton = page.locator('button[aria-label="View options"]').first()
     this.columnsSlider = page.locator('.gb-columns-slider')
-    // Expand/Collapse-all live in the View popover as .tbm-action buttons.
-    this.expandAllStacksButton = page
-      .locator('.tbm-action', { hasText: 'Expand all' })
+    // One stack is open at a time, so the View popover has one stack control.
+    this.collapseStackButton = page
+      .locator('.tbm-action', { hasText: 'Collapse' })
       .first()
-    this.collapseAllStacksButton = page
-      .locator('.tbm-action', { hasText: 'Collapse all' })
-      .first()
+    // The stack tray: the panel an expanded stack opens under its card.
+    this.stackBadges = page.getByTestId('stack-badge')
+    this.stackTray = page.locator('.stack-tray-surface')
+    this.stackTrayHead = page.locator('.stack-tray-head')
+    this.stackTabCards = page.locator('.image-card--stack-tab')
     // Search popover (.gb-search-panel) opened from the toolbar search icon.
     this.searchOverlay = page.locator('.gb-search-panel')
     this.searchInput = page.locator('.gb-search-panel input').first()

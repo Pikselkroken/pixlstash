@@ -125,10 +125,13 @@ test.describe('star rating', () => {
     // triggers while a fresh grid settles. The score has to be in those rows
     // too, or the rebuild empties the stars the click just filled (the timing-
     // dependent failure this test used to show). Force one rebuild here.
+    // Opening a stack rebuilds the cards from the fetched rows, and collapsing
+    // it rebuilds them back, so the grid ends up exactly where it started.
+    await grid.stackBadges.first().click()
+    await expect(grid.stackTray).toBeVisible()
     await grid.openViewMenu()
-    const expandAll = page.getByRole('button', { name: 'Expand all' })
-    const collapseAll = page.getByRole('button', { name: 'Collapse all' })
-    await ((await expandAll.isEnabled()) ? expandAll : collapseAll).click()
+    await grid.collapseStackButton.click()
+    await expect(grid.stackTray).toHaveCount(0)
     await page.keyboard.press('Escape')
     await card.hover()
     await expect.poll(() => filledStars(gridStars)).toBe(GRID_RATING)
@@ -170,8 +173,8 @@ test.describe('star rating', () => {
     await card.hover()
     await expect(stars.first()).toBeVisible()
 
-    // Hold the next batch. Expanding or collapsing all stacks refetches the
-    // visible range, so one starts now and waits here.
+    // Hold the next batch. Opening a stack splices its members in and fetches
+    // thumbnails for them, so one starts now and waits here.
     let release
     const held = new Promise((resolve) => (release = resolve))
     let batchOut = false
@@ -180,11 +183,7 @@ test.describe('star rating', () => {
       await held
       await route.continue()
     })
-    await grid.openViewMenu()
-    const expandAll = page.getByRole('button', { name: 'Expand all' })
-    const collapseAll = page.getByRole('button', { name: 'Collapse all' })
-    await ((await expandAll.isEnabled()) ? expandAll : collapseAll).click()
-    await page.keyboard.press('Escape')
+    await grid.stackBadges.first().click()
     await expect.poll(() => batchOut).toBe(true)
 
     await card.hover()

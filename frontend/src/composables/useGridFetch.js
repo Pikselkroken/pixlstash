@@ -90,7 +90,7 @@ export function useGridFetch(
   {
     collapseStackImages,
     mapGridImages,
-    syncExpandAllStacksFromFetchedImages,
+    pruneExpandedStackIfGone,
     refreshExpandedStacksAfterFetch,
     resetThumbnailState,
     triggerNewImageHighlight,
@@ -1366,7 +1366,7 @@ export function useGridFetch(
         return;
       }
       lastFetchedGridImages.value = Array.isArray(images) ? images.slice() : [];
-      syncExpandAllStacksFromFetchedImages();
+      pruneExpandedStackIfGone();
       images = collapseStackImages(images);
       const shouldHighlight = highlightNextFetch.value && hasLoadedOnce.value;
       const nextIdSet = new Set(

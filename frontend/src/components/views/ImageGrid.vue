@@ -52,8 +52,7 @@
       :allPicturesId="String(ALL_PICTURES_ID)"
       :comfyui-configured="filterStore.comfyuiConfigured"
       :filter-count-base-query="filterCountBaseQuery"
-      @expand-all-stacks="expandAllStacks"
-      @collapse-all-stacks="collapseAllStacks"
+      @collapse-stack="collapseOpenStack"
       @open-duplicates="emit('open-duplicates')"
       @open-settings="emit('open-settings')"
       @open-import="emit('open-import')"
@@ -469,11 +468,7 @@
       <div v-if="showFolderScanningState" class="empty-state">
         <div class="empty-state-card" role="status" aria-live="polite">
           <div class="empty-state-illustration" aria-hidden="true">
-            <img
-              src="/Empty.png"
-              alt=""
-              :style="emptyStateImageStyle"
-            />
+            <img src="/Empty.png" alt="" :style="emptyStateImageStyle" />
           </div>
           <div class="empty-state-title">PixlStash is scanning your folder</div>
           <div class="empty-state-subtitle">
@@ -494,11 +489,7 @@
       <div v-else-if="showEmptyState" class="empty-state">
         <div class="empty-state-card">
           <div class="empty-state-illustration" aria-hidden="true">
-            <img
-              :src="emptyStateImage"
-              alt=""
-              :style="emptyStateImageStyle"
-            />
+            <img :src="emptyStateImage" alt="" :style="emptyStateImageStyle" />
           </div>
           <div class="empty-state-title">
             {{ emptyStateTitle }}
@@ -544,391 +535,463 @@
             height: `${topSpacerHeight}px`,
           }"
         ></div>
+        <!-- The tray's surface. Rendered once, outside the loop: it is an
+             absolutely-positioned grid child pinned to the head..foot grid
+             area, so where it sits in the DOM decides only paint order (early,
+             therefore behind the tiles) and never its position. Keeping it out
+             of the loop also keeps it a stable element, so the open animation
+             runs when a stack opens and not again on every scroll that moves
+             the render window. -->
         <div
+          v-if="trayRenderInfo"
+          class="stack-tray-surface"
+          :style="traySurfaceStyle"
+          aria-hidden="true"
+        ></div>
+        <template
           v-for="(img, idx) in gridImagesToRender"
           :key="img.id ? `img-${img.id}-${img.idx}` : `placeholder-${img.idx}`"
-          :style="[getStackCardStyle(img), getJustifiedCardStyle(img, idx)]"
-          :class="[
-            'image-card',
-            {
-              'image-card-stack-expanded': isStackExpandedForImage(img),
-              'image-card-stack-reorder-target': isStackReorderTarget(img),
-              'image-card-stack-reorder-left': isStackReorderTargetSide(
-                img,
-                'left',
-              ),
-              'image-card-stack-reorder-right': isStackReorderTargetSide(
-                img,
-                'right',
-              ),
-              'stack-hover-active':
-                hoveredStackId !== null &&
-                getPictureStackId(img) === hoveredStackId,
-              'image-card-cursor': img.idx === cursorIdx,
-              'image-card--ghost': isImageGhosted(img),
-            },
-          ]"
-          :ref="(element) => setImageCardRef(img.idx, element)"
-          :role="img.id && !isImageGhosted(img) ? 'row' : 'presentation'"
-          :tabindex="imageCardTabIndex(img)"
-          :aria-label="img.id ? imageCardAriaLabel(img) : undefined"
-          :aria-selected="
-            img.id && !isImageGhosted(img)
-              ? selectedImageIds.includes(img.id)
-                ? 'true'
-                : 'false'
-              : undefined
-          "
-          :aria-hidden="!img.id || isImageGhosted(img) ? 'true' : undefined"
-          :inert="isImageGhosted(img) || null"
-          @click="handleImageCardClick(img, img.idx, $event)"
-          @focus="handleImageCardFocus(img)"
-          @mouseenter="handleImageMouseEnter(img)"
-          @mouseleave="handleImageMouseLeave(img)"
-          @contextmenu.prevent="handleImageContextMenu(img, $event)"
-          @touchstart="handleTouchStart(img, img.idx, $event)"
-          @touchmove.passive="handleTouchMove"
-          @touchend.passive="handleTouchEnd"
         >
+          <!-- The tray. One `--panel` surface, pinned to the grid area that
+               runs from the head row down to the foot row, so it is exactly as
+               tall as the member rows it holds - no pixel arithmetic to drift.
+               It is absolutely positioned, which is what keeps it OUT of the
+               auto-placement flow: the members below still land on the grid's
+               own column tracks, each one under the picture above it. The stack
+               card in the row above draws the tab that runs into it
+               (`.image-card--stack-tab`). -->
           <div
+            v-if="trayRenderInfo && idx === trayRenderInfo.firstIdx"
+            class="stack-tray-head"
+            role="group"
+            :aria-label="trayAriaLabel"
+            @mouseenter="handleTrayMouseEnter"
+            @mouseleave="handleTrayMouseLeave"
+          >
+            <!-- The sentence naming the stack starts in the CARD's column,
+                 wherever in the row the card happens to be. -->
+            <span
+              class="stack-tray-title"
+              :style="{ gridColumn: `${trayRenderInfo.tabColumn} / -2` }"
+            >
+              <b>Stack of {{ trayStackCount }}</b>
+              <span
+                class="stack-tray-sub"
+                title="The cover stays in the grid above; the tray holds the rest."
+                >{{ trayStackCount - 1 }} others</span
+              >
+            </span>
+            <span class="stack-tray-actions">
+              <button
+                type="button"
+                class="stack-tray-action"
+                @click.stop="collapseOpenStack"
+              >
+                <v-icon size="14">mdi-arrow-collapse-vertical</v-icon>Collapse
+              </button>
+              <button
+                type="button"
+                class="stack-tray-action"
+                @click.stop="unstackOpenStack"
+              >
+                <v-icon size="14">mdi-layers-off-outline</v-icon>Unstack
+              </button>
+            </span>
+          </div>
+          <div
+            :style="[getStackCardStyle(img), getJustifiedCardStyle(img, idx)]"
             :class="[
-              'thumbnail-card',
-              { 'thumbnail-card-new': isImageRecentlyAdded(img.id) },
+              'image-card',
+              {
+                'image-card--stack-tab': isExpandedStackCover(img),
+                'image-card--tray-member': isTrayMember(img),
+                'image-card-stack-expanded': isStackExpandedForImage(img),
+                'image-card-stack-reorder-target': isStackReorderTarget(img),
+                'image-card-stack-reorder-left': isStackReorderTargetSide(
+                  img,
+                  'left',
+                ),
+                'image-card-stack-reorder-right': isStackReorderTargetSide(
+                  img,
+                  'right',
+                ),
+                'stack-hover-active':
+                  hoveredStackId !== null &&
+                  getPictureStackId(img) === hoveredStackId,
+                'image-card-cursor': img.idx === cursorIdx,
+                'image-card--ghost': isImageGhosted(img),
+              },
             ]"
-            :role="img.id && !isImageGhosted(img) ? 'gridcell' : 'presentation'"
-            @click.stop="handleThumbnailClick(img, img.idx, $event)"
+            :ref="(element) => setImageCardRef(img.idx, element)"
+            :role="img.id && !isImageGhosted(img) ? 'row' : 'presentation'"
+            :tabindex="imageCardTabIndex(img)"
+            :aria-label="img.id ? imageCardAriaLabel(img) : undefined"
+            :aria-selected="
+              img.id && !isImageGhosted(img)
+                ? selectedImageIds.includes(img.id)
+                  ? 'true'
+                  : 'false'
+                : undefined
+            "
+            :aria-hidden="!img.id || isImageGhosted(img) ? 'true' : undefined"
+            :inert="isImageGhosted(img) || null"
+            @click="handleImageCardClick(img, img.idx, $event)"
+            @focus="handleImageCardFocus(img)"
+            @mouseenter="handleImageMouseEnter(img)"
+            @mouseleave="handleImageMouseLeave(img)"
+            @contextmenu.prevent="handleImageContextMenu(img, $event)"
+            @touchstart="handleTouchStart(img, img.idx, $event)"
+            @touchmove.passive="handleTouchMove"
+            @touchend.passive="handleTouchEnd"
           >
             <div
               :class="[
-                'thumbnail-container',
-                {
-                  'thumbnail-container-drag-source': isDragSourceImage(img),
-                  'thumbnail-container--justified': isJustifiedMode,
-                  'thumbnail-container--cropped': isSquareCropActive(img),
-                },
+                'thumbnail-card',
+                { 'thumbnail-card-new': isImageRecentlyAdded(img.id) },
               ]"
-              :style="getJustifiedThumbStyle(img, idx)"
-              :ref="(el) => setThumbnailContainerRef(img.id, el)"
-              draggable="true"
-              @dragstart.capture="handleContainerDragStart(img, $event)"
-              @dragend.capture="handleDragEnd"
-              @dragover="handleStackReorderDragOver(img, $event)"
-              @drop="handleStackReorderDrop(img, $event)"
-              @dragleave="handleStackReorderDragLeave(img, $event)"
+              :role="
+                img.id && !isImageGhosted(img) ? 'gridcell' : 'presentation'
+              "
+              @click.stop="handleThumbnailClick(img, img.idx, $event)"
             >
-              <!-- Top-left permanent badges (top→bottom): problem, reference folder, lock, share -->
               <div
-                v-if="
-                  isThumbnailReady(img.id) &&
-                  img.thumbnail &&
-                  ((gridStore.showProblemIcon && hasPenalisedTags(img)) ||
-                    img.reference_folder_id ||
-                    lockedSetsStore.isLocked(img.id) ||
-                    (!isReadOnly && sharedPictureIds.has(img.id)))
-                "
-                class="thumbnail-top-left-badges"
-              >
-                <div
-                  v-if="gridStore.showProblemIcon && hasPenalisedTags(img)"
-                  class="penalised-tag-indicator thumbnail-badge"
-                >
-                  <Tooltip :text="penalisedTagsTitle(img)" activator="parent" />
-                  <v-icon
-                    :size="badgeIconSizes.penalised"
-                    :color="
-                      penalisedTagColor(img, userPrefsStore.penalisedTagWeights)
-                    "
-                    >{{
-                      penalisedTagIcon(
-                        img,
-                        userPrefsStore.penalisedTagWeights,
-                        userPrefsStore.themeMode !== "light",
-                      )
-                    }}</v-icon
-                  >
-                </div>
-                <button
-                  v-if="img.reference_folder_id"
-                  type="button"
-                  class="thumbnail-reference-badge thumbnail-badge"
-                  :aria-label="`Open reference location for ${imageCardAriaLabel(img)}`"
-                  @click.stop="openReferenceLocation(img.id)"
-                >
-                  <Tooltip
-                    :text="img.file_path || 'Reference picture'"
-                    activator="parent"
-                  />
-                  <v-icon :size="badgeIconSizes.penalised">mdi-folder</v-icon>
-                </button>
-                <div
-                  v-if="lockedSetsStore.isLocked(img.id)"
-                  class="thumbnail-lock-badge thumbnail-badge"
-                >
-                  <Tooltip
-                    :text="lockedSetsStore.lockReason(img.id)"
-                    activator="parent"
-                  />
-                  <v-icon :size="badgeIconSizes.penalised"
-                    >mdi-lock-outline</v-icon
-                  >
-                </div>
-                <div
-                  v-if="!isReadOnly && sharedPictureIds.has(img.id)"
-                  class="thumbnail-share-badge thumbnail-badge"
-                >
-                  <Tooltip text="Has active share link" activator="parent" />
-                  <v-icon :size="badgeIconSizes.penalised"
-                    >mdi-link-variant</v-icon
-                  >
-                </div>
-              </div>
-              <!-- Scrapheap auto-purge state (permanent, bottom-left).
-                   Either a countdown to the server's `purge_at` or, for a
-                   protected reference original, the "won't auto-delete" badge.
-                   Icon + text, never colour alone. -->
-              <div
-                v-if="getScrapheapPurgeBadge(img)"
-                class="thumbnail-purge-badge"
-                :class="`thumbnail-purge-badge--${getScrapheapPurgeBadge(img).kind}`"
-              >
-                <Tooltip
-                  :text="getScrapheapPurgeBadge(img).title"
-                  activator="parent"
-                />
-                <v-icon size="12" class="thumbnail-purge-badge__icon">{{
-                  getScrapheapPurgeBadge(img).icon
-                }}</v-icon>
-                <span class="thumbnail-purge-badge__text">{{
-                  getScrapheapPurgeBadge(img).label
-                }}</span>
-              </div>
-              <!-- Resolution overlay (always rendered, visible on hover) -->
-              <div
-                v-if="
-                  img.width &&
-                  img.height &&
-                  isThumbnailReady(img.id) &&
-                  img.thumbnail
-                "
                 :class="[
-                  'resolution-hover-overlay',
-                  'thumbnail-badge',
-                  'thumbnail-badge--bottom-right',
+                  'thumbnail-container',
+                  {
+                    'thumbnail-container-drag-source': isDragSourceImage(img),
+                    'thumbnail-container--justified': isJustifiedMode,
+                    'thumbnail-container--cropped': isSquareCropActive(img),
+                  },
                 ]"
+                :style="getJustifiedThumbStyle(img, idx)"
+                :ref="(el) => setThumbnailContainerRef(img.id, el)"
+                draggable="true"
+                @dragstart.capture="handleContainerDragStart(img, $event)"
+                @dragend.capture="handleDragEnd"
+                @dragover="handleStackReorderDragOver(img, $event)"
+                @drop="handleStackReorderDrop(img, $event)"
+                @dragleave="handleStackReorderDragLeave(img, $event)"
               >
-                {{ img.width }}×{{ img.height }}
-              </div>
-              <template
-                v-if="
-                  getThumbnailSrc(img) &&
-                  isVideo(img) &&
-                  getVideoThumbnailSrc(img)
-                "
-              >
-                <video
-                  class="thumbnail-img"
-                  aria-hidden="true"
-                  :src="getVideoThumbnailSrc(img)"
-                  :poster="getThumbnailSrc(img)"
-                  :ref="
-                    (el) => {
-                      setVideoRef(img.id, el);
-                      setThumbnailRef(img.id, el);
-                    }
-                  "
-                  preload="none"
-                  draggable="false"
-                  @pointerdown="prepareThumbnailNativeDrag(img, $event)"
-                  @pointerup="handleThumbnailPointerRelease($event)"
-                  @pointercancel="handleThumbnailPointerRelease($event)"
-                  @loadeddata="onThumbnailLoad(img.id, $event)"
-                  muted
-                  loop
-                  playsinline
-                  @mouseenter="playVideo(img.id)"
-                  @mouseleave="pauseVideo(img.id)"
-                ></video>
-                <img
-                  class="thumbnail-drag-preview"
-                  :src="getThumbnailSrc(img)"
-                  :ref="(el) => setDragPreviewRef(img.id, el)"
-                  alt=""
-                />
-              </template>
-              <template v-else-if="getThumbnailSrc(img)">
-                <img
-                  v-show="!failedThumbnailIds.has(img.id)"
-                  :src="getThumbnailSrc(img)"
-                  alt=""
-                  class="thumbnail-img"
-                  :style="getSquareCropImgStyle(img)"
-                  :ref="(el) => setThumbnailRef(img.id, el)"
-                  loading="eager"
-                  fetchpriority="high"
-                  decoding="async"
-                  draggable="true"
-                  @pointerdown="prepareThumbnailNativeDrag(img, $event)"
-                  @pointerup="handleThumbnailPointerRelease($event)"
-                  @pointercancel="handleThumbnailPointerRelease($event)"
-                  @dragstart="handleThumbnailNativeDragStart(img, $event)"
-                  @dragend="handleDragEnd"
-                  @error="handleImageError(img, $event)"
-                  @load="onThumbnailLoad(img.id, $event)"
-                />
-                <div
-                  v-if="failedThumbnailIds.has(img.id)"
-                  class="thumbnail-placeholder"
-                >
-                  <v-icon class="thumbnail-broken-icon"
-                    >mdi-image-broken-variant</v-icon
-                  >
-                </div>
-                <!-- In-flight rotate. Raised the moment the gesture is sent and
-                     dropped when the tile actually turns, which is a beat later
-                     than the click: the new bitmap is decoded first so the
-                     shape and the picture change in one frame. Decorative -
-                     the operation receipt is what announces the result. -->
-                <div
-                  v-if="rotatingIconFor(img)"
-                  class="thumbnail-rotating-overlay"
-                  data-testid="thumbnail-rotating-overlay"
-                  aria-hidden="true"
-                >
-                  <v-icon class="thumbnail-rotating-icon">{{
-                    rotatingIconFor(img)
-                  }}</v-icon>
-                </div>
-                <img
-                  v-if="isVideo(img)"
-                  class="thumbnail-drag-preview"
-                  :src="getThumbnailSrc(img)"
-                  :ref="(el) => setDragPreviewRef(img.id, el)"
-                  alt=""
-                />
-                <!-- Face bounding box overlays: must be rendered after the image for correct stacking -->
-                <template v-if="isThumbnailReady(img.id) && img.thumbnail">
-                  <button
-                    v-for="overlay in getFaceBboxOverlays(img)"
-                    :key="
-                      overlay.faceId +
-                      '-' +
-                      img.id +
-                      '-' +
-                      (img.thumbnail ? 1 : 0)
-                    "
-                    type="button"
-                    class="face-bbox-overlay face-bbox-overlay--interactive"
-                    :style="overlay.style"
-                    :aria-label="`Select face ${overlay.face.character_name || overlay.faceIdx + 1}`"
-                    :aria-pressed="
-                      isFaceSelected(img.id, overlay.faceIdx) ? 'true' : 'false'
-                    "
-                    draggable="true"
-                    @pointerdown.stop
-                    @mousedown.stop
-                    @contextmenu.prevent.stop="
-                      handleFaceBboxContextMenu(img, overlay, $event)
-                    "
-                    @click.stop="
-                      toggleFaceSelection(
-                        img.id,
-                        overlay.faceIdx,
-                        overlay.faceId,
-                      )
-                    "
-                    @dragstart="
-                      (e) => {
-                        e.stopPropagation();
-                        onFaceBboxDragStart(
-                          e,
-                          img,
-                          overlay.faceIdx,
-                          overlay.faceId,
-                        );
-                      }
-                    "
-                  >
-                    <div
-                      :style="{ color: overlay.color }"
-                      class="face-bbox-label"
-                    >
-                      {{ overlay.face.character_name }}
-                    </div>
-                  </button>
-                </template>
-                <!-- Object detection (segmentation) overlays -->
-                <template v-if="isThumbnailReady(img.id) && img.thumbnail">
-                  <div
-                    v-for="overlay in getDetectionBboxOverlays(img)"
-                    :key="'det-' + overlay.detId + '-' + img.id"
-                    class="face-bbox-overlay"
-                    :style="overlay.style"
-                  >
-                    <div
-                      :style="{ color: overlay.color }"
-                      class="face-bbox-label"
-                    >
-                      {{ overlay.det.label }}
-                    </div>
-                  </div>
-                </template>
+                <!-- Top-left permanent badges (top→bottom): problem, reference folder, lock, share -->
                 <div
                   v-if="
                     isThumbnailReady(img.id) &&
                     img.thumbnail &&
-                    img.format &&
-                    img.format !== 'unknown'
+                    ((gridStore.showProblemIcon && hasPenalisedTags(img)) ||
+                      img.reference_folder_id ||
+                      lockedSetsStore.isLocked(img.id) ||
+                      (!isReadOnly && sharedPictureIds.has(img.id)))
                   "
-                  :class="[
-                    'thumbnail-bottom-left-badges',
-                    {
-                      // The scrapheap purge badge is permanent and owns the
-                      // bottom-left corner; the hover-only format badge stacks
-                      // above it instead of landing on top of it.
-                      'thumbnail-bottom-left-badges--raised':
-                        !!getScrapheapPurgeBadge(img),
-                    },
-                  ]"
+                  class="thumbnail-top-left-badges"
                 >
-                  <!-- Format badge: hover-only -->
-                  <div class="thumbnail-id-overlay thumbnail-badge">
-                    {{ img.format.toUpperCase() }}
+                  <div
+                    v-if="gridStore.showProblemIcon && hasPenalisedTags(img)"
+                    class="penalised-tag-indicator thumbnail-badge"
+                  >
+                    <Tooltip
+                      :text="penalisedTagsTitle(img)"
+                      activator="parent"
+                    />
+                    <v-icon
+                      :size="badgeIconSizes.penalised"
+                      :color="
+                        penalisedTagColor(
+                          img,
+                          userPrefsStore.penalisedTagWeights,
+                        )
+                      "
+                      >{{
+                        penalisedTagIcon(
+                          img,
+                          userPrefsStore.penalisedTagWeights,
+                          userPrefsStore.themeMode !== "light",
+                        )
+                      }}</v-icon
+                    >
+                  </div>
+                  <button
+                    v-if="img.reference_folder_id"
+                    type="button"
+                    class="thumbnail-reference-badge thumbnail-badge"
+                    :aria-label="`Open reference location for ${imageCardAriaLabel(img)}`"
+                    @click.stop="openReferenceLocation(img.id)"
+                  >
+                    <Tooltip
+                      :text="img.file_path || 'Reference picture'"
+                      activator="parent"
+                    />
+                    <v-icon :size="badgeIconSizes.penalised">mdi-folder</v-icon>
+                  </button>
+                  <div
+                    v-if="lockedSetsStore.isLocked(img.id)"
+                    class="thumbnail-lock-badge thumbnail-badge"
+                  >
+                    <Tooltip
+                      :text="lockedSetsStore.lockReason(img.id)"
+                      activator="parent"
+                    />
+                    <v-icon :size="badgeIconSizes.penalised"
+                      >mdi-lock-outline</v-icon
+                    >
+                  </div>
+                  <div
+                    v-if="!isReadOnly && sharedPictureIds.has(img.id)"
+                    class="thumbnail-share-badge thumbnail-badge"
+                  >
+                    <Tooltip text="Has active share link" activator="parent" />
+                    <v-icon :size="badgeIconSizes.penalised"
+                      >mdi-link-variant</v-icon
+                    >
                   </div>
                 </div>
-              </template>
-              <template v-else>
+                <!-- Scrapheap auto-purge state (permanent, bottom-left).
+                   Either a countdown to the server's `purge_at` or, for a
+                   protected reference original, the "won't auto-delete" badge.
+                   Icon + text, never colour alone. -->
                 <div
-                  class="thumbnail-placeholder thumbnail-placeholder--loading"
-                  aria-hidden="true"
+                  v-if="getScrapheapPurgeBadge(img)"
+                  class="thumbnail-purge-badge"
+                  :class="`thumbnail-purge-badge--${getScrapheapPurgeBadge(img).kind}`"
+                >
+                  <Tooltip
+                    :text="getScrapheapPurgeBadge(img).title"
+                    activator="parent"
+                  />
+                  <v-icon size="12" class="thumbnail-purge-badge__icon">{{
+                    getScrapheapPurgeBadge(img).icon
+                  }}</v-icon>
+                  <span class="thumbnail-purge-badge__text">{{
+                    getScrapheapPurgeBadge(img).label
+                  }}</span>
+                </div>
+                <!-- Resolution overlay (always rendered, visible on hover) -->
+                <div
+                  v-if="
+                    img.width &&
+                    img.height &&
+                    isThumbnailReady(img.id) &&
+                    img.thumbnail
+                  "
+                  :class="[
+                    'resolution-hover-overlay',
+                    'thumbnail-badge',
+                    'thumbnail-badge--bottom-right',
+                  ]"
+                >
+                  {{ img.width }}×{{ img.height }}
+                </div>
+                <template
+                  v-if="
+                    getThumbnailSrc(img) &&
+                    isVideo(img) &&
+                    getVideoThumbnailSrc(img)
+                  "
+                >
+                  <video
+                    class="thumbnail-img"
+                    aria-hidden="true"
+                    :src="getVideoThumbnailSrc(img)"
+                    :poster="getThumbnailSrc(img)"
+                    :ref="
+                      (el) => {
+                        setVideoRef(img.id, el);
+                        setThumbnailRef(img.id, el);
+                      }
+                    "
+                    preload="none"
+                    draggable="false"
+                    @pointerdown="prepareThumbnailNativeDrag(img, $event)"
+                    @pointerup="handleThumbnailPointerRelease($event)"
+                    @pointercancel="handleThumbnailPointerRelease($event)"
+                    @loadeddata="onThumbnailLoad(img.id, $event)"
+                    muted
+                    loop
+                    playsinline
+                    @mouseenter="playVideo(img.id)"
+                    @mouseleave="pauseVideo(img.id)"
+                  ></video>
+                  <img
+                    class="thumbnail-drag-preview"
+                    :src="getThumbnailSrc(img)"
+                    :ref="(el) => setDragPreviewRef(img.id, el)"
+                    alt=""
+                  />
+                </template>
+                <template v-else-if="getThumbnailSrc(img)">
+                  <img
+                    v-show="!failedThumbnailIds.has(img.id)"
+                    :src="getThumbnailSrc(img)"
+                    alt=""
+                    class="thumbnail-img"
+                    :style="getSquareCropImgStyle(img)"
+                    :ref="(el) => setThumbnailRef(img.id, el)"
+                    loading="eager"
+                    fetchpriority="high"
+                    decoding="async"
+                    draggable="true"
+                    @pointerdown="prepareThumbnailNativeDrag(img, $event)"
+                    @pointerup="handleThumbnailPointerRelease($event)"
+                    @pointercancel="handleThumbnailPointerRelease($event)"
+                    @dragstart="handleThumbnailNativeDragStart(img, $event)"
+                    @dragend="handleDragEnd"
+                    @error="handleImageError(img, $event)"
+                    @load="onThumbnailLoad(img.id, $event)"
+                  />
+                  <div
+                    v-if="failedThumbnailIds.has(img.id)"
+                    class="thumbnail-placeholder"
+                  >
+                    <v-icon class="thumbnail-broken-icon"
+                      >mdi-image-broken-variant</v-icon
+                    >
+                  </div>
+                  <!-- In-flight rotate. Raised the moment the gesture is sent and
+                     dropped when the tile actually turns, which is a beat later
+                     than the click: the new bitmap is decoded first so the
+                     shape and the picture change in one frame. Decorative -
+                     the operation receipt is what announces the result. -->
+                  <div
+                    v-if="rotatingIconFor(img)"
+                    class="thumbnail-rotating-overlay"
+                    data-testid="thumbnail-rotating-overlay"
+                    aria-hidden="true"
+                  >
+                    <v-icon class="thumbnail-rotating-icon">{{
+                      rotatingIconFor(img)
+                    }}</v-icon>
+                  </div>
+                  <img
+                    v-if="isVideo(img)"
+                    class="thumbnail-drag-preview"
+                    :src="getThumbnailSrc(img)"
+                    :ref="(el) => setDragPreviewRef(img.id, el)"
+                    alt=""
+                  />
+                  <!-- Face bounding box overlays: must be rendered after the image for correct stacking -->
+                  <template v-if="isThumbnailReady(img.id) && img.thumbnail">
+                    <button
+                      v-for="overlay in getFaceBboxOverlays(img)"
+                      :key="
+                        overlay.faceId +
+                        '-' +
+                        img.id +
+                        '-' +
+                        (img.thumbnail ? 1 : 0)
+                      "
+                      type="button"
+                      class="face-bbox-overlay face-bbox-overlay--interactive"
+                      :style="overlay.style"
+                      :aria-label="`Select face ${overlay.face.character_name || overlay.faceIdx + 1}`"
+                      :aria-pressed="
+                        isFaceSelected(img.id, overlay.faceIdx)
+                          ? 'true'
+                          : 'false'
+                      "
+                      draggable="true"
+                      @pointerdown.stop
+                      @mousedown.stop
+                      @contextmenu.prevent.stop="
+                        handleFaceBboxContextMenu(img, overlay, $event)
+                      "
+                      @click.stop="
+                        toggleFaceSelection(
+                          img.id,
+                          overlay.faceIdx,
+                          overlay.faceId,
+                        )
+                      "
+                      @dragstart="
+                        (e) => {
+                          e.stopPropagation();
+                          onFaceBboxDragStart(
+                            e,
+                            img,
+                            overlay.faceIdx,
+                            overlay.faceId,
+                          );
+                        }
+                      "
+                    >
+                      <div
+                        :style="{ color: overlay.color }"
+                        class="face-bbox-label"
+                      >
+                        {{ overlay.face.character_name }}
+                      </div>
+                    </button>
+                  </template>
+                  <!-- Object detection (segmentation) overlays -->
+                  <template v-if="isThumbnailReady(img.id) && img.thumbnail">
+                    <div
+                      v-for="overlay in getDetectionBboxOverlays(img)"
+                      :key="'det-' + overlay.detId + '-' + img.id"
+                      class="face-bbox-overlay"
+                      :style="overlay.style"
+                    >
+                      <div
+                        :style="{ color: overlay.color }"
+                        class="face-bbox-label"
+                      >
+                        {{ overlay.det.label }}
+                      </div>
+                    </div>
+                  </template>
+                  <div
+                    v-if="
+                      isThumbnailReady(img.id) &&
+                      img.thumbnail &&
+                      img.format &&
+                      img.format !== 'unknown'
+                    "
+                    :class="[
+                      'thumbnail-bottom-left-badges',
+                      {
+                        // The scrapheap purge badge is permanent and owns the
+                        // bottom-left corner; the hover-only format badge stacks
+                        // above it instead of landing on top of it.
+                        'thumbnail-bottom-left-badges--raised':
+                          !!getScrapheapPurgeBadge(img),
+                      },
+                    ]"
+                  >
+                    <!-- Format badge: hover-only -->
+                    <div class="thumbnail-id-overlay thumbnail-badge">
+                      {{ img.format.toUpperCase() }}
+                    </div>
+                  </div>
+                </template>
+                <template v-else>
+                  <div
+                    class="thumbnail-placeholder thumbnail-placeholder--loading"
+                    aria-hidden="true"
+                  ></div>
+                </template>
+                <!-- Stack band overlay (top+bottom color stripe for compact mode) -->
+                <div
+                  v-if="getStackBandStyle(img)"
+                  class="stack-band-overlay"
+                  :style="getStackBandStyle(img)"
                 ></div>
-              </template>
-              <!-- Stack band overlay (top+bottom color stripe for compact mode) -->
-              <div
-                v-if="getStackBandStyle(img)"
-                class="stack-band-overlay"
-                :style="getStackBandStyle(img)"
-              ></div>
-              <!-- The stack count and the deck edges are permanent, not
+                <!-- The stack count and the deck edges are permanent, not
                    hover-only: how many pictures a tile stands for is a fact
                    about the tile, and hiding it until hover is what made stacks
                    invisible while browsing. -->
-              <StackEdgeTicks
-                v-if="shouldShowStackBadge(img) && stackDeckEdgesFit"
-                :count="getStackBadgeCount(img)"
-              />
-              <!-- Once a stack is expanded its members look like any other
+                <StackEdgeTicks
+                  v-if="shouldShowStackBadge(img) && stackDeckEdgesFit"
+                  :count="getStackBadgeCount(img)"
+                  :open="isExpandedStackCover(img)"
+                />
+                <!-- Once a stack is expanded its members look like any other
                    picture, so the one that the collapsed tile stands for has to
                    say so. Without this, expanding a stack loses the answer to
                    "which of these is the keeper". -->
-              <span
-                v-if="isExpandedStackCover(img)"
-                class="stack-cover-flag"
-                ><Tooltip
-                  text="This picture is the stack's cover"
-                  activator="parent"
-                />Cover</span
-              >
-              <!-- Top-right badge column - the shared home for corner
+                <span v-if="isExpandedStackCover(img)" class="stack-cover-flag"
+                  ><Tooltip
+                    text="This picture is the stack's cover"
+                    activator="parent"
+                  />Cover</span
+                >
+                <!-- Top-right badge column - the shared home for corner
                    indicators (stack count in the corner, hover-only stars
                    below it, right-aligned, 2px gap). The stack count is
                    PERMANENT - how many pictures a tile stands for is a fact
@@ -943,48 +1006,57 @@
                    corner and moved whenever the star size or `showStars`
                    changed. Leading, it never moves; only what appears beneath
                    it does. -->
+                <div
+                  v-if="isThumbnailReady(img.id) && img.thumbnail"
+                  class="thumbnail-top-right-badges"
+                >
+                  <StackBadge
+                    v-if="shouldShowStackBadge(img)"
+                    :count="getStackBadgeCount(img)"
+                    :tint="getStackBadgeTint(img)"
+                    @activate="toggleStackExpand(img)"
+                    @mouseenter.stop="prefetchStackMembers(img)"
+                  />
+                  <StarRatingOverlay
+                    v-if="gridStore.showStars"
+                    :score="
+                      isReadOnly
+                        ? (guestScoreMap.get(img.id) ?? img.score ?? 0)
+                        : img.score || 0
+                    "
+                    :icon-size="badgeIconSizes.star"
+                    :compact="true"
+                    @set-score="setScore(img, $event)"
+                  />
+                </div>
+              </div>
+            </div>
+            <div v-if="isImageSelected(img.id)" class="selection-overlay"></div>
+            <!-- Info row absolutely positioned below thumbnail -->
+            <div v-if="!gridStore.compactMode" class="thumbnail-info-row">
               <div
-                v-if="isThumbnailReady(img.id) && img.thumbnail"
-                class="thumbnail-top-right-badges"
+                v-for="info in getThumbnailInfoItems(img)"
+                :key="`${info.key}-${img.id}`"
+                class="thumbnail-info"
+                :ref="
+                  (el) => setThumbnailInfoRef(img.id, info.key, info.text, el)
+                "
+                :title="getThumbnailInfoTitle(img.id, info.key)"
+                @mouseenter="handleThumbnailInfoMouseEnter(img.id, info.key)"
               >
-                <StackBadge
-                  v-if="shouldShowStackBadge(img)"
-                  :count="getStackBadgeCount(img)"
-                  :tint="getStackBadgeTint(img)"
-                  @activate="toggleStackExpand(img)"
-                  @mouseenter.stop="prefetchStackMembers(img)"
-                />
-                <StarRatingOverlay
-                  v-if="gridStore.showStars"
-                  :score="
-                    isReadOnly
-                      ? (guestScoreMap.get(img.id) ?? img.score ?? 0)
-                      : img.score || 0
-                  "
-                  :icon-size="badgeIconSizes.star"
-                  :compact="true"
-                  @set-score="setScore(img, $event)"
-                />
+                {{ getThumbnailInfoDisplayText(img.id, info.key, info.text) }}
               </div>
             </div>
           </div>
-          <div v-if="isImageSelected(img.id)" class="selection-overlay"></div>
-          <!-- Info row absolutely positioned below thumbnail -->
-          <div v-if="!gridStore.compactMode" class="thumbnail-info-row">
-            <div
-              v-for="info in getThumbnailInfoItems(img)"
-              :key="`${info.key}-${img.id}`"
-              class="thumbnail-info"
-              :ref="
-                (el) => setThumbnailInfoRef(img.id, info.key, info.text, el)
-              "
-              :title="getThumbnailInfoTitle(img.id, info.key)"
-              @mouseenter="handleThumbnailInfoMouseEnter(img.id, info.key)"
-            >
-              {{ getThumbnailInfoDisplayText(img.id, info.key, info.text) }}
-            </div>
-          </div>
-        </div>
+          <!-- The tray's foot: an empty full-width row that gives the panel
+               its bottom edge somewhere real to land, and puts the first
+               picture after the stack back at column one. -->
+          <div
+            v-if="trayRenderInfo && idx === trayRenderInfo.lastIdx"
+            class="stack-tray-foot"
+            aria-hidden="true"
+          ></div>
+        </template>
         <!-- Bottom spacer -->
         <div
           v-if="bottomSpacerHeight > 0"
@@ -1111,7 +1183,7 @@
           :captioner-plugins="captionerPlugins"
           :all-grid-images="allGridImages"
           :selected-character="String(selectionStore.selectedCharacter)"
-              :impossible-sources="filterStore.impossibleSources"
+          :impossible-sources="filterStore.impossibleSources"
           :clearing-impossible="clearingImpossibleTags"
           @clear-impossible-tags="handleClearImpossibleTags"
           @clear-selection="clearSelection"
@@ -1857,15 +1929,12 @@ async function runPluginWithParameters(
 ) {
   if (!pluginName || !Array.isArray(pictureIds) || !pictureIds.length) return;
   try {
-    const res = await runPicturePlugin(
-      pluginName,
-      {
-        picture_ids: pictureIds,
-        parameters: parameters || {},
-        captions: Array.isArray(captions) ? captions : undefined,
-        stack,
-      },
-    );
+    const res = await runPicturePlugin(pluginName, {
+      picture_ids: pictureIds,
+      parameters: parameters || {},
+      captions: Array.isArray(captions) ? captions : undefined,
+      stack,
+    });
     const createdIds = Array.isArray(res?.created_picture_ids)
       ? res.created_picture_ids
       : [];
@@ -2807,6 +2876,17 @@ function handleImageMouseEnter(img) {
   hoveredImageIdx.value = img.idx;
   hoveredStackId.value = getPictureStackId(img) ?? null;
 }
+// Hovering the tray lights the card as well: the shipped `.stack-hover-active`
+// rule already lifts every tile of the hovered stack, so a cursor anywhere in
+// the group proves the pairing without a click.
+function handleTrayMouseEnter() {
+  hoveredStackId.value = expandedStackId.value;
+}
+function handleTrayMouseLeave() {
+  if (hoveredStackId.value === expandedStackId.value) {
+    hoveredStackId.value = null;
+  }
+}
 function handleImageMouseLeave(img) {
   if (hoveredImageIdx.value === img.idx) hoveredImageIdx.value = null;
   if (hoveredStackId.value && getPictureStackId(img) === hoveredStackId.value) {
@@ -3281,10 +3361,7 @@ async function removeFromGroup() {
     }
     if (faceIds.length) {
       requests.push(
-        removeCharacterFacesByFaceId(
-          selectionStore.selectedCharacter,
-          faceIds,
-        ),
+        removeCharacterFacesByFaceId(selectionStore.selectedCharacter, faceIds),
       );
     }
     if (!requests.length) return;
@@ -3411,23 +3488,21 @@ async function removeFromGroup() {
       if (stackRemovalsForExpanded.size) {
         await Promise.all(
           [...stackRemovalsForExpanded.entries()].map(([stackId, ids]) =>
-            removeStackMembers(stackId, ids).catch(
-              (err) => {
-                console.error("Failed to remove from stack:", err);
-                // The set removal below still runs, so the user sees the
-                // pictures leave the set while the stack detach silently did
-                // not happen. A locked set is the one refusal nobody can
-                // diagnose without being told which set froze it.
-                if (isLockedRefusal(err)) {
-                  const sets = lockedSetsSentence(lockedSets(err));
-                  noticeStore.error(
-                    sets
-                      ? `They left the set, but could not leave their stack: ${sets}`
-                      : "They left the set, but could not leave their stack: a locked set freezes it.",
-                  );
-                }
-              },
-            ),
+            removeStackMembers(stackId, ids).catch((err) => {
+              console.error("Failed to remove from stack:", err);
+              // The set removal below still runs, so the user sees the
+              // pictures leave the set while the stack detach silently did
+              // not happen. A locked set is the one refusal nobody can
+              // diagnose without being told which set froze it.
+              if (isLockedRefusal(err)) {
+                const sets = lockedSetsSentence(lockedSets(err));
+                noticeStore.error(
+                  sets
+                    ? `They left the set, but could not leave their stack: ${sets}`
+                    : "They left the set, but could not leave their stack: a locked set freezes it.",
+                );
+              }
+            }),
           ),
         );
       }
@@ -4645,7 +4720,9 @@ const selectedMediaSupport = computed(() => {
 // The selection's picture records, in selection order, for the gates that need
 // to look at the files rather than only count them.
 function selectedPictureRecords() {
-  const ids = Array.isArray(selectedImageIds.value) ? selectedImageIds.value : [];
+  const ids = Array.isArray(selectedImageIds.value)
+    ? selectedImageIds.value
+    : [];
   if (!ids.length) return [];
   const byId = new Map(
     (Array.isArray(allGridImages.value) ? allGridImages.value : [])
@@ -5028,8 +5105,7 @@ async function loadDeletePreview(ids) {
   deleteForeverLoading.value = true;
   deleteForeverConfirmToken.value = "";
   try {
-    const d =
-      (await previewScrapheapDelete(ids ?? null)) ?? {};
+    const d = (await previewScrapheapDelete(ids ?? null)) ?? {};
     deleteForeverConfirmToken.value = String(d.confirm_token ?? "");
     deleteForeverTotalCount.value = Number(d.total_count) || 0;
     deleteForeverProtectedCount.value = Number(d.protected_count) || 0;
@@ -5292,9 +5368,7 @@ async function handleImagesUploaded(payload) {
       ].includes(selectedCharacterKey);
       if (selectedSetId != null && selectedSetId !== "") {
         await Promise.all(
-          pictureIds.map((id) =>
-            addPictureToSet(selectedSetId, id),
-          ),
+          pictureIds.map((id) => addPictureToSet(selectedSetId, id)),
         );
       } else if (!skipCharacter && selectedCharacterId != null) {
         await addCharacterFaces(selectedCharacterId, pictureIds);
@@ -5349,7 +5423,7 @@ function handleImportErrored() {
 const _stackOps = {
   collapseStackImages: null,
   mapGridImages: null,
-  syncExpandAllStacksFromFetchedImages: null,
+  pruneExpandedStackIfGone: null,
   refreshExpandedStacksAfterFetch: null,
 };
 const lastGridVersionRefreshAt = ref(Date.now());
@@ -5959,8 +6033,7 @@ const {
   {
     collapseStackImages: (images) => _stackOps.collapseStackImages(images),
     mapGridImages: (images) => _stackOps.mapGridImages(images),
-    syncExpandAllStacksFromFetchedImages: () =>
-      _stackOps.syncExpandAllStacksFromFetchedImages(),
+    pruneExpandedStackIfGone: () => _stackOps.pruneExpandedStackIfGone(),
     refreshExpandedStacksAfterFetch: () =>
       _stackOps.refreshExpandedStacksAfterFetch(),
     resetThumbnailState,
@@ -6062,7 +6135,9 @@ operationStore.$onAction(({ name, args, after }) => {
 // (moved to useStackOrdering composable)
 // ============================================================
 const {
+  expandedStackId,
   expandedStackIds,
+  useTrayLayout,
   expandedStackMembers,
   expandedStackLoading,
   selectedMultipleStackIds,
@@ -6075,17 +6150,17 @@ const {
   rebuildGridImagesFromLastFetch,
   refreshExpandedStacksAfterFetch,
   loadExpandedStacksInView,
-  expandAllStacks,
-  collapseAllStacks,
+  collapseOpenStack,
   toggleStackExpand,
   prefetchStackMembers,
   emitStackStats,
-  syncExpandAllStacksFromFetchedImages,
+  pruneExpandedStackIfGone,
   handleStackReorderDragOver,
   handleStackReorderDragLeave,
   handleStackReorderDrop,
   createStackFromSelection,
   dissolveSelectedStacks,
+  unstackOpenStack,
   removeSelectedFromStack,
   createStacksFromSelectedGroups,
   collapseStackImages,
@@ -6132,8 +6207,7 @@ const {
 // that useStackOrdering has returned them.
 _stackOps.collapseStackImages = collapseStackImages;
 _stackOps.mapGridImages = mapGridImages;
-_stackOps.syncExpandAllStacksFromFetchedImages =
-  syncExpandAllStacksFromFetchedImages;
+_stackOps.pruneExpandedStackIfGone = pruneExpandedStackIfGone;
 _stackOps.refreshExpandedStacksAfterFetch = refreshExpandedStacksAfterFetch;
 
 const selectedGroupName = ref("");
@@ -6254,6 +6328,8 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     clearFaceSelection,
     clearSearchQuery,
     scrollCursorIntoView,
+    isStackTrayOpen: () => expandedStackId.value != null,
+    closeStackTray: collapseOpenStack,
     focusCursor: focusGridCursor,
     openOverlay,
     deleteSelected,
@@ -6588,7 +6664,7 @@ function _resetGridState() {
   resetThumbnailState();
   allGridImages.value = [];
   lastFetchedGridImages.value = [];
-  expandedStackIds.value = new Set();
+  expandedStackId.value = null;
   expandedStackMembers.value = new Map();
   expandedStackLoading.value = new Set();
   selectedImageIds.value = [];
@@ -6665,11 +6741,11 @@ watch(
 
 watch(
   () => gridStore.showStacks,
-  async (expandAllStacksEnabled) => {
-    if (expandAllStacksEnabled) {
-      syncExpandAllStacksFromFetchedImages();
+  async (showStacksEnabled) => {
+    if (showStacksEnabled) {
+      pruneExpandedStackIfGone();
     } else {
-      expandedStackIds.value = new Set();
+      expandedStackId.value = null;
     }
     rebuildGridImagesFromLastFetch();
     await refreshExpandedStacksAfterFetch();
@@ -6680,6 +6756,13 @@ watch(
   () => gridStore.columns,
   async () => {
     updateRowHeightFromGrid();
+    // The tray's members are spliced to where the cover's ROW ends, so a
+    // different column count puts that boundary somewhere else and the members
+    // have to be re-placed or the tray stops lining up under its card.
+    if (expandedStackId.value != null && useTrayLayout.value) {
+      rebuildGridImagesFromLastFetch();
+      await refreshExpandedStacksAfterFetch();
+    }
     recalculateVisibleRange();
     await nextTick();
     triggerFaceOverlayRedraw();
@@ -7033,6 +7116,128 @@ const gridImagesToRender = computed(() => {
 
   const filtered = filterImagesByMediaType(allGridImages.value);
   return filtered.slice(renderStart.value, renderEnd.value);
+});
+
+// ============================================================
+// THE STACK TRAY
+// ============================================================
+// Expanding a stack used to splice its members into the grid where the cover
+// was, leaving them indistinguishable from the pictures around them. They now
+// leave the cover's row and open a tray underneath it: one `--panel` surface
+// running unbroken out of the stack card, on the grid's own column tracks.
+// Only one stack is open at a time (`expandedStackId`), which is what lets the
+// tray claim to be *that* card's tray.
+
+/** A member of the open stack - every tile in the tray except the cover. */
+function isTrayMember(img) {
+  if (!useTrayLayout.value) return false;
+  return isStackExpandedForImage(img) && !isExpandedStackCover(img);
+}
+
+const trayStackCount = computed(() => {
+  const stackId = expandedStackId.value;
+  if (stackId == null) return 0;
+  const entry = expandedStackMembers.value.get(stackId);
+  const cached = Array.isArray(entry?.ids) ? entry.ids.length : 0;
+  if (cached > 1) return cached;
+  const cover = allGridImages.value.find(
+    (img) => getPictureStackId(img) === stackId,
+  );
+  return Math.max(2, getStackBadgeCount(cover));
+});
+
+const trayAriaLabel = computed(
+  () =>
+    `Stack of ${trayStackCount.value}, ${trayStackCount.value - 1} other pictures; ` +
+    `the cover stays in the grid above`,
+);
+
+/**
+ * Where the tray's three extra elements go in the rendered grid.
+ *
+ * The surface is an absolutely-positioned grid child, so it takes a grid AREA
+ * rather than a height: pin it from the head's row to the foot's row and it is
+ * exactly as tall as whatever those rows turn out to be. Row numbers are
+ * counted over the rendered slice (the top spacer is row 1, and it is always
+ * rendered in square mode), never over absolute image indices, so a scrolled
+ * window does not shift it.
+ *
+ * Null when no stack is open, when the tray layout is off (justified mode), or
+ * when the render window holds no member of the open stack.
+ */
+const trayRenderInfo = computed(() => {
+  if (!useTrayLayout.value) return null;
+  const stackId = expandedStackId.value;
+  if (stackId == null) return null;
+  const rendered = gridImagesToRender.value;
+  let firstIdx = -1;
+  let lastIdx = -1;
+  let coverIdx = -1;
+  for (let i = 0; i < rendered.length; i += 1) {
+    const img = rendered[i];
+    if (getPictureStackId(img) !== stackId) continue;
+    if (isExpandedStackCover(img)) {
+      coverIdx = i;
+      continue;
+    }
+    if (firstIdx === -1) firstIdx = i;
+    lastIdx = i;
+  }
+  if (firstIdx === -1) return null;
+  const cols = Math.max(1, gridStore.columns || 1);
+  const memberRows = Math.ceil((lastIdx - firstIdx + 1) / cols);
+  return {
+    firstIdx,
+    lastIdx,
+    // The top spacer takes the first row (it is always rendered in square
+    // mode, where the tray lives); the cards before the head fill the rows
+    // after it.
+    headRow:
+      (topSpacerHeight.value > 0 ? 1 : 0) + Math.ceil(firstIdx / cols) + 1,
+    // head + member rows + foot.
+    span: memberRows + 2,
+    // 1-based grid line of the column the stack card sits in. Clamped off the
+    // last column, which the actions own: a cover there would otherwise start
+    // the sentence on top of them.
+    tabColumn:
+      coverIdx === -1
+        ? 1
+        : Math.min((coverIdx % cols) + 1, Math.max(1, cols - 1)),
+  };
+});
+
+// An open tray must be on screen together with the card it belongs to - an
+// anchor you have to scroll back to find is not an anchor. A stack taller than
+// the window still overflows the bottom (the design's answer, a tray capped at
+// two rows with its own scroll region, is not built yet), so opening one puts
+// its card at the top of the viewport and gives the tray the whole window.
+watch(expandedStackId, async (stackId) => {
+  if (stackId == null || !useTrayLayout.value) return;
+  await nextTick();
+  const wrapper = scrollWrapper.value;
+  if (!wrapper) return;
+  const coverIdx = allGridImages.value.findIndex(
+    (img) => getPictureStackId(img) === stackId,
+  );
+  const top = gridItemTopOffset(coverIdx);
+  if (top == null || top <= wrapper.scrollTop) return;
+  wrapper.scrollTop = top;
+});
+
+/**
+ * The surface's grid area, plus the column it unfolds out of. `transform-origin`
+ * lands on the tab's own column so the panel visibly comes out of the tile
+ * rather than appearing underneath it.
+ */
+const traySurfaceStyle = computed(() => {
+  const info = trayRenderInfo.value;
+  if (!info) return null;
+  const cols = Math.max(1, gridStore.columns || 1);
+  const originX = ((info.tabColumn - 0.5) / cols) * 100;
+  return {
+    gridRow: `${info.headRow} / span ${info.span}`,
+    transformOrigin: `${originX.toFixed(2)}% top`,
+  };
 });
 
 const imageCardRefs = new Map();
@@ -7866,8 +8071,7 @@ defineExpose({
   gridEl: scrollWrapper,
   onGlobalKeyPress,
   updateVisibleThumbnails,
-  expandAllStacks,
-  collapseAllStacks,
+  collapseOpenStack,
   exportCurrentViewToZip,
   exportCurrentViewToFolder,
   getExportCount,
@@ -8251,7 +8455,8 @@ async function exportCurrentViewToZip(options = {}) {
     exportProgress.status = "failed";
     exportProgress.message = "Export failed";
     console.error("ZIP export failed", e);
-    noticeStore.error(`Export failed. ${errorDetail(e)}`, { key: "export-zip",
+    noticeStore.error(`Export failed. ${errorDetail(e)}`, {
+      key: "export-zip",
     });
     setTimeout(() => {
       exportProgress.visible = false;

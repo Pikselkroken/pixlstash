@@ -85,7 +85,7 @@ function makeHarness({
   const callbacks = {
     collapseStackImages: (x) => x,
     mapGridImages: (x) => x,
-    syncExpandAllStacksFromFetchedImages: vi.fn(),
+    pruneExpandedStackIfGone: vi.fn(),
     refreshExpandedStacksAfterFetch: vi.fn(),
     resetThumbnailState: vi.fn(),
     triggerNewImageHighlight: vi.fn(),

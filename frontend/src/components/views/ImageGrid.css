@@ -46,7 +46,6 @@
   position: absolute;
 }
 
-
 .thumbnail-bottom-left-badges {
   position: absolute;
   bottom: 2px;
@@ -172,7 +171,6 @@
   right: 2px;
   bottom: 2px;
 }
-
 
 .face-bbox-label {
   /* Anchor to the top of the box - a <button> would otherwise centre it. */
@@ -1122,4 +1120,176 @@
   font-size: var(--text-base);
   line-height: var(--leading-body);
   color: rgba(var(--v-theme-on-surface), 0.85);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE STACK TRAY
+
+   An expanded stack leaves the grid's flow and opens a tray under its card.
+   The card becomes the tray's TAB: one `--panel` surface drawn straight
+   through the 4px grid gap, overlapping the tray's top border by a pixel, so
+   the two cannot read as separate objects. No hue is spent anywhere here - a
+   full-area tint over a tile is exactly what selection is, so a grouping mark
+   may not be one (visual-language.md: amber acts, olive selects).
+
+   Geometry, and why there is no arithmetic in it: `.stack-tray-surface` is an
+   ABSOLUTELY POSITIONED grid child. An abspos grid child is laid out against
+   the grid AREA its `grid-row` / `grid-column` name, and takes no part in
+   auto-placement - so pinning it from the head's row to the foot's row makes
+   it exactly as tall as those rows turn out to be, at any column count, in
+   compact mode, at any thumbnail size, while the member tiles above it keep
+   landing on the grid's own column tracks. A computed pixel height would drift
+   the moment a row measured differently from the virtual scroller's estimate.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.stack-tray-surface {
+  position: absolute;
+  grid-column: 1 / -1;
+  inset: 0;
+  background: rgb(var(--v-theme-panel));
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-2);
+  pointer-events: none;
+  /* The panel unfolds out of the tab's own column rather than appearing under
+     it; `transform-origin` is set per tray from the card's column. */
+  animation: stackTrayOpen var(--dur-2) var(--ease-decelerate);
+}
+
+@keyframes stackTrayOpen {
+  from {
+    opacity: 0;
+    transform: scaleY(0.88);
+  }
+  to {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stack-tray-surface {
+    animation: none;
+  }
+}
+
+/* The head takes NO horizontal padding of its own: its tracks are the grid's
+   tracks, so the sentence naming the stack can start in the card's column. */
+.stack-tray-head {
+  grid-column: 1 / -1;
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: inherit;
+  gap: inherit;
+  align-items: center;
+  min-height: var(--control-h);
+  padding-top: var(--space-2);
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-on-panel));
+}
+
+.stack-tray-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
+  overflow: hidden;
+  padding-left: var(--space-2);
+}
+
+.stack-tray-title b {
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  flex: none;
+}
+
+.stack-tray-sub {
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Right-aligned, where every other action row in the app puts them. */
+.stack-tray-actions {
+  grid-column: -2 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding-right: var(--space-2);
+}
+
+.stack-tray-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: rgb(var(--v-theme-on-panel));
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.stack-tray-action:hover {
+  background: var(--hover-wash);
+}
+
+.stack-tray-action:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-inset);
+}
+
+/* An empty full-width row. It gives the panel's bottom edge somewhere real to
+   land and puts the first picture after the stack back at column one. */
+.stack-tray-foot {
+  grid-column: 1 / -1;
+  height: var(--space-4);
+}
+
+.compact-mode .stack-tray-foot {
+  height: var(--space-2);
+}
+
+/* Tray members sit ON the panel, so their caption takes the panel's secondary
+   ink rather than the canvas's. */
+.image-card--tray-member .thumbnail-info {
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
+}
+
+/* The stack card, drawn as the tray's tab. The surface runs from the card's
+   own top edge down through the grid gap and a pixel INTO the tray's top
+   border: a caret floating in the gap reads as a pointer between two objects,
+   a continuous surface reads as one object. `z-index: -1` keeps it inside the
+   card's own stacking context, behind the thumbnail and the caption. */
+.image-card--stack-tab::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 calc(-1 * var(--space-2) - 1px) 0;
+  background: rgb(var(--v-theme-panel));
+  border: 1px solid rgb(var(--v-theme-border));
+  border-bottom: 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* Compact mode deletes the grid gap, so the tab has only the tray's own border
+   left to reach into. */
+.compact-mode .image-card--stack-tab::before {
+  inset: 0 0 -1px 0;
+  border-radius: 0;
+}
+
+/* Justified mode packs rows by aspect ratio and has no column track for a tray
+   to borrow, so it keeps the marks it shipped with (see useStackOrdering's
+   `useTrayLayout`). Nothing here should reach it. */
+.image-grid--justified .stack-tray-surface,
+.image-grid--justified .stack-tray-head,
+.image-grid--justified .stack-tray-foot {
+  display: none;
 }

@@ -622,6 +622,23 @@ kbd {
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
   margin-bottom: var(--space-3);
 }
+/* The menu label's live-state chip: "1 open" beside STACKS while a tray is out.
+   Olive on `--bg` is the app's own active pair; the chip says a state, it does
+   not act, so it never takes the amber. */
+.tbm-open-chip {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--active-bar);
+  color: rgb(var(--v-theme-background));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0;
+  text-transform: none;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
 .tbm-label--right {
   text-align: right;
 }

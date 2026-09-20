@@ -293,28 +293,25 @@
               <span class="gb-size-value">{{ gbSizeLabel }}</span>
             </div>
 
+            <!-- One stack is open at a time, so there is one control: the
+                 pair that used to sit here could not mean anything under that
+                 rule ("Expand all" would open one stack and close it again). -->
             <div class="tbm-section">
-              <span class="tbm-label">Stacks</span>
+              <span class="tbm-label"
+                >Stacks<span v-if="gbStackTrayOpen" class="tbm-open-chip"
+                  >1 open</span
+                ></span
+              >
               <div class="tbm-btngroup">
                 <button
                   class="tbm-action tbm-action--secondary"
                   type="button"
                   style="flex: 1"
-                  :disabled="gbExpandAllStacksDisabled"
-                  @click="emit('expand-all-stacks')"
-                >
-                  <v-icon size="16">mdi-arrow-expand-vertical</v-icon>
-                  Expand all
-                </button>
-                <button
-                  class="tbm-action tbm-action--secondary"
-                  type="button"
-                  style="flex: 1"
-                  :disabled="gbCollapseAllStacksDisabled"
-                  @click="emit('collapse-all-stacks')"
+                  :disabled="!gbStackTrayOpen"
+                  @click="emit('collapse-stack')"
                 >
                   <v-icon size="16">mdi-arrow-collapse-vertical</v-icon>
-                  Collapse all
+                  Collapse
                 </button>
               </div>
             </div>
@@ -626,8 +623,7 @@ const props = defineProps({
 });
 
 const emit = defineEmits([
-  "expand-all-stacks",
-  "collapse-all-stacks",
+  "collapse-stack",
   "confirm-export-zip",
   "confirm-export-folder",
   "open-import",
@@ -1077,14 +1073,10 @@ const gbOverlayOptions = computed(() => [
   },
 ]);
 
-const gbExpandAllStacksDisabled = computed(() => {
-  const total = Number(gridStore.totalStackCount || 0);
-  const expanded = Number(gridStore.expandedStackCount || 0);
-  return total <= 0 || expanded >= total;
-});
-
-const gbCollapseAllStacksDisabled = computed(
-  () => Number(gridStore.expandedStackCount || 0) <= 0,
+// At most one stack is open at a time, so this is a boolean wearing a count's
+// clothes: the grid reports 0 or 1.
+const gbStackTrayOpen = computed(
+  () => Number(gridStore.expandedStackCount || 0) > 0,
 );
 </script>
 

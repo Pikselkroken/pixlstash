@@ -52,6 +52,8 @@ export function useGridKeyboardNav(
     clearFaceSelection,
     clearSearchQuery,
     scrollCursorIntoView,
+    isStackTrayOpen,
+    closeStackTray = () => {},
     focusCursor = () => {},
     openOverlay,
     deleteSelected,
@@ -194,6 +196,10 @@ export function useGridKeyboardNav(
       } else if (isMultiCharacterView.value || isSetOverlapView.value) {
         // No images selected - ESC closes the union/intersect/overlap bar
         emit("clear-multi-selection");
+      } else if (isStackTrayOpen?.()) {
+        // An open stack tray is a surface over the grid, so it closes before
+        // Esc reaches the search query behind it.
+        void closeStackTray();
       } else if (
         searchResultsActive?.value ||
         (searchStore.searchQuery && searchStore.searchQuery.trim())

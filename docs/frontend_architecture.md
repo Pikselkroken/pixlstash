@@ -255,7 +255,7 @@ Sub-components that manage independent data (e.g. `AccountSection`, `SmartScoreS
 
 **`SideBar` exposes:** `refreshSidebar()`, `openSettingsDialog()`, `startLocalImport()`, `currentProjectId`, `openCurrentSelectionEditor()`
 
-**`ImageGrid` exposes:** `gridEl`, `onGlobalKeyPress()`, `updateVisibleThumbnails()`, `expandAllStacks()`, `collapseAllStacks()`, `exportCurrentViewToZip()`, `getExportCount()`, `removeImagesById()`, `clearFaceSelection()`, `runComfyuiOnGridImages()`, `hasCursorFocus`
+**`ImageGrid` exposes:** `gridEl`, `onGlobalKeyPress()`, `updateVisibleThumbnails()`, `collapseOpenStack()`, `exportCurrentViewToZip()`, `getExportCount()`, `removeImagesById()`, `clearFaceSelection()`, `runComfyuiOnGridImages()`, `hasCursorFocus`
 
 ### 4.4 Task activity and the app-wide activity indicators
 
@@ -393,7 +393,7 @@ Presentational "PixlStash" brand wordmark in the Tiny5 pixel font (replaced the 
 The core image display engine. Responsibilities:
 - Virtualised grid scroll with dynamic thumbnail sizes (via `useVirtualScroll`).
 - Fetches images from `GET /pictures` with all filter params as query args.
-- Manages stacks: collapsing/expanding, leader-map calculation, inline stack drag-sort (via `useStackOrdering`).
+- Manages stacks: collapsing/expanding (one open at a time — see *An expanded stack opens a tray* below), leader-map calculation, inline stack drag-sort (via `useStackOrdering`).
 - Multi-selection (shift-click, keyboard navigation with arrow keys) (via `useMultiSelect`).
 - **Segment (object detection)**: the context menu's "Segment" item emits `segment`; `ImageGrid` opens a small dialog for an optional label phrase and `POST`s `/pictures/detect` with the selected ids (empty phrase → dense detection). Progress shows in the task manager; the overlay refreshes on the resulting `changed_pictures` event.
 - Image scoring (guest and authenticated star rating).
@@ -401,6 +401,92 @@ The core image display engine. Responsibilities:
 - Integrates `ImageOverlay`, `ImageImporter`, `Toolbar`, `ImageGridContextMenu`, `EmptyScrapHeap`, `LibraryEmptyState`, `ComfyUiRunner`.
 - Emits: `open-overlay`, `refresh-sidebar`, `clear-search`, `reset-to-all`, `search-all`, `update:selected-sort`, `update:stack-stats`, `import-started`, `import-ended`, `clear-multi-selection`, `update:character-multi-mode`, `update:set-multi-mode`, `update:set-difference-base-id`, `update:embed-watermark`, `update:visible-range-label`, `load-pending-imports`
 - Key props: `thumbnailSize`, `columns`, `selectedCharacter`, `selectedSet`, `searchQuery`, `selectedSort`, `wsTagUpdate`, `wsPluginProgress`, `gridVersion`, `wsUpdateKey`, `publicUrl`, `embedWatermark`, + all filter props.
+
+##### An expanded stack opens a tray
+
+Expanding a stack used to splice its members into the grid where the cover was.
+From that moment they were ordinary tiles — same size, same gutter, same
+framing, in the same reading order as every unstacked picture around them — and
+the only marks saying otherwise were a wash of the stack's hue at 0.6 alpha
+behind each card's 4px padding and an 8px ribbon along the bottom of each
+thumbnail. At grid scale the wash is a coloured hairline around a photo and
+nobody reads it.
+
+**That wash could not simply be turned up.** A full-area tint over a tile is
+exactly what selection is (`--active-wash` plus the olive edge), so
+strengthening the group wash put the two marks in the same place. The system's
+rule sets the constraint — *amber acts, olive selects* — so a grouping mark may
+not be olive, may not be amber, and may not be a full-area field of anything
+else either. The answer is therefore containment, not colour: an expanded stack
+leaves the cover's row and opens a **tray** underneath it, and **no hue is
+spent anywhere in it**. Design: *The Stack Opens a Tray*.
+
+**One stack is open at a time.** `useStackOrdering` holds a single
+`expandedStackId` (the exported `expandedStackIds` is a read-only `Set`-shaped
+view of it, so existing readers are unchanged). Opening a stack closes whichever
+one was open, which makes a second tray *unrepresentable* rather than merely
+avoided — there is no accordion, nothing to tell two trays apart, and no card
+whose tab sits over a stranger's tray. It costs **Expand all**: the Grid-view
+menu's pair became one **Collapse**, disabled when nothing is open, with a
+`1 open` chip beside the STACKS label while a tray is out.
+
+Four things tie the tray to *that* card, and none of them is a new colour:
+
+1. **The card is the tray's tab.** `.image-card--stack-tab::before` draws one
+   `--panel` surface over the whole card and down through the 4px grid gap, a
+   pixel into the tray's top border. A caret floating in the gap reads as a
+   pointer between two objects; a continuous surface reads as one object.
+2. **The tray borrows the grid's own columns.** It takes no horizontal padding,
+   and its head inherits `grid-template-columns` and `gap` from the grid
+   container, so its tracks *are* the grid's tracks.
+3. **The head starts in the card's column.** "Stack of 6" is set under the tab
+   wherever in the row the card happens to be (clamped off the last column,
+   which Collapse and Unstack own), not at the tray's left edge.
+4. **The deck's edges turn over.** Collapsed, `StackEdgeTicks` peeks up and to
+   the right, on canvas; open (`:open`), the layers point down at the tray. Two
+   pixels on an element that already exists, and it is the card saying where its
+   pictures went.
+
+**How the members become a rectangle.** `insertExpandedStackMembers` (and
+`collapseStackImages`, which must agree with it or a rebuild paints one wrong
+frame) splices the members at `ceil((coverIndex + 1) / columns) * columns` — the
+end of the cover's ROW — so the pictures that shared that row stay on it and
+every member lands on a column track under the picture above it. A column-count
+change re-splices (the `gridStore.columns` watcher in `ImageGrid.vue`), and so
+does an in-tray drag reorder, because `applyStackOrderToList` puts every member
+back at the first one's position.
+
+**How the surface is sized: it is not.** `.stack-tray-surface` is an
+**absolutely positioned grid child**, which CSS Grid lays out against the grid
+*area* its `grid-row` / `grid-column` name while keeping it out of
+auto-placement entirely. Pinning it from the head's row to the foot's row
+(`grid-row: N / span 2 + memberRows`) makes it exactly as tall as those rows
+turn out to be, at any column count, in compact mode, at any thumbnail size —
+and the member tiles above it keep landing on the grid's own tracks. A computed
+pixel height would drift the moment a row measured differently from the virtual
+scroller's estimate. Row numbers are counted over the *rendered* slice (the top
+spacer is row 1, always rendered in square mode), never over absolute image
+indices, so scrolling does not move it. The surface is rendered once, outside
+the card loop, so the open animation runs when a stack opens and not again on
+every scroll that shifts the render window.
+
+**What it does not do yet, and why that is visible:**
+
+- **The tray is not capped.** The design's answer to a stack much taller than
+  the window is a tray capped at two rows with its own scroll region, so the
+  card and its tray are always on screen together. That is not built. Instead,
+  opening a stack scrolls its card to the top of the viewport and gives the tray
+  the rest of the window; a stack of twenty-odd still runs off the bottom.
+- **Justified mode keeps the old marks.** Justified rows are packed by aspect
+  ratio and have no column track for a tray to borrow, so `useTrayLayout` is
+  false there and the wash and the ribbon still draw. Square and compact get the
+  tray.
+- **The virtual scroller does not model the tray's chrome.** The head and foot
+  rows add roughly 40-50px that `rowHeight * row` does not know about. The grid
+  already drifts a few px per row against its own estimate, and the render
+  buffer is ±100 items, so one tray's worth of error is absorbed; with more than
+  one tray it would not be, which is a second reason the one-open rule is load
+  bearing.
 
 ##### The empty library is a different question from an empty grid
 
@@ -733,7 +819,7 @@ Responsibilities:
 - Top bar: search toggle, export menu, settings button, import button, sidebar/stats toggles.
 - Export menu: type (full/face), caption mode, resolution, tag format, character name inclusion, bounding-box sidecar (`exportBboxMode`: none / COCO JSON → `bbox_mode` query param).
 - Props: `selectedCount`, `selectedCharacter`, `selectedSort`, `allPicturesId`, `unassignedPicturesId`, `backendUrl`, `comfyuiConfigured`.
-- Key emits: `expand-all-stacks`, `collapse-all-stacks`, `confirm-export-zip`, `open-import`, `open-settings`.
+- Key emits: `collapse-stack`, `confirm-export-zip`, `open-import`, `open-settings`.
 
 #### Toolbar menu panels (`panels/`)
 The individual toolbar menu bodies, extracted from `Toolbar.vue` so each dropdown owns its own markup and state:

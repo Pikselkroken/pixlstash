@@ -84,10 +84,27 @@ export function useStackOrdering(
   const noticeStore = useNoticeStore();
 
   // ── Stack expand/collapse state ───────────────────────────────────────────
-  const expandedStackIds = ref(new Set());
+  // One stack is open at a time, so the state is a single id rather than a set:
+  // a second open tray is unrepresentable rather than merely avoided. Opening a
+  // stack closes whichever one was open.
+  const expandedStackId = ref(null);
+  const NO_EXPANDED_STACKS = new Set();
+  // Read-only view of the id above, kept in the Set shape every reader already
+  // uses. Never assign to it - write `expandedStackId`.
+  const expandedStackIds = computed(() =>
+    expandedStackId.value == null
+      ? NO_EXPANDED_STACKS
+      : new Set([expandedStackId.value]),
+  );
   const expandedStackMembers = ref(new Map());
   const expandedStackLoading = ref(new Set());
   const expandedStackLoadPromises = new Map();
+
+  // The tray is drawn on the square grid's own column tracks. Justified mode
+  // packs rows by aspect ratio and has no such track, so it keeps the marks it
+  // shipped with (the stack wash and the bottom ribbon) instead.
+  const useTrayLayout = computed(() => gridStore.thumbnailMode !== "justified");
+  const trayColumns = computed(() => Math.max(1, gridStore.columns || 1));
 
   // ── Stack visual order map ────────────────────────────────────────────────
   const stackVisualOrderMap = computed(() => {
@@ -160,10 +177,22 @@ export function useStackOrdering(
     const leaders = buildStackLeaderMap(images);
     const seen = new Set();
     const collapsed = [];
+    const cols = trayColumns.value;
+    // The open stack's members wait here until the cover's ROW is complete, so
+    // this agrees with `insertExpandedStackMembers` and a rebuild never paints
+    // one frame of the members sitting directly behind their cover.
+    let pendingTrayMembers = null;
+    const flushTrayMembers = () => {
+      if (!pendingTrayMembers) return;
+      if (collapsed.length % cols !== 0) return;
+      collapsed.push(...pendingTrayMembers);
+      pendingTrayMembers = null;
+    };
     for (const img of images) {
       const stackId = getPictureStackId(img);
       if (!stackId) {
         collapsed.push(img);
+        flushTrayMembers();
         continue;
       }
       const leaderId = leaders.get(stackId);
@@ -178,7 +207,13 @@ export function useStackOrdering(
       if (expandedStackIds.value.has(stackId)) {
         const expanded = buildExpandedStackImages(stackId, img, stackCount);
         if (expanded.length) {
-          collapsed.push(...expanded);
+          if (useTrayLayout.value && expanded.length > 1) {
+            collapsed.push(expanded[0]);
+            pendingTrayMembers = expanded.slice(1);
+            flushTrayMembers();
+          } else {
+            collapsed.push(...expanded);
+          }
           continue;
         }
       }
@@ -186,7 +221,9 @@ export function useStackOrdering(
         ...img,
         stackCount,
       });
+      flushTrayMembers();
     }
+    if (pendingTrayMembers) collapsed.push(...pendingTrayMembers);
     return collapsed;
   }
 
@@ -405,10 +442,28 @@ export function useStackOrdering(
       .filter((img) => img && img.id != null)
       .filter((img) => String(img.id) !== headerId)
       .map((img) => hydrateGridImage(img, 0, existingById));
-    const insertIndex = filteredHeaderIndex + 1;
+    // The tray is a rectangle of whole grid rows, so the members begin where
+    // the cover's row ends rather than in the next free cell after the cover:
+    // the pictures that shared the cover's row stay on it, and every member
+    // lands under a column of the grid above it. Justified mode has no uniform
+    // row to end, so there the members follow the cover as they always did.
+    const insertIndex = Math.min(
+      filtered.length,
+      useTrayLayout.value
+        ? Math.ceil((filteredHeaderIndex + 1) / trayColumns.value) *
+            trayColumns.value
+        : filteredHeaderIndex + 1,
+    );
     const before = filtered.slice(0, filteredHeaderIndex);
-    const after = filtered.slice(filteredHeaderIndex + 1);
-    const result = [...before, mergedHeader, ...insertItems, ...after];
+    const between = filtered.slice(filteredHeaderIndex + 1, insertIndex);
+    const after = filtered.slice(insertIndex);
+    const result = [
+      ...before,
+      mergedHeader,
+      ...between,
+      ...insertItems,
+      ...after,
+    ];
     setGridIndices(result);
     allGridImages.value = result;
     const insertCount = insertItems.length;
@@ -459,12 +514,14 @@ export function useStackOrdering(
     if (headerIndex === -1) return;
     let removedCount = 0;
     let keptHeader = false;
-    const filtered = items.filter((item) => {
+    let firstRemovedIndex = -1;
+    const filtered = items.filter((item, index) => {
       if (getPictureStackId(item) !== stackId) return true;
       if (!keptHeader) {
         keptHeader = true;
         return true;
       }
+      if (firstRemovedIndex === -1) firstRemovedIndex = index;
       removedCount += 1;
       return false;
     });
@@ -472,7 +529,10 @@ export function useStackOrdering(
     setGridIndices(filtered);
     allGridImages.value = filtered;
     if (removedCount > 0) {
-      const removeStart = headerIndex + 1;
+      // The members do not sit directly after the cover under the tray layout,
+      // so the loaded-range shift starts where they actually were.
+      const removeStart =
+        firstRemovedIndex === -1 ? headerIndex + 1 : firstRemovedIndex;
       const removeEnd = headerIndex + 1 + removedCount;
       loadedRanges.value = shiftRangesForDelta(
         loadedRanges.value,
@@ -516,33 +576,23 @@ export function useStackOrdering(
 
   function emitStackStats() {
     const expandable = collectExpandableStackIds(lastFetchedGridImages.value);
-    const expandableSet = new Set(expandable);
-    let expanded = 0;
-    for (const stackId of expandedStackIds.value || []) {
-      if (expandableSet.has(stackId)) {
-        expanded += 1;
-      }
-    }
+    const open = expandedStackId.value;
     emit("update:stack-stats", {
-      expanded,
+      expanded: open != null && expandable.includes(open) ? 1 : 0,
       total: expandable.length,
     });
   }
 
-  function syncExpandAllStacksFromFetchedImages() {
-    const autoIds = collectExpandableStackIds(lastFetchedGridImages.value);
-    const autoIdSet = new Set(autoIds);
-    const currentIds = Array.from(expandedStackIds.value || []);
-    const nextIds = new Set(currentIds.filter((id) => autoIdSet.has(id)));
-    let changed = false;
-    for (const stackId of currentIds) {
-      if (!nextIds.has(stackId)) {
-        changed = true;
-        break;
-      }
-    }
-    if (changed) {
-      expandedStackIds.value = nextIds;
+  // Drops the open stack when the fetched page no longer contains it (a filter
+  // changed, it was dissolved elsewhere). Nothing re-opens automatically: with
+  // one tray on screen there is no "expand all" state to restore.
+  function pruneExpandedStackIfGone() {
+    const open = expandedStackId.value;
+    if (open == null) return;
+    if (
+      !collectExpandableStackIds(lastFetchedGridImages.value).includes(open)
+    ) {
+      expandedStackId.value = null;
     }
   }
 
@@ -550,7 +600,7 @@ export function useStackOrdering(
     const source = Array.isArray(lastFetchedGridImages.value)
       ? lastFetchedGridImages.value
       : [];
-    syncExpandAllStacksFromFetchedImages();
+    pruneExpandedStackIfGone();
     const collapsed = collapseStackImages(source);
     const newImages = mapGridImages(collapsed);
     allGridImages.value = newImages;
@@ -641,126 +691,71 @@ export function useStackOrdering(
   }
 
   async function refreshExpandedStacksAfterFetch() {
-    // Every mutation of expandedStackIds assigns a fresh Set, so identity is
-    // enough to tell whether an expand/collapse landed during the await below.
-    const startIds = expandedStackIds.value;
-    const expanded = Array.from(startIds || []);
-    if (!expanded.length) return;
+    // `expandedStackId` is a plain ref, so comparing it before and after the
+    // await below is enough to tell whether an expand/collapse landed meanwhile.
+    const stackId = expandedStackId.value;
+    if (stackId == null) return;
     const fetchStart = visibleStart.value;
     const fetchEnd = visibleEnd.value;
-    const nextExpanded = new Set(expandedStackIds.value);
 
-    for (const stackId of expanded) {
-      removeExpandedStackMembers(stackId);
-    }
+    removeExpandedStackMembers(stackId);
 
-    const toLoad = [];
-    for (const stackId of expanded) {
-      const headerIndex = allGridImages.value.findIndex(
-        (item) => getPictureStackId(item) === stackId,
-      );
-      if (headerIndex === -1) {
-        nextExpanded.delete(stackId);
-        continue;
-      }
-      if (headerIndex < fetchStart || headerIndex >= fetchEnd) {
-        continue;
-      }
-      const header = allGridImages.value[headerIndex];
-      const fallbackCount = header?.stackCount ?? header?.stack_count ?? null;
-      toLoad.push({ stackId, fallbackCount });
-    }
-
-    const fetchResults = await Promise.all(
-      toLoad.map(({ stackId, fallbackCount }) =>
-        ensureStackMembersLoaded(stackId, fallbackCount).then((loaded) => ({
-          stackId,
-          fallbackCount,
-          loaded,
-        })),
-      ),
+    const headerIndex = allGridImages.value.findIndex(
+      (item) => getPictureStackId(item) === stackId,
     );
-
-    if (expandedStackIds.value !== startIds) {
-      // A collapse (or another expand) superseded this refresh while the
-      // members were loading; writing nextExpanded back would re-expand
-      // stacks the user just collapsed.
+    if (headerIndex === -1) {
+      expandedStackId.value = null;
       return;
     }
+    if (headerIndex < fetchStart || headerIndex >= fetchEnd) return;
 
-    for (const { stackId, fallbackCount, loaded } of fetchResults) {
-      if (loaded !== false) {
-        const insertedCount = insertExpandedStackMembers(
-          stackId,
-          fallbackCount,
-        );
-        if (insertedCount <= 0) {
-          nextExpanded.delete(stackId);
-        }
-      } else {
-        nextExpanded.delete(stackId);
-      }
+    const header = allGridImages.value[headerIndex];
+    const fallbackCount = header?.stackCount ?? header?.stack_count ?? null;
+    const loaded = await ensureStackMembersLoaded(stackId, fallbackCount);
+
+    if (expandedStackId.value !== stackId) {
+      // A collapse (or another expand) superseded this refresh while the
+      // members were loading; re-inserting now would re-open a closed tray.
+      return;
     }
-
-    if (nextExpanded.size !== expandedStackIds.value.size) {
-      expandedStackIds.value = nextExpanded;
+    if (
+      loaded === false ||
+      insertExpandedStackMembers(stackId, fallbackCount) <= 0
+    ) {
+      expandedStackId.value = null;
     }
   }
 
   async function loadExpandedStacksInView() {
-    if (!expandedStackIds.value.size) return;
+    const stackId = expandedStackId.value;
+    if (stackId == null) return;
+    const entry = expandedStackMembers.value.get(stackId);
+    if (entry && Array.isArray(entry.images) && entry.images.length > 0) return;
     const start = Math.max(0, visibleStart.value - renderBuffer.value);
     const end = Math.min(
       allGridImages.value.length,
       visibleEnd.value + renderBuffer.value,
     );
-    const slice = allGridImages.value.slice(start, end);
-    const seen = new Set();
-    const pending = [];
-    for (const img of slice) {
-      const stackId = getPictureStackId(img);
-      if (!stackId || seen.has(stackId)) continue;
-      seen.add(stackId);
-      if (!expandedStackIds.value.has(stackId)) continue;
-      const entry = expandedStackMembers.value.get(stackId);
-      if (entry && Array.isArray(entry.images) && entry.images.length > 0)
-        continue;
-      pending.push(stackId);
-    }
-    if (!pending.length) return;
-    for (const stackId of pending) {
-      if (!expandedStackIds.value.has(stackId)) continue;
-      const headerIndex = allGridImages.value.findIndex(
-        (item) => getPictureStackId(item) === stackId,
-      );
-      if (headerIndex === -1) continue;
-      const header = allGridImages.value[headerIndex];
-      const fallbackCount = header?.stackCount ?? header?.stack_count ?? null;
-      const loaded = await ensureStackMembersLoaded(stackId, fallbackCount);
-      if (loaded !== false && expandedStackIds.value.has(stackId)) {
-        removeExpandedStackMembers(stackId);
-        const insertedCount = insertExpandedStackMembers(
-          stackId,
-          fallbackCount,
-        );
-        if (insertedCount <= 0) {
-          const nextExpanded = new Set(expandedStackIds.value);
-          nextExpanded.delete(stackId);
-          expandedStackIds.value = nextExpanded;
-        }
-      }
+    const headerIndex = allGridImages.value.findIndex(
+      (item) => getPictureStackId(item) === stackId,
+    );
+    if (headerIndex < start || headerIndex >= end) return;
+    const header = allGridImages.value[headerIndex];
+    const fallbackCount = header?.stackCount ?? header?.stack_count ?? null;
+    const loaded = await ensureStackMembersLoaded(stackId, fallbackCount);
+    if (loaded === false || expandedStackId.value !== stackId) return;
+    removeExpandedStackMembers(stackId);
+    if (insertExpandedStackMembers(stackId, fallbackCount) <= 0) {
+      expandedStackId.value = null;
     }
   }
 
-  async function expandAllStacks() {
-    const autoIds = collectExpandableStackIds(lastFetchedGridImages.value);
-    expandedStackIds.value = new Set(autoIds);
-    rebuildGridImagesFromLastFetch();
-    await refreshExpandedStacksAfterFetch();
-  }
-
-  async function collapseAllStacks() {
-    expandedStackIds.value = new Set();
+  // The Grid-view menu's single stack control. `Expand all` was retired with
+  // the one-open rule: it cannot mean anything when opening the second stack
+  // closes the first.
+  async function collapseOpenStack() {
+    if (expandedStackId.value == null) return;
+    expandedStackId.value = null;
     rebuildGridImagesFromLastFetch();
     await refreshExpandedStacksAfterFetch();
   }
@@ -768,16 +763,19 @@ export function useStackOrdering(
   async function toggleStackExpand(img) {
     const stackId = getPictureStackId(img);
     if (!stackId) return;
-    if (expandedStackIds.value.has(stackId)) {
-      const nextIds = new Set(expandedStackIds.value);
-      nextIds.delete(stackId);
-      expandedStackIds.value = nextIds;
+    if (expandedStackId.value === stackId) {
+      expandedStackId.value = null;
       removeExpandedStackMembers(stackId);
       return;
     }
-    const nextIds = new Set(expandedStackIds.value);
-    nextIds.add(stackId);
-    expandedStackIds.value = nextIds;
+    // Opening a stack closes whichever one was open: one tray on screen is the
+    // rule the whole tray design rests on.
+    const previous = expandedStackId.value;
+    if (previous != null) {
+      expandedStackId.value = null;
+      removeExpandedStackMembers(previous);
+    }
+    expandedStackId.value = stackId;
     const stackCount = getStackBadgeCount(img);
     let insertedCount = 0;
     const localMembers = getLocalStackMembers(stackId);
@@ -787,7 +785,7 @@ export function useStackOrdering(
     }
 
     const loaded = await ensureStackMembersLoaded(stackId, stackCount);
-    if (!expandedStackIds.value.has(stackId)) {
+    if (expandedStackId.value !== stackId) {
       return;
     }
     if (loaded !== false) {
@@ -804,18 +802,14 @@ export function useStackOrdering(
       removeExpandedStackMembers(stackId);
       insertedCount = insertExpandedStackMembers(stackId, stackCount);
       if (insertedCount <= 0) {
-        const resetExpanded = new Set(expandedStackIds.value);
-        resetExpanded.delete(stackId);
-        expandedStackIds.value = resetExpanded;
+        expandedStackId.value = null;
         removeExpandedStackMembers(stackId);
       }
       return;
     }
 
     if (insertedCount <= 0) {
-      const resetExpanded = new Set(expandedStackIds.value);
-      resetExpanded.delete(stackId);
-      expandedStackIds.value = resetExpanded;
+      expandedStackId.value = null;
       removeExpandedStackMembers(stackId);
     }
   }
@@ -832,6 +826,11 @@ export function useStackOrdering(
     if (!isStackExpandedForImage(img)) {
       return {};
     }
+    // Under the tray the group is drawn by containment, not by tint. A
+    // full-area wash over a tile is exactly what selection is, which is why
+    // strengthening it was never available (see the tray notes in
+    // frontend_architecture.md §7).
+    if (useTrayLayout.value) return {};
     const color = applyStackBackgroundAlpha(getStackCardColor(img));
     if (!color) return {};
     return {
@@ -851,6 +850,7 @@ export function useStackOrdering(
   function getStackBandStyle(img) {
     if (!img || !getPictureStackId(img)) return null;
     if (!isStackExpandedForImage(img)) return null;
+    if (useTrayLayout.value) return null;
     const color = getStackCardColor(img);
     if (!color) return null;
     return {
@@ -969,6 +969,14 @@ export function useStackOrdering(
     });
     expandedStackMembers.value = nextMembers;
 
+    // `applyStackOrderToList` puts every member back at the first member's
+    // position, which under the tray layout is the cover's own cell. Re-splice
+    // so the members return to the row below and the tray stays a rectangle.
+    if (useTrayLayout.value && expandedStackId.value === stackId) {
+      removeExpandedStackMembers(stackId);
+      insertExpandedStackMembers(stackId, stackCount);
+    }
+
     const nextFetched = applyStackOrderToList(
       Array.isArray(lastFetchedGridImages.value)
         ? lastFetchedGridImages.value.slice()
@@ -1076,7 +1084,21 @@ export function useStackOrdering(
   }
 
   async function dissolveSelectedStacks() {
-    const stackIds = selectedMultipleStackIds.value;
+    await dissolveStacks(selectedMultipleStackIds.value);
+  }
+
+  /**
+   * The tray's Unstack: dissolves the stack the tray belongs to, without
+   * needing it selected first.
+   */
+  async function unstackOpenStack() {
+    const stackId = expandedStackId.value;
+    if (stackId == null) return;
+    await dissolveStacks([stackId]);
+  }
+
+  async function dissolveStacks(ids) {
+    const stackIds = Array.isArray(ids) ? ids : [];
     if (!stackIds.length) return;
     try {
       await Promise.all(
@@ -1112,9 +1134,7 @@ export function useStackOrdering(
           const nextMembers = new Map(expandedStackMembers.value);
           nextMembers.delete(stackId);
           expandedStackMembers.value = nextMembers;
-          const nextExpanded = new Set(expandedStackIds.value);
-          if (nextExpanded.delete(stackId))
-            expandedStackIds.value = nextExpanded;
+          if (expandedStackId.value === stackId) expandedStackId.value = null;
         }),
       );
       clearSelection();
@@ -1210,10 +1230,7 @@ export function useStackOrdering(
           nextMembers.set(stackId, { ids: nextIds, images: nextImages });
         } else {
           nextMembers.delete(stackId);
-          const nextExpanded = new Set(expandedStackIds.value);
-          if (nextExpanded.delete(stackId)) {
-            expandedStackIds.value = nextExpanded;
-          }
+          if (expandedStackId.value === stackId) expandedStackId.value = null;
         }
         expandedStackMembers.value = nextMembers;
       }
@@ -1371,7 +1388,9 @@ export function useStackOrdering(
 
   return {
     // State
+    expandedStackId,
     expandedStackIds,
+    useTrayLayout,
     expandedStackMembers,
     expandedStackLoading,
     stackVisualOrderMap,
@@ -1396,12 +1415,11 @@ export function useStackOrdering(
     rebuildGridImagesFromLastFetch,
     refreshExpandedStacksAfterFetch,
     loadExpandedStacksInView,
-    expandAllStacks,
-    collapseAllStacks,
+    collapseOpenStack,
     toggleStackExpand,
     prefetchStackMembers,
     emitStackStats,
-    syncExpandAllStacksFromFetchedImages,
+    pruneExpandedStackIfGone,
     collectExpandableStackIds,
     // Stack reorder drag
     handleStackReorderDragOver,
@@ -1410,6 +1428,7 @@ export function useStackOrdering(
     // Stack CRUD
     createStackFromSelection,
     dissolveSelectedStacks,
+    unstackOpenStack,
     removeSelectedFromStack,
     getLikenessGroupId,
     createStacksFromSelectedGroups,

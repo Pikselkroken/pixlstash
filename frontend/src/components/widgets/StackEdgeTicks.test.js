@@ -54,6 +54,16 @@ describe("StackEdgeTicks - it stays decoration", () => {
     ).toBe("true");
   });
 
+  it("turns the layers over when the stack is open", () => {
+    // Collapsed they peek up at the canvas; open they point down at the tray,
+    // which is the card saying where its pictures went. Without the class the
+    // two states draw identically and the tie to the tray is gone.
+    const closed = mountTicks({ count: 5 });
+    const open = mountTicks({ count: 5, open: true });
+    expect(closed.get(".sticks").classes()).not.toContain("sticks--open");
+    expect(open.get(".sticks").classes()).toContain("sticks--open");
+  });
+
   it("offsets each layer further than the last", () => {
     // The deck reads only if the two edges are distinguishable; identical
     // transforms would stack them into one line.

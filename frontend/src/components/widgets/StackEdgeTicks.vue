@@ -2,6 +2,7 @@
   <span
     v-if="layers > 0"
     class="sticks"
+    :class="{ 'sticks--open': open }"
     aria-hidden="true"
     data-testid="stack-edge-ticks"
   >
@@ -34,6 +35,12 @@ import { computed } from "vue";
 const props = defineProps({
   /** How many pictures the tile stands for. Below 2 there is no deck to draw. */
   count: { type: Number, default: 0 },
+  /**
+   * Whether this tile's stack is open. The layers then point DOWN and to the
+   * right, at the tray, instead of up at the canvas - the card saying where its
+   * pictures went, on an element that is already there.
+   */
+  open: { type: Boolean, default: false },
 });
 
 const layers = computed(() => {
@@ -68,5 +75,15 @@ const layers = computed(() => {
 
 .stick--2 {
   transform: translate(calc(var(--space-1) * 2), calc(var(--space-1) * -2));
+}
+
+/* Open: the layers turn over and peek down at the tray. They were dealt, not
+   lost - which is the whole claim the tray needs the card to make. */
+.sticks--open .stick--1 {
+  transform: translate(var(--space-1), calc(var(--space-1) * 1.5));
+}
+
+.sticks--open .stick--2 {
+  transform: translate(calc(var(--space-1) * 2), calc(var(--space-1) * 3));
 }
 </style>

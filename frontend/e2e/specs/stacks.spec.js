@@ -1,21 +1,33 @@
 import { test, expect } from '../fixtures/test.js'
 
-// Release plan §3.4 / §11 — Stacks. The fixture has 10 stacks. Driving the
-// per-thumbnail badge is occluded by the stats sidebar at the right edge, so
-// we exercise the same expand/collapse behaviour through the View menu's
-// "Expand all" / "Collapse all" controls, asserting on the .image-card-stack-
-// expanded class the grid applies to expanded leaders. Read-only.
+// Release plan §3.4 / §11 — Stacks. The fixture has 10 stacks. Expanding one
+// opens a tray under its card (design: "The Stack Opens a Tray"), and only one
+// stack is open at a time, so the View menu carries a single "Collapse".
+// Read-only.
 
 test.describe('stacks', () => {
-  test('expands and collapses stacks from the View menu', async ({ page, grid }) => {
+  test('a stack opens a tray under its own card, and only one at a time', async ({ grid }) => {
     await grid.goto()
-    const expandedCards = page.locator('.image-card-stack-expanded')
+    await expect(grid.stackBadges.first()).toBeVisible()
+    await expect(grid.stackTray).toHaveCount(0)
+
+    await grid.stackBadges.first().click()
+    await expect(grid.stackTray).toBeVisible()
+    await expect(grid.stackTrayHead).toContainText('Stack of')
+    // The card the tray belongs to is drawn as its tab.
+    await expect(grid.stackTabCards).toHaveCount(1)
+
+    // Opening a second stack closes the first: a second tray is unrepresentable.
+    const second = grid.stackBadges.nth(1)
+    if (await second.isVisible()) {
+      await second.click()
+      await expect(grid.stackTray).toHaveCount(1)
+      await expect(grid.stackTabCards).toHaveCount(1)
+    }
 
     await grid.openViewMenu()
-    await grid.expandAllStacksButton.click()
-    await expect(expandedCards.first()).toBeVisible()
-
-    await grid.collapseAllStacksButton.click()
-    await expect(expandedCards).toHaveCount(0)
+    await grid.collapseStackButton.click()
+    await expect(grid.stackTray).toHaveCount(0)
+    await expect(grid.stackTabCards).toHaveCount(0)
   })
 })
