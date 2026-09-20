@@ -17,7 +17,7 @@ import { unwrap } from "../utils/unwrap";
 /**
  * The URL a browser loads one of a card's `covers` from.
  *
- * `_cover_urls` (`routes/workflows.py`) sends an API-RELATIVE path -
+ * `_covers` (`routes/workflows.py`) sends an API-RELATIVE path in `url` -
  * `/pictures/thumbnails/{id}.webp?v={version}` - and an `<img src>` bypasses
  * Axios entirely, so nothing prepends `/api/v1` and nothing appends the share
  * token. Used verbatim, the browser asks the PAGE origin for a path no route
@@ -28,11 +28,17 @@ import { unwrap } from "../utils/unwrap";
  * exactly the drift the api layer exists to prevent. This is the second
  * spelling of THAT path, so the two live one file apart on purpose.
  *
- * @param {string} cover - a `covers` entry, exactly as the payload sends it.
+ * A `covers` entry is an OBJECT since #1465 - the URL plus the stored crop
+ * rectangle the cell is cropped around - so this reads `url` off it. An entry
+ * without one returns "" rather than the truthy `/api/v1undefined`, which is a
+ * broken-image glyph where the caller meant "no picture".
+ *
+ * @param {Object} cover - a `covers` entry, exactly as the payload sends it.
  * @returns {string}
  */
 export function workflowCoverUrl(cover) {
-  return appendShareToken(`${API_BASE_URL}${cover}`);
+  if (!cover?.url) return "";
+  return appendShareToken(`${API_BASE_URL}${cover.url}`);
 }
 
 /**

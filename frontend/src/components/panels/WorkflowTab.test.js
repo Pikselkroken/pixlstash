@@ -32,7 +32,7 @@ vi.mock("../../api/workflows", () => ({
   setWorkflowSlots: (...args) => setWorkflowSlots(...args),
   // `WorkflowCard` renders its covers through this, so a mock without it
   // throws in the render and every assertion in the file goes with it.
-  workflowCoverUrl: (cover) => cover,
+  workflowCoverUrl: (cover) => cover?.url ?? "",
   stackWorkflows: (...args) => stackWorkflows(...args),
 }));
 

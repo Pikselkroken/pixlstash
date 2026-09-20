@@ -74,6 +74,7 @@ from pixlstash.services import workflow_card_service
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
 from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
 from pixlstash.services.workflow_card_service import SlotModel, model_titles
 from pixlstash.services.workflow_identity import (
@@ -3123,6 +3124,15 @@ def _picture_ids_by_path(server) -> dict[str, int]:
     return server.vault.db.run_task(read, priority=DBPriority.IMMEDIATE)
 
 
+def _cover_urls(card) -> list[str]:
+    """The strip's URLs alone, which is what the ordering tests are about.
+
+    A cover is an object since #1465 -- the URL plus the crop rectangle a
+    client frames it by -- and the crop has its own test below.
+    """
+    return [cover["url"] for cover in card["covers"]]
+
+
 def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
     """The merged contract, field by field.
 
@@ -3897,11 +3907,66 @@ def test_the_cover_strip_is_the_cards_best_three_across_its_variants(workflow_en
     """
     card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
     ids = _picture_ids_by_path(workflow_env.server)
-    assert card["covers"] == [
+    assert _cover_urls(card) == [
         f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
         f"/pictures/thumbnails/{ids['busy_two.png']}.webp?v=0",
         f"/pictures/thumbnails/{ids['busy_three.png']}.webp?v=0",
     ]
+
+
+def test_a_cover_carries_the_stored_crop_rectangle_or_nothing(workflow_env):
+    """The face-weighted rectangle travels with the cover, per picture (#1465).
+
+    Both halves in one test, because the fallback is the half that decides
+    whether this is a regression: a cover whose rectangle has not been computed
+    must send NULLs, so the client can keep the top-anchored ``cover`` crop it
+    has always drawn rather than inventing a framing from a zero.
+
+    The card's other two pictures carry no rectangle and are exactly that case,
+    so the negative is asserted against a sibling in the same strip rather than
+    against an empty library.
+    """
+    ids = _picture_ids_by_path(workflow_env.server)
+    # A portrait bitmap whose stored square sits BELOW the top edge, which is
+    # the picture the issue is about: a blind top anchor would cut through it.
+    rectangle = {
+        "thumbnail_width": 384,
+        "thumbnail_height": 561,
+        "square_crop_x": 0,
+        "square_crop_y": 120,
+        "square_crop_side": 384,
+    }
+
+    def write(session, values):
+        picture = session.get(Picture, ids["busy_one.png"])
+        for field, value in values.items():
+            setattr(picture, field, value)
+        session.add(picture)
+        session.commit()
+
+    workflow_env.server.vault.db.run_task(
+        lambda session: write(session, rectangle), priority=DBPriority.IMMEDIATE
+    )
+    try:
+        covers = _by_key(_cards(workflow_env.owner))[BUSY_CARD]["covers"]
+        assert covers[0] == {
+            "url": (
+                f"/pictures/thumbnails/{ids['busy_one.png']}.webp"
+                f"?v={ImageUtils.thumbnail_cache_version(384, 561, None)}"
+            ),
+            **rectangle,
+        }
+        for cover in covers[1:]:
+            assert cover["square_crop_x"] is None
+            assert cover["square_crop_y"] is None
+            assert cover["square_crop_side"] is None
+    finally:
+        # Put the picture back: the module shares one vault, and the bitmap
+        # dimensions are the cache-buster every other cover assertion reads.
+        workflow_env.server.vault.db.run_task(
+            lambda session: write(session, dict.fromkeys(rectangle, None)),
+            priority=DBPriority.IMMEDIATE,
+        )
 
 
 def test_an_owner_chosen_cover_leads_the_strip(workflow_env):
@@ -3928,11 +3993,11 @@ def test_an_owner_chosen_cover_leads_the_strip(workflow_env):
             (workflow_env.server.vault.library_uuid, BUSY_CARD, chosen),
         )
     card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
-    assert card["covers"][0] == (
+    assert _cover_urls(card)[0] == (
         f"/pictures/thumbnails/{ids['busy_four.png']}.webp?v=0"
     )
     # Still three, and the rest keep their order behind it.
-    assert card["covers"][1:] == [
+    assert _cover_urls(card)[1:] == [
         f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
         f"/pictures/thumbnails/{ids['busy_two.png']}.webp?v=0",
     ]
@@ -3949,7 +4014,7 @@ def test_an_owner_chosen_cover_leads_the_strip(workflow_env):
 
     workflow_env.server.vault.db.run_task(bin_it, priority=DBPriority.IMMEDIATE)
     card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
-    assert card["covers"] == [
+    assert _cover_urls(card) == [
         f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
         f"/pictures/thumbnails/{ids['busy_two.png']}.webp?v=0",
         f"/pictures/thumbnails/{ids['busy_three.png']}.webp?v=0",
@@ -3984,11 +4049,87 @@ def test_an_empty_chosen_cover_covers_nothing_rather_than_everything(
             (workflow_env.server.vault.library_uuid, HIDDEN_CARD),
         )
     card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
-    assert card["covers"] == [
+    assert _cover_urls(card) == [
         f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
         f"/pictures/thumbnails/{ids['busy_two.png']}.webp?v=0",
         f"/pictures/thumbnails/{ids['busy_three.png']}.webp?v=0",
     ]
+
+
+def test_an_owner_chosen_cover_carries_its_crop_rectangle_too(workflow_env):
+    """The SECOND query that builds a cover, which the strip's test cannot see.
+
+    A chosen cover is resolved by ``pixel_sha`` through
+    ``cover_pictures_by_pixel_sha``, a different ``SELECT`` from the ranked
+    window -- and it unpacks positionally into ``CoverCandidate("", *row[1:])``,
+    so a column added in the wrong place lands in the wrong field silently.
+    Scrambling that select left the strip's own tests green, because they
+    assert URLs and the picture they pick has no rectangle at all.
+
+    The rectangle is deliberately ASYMMETRIC (x != y, side != either), so any
+    permutation of the three shows up rather than cancelling out.
+    """
+    ids = _picture_ids_by_path(workflow_env.server)
+    chosen = _h("chosen-cover-with-a-crop")
+    rectangle = {
+        "thumbnail_width": 512,
+        "thumbnail_height": 384,
+        "square_crop_x": 96,
+        "square_crop_y": 12,
+        "square_crop_side": 384,
+    }
+    library = workflow_env.server.vault.library_uuid
+
+    def write(session, values):
+        picture = session.get(Picture, ids["forgotten.png"])
+        for field, value in values.items():
+            setattr(picture, field, value)
+        session.add(picture)
+        session.commit()
+
+    def read_pixel_sha(session):
+        return session.get(Picture, ids["forgotten.png"]).pixel_sha
+
+    was = workflow_env.server.vault.db.run_task(
+        read_pixel_sha, priority=DBPriority.IMMEDIATE
+    )
+    workflow_env.server.vault.db.run_task(
+        lambda session: write(session, {**rectangle, "pixel_sha": chosen}),
+        priority=DBPriority.IMMEDIATE,
+    )
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_cover (library_uuid, workflow_key, pixel_sha) "
+            "VALUES (?, ?, ?)",
+            (library, FORGOTTEN_CARD, chosen),
+        )
+    try:
+        # Opened rather than listed: FORGOTTEN_CARD is a one-off and the grid
+        # leaves it out. The chosen cover is applied over every figure, which
+        # is the same reason a hidden card opens with the right one.
+        cover = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]["covers"][0]
+        assert cover == {
+            "url": (
+                f"/pictures/thumbnails/{ids['forgotten.png']}.webp"
+                f"?v={ImageUtils.thumbnail_cache_version(512, 384, None)}"
+            ),
+            **rectangle,
+        }
+    finally:
+        # The module shares one vault: put the picture back, and take the
+        # owner's choice away again so no later card inherits it.
+        workflow_env.server.vault.db.run_task(
+            lambda session: write(
+                session, {**dict.fromkeys(rectangle, None), "pixel_sha": was}
+            ),
+            priority=DBPriority.IMMEDIATE,
+        )
+        with workflow_env.server.hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_cover "
+                "WHERE library_uuid = ? AND workflow_key = ?",
+                (library, FORGOTTEN_CARD),
+            )
 
 
 def test_a_hidden_card_is_counted_never_listed_and_still_opens(workflow_env):

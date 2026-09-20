@@ -370,6 +370,39 @@ class WorkflowDefault(BaseModel):
     provenance: str
 
 
+class WorkflowCover(BaseModel):
+    """One picture of a card's cover strip: where to load it, and how to crop it.
+
+    ``url`` is API-relative (``/pictures/thumbnails/{id}.webp?v=…``), so a
+    consumer prefixes the API base and appends the share token itself.
+
+    The rest is the stored face-weighted SQUARE rectangle within that bitmap,
+    under the same names ``GET /pictures/thumbnails/batch`` serves it by, so
+    ``utils/squareCrop.js`` reads a cover with no mapping layer. A cover cell
+    is not square (6:5, 4:5, 3:5 on a card), so the client fits the cell's
+    ratio around this rectangle's centre rather than using it verbatim.
+
+    **Every crop field is nullable**, because a picture keeps them NULL until
+    it has been processed. A cover with no rectangle is cropped the way it is
+    today, ``object-fit: cover`` anchored top centre — the fallback is a
+    requirement, not a nicety (#1465).
+
+    They are five independent columns rather than one optional block, so a
+    client decides on ``square_crop_x``/``_y``: ``render_thumbnail`` writes the
+    three crop values together, but nothing here enforces that, and a row
+    carrying an origin without a ``side`` is answered by deriving
+    ``min(width, height)`` — which is what the square-mode grid already does
+    (``squareCropParams``).
+    """
+
+    url: str
+    thumbnail_width: int | None = None
+    thumbnail_height: int | None = None
+    square_crop_x: int | None = None
+    square_crop_y: int | None = None
+    square_crop_side: int | None = None
+
+
 class WorkflowCard(BaseModel):
     """One card of the Workflows grid (v1.12 B3).
 
@@ -425,8 +458,9 @@ class WorkflowCard(BaseModel):
     rating: float | None = Field(
         None, description="Mean of the stars this card has; null when it has none."
     )
-    covers: list[str] = Field(
-        default_factory=list, description="Thumbnail URLs, up to three, cover first."
+    covers: list[WorkflowCover] = Field(
+        default_factory=list,
+        description="Up to three cover pictures, the cover first.",
     )
     stack_size: int = 1
     saved_recipe_count: int = 0
@@ -943,20 +977,33 @@ def _assets(rows) -> list[WorkflowAsset]:
     ]
 
 
-def _cover_urls(covers) -> list[str]:
-    """Thumbnail URLs for a card's cover strip, cache-busted per bitmap.
+def _covers(covers) -> list[WorkflowCover]:
+    """A card's cover strip: a cache-busted URL plus its stored crop rectangle.
 
     The same URL and the same cache key the grid's own tiles use
     (``routes/pictures/_thumbnails.py``), so a cover the browser already holds
     is not fetched twice and a regenerated bitmap is not served stale.
+
+    The crop rectangle rides along rather than being fetched per cover: the
+    ranked query already reads this row, so the three columns cost nothing
+    beyond the bytes (#1465).
     """
-    urls = []
+    strip = []
     for cover in covers:
         version = ImageUtils.thumbnail_cache_version(
             cover.thumbnail_width, cover.thumbnail_height, cover.orientation
         )
-        urls.append(f"/pictures/thumbnails/{cover.picture_id}.webp?v={version}")
-    return urls
+        strip.append(
+            WorkflowCover(
+                url=f"/pictures/thumbnails/{cover.picture_id}.webp?v={version}",
+                thumbnail_width=cover.thumbnail_width,
+                thumbnail_height=cover.thumbnail_height,
+                square_crop_x=cover.square_crop_x,
+                square_crop_y=cover.square_crop_y,
+                square_crop_side=cover.square_crop_side,
+            )
+        )
+    return strip
 
 
 # The last resort, when a card has nothing identifying at all.
@@ -1189,7 +1236,7 @@ def _card(figure, defaults=()) -> WorkflowCard:
         differs_by=figure.differs_by,
         picture_count=figure.pictures,
         rating=figure.rating,
-        covers=_cover_urls(figure.covers),
+        covers=_covers(figure.covers),
         stack_size=figure.stack_size,
         saved_recipe_count=figure.saved_recipes,
         defaults=[

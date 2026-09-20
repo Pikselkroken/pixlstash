@@ -30,6 +30,7 @@ vi.mock("vuetify/components", async () => {
 import StackPanel from "./StackPanel.vue";
 import WorkflowCard from "../widgets/WorkflowCard.vue";
 import { workflowCoverUrl } from "../../api/workflows";
+import { coverCellRatio } from "../../utils/workflowCard";
 import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 
 const member = (key, extra = {}) => ({
@@ -40,7 +41,10 @@ const member = (key, extra = {}) => ({
   differs_by: [],
   picture_count: 4,
   rating: 4.25,
-  covers: [`/thumb/${key}/1`, `/thumb/${key}/2`],
+  // A `covers` entry is an object since #1465: the URL, plus the stored
+  // face-weighted rectangle where the picture has one. These carry none, so
+  // they are also the fallback case the strip must keep drawing as before.
+  covers: [{ url: `/thumb/${key}/1` }, { url: `/thumb/${key}/2` }],
   stack_size: 3,
   member_keys: [],
   ...extra,
@@ -223,7 +227,36 @@ describe("StackPanel", () => {
     // against the raw value so the helper cannot be a no-op.
     const raw = MEMBERS[0].covers[0];
     expect(images[0].attributes("src")).toBe(workflowCoverUrl(raw));
-    expect(images[0].attributes("src")).not.toBe(raw);
+    expect(images[0].attributes("src")).not.toBe(raw.url);
+  });
+
+  it("crops a row's thumbnail around the stored rectangle, as the card does", async () => {
+    // The same helper the card uses, so a stack's row and its tile frame the
+    // same picture the same way (#1465). Two pictures here, so each cell is
+    // 3:5: 384/0.6 = 640 rows wanted from a 561-row bitmap, so it takes all of
+    // them and trims the sides around the face's own x instead.
+    useWorkflowPrefsStore().setStackView("list");
+    const cropped = {
+      ...MEMBERS[0],
+      covers: MEMBERS[0].covers.map((cover) => ({
+        ...cover,
+        thumbnail_width: 384,
+        thumbnail_height: 561,
+        square_crop_x: 0,
+        square_crop_y: 120,
+        square_crop_side: 384,
+      })),
+    };
+    const wrapper = makePanel({ members: [cropped, MEMBERS[1]] });
+    await wrapper.vm.$nextTick();
+
+    const rows = wrapper.findAll(".stack-panel__row");
+    const style = rows[0].find("img").attributes("style");
+    expect(style).toContain("top: 0%");
+    expect(style).toContain(`width: ${(384 / (561 * (3 / 5))) * 100}%`);
+    // The member whose covers carry no rectangle keeps the stylesheet's own
+    // top-anchored crop — the look every cover had before this existed.
+    expect(rows[1].find("img").attributes("style")).toBeUndefined();
   });
 
   it("keeps the cover's union out of the row's name as well as its cells", async () => {
@@ -530,6 +563,21 @@ describe("StackPanel List thumbnails", () => {
     );
   });
 
+  // The crop is computed from `coverCellRatio` (#1465), a hand-copy of this
+  // arithmetic in a third file. The card asserts the same agreement against
+  // its own stylesheet; both are needed, because these two stylesheets can
+  // drift from each other as easily as either can from the map — and a crop
+  // computed for the wrong shape renders perfectly and is simply cut in the
+  // wrong place.
+  it.each(["1", "2", "3"])(
+    "crops %s picture(s) to the ratio this strip's tracks produce",
+    (count) => {
+      for (const ratio of cellRatios(count)) {
+        expect(coverCellRatio(Number(count))).toBeCloseTo(ratio, 5);
+      }
+    },
+  );
+
   it("spans the mosaic's big cell over both rows, and only there", () => {
     // Unscoped, this rule puts every arrangement's first cell across two rows
     // that only the mosaic has.
@@ -579,6 +627,24 @@ describe("StackPanel List thumbnails", () => {
     expect(rule(".stack-panel__thumb").background).toBe(
       "rgb(var(--v-theme-input-background))",
     );
+  });
+
+  // The CSS half of #1465's crop, pinned here as it is on the card:
+  // `coverCellStyle` emits percentages, and a percentage only means the CELL
+  // if the cell is the containing block and the img is out of flow. Either
+  // rule can be deleted with every mounted assertion still green — the strip
+  // renders, it simply crops against the wrong box or ignores the offsets.
+  it("makes the cell the box the crop is computed against", () => {
+    expect(rule(".stack-panel__thumb").position).toBe("relative");
+    expect(rule(".stack-panel__thumb").overflow).toBe("hidden");
+  });
+
+  it("takes the cropped img out of flow so its offsets apply", () => {
+    const img = rule(".stack-panel__thumb img");
+
+    expect(img.position).toBe("absolute");
+    expect(img.top).toBe("0");
+    expect(img.left).toBe("0");
   });
 });
 

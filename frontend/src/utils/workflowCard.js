@@ -47,11 +47,19 @@
 //                                       // `PUT /workflows/{key}/slots` marks
 //     differs_by: [string],             // a stack: the union over its members
 //     picture_count, rating,            // rating 1-5; 0 or null is unrated
-//     covers: [url],                    // up to 3, the cover first. An
-//                                       // API-RELATIVE path, so a consumer
-//                                       // putting one in an <img src> has to
-//                                       // prepend API_BASE_URL and append the
-//                                       // share token itself (WorkflowCard).
+//     covers: [{ url, thumbnail_width, thumbnail_height,
+//                square_crop_x, square_crop_y, square_crop_side }],
+//                                       // up to 3, the cover first. `url` is
+//                                       // API-RELATIVE, so a consumer putting
+//                                       // one in an <img src> has to prepend
+//                                       // API_BASE_URL and append the share
+//                                       // token itself (`workflowCoverUrl`).
+//                                       // The rest is the stored face-weighted
+//                                       // square rectangle within the bitmap,
+//                                       // which `coverCellStyle` below fits
+//                                       // the cell's own ratio around; all
+//                                       // three are null until the
+//                                       // picture has been processed (#1465).
 //     specials: [string] | null,        // the post-processing the workflow
 //                                       // carries ("upscale",
 //                                       // "face_detailer"), which `name`
@@ -108,7 +116,65 @@
 // graph carries instead); ⓘ lists every model, so a stack whose difference is
 // "other models" always has the models behind it.
 
+import { cropImgStyle } from "./squareCrop.js";
+
 const RECIPE = "recipe";
+
+/**
+ * The aspect ratio of one cover cell, by how many pictures the strip holds.
+ *
+ * The cover box is 6:5 at every count and only the tracks inside it change
+ * (#1456), so the count alone fixes the shape of every cell in it - the same
+ * arithmetic `WorkflowCard.vue`'s stylesheet states, against a cover W wide
+ * and (5/6)W tall:
+ *   one    W × (5/6)W                    → 6/5
+ *   two    (1/2)W × (5/6)W               → 3/5, twice
+ *   three  big (2/3)W × (5/6)W           → 4/5
+ *          small (1/3)W × (5/12)W        → 4/5
+ * The mosaic's three cells are all 4:5, which is why this takes no index.
+ *
+ * These are the shapes the tracks would make with NO gap between them. The
+ * `--space-1` gap comes out of the cells rather than out of the box, so a real
+ * cell is a little narrower than its share: 0.8% on the card's narrowest cell
+ * and 2.1% on the stack panel's, whose box is a fixed 96×80 against the same
+ * 2px. Not worth a `calc` here — `cropImgStyle` spends the mismatch on a
+ * couple of cropped pixels rather than on a squeeze, and says so.
+ *
+ * Both surfaces that draw a strip read this: the card's cover and the stack
+ * panel's List row, which draws the same arrangement one size down. It is a
+ * hand-copy of arithmetic that lives in two stylesheets, so both are asserted
+ * against it - `WorkflowCard.test.js` derives the card's ratios from its own
+ * `<style>` block and `StackPanel.test.js` does the same for the row's, and
+ * either drifting from this map is a failing test rather than a wrong crop.
+ *
+ * `undefined` for a count that is not 1, 2 or 3, and deliberately no default:
+ * both callers cap the strip at three and return early on none, so there is no
+ * such count to answer for. Should one ever arrive, `cropRectForRatio` refuses
+ * a ratio that is not a positive number and the cell falls back to the
+ * stylesheet's crop, which is the honest answer to "what shape is this cell?"
+ * — a guessed 4:5 would crop it wrongly and look deliberate.
+ */
+const COVER_CELL_RATIO = { 1: 6 / 5, 2: 3 / 5, 3: 4 / 5 };
+
+export function coverCellRatio(count) {
+  return COVER_CELL_RATIO[count];
+}
+
+/**
+ * The inline `<img>` style that crops one cover around its stored rectangle,
+ * or null when there is no rectangle yet and CSS `cover` has to do it.
+ *
+ * Null is the shipped look and not a defect: `square_crop_x` is NULL while a
+ * picture is still being processed, and those covers must keep today's
+ * top-anchored crop rather than jumping to some invented framing (#1465).
+ *
+ * @param {Object} cover - One `covers` entry.
+ * @param {number} count - How many cells the strip is drawing.
+ * @returns {Object|null}
+ */
+export function coverCellStyle(cover, count) {
+  return cropImgStyle(cover, coverCellRatio(count));
+}
 
 /**
  * How many chips fit on one line, leaving room for a "+N" chip when some do not.
