@@ -1,10 +1,15 @@
 // The uniform workflow card (v1.12 Workflows & Recipes, F0).
 //
-// jsdom has no layout, so "every card is exactly --wf-card-h" is pinned in two
+// jsdom has no layout, so "the content cannot grow the card" is pinned in two
 // halves: the stylesheet's own sum, resolved against the shipped token values,
 // and the mounted card's structure, which must not change with what it holds
-// (0 or 5 LoRAs, long names). Together they say the content has no way to grow
-// the card: the height is fixed, the four rows are fixed, and a row clips.
+// (0 or 5 LoRAs, long names). Together they say the meta block is fixed, the
+// four rows are fixed, and a row clips.
+//
+// The CARD's total height is deliberately not fixed any more: the cover is a
+// 6:5 box so its cells stay 4:5 at every column width, which is the shape the
+// pictures are. Cards still line up, because every card in a row is the same
+// width - that is what the old fixed height was really protecting.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -108,13 +113,12 @@ function px(value, t = tokens()) {
 }
 
 describe("WorkflowCard height", () => {
-  it("adds up to exactly --wf-card-h", () => {
+  it("adds the meta block up to exactly --wf-meta-h", () => {
     const t = tokens();
     const card = rule(".wf-card");
     const cover = rule(".wf-card__cover");
     const meta = rule(".wf-card__meta");
 
-    expect(card.height).toBe("var(--wf-card-h)");
     expect(card["box-sizing"]).toBe("border-box");
     expect(card.overflow).toBe("hidden");
     expect(cover.flex).toBe("none");
@@ -122,15 +126,45 @@ describe("WorkflowCard height", () => {
 
     const rows = meta["grid-template-rows"].match(/^repeat\((\d+), (.+)\)$/);
     expect(Number(rows[1])).toBe(4);
-    const border = px(card.border.split(" ")[0]);
     const total =
-      2 * border +
-      px(cover.height) +
-      2 * px(meta.padding) +
-      4 * px(rows[2]) +
-      3 * px(meta["row-gap"]);
-    expect(t["--wf-card-h"]).toBe(252);
-    expect(total).toBe(t["--wf-card-h"]);
+      2 * px(meta.padding) + 4 * px(rows[2]) + 3 * px(meta["row-gap"]);
+    expect(t["--wf-meta-h"]).toBe(118);
+    expect(total).toBe(t["--wf-meta-h"]);
+  });
+
+  // The defect this replaces: a flat `height` on the cover against a fluid
+  // card width, so the cells stretched from 1.2:1 at the 240px column floor
+  // to 1.8:1 by 360px. A ratio holds at every width instead.
+  it("sizes the cover by ratio, not by a pixel height", () => {
+    const cover = rule(".wf-card__cover");
+
+    expect(cover.height).toBeUndefined();
+    expect(cover["aspect-ratio"]).toBe("6 / 5");
+  });
+
+  // 6:5 is not arbitrary: it is the number that makes BOTH cells 4:5, because
+  // the big one is two columns and two rows and so keeps the cover's own
+  // proportion. If the column split or the row count moves, this is the sum
+  // that says the cells are no longer the shape they were chosen to be.
+  it("puts every cell at 4:5, big and small alike", () => {
+    const cover = rule(".wf-card__cover");
+    const [w, h] = cover["aspect-ratio"].split("/").map((n) => Number(n));
+    const columns = cover["grid-template-columns"].split(" ").length;
+    const [bigFr, smallFr] = cover["grid-template-columns"]
+      .split(" ")
+      .map((n) => Number(n.replace("fr", "")));
+    const totalFr = bigFr + smallFr;
+    const rows = cover["grid-template-rows"].split(" ").length;
+
+    expect(columns).toBe(2);
+    expect(rows).toBe(2);
+    // Cover height as a fraction of its width.
+    const coverH = h / w;
+    // The big cell spans every row; the small ones one row each.
+    const bigRatio = bigFr / totalFr / coverH;
+    const smallRatio = smallFr / totalFr / (coverH / rows);
+    expect(bigRatio).toBeCloseTo(0.8, 5);
+    expect(smallRatio).toBeCloseTo(0.8, 5);
   });
 
   it("keeps row 4 clear of the ⓘ button", () => {

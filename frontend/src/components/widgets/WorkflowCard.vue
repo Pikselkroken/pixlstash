@@ -129,9 +129,11 @@
 
 <script setup>
 // The uniform workflow card (v1.12 Workflows & Recipes, "The same in all three
-// alternatives"). Every card is exactly --wf-card-h tall whatever it holds: a
-// 2fr/1fr cover, then four single-line rows (name, checkpoint, LoRAs, special
-// facts) that clip to "+N" instead of wrapping. ⓘ is pinned bottom-right.
+// alternatives"). A 2fr/1fr cover at a fixed 6:5 - so its cells are 4:5,
+// which is the shape the pictures actually are - then four single-line rows
+// (name, checkpoint, LoRAs, special facts) that clip to "+N" instead of
+// wrapping, exactly --wf-meta-h tall whatever the card holds. ⓘ is pinned
+// bottom-right.
 //
 // ▸ and ⓘ are real buttons at tabindex -1: the grid's roving cursor owns Tab.
 
@@ -234,19 +236,24 @@ const accessibleName = computed(() =>
 </script>
 
 <style scoped>
-/* 252 = 1 border + 132 cover + (8 + 4 × 24 + 3 × 2 + 8) meta + 1 border.
-   Both sizes are local on purpose (approved as component-local, not global).
-   The meta block is `flex: none` so a change to that sum shows as a wrong
-   height rather than being absorbed. */
+/* 118 = 8 + 4 × 24 + 3 × 2 + 8: the meta block, which is fixed whatever the
+   card holds and is `flex: none` so a change to that sum shows as a wrong
+   height rather than being absorbed. Local on purpose (approved as
+   component-local, not global).
+
+   The COVER is not fixed. It used to be a flat 132px against a fluid card
+   width, so the cells grew steadily more landscape as the window widened -
+   1.2:1 at the 240px column floor and 1.8:1 by 360px - and nobody had chosen
+   landscape at all; it fell out of mixing a pixel height with an `1fr` width.
+   Pictures here are mostly portrait or square (832×1216, 1024×1024), so that
+   shape threw away most of every cover. */
 .wf-card {
-  --wf-card-h: 252px;
-  --wf-cover-h: 132px;
+  --wf-meta-h: 118px;
 
   position: relative;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  height: var(--wf-card-h);
   overflow: hidden;
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
@@ -254,6 +261,16 @@ const accessibleName = computed(() =>
   color: rgb(var(--v-theme-on-surface));
 }
 
+/* 6:5 is the cover, and it makes every CELL 4:5.
+   The big cell is two columns and two rows, so it is 2× wide and 2× tall and
+   keeps the cover's own proportion; the small ones are a third of the width
+   against half the height. Both land on 4×5:
+     big   = (2/3)W ÷ (5/6)W = 4/5
+     small = (1/3)W ÷ (5/12)W = 4/5
+   The 2px gap makes each a third of a pixel off that, which is not worth
+   carrying a `calc` for. Every card in a row is the same width, so they are
+   all still exactly as tall as each other - that is what the old fixed height
+   was protecting, and it survives. */
 .wf-card__cover {
   position: relative;
   flex: none;
@@ -263,7 +280,7 @@ const accessibleName = computed(() =>
   grid-template-columns: 2fr 1fr;
   grid-template-rows: 1fr 1fr;
   gap: var(--space-1);
-  height: var(--wf-cover-h);
+  aspect-ratio: 6 / 5;
 }
 
 .wf-card__pic {
