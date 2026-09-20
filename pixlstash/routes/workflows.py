@@ -52,7 +52,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, StrictBool, ValidationError, field_validator
 
 from pixlstash.hub.workflow_card_reads import (
     asset_names,
@@ -800,7 +800,13 @@ class RunRequest(BaseModel):
     # is another take of that picture, while this runs a card and the pictures
     # that named it are its source rather than its subject.
     stack: bool = False
-    allow_unchecked: bool = False
+    # `StrictBool`, not `bool`: consent to running a graph nobody could inspect
+    # is the CWE-829 control (review finding R3b), and a lax cast reads `"yes"`,
+    # `"on"`, `"y"` and `1` as an acknowledgement the owner never gave - `"false"`
+    # included, since every non-empty string is truthy. The route #1410 retired
+    # required the literal JSON `true` (`payload.get(...) is True`); this is the
+    # same rule, declared instead of hand-written.
+    allow_unchecked: StrictBool = False
     client_id: str | None = Field(None, max_length=MAX_LABEL_LENGTH)
 
 

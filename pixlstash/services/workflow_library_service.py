@@ -153,19 +153,6 @@ def scan_progress(session: Session) -> ScanProgress:
     return ScanProgress(pictures=pictures or 0, scanned=scanned or 0)
 
 
-def topology_picture_ids(session: Session, topology_hash: str, limit: int) -> list[int]:
-    """The newest kept pictures made by one topology, for the rail's tiles."""
-    return list(
-        session.exec(
-            select(Picture.id)
-            .where(Picture.workflow_topology_hash == topology_hash)
-            .where(Picture.deleted.is_(False))
-            .order_by(_USED_AT.desc(), Picture.id.desc())
-            .limit(limit)
-        ).all()
-    )
-
-
 # ---------------------------------------------------------------------------
 # The vault-level entry points the routes call.
 #
@@ -176,15 +163,6 @@ def topology_picture_ids(session: Session, topology_hash: str, limit: int) -> li
 # asks for, and it is why the list's two reads share one session rather than
 # taking two.
 # ---------------------------------------------------------------------------
-
-
-def read_library(vault) -> tuple[dict[str, WorkflowActivity], ScanProgress]:
-    """The list route's whole vault side: per-topology figures and scan state."""
-
-    def _read(session: Session):
-        return topology_activity(session), scan_progress(session)
-
-    return vault.db.run_immediate_read_task(_read)
 
 
 def read_recipe_activity(
@@ -202,11 +180,6 @@ def read_variant_picture_counts(vault) -> dict[str, int]:
     are joined by the hub on the variants it is re-keying.
     """
     return vault.db.run_immediate_read_task(recipe_picture_counts)
-
-
-def read_topology_picture_ids(vault, topology_hash: str, limit: int) -> list[int]:
-    """The inspector's tile ids for one topology."""
-    return vault.db.run_immediate_read_task(topology_picture_ids, topology_hash, limit)
 
 
 # ---------------------------------------------------------------------------

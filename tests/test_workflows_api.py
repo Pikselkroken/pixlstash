@@ -875,15 +875,28 @@ def test_no_scoped_token_can_read_the_workflow_library(workflow_env):
     assert client.get(f"{API}/pictures").status_code == 200, (
         "the scoped token is dead; the refusals below would prove nothing"
     )
+    # Each path is named with the template that must answer it. Since #1410
+    # moved the cards onto `/workflows/{workflow_key}`, a bare `assert_real_route`
+    # passes for ANY string in that segment, so it would no longer notice the
+    # handler being renamed away - which is the vacuity it exists to refuse.
     paths = (
-        f"{API}/workflows",
-        f"{API}/workflows/{BUSY_CARD}",
-        f"{API}/workflows/{BUSY_CARD}/pictures",
-        f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph",
-        f"{API}/workflows/{BUSY_CARD}/export",
+        (f"{API}/workflows", f"{API}/workflows"),
+        (f"{API}/workflows/{BUSY_CARD}", API + "/workflows/{workflow_key}"),
+        (
+            f"{API}/workflows/{BUSY_CARD}/pictures",
+            API + "/workflows/{workflow_key}/pictures",
+        ),
+        (
+            f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph",
+            API + "/workflows/recipes/{structural_hash}/graph",
+        ),
+        (
+            f"{API}/workflows/{BUSY_CARD}/export",
+            API + "/workflows/{workflow_key}/export",
+        ),
     )
-    for path in paths:
-        assert_real_route(workflow_env.server.api, "GET", path)
+    for path, template in paths:
+        assert_real_route(workflow_env.server.api, "GET", path, template)
         r = client.get(path)
         assert r.status_code == 403, f"GET {path}: {r.status_code} {r.text}"
 
@@ -914,13 +927,22 @@ def test_an_unknown_recipe_is_a_404(workflow_env):
 # Hardening (#1293): the rollback belt, transport, and the ghost routes
 # ===========================================================================
 
+# `(path, the route template that must answer it)` - see
+# `test_no_scoped_token_can_read_the_workflow_library` for why the template is
+# named rather than left to "some route matched".
 _TEMPLATED_PATHS = (
-    f"{API}/workflows/{BUSY_CARD}",
-    f"{API}/workflows/{BUSY_CARD}/pictures",
-    f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph",
+    (f"{API}/workflows/{BUSY_CARD}", API + "/workflows/{workflow_key}"),
+    (
+        f"{API}/workflows/{BUSY_CARD}/pictures",
+        API + "/workflows/{workflow_key}/pictures",
+    ),
+    (
+        f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph",
+        API + "/workflows/recipes/{structural_hash}/graph",
+    ),
     # The export (v1.12 B8) hands back a whole graph, so it is the one here
     # with most to lose from the rollback.
-    f"{API}/workflows/{BUSY_CARD}/export",
+    (f"{API}/workflows/{BUSY_CARD}/export", API + "/workflows/{workflow_key}/export"),
 )
 
 
@@ -946,11 +968,11 @@ def test_the_templated_reads_stay_closed_with_the_gate_rolled_back(workflow_env)
             assert client.get(f"{API}/pictures").status_code == 200, (
                 "the token is dead; the refusals below would prove nothing"
             )
-            for path in _TEMPLATED_PATHS:
-                assert_real_route(server.api, "GET", path)
+            for path, template in _TEMPLATED_PATHS:
+                assert_real_route(server.api, "GET", path, template)
                 r = client.get(path)
                 assert r.status_code == 403, f"GET {path}: {r.status_code} {r.text}"
-        for path in _TEMPLATED_PATHS:
+        for path, _template in _TEMPLATED_PATHS:
             r = workflow_env.owner.get(path)
             assert r.status_code == 200, f"owner GET {path}: {r.status_code} {r.text}"
     finally:
@@ -964,7 +986,7 @@ def test_the_workflow_reads_refuse_remote_plaintext_under_require_ssl(
     server = workflow_env.server
     monkeypatch.setitem(server.auth._server_config, "require_ssl", True)
     monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: "8.8.8.8")
-    for path in (f"{API}/workflows", *_TEMPLATED_PATHS):
+    for path in (f"{API}/workflows", *(p for p, _t in _TEMPLATED_PATHS)):
         r = workflow_env.owner.get(path)
         assert r.status_code == 403 and "HTTPS is required" in r.text, (
             f"GET {path}: {r.status_code} {r.text}"
@@ -3037,11 +3059,14 @@ def test_an_unknown_card_is_a_404_and_a_malformed_key_a_422(workflow_env):
     read as "this card has nothing" rather than "this machine has no such card".
     """
     unknown = _h("nosuchcard")
-    for path in (
-        f"{API}/workflows/{unknown}",
-        f"{API}/workflows/{unknown}/pictures",
+    for path, template in (
+        (f"{API}/workflows/{unknown}", API + "/workflows/{workflow_key}"),
+        (
+            f"{API}/workflows/{unknown}/pictures",
+            API + "/workflows/{workflow_key}/pictures",
+        ),
     ):
-        assert_real_route(workflow_env.server.api, "GET", path)
+        assert_real_route(workflow_env.server.api, "GET", path, template)
         assert workflow_env.owner.get(path).status_code == 404, path
     for path in (
         f"{API}/workflows/not-a-digest",
@@ -5086,6 +5111,31 @@ def test_an_uninspectable_comfyui_runs_only_on_the_owners_acknowledgement(runnab
     assert len(runnable.submitted) == 1, "consent did not let the run through"
     # The reason survives the consent rather than being cleared by it.
     assert r.json()["groups"][0]["reasons"][0]["code"] == "comfyui_not_configured"
+
+
+def test_only_the_literal_true_is_consent(runnable):
+    """R3b, carried over from the route #1410 retired: consent is JSON `true`.
+
+    The string `"false"` is truthy in Python, and `"true"` / `1` / `"yes"` /
+    `"on"` are the sibling spellings a lenient cast would also let through -
+    which is what a plain Pydantic `bool` does. `RunRequest.allow_unchecked`
+    is `StrictBool` so every one of them is a 422, and the run is refused
+    rather than submitted on a word the owner never typed.
+
+    The positive control is next door in
+    `test_an_uninspectable_comfyui_runs_only_on_the_owners_acknowledgement`: a
+    real `true` still runs, because over-blocking is its own regression.
+    """
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
+    )
+    for value in ("false", "true", 1, "yes", "on", [True], {"v": True}):
+        r = runnable.owner.post(
+            f"{API}/workflows/run",
+            json={"workflow_key": RUN_CARD, "allow_unchecked": value},
+        )
+        assert r.status_code == 422, f"{value!r} was accepted: {r.status_code} {r.text}"
+    assert runnable.submitted == [], "an uninspected graph ran on a cast consent"
 
 
 def test_consent_does_not_reach_a_missing_model(runnable):
