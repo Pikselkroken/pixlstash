@@ -44,6 +44,7 @@ from pixlstash.services.workflow_identity import (
     core_hash,
     guess_mark,
     slots,
+    special_groups,
     workflow_key,
     workflow_type,
 )
@@ -82,7 +83,17 @@ _VARIANT_JOIN = (
     "AND c.core_version = ? "
 )
 _VARIANT_VERSIONS = (WORKFLOW_KEY_VERSION, CORE_RULE_VERSION)
-_VARIANT_PENDING = "(v.structural_hash IS NULL OR c.topology_hash IS NULL)"
+# `c.specials IS NULL` is the third case and it is not redundant: a topology
+# cached before that column existed joins on the current rule and is still
+# missing a value this build's cards read. Re-queuing on the column itself,
+# rather than bumping CORE_VERSION, is what keeps the re-derivation invisible -
+# the row keeps its stack key, its type and its slots the whole time, so no
+# grid goes blank while the pass runs. The finder is the once-only-ness here
+# (see WorkflowCardBackfillFinder): work exists exactly while a stored document
+# has no current row, so nothing has to remember to run anything.
+_VARIANT_PENDING = (
+    "(v.structural_hash IS NULL OR c.topology_hash IS NULL OR c.specials IS NULL)"
+)
 
 
 def topology_only_key(topology_hash: str) -> str:
@@ -113,16 +124,27 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
     """
     row = hub.fetchone(
         "SELECT r.topology_hash AS topology_hash, g.document AS document, "
-        "v.workflow_key AS workflow_key, c.topology_hash AS core_cached "
+        "v.workflow_key AS workflow_key, c.topology_hash AS core_cached, "
+        "c.specials AS core_specials "
         f"{_VARIANT_JOIN} WHERE r.structural_hash = ?",
         (*_VARIANT_VERSIONS, structural_hash),
     )
     if row is None:
         return None
-    # Both halves, and on the same rule the finder selects by: returning early
-    # on a current card while the topology cache is stale would leave the finder
-    # handing this variant out on every sweep, for a pass that does nothing.
-    if row["workflow_key"] is not None and row["core_cached"] is not None:
+    # The same three conditions `_VARIANT_PENDING` selects on, spelled here as
+    # the early return. Both halves, and on the same rule the finder selects by:
+    # returning early on a current card while the topology cache is stale would
+    # leave the finder handing this variant out on every sweep, for a pass that
+    # does nothing.
+    #
+    # **The two cache gaps are kept apart** rather than folded into one "is it
+    # current". A row missing only `specials` already holds a `core_hash` under
+    # the current rule, and re-deriving that would run the Weisfeiler-Leman
+    # refinement over every topology in the hub on upgrade to fill in at most
+    # two words. That row is UPDATEd in place instead.
+    core_missing = row["core_cached"] is None
+    specials_missing = row["core_specials"] is None
+    if row["workflow_key"] is not None and not core_missing and not specials_missing:
         return row["workflow_key"]
     try:
         document = json.loads(row["document"])
@@ -143,14 +165,29 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
     # topology with 200 variants would otherwise recompute and rewrite one row
     # 200 times in a single pass.
     core = (
-        None
-        if row["core_cached"] is not None
-        else core_hash(document, strip_loras=STRIP_LORAS_FOR_STACKS)
+        core_hash(document, strip_loras=STRIP_LORAS_FOR_STACKS)
+        if core_missing
+        else None
     )
     with hub.transaction() as conn:
         marks = _freeze_marks(conn, topology_hash, structural_hash, document_slots)
         if core is not None:
             _cache_topology(conn, topology_hash, document, document_slots, core)
+        elif specials_missing:
+            # The whole cost of the upgrade for an already-cached topology: one
+            # reduction, no refinement, and the row's stack key, type and slots
+            # are left exactly where the grid is already reading them.
+            # `core_version` is in the WHERE so a row re-stamped under another
+            # rule between the read and here is not written by this branch.
+            conn.execute(
+                "UPDATE workflow_topology_core SET specials = ? "
+                "WHERE topology_hash = ? AND core_version = ?",
+                (
+                    ",".join(special_groups(document)),
+                    topology_hash,
+                    CORE_RULE_VERSION,
+                ),
+            )
         key = workflow_key(
             topology_hash,
             document_slots,
@@ -234,11 +271,15 @@ def _cache_topology(
     ``slots`` is JSON and holds no filename and no asset reference: a model's
     readable name lives in ``workflow_recipe_asset`` and nowhere else, so
     forgetting it stays one delete.
+
+    ``specials`` is written on every pass and is never left NULL here: NULL is
+    reserved for a row this pass has not touched, and a graph with no
+    post-processing writes the empty string.
     """
     conn.execute(
         "INSERT OR REPLACE INTO workflow_topology_core "
-        "(topology_hash, core_hash, core_version, workflow_type, slots) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "(topology_hash, core_hash, core_version, workflow_type, slots, specials) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         (
             topology_hash,
             core,
@@ -256,6 +297,7 @@ def _cache_topology(
                 ],
                 separators=(",", ":"),
             ),
+            ",".join(special_groups(document)),
         ),
     )
 

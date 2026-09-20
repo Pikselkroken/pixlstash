@@ -808,13 +808,21 @@ CREATE TABLE IF NOT EXISTS workflow_variant (
 # ``slots`` is JSON: ``[{"label", "class_type", "widget", "is_lora"}, ...]``.
 # **No filename and no asset reference.** A model's readable name lives in
 # ``workflow_recipe_asset`` and nowhere else, so forgetting it stays one delete.
+#
+# ``specials`` is the post-processing this topology carries
+# (``workflow_identity.SPECIAL_GROUPS``), comma-joined. **NULL and the empty
+# string are different answers**: NULL is "the pass has not reached this
+# topology", the empty string is "it has, and the graph has none". A card's
+# generated name says "+ FaceDetailer" only on the second, so a topology the
+# backfill has not reached is not quietly described as plain.
 _V2_WORKFLOW_TOPOLOGY_CORE = """
 CREATE TABLE IF NOT EXISTS workflow_topology_core (
     topology_hash  TEXT PRIMARY KEY REFERENCES workflow_topology(topology_hash),
     core_hash      TEXT NOT NULL,
     core_version   TEXT NOT NULL,
     workflow_type  TEXT,
-    slots          TEXT NOT NULL
+    slots          TEXT NOT NULL,
+    specials       TEXT
 )
 """
 
@@ -1236,6 +1244,18 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
 
     for statement in _V2_WORKFLOW_TABLES:
         conn.execute(statement)
+
+    # The card's post-processing groups (#1454), guarded on PRAGMA table_info
+    # like every other amendment into v2: a no-op on a fresh hub, because the
+    # CREATE above already carries the column, and a no-op on re-run. Nullable
+    # by design - an existing row means "derived before this column existed",
+    # which is what `workflow_cards._VARIANT_PENDING` re-queues on.
+    core_columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(workflow_topology_core)").fetchall()
+    }
+    if "specials" not in core_columns:
+        conn.execute("ALTER TABLE workflow_topology_core ADD COLUMN specials TEXT")
 
     # The icon column (shelf plan, the sixth verb) lands the same way the rest
     # of v2 does: amended in place rather than as a v3, because a build shipped

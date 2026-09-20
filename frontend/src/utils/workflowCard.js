@@ -18,10 +18,17 @@
 //                                       // spells it ("Text to Image"); the
 //                                       // name row and the type chip both
 //                                       // read it, so one fact has one voice
-//     models: [{ name, kind, mark?, slot_label? }],
+//     models: [{ name, title, kind, mark?, slot_label? }],
 //                                       // every non-LoRA slot: checkpoint,
-//                                       // unet, vae, clip… `kind` is the slot
-//     loras:  [{ name, mark, slot_label? }],
+//                                       // unet, vae, clip… `kind` is the slot.
+//                                       // `title` is the MODEL SHELF's name
+//                                       // for the file and is what a client
+//                                       // shows (`modelDisplayName`): the card's
+//                                       // `name` row was built from it, so
+//                                       // showing `name` beside it describes
+//                                       // one model twice. Null where the
+//                                       // shelf has not scanned the file
+//     loras:  [{ name, title, mark, slot_label? }],
 //                                       // "structural" = in the workflow
 //                                       // (a filled chip), "recipe" = a slot
 //                                       // the recipe fills (dashed).
@@ -34,6 +41,14 @@
 //                                       // putting one in an <img src> has to
 //                                       // prepend API_BASE_URL and append the
 //                                       // share token itself (WorkflowCard).
+//     specials: [string] | null,        // the post-processing the workflow
+//                                       // carries ("upscale",
+//                                       // "face_detailer"), which `name`
+//                                       // already spells as "+ FaceDetailer".
+//                                       // NULL IS NOT []: null means nothing
+//                                       // has read the card's document for
+//                                       // it yet, [] means it has and the
+//                                       // graph carries none
 //     stack_size,                       // 2 or more makes the card a stack
 //     member_keys,                      // the stack's OTHER cards, so it is
 //                                       // `stack_size - 1` long. The service
@@ -141,11 +156,32 @@ export function checkpointModel(card) {
   return null;
 }
 
+/**
+ * What to CALL a model the payload carries: the model shelf's name for it,
+ * else the file it sits in.
+ *
+ * The same preference the server built the card's `name` row from, and it has
+ * to be the same one: the row would otherwise read `Krea 2: Text to Image`
+ * over a chip reading `realvisxl.safetensors`, which is one model described
+ * twice and is exactly the pair that drifted in #1416. `title` is null for
+ * every model the shelf has not scanned, which is the ordinary case, so this
+ * falls through to the filename rather than blanking the chip.
+ *
+ * **Not `modelLabel`**, which `utils/filterChips.js` already exports and which
+ * takes a NAME and strips its extension for the Filters menu. Two same-named
+ * exports with incompatible arguments fail quietly in both directions - a
+ * string through this one is `null`, an object through that one is
+ * `[object Object]` - so the newcomer is the one that renames.
+ */
+export function modelDisplayName(model) {
+  return model?.title || model?.name || null;
+}
+
 /** The LoRA row: a filled chip per workflow LoRA, a dashed one per recipe slot. */
 export function loraChips(card) {
   return (card.loras ?? []).map((lora, i) => ({
     key: `lora-${i}`,
-    label: lora.mark === RECIPE ? "recipe LoRA" : lora.name,
+    label: lora.mark === RECIPE ? "recipe LoRA" : modelDisplayName(lora),
     icon: lora.mark === RECIPE ? "plus" : "layers",
     dashed: lora.mark === RECIPE,
   }));
@@ -197,13 +233,15 @@ export function cardAccessibleName(card, { member = false } = {}) {
   const count = card.picture_count ?? 0;
   const checkpoint = checkpointModel(card);
   const loras = (card.loras ?? []).map((lora) =>
-    lora.mark === RECIPE ? "recipe LoRA slot" : `${lora.name}, workflow LoRA`,
+    lora.mark === RECIPE
+      ? "recipe LoRA slot"
+      : `${modelDisplayName(lora)}, workflow LoRA`,
   );
   const facts = factChips(card).map((chip) => chip.label);
   const parts = [
     card.name,
     isStack(card) && !member ? `stack of ${card.stack_size} workflows` : null,
-    checkpoint ? `${checkpoint.kind} ${checkpoint.name}` : null,
+    checkpoint ? `${checkpoint.kind} ${modelDisplayName(checkpoint)}` : null,
     loras.length ? `LoRAs: ${loras.join("; ")}` : "no LoRAs",
     facts.length
       ? `${isStack(card) ? "differs by" : "facts"}: ${facts.join(", ")}`

@@ -51,6 +51,7 @@ from pixlstash.db_models.saved_recipe import SavedRecipe
 from pixlstash.event_types import EventType
 from pixlstash.hub.workflow_card_reads import (
     AUTO_STACK_PREFIX,
+    Card,
     default_overrides,
     instance_documents,
     variant_documents,
@@ -68,10 +69,14 @@ import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
 from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
+from pixlstash.services.workflow_card_service import SlotModel, model_titles
 from pixlstash.services.workflow_identity import (
+    FACE_DETAILER,
+    UPSCALE,
     WORKFLOW_KEY_VERSION,
     guess_mark,
     slots,
+    special_groups,
     topology_node_labels,
     workflow_key,
 )
@@ -342,6 +347,11 @@ def _instance_document(structural_hash: str, values: dict) -> dict:
 # The one model on the shelf: BUSY's checkpoint. Its LoRA is not, which makes
 # ``add_detail.safetensors`` a model ghost.
 _SHELF_FILENAME = "realvisxl.safetensors"
+# What the shelf calls it, which is not how the file is spelled - the whole
+# point of the join (#1454). A card naming this model says ``Krea 2``, never
+# ``realvisxl``, and a card naming any model the shelf has not got still says
+# the stem.
+_SHELF_TITLE = "Krea 2"
 
 # (file_path, topology, structural, deleted, created_at, score, instance)
 #
@@ -545,9 +555,9 @@ def _seed_hub(server) -> None:
         # Hashed, like a checkpoint the finder has already read: an unhashed
         # one holds back every digest judgement (see the digest tests below).
         conn.execute(
-            "INSERT INTO model (file_kind, filename, sha256, provenance) "
-            "VALUES ('checkpoint', ?, ?, 'scanned')",
-            (_SHELF_FILENAME, _h("realvisxl-digest")),
+            "INSERT INTO model (file_kind, filename, sha256, display_name, "
+            "provenance) VALUES ('checkpoint', ?, ?, ?, 'scanned')",
+            (_SHELF_FILENAME, _h("realvisxl-digest"), _SHELF_TITLE),
         )
         for topology, node_count, first_seen in (
             (BUSY_TOPOLOGY, 47, "2026-08-01T00:00:00Z"),
@@ -586,8 +596,8 @@ def _seed_hub(server) -> None:
         )
         conn.executemany(
             "INSERT INTO workflow_topology_core "
-            "(topology_hash, core_hash, core_version, workflow_type, slots) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "(topology_hash, core_hash, core_version, workflow_type, slots, "
+            "specials) VALUES (?, ?, ?, ?, ?, ?)",
             [
                 (
                     topology,
@@ -595,6 +605,10 @@ def _seed_hub(server) -> None:
                     CORE_RULE_VERSION,
                     kind,
                     json.dumps(_slot_list(structural)),
+                    # Derived rather than written out, for the same reason the
+                    # slot list is: a fixture that spelled it would go on
+                    # describing the old rule after the rule changed.
+                    ",".join(special_groups(_DOCUMENTS[structural])),
                 )
                 for topology, core, kind, structural in _SEED_CORES
             ],
@@ -3127,9 +3141,15 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
     lora_label = next(
         slot.label for slot in slots(_DOCUMENTS[BUSY_RECIPE_A]) if slot.is_lora
     )
+    #
+    # `title` is null here and that is the state, not an omission: the LoRA is
+    # not on the shelf. It is served on every slot all the same, because the
+    # card's name row is built from it and a client showing `name` instead
+    # would describe one model twice (#1416).
     assert card["loras"] == [
         {
             "name": None,
+            "title": None,
             "kind": "lora",
             "mark": "recipe",
             "slot_label": lora_label,
@@ -3174,9 +3194,15 @@ def test_a_card_is_never_nameless(workflow_env):
     workflow" and the one identifying row identified nothing.
     """
     cards = _by_key(_cards(workflow_env.owner))
-    # BUSY has no name and no file, so it is named for what it loads - and the
-    # extension is off, which a guess-by-length gets wrong on `.safetensors`.
-    assert cards[BUSY_CARD]["name"] == "realvisxl: Text to Image"
+    # BUSY has no name and no file, so it is named for what it loads - and by
+    # the name the SHELF has for that model rather than by the file's spelling
+    # (#1454). The stem would read `realvisxl`; the row says `Krea 2`, and the
+    # two are in the same database, so this is a join and not a derivation.
+    assert cards[BUSY_CARD]["name"] == f"{_SHELF_TITLE}: Text to Image"
+    assert _SHELF_FILENAME.startswith("realvisxl")  # ... and the file is not it
+    # The seeded documents carry no post-processing, and `[]` says so. It is
+    # not `null`, which would mean nothing had looked.
+    assert cards[BUSY_CARD]["specials"] == []
 
     # **`type_label` is SERVED, not mirrored.** The card shows its type twice -
     # in a generated name and in its own chip - and a second copy of these
@@ -3191,22 +3217,27 @@ def test_a_card_is_never_nameless(workflow_env):
     # after: no name, no file, and every model name forgotten. Asserted on the
     # helper, because the fixture has no such card and inventing one to prove a
     # two-line branch costs more than it tells anybody.
-    class _Nameless:
-        name = None
-        file_name = None
-        workflow_type = None
+    #
+    # The REAL `Card` and the real `SlotModel`, not a stub with the three
+    # attributes this branch happens to read: a duck that grows an attribute
+    # only when a test remembers to add it is how a name built from a field
+    # nothing supplies still passes.
+    def _nameless(workflow_type=None, specials=None):
+        return Card(
+            workflow_key="k",
+            topology_hash="t",
+            workflow_type=workflow_type,
+            specials=specials,
+        )
 
-    assert workflows_routes._display_name(_Nameless(), []) == UNNAMED_CARD
+    assert workflows_routes._display_name(_nameless(), []) == UNNAMED_CARD
 
     # A graph whose names survive but which loads no checkpoint still gets a
     # name: the first slot it does load.
-    class _UnetOnly(_Nameless):
-        workflow_type = "txt2img"
+    unet_only = _nameless("txt2img")
 
-    only = [SimpleNamespace(name="flux1-dev.safetensors", kind="unet")]
-    assert (
-        workflows_routes._display_name(_UnetOnly(), only) == "flux1-dev: Text to Image"
-    )
+    only = [SlotModel(name="flux1-dev.safetensors", kind="unet")]
+    assert workflows_routes._display_name(unet_only, only) == "flux1-dev: Text to Image"
 
     # **The base model names the card, and nothing else may.** A Flux or SD3
     # graph has no `checkpoint` kind at all - only `unet` - and slot order is
@@ -3214,39 +3245,102 @@ def test_a_card_is_never_nameless(workflow_env):
     # a card after its VAE or one of its text encoders. Nobody calls a
     # workflow by its VAE.
     flux = [
-        SimpleNamespace(name="ae.safetensors", kind="vae"),
-        SimpleNamespace(name="t5xxl_fp16.safetensors", kind="clip"),
-        SimpleNamespace(name="flux1-dev.safetensors", kind="unet"),
+        SlotModel(name="ae.safetensors", kind="vae"),
+        SlotModel(name="t5xxl_fp16.safetensors", kind="clip"),
+        SlotModel(name="flux1-dev.safetensors", kind="unet"),
     ]
-    assert (
-        workflows_routes._display_name(_UnetOnly(), flux) == "flux1-dev: Text to Image"
-    )
+    assert workflows_routes._display_name(unet_only, flux) == "flux1-dev: Text to Image"
 
     # A graph that loads a VAE and an upscaler but no base model at all takes
     # the stand-in rather than being named after either.
     accessories = [
-        SimpleNamespace(name="ae.safetensors", kind="vae"),
-        SimpleNamespace(name="4x-UltraSharp.pth", kind="upscale"),
+        SlotModel(name="ae.safetensors", kind="vae"),
+        SlotModel(name="4x-UltraSharp.pth", kind="upscale"),
     ]
-    assert workflows_routes._display_name(_Nameless(), accessories) == UNNAMED_CARD
+    assert workflows_routes._display_name(_nameless(), accessories) == UNNAMED_CARD
 
     # **An empty stem is as nameless as a null one.** These are graph widget
     # values - third-party strings out of whatever workflow was imported - so
     # a name that is nothing but an extension, or that ends in a separator,
     # reaches here and would render the row blank and read "About null".
     for hostile in (".safetensors", "SDXL/", "loras\\"):
-        slots = [SimpleNamespace(name=hostile, kind="checkpoint")]
-        assert workflows_routes._display_name(_UnetOnly(), slots) == UNNAMED_CARD
+        hostile_slots = [SlotModel(name=hostile, kind="checkpoint")]
+        assert workflows_routes._display_name(unet_only, hostile_slots) == UNNAMED_CARD
 
     # A checkpoint outranks a unet where a graph carries both.
     both = [
-        SimpleNamespace(name="flux1-dev.safetensors", kind="unet"),
-        SimpleNamespace(name="juggernautXL.safetensors", kind="checkpoint"),
+        SlotModel(name="flux1-dev.safetensors", kind="unet"),
+        SlotModel(name="juggernautXL.safetensors", kind="checkpoint"),
     ]
     assert (
-        workflows_routes._display_name(_UnetOnly(), both)
-        == "juggernautXL: Text to Image"
+        workflows_routes._display_name(unet_only, both) == "juggernautXL: Text to Image"
     )
+
+    # **The shelf's name for the model beats the file's spelling** (#1454).
+    # `realvisxl` is a filename stem; `Krea 2` is what the trainer wrote in the
+    # header or what the owner typed, and it is in the same database as the
+    # card, so this is a join rather than a derivation.
+    titled = [
+        SlotModel(name="realvisxl_v50.safetensors", kind="checkpoint", title="Krea 2")
+    ]
+    assert workflows_routes._display_name(unet_only, titled) == "Krea 2: Text to Image"
+    # Free text off a safetensors header: whitespace is not a name, and taking
+    # it would render the row blank exactly as an empty stem would.
+    blank = [
+        SlotModel(name="realvisxl_v50.safetensors", kind="checkpoint", title="   ")
+    ]
+    assert (
+        workflows_routes._display_name(unet_only, blank)
+        == "realvisxl_v50: Text to Image"
+    )
+
+    # **The post-processing half** (#1454). `[]` and `None` both produce no
+    # suffix, but they are different facts and only `[]` is a claim.
+    assert (
+        workflows_routes._display_name(_nameless("txt2img", (FACE_DETAILER,)), titled)
+        == "Krea 2: Text to Image + FaceDetailer"
+    )
+    assert (
+        workflows_routes._display_name(
+            _nameless("txt2img", (UPSCALE, FACE_DETAILER)), titled
+        )
+        == "Krea 2: Text to Image + Upscale + FaceDetailer"
+    )
+    for no_suffix in ((), None):
+        assert (
+            workflows_routes._display_name(_nameless("txt2img", no_suffix), titled)
+            == "Krea 2: Text to Image"
+        )
+    # A group that IS the type is left off rather than said twice.
+    assert (
+        workflows_routes._display_name(_nameless("upscale", (UPSCALE,)), titled)
+        == "Krea 2: Upscale"
+    )
+    # A value a newer build wrote is dropped rather than printed raw: the name
+    # row is the card's only identifying text.
+    assert (
+        workflows_routes._display_name(_nameless("txt2img", ("teleportation",)), titled)
+        == "Krea 2: Text to Image"
+    )
+    # **A card with no recognised type still takes the suffix**, on the bare
+    # stem: `workflow_type` is null for any graph matching none of its five
+    # shapes, and "Krea 2 + Upscale" is the honest name for one - the model,
+    # and what it adds.
+    assert (
+        workflows_routes._display_name(_nameless(None, (UPSCALE,)), titled)
+        == "Krea 2 + Upscale"
+    )
+
+    # The suffix is on the GENERATED name only. A card named after its workflow
+    # file keeps the owner's spelling untouched.
+    filed = Card(
+        workflow_key="k",
+        topology_hash="t",
+        workflow_type="txt2img",
+        specials=(FACE_DETAILER,),
+        file_name="Flux2 portrait.json",
+    )
+    assert workflows_routes._display_name(filed, titled) == "Flux2 portrait"
     # The hidden card has both a name and a file, and the owner's name wins.
     assert _detail(workflow_env.owner, HIDDEN_CARD)["card"]["name"] == (
         "A workflow I hid"
@@ -3260,6 +3354,176 @@ def test_a_card_is_never_nameless(workflow_env):
         )
     named = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
     assert named["name"] == "Flux2 portrait"
+
+
+def test_a_card_never_calls_one_model_two_different_things(workflow_env):
+    """The name row and every chip under it read the same name for one model.
+
+    The generated name is built from the SHELF's name for the base model, so a
+    payload carrying only the filename would have the card read `Krea 2: Text
+    to Image` over a chip reading `realvisxl.safetensors` - one model described
+    twice, on one card, and spoken that way to a screen reader. That is exactly
+    the pair that drifted in #1416, which is why the shelf's name is SERVED on
+    the slot rather than left for a client to look up.
+    """
+    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    checkpoint = next(slot for slot in card["models"] if slot["kind"] == "checkpoint")
+    assert checkpoint["name"] == _SHELF_FILENAME
+    assert checkpoint["title"] == _SHELF_TITLE
+    # The name row was built from the title, so the title is what a client has
+    # to be able to show beside it.
+    assert checkpoint["title"] in card["name"]
+    assert checkpoint["name"] not in card["name"]
+
+    # A model the shelf does not know carries no title at all, and the client
+    # falls back to the filename - which is also what the name row does.
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET display_name = NULL WHERE filename = ?",
+            (_SHELF_FILENAME,),
+        )
+    plain = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    plain_ckpt = next(s for s in plain["models"] if s["kind"] == "checkpoint")
+    assert plain_ckpt["title"] is None
+    assert plain["name"] == "realvisxl: Text to Image"
+
+
+def test_a_card_says_the_post_processing_it_carries_and_when_it_cannot(
+    workflow_env,
+):
+    """`specials` on the wire, and the two answers null and `[]` keep apart.
+
+    A card whose document was cached by a build predating the column has NOT
+    said "no post-processing"; it has said nothing. Serving `[]` there would
+    have the grid assert a fact about every workflow in a library that has not
+    finished its backfill, and the name would drop a `+ FaceDetailer` that is
+    really there.
+    """
+    hub = workflow_env.server.hub
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET specials = ? WHERE topology_hash = ?",
+            (FACE_DETAILER, BUSY_TOPOLOGY),
+        )
+    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    assert card["specials"] == [FACE_DETAILER]
+    assert card["name"] == f"{_SHELF_TITLE}: Text to Image + FaceDetailer"
+
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET specials = NULL WHERE topology_hash = ?",
+            (BUSY_TOPOLOGY,),
+        )
+    unknown = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    assert unknown["specials"] is None
+    # No suffix, because a name has nowhere to say "not known yet" - but the
+    # payload does, and it did.
+    assert unknown["name"] == f"{_SHELF_TITLE}: Text to Image"
+
+
+def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
+    workflow_env,
+):
+    """`model_titles` over filename, digest and shelf id, and the ambiguity.
+
+    A card's slot name is whichever of those three `structural_widget_value`
+    kept, and the card cannot say which - so a lookup that guessed one column
+    would silently miss every graph using the other two.
+    """
+    hub = workflow_env.server.hub
+    row = hub.fetchone(
+        "SELECT id, sha256 FROM model WHERE filename = ?", (_SHELF_FILENAME,)
+    )
+    # All three name the same model, so all three resolve to the same title.
+    found = model_titles(hub, [_SHELF_FILENAME, row["sha256"], str(row["id"])])
+    assert found == {
+        _SHELF_FILENAME: _SHELF_TITLE,
+        row["sha256"]: _SHELF_TITLE,
+        str(row["id"]): _SHELF_TITLE,
+    }
+    # **And the SHORT hash A1111 writes**, which is a prefix of that digest
+    # rather than the digest. `structural_widget_value` keeps 10 and 12 hex
+    # characters as readily as 64, so a lookup matching only the long form
+    # leaves every A1111-sourced card wearing a raw hex blob for a name.
+    assert model_titles(hub, [row["sha256"][:10]]) == {row["sha256"][:10]: _SHELF_TITLE}
+    assert model_titles(hub, [row["sha256"][:12]]) == {row["sha256"][:12]: _SHELF_TITLE}
+    # A model the shelf has never scanned has no entry, which is how a card
+    # keeps its filename stem rather than being renamed after something else.
+    assert model_titles(hub, ["add_detail.safetensors"]) == {}
+    assert model_titles(hub, []) == {}
+    # A digest names only the model that carries it, never the row beside it.
+    assert model_titles(hub, [_h("nothing-on-this-shelf")]) == {}
+
+    # The rest mutates the shelf, which this module shares: the autouse reset
+    # deletes the seeded row BY FILENAME, so a renamed one survives it and the
+    # next insert of the same digest fails the UNIQUE. Undone in `finally`
+    # rather than left to the reset.
+    second = _h("a-second-realvisxl")
+    try:
+        # The stored name is a lowercased basename; the shelf keeps the file's
+        # own spelling. Matching has to ignore the case or every capitalised
+        # model on the shelf is invisible to a card.
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET filename = 'RealVisXL.safetensors' WHERE id = ?",
+                (row["id"],),
+            )
+        assert model_titles(hub, [_SHELF_FILENAME]) == {_SHELF_FILENAME: _SHELF_TITLE}
+
+        # **A SECOND COPY under a different spelling resolves too.**
+        # `model.filename` is frozen at first sight while `model_file` holds a
+        # row per copy, so the same checkpoint sitting in an archive under a
+        # longer name is a name only the location table knows.
+        with hub.transaction() as conn:
+            folder = conn.execute(
+                "INSERT INTO model_folder (path, kind, movable) "
+                "VALUES ('/home/me/models', 'checkpoint', 'no')"
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+                "VALUES (?, ?, 'SDXL/RealVisXL_v5.0.safetensors', 'present')",
+                (row["id"], folder),
+            )
+        assert model_titles(hub, ["realvisxl_v5.0.safetensors"]) == {
+            "realvisxl_v5.0.safetensors": _SHELF_TITLE
+        }
+
+        # **Two rows claiming one filename with different titles is dropped,
+        # not resolved.** Naming a card after the wrong model is worse than
+        # naming it after its file, and nothing here could tell the two apart.
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO model (file_kind, filename, sha256, display_name, "
+                "provenance) VALUES ('checkpoint', 'RealVisXL.safetensors', ?, "
+                "'Something Else', 'scanned')",
+                (second,),
+            )
+        assert model_titles(hub, [_SHELF_FILENAME]) == {}
+        # **An UNNAMED rival is an ambiguity too, and this is the one a filter
+        # on `display_name` in SQL hides**: the rival never reaches the check,
+        # so the named row wins by default and a card using the unnamed file is
+        # titled after a model it did not use.
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET display_name = NULL WHERE sha256 = ?", (second,)
+            )
+        assert model_titles(hub, [_SHELF_FILENAME]) == {}
+        # ... while two rows agreeing are not an ambiguity at all.
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET display_name = ? WHERE sha256 = ?",
+                (_SHELF_TITLE, second),
+            )
+        assert model_titles(hub, [_SHELF_FILENAME]) == {_SHELF_FILENAME: _SHELF_TITLE}
+    finally:
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM model_file WHERE model_id = ?", (row["id"],))
+            conn.execute("DELETE FROM model_folder WHERE path = '/home/me/models'")
+            conn.execute("DELETE FROM model WHERE sha256 = ?", (second,))
+            conn.execute(
+                "UPDATE model SET filename = ? WHERE id = ?",
+                (_SHELF_FILENAME, row["id"]),
+            )
 
 
 def test_a_stack_member_opened_alone_still_says_it_is_in_a_stack(workflow_env):
@@ -4200,7 +4464,8 @@ def _seed_flip_fixture(server) -> str:
         )
         conn.execute(
             "INSERT INTO workflow_topology_core (topology_hash, core_hash, "
-            "core_version, workflow_type, slots) VALUES (?, ?, ?, 'txt2img', ?)",
+            "core_version, workflow_type, slots, specials) "
+            "VALUES (?, ?, ?, 'txt2img', ?, '')",
             (
                 FLIP_TOPOLOGY,
                 FLIP_CORE,
@@ -5445,8 +5710,8 @@ def _seed_runnable_card(server) -> int:
         )
         conn.execute(
             "INSERT OR REPLACE INTO workflow_topology_core "
-            "(topology_hash, core_hash, core_version, workflow_type, slots) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "(topology_hash, core_hash, core_version, workflow_type, slots, "
+            "specials) VALUES (?, ?, ?, ?, ?, '')",
             (
                 RUN_TOPOLOGY,
                 RUN_CORE,

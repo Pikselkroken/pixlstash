@@ -890,9 +890,13 @@ def _card_picture(server, pic_id: int, key: str, core: str) -> str:
             (structural, row["topology_hash"], key, WORKFLOW_KEY_VERSION),
         )
         conn.execute(
+            # `specials` is written even though this row is a stand-in:
+            # NULL means "no pass has read this topology", so the live backfill
+            # finder would pick the variant straight back up and overwrite the
+            # hand-picked key and core hash this helper exists to install.
             "INSERT OR REPLACE INTO workflow_topology_core "
-            "(topology_hash, core_hash, core_version, workflow_type, slots) "
-            "VALUES (?, ?, ?, NULL, '[]')",
+            "(topology_hash, core_hash, core_version, workflow_type, slots, "
+            "specials) VALUES (?, ?, ?, NULL, '[]', '')",
             (row["topology_hash"], core, CORE_RULE_VERSION),
         )
     return structural

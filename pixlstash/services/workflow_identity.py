@@ -299,6 +299,45 @@ def workflow_key(
     return _digest([WORKFLOW_KEY_VERSION, topology_hash, pairs])
 
 
+# The post-processing groups a card says it has, in the order a name lists
+# them. A tuple and not the set itself: the cached value is a string, and two
+# derivations of one topology have to compare equal byte for byte.
+SPECIAL_GROUPS = (UPSCALE, FACE_DETAILER)
+
+# A class that only LOADS the thing, and so is not on its own evidence the
+# graph does it. `node_groups` groups these with the work they feed because it
+# exists to STRIP a group whole - leaving a detector loader behind while
+# removing its detailer would change the stack key for nothing. Printing is the
+# opposite case: a `SAMLoader` sitting in a document with no detailer in front
+# of it must not put "+ FaceDetailer" on the card's only identifying text.
+_LOADER_CLASS_RE = re.compile(r"(Loader|DetectorProvider)$")
+
+
+def special_groups(document: dict) -> tuple[str, ...]:
+    """Which of :data:`SPECIAL_GROUPS` this document actually DOES.
+
+    The same classification ``core_hash`` strips and ``differs_by`` chips, asked
+    of one graph on its own rather than of a pair: a lone card has no cover to
+    differ from, and what a card *has* is what its name is allowed to say.
+
+    **Narrower than the strip, deliberately.** Over-inclusion is free when the
+    answer is which nodes to remove and costly when it is a sentence printed on
+    the card, so a group counts only where some node in it does the work rather
+    than loads the model for it (:data:`_LOADER_CLASS_RE`).
+
+    Raises:
+        WorkflowGraphError: The document is a raw graph rather than a stored one.
+    """
+    nodes = _reduce(document)
+    present = {
+        group
+        for node_id, group in node_groups(nodes).items()
+        if group in SPECIAL_GROUPS
+        and not _LOADER_CLASS_RE.search(nodes[node_id].class_type)
+    }
+    return tuple(group for group in SPECIAL_GROUPS if group in present)
+
+
 def node_groups(nodes: dict[str, ReducedNode]) -> dict[str, Optional[str]]:
     """Each node's taxonomy group, or ``None`` for one that does real work.
 
