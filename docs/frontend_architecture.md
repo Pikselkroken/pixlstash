@@ -1619,7 +1619,16 @@ watcher the model shelf uses. See §9.1b for the destination itself.
   List the row's rail rule is scoped `:not(.stack-panel--selected)`. A partly
   selected stack marks its rows instead, that being the only way to see which of
   them are in. Rows keep `aria-selected` either way — they are selected
-  whichever box the olive is on. The band's wash is a `background-image` layer
+  whichever box the olive is on. **The grid's own card for the OPEN stack marks
+  on `openStackSelected`, not on the key** (`cardSelected`): a cover key names
+  two rows, and only while the panel is open is the second of them on screen,
+  so from that moment the card stands for the whole stack and nothing less.
+  Marking it on the key alone made selecting the top workflow — the one gesture
+  that reaches the cover as an individual — light the stack card up as well, so
+  the cover was the single card in an open panel that could not be picked out of
+  it. A CLOSED stack still marks on the key, because the card is then the
+  cover's only row; that is also what keeps the `?topology=` deep link, which
+  selects one cover key, visibly landing somewhere. The band's wash is a `background-image` layer
   over `--panel` (the way `--hover-shade` layers over a filled control), which
   is also why the `.tbm-caret` notch restates it: the caret hardcodes `--panel`
   and would otherwise seam. In List the rows are transparent so the wash reads

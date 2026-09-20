@@ -261,7 +261,7 @@
             class="wfv-row"
             role="row"
             aria-level="1"
-            :aria-selected="store.selectedKeys.includes(entry.key)"
+            :aria-selected="cardSelected(entry.key)"
             :aria-expanded="
               isStack(entry.card)
                 ? String(store.openStackKey === entry.key)
@@ -285,7 +285,7 @@
             <div class="wfv-cell" role="gridcell">
               <WorkflowCard
                 :card="entry.card"
-                :selected="store.selectedKeys.includes(entry.key)"
+                :selected="cardSelected(entry.key)"
                 :expanded="store.openStackKey === entry.key"
                 :panel-id="store.openStackKey === entry.key ? panelId : ''"
                 @toggle="store.toggleStack(entry.key)"
@@ -529,6 +529,27 @@ const openStackSelected = computed(() =>
     .stackKeys(store.openStackKey)
     .every((key) => store.selectedKeys.includes(key)),
 );
+
+/**
+ * Whether the GRID's card for `key` wears the mark.
+ *
+ * **A cover key names two rows**, the grid's stack card and the panel's first
+ * member row, and only while the panel is open is the second of them on
+ * screen. From that moment the grid's card stands for the whole stack and
+ * nothing less: marking it on the key alone made selecting the top workflow —
+ * the one gesture that reaches the cover as an individual — light the stack
+ * card up as well, so the reader could not tell "this workflow" from "this
+ * stack" and the stack's own row was the one card in the panel they could not
+ * pick out.
+ *
+ * Closed, the card is the cover's only row, so the key is the whole answer;
+ * that is also what keeps the `?topology=` deep link, which selects one cover
+ * key, visibly landing somewhere.
+ */
+function cardSelected(key) {
+  if (store.openStackKey !== key) return store.selectedKeys.includes(key);
+  return openStackSelected.value;
+}
 
 /** Where the cursor is now. Always a real row: it falls back to the first. */
 const cursorIndex = computed(() => {

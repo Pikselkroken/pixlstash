@@ -1320,6 +1320,72 @@ describe("the selection mark", () => {
     expect(markedKeys(wrapper)).toEqual(["b1"]);
   });
 
+  it("picks the top workflow out of its own stack", async () => {
+    // The cover key names TWO rows — the grid's stack card and the panel's
+    // first member — so marking the card on the key alone made the one gesture
+    // that reaches the cover as an individual light the stack up as well. The
+    // top workflow was the one card in an open panel that could not be picked
+    // out of it.
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    await store.openStack("b");
+    await flush();
+
+    await wrapper.find('.stack-panel__member[data-key="b"]').trigger("click");
+    await flush();
+
+    expect(store.selectedKeys).toEqual(["b"]);
+    // The panel's cover row, and NOT the stack card above it.
+    const marked = wrapper
+      .findAll(".wf-card--selected")
+      .map(
+        (el) => el.element.closest("[class*='__member'], .wfv-row")?.className,
+      );
+    expect(marked).toHaveLength(1);
+    expect(marked[0]).toContain("stack-panel__member");
+    expect(
+      wrapper
+        .findAll(".wfv-row")
+        .find((el) => el.attributes("data-key") === "b")
+        .attributes("aria-selected"),
+    ).toBe("false");
+  });
+
+  it("marks the stack card once the whole stack is in", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    await store.openStack("b");
+    await flush();
+
+    // A click on the grid's stack card takes the stack whole, which is when
+    // that card genuinely stands for what is selected.
+    await wrapper
+      .findAll(".wfv-row")
+      .find((el) => el.attributes("data-key") === "b")
+      .trigger("click");
+    await flush();
+
+    expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
+    expect(
+      wrapper
+        .findAll(".wfv-row")
+        .find((el) => el.attributes("data-key") === "b")
+        .attributes("aria-selected"),
+    ).toBe("true");
+  });
+
+  it("marks a closed stack on its cover key, as the deep link leaves it", async () => {
+    // Closed, the card is the cover's only row, so the key is the whole
+    // answer — and `?topology=` selects exactly that one key.
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.select("b");
+    await flush();
+
+    expect(store.openStackKey).toBe(null);
+    expect(markedKeys(wrapper)).toEqual(["b"]);
+  });
+
   it("marks nothing when nothing is selected", async () => {
     const wrapper = await grid();
     expect(wrapper.findAll(".wf-card--selected")).toHaveLength(0);
