@@ -534,14 +534,16 @@
              absolutely-positioned grid child pinned to the head..foot grid
              area, so where it sits in the DOM decides only paint order (early,
              therefore behind the tiles) and never its position. Keeping it out
-             of the loop also keeps it a stable element, so the open animation
-             runs when a stack opens and not again on every scroll that moves
-             the render window. -->
+             of the loop also keeps it one element per tray rather than one per
+             first-member, so the open animation does not replay every time the
+             render window shifts by a row. It does replay if the whole tray
+             leaves the render buffer and comes back. -->
         <div
           v-if="trayRenderInfo"
           class="stack-tray-surface"
           :style="traySurfaceStyle"
           aria-hidden="true"
+          @click.stop
         ></div>
         <template
           v-for="(img, idx) in gridImagesToRender"
@@ -555,11 +557,25 @@
                own column tracks, each one under the picture above it. The stack
                card in the row above draws the tab that runs into it
                (`.image-card--stack-tab`). -->
+          <!-- The head is only drawn where the card it names is on screen. A
+               stack with more members than the render window reaches would
+               otherwise grow a second head part-way down itself, every time
+               the window moved. `role=row` + one `gridcell`: the container is
+               a `grid`, which may own nothing else, and the group it would
+               otherwise claim does not contain the pictures it names - they
+               are its siblings. -->
           <div
-            v-if="trayRenderInfo && idx === trayRenderInfo.firstIdx"
-            class="stack-tray-head"
-            role="group"
-            :aria-label="trayAriaLabel"
+            v-if="
+              trayRenderInfo &&
+              trayRenderInfo.showHead &&
+              idx === trayRenderInfo.firstIdx
+            "
+            :class="[
+              'stack-tray-head',
+              { 'stack-tray-head--narrow': trayRenderInfo.narrow },
+            ]"
+            role="row"
+            @click.stop
             @mouseenter="handleTrayMouseEnter"
             @mouseleave="handleTrayMouseLeave"
           >
@@ -567,7 +583,13 @@
                  wherever in the row the card happens to be. -->
             <span
               class="stack-tray-title"
-              :style="{ gridColumn: `${trayRenderInfo.tabColumn} / -2` }"
+              role="gridcell"
+              :aria-label="trayAriaLabel"
+              :style="
+                trayRenderInfo.narrow
+                  ? null
+                  : { gridColumn: `${trayRenderInfo.tabColumn} / -2` }
+              "
             >
               <b>Stack of {{ trayStackCount }}</b>
               <span
@@ -582,14 +604,18 @@
                 class="stack-tray-action"
                 @click.stop="collapseOpenStack"
               >
-                <v-icon size="14">mdi-arrow-collapse-vertical</v-icon>Collapse
+                <v-icon :size="badgeIconSizes.stack"
+                  >mdi-arrow-collapse-vertical</v-icon
+                >Collapse
               </button>
               <button
                 type="button"
                 class="stack-tray-action"
                 @click.stop="unstackOpenStack"
               >
-                <v-icon size="14">mdi-layers-off-outline</v-icon>Unstack
+                <v-icon :size="badgeIconSizes.stack"
+                  >mdi-layers-off-outline</v-icon
+                >Unstack
               </button>
             </span>
           </div>
@@ -598,7 +624,7 @@
             :class="[
               'image-card',
               {
-                'image-card--stack-tab': isExpandedStackCover(img),
+                'image-card--stack-tab': isStackTabCard(img),
                 'image-card--tray-member': isTrayMember(img),
                 'image-card-stack-expanded': isStackExpandedForImage(img),
                 'image-card-stack-reorder-target': isStackReorderTarget(img),
@@ -976,10 +1002,12 @@
                   :count="getStackBadgeCount(img)"
                   :open="isExpandedStackCover(img)"
                 />
-                <!-- Once a stack is expanded its members look like any other
-                   picture, so the one that the collapsed tile stands for has to
-                   say so. Without this, expanding a stack loses the answer to
-                   "which of these is the keeper". -->
+                <!-- Which of these is the keeper. Under the tray the cover is
+                   the one member NOT in the panel - it stayed in the grid as
+                   the tray's tab - so the chip answers "why is that one still
+                   up here" rather than picking it out of a run of lookalikes.
+                   In justified mode, which draws no tray, it is still the only
+                   thing saying so. -->
                 <span v-if="isExpandedStackCover(img)" class="stack-cover-flag"
                   ><Tooltip
                     text="This picture is the stack's cover"
@@ -6445,7 +6473,10 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     clearFaceSelection,
     clearSearchQuery,
     scrollCursorIntoView,
-    isStackTrayOpen: () => expandedStackId.value != null,
+    // Only where a tray is actually drawn. In justified mode an expanded stack
+    // has no tray, and swallowing Esc there would take it from the
+    // clear-search pill that renders an Esc keycap on itself.
+    isStackTrayOpen: () => expandedStackId.value != null && useTrayLayout.value,
     closeStackTray: collapseOpenStack,
     focusCursor: focusGridCursor,
     openOverlay,
@@ -7263,6 +7294,19 @@ function isTrayMember(img) {
   return isStackExpandedForImage(img) && !isExpandedStackCover(img);
 }
 
+/**
+ * Whether this tile is drawn as the tray's tab.
+ *
+ * The tab is a piece of the tray, not a mark of its own: without a tray under
+ * it, it is a panel-coloured slab bleeding out of the bottom of one card. So it
+ * needs a tray on screen - which rules out justified mode (no tray at all) and
+ * the case where a media-type filter has removed every member from the render.
+ */
+function isStackTabCard(img) {
+  if (!trayRenderInfo.value) return false;
+  return isExpandedStackCover(img);
+}
+
 const trayStackCount = computed(() => {
   const stackId = expandedStackId.value;
   if (stackId == null) return 0;
@@ -7277,8 +7321,8 @@ const trayStackCount = computed(() => {
 
 const trayAriaLabel = computed(
   () =>
-    `Stack of ${trayStackCount.value}, ${trayStackCount.value - 1} other pictures; ` +
-    `the cover stays in the grid above`,
+    `Open stack of ${trayStackCount.value}: its other ${trayStackCount.value - 1} ` +
+    `pictures follow in the grid`,
 );
 
 /**
@@ -7315,9 +7359,17 @@ const trayRenderInfo = computed(() => {
   if (firstIdx === -1) return null;
   const cols = Math.max(1, gridStore.columns || 1);
   const memberRows = Math.ceil((lastIdx - firstIdx + 1) / cols);
+  // Two tracks is the least the head's sentence and its two buttons can share.
+  // Below that they collide, so the head drops to a plain flex row.
+  const narrow = cols < 3;
   return {
     firstIdx,
     lastIdx,
+    narrow,
+    // Only where the card it names is on screen: a stack with more members
+    // than the render window reaches would otherwise grow a second head
+    // part-way down itself.
+    showHead: coverIdx !== -1,
     // The top spacer takes the first row (it is always rendered in square
     // mode, where the tray lives); the cards before the head fill the rows
     // after it.
@@ -7325,32 +7377,49 @@ const trayRenderInfo = computed(() => {
       (topSpacerHeight.value > 0 ? 1 : 0) + Math.ceil(firstIdx / cols) + 1,
     // head + member rows + foot.
     span: memberRows + 2,
-    // 1-based grid line of the column the stack card sits in. Clamped off the
-    // last column, which the actions own: a cover there would otherwise start
-    // the sentence on top of them.
+    // 1-based grid line of the column the stack card sits in. Clamped so the
+    // sentence always has two tracks before the column the actions own: at
+    // eight columns one track cuts "3 others" in half. A cover in the last two
+    // columns therefore starts the sentence one column early - the alternative
+    // is a header nobody can read, and the tab, the columns and the deck edges
+    // still carry the tie.
     tabColumn:
       coverIdx === -1
         ? 1
-        : Math.min((coverIdx % cols) + 1, Math.max(1, cols - 1)),
+        : Math.min((coverIdx % cols) + 1, Math.max(1, cols - 2)),
   };
 });
 
 // An open tray must be on screen together with the card it belongs to - an
 // anchor you have to scroll back to find is not an anchor. A stack taller than
 // the window still overflows the bottom (the design's answer, a tray capped at
-// two rows with its own scroll region, is not built yet), so opening one puts
-// its card at the top of the viewport and gives the tray the whole window.
+// two rows with its own scroll region, is not built yet), so when the tray does
+// not fit below its card, the card goes to the top of the viewport and the tray
+// gets the rest of the window.
+//
+// Measured off the rendered nodes, not off an index: the painted grid is
+// `filterImagesByMediaType(allGridImages)`, so an index into the unfiltered
+// list names the wrong row whenever a media filter is on, and no arithmetic
+// over `rowHeight` knows about the head and foot rows the tray adds.
 watch(expandedStackId, async (stackId) => {
   if (stackId == null || !useTrayLayout.value) return;
   await nextTick();
   const wrapper = scrollWrapper.value;
-  if (!wrapper) return;
-  const coverIdx = allGridImages.value.findIndex(
-    (img) => getPictureStackId(img) === stackId,
-  );
-  const top = gridItemTopOffset(coverIdx);
-  if (top == null || top <= wrapper.scrollTop) return;
-  wrapper.scrollTop = top;
+  const tab = gridContainer.value?.querySelector(".image-card--stack-tab");
+  const foot = gridContainer.value?.querySelector(".stack-tray-foot");
+  if (!wrapper || !tab || !foot) return;
+  const view = wrapper.getBoundingClientRect();
+  const tabBox = tab.getBoundingClientRect();
+  // Already whole on screen: leave the view where the user put it.
+  if (
+    tabBox.top >= view.top &&
+    foot.getBoundingClientRect().bottom <= view.bottom
+  ) {
+    return;
+  }
+  const delta = tabBox.top - view.top;
+  if (delta <= 0) return;
+  wrapper.scrollTop += delta;
 });
 
 /**

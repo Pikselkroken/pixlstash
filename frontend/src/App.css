@@ -636,7 +636,7 @@ kbd {
   font-weight: var(--weight-semibold);
   letter-spacing: 0;
   text-transform: none;
-  line-height: 16px;
+  line-height: var(--leading-snug);
   font-variant-numeric: tabular-nums;
 }
 .tbm-label--right {

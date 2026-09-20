@@ -97,7 +97,7 @@ shrinks as automated coverage grows.
 ## Stacks — `stacks.spec.js` (plan §11)
 | Test | Covers | Status |
 |------|--------|--------|
-| expands and collapses stacks from the View menu | Expand-all / collapse-all stack controls in the View menu | ✅ |
+| a stack opens a tray tied to its own card | Expanding a stack opens the tray, draws its card as the tab with the deck edges turned over, draws N-1 member tiles, and closes from the badge and from the View menu's Collapse | ✅ |
 
 ## Tags — `tags.spec.js` (plan §5)
 | Test | Covers | Status |

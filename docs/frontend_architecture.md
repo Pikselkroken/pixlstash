@@ -439,12 +439,22 @@ Four things tie the tray to *that* card, and none of them is a new colour:
    and its head inherits `grid-template-columns` and `gap` from the grid
    container, so its tracks *are* the grid's tracks.
 3. **The head starts in the card's column.** "Stack of 6" is set under the tab
-   wherever in the row the card happens to be (clamped off the last column,
-   which Collapse and Unstack own), not at the tray's left edge.
+   wherever in the row the card happens to be, not at the tray's left edge.
+   Two clamps qualify that: the sentence always keeps two tracks before the
+   column Collapse and Unstack own, so a cover in the **last two columns**
+   starts it one column early (one track cuts "3 others" in half at eight
+   columns); and below **three columns** there is no arrangement at all, so the
+   head drops out of the grid into a plain flex row
+   (`.stack-tray-head--narrow`). One column is reachable — `useViewportLayout`
+   clamps `columns` to `floor(width / 96)`.
 4. **The deck's edges turn over.** Collapsed, `StackEdgeTicks` peeks up and to
    the right, on canvas; open (`:open`), the layers point down at the tray. Two
    pixels on an element that already exists, and it is the card saying where its
-   pictures went.
+   pictures went. **Compact mode does not get this one**: `stackDeckEdgesFit`
+   already withheld the ticks there, and the same mode reduces tie 1 to a
+   one-pixel break in the tray's border under the card, because there is no
+   padding for the panel to show through. Compact keeps the tray and the column
+   alignment; it gets two of the four ties, not four.
 
 **How the members become a rectangle.** `insertExpandedStackMembers` (and
 `collapseStackImages`, which must agree with it or a rebuild paints one wrong
@@ -474,18 +484,34 @@ every scroll that shifts the render window.
 - **The tray is not capped.** The design's answer to a stack much taller than
   the window is a tray capped at two rows with its own scroll region, so the
   card and its tray are always on screen together. That is not built. Instead,
-  opening a stack scrolls its card to the top of the viewport and gives the tray
-  the rest of the window; a stack of twenty-odd still runs off the bottom.
+  when the tab and the foot are not both already on screen, opening a stack
+  scrolls its card to the top of the viewport and gives the tray the rest of the
+  window; a stack of twenty-odd still runs off the bottom. That scroll is
+  measured off the rendered tab and foot nodes rather than an index, because the
+  painted grid is `filterImagesByMediaType(allGridImages)` and no `rowHeight`
+  arithmetic knows about the tray's own rows.
+- **A stack bigger than the render buffer (~100 items) is drawn in pieces.**
+  `trayRenderInfo` only sees `gridImagesToRender`, so the foot lands after the
+  last *rendered* member and the panel ends there. The head is suppressed when
+  the cover is not rendered (`showHead`), which is what stops a second
+  "Stack of N" header appearing part-way down such a stack.
 - **Justified mode keeps the old marks.** Justified rows are packed by aspect
   ratio and have no column track for a tray to borrow, so `useTrayLayout` is
   false there and the wash and the ribbon still draw. Square and compact get the
   tray.
 - **The virtual scroller does not model the tray's chrome.** The head and foot
-  rows add roughly 40-50px that `rowHeight * row` does not know about. The grid
-  already drifts a few px per row against its own estimate, and the render
-  buffer is ±100 items, so one tray's worth of error is absorbed; with more than
-  one tray it would not be, which is a second reason the one-open rule is load
-  bearing.
+  rows add roughly 50px that `topSpacerHeight`, `bottomSpacerHeight` and
+  `gridItemTopOffset` do not know about. The render buffer does **not** absorb
+  this — it bounds the render *window*, not the scroll *height*. What follows
+  is: the container's scroll range grows and shrinks by that 50px as the tray
+  enters and leaves the render window, so scrolling a tray right out of the
+  buffer shifts the rows below it; and `gridItemTopOffset` is short by the same
+  amount for every item below an open tray, which `collapseGhostedImages` uses
+  to re-anchor the viewport. The grid already drifts a few px per row against
+  its own estimate, so one tray's worth is of that order — with more than one
+  tray it would not be, which is a second reason the one-open rule is load
+  bearing. Modelling it properly means teaching `useVirtualScroll` a band
+  offset, which is the next thing to do here if the drift is felt.
 
 ##### The empty library is a different question from an empty grid
 

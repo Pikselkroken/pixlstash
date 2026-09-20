@@ -80,10 +80,10 @@ const layers = computed(() => {
 /* Open: the layers turn over and peek down at the tray. They were dealt, not
    lost - which is the whole claim the tray needs the card to make. */
 .sticks--open .stick--1 {
-  transform: translate(var(--space-1), calc(var(--space-1) * 1.5));
+  transform: translate(var(--space-1), var(--space-1));
 }
 
 .sticks--open .stick--2 {
-  transform: translate(calc(var(--space-1) * 2), calc(var(--space-1) * 3));
+  transform: translate(calc(var(--space-1) * 2), calc(var(--space-1) * 2));
 }
 </style>

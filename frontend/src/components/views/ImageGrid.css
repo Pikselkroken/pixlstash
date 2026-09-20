@@ -235,7 +235,10 @@
   white-space: nowrap;
   backdrop-filter: blur(6px);
   box-shadow: var(--elevation-2);
-  pointer-events: none;
+  /* The panel's own empty area is inside the tray, not grid background: a click
+     there must not clear the selection. The member tiles paint above it and
+     take their own clicks, so this only catches the gaps. */
+  pointer-events: auto;
   user-select: none;
   z-index: 50;
 }
@@ -490,7 +493,10 @@
   border-radius: var(--radius-pill);
   background: var(--active-bar);
   box-shadow: var(--elevation-2);
-  pointer-events: none;
+  /* The panel's own empty area is inside the tray, not grid background: a click
+     there must not clear the selection. The member tiles paint above it and
+     take their own clicks, so this only catches the gaps. */
+  pointer-events: auto;
   z-index: 6;
 }
 
@@ -563,7 +569,10 @@
   border: var(--space-1) solid rgb(var(--v-theme-on-dark-surface));
   background: var(--scrim-photo);
   box-shadow: var(--elevation-2);
-  pointer-events: none;
+  /* The panel's own empty area is inside the tray, not grid background: a click
+     there must not clear the selection. The member tiles paint above it and
+     take their own clicks, so this only catches the gaps. */
+  pointer-events: auto;
   z-index: 26;
 }
 .touch-select-mode .image-card:has(.selection-overlay)::after {
@@ -1149,7 +1158,10 @@
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-lg);
   box-shadow: var(--elevation-2);
-  pointer-events: none;
+  /* The panel's own empty area is inside the tray, not grid background: a click
+     there must not clear the selection. The member tiles paint above it and
+     take their own clicks, so this only catches the gaps. */
+  pointer-events: auto;
   /* The panel unfolds out of the tab's own column rather than appearing under
      it; `transform-origin` is set per tray from the card's column. */
   animation: stackTrayOpen var(--dur-2) var(--ease-decelerate);
@@ -1209,6 +1221,25 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* One or two columns leave no track for the sentence to sit in beside the
+   actions - `1 / -2` and `-2 / -1` resolve to the same cell and the two render
+   on top of each other. Below three columns the head stops being a grid. */
+.stack-tray-head--narrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding-left: var(--space-2);
+}
+
+.stack-tray-head--narrow .stack-tray-title {
+  padding-left: 0;
+}
+
+.stack-tray-head--narrow .stack-tray-actions {
+  flex: none;
 }
 
 /* Right-aligned, where every other action row in the app puts them. */
@@ -1291,5 +1322,13 @@
 .image-grid--justified .stack-tray-surface,
 .image-grid--justified .stack-tray-head,
 .image-grid--justified .stack-tray-foot {
+  display: none;
+}
+
+/* The tab belongs to the tray, so it goes where the tray goes. `isStackTabCard`
+   already withholds the class here; this is the belt to that brace, because a
+   panel slab bleeding out of one card's bottom edge into a packed row is the
+   most visible way this could fail. */
+.image-grid--justified .image-card--stack-tab::before {
   display: none;
 }

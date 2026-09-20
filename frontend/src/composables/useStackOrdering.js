@@ -530,10 +530,14 @@ export function useStackOrdering(
     allGridImages.value = filtered;
     if (removedCount > 0) {
       // The members do not sit directly after the cover under the tray layout,
-      // so the loaded-range shift starts where they actually were.
+      // so BOTH ends of the shift come from where they actually were.
+      // `shiftRangesForDelta` keeps a range ending at or before `start`, shifts
+      // one beginning at or after `end`, and DROPS everything that straddles -
+      // so an `end` behind `start` discards every loaded range covering the
+      // grid, and the whole visible window refetches on a collapse.
       const removeStart =
         firstRemovedIndex === -1 ? headerIndex + 1 : firstRemovedIndex;
-      const removeEnd = headerIndex + 1 + removedCount;
+      const removeEnd = removeStart + removedCount;
       loadedRanges.value = shiftRangesForDelta(
         loadedRanges.value,
         removeStart,
@@ -729,8 +733,18 @@ export function useStackOrdering(
   async function loadExpandedStacksInView() {
     const stackId = expandedStackId.value;
     if (stackId == null) return;
+    // Having the members CACHED is not the same as having them in the grid.
+    // `refreshExpandedStacksAfterFetch` pulls them out and leaves them out when
+    // the cover is outside the fetched window, so returning here on a warm
+    // cache is what left a tab with no tray under it once the user scrolled
+    // back to the card.
     const entry = expandedStackMembers.value.get(stackId);
-    if (entry && Array.isArray(entry.images) && entry.images.length > 0) return;
+    const cached = !!(
+      entry &&
+      Array.isArray(entry.images) &&
+      entry.images.length
+    );
+    if (cached && getRenderedStackMemberIds(stackId).length > 1) return;
     const start = Math.max(0, visibleStart.value - renderBuffer.value);
     const end = Math.min(
       allGridImages.value.length,
