@@ -23,12 +23,26 @@ from pixlstash.services.workflow_inputs import (
     FIXED,
     PICKER,
     SELECTION,
+    node_title,
     resolve_input_modes,
     validate_requested_modes,
 )
-from pixlstash.services.workflow_hash import structural_hash, topology_hash
-from pixlstash.services.workflow_io import detect_workflow_io
-from pixlstash.utils.comfyui_utilities import NotAWorkflowError, check_comfy_workflow
+from pixlstash.services.workflow_hash import (
+    WorkflowGraphError,
+    reduce_ui_graph,
+    structural_hash,
+    topology_hash,
+)
+from pixlstash.services.workflow_bindings import run_targets
+from pixlstash.services.workflow_io import api_graph, detect_workflow_io
+from pixlstash.utils.comfyui_utilities import (
+    NotAWorkflowError,
+    check_comfy_workflow,
+    extract_generation_info,
+    is_api_format,
+    is_comfy_workflow,
+    loaded_model_widgets,
+)
 
 BUILT_IN = (
     pathlib.Path(comfyui_module.__file__).parent.parent
@@ -1208,3 +1222,130 @@ def test_the_list_says_which_workflows_the_selection_pill_may_offer(
         # A loader detection misses keeps its binding.
         "custom.json": True,
     }
+
+
+# A document check_comfy_workflow lets through carrying an editor hint: it
+# validates what is under `prompt`, so the envelope may hold anything. The
+# hint is on the envelope, which is not the graph (#1482).
+def _hinted_envelope() -> dict:
+    return {"prompt": _t2i_graph(), "last_node_id": 9, "last_link_id": 12}
+
+
+# The shape that cannot be imported at all - `check_comfy_workflow` refuses a
+# top-level `last_node_id`, so this one only ever arrives as a picture's
+# embedded metadata, where nothing validates it. An editor export truncated to
+# its header, with a body that would read as a flat node map.
+_HINTS_WITH_A_FLAT_BODY = {
+    "last_node_id": 9,
+    "last_link_id": 12,
+    "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "m.ckpt"}},
+    "2": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+}
+
+
+def test_an_editor_hint_on_the_envelope_does_not_make_the_graph_an_editor_graph(
+    import_route,
+):
+    """A guard on this change, not a fix of an older one.
+
+    **`develop` gets this document right already**, by unwrapping `prompt`
+    before it looks at `nodes`; what it could not survive is the naive
+    conversion, where `is_api_format` is asked about the envelope, says
+    "editor format" on the hint and sends a file with no node list to the UI
+    reducer, which raises - stored, and filed under no topology at all. So
+    this passes before the change and after it, and fails only for the
+    version of it that sniffs the wrong object. Nothing this repository writes
+    puts a hint on an envelope; `check_comfy_workflow` validates what is
+    *inside* one, which is why such a file imports at all.
+    """
+    call, _user_dir, _built_in, _hub = import_route
+    envelope = _hinted_envelope()
+
+    check_comfy_workflow(envelope)  # it really does get this far
+    assert is_api_format(envelope) is False  # the hint calls it the editor graph
+    assert api_graph(envelope) == envelope["prompt"]  # the graph inside is not
+    with pytest.raises(WorkflowGraphError):
+        reduce_ui_graph(envelope)  # what filing it as an editor graph would do
+
+    body = call(name="envelope", workflow=envelope)
+    assert body["topology_hash"] == topology_hash(envelope["prompt"])
+    assert run_targets(envelope)["caption"] == [
+        {"path": ["prompt", "2", "inputs", "text"], "template": None}
+    ]
+
+
+def test_a_file_that_carries_both_graphs_is_read_as_the_one_it_can_run(import_route):
+    """The reachable document the readers used to disagree about (#1482).
+
+    `check_comfy_workflow` validates the node list and never looks at
+    `prompt`, so an editor file carrying a prompt chunk imports. On `develop`
+    the node list won every question: it was filed under the editor graph's
+    topology, `run_targets` filled nothing because "a UI-format file fills
+    nothing", and a title came off the editor's own node ids - while the
+    executable graph sat in the file unread. One sniff makes the wrapped
+    prompt the answer to all three, which is the graph this file can actually
+    run. **Three of the moved sites are pinned here and nowhere else**: revert
+    `_file_in_hub`, `run_targets` or `_raw_node` and one of these fails.
+    """
+    call, _user_dir, _built_in, _hub = import_route
+    prompt = _t2i_graph()
+    prompt["7"] = _node("LoadImage", image="a.png")
+    prompt["7"]["_meta"] = {"title": "Run title"}
+    document = {
+        # One editor node, deliberately sharing id 7 with a different node of
+        # the prompt chunk, so a title read off the wrong graph is visible.
+        "nodes": [
+            {
+                "id": 7,
+                "type": "LoadImage",
+                "title": "Editor title",
+                "widgets_values": ["a.png"],
+            }
+        ],
+        "links": [],
+        "prompt": prompt,
+    }
+    check_comfy_workflow(document)  # the node list is all it checks
+    assert api_graph(document) is prompt
+
+    body = call(name="both", workflow=document)
+    assert body["topology_hash"] == topology_hash(prompt)
+    assert run_targets(document)["image"] == [
+        {"path": ["prompt", "7", "inputs", "image"], "template": None}
+    ]
+    assert node_title(document, "7", "LoadImage") == "Run title"
+
+
+def test_the_hints_decide_the_format_for_every_reader_of_a_picture():
+    """One sniff for the readers a picture's own metadata reaches.
+
+    `is_comfy_workflow` accepts this document on its hints, so it is offered to
+    the extractors with nothing having validated it. They used to look at
+    `nodes` alone, call it the API format and walk it; `is_api_format` calls it
+    the editor format. **Reading it as one is a deliberate narrowing**: the
+    models it would have yielded are the ones a document nothing wrote would
+    have yielded, and `tests/comfyui_workflows/expected_results.csv` holds the
+    real files to the letter either way.
+    """
+    assert is_comfy_workflow(_HINTS_WITH_A_FLAT_BODY) is True
+    with pytest.raises(NotAWorkflowError):
+        check_comfy_workflow(_HINTS_WITH_A_FLAT_BODY)  # so it is never imported
+
+    assert is_api_format(_HINTS_WITH_A_FLAT_BODY) is False
+    assert extract_generation_info(_HINTS_WITH_A_FLAT_BODY)["models"] == []
+    assert loaded_model_widgets(_HINTS_WITH_A_FLAT_BODY) == []
+    assert api_graph(_HINTS_WITH_A_FLAT_BODY) is None
+    # An editor document is one the hints alone can name, so there may be no
+    # `nodes` to read a title out of, and looking must not raise.
+    assert node_title({"last_node_id": 9}, "1", "SaveImage") == "SaveImage"
+
+    # The controls: a real API graph and a real editor file each still read as
+    # what they are.
+    graph = _t2i_graph()
+    assert is_api_format(graph) is True
+    assert api_graph(graph) is graph
+    editor = _load(UI_FIXTURES / "image_z_image_turbo.json")
+    assert is_api_format(editor) is False
+    assert extract_generation_info(editor)["models"] == [
+        "z_image_turbo_bf16.safetensors"
+    ]

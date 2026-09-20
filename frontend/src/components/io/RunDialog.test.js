@@ -38,7 +38,10 @@ const listAdapters = vi.fn();
 vi.mock("../../api/modelShelf", () => ({
   listAdapters: (...args) => listAdapters(...args),
 }));
-vi.mock("../../api/recipes", () => ({ createSavedRecipe: vi.fn() }));
+vi.mock("../../api/recipes", () => ({
+  createSavedRecipe: vi.fn(),
+  listSavedRecipes: vi.fn(() => Promise.resolve([])),
+}));
 vi.mock("vuetify/components", async () => {
   const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
   return vuetifyComponentStubs();

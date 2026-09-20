@@ -708,6 +708,7 @@ knows from its pictures exports and duplicates like any other:
 | `POST /api/v1/workflows/{workflow_key}/insert-lora-loader` | A copy with a LoRA loader spliced in | `201 {name, workflow_key, node_id, class_type}` |
 | `DELETE /api/v1/workflows/{workflow_key}` | Send the imported file to the trash | `{deleted, workflow_key}` |
 | `GET /api/v1/recipes/{recipe_id}/export` | The saved recipe as a file | `{filename, recipe, shares: [string]}` |
+| `GET /api/v1/recipes/used?workflow_key=…` | The looks this workflow's own pictures were made with, minus any a saved recipe already keeps. `workflow_key` repeats for a selection of several and the answer is the union. **The half of the Recipes tab a library has without ever pressing Save** | `[{prompt, loras: [{filename}], pictures, cover_picture_id}]` |
 
 Five rules the client must not re-derive:
 

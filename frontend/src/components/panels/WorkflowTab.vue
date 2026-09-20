@@ -16,6 +16,16 @@
       Pick a workflow to see what it is made of.
     </p>
 
+    <!-- Before the multiple-selection body: a selection of several has a
+         Recipes answer of its own, the union of their stacks, which is what
+         the owner is asking for by selecting them. -->
+    <WorkflowRecipesTab
+      v-else-if="showingRecipes"
+      :workflow-keys="recipeKeys"
+      :stack-name="recipesStack.name"
+      :stack-size="recipesStack.size"
+    />
+
     <!-- Several selected: the tab says so, and the VERBS ARE THE PILL'S.
          They were here first, as two buttons of this tab's own; #1455 gave
          the grid a selection bar that offers the same two and eight more, and
@@ -196,6 +206,8 @@
 
     <!-- The footer is the last thing in the body and sticks to its bottom, so
          Run… is where the design puts it without a second scroll container. -->
+    <!-- The Workflow tab's, and only its: Recipes runs a recipe from its own
+         row and Tasks is the app's business, so neither wants this footer. -->
     <div v-if="tab === 'workflow' && (card || multiple)" class="wftab-foot">
       <AppButton
         variant="primary"
@@ -279,6 +291,7 @@ import Segmented from "../widgets/Segmented.vue";
 import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import WorkflowDefaultRow from "./WorkflowDefaultRow.vue";
+import WorkflowRecipesTab from "./WorkflowRecipesTab.vue";
 
 /** B1's vocabulary, in the design's words. */
 const MARK_OPTIONS = [
@@ -315,7 +328,18 @@ watch(
 
 // Tasks last, and never anything but last: it is the app's business, not this
 // workflow's.
+/**
+ * Recipes first, as the design bands them; Workflow is still the tab a
+ * selection opens on, because it is the one that says what the card IS; and
+ * Tasks last, and never anything but last, because it is the app's business
+ * and not this workflow's.
+ *
+ * Recipes answers for a selection of several too — the union of their stacks —
+ * so it is never disabled. The Workflow tab is the one with nothing to say
+ * about several cards at once.
+ */
 const tabs = computed(() => [
+  { value: "recipes", label: "Recipes", icon: "mdi-bookmark-outline" },
   { value: "workflow", label: "Workflow", icon: "mdi-sitemap-outline" },
   tasksTabFor(tasksStore),
 ]);
@@ -358,6 +382,41 @@ const card = computed(() => {
   // gesture this tab exists for.
   if (detail.value?.card?.key === key) return detail.value.card;
   return null;
+});
+
+/**
+ * Whether the Recipes list is the body on screen.
+ *
+ * Not `tab === "recipes"` alone: with nothing selected the empty sentence is
+ * the body, and gating the footer on the tab would take Run… off a screen
+ * still showing the Workflow body — Run… has to stay on screen and refuse
+ * rather than vanish.
+ */
+const showingRecipes = computed(
+  () => tab.value === "recipes" && recipeKeys.value.length > 0,
+);
+
+/** Every selected card, because a selection's recipes are their union. */
+const recipeKeys = computed(() =>
+  multiple.value ? [...store.selectedKeys] : card.value ? [card.value.key] : [],
+);
+
+/**
+ * What heads the Recipes tab: the stack, when the selected card is a member.
+ *
+ * `stack_size` rather than `member_keys.length`, which leaves the card's own
+ * key out and would call a stack of six "five workflows".
+ */
+const recipesStack = computed(() => {
+  if (multiple.value) {
+    const count = store.selectedKeys.length;
+    return { name: `${count} workflows selected`, size: 0 };
+  }
+  const stack = parentStack.value || card.value;
+  return {
+    name: stack?.name || "",
+    size: Number(stack?.stack_size) || 0,
+  };
 });
 
 /** The stack this card sits in, when it is a member of one. */

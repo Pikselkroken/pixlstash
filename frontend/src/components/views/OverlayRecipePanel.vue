@@ -9,10 +9,15 @@
 
     <template v-else>
       <div class="recipe-scroll">
-        <!-- Design order: Workflow, Prompt, Models, Settings. The "Matches your
-             saved recipe X" banner the design puts above this needs saved
-             recipes, which do not exist yet, so it is absent rather than
-             faked. -->
+        <!-- Design order: the "Matches your saved recipe X" banner, then
+             Workflow, Prompt, Models, Settings. -->
+        <div v-if="matched" class="recipe-match">
+          <v-icon size="16">mdi-bookmark</v-icon>
+          <span
+            >Matches your saved recipe
+            <b class="recipe-match-name">{{ matched.name || "Untitled" }}</b>
+          </span>
+        </div>
         <div class="section-label section-label--on-dark recipe-sec">
           <span>Workflow</span>
           <button
@@ -195,11 +200,10 @@
         </details>
       </div>
 
-      <!-- The footer the design pins at the bottom. It holds Run… and Save;
-           Save needs saved recipes, so today it is Run… (the Run popup, #1407)
-           and, beside it, *Run another workflow…* (#1406) - the same popup with
-           its workflow picker unset, which is what an A1111 picture, and any
-           picture at all, can still do. -->
+      <!-- The footer the design pins at the bottom: Run… (the Run popup,
+           #1407), Save as recipe, and *Run another workflow…* (#1406) - the
+           same popup with its workflow picker unset, which is what an A1111
+           picture, and any picture at all, can still do. -->
       <div class="recipe-foot">
         <!-- The reason in prose as well as on the button. A tooltip is not a
              sentence everyone gets: it needs a hover or a focus, and the
@@ -244,6 +248,37 @@
             <v-icon size="16">mdi-play</v-icon>
             Run…
           </AppButton>
+          <!-- Saved, not "Save as recipe", once a recipe already keeps this
+               look: the gesture is done and offering it again would make a
+               second row saying the same thing.
+
+               `aria-disabled`, not `disabled`, for this pane's own stated
+               reason: a natively-disabled button is out of the tab order, so
+               a keyboard reader could never reach the sentence that says why
+               it is inert. The click is refused in the handler instead. -->
+          <AppButton
+            v-if="canSave"
+            size="sm"
+            block
+            :icon-left="matched ? 'check' : 'bookmark-plus-outline'"
+            :aria-disabled="matched ? 'true' : undefined"
+            :aria-describedby="matched ? savedReasonId : undefined"
+            @click="onSave"
+          >
+            <Tooltip
+              :text="
+                matched
+                  ? `Already kept as “${matched.name || 'Untitled'}”`
+                  : 'Keep this look as a recipe'
+              "
+              activator="parent"
+              :describe="false"
+            />
+            {{ matched ? "Saved" : "Save as recipe" }}
+          </AppButton>
+          <p v-if="matched" :id="savedReasonId" class="recipe-run-reason">
+            Already kept as “{{ matched.name || "Untitled" }}”.
+          </p>
           <AppButton
             v-if="comfyuiConfigured"
             variant="secondary"
@@ -264,6 +299,22 @@
       </div>
     </template>
   </div>
+
+  <!-- Mounted only while it is up: it is a dialog nobody has asked for until
+       they press the button, and an unmounted one costs no reads. -->
+  <SaveRecipeDialog
+    v-if="saveOpen"
+    :open="saveOpen"
+    :workflow-key="recipe?.workflowKey || ''"
+    :prompt="recipe?.positive_prompt || ''"
+    :negative="recipe?.negativePrompt || ''"
+    :loras="saveLoras"
+    :seed="recipe?.seedText || ''"
+    :settings-aside="settingsAside"
+    :source-picture-id="Number(pictureId) || null"
+    @close="saveOpen = false"
+    @saved="onSaved"
+  />
 </template>
 
 <script setup>
@@ -277,21 +328,27 @@
  * strengths, then Settings, Seed and Negative in one key/value grid, with the
  * action pinned in a footer.
  *
- * **Four things the design draws are absent rather than faked**, because the
- * data behind each is a later step of that plan: the "Matches your saved recipe
- * X" banner and the Save button (saved recipes), the workflow's name and the
- * stack it is in (the workflow cards read), and the workflow's own value beside
- * an overridden setting (the workflow defaults read). Run… itself is the Run
- * popup (F5, #1407).
+ * **Two things the design draws are still absent rather than faked**, because
+ * the data behind each is a later step of that plan: the workflow's name and
+ * the stack it is in (the workflow cards read), and the workflow's own value
+ * beside an overridden setting (the workflow defaults read). Run… itself is
+ * the Run popup (F5, #1407), and the "Matches your saved recipe X" banner and
+ * the Save button are live (F6, #1408).
  */
 import { computed, reactive, ref, useId, watch } from "vue";
 import { useRouter } from "vue-router";
+import SaveRecipeDialog from "../io/SaveRecipeDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { getPictureWorkflow } from "../../api/comfyui";
+import { listAdapters } from "../../api/modelShelf";
+import { listSavedRecipes } from "../../api/recipes";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
+import { downloadBlob } from "../../utils/downloadFile";
+import { keepsTheSameLook } from "../../utils/recipeKey";
+import { resolveRecipeLoras } from "../../utils/recipeLoras";
 
 const props = defineProps({
   recipe: { type: Object, default: null },
@@ -476,6 +533,145 @@ watch(
 );
 
 const models = computed(() => props.recipe?.modelSlots || []);
+
+// ── Saved recipes: does one of them already keep this look? ─────────────────
+//
+// The banner and the Save button are one question: a recipe whose prompt and
+// LoRA file names are this picture's is the recipe this picture was made by,
+// which is exactly what the server's own credit matches on. The keys live in
+// `utils/recipeKey.js` so the two sides cannot drift; matched here rather than
+// asked of the server because there is no route that answers "which recipe
+// does this picture match".
+
+const saveOpen = ref(false);
+const savedRecipes = ref([]);
+
+/**
+ * Whether keeping this look is even offered.
+ *
+ * A recipe is filed under a card, so a picture the hub has not keyed has
+ * nowhere to put one; a read-only reader is refused for the reason every other
+ * action here refuses them.
+ */
+const canSave = computed(
+  () => Boolean(props.recipe?.workflowKey) && !isReadOnly.value,
+);
+
+/**
+ * The key `savedRecipes` holds the recipes OF.
+ *
+ * A ref, and the banner is gated on it: `ImageOverlay` nulls the recipe before
+ * each read, so the key goes key → undefined → key on every filmstrip step.
+ * Clearing the rows on the undefined would make the step re-read; keeping them
+ * without this gate would let the previous card's recipes match the next
+ * picture. So the rows stay and the comparison refuses until the key is back.
+ */
+const loadedKey = ref("");
+
+/** This picture's look, in the shape both sides of the match take. */
+const thisLook = computed(() => ({
+  prompt: props.recipe?.positive_prompt,
+  loras: props.recipe?.loraNames,
+}));
+
+const matched = computed(() => {
+  if (!props.recipe) return null;
+  // Only against the card these rows were read for.
+  if (props.recipe.workflowKey !== loadedKey.value) return null;
+  return (
+    savedRecipes.value.find((row) => keepsTheSameLook(row, thisLook.value)) ||
+    null
+  );
+});
+
+/** The LoRAs a new recipe would keep, resolved against the model shelf. */
+const saveLoras = ref([]);
+
+const savedReasonId = useId();
+
+/**
+ * What this pane cannot hand the Save dialog, said rather than dropped.
+ *
+ * A recipe's settings are *overrides*, addressed `slot_label/input_name`, and
+ * `extract_recipe_extras` gives this tab `{field: value}` with no slot - so
+ * the numbers on screen cannot be turned into a recipe's overrides here. The
+ * Run popup can, because it reads the card's parameter list.
+ */
+const settingsAside = computed(() =>
+  Object.keys(props.recipe?.settings || {}).length
+    ? "The settings above are not kept: a recipe keeps the ones you change in the Run popup, which is where this workflow's parameters are named."
+    : "",
+);
+
+/** The gesture, refused here rather than by a `disabled` nobody can reach. */
+function onSave() {
+  if (matched.value) return;
+  void openSave();
+}
+
+/**
+ * Build the LoRA list the Save dialog is handed, and open it.
+ *
+ * **Every LoRA the picture names is kept, digest or no digest** - dropping the
+ * ones the shelf cannot identify made the recipe's key disagree with the
+ * picture's, so a saved row never matched the picture it came from. The
+ * resolution itself is `utils/recipeLoras.js`, shared with the Recipes tab,
+ * which does the same job from the cover picture of an unsaved look.
+ */
+async function openSave() {
+  let shelf = [];
+  try {
+    shelf = await listAdapters();
+  } catch (err) {
+    console.warn("Could not read the model shelf's LoRAs:", err);
+  }
+  saveLoras.value = resolveRecipeLoras(
+    props.recipe?.loraNames,
+    models.value,
+    shelf,
+  );
+  saveOpen.value = true;
+}
+
+async function loadSavedRecipes() {
+  const key = props.recipe?.workflowKey;
+  // **Not for a read-only reader.** Every route under `/recipes` is
+  // OWNER_ONLY by decision, so this would be a guaranteed 403 - and the
+  // filmstrip would fire it on every step.
+  if (isReadOnly.value) {
+    savedRecipes.value = [];
+    loadedKey.value = "";
+    return;
+  }
+  // No card on this picture: nothing to read, and `matched` already refuses
+  // because the key it gates on is not this one.
+  if (!key) return;
+  // Already read for this card. The whole stack's recipes do not change
+  // because the reader stepped to the next picture on the same workflow, and
+  // this read is not cheap: it resolves the stack and groups every kept
+  // picture of every variant in it to work out the credit.
+  if (key === loadedKey.value) return;
+  loadedKey.value = key;
+  try {
+    const rows = await listSavedRecipes(key);
+    // The key may have moved on while the read was out - the filmstrip steps
+    // through pictures faster than a round trip.
+    if (key === props.recipe?.workflowKey) savedRecipes.value = rows;
+  } catch (err) {
+    // A banner that cannot be drawn is not a failure of the tab: the reading
+    // above it is what the reader came for, so this is logged and dropped.
+    console.warn("Could not read your saved recipes for this picture:", err);
+    savedRecipes.value = [];
+    loadedKey.value = "";
+  }
+}
+
+watch(() => props.recipe?.workflowKey, loadSavedRecipes, { immediate: true });
+
+function onSaved(row) {
+  // Straight into the list, so the footer says Saved without another read.
+  if (row) savedRecipes.value = [...savedRecipes.value, row];
+}
 const inputs = computed(() => props.recipe?.inputs || []);
 
 /** A LoRA and friends wear the layers glyph; a checkpoint wears the cube. */
@@ -705,17 +901,10 @@ async function copyWorkflow() {
 }
 
 function downloadWorkflow() {
-  const blob = new Blob([workflowJson.value], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "comfyui_workflow.json";
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => {
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, 100);
+  downloadBlob(
+    new Blob([workflowJson.value], { type: "application/json" }),
+    "comfyui_workflow.json",
+  );
 }
 
 async function copyPrompt() {
@@ -778,6 +967,23 @@ async function copyPrompt() {
 
 .recipe-sec-act:hover {
   background: rgba(var(--v-theme-on-dark-surface), 0.16);
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+/* The design's banner: quiet, above the reading, and never an alert - it says
+   something good happened once, not that something is wrong. */
+.recipe-match {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+
+.recipe-match-name {
   color: rgb(var(--v-theme-on-dark-surface));
 }
 
