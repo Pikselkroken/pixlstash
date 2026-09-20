@@ -17,7 +17,13 @@
           </template>
         </li>
       </ul>
-      <div class="rrn-acts">
+      <!-- No catch-all "learn more" link. A refusal with no fix has its whole
+           answer in the sentence above - which node is missing, which file,
+           what the graph does that PixlStash will not run - and a link to a
+           general page cannot say more about THIS run than that sentence
+           already does. An action that goes somewhere unhelpful is worse than
+           no action, because it has to be tried before it can be dismissed. -->
+      <div v-if="hasAction" class="rrn-acts">
         <AppButton
           v-if="read.fix === FIX_SETTINGS"
           size="sm"
@@ -44,15 +50,6 @@
         >
           Run without the LoRA
         </AppButton>
-        <a
-          v-else
-          class="rrn-help"
-          :href="HELP_URL"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          What this means
-        </a>
       </div>
     </div>
   </div>
@@ -87,13 +84,12 @@ const props = defineProps({
 
 const emit = defineEmits(["settings", "retry", "drop-lora"]);
 
-// A page that exists. There is no per-reason help article to link to, so this
-// is the project's own ComfyUI page rather than an invented deep link: seven
-// refusal codes fall through to it, and a 404 would be worse than the sentence
-// alone.
-const HELP_URL = "https://pixlstash.dev/comfyui.html";
-
 const read = computed(() => readReason(props.reason));
+
+/** Whether anything here can actually be pressed; see the template. */
+const hasAction = computed(
+  () => read.value.retry || read.value.fix === FIX_SETTINGS || read.value.fix === FIX_DROP_LORA,
+);
 </script>
 
 <style scoped>
@@ -142,8 +138,4 @@ const read = computed(() => readReason(props.reason));
   gap: var(--space-3);
 }
 
-.rrn-help {
-  font-size: var(--text-xs);
-  color: rgb(var(--v-theme-on-surface));
-}
 </style>

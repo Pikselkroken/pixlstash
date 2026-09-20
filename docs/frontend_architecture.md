@@ -1416,8 +1416,8 @@ Load-bearing behaviours:
 - **Every edit is an override, never a write-back.** Edited fields go out as `values: [{slot_label, input_name, value}]` — the address the card's defaults use, never a node id, which every re-serialisation renumbers. Nothing here writes `PUT /workflows/{key}/defaults`: the stored document is content-addressed and rewriting it would change the identity of the card being run.
 - **An edited field is marked IN ITS LABEL ROW** (`RunResetChip.vue`): a ↺ chip carrying the value the field started at, which puts it back. Beside the control it would change a cell's height and knock the four-column grid out of alignment the moment one field was edited. The value it carries is the picture's own setting where there is one, else the card's default — what the popup opened showing, not the card's value and not the current one.
 - **Switching to another stack member keeps the edits and NAMES the ones it cannot keep.** The new card's `defaults` are re-read, edits whose address survives are kept, and the rest are listed ("Denoise went back to this workflow's own value"). Dropping them silently is what makes a run quietly use 8 steps when the form said 16.
-- **Pinned fields first, then `All N parameters`.** Workflow, Prompt, LoRAs, Size, Steps, CFG, Count, Seed, Checkpoint, from the card's `defaults` matched by widget name; everything else is behind the disclosure. The negative prompt only opens when the original had one — an empty box under every run reads as a field somebody forgot to fill in.
-- **A refusal is a code, read in one place.** `utils/runReasons.js` turns a pre-flight reason into a sentence and a fix, shared by both popups so the same refusal is never worded two ways; `RunReasonNotice.vue` draws it on the notice surface's error shape (a `--rail-w` rail in `--surface-error`, the glyph in the same hue, the sentence left as ordinary text). Fixes offered: **Settings › Compute** (`comfyui_not_configured`), **Retry** (`comfyui_unreachable`, re-runs the pre-flight), **Run without the LoRA** (`no_lora_loader`), and a help link for everything else.
+- **Pinned fields first, then `All N parameters`.** Workflow, Prompt, LoRAs, Size, Steps, CFG, Count, Seed, Checkpoint, from the card's `defaults` matched by widget name; everything else is behind the disclosure. The four columns are spanned by what a field HOLDS, not evenly: Size is two numbers of up to five digits and takes two columns, Steps and CFG one each; Count keeps a narrow cell beside Seed's three; Checkpoint takes the row, because a filename is the longest value on the form. The negative prompt only opens when the original had one — an empty box under every run reads as a field somebody forgot to fill in.
+- **A refusal is a code, read in one place.** `utils/runReasons.js` turns a pre-flight reason into a sentence and a fix, shared by both popups so the same refusal is never worded two ways; `RunReasonNotice.vue` draws it on the notice surface's error shape (a `--rail-w` rail in `--surface-error`, the glyph in the same hue, the sentence left as ordinary text). Fixes offered: **Settings › Compute** (`comfyui_not_configured`), **Retry** (both ComfyUI codes, re-running the pre-flight — `comfyui_not_configured` needs one of its own because Settings opens *over* this popup and nothing tells it when the address has been set), and **Run without the LoRA** (`no_lora_loader`, which clears them and re-asks, or the refusal outlives its own fix). **Everything else gets no action at all**: a refusal with no fix has its whole answer in the sentence — which node, which file, what the graph does that PixlStash will not run — and a general "learn more" link cannot say more about THIS run than that, so it is one more thing to try before it can be dismissed.
   - **Two fixes the design names are deliberately not offered**, because this route cannot carry them. *Insert a LoRA loader* is `POST /comfyui/run_recipe`'s `insert_lora_loader` (#1376) and `POST /workflows/run` has no field for it; the reason only ever fires because the run is putting a LoRA in, so taking it out again is the fix that actually works here. *Pick a new input* would mean `PUT /workflows/{key}/inputs`, which replaces a card's **whole** input set, and nothing reads that set back — a fix built on it would delete every row it could not see. `fixed_input_deleted` therefore names the slot and sends the reader to the workflow's own tab.
 - **A missing model blocks the WHOLE batch**, mirroring `workflow_run_service.blocks_batch`: installing a file is a trip away from the keyboard, so queueing the rest would leave the owner repeating the gesture to catch what was skipped. A group that cannot run stays on screen, faded, with its reason and its count — filtering it out would make the total add up and say nothing about why. `MakeMoreDialog.test.js` pins that.
 - **An empty prompt box is `null`, not `""`.** `_apply_prompts` short-circuits on `None` and writes on `""`, so the two are opposite instructions: "leave the graph's own text alone" and "blank every positive-prompt node". Only a box that *had* text in it and was cleared sends `""`. A card and a multi-picture selection read no recipe, so their box is empty because nothing filled it, and sending that would generate from no prompt at all.
@@ -1621,10 +1621,13 @@ watcher the model shelf uses. See §9.1b for the destination itself.
   asserted as such in `StackPanel.test.js`. It carries *Make it the cover*,
   *Move earlier*, *Move later*, *Unstack* and *Hide*; the ordering three go
   disabled at the ends and whenever the OPEN STACK'S COVER carries no
-  `stack_id`. The design's *Run…* and *Rename* are not drawn at all: one wants
-  the run panel, which nothing on this route opens yet, and the other somewhere
-  to type, and an item that has never done anything is not a control a reader
-  should discount.
+  `stack_id`. The design's *Run…* and *Rename* are not drawn at all.
+  *Rename* wants somewhere to type. *Run…* no longer wants for a surface — F5
+  made running a popup and the Workflow tab on this route opens it for a card —
+  but it does want the member menu's own decision, since a member is the
+  stack's OTHER card and the popup would open on that key rather than the
+  cover's; that belongs to whoever adds the item. An item that has never done
+  anything is not a control a reader should discount.
 - **Opening the menu closes it first.** A right button press fires `mousedown`
   and `contextmenu` but no `click`, and Vuetify's click-outside closes on
   `click`; its location strategy reads the anchor on open and never on change.
@@ -1788,7 +1791,9 @@ tab** — Run… is an action, so it belongs in the footer and opens a popup (F5
 - **Run… with several selected stays on screen and refuses**: `aria-disabled`
   plus `aria-describedby` pointing at "Run one workflow at a time". A control
   that disappears teaches nobody why. The multi-selection also gets *Stack
-  together* and *Hide*. Until F5 lands, Run… opens the shipped run panel.
+  together* and *Hide*. With one selected, Run… opens the Run popup on that
+  card (F5, #1407): no picture behind it, so it shows the card's cover, an
+  empty prompt box and a set picker for where the output is filed.
 
 #### Shared shell pieces (issue #1301)
 Four pieces every screen builds on, to the design system's shell contract (`ui_kits/app/unified-shell.html`, rules 2, 3, 8 and 9). Reuse them; do not re-roll them.

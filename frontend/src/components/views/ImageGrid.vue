@@ -2118,7 +2118,8 @@ function runWorkflowOnPicture(pictureId) {
 }
 
 // What a run with no selection files its output into: the set, project and
-// character in view. Fed to the run panel, which lives in the rail (#1307).
+// character in view. Fed to the Run popup, which App.vue mounts (#1407): the
+// view is the grid's to know, and the popup is not the grid's to own.
 const runViewContext = computed(() => {
   const rawChar = selectionStore.selectedCharacter;
   const specialIds = [

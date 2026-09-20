@@ -121,6 +121,16 @@ describe("a selection that spans several recipes", () => {
     expect(blocked.text()).toContain("1 picture");
   });
 
+  it("offers no action at all when there is nothing to press", async () => {
+    // A missing model has no fix this popup can carry out, and a general
+    // "learn more" link cannot say more about THIS run than the sentence
+    // already does - it just has to be tried before it can be dismissed.
+    const wrapper = await mountMakeMore();
+    const notice = wrapper.findComponent({ name: "RunReasonNotice" });
+    expect(notice.find(".rrn-acts").exists()).toBe(false);
+    expect(notice.find("a").exists()).toBe(false);
+  });
+
   it("names the missing file and the folder it belongs in", async () => {
     const wrapper = await mountMakeMore();
     const notice = wrapper.findComponent({ name: "RunReasonNotice" });

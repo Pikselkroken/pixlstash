@@ -680,19 +680,15 @@ function hideSelected() {
 }
 
 /**
- * Run the selected workflow.
- *
- * Until F5 lands the Run popup, this opens the shipped run panel, which is
- * the app's only way to start a run today. Refused outright while several are
- * selected: the button stays on screen and `aria-disabled` says why, rather
- * than disappearing and leaving nothing to explain.
- */
-/**
  * Run… opens the Run popup on THIS card (v1.12 F5).
  *
  * No picture behind it, so the popup shows the card's cover, an empty prompt
  * and a set picker for where the output is filed - which is the one thing a
  * card-sourced run has to be told and a picture-sourced one already knows.
+ *
+ * Refused outright while several are selected: the button stays on screen and
+ * `aria-disabled` says why, rather than disappearing and leaving nothing to
+ * explain.
  */
 function run() {
   if (multiple.value || !card.value) return;

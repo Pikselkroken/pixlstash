@@ -138,7 +138,7 @@
           </AppButton>
         </div>
 
-        <div v-if="sizeFields.length" class="rund-f">
+        <div v-if="sizeFields.length" class="rund-f rund-f--2">
           <span class="rund-l">
             Size
             <RunResetChip
@@ -195,7 +195,7 @@
           />
         </div>
 
-        <div class="rund-f rund-f--2">
+        <div class="rund-f rund-f--3">
           <span class="rund-l">Seed</span>
           <AppSelect
             v-model="seedMode"
@@ -218,7 +218,7 @@
           />
         </div>
 
-        <div v-if="checkpointField" class="rund-f rund-f--2">
+        <div v-if="checkpointField" class="rund-f rund-f--4">
           <span class="rund-l">
             Checkpoint
             <RunResetChip
@@ -1285,6 +1285,10 @@ watch(
   grid-column: span 2;
 }
 
+.rund-f--3 {
+  grid-column: span 3;
+}
+
 .rund-f--4 {
   grid-column: span 4;
 }
@@ -1327,8 +1331,12 @@ watch(
   align-items: center;
 }
 
+/* Width and height split the cell evenly. At `--rund-f--2` that is one grid
+   column each, which is what a five-digit number needs and what the single
+   cell never gave it. */
 .rund-size {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-3);
 }
 
 /* One live region around the refusals: see RunReasonNotice. */
