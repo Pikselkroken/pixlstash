@@ -169,10 +169,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_49_local_7_loopback():
+def test_host_capability_tier_split_is_50_local_7_loopback():
     """The loopback tier is the 5 file-manager spawns, the process restart and
-    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 56
-    routes carry a locality tier = 49 local + 7 loopback.
+    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 57
+    routes carry a locality tier = 50 local + 7 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -431,6 +431,19 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     class). Both take a registry uuid, never a path, and refuse any library not
     on its first import. Neither spawns anything.
 
+    57 = 50 + 7 with ``POST /model-files/merge`` (#1439), the per-copy delete:
+    it keeps the copy the body names and removes every other ``present`` copy of
+    that model. That is ``POST /model-files/delete``'s unlink narrowed to the
+    copies the caller did *not* name, so it is on that route's tier for that
+    route's reason - the destruction itself - and fewer bytes is not a weaker
+    authority. It takes no host path (a ``model.id`` and a ``(folder_id,
+    relpath)`` the scanner wrote), contains every path with the same
+    ``_contained_path``, and deletes no hub row at all: the removed copies keep
+    their ``model_file`` rows at ``state = 'removed'``. It also reads the owner's
+    configured ComfyUI for its advertised model list, which is the outbound read
+    the run pre-flight already makes on the same credential. Nothing spawns, so
+    the loopback count is unchanged.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -444,7 +457,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 7, sorted(loopback)
-    assert len(local) == 49, sorted(local)
+    assert len(local) == 50, sorted(local)
 
 
 # ===========================================================================

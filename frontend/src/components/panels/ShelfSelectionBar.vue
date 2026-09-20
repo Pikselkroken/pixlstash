@@ -37,7 +37,9 @@
           <v-icon size="16" class="selbar-chevron">mdi-menu-down</v-icon>
         </button>
       </template>
-      <div class="ctx-menu shelf-menu" role="menu"
+      <div
+        class="ctx-menu shelf-menu"
+        role="menu"
         tabindex="-1"
         @keydown="onMenuKeydown"
       >
@@ -295,6 +297,7 @@ const emit = defineEmits([
   "set-icon",
   "clear-icons",
   "move",
+  "merge-copies",
   "open-location",
   "forget",
   "delete",
@@ -556,6 +559,35 @@ const assignTitle = computed(() => {
 const movable = computed(
   () => movableCopies(store.selectedRows, foldersById.value).items,
 );
+
+/**
+ * Whether the selection is one model with the same bytes on the disk twice.
+ *
+ * `copies` is the row's own count of `present` locations, carried by the store
+ * because the folder axis narrows a draw to one of them. One row only: the keeper
+ * is a per-model choice, and a batch would be a table of radio groups rather than
+ * a dialog.
+ */
+const mergeable = computed(() => {
+  const row = store.selectedRows[0];
+  // A collapsed run satisfies `single` - it is one row - and carries the COVER's
+  // `copies`, so without the `members` check the verb would be offered on a
+  // whole run and act on one file of it while the pill counted several. `move`
+  // has the same shape and may be settled convention there; this one deletes
+  // bytes, so it asks for a model.
+  return single.value && !row?.members && (row?.copies ?? 0) > 1;
+});
+
+const mergeTitle = computed(() => {
+  const row = store.selectedRows[0];
+  if (!single.value) return "Choose one model to merge the copies of";
+  if (row?.members) return "Open the run and choose one of its models";
+  const copies = row?.copies ?? 0;
+  if (copies < 2) {
+    return "There is only one copy of this model on the disk";
+  }
+  return `Keep one of the ${copies} copies on the disk and remove the rest`;
+});
 
 const moveTitle = computed(() => {
   if (moves.busy) return "A move is already running. One at a time, one disk.";
@@ -861,6 +893,8 @@ const verbHandlers = computed(() => ({
       : "Take out of this run",
   movable: movable.value.length > 0 && !moves.busy,
   moveTitle: moveTitle.value,
+  mergeable: mergeable.value,
+  mergeTitle: mergeTitle.value,
   openable: openable.value,
   openTitle: openTitle.value,
   forgettable: forgettable.value.length > 0,
@@ -998,6 +1032,16 @@ const VerbMenu = (props) => {
       disabled: !props.movable,
       title: props.moveTitle,
     }),
+    // Listed always and disabled with its reason, like the two run verbs above:
+    // a reader whose shelf has no duplicates on screen is the one who most needs
+    // to learn that the verb exists and what it acts on. NOT the danger
+    // treatment - it removes a redundant copy and keeps the model, which is the
+    // opposite of what the red below is for.
+    item("mdi-call-merge", "Keep one copy…", {
+      on: () => props.onVerb("merge-copies"),
+      disabled: !props.mergeable,
+      title: props.mergeTitle,
+    }),
     sep(),
     // The two verbs that answer "where is this file, actually" - the first
     // asks the server's own desktop, the second answers on this machine.
@@ -1053,6 +1097,7 @@ defineExpose({
   assignable,
   membership,
   movable,
+  mergeable,
   openable,
   selectedBytes,
   stackable,

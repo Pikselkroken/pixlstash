@@ -718,6 +718,15 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 unlinks the owner's model files (OS trash by default, permanent on request) out of registered host folders - the unlink half of POST /model-moves standing alone, and the shelf's only destructive verb. Takes no host path: the ids address rows the scanner wrote, every path is contained against its registered folder - lexically for the file so a symlinked model loses its link and not the bytes it points at, and by realpath for the directory holding it so no symlinked component can redirect the unlink (`_contained_path`) - and only `user` and `managed` folders are eligible, so PixlStash's own engine roots, the InsightFace packs and the shared HuggingFace cache are refused whole; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    # Keep one copy of a duplicated model and remove the rest (#1439). The same
+    # unlink as the delete above, narrowed to the copies the caller did NOT name,
+    # so it sits on the same tier for the same reason. It destroys fewer bytes
+    # and no rows at all - the removed copies keep their `model_file` row at
+    # `state = 'removed'` - but "fewer bytes" is not a weaker authority.
+    ("POST", "/api/v1/model-files/merge"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 unlinks the owner's redundant model copies (OS trash by default, permanent on request) out of registered host folders - POST /model-files/delete's unlink narrowed to the copies of a model other than the one the body names as the keeper, so it is that route's authority class exactly. Takes no host path: the body names a model.id and a (folder_id, relpath) the scanner wrote, every path is contained against its registered folder by the same `_contained_path`, and only the copies being REMOVED need a folder whose contents are the owner's. It also reads the owner's configured ComfyUI for its advertised model list, which is the same outbound read the run pre-flight already makes on the same credential; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     # ── filesystem.py (§16.3 host-capability; Step-3 → LOCAL_OWNER_ONLY) ─────
     ("GET", "/api/v1/filesystem/browse"): RoutePolicy(
         _LOCAL,

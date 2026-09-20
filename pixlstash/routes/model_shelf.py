@@ -176,13 +176,18 @@ class ModelLocation(BaseModel):
     relpath: str = Field(description="Path of this copy relative to the folder.")
     state: str = Field(
         description=(
-            "``present``, ``missing``, ``unreachable`` or ``not_downloaded``. "
-            "``missing`` is a fact (the folder was readable and the file was "
-            "not in it); ``unreachable`` is the absence of one (we could not "
-            "look), and only ``missing`` is something a forget/cleanup action "
-            "may act on. ``not_downloaded`` belongs to the folders PixlStash "
-            "declares rather than scans: one of its own engines that nothing "
-            "has needed yet, which is normal and not a fault."
+            "``present``, ``missing``, ``unreachable``, ``not_downloaded`` or "
+            "``removed``. ``missing`` is a fact (the folder was readable and "
+            "the file was not in it); ``unreachable`` is the absence of one (we "
+            "could not look), and only ``missing`` is something a "
+            "forget/cleanup action may act on. ``not_downloaded`` belongs to "
+            "the folders PixlStash declares rather than scans: one of its own "
+            "engines that nothing has needed yet, which is normal and not a "
+            "fault. ``removed`` is a copy the owner deleted to keep one of "
+            "several (``POST /model-files/merge``): the row outlives the file "
+            "on purpose, so the record of which files were this model - and "
+            "therefore what a recipe naming the removed one resolves to - "
+            "survives the delete. No scan re-labels it."
         )
     )
     file_mtime: Optional[int] = Field(

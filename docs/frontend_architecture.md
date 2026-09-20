@@ -3949,6 +3949,62 @@ and at the pointer with them.
   (`trash_name`, the SERVER's platform) rather than from the browser: where the
   bytes went is the difference between recoverable and not. Only the pre-action
   label falls back to the browser's own guess, which is cosmetic.
+- **`Keep one copy…` is the per-copy delete (#1439)**, and the one destructive
+  verb here that is NOT in the danger treatment: it removes a redundant copy and
+  keeps the model, which is the opposite of what the red beside it is for. It is
+  gated on `mergeable` — one row, **not a collapsed run**, whose own `copies`
+  count (the store's, off the model's whole `locations`, because the folder axis
+  narrows a draw to one of them) is above one. A folded stack satisfies `single`
+  and carries the *cover's* count, so without the `members` check the verb would
+  be offered on a whole run and act on one file of it while the pill said six. It
+  is drawn wherever `VerbMenu` is — the row context menu and the `⋯` overflow —
+  because the gate is `mergeable` rather than `single`. Listed always and disabled with
+  its reason, like the two run verbs: a reader whose shelf shows no duplicates is
+  the one who most needs to learn the verb exists.
+  A removed copy is drawn as itself, not as a fault: `locationState` reports
+  `removed` when every copy of a draw is one — which is exactly what the folder
+  axis hands in, since that draw stands for the removed copy alone — and the
+  view's three vocabularies (`LOC_ICON`, `LOC_NOTE`, `LOC_TITLE`) carry a merge
+  glyph and "removed as a duplicate" for it. It is deliberately NOT in
+  `BROKEN_STATES`: the row is there on purpose, and drawing the red rail and "the
+  file is not where it was" over it would report a fault about the tidy-up the
+  reader just asked for. Ranked after `unreachable`, so a removed copy beside a
+  genuinely missing one still states the fault rather than hiding it.
+  `MergeCopiesDialog.vue` is where the choice is made, and three things about it
+  are the issue's rules rather than taste. **Nothing is pre-selected**, as
+  everywhere else on this shelf, because the wrong default here is a 20 GB
+  redownload. **It runs the route's own `dry_run` on every change of the keeper**,
+  so the refusal and the ComfyUI warning are in front of the reader while they
+  decide instead of in the receipt once the bytes have gone — which also means
+  the gates are the server's rather than a second implementation of them here.
+  The confirm waits for that answer, is disabled by a refusal in it (a live
+  button under "that copy is gone" invites the reader to press it and read the
+  same sentence back as a failure), and **is disabled when the dry run does not
+  answer at all** — failing open there would leave the press live with the
+  warning never asked, which is the one thing planning first exists to prevent.
+  Each answer is **matched to the keeper that asked for it**: the radio group is
+  arrow-keyed, so walking the copies dispatches a request each and overlap is the
+  ordinary keyboard path, and the last response to land used to win.
+  The wording is deliberately short. Every sentence a reader has to finish before
+  they know which file gets deleted is a sentence they will skip, so the
+  consequence is also **on each row** ("kept" / "goes to Trash") rather than only
+  in the paragraph above them, the three status lines are **one persistent live
+  region** (a region inserted with its text already in it is announced
+  unreliably), and the confirm is `variant="danger"` like every other confirm in
+  the app that destroys a file — the argument that the model survives and the
+  copy is recoverable is true and still lost, because it left this footer
+  pixel-identical to the Move dialog's, which destroys nothing. Focus is handed
+  back on close, since the context menu this opens from is gone by then and
+  Vuetify only restores an `activatorEl`; `:persistent="working"` stops it being
+  dismissed mid-flight. And the **ComfyUI warning has two
+  sentences**, because `keeper_advertised` is two situations: that install lists
+  the copy being kept, so a run through PixlStash is put on it and only a graph
+  queued inside ComfyUI breaks; or it does not, and nothing can be substituted
+  there at all. One model at a time, deliberately — the keeper is a per-model
+  choice and a batch would be a table of radio groups — while the route already
+  takes a list, so the batch is a later screen and not a later route. No
+  permanent option: the trash is the undo, and a merge is exactly the gesture
+  that wants one.
 - **`Open in file manager` is built (#933), and it is the one verb here that
   acts on the machine rather than on the library.** `POST
   /models/{model_id}/open-location` shows the row's folder in the file manager

@@ -28,6 +28,7 @@ from pixlstash.services import model_folder_scanner as scanner_module
 from pixlstash.services.model_folder_scanner import (
     STATE_MISSING,
     STATE_PRESENT,
+    STATE_REMOVED,
     STATE_UNREACHABLE,
     ModelFolderScanner,
     sha256_file,
@@ -453,6 +454,162 @@ class TestStates:
         assert result.missing == 1
         assert located(hub)["sdxl.safetensors"]["state"] == STATE_MISSING
         assert len(checkpoints(hub)) == 1
+
+    def test_a_deliberately_removed_copy_is_not_re_labelled_missing(
+        self, hub, scanner, tmp_path
+    ):
+        """The fact that survives the file (#1439).
+
+        A copy the owner removed to keep one of several is recorded ``removed``,
+        and the scan will keep finding it absent for the rest of the folder's
+        life. Every sweep therefore skips it: without that, the first scan after
+        the merge turns "I removed this on purpose" into the scanner's own
+        "I looked and it was gone", and the distinction is destroyed by the one
+        thing that runs unattended.
+        """
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        path = folder / "a.safetensors"
+        write_adapter(path)
+        write_adapter(folder / "bystander.safetensors", pad=1)
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        os.remove(path)
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model_file SET state = ? WHERE relpath = 'a.safetensors'",
+                (STATE_REMOVED,),
+            )
+
+        result = scanner.scan_folder(folder_id, str(folder), "user")
+
+        assert located(hub)["a.safetensors"]["state"] == STATE_REMOVED
+        assert result.missing == 0, "the removed copy was swept as missing"
+        assert located(hub)["bystander.safetensors"]["state"] == STATE_PRESENT
+
+    def test_an_unreadable_folder_leaves_a_removed_copy_alone(
+        self, hub, scanner, tmp_path
+    ):
+        """Unplugging the drive does not un-decide the removal.
+
+        ``unreachable`` is "we could not look", and we do not need to look: that
+        copy is gone because the owner said so, and a row that flipped would come
+        back as ``missing`` on the next readable scan.
+        """
+        folder = tmp_path / "usb"
+        folder.mkdir()
+        write_adapter(folder / "a.safetensors")
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+        with hub.transaction() as conn:
+            conn.execute("UPDATE model_file SET state = ?", (STATE_REMOVED,))
+
+        os.remove(folder / "a.safetensors")
+        folder.rmdir()
+        result = scanner.scan_folder(folder_id, str(folder), "user")
+
+        assert result.state == STATE_UNREACHABLE
+        assert located(hub)["a.safetensors"]["state"] == STATE_REMOVED
+
+    @SKIP_AS_ROOT
+    def test_an_unreadable_subdirectory_leaves_a_removed_copy_alone(
+        self, hub, scanner, tmp_path
+    ):
+        """The subtree sweep is a second query and needs its own assertion.
+
+        A NAS mounted inside a registered folder flips only the rows under it, by
+        a `relpath LIKE` predicate rather than by folder - so the folder-wide test
+        above does not exercise this branch at all. A `removed` row flipped to
+        `unreachable` here is worse than cosmetic: `unreachable` is in
+        `_KEEPS_A_MODEL_ALIVE`, so it would wrongly block Forget, and the next
+        readable scan's missing sweep - which guards `removed`, not
+        `unreachable` - would write `missing` over it.
+        """
+        folder = tmp_path / "models"
+        (folder / "nas").mkdir(parents=True)
+        write_adapter(folder / "local.safetensors")
+        write_adapter(folder / "nas" / "remote.safetensors", pad=1)
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+        under = os.path.join("nas", "remote.safetensors")
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model_file SET state = ? WHERE relpath = ?",
+                (STATE_REMOVED, under),
+            )
+
+        os.chmod(folder / "nas", 0o000)
+        try:
+            result = scanner.scan_folder(folder_id, str(folder), "user")
+        finally:
+            os.chmod(folder / "nas", 0o755)
+
+        rows = located(hub)
+        assert rows[under]["state"] == STATE_REMOVED
+        assert rows["local.safetensors"]["state"] == STATE_PRESENT
+        assert result.unreachable == 0, "the removed copy was swept as unreachable"
+
+    def test_an_unlistable_root_leaves_a_removed_copy_alone(
+        self, hub, scanner, tmp_path
+    ):
+        """The subtree sweep's other branch, driven directly.
+
+        `_mark_unreachable_subtrees` has two UPDATEs: one keyed on
+        `relpath LIKE prefix` (above) and one with no path predicate at all, for
+        `blocked = {"."}` - the root became unlistable *after* `scan_folder`'s
+        readability check passed, which is a race no test can force and
+        `on_error` genuinely produces (`os.path.relpath(root, root)` is `"."`).
+        Called directly rather than mocked into a scan, because a test that
+        cannot reach the branch is worse than none: a `chmod` before the scan is
+        answered by `_mark_folder_unreachable` instead, and the assertion then
+        passes with this branch's guard deleted.
+        """
+        folder = tmp_path / "models"
+        folder.mkdir()
+        write_adapter(folder / "a.safetensors")
+        write_adapter(folder / "b.safetensors", pad=1)
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model_file SET state = ? WHERE relpath = 'a.safetensors'",
+                (STATE_REMOVED,),
+            )
+
+        touched = scanner._mark_unreachable_subtrees(
+            folder_id, {"."}, scanner_module._utcnow()
+        )
+
+        rows = located(hub)
+        assert rows["a.safetensors"]["state"] == STATE_REMOVED
+        assert rows["b.safetensors"]["state"] == STATE_UNREACHABLE
+        assert touched == 1, "the removed copy was counted as newly unreachable"
+
+    def test_a_removed_copy_that_comes_back_is_present_again(
+        self, hub, scanner, tmp_path
+    ):
+        """Skipping the sweeps must not make the row unreachable by the scan.
+
+        Putting the file back is the owner un-doing the merge with a file
+        manager, and the shelf has to notice: the fast path reads ``present`` rows
+        only, so this one is re-read and re-registered rather than skipped.
+        """
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        path = folder / "a.safetensors"
+        write_adapter(path)
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+        os.remove(path)
+        with hub.transaction() as conn:
+            conn.execute("UPDATE model_file SET state = ?", (STATE_REMOVED,))
+
+        write_adapter(path)
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        assert located(hub)["a.safetensors"]["state"] == STATE_PRESENT
+        assert len(models(hub)) == 1
 
     def test_a_returning_file_goes_back_to_present(self, hub, scanner, tmp_path):
         folder = tmp_path / "loras"

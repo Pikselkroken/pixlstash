@@ -12,10 +12,13 @@ import pytest
 from pixlstash.services.comfyui_recipe_service import (
     MAX_SEED_64,
     MODEL_FILENAME_FIELDS,
+    advertised_model_names,
     apply_adapter,
+    apply_model_swap,
     apply_seeds,
     collect_node_classes,
     detect_lora_targets,
+    detect_model_targets,
     detect_seed_targets,
     format_prompt_rejection,
     insert_adapter,
@@ -1168,3 +1171,271 @@ class TestLoraInsertion:
             "3",
             "10",
         ]
+
+
+class TestAdvertisedModelNames:
+    """What a ComfyUI says it can load, which is the only honest answer to it.
+
+    PixlStash holds a URL and no path into that install's ``models/`` tree, so
+    the combo lists are the source for both the merge's warning and the
+    submit-time swap's verification.
+    """
+
+    def test_every_loader_field_is_collected_with_its_basename(self):
+        names = advertised_model_names(
+            {
+                "CheckpointLoaderSimple": {
+                    "input": {"required": {"ckpt_name": [["SDXL/base.safetensors"]]}}
+                },
+                "LoraLoader": {
+                    "input": {"required": {"lora_name": [["detail.safetensors"]]}}
+                },
+            }
+        )
+        # The entry as listed AND its basename: a combo entry is relative to one
+        # of ComfyUI's model folders, and nothing here knows which prefix it puts
+        # in front of a registered folder's relpath.
+        assert names == {
+            "SDXL/base.safetensors",
+            "base.safetensors",
+            "detail.safetensors",
+        }
+
+    def test_a_windows_listing_is_the_same_file_as_a_posix_one(self):
+        names = advertised_model_names(
+            {
+                "LoraLoader": {
+                    "input": {"required": {"lora_name": [["sdxl\\a.safetensors"]]}}
+                }
+            }
+        )
+        assert names == {"sdxl/a.safetensors", "a.safetensors"}
+
+    def test_a_field_with_no_enumerable_options_advertises_nothing(self):
+        # A `remote` combo's embedded list proves nothing, and a plain type name
+        # is not a filename. Reporting either as "advertised" would warn the owner
+        # about a file this ComfyUI may not read at all.
+        assert (
+            advertised_model_names(
+                {
+                    "LoraLoader": {
+                        "input": {
+                            "required": {
+                                "lora_name": ["COMBO", {"remote": {"route": "/x"}}]
+                            }
+                        }
+                    }
+                }
+            )
+            == set()
+        )
+        assert advertised_model_names({}) == set()
+
+
+class TestModelSwap:
+    """Resolve a model reference at submit, verified against ComfyUI (#1439).
+
+    The graph names a copy that was removed to keep one of several; another copy
+    of the *same bytes* is still on the shelf under another name. The swap points
+    the loader at it, and the thing that decides whether it may is ComfyUI's own
+    combo list.
+    """
+
+    GRAPH = {
+        "4": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "gone.safetensors"},
+        }
+    }
+    OBJECT_INFO = {
+        "CheckpointLoaderSimple": {
+            "input": {"required": {"ckpt_name": [["kept/kept.safetensors"], {}]}}
+        }
+    }
+    ALIASES = {"gone.safetensors": ["kept/kept.safetensors", "kept.safetensors"]}
+
+    def test_it_aims_at_exactly_what_the_preflight_would_report(self):
+        targets = detect_model_targets(self.GRAPH, self.OBJECT_INFO)
+        assert (
+            targets == preflight_prompt(self.GRAPH, self.OBJECT_INFO)["missing_models"]
+        )
+        assert [t["value"] for t in targets] == ["gone.safetensors"]
+
+    def test_a_verified_candidate_is_written_and_reported(self):
+        graph = json.loads(json.dumps(self.GRAPH))
+        swapped = apply_model_swap(
+            graph,
+            detect_model_targets(graph, self.OBJECT_INFO),
+            self.ALIASES,
+            self.OBJECT_INFO,
+        )
+        assert graph["4"]["inputs"]["ckpt_name"] == "kept/kept.safetensors"
+        # Reported, never silent: a run that quietly loaded another file makes
+        # its own lineage a lie.
+        assert swapped == [
+            {
+                "node_id": "4",
+                "class_type": "CheckpointLoaderSimple",
+                "field": "ckpt_name",
+                "was": "gone.safetensors",
+                "now": "kept/kept.safetensors",
+            }
+        ]
+        # And the graph now passes the pre-flight it was failing.
+        assert preflight_prompt(graph, self.OBJECT_INFO)["missing_models"] == []
+
+    def test_a_candidate_this_comfyui_does_not_advertise_is_not_written(self):
+        """**The rule the whole design turns on.** A swap PixlStash believes in
+        and ComfyUI does not list only moves the failure to the queue."""
+        graph = json.loads(json.dumps(self.GRAPH))
+        swapped = apply_model_swap(
+            graph,
+            detect_model_targets(graph, self.OBJECT_INFO),
+            {"gone.safetensors": ["somewhere-else.safetensors"]},
+            self.OBJECT_INFO,
+        )
+        assert swapped == []
+        assert graph["4"]["inputs"]["ckpt_name"] == "gone.safetensors", (
+            "an unverified name was written into the graph"
+        )
+
+    def test_a_mixed_case_filename_resolves(self):
+        """**The case that made the whole feature a no-op.**
+
+        `model_name_aliases` keys its map with `normalized_filename`, which
+        LOWERCASES; a lookup that merely unified separators found nothing for any
+        name with a capital in it, which is most real model filenames. The
+        candidates are the shelf's own spelling, because ComfyUI compares exactly.
+        """
+        graph = {
+            "4": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": "RealVisXL.safetensors"},
+            }
+        }
+        object_info = {
+            "CheckpointLoaderSimple": {
+                "input": {"required": {"ckpt_name": [["kept/Kept.safetensors"], {}]}}
+            }
+        }
+        swapped = apply_model_swap(
+            graph,
+            detect_model_targets(graph, object_info),
+            # As `model_name_aliases` builds it: a folded key, unfolded names.
+            {"realvisxl.safetensors": ["kept/Kept.safetensors", "Kept.safetensors"]},
+            object_info,
+        )
+        assert [s["now"] for s in swapped] == ["kept/Kept.safetensors"]
+        assert preflight_prompt(graph, object_info)["missing_models"] == []
+
+    def test_a_candidate_is_never_lowercased_on_the_way_in(self):
+        """A folded candidate is a filename ComfyUI would refuse.
+
+        `_match_option` reports a case-only difference as a miss, on purpose - it
+        is a real failure on a case-sensitive host - so writing the lowercased
+        form would be a substitution that fails at the queue instead of here.
+        """
+        graph = {
+            "4": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": "gone.safetensors"},
+            }
+        }
+        object_info = {
+            "CheckpointLoaderSimple": {
+                "input": {"required": {"ckpt_name": [["Kept.safetensors"], {}]}}
+            }
+        }
+        assert (
+            apply_model_swap(
+                graph,
+                detect_model_targets(graph, object_info),
+                {"gone.safetensors": ["kept.safetensors"]},
+                object_info,
+            )
+            == []
+        )
+        assert graph["4"]["inputs"]["ckpt_name"] == "gone.safetensors"
+
+    def test_it_writes_the_spelling_this_comfyui_advertises(self):
+        """The candidate is verified with separators normalised; the value written
+        has to be the option that matched.
+
+        ComfyUI compares exactly, so writing a Windows-spelled candidate onto an
+        install that lists the POSIX form would be a substitution that fails at
+        the queue - the one thing this function's contract says cannot happen.
+        """
+        graph = {
+            "4": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": "gone.safetensors"},
+            }
+        }
+        object_info = {
+            "CheckpointLoaderSimple": {
+                "input": {"required": {"ckpt_name": [["sub/kept.safetensors"], {}]}}
+            }
+        }
+        swapped = apply_model_swap(
+            graph,
+            detect_model_targets(graph, object_info),
+            # As a Windows host recorded the relpath.
+            {"gone.safetensors": ["sub\\kept.safetensors"]},
+            object_info,
+        )
+        assert [s["now"] for s in swapped] == ["sub/kept.safetensors"]
+        assert graph["4"]["inputs"]["ckpt_name"] == "sub/kept.safetensors"
+        # And the graph really does pass now, which is the property at stake.
+        assert preflight_prompt(graph, object_info)["missing_models"] == []
+
+    def test_a_model_with_no_other_name_is_left_alone(self):
+        graph = json.loads(json.dumps(self.GRAPH))
+        assert (
+            apply_model_swap(
+                graph,
+                detect_model_targets(graph, self.OBJECT_INFO),
+                {},
+                self.OBJECT_INFO,
+            )
+            == []
+        )
+        assert graph["4"]["inputs"]["ckpt_name"] == "gone.safetensors"
+
+    def test_the_same_file_under_a_path_this_comfyui_uses_is_a_real_swap(self):
+        """Not a no-op, and worth having: ComfyUI enumerates a model by its path
+        under its own folder, so an install that files this one in a
+        subdirectory advertises a name the recipe never said. The pre-flight
+        calls that missing today; the swap is the fix, and it is verified the
+        same way as any other."""
+        graph = json.loads(json.dumps(self.GRAPH))
+        object_info = {
+            "CheckpointLoaderSimple": {
+                "input": {"required": {"ckpt_name": [["sub/gone.safetensors"], {}]}}
+            }
+        }
+        swapped = apply_model_swap(
+            graph,
+            detect_model_targets(graph, object_info),
+            {"gone.safetensors": ["sub/gone.safetensors"]},
+            object_info,
+        )
+        assert [s["now"] for s in swapped] == ["sub/gone.safetensors"]
+        assert preflight_prompt(graph, object_info)["missing_models"] == []
+
+    def test_a_loaded_model_is_never_touched(self):
+        graph = {
+            "4": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": "kept/kept.safetensors"},
+            }
+        }
+        assert (
+            apply_model_swap(
+                graph,
+                detect_model_targets(graph, self.OBJECT_INFO),
+                {"kept.safetensors": ["something.safetensors"]},
+                self.OBJECT_INFO,
+            )
+            == []
+        )
+        assert graph["4"]["inputs"]["ckpt_name"] == "kept/kept.safetensors"

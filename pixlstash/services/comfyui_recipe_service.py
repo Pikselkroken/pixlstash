@@ -252,6 +252,24 @@ def _normalize_filename(value: str) -> str:
     return value.replace("\\", "/")
 
 
+def _matching_option(value: str, options: list[str]) -> str | None:
+    """The advertised option *value* names, in **ComfyUI's own spelling**.
+
+    :func:`_match_option` answers "is this loadable" and normalizes separators to
+    do it, which is right for a check and not enough for a patch: a caller about
+    to write the value into a graph has to write the string this install actually
+    lists, because ComfyUI compares exactly. Case is not folded, for the same
+    reason ``_match_option`` reports a case-only difference as a miss.
+
+    Returns ``None`` when no option matches, so a caller can loop candidates.
+    """
+    normalized = _normalize_filename(value)
+    for option in options:
+        if _normalize_filename(option) == normalized:
+            return option
+    return None
+
+
 def _match_option(value: str, options: list[str]) -> str | None:
     """Return ``None`` if *value* is present, else a note on the near-miss.
 
@@ -412,6 +430,151 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
         "has_save_image": has_save_image,
         "unchecked_fields": unchecked_fields,
     }
+
+
+def advertised_model_names(object_info: dict) -> set[str]:
+    """Every model filename this ComfyUI says it can load, normalized.
+
+    The question "does that ComfyUI read this file" answered by the only party
+    who knows: the combo lists ComfyUI publishes for the loader fields in
+    :data:`MODEL_FILENAME_FIELDS`. PixlStash holds a ComfyUI **URL** and no path
+    to its ``models/`` tree, so comparing registered folders against it is not
+    available - and would be the wrong answer anyway, because what matters is
+    what the install can load, symlinks, ``extra_model_paths.yaml`` and all.
+
+    Both the option as listed and its basename are in the set: an entry is a
+    path relative to one of ComfyUI's model folders (``sdxl/base.safetensors``),
+    and a caller holding a registered folder's relpath has no way to know which
+    prefix that ComfyUI puts in front of it.
+
+    Args:
+        object_info: The map from :func:`fetch_object_info`.
+
+    Returns:
+        The normalized names, empty for a map that advertises no loader.
+    """
+    names: set[str] = set()
+    for class_type, fields in MODEL_FILENAME_FIELDS.items():
+        spec = (object_info or {}).get(class_type)
+        if spec is None:
+            continue
+        for field in fields:
+            for option in _combo_options(spec, field) or ():
+                normalized = _normalize_filename(option)
+                names.add(normalized)
+                names.add(normalized.rsplit("/", 1)[-1])
+    return names
+
+
+def detect_model_targets(prompt_graph: dict, object_info: dict) -> list[dict]:
+    """Every model-loader field naming a file this ComfyUI does not advertise.
+
+    The detect half of the detect-then-patch pair
+    :func:`detect_seed_targets`/:func:`apply_seeds` and
+    :func:`detect_lora_targets`/:func:`apply_adapter` already are (#1439); the
+    patch half is :func:`apply_model_swap`.
+
+    It is :func:`preflight_prompt`'s ``missing_models`` and nothing else, which
+    is the point rather than laziness: the swap has to be aimed at exactly the
+    fields the pre-flight would report, or it would either patch a field ComfyUI
+    was perfectly happy with or leave one it will refuse.
+
+    Args:
+        prompt_graph: The API-format graph.
+        object_info: The map from :func:`fetch_object_info`.
+
+    Returns:
+        ``{node_id, class_type, field, value, note}`` per unloadable field.
+    """
+    return preflight_prompt(prompt_graph, object_info)["missing_models"]
+
+
+def _alias_key(value: str) -> str:
+    """One loader value as :func:`model_name_aliases` keys its map.
+
+    Its keys are ``workflow_hash.normalized_filename`` - a **lowercased**
+    basename - so a lookup that merely unified separators would miss every
+    mixed-case filename, which is most of them.
+    """
+    return _normalize_filename(value).rsplit("/", 1)[-1].lower()
+
+
+def apply_model_swap(
+    prompt_graph: dict,
+    targets: list[dict],
+    aliases: dict[str, list[str]],
+    object_info: dict,
+) -> list[dict]:
+    """Point each target at another name for the same model, where one loads.
+
+    The patch half of :func:`detect_model_targets`. *aliases* maps a normalized
+    basename to the other names the shelf knows the **same** model by - another
+    copy of the identical bytes, which is what makes this a substitution and not
+    a suggestion (a same-weights-different-precision file is a different output
+    and stays a hint the owner accepts).
+
+    **Every candidate is verified against ``object_info`` before it is written.**
+    A swap PixlStash believes in and ComfyUI does not advertise only moves the
+    failure from the pre-flight to the queue, so the accepted candidate is one
+    this install's own combo list contains - which is also why the aliases may
+    be generous: the combo list, not this function, decides.
+
+    The graph is mutated in place, which is what the caller wants for the graph
+    it is about to submit; nothing is written back to the stored recipe, whose
+    filenames remain the picture's provenance.
+
+    Args:
+        prompt_graph: The API-format graph, mutated in place.
+        targets: :func:`detect_model_targets`' output.
+        aliases: normalized basename -> other names for the same model.
+        object_info: The map from :func:`fetch_object_info`.
+
+    Returns:
+        One ``{node_id, class_type, field, was, now}`` per field patched, for the
+        caller to report and log. A run that quietly loaded a different file
+        makes its own lineage a lie, so this list is the whole point of the
+        return value.
+    """
+    substitutions: list[dict] = []
+    for target in targets or []:
+        node = (prompt_graph or {}).get(str(target.get("node_id")))
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        field = str(target.get("field") or "")
+        value = target.get("value")
+        if not isinstance(inputs, dict) or not field or not isinstance(value, str):
+            continue
+        options = _combo_options(object_info.get(node.get("class_type")), field)
+        if not options:
+            continue
+        # Folded to match `model_name_aliases`' keys, which are
+        # `normalized_filename` - LOWERCASE. Looking up the graph's own
+        # spelling instead finds nothing for any name with a capital in
+        # it, which is most real model filenames.
+        candidates = aliases.get(_alias_key(value)) or ()
+        for candidate in candidates:
+            # The OPTION, not the candidate: `_match_option` accepts a candidate
+            # whose separators merely normalize onto an advertised entry, and
+            # ComfyUI compares exactly - so writing the candidate's own spelling
+            # could put `sub\x.safetensors` into a graph on an install that
+            # advertises `sub/x.safetensors`, which is the one thing this
+            # function's contract promises cannot happen.
+            listed = _matching_option(candidate, options)
+            if listed is None:
+                continue
+            inputs[field] = listed
+            substitutions.append(
+                {
+                    "node_id": str(target.get("node_id")),
+                    "class_type": node.get("class_type"),
+                    "field": field,
+                    "was": value,
+                    "now": listed,
+                }
+            )
+            break
+    return substitutions
 
 
 def detect_seed_targets(prompt_graph: dict, object_info: dict) -> list[dict]:

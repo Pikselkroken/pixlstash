@@ -47,7 +47,11 @@ from typing import Optional
 from platformdirs import user_data_dir
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.model_folder_scanner import STATE_PRESENT, STATE_UNREACHABLE
+from pixlstash.services.model_folder_scanner import (
+    STATE_PRESENT,
+    STATE_REMOVED,
+    STATE_UNREACHABLE,
+)
 from pixlstash.utils.adapter_header import FILE_ENGINE, FILE_UNKNOWN
 
 logger = get_logger(__name__)
@@ -892,10 +896,19 @@ def declare_folder(
         # `seen_at <` the run's own stamp rather than `!=`, the same predicate
         # the scanner uses, so a concurrent declaration that stamped a later
         # time cannot have its rows swept by this one.
+        #
+        # `removed` is skipped for the reason the scanner's three sweeps skip it
+        # (#1439): a copy the owner deleted to keep one of several has a row on
+        # purpose, and this sweep runs on every start - so without the predicate
+        # the distinction would survive the delete and not the next boot. It
+        # matters here and not only in theory, because `deletes_unclaimed_files`
+        # lets the merge act on the unclaimed files in PixlStash's own download
+        # folder, which is one of the roots this function declares.
         conn.execute(
             "UPDATE model_file SET state = 'missing' "
-            "WHERE model_folder_id = ? AND seen_at < ? AND state <> 'missing'",
-            (folder_id, now),
+            "WHERE model_folder_id = ? AND seen_at < ? "
+            "AND state NOT IN ('missing', ?)",
+            (folder_id, now, STATE_REMOVED),
         )
         conn.execute(
             "UPDATE model_folder SET last_checked = ? WHERE id = ?", (now, folder_id)
