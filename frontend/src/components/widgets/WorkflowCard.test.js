@@ -36,6 +36,22 @@ const read = (rel) =>
 
 const LONG = "a-checkpoint-name-that-is-far-too-long-for-any-card-column_v12";
 
+// One `covers` entry, which is an object since #1465: the URL, plus the stored
+// face-weighted rectangle where the picture has one. Most cases here are about
+// the arrangement rather than the crop, so the rectangle is opt-in and those
+// covers exercise the fallback path.
+const cover = (url, crop = {}) => ({ url, ...crop });
+
+// A cover WITH a rectangle: an 832×1216 generation's 384×561 bitmap whose
+// square sits at y 120, which a top anchor would cut through.
+const CROPPED = {
+  thumbnail_width: 384,
+  thumbnail_height: 561,
+  square_crop_x: 0,
+  square_crop_y: 120,
+  square_crop_side: 384,
+};
+
 const BARE = {
   key: "w0",
   name: "Outpaint to 16:9",
@@ -44,7 +60,7 @@ const BARE = {
   type: "outpaint",
   picture_count: 22,
   rating: 3.4,
-  covers: ["/a.webp", "/b.webp", "/c.webp"],
+  covers: [cover("/a.webp"), cover("/b.webp"), cover("/c.webp")],
 };
 
 const CROWDED = {
@@ -349,10 +365,10 @@ describe("WorkflowCard", () => {
   // `input-background` rectangles and the card read as one that had failed to
   // load rather than one showing everything it has (#1456).
   it.each([
-    [1, ["/a.webp"]],
-    [2, ["/a.webp", "/b.webp"]],
-    [3, ["/a.webp", "/b.webp", "/c.webp"]],
-    [3, ["/a.webp", "/b.webp", "/c.webp", "/d.webp"]],
+    [1, [cover("/a.webp")]],
+    [2, [cover("/a.webp"), cover("/b.webp")]],
+    [3, [cover("/a.webp"), cover("/b.webp"), cover("/c.webp")]],
+    [3, ["a", "b", "c", "d"].map((n) => cover(`/${n}.webp`))],
   ])("draws %i cell(s), each with a picture in it", (cells, covers) => {
     const wrapper = mountCard({ ...BARE, covers });
     const cover = wrapper.find(".wf-card__cover");
@@ -389,18 +405,17 @@ describe("WorkflowCard", () => {
   );
 
   it("does not count a cover entry it cannot show", () => {
-    // `workflowCoverUrl` does not guard an empty entry - it would join one into
-    // the truthy `/api/v1null`, a broken-image glyph - and since the
-    // arrangement is counted from this list, such an entry would also buy
-    // itself a cell.
-    const cover = mountCard({
+    // An entry with no `url` has no picture behind it, and since the
+    // arrangement is counted from this list it would otherwise buy itself a
+    // cell — the empty cell #1456 removed.
+    const strip = mountCard({
       ...BARE,
-      covers: ["/a.webp", null, ""],
+      covers: [cover("/a.webp"), null, {}, cover("")],
     }).find(".wf-card__cover");
 
-    expect(cover.findAll(".wf-card__pic")).toHaveLength(1);
-    expect(cover.classes()).toContain("wf-card__cover--1");
-    expect(cover.find(".wf-card__pic img").attributes("src")).toContain(
+    expect(strip.findAll(".wf-card__pic")).toHaveLength(1);
+    expect(strip.classes()).toContain("wf-card__cover--1");
+    expect(strip.find(".wf-card__pic img").attributes("src")).toContain(
       "/a.webp",
     );
   });
@@ -525,7 +540,7 @@ describe("cover thumbnail URLs", () => {
   it("prepends the API base, so the src is a route that exists", () => {
     const wrapper = mountCard({
       ...CROWDED,
-      covers: ["/pictures/thumbnails/12.webp?v=3"],
+      covers: [cover("/pictures/thumbnails/12.webp?v=3")],
     });
 
     const src = wrapper.find(".wf-card__pic img").attributes("src");
@@ -535,13 +550,62 @@ describe("cover thumbnail URLs", () => {
   });
 });
 
-// ── The cover crop is top-anchored ───────────────────────────────────────
+// ── The cover crop follows the stored rectangle ──────────────────────────
+//
+// The card crops each cell around the face-weighted rectangle the library
+// already computed for that picture (#1465), so a full-length figure keeps its
+// face instead of being cut wherever the top anchor happened to land. The
+// fallback below is the other half, and the one that would be a regression.
+describe("the cover crop", () => {
+  const imgStyle = (card) =>
+    mountCard(card).find(".wf-card__pic img").attributes("style") ?? "";
+
+  it("crops a single cover's 6:5 cell around the stored rectangle", () => {
+    // 6:5 around a 384 square in a 384×561 bitmap is the full width and 320
+    // tall, centred on the square at y 312 → the crop starts at 152 rather
+    // than at 0. The img is sized and translated in percentages of the cell.
+    const style = imgStyle({ ...BARE, covers: [cover("/a.webp", CROPPED)] });
+
+    expect(style).toContain(`height: ${(561 / 320) * 100}%`);
+    expect(style).toContain(`top: ${(-152 / 320) * 100}%`);
+    expect(style).toContain("object-fit: fill");
+  });
+
+  it("crops the mosaic's cells to their own 4:5, not to the 6:5 box", () => {
+    // Three pictures put every cell at 4:5, which keeps 480 of the 561 rows
+    // and so moves the crop by 72 rather than 152. A card that cropped every
+    // arrangement the same way would be wrong in two of the three.
+    const style = imgStyle({
+      ...BARE,
+      covers: [
+        cover("/a.webp", CROPPED),
+        cover("/b.webp", CROPPED),
+        cover("/c.webp", CROPPED),
+      ],
+    });
+
+    expect(style).toContain(`height: ${(561 / 480) * 100}%`);
+    expect(style).toContain(`top: ${(-72 / 480) * 100}%`);
+  });
+
+  it("leaves a cover with no rectangle to the stylesheet", () => {
+    // `square_crop_x` is null until the picture has been processed, and those
+    // covers have to look exactly as they did before this existed. An inline
+    // width or top here would be a framing invented from a missing number.
+    const style = imgStyle({ ...BARE, covers: [cover("/a.webp")] });
+
+    expect(style).not.toContain("top:");
+    expect(style).not.toContain("width:");
+  });
+});
+
+// ── The fallback crop is top-anchored ────────────────────────────────────
 //
 // jsdom applies no scoped CSS, so this reads the SFC's own `<style>` text -
 // the shape `Toolbar.test.js` uses to pin a bar recipe. Worth pinning because
 // the defect is invisible to every other test: a centred crop renders, it
 // just takes the heads off, and the two short cells are far wider than tall.
-describe("the cover crop", () => {
+describe("the fallback crop", () => {
   const styleOf = async (path) => {
     const { readFileSync } = await import("node:fs");
     return readFileSync(`${process.cwd()}/${path}`, "utf8");

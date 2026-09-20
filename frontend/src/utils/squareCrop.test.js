@@ -4,6 +4,8 @@ import {
   squareCropImgStyle,
   squareCropBboxRect,
   coverBboxRect,
+  cropRectForRatio,
+  cropImgStyle,
 } from "./squareCrop.js";
 
 describe("squareCropParams", () => {
@@ -41,9 +43,7 @@ describe("squareCropParams", () => {
   });
 
   it("returns null when bitmap dims are missing", () => {
-    expect(
-      squareCropParams({ square_crop_x: 0, square_crop_y: 0 }),
-    ).toBeNull();
+    expect(squareCropParams({ square_crop_x: 0, square_crop_y: 0 })).toBeNull();
     expect(squareCropParams(null)).toBeNull();
   });
 });
@@ -93,6 +93,113 @@ describe("squareCropImgStyle", () => {
         square_crop_x: null,
         square_crop_y: null,
       }),
+    ).toBeNull();
+  });
+});
+
+// A workflow generation as the app actually stores one: 832×1216 becomes a
+// 384×561 bitmap, and the face-weighted square sits BELOW the top edge, which
+// is the case #1465 is about — a blind top anchor cuts through the face that
+// the stored rectangle was computed to keep. The square spans y 120…504, so
+// its centre of interest is (192, 312).
+const PORTRAIT = {
+  thumbnail_width: 384,
+  thumbnail_height: 561,
+  square_crop_x: 0,
+  square_crop_y: 120,
+  square_crop_side: 384,
+};
+
+describe("cropRectForRatio", () => {
+  it("is the stored rectangle itself at ratio 1", () => {
+    expect(cropRectForRatio(squareCropParams(PORTRAIT), 1)).toEqual({
+      x: 0,
+      y: 120,
+      w: 384,
+      h: 384,
+    });
+  });
+
+  it("centres the card's 6:5 cover on the face instead of the top edge", () => {
+    // 6:5 is wider than the bitmap allows around a 384 square, so the crop is
+    // the full width and 384/1.2 = 320 tall — the same SHAPE the top anchor
+    // takes, moved from y=0 to the one that keeps the face: 312 - 160.
+    expect(cropRectForRatio(squareCropParams(PORTRAIT), 6 / 5)).toEqual({
+      x: 0,
+      y: 152,
+      w: 384,
+      h: 320,
+    });
+  });
+
+  it("does the same for the mosaic's 4:5 cells, which keep more height", () => {
+    // 384 / 0.8 = 480 tall, centred at 312 → 72. A taller cell needs to move
+    // less, which is why the mosaic loses fewer faces than the single cover.
+    expect(cropRectForRatio(squareCropParams(PORTRAIT), 4 / 5)).toEqual({
+      x: 0,
+      y: 72,
+      w: 384,
+      h: 480,
+    });
+  });
+
+  it("clamps to the bitmap rather than reading past its edge", () => {
+    // A 3:5 cell wants 640px of height from a 561px bitmap, so it takes all of
+    // it and trims the sides instead: 561 × 0.6 = 336.6 wide, and y can only
+    // be 0. The face's own x still decides WHICH sides come off, which
+    // `object-position: top center` could not do.
+    const rect = cropRectForRatio(squareCropParams(PORTRAIT), 3 / 5);
+    expect(rect.y).toBe(0);
+    expect(rect.h).toBe(561);
+    expect(rect.w).toBeCloseTo(336.6, 6);
+    expect(rect.x).toBeCloseTo(23.7, 6);
+  });
+
+  it("keeps a crop whose face sits against an edge inside the bitmap", () => {
+    // An 800×600 bitmap whose square is hard against the right edge: centred
+    // on it, a 720-wide 6:5 crop would start at 140 and end at 860.
+    const rect = cropRectForRatio(
+      squareCropParams({
+        thumbnail_width: 800,
+        thumbnail_height: 600,
+        square_crop_x: 200,
+        square_crop_y: 0,
+        square_crop_side: 600,
+      }),
+      6 / 5,
+    );
+    expect(rect).toEqual({ x: 80, y: 0, w: 720, h: 600 });
+    expect(rect.x + rect.w).toBe(800);
+  });
+
+  it("refuses a ratio that is not a positive number", () => {
+    const params = squareCropParams(PORTRAIT);
+    expect(cropRectForRatio(params, 0)).toBeNull();
+    expect(cropRectForRatio(params, NaN)).toBeNull();
+  });
+});
+
+describe("cropImgStyle", () => {
+  it("scales and translates the bitmap so the 6:5 crop fills the cell", () => {
+    // The rect is 384×320 at (0, 152): the img is the bitmap's own size over
+    // the crop's, offset by -crop, and the two denominators differ because
+    // the cell is not square.
+    const style = cropImgStyle(PORTRAIT, 6 / 5);
+    expect(style.width).toBe("100%");
+    expect(style.height).toBe(`${(561 / 320) * 100}%`);
+    expect(style.left).toBe("0%");
+    expect(style.top).toBe(`${(-152 / 320) * 100}%`);
+    expect(style.objectFit).toBe("fill");
+  });
+
+  it("falls back to CSS cover when the rectangle has not been computed", () => {
+    // The requirement, not a nicety: those covers must look exactly as they
+    // did before the crop existed.
+    expect(
+      cropImgStyle(
+        { ...PORTRAIT, square_crop_x: null, square_crop_y: null },
+        6 / 5,
+      ),
     ).toBeNull();
   });
 });

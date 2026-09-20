@@ -255,6 +255,12 @@ class CoverCandidate:
     The three bitmap fields are here for the cache-buster in the thumbnail URL
     (``ImageUtils.thumbnail_cache_version``), so the covers can be served as
     URLs without a second read per card.
+
+    The three ``square_crop_*`` fields are the stored face-weighted rectangle
+    within that bitmap (``FaceUtils.square_crop_rect``), so a client can crop a
+    cover around the face rather than to a blind top anchor (#1465). They are
+    NULL while a picture is still being processed, which is the client's cue to
+    fall back to the shipped ``object-fit: cover`` framing.
     """
 
     structural_hash: str
@@ -265,6 +271,9 @@ class CoverCandidate:
     thumbnail_width: Optional[int] = None
     thumbnail_height: Optional[int] = None
     orientation: Optional[int] = None
+    square_crop_x: Optional[int] = None
+    square_crop_y: Optional[int] = None
+    square_crop_side: Optional[int] = None
 
 
 def variant_activity(session: Session) -> dict[str, VariantActivity]:
@@ -326,6 +335,9 @@ def variant_cover_candidates(
             Picture.thumbnail_width.label("thumbnail_width"),
             Picture.thumbnail_height.label("thumbnail_height"),
             Picture.orientation.label("orientation"),
+            Picture.square_crop_x.label("square_crop_x"),
+            Picture.square_crop_y.label("square_crop_y"),
+            Picture.square_crop_side.label("square_crop_side"),
             func.row_number()
             .over(partition_by=Picture.workflow_structural_hash, order_by=ordering)
             .label("rank"),
@@ -344,6 +356,9 @@ def variant_cover_candidates(
             ranked.c.thumbnail_width,
             ranked.c.thumbnail_height,
             ranked.c.orientation,
+            ranked.c.square_crop_x,
+            ranked.c.square_crop_y,
+            ranked.c.square_crop_side,
         ).where(ranked.c.rank <= per_variant)
     ).all()
     return [CoverCandidate(*row) for row in rows]
@@ -394,6 +409,9 @@ def cover_pictures_by_pixel_sha(
             Picture.thumbnail_width,
             Picture.thumbnail_height,
             Picture.orientation,
+            Picture.square_crop_x,
+            Picture.square_crop_y,
+            Picture.square_crop_side,
         )
         .where(Picture.pixel_sha.in_(pixel_shas))
         .where(Picture.deleted.is_(False))

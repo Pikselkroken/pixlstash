@@ -140,11 +140,17 @@
             :class="`stack-panel__thumbs--${thumbsOf(member).length}`"
           >
             <span
-              v-for="(src, i) in thumbsOf(member)"
+              v-for="(cell, i) in thumbsOf(member)"
               :key="i"
               class="stack-panel__thumb"
             >
-              <img v-if="src" :src="src" alt="" loading="lazy" />
+              <img
+                v-if="cell.src"
+                :src="cell.src"
+                :style="cell.style"
+                alt=""
+                loading="lazy"
+              />
             </span>
           </span>
           <span class="stack-panel__rowname">{{ member.name }}</span>
@@ -252,6 +258,7 @@ import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 import {
   cardAccessibleName,
   checkpointModel,
+  coverCellStyle,
   factChips as cardFactChips,
 } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
@@ -327,38 +334,47 @@ const pending = computed(() => {
 const toolbarName = computed(() => `${props.name || "Stack"} stack`);
 
 /**
- * One member's cover URLs, joined the way `WorkflowCard` joins its own.
+ * One member's cover pictures, the ones this row can actually draw.
  *
- * `covers` arrives API-RELATIVE (`/pictures/thumbnails/{id}.webp?v=…`) and an
+ * An entry without a `url` is dropped rather than counted: a cell it cannot
+ * fill is the thing #1456 removed, and `workflowCoverUrl` gives one "".
+ */
+function coversOf(member) {
+  return (member.covers ?? []).filter((cover) => cover?.url).slice(0, 3);
+}
+
+/**
+ * The cells one row's strip draws: one per picture, as the card's cover does,
+ * each with a URL a browser can load and the crop that keeps the face in it.
+ *
+ * `url` arrives API-RELATIVE (`/pictures/thumbnails/{id}.webp?v=…`) and an
  * `<img src>` bypasses Axios, so nothing prepends `/api/v1` and nothing
  * appends the share token. Used verbatim the browser asks the PAGE origin for
  * a path no route serves and every thumbnail in the list is a broken image —
  * the bug F1b fixed for the card, which this column reintroduced by reading
  * the payload directly. `workflowCoverUrl` is the api layer's one spelling of
  * that join; a second one here is exactly the drift it exists to prevent.
- */
-function coversOf(member) {
-  return (member.covers ?? [])
-    .filter(Boolean)
-    .slice(0, 3)
-    .map(workflowCoverUrl);
-}
-
-/**
- * The cells one row's strip draws: one per picture, as the card's cover does.
  *
- * Empty entries are dropped above rather than counted, because
- * `workflowCoverUrl` does not guard them - it joins one into the truthy
- * `/api/v1null` - and a cell it cannot fill is the thing #1456 removed.
+ * The crop is `coverCellStyle`, the card's own, so a row and a card frame the
+ * same picture the same way. It is null while the picture's rectangle has not
+ * been computed, and the stylesheet's top-anchored `cover` takes over.
+ *
  * A member whose covers have not arrived keeps the arrangement its pictures
  * are about to land in; one with no pictures at all keeps a single cell, so
  * the strip is still a picture-shaped slot in the row.
  */
 function thumbsOf(member) {
   const covers = coversOf(member);
-  return covers.length
-    ? covers
-    : Array(Math.min(member.picture_count || 1, 3)).fill("");
+  if (!covers.length) {
+    return Array(Math.min(member.picture_count || 1, 3)).fill({
+      src: "",
+      style: null,
+    });
+  }
+  return covers.map((cover) => ({
+    src: workflowCoverUrl(cover),
+    style: coverCellStyle(cover, covers.length),
+  }));
 }
 
 /**
@@ -752,17 +768,33 @@ const notchStyle = computed(() => {
 /* Still painted, because a cell exists before its `<img>` has loaded — and in
    `--v-theme-input-background`, which is the grey `.wf-card__pic` paints the
    same waiting cell with. At 36px the two were near enough; at 80 a row and
-   its card were visibly two different greys. */
+   its card were visibly two different greys.
+
+   `position: relative` because the crop below positions the `<img>` against
+   this cell; without it the oversized img is laid out against the page. */
 .stack-panel__thumb {
+  position: relative;
   overflow: hidden;
   background: rgb(var(--v-theme-input-background));
 }
 
-/* TOP-anchored, the app's shipped crop (`ImageGrid.css`, `utils/squareCrop.js`,
+/* THE FALLBACK, as on the card: since #1465 `coverCellStyle` crops each cell
+   around the picture's stored face-weighted rectangle with inline width/
+   height/left/top, and this rule is what a picture whose rectangle has not
+   been computed yet still gets.
+
+   TOP-anchored, the app's shipped crop (`ImageGrid.css`, `utils/squareCrop.js`,
    and `WorkflowCard.vue`'s cover): a centre crop takes the same slice off the
-   top and the bottom, so on a picture of a person the head comes off. */
+   top and the bottom, so on a picture of a person the head comes off.
+
+   Absolutely positioned so the cropped case has something to translate
+   against; at 100%/100% and inset 0 it fills the cell exactly as a static img
+   did. */
 .stack-panel__thumb img {
   display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;

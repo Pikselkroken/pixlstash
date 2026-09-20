@@ -1,4 +1,6 @@
-// Pure geometry helpers for the square (uniform-grid) thumbnail mode.
+// Pure geometry helpers for cropping a thumbnail around its stored rectangle:
+// the square (uniform-grid) thumbnail mode, and since #1465 any cell shape,
+// which is what the workflow cards' 6:5 / 4:5 / 3:5 covers need.
 //
 // Thumbnail v2 stores ONE aspect-ratio-preserving bitmap per picture (the whole
 // frame, short edge ~384px) plus a stored face-weighted square rectangle within
@@ -33,12 +35,7 @@ export function squareCropParams(img) {
   const th = Number(img.thumbnail_height);
   const cx = Number(img.square_crop_x);
   const cy = Number(img.square_crop_y);
-  if (
-    !(tw > 0) ||
-    !(th > 0) ||
-    !Number.isFinite(cx) ||
-    !Number.isFinite(cy)
-  ) {
+  if (!(tw > 0) || !(th > 0) || !Number.isFinite(cx) || !Number.isFinite(cy)) {
     return null;
   }
   // square_crop_side is normally min(w, h). Derive it if the backend omitted it.
@@ -48,30 +45,76 @@ export function squareCropParams(img) {
 }
 
 /**
- * Inline `<img>` style that sprite-crops the AR bitmap into a square cell.
+ * The crop rectangle for a cell of ANY aspect ratio, in bitmap pixels.
  *
- * The cell (container) is overflow:hidden and square (side = S in CSS pixels).
- * The <img> is scaled by S/side and translated by -crop*S/side, expressed as
- * percentages so the exact pixel size S never has to be known here:
- *   width  = thumbnail_width  / side * 100%   (relative to container width S)
- *   height = thumbnail_height / side * 100%   (relative to container height S)
- *   left   = -square_crop_x   / side * 100%   (percentage left is relative to S)
- *   top    = -square_crop_y   / side * 100%
- * The container being square, its width and height both equal S, so the same
- * `side` denominator maps both axes correctly.
+ * The stored rectangle is square; a cell mostly is not (the workflow card's
+ * covers are 6:5, 4:5 and 3:5). So the square is treated as the picture's
+ * region of interest and the cell's ratio is fitted AROUND it: the smallest
+ * rectangle of that ratio containing the square, shrunk to the bitmap where it
+ * does not fit, then centred on the square's centre and clamped to the bitmap
+ * edges. The centre is what survives the shrink, which is the point - it is
+ * where `FaceUtils.square_crop_rect` put the faces.
  *
- * @param {Object} img - Grid image object.
+ * `ratio` 1 reproduces the stored rectangle exactly: w = h = side, and the
+ * centring is a no-op because a stored square is already inside the bitmap.
+ *
+ * @param {{tw:number, th:number, cx:number, cy:number, side:number}} params
+ * @param {number} ratio - The cell's width / height.
+ * @returns {{x:number, y:number, w:number, h:number}|null}
+ */
+export function cropRectForRatio(params, ratio) {
+  if (!(ratio > 0)) return null;
+  const { tw, th, cx, cy, side } = params;
+  let w = ratio >= 1 ? side * ratio : side;
+  let h = w / ratio;
+  if (w > tw) {
+    w = tw;
+    h = tw / ratio;
+  }
+  if (h > th) {
+    h = th;
+    w = th * ratio;
+  }
+  return {
+    x: Math.min(Math.max(cx + side / 2 - w / 2, 0), tw - w),
+    y: Math.min(Math.max(cy + side / 2 - h / 2, 0), th - h),
+    w,
+    h,
+  };
+}
+
+/**
+ * Inline `<img>` style that sprite-crops the AR bitmap into a cell of `ratio`.
+ *
+ * The cell (container) is overflow:hidden, W wide and H = W/ratio tall, and
+ * the `<img>` inside it is absolutely positioned. The img is scaled by W/w and
+ * translated by -x, expressed as percentages so the cell's pixel size never
+ * has to be known here (a percentage `left` resolves against W and a
+ * percentage `top` against H, which is exactly the two denominators below):
+ *   width  = thumbnail_width  / w * 100%
+ *   height = thumbnail_height / h * 100%
+ *   left   = -x / w * 100%
+ *   top    = -y / h * 100%
+ * `w` never exceeds `tw` and `h` never exceeds `th`, so the img covers the cell
+ * on both axes however far the cell's real ratio has drifted from `ratio` (a
+ * gap between the grid's tracks puts it a fraction of a percent out).
+ *
+ * @param {Object} img - Anything carrying the bitmap and crop fields: a grid
+ *   image, or one of a workflow card's `covers`.
+ * @param {number} [ratio=1] - The cell's width / height.
  * @returns {Object|null} Inline style object, or null to fall back to CSS cover.
  */
-export function squareCropImgStyle(img) {
+export function cropImgStyle(img, ratio = 1) {
   const params = squareCropParams(img);
   if (!params) return null;
-  const { tw, th, cx, cy, side } = params;
+  const rect = cropRectForRatio(params, ratio);
+  if (!rect) return null;
+  const { tw, th } = params;
   return {
-    width: `${(tw / side) * 100}%`,
-    height: `${(th / side) * 100}%`,
-    left: `${(-cx / side) * 100}%`,
-    top: `${(-cy / side) * 100}%`,
+    width: `${(tw / rect.w) * 100}%`,
+    height: `${(th / rect.h) * 100}%`,
+    left: `${(-rect.x / rect.w) * 100}%`,
+    top: `${(-rect.y / rect.h) * 100}%`,
     // Both dims are explicit and match the bitmap AR, so aspect-ratio must not
     // fight them and object-fit is a no-op - set them defensively.
     aspectRatio: "auto",
@@ -79,6 +122,16 @@ export function squareCropImgStyle(img) {
     // Rounded corners frame the cell (container), not this oversized img.
     borderRadius: "0",
   };
+}
+
+/**
+ * The square case, which is what the uniform grid's cells are.
+ *
+ * @param {Object} img - Grid image object.
+ * @returns {Object|null} Inline style object, or null to fall back to CSS cover.
+ */
+export function squareCropImgStyle(img) {
+  return cropImgStyle(img, 1);
 }
 
 /**

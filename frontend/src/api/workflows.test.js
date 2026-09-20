@@ -16,8 +16,16 @@ vi.mock("../utils/apiClient", () => ({
 import { workflowCoverUrl } from "./workflows";
 
 describe("workflowCoverUrl", () => {
-  // The payload's own shape, from `_cover_urls`.
-  const cover = "/pictures/thumbnails/12.webp?v=3";
+  // The payload's own shape, from `_covers`: an object since #1465, of which
+  // this function reads `url` and the crop helpers read the rest.
+  const cover = {
+    url: "/pictures/thumbnails/12.webp?v=3",
+    thumbnail_width: 384,
+    thumbnail_height: 561,
+    square_crop_x: 0,
+    square_crop_y: 120,
+    square_crop_side: 384,
+  };
 
   it("prefixes the API base, so the src names a route that exists", () => {
     // Used verbatim the browser asks the PAGE origin for this path, which
@@ -34,5 +42,12 @@ describe("workflowCoverUrl", () => {
     // `v` is `thumbnail_cache_version`; dropping it serves a stale bitmap
     // after a regeneration.
     expect(workflowCoverUrl(cover)).toContain("v=3");
+  });
+
+  it("gives an entry with no url nothing, not a broken-image path", () => {
+    // `/api/v1undefined` is truthy, so a `v-if` on it draws a broken-image
+    // glyph where the caller meant "this cover has no picture".
+    expect(workflowCoverUrl({})).toBe("");
+    expect(workflowCoverUrl(null)).toBe("");
   });
 });
