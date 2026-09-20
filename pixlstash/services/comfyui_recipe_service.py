@@ -400,7 +400,17 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
                     )
             continue
 
-        for field in MODEL_FILENAME_FIELDS.get(class_type, ()):
+        fields = list(MODEL_FILENAME_FIELDS.get(class_type, ()))
+        # Stackers spell their extra slots `lora_name_2`, `lora_name_3`, …;
+        # unlike the core loader, their class gives no fixed field list. Read
+        # the actual graph inputs so the pre-flight and the later bypass see
+        # the same missing adapters.
+        fields.extend(
+            field
+            for field in inputs
+            if LORA_FILENAME_FIELD_RE.match(str(field)) and field not in fields
+        )
+        for field in fields:
             value = inputs.get(field)
             if not isinstance(value, str) or not value:
                 # Missing, or wired from another node - not a literal filename.

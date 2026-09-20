@@ -6099,6 +6099,20 @@ def test_a_stacker_whose_other_slot_is_empty_is_bypassed():
     assert graph["3"]["inputs"]["model"] == ["1", 0]
 
 
+def test_a_stacker_whose_numbered_slots_are_all_missing_is_bypassed():
+    """Each numbered LoRA is pre-flighted, then the empty stack leaves once."""
+    graph = _stacker_graph(second="also-gone.safetensors")
+
+    bypassed = bypass_missing_loras(graph, STACKER_INFO)
+
+    assert [gone["file"] for gone in bypassed] == [
+        "gone.safetensors",
+        "also-gone.safetensors",
+    ]
+    assert "2" not in graph
+    assert graph["3"]["inputs"]["model"] == ["1", 0]
+
+
 def test_only_loras_are_bypassed_even_where_another_loader_could_be():
     """Only `loras`. Nothing else in a graph is optional in this way.
 

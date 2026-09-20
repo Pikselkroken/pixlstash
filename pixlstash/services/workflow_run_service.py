@@ -353,17 +353,22 @@ def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
             what it holds there is no missing file to find.
 
     Returns:
-        ``[{file, folder, node_id, class_type, field}, …]``, one per loader
-        taken out; empty when nothing was missing or nothing could be bypassed
-        honestly.
+        ``[{file, folder, node_id, class_type, field}, …]``, one per missing
+        LoRA whose loader was taken out; empty when nothing was missing or
+        nothing could be bypassed honestly.
     """
-    bypassed: list[dict] = []
+    missing_by_node: dict[str, list[dict]] = {}
     for item in preflight_prompt(graph, object_info).get("missing_models") or []:
         if not item:
             continue
         if model_folder(item.get("class_type"), item.get("field")) != "loras":
             continue
-        if item.get("value") == FORGOTTEN_MODEL:
+        missing_by_node.setdefault(str(item.get("node_id")), []).append(item)
+
+    bypassed: list[dict] = []
+    for node_id, missing in missing_by_node.items():
+        item = missing[0]
+        if any(item.get("value") == FORGOTTEN_MODEL for item in missing):
             # The hub lost this reference's NAME; the file itself may well be
             # installed. :func:`resolve_references` puts the token in on
             # purpose so the pre-flight surfaces it, and bypassing would trade
@@ -373,11 +378,10 @@ def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
             logger.info(
                 "Node %s (%s) names a LoRA this hub can no longer name, so it "
                 "keeps its refusal rather than being bypassed.",
-                item.get("node_id"),
+                node_id,
                 item.get("class_type"),
             )
             continue
-        node_id = str(item.get("node_id"))
         node = graph.get(node_id)
         inputs = node.get("inputs") if isinstance(node, dict) else None
         # A slot counts as filled whether it names a file or is WIRED from
@@ -391,7 +395,8 @@ def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
             if LORA_FILENAME_FIELD_RE.match(str(field))
             and (is_link(value) or (isinstance(value, str) and value))
         ]
-        if len(filled) > 1:
+        missing_fields = {str(item.get("field")) for item in missing}
+        if not set(filled) <= missing_fields:
             # A stacker holding three LoRAs of which one is gone: the node
             # carries the two that ARE here, so taking it out would drop them
             # too. Left to block, which is the honest answer - the owner is
@@ -403,7 +408,7 @@ def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
                 node_id,
                 item.get("class_type"),
                 len(filled),
-                item.get("value"),
+                ", ".join(str(item.get("value")) for item in missing),
             )
             continue
         try:
@@ -423,9 +428,9 @@ def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
             "LoRA is optional, so the run goes ahead without it.",
             node_id,
             item.get("class_type"),
-            item.get("value"),
+            ", ".join(str(item.get("value")) for item in missing),
         )
-        bypassed.append(
+        bypassed.extend(
             {
                 "file": str(item.get("value")),
                 "folder": "loras",
@@ -433,6 +438,7 @@ def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
                 "class_type": item.get("class_type"),
                 "field": item.get("field"),
             }
+            for item in missing
         )
     return bypassed
 
