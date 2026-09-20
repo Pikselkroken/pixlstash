@@ -43,6 +43,7 @@ privacy purge that lives with the retention setting in ``routes/config.py``.
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import threading
@@ -148,7 +149,10 @@ from pixlstash.services.workflow_library_service import (
     read_variant_picture_counts,
     stack_for_picture,
 )
-from pixlstash.utils.comfyui_utilities import collect_seed_inputs
+from pixlstash.utils.comfyui_utilities import (
+    collect_seed_inputs,
+    loaded_model_widgets,
+)
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
 logger = get_logger(__name__)
@@ -282,6 +286,12 @@ class WorkflowSlotModel(BaseModel):
     ``name`` is ``None`` for a **recipe** LoRA, which is a slot rather than a
     file — which character LoRA went in it is the recipe's business, not the
     workflow's — and for a model whose name was forgotten.
+
+    On a card with **no recipe** (``variant_count: 0``, #1466) these are not
+    read off a stored slot list at all: they are recovered from the workflow
+    file itself, which is best effort and comes back empty on a document the
+    recovery cannot read. An empty ``models`` on such a card therefore means
+    *nobody has read this workflow's models*, never *it has none*.
     """
 
     name: str | None = None
@@ -297,13 +307,44 @@ class WorkflowSlotModel(BaseModel):
             "drift #1416 already cost this pair once."
         ),
     )
+    icon: str | None = Field(
+        None,
+        description=(
+            "The `sha256` of the picture the owner chose for this model on "
+            "the shelf, for `GET /model-icons/{sha256}`, or null - which is "
+            "the ordinary case, since PixlStash generates no sample for a "
+            "model it registers in place. A client drawing the model falls "
+            "back the way the shelf's own rows do: this picture, else "
+            "initials off the name."
+        ),
+    )
+    base_model: str | None = Field(
+        None,
+        description=(
+            "The shelf's raw `base_model` for this file, or null where the "
+            "shelf does not hold the model."
+        ),
+    )
+    base_model_folded: str | None = Field(
+        None,
+        description=(
+            "The same value folded to its canonical label, or null where "
+            "`known_base_models` does not recognise it — **the two spellings "
+            "the model shelf serves, under the same names**. A client hashes "
+            "a generated mark's colour out of `base_model_folded or "
+            "base_model`, so serving one of them would give the same model "
+            "two colours in two places."
+        ),
+    )
     kind: str
     mark: str | None = None
     slot_label: str | None = Field(
         None,
         description=(
             "The slot's address, as `PUT /workflows/{key}/slots` marks it. "
-            "Null for a slot the cached list gave no label."
+            "Null for a slot the cached list gave no label — which is every "
+            "slot of a card that has no recipe (#1466), since a label is an "
+            "address inside a stored topology and such a card has none."
         ),
     )
 
@@ -1055,11 +1096,76 @@ def _display_name(card, models=()) -> str:
     return named + _specials_suffix(card)
 
 
+# ponytail: one entry per file version; stale versions age out of the LRU.
+@functools.lru_cache(maxsize=256)
+def _file_model_widgets(path: str, mtime_ns: int, size: int) -> tuple:
+    """``((widget, filename), ...)`` read off one stored workflow file (#1466).
+
+    Keyed on mtime and size exactly as ``comfyui._describe_workflow`` is, so
+    the grid parses each file once per version of it rather than once per
+    request, and a file that will not read is logged once rather than on every
+    open of the view.
+    """
+    try:
+        document = _load_workflow_json(path)
+    except (OSError, ValueError, RecursionError) as exc:
+        logger.warning(
+            "Workflow file %s will not load, so the card it is the whole of "
+            "is described with no models: %s",
+            path,
+            exc,
+        )
+        return ()
+    try:
+        return tuple(loaded_model_widgets(document))
+    except Exception as exc:
+        # The reader indexes into whatever the file holds, so a malformed one
+        # (a `nodes` entry that is not a dict, a non-list `widgets_values`)
+        # raises something other than a ValueError. A card described without
+        # its models is the failure this whole function exists to soften; it
+        # must not be one that takes the grid down.
+        logger.warning(
+            "Could not read the models out of workflow file %s, which failed "
+            "with %s; its card is described with none: %s",
+            path,
+            type(exc).__name__,
+            exc,
+        )
+        return ()
+
+
+def _file_models(file_name: str) -> tuple:
+    """:func:`read_grid`'s reader: the models one stored file loads.
+
+    The I/O half of #1466, here rather than in the service because the folder
+    a workflow file lives in is this layer's - the same split
+    :func:`_source_graph_for` already keeps, where the route does the reads
+    and the service decides what they mean.
+    """
+    path, _source = _resolve_workflow_path(file_name)
+    if not path:
+        return ()
+    try:
+        stat = os.stat(path)
+    except OSError as exc:
+        logger.warning(
+            "Could not stat workflow file %s, so the card it is the whole of "
+            "is described with no models: %s",
+            path,
+            exc,
+        )
+        return ()
+    return _file_model_widgets(path, stat.st_mtime_ns, stat.st_size)
+
+
 def _slot_models(slots) -> list[WorkflowSlotModel]:
     return [
         WorkflowSlotModel(
             name=slot.name,
             title=slot.title,
+            icon=slot.icon,
+            base_model=slot.base_model,
+            base_model_folded=slot.base_model_folded,
             kind=slot.kind,
             mark=slot.mark,
             slot_label=slot.label,
@@ -1353,6 +1459,7 @@ def create_router(server) -> APIRouter:
             server.vault,
             include_hidden=include_hidden,
             include_one_offs=include_one_offs,
+            file_models=_file_models,
         )
         return WorkflowCards(
             cards=[_card(figure) for figure in grid.cards],
@@ -1384,7 +1491,9 @@ def create_router(server) -> APIRouter:
         rather than an echo of its own request - and pays the grid read once,
         on a gesture a person made, rather than per card.
         """
-        figure = read_grid(hub, server.vault).figure(workflow_key)
+        figure = read_grid(hub, server.vault, file_models=_file_models).figure(
+            workflow_key
+        )
         if figure is None:
             raise HTTPException(status_code=404, detail="Unknown workflow card.")
         card = figure.card

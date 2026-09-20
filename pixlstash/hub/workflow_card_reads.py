@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
+from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, topology_only_key
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_identity import WORKFLOW_KEY_VERSION
 from pixlstash.utils.sql_chunking import chunked
@@ -98,6 +98,9 @@ def card_index(hub: HubDatabase) -> list[Card]:
     One query over the variant table, left-joined to the topology cache and to
     the owner's attributes, grouped in memory. Variants are returned sorted so
     two reads of an unchanged hub answer identically.
+
+    Then one more small query for the cards that have **no variant at all**:
+    see :func:`_file_only_cards`.
     """
     rows = hub.fetchall(
         "SELECT v.workflow_key AS workflow_key, v.topology_hash AS topology_hash, "
@@ -135,7 +138,79 @@ def card_index(hub: HubDatabase) -> list[Card]:
                 file_name=row["file_name"],
             )
         card.variants.append(row["structural_hash"])
-    return list(cards.values())
+    return list(cards.values()) + _file_only_cards(hub, set(cards))
+
+
+def _file_only_cards(hub: HubDatabase, keyed: set[str]) -> list[Card]:
+    """The cards whose whole content is a stored workflow file (#1466).
+
+    ComfyUI saves in **editor** format unless somebody deliberately exports
+    the API one, and an editor-format file names its widget values by
+    position: :func:`pixlstash.hub.workflows.record_ui_graph` files its
+    topology and stops there, so no ``workflow_recipe`` and no
+    ``workflow_variant`` row is ever written for it.
+    :func:`pixlstash.hub.workflow_cards.record_file` keys the file on
+    :func:`~pixlstash.hub.workflow_cards.topology_only_key` instead. The query
+    above starts at the variant table, so such a file had a row in the hub, a
+    file in the folder, and no card at all - which is the answer
+    ``record_file``'s own comment calls the worse one. A document that would
+    not reduce lands here for the same reason.
+
+    **A file belongs here when its own variant is missing, and the card's key
+    is derived rather than read.** ``workflow_file.workflow_key`` is a digest
+    written at filing time and the re-key pass only updates rows it can reach
+    through a ``structural_hash`` (``workflow_card_writes``), so a stored key
+    is the one thing here that can go stale - and a card surfaced under a
+    stale key would be an undeletable duplicate whose attribute rows had
+    already been swept. Deriving it means a rule change moves this card the
+    way it moves every other one.
+
+    **Topology and file name only.** ``core_hash`` and ``slots`` are left
+    unread rather than joined off ``workflow_topology_core``: that cache is
+    written per *recipe*, so a row there describes the models some API graph
+    of this topology named, not the ones in this file. A NULL ``core_hash`` is
+    already "stacks with nothing", which is the right answer for a card whose
+    models nobody has read, and it keeps this card out of the automatic groups
+    :func:`keys_in_stack` resolves from the variant table.
+    """
+    found = {}
+    for row in hub.fetchall(
+        "SELECT f.topology_hash AS topology_hash, "
+        "MIN(f.workflow_name) AS workflow_name FROM workflow_file f "
+        "WHERE f.structural_hash IS NULL OR f.structural_hash NOT IN "
+        "(SELECT structural_hash FROM workflow_variant WHERE key_version = ?) "
+        "GROUP BY f.topology_hash ORDER BY f.topology_hash",
+        (WORKFLOW_KEY_VERSION,),
+    ):
+        key = topology_only_key(row["topology_hash"])
+        # A topology whose variants include a model-less one already has this
+        # very card, and the file row is on it: yielding it again would hand
+        # the grid two Cards under one key.
+        if key not in keyed:
+            found[key] = (row["topology_hash"], row["workflow_name"])
+    if not found:
+        return []
+    attrs = {}
+    for batch in chunked(sorted(found)):
+        placeholders = ",".join("?" * len(batch))
+        for row in hub.fetchall(
+            "SELECT workflow_key, name, notes, hidden FROM workflow_attr "
+            f"WHERE workflow_key IN ({placeholders})",
+            tuple(batch),
+        ):
+            attrs[row["workflow_key"]] = row
+    return [
+        Card(
+            workflow_key=key,
+            topology_hash=topology_hash,
+            name=attrs[key]["name"] if key in attrs else None,
+            notes=attrs[key]["notes"] if key in attrs else None,
+            hidden=bool(attrs[key]["hidden"]) if key in attrs else False,
+            imported=True,
+            file_name=file_name,
+        )
+        for key, (topology_hash, file_name) in sorted(found.items())
+    ]
 
 
 def _specials(raw: Optional[str]) -> Optional[tuple[str, ...]]:

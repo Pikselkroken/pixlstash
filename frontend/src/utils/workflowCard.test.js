@@ -12,6 +12,7 @@ import {
   ratingLabel,
   checkpointModel,
   modelDisplayName,
+  modelsUnread,
 } from "./workflowCard";
 
 describe("fitChipCount", () => {
@@ -75,14 +76,14 @@ describe("card chips", () => {
     // The card's `name` row was built from `title` server-side, so a chip
     // showing `name` beside it describes one model twice - the pair that
     // drifted in #1416.
-    expect(modelDisplayName({ name: "realvisxl.safetensors", title: "Krea 2" })).toBe(
-      "Krea 2",
-    );
+    expect(
+      modelDisplayName({ name: "realvisxl.safetensors", title: "Krea 2" }),
+    ).toBe("Krea 2");
     // Null title is the ORDINARY case (the shelf has not scanned the file),
     // so it falls through to the filename rather than blanking the chip.
-    expect(modelDisplayName({ name: "realvisxl.safetensors", title: null })).toBe(
-      "realvisxl.safetensors",
-    );
+    expect(
+      modelDisplayName({ name: "realvisxl.safetensors", title: null }),
+    ).toBe("realvisxl.safetensors");
     // A payload that predates `title` at all behaves the same way.
     expect(modelDisplayName({ name: "flux1-dev" })).toBe("flux1-dev");
     expect(modelDisplayName({ name: null, title: null })).toBeNull();
@@ -168,6 +169,48 @@ describe("cardAccessibleName", () => {
       picture_count: 1,
     });
     expect(name).toBe("Bare, no LoRAs, 1 picture");
+  });
+
+  it("says a card's models were not read rather than that it has none", () => {
+    const name = cardAccessibleName({
+      name: "Template",
+      models: [],
+      loras: [],
+      variant_count: 0,
+      picture_count: 0,
+    });
+    expect(name).toBe("Template, models not read, 0 pictures");
+  });
+});
+
+describe("modelsUnread", () => {
+  // The whole point of the helper: a card with a recipe that loads no LoRAs
+  // HAS none, and a card with no recipe and nothing recovered was never read.
+  it("is true only for a card with no recipe and nothing recovered", () => {
+    expect(modelsUnread({ variant_count: 0, models: [], loras: [] })).toBe(
+      true,
+    );
+    expect(modelsUnread({ variant_count: 1, models: [], loras: [] })).toBe(
+      false,
+    );
+  });
+
+  it("is false once the recovery has read anything at all", () => {
+    // A model was read, so the empty LoRA row means this workflow loads none:
+    // the recovery finds LoRA loaders by class, so none found is none.
+    expect(
+      modelsUnread({ variant_count: 0, models: [{ name: "a" }], loras: [] }),
+    ).toBe(false);
+    expect(
+      modelsUnread({ variant_count: 0, models: [], loras: [{ name: "b" }] }),
+    ).toBe(false);
+  });
+
+  it("reads a card carrying no variant_count at all as having a recipe", () => {
+    // Every card the route serves carries one, so the missing case is a
+    // caller that predates the field - and it must not be told that every
+    // card it holds is unread.
+    expect(modelsUnread({ models: [], loras: [] })).toBe(false);
   });
 });
 

@@ -18,7 +18,8 @@
 //                                       // spells it ("Text to Image"); the
 //                                       // name row and the type chip both
 //                                       // read it, so one fact has one voice
-//     models: [{ name, title, kind, mark?, slot_label? }],
+//     models: [{ name, title, icon, base_model, base_model_folded, kind,
+//               mark?, slot_label? }],
 //                                       // every non-LoRA slot: checkpoint,
 //                                       // unet, vae, clip… `kind` is the slot.
 //                                       // `title` is the MODEL SHELF's name
@@ -28,7 +29,17 @@
 //                                       // showing `name` beside it describes
 //                                       // one model twice. Null where the
 //                                       // shelf has not scanned the file
-//     loras:  [{ name, title, mark, slot_label? }],
+//                                       // `icon` is the sha256 of the
+//                                       // picture the owner chose for the
+//                                       // model on the shelf; the two
+//                                       // base-model spellings are what a
+//                                       // generated mark takes its colour
+//                                       // from, under the same names the
+//                                       // shelf serves them by. A card with
+//                                       // no pictures draws itself out of
+//                                       // these (#1466). Usually all null
+//     loras:  [{ name, title, icon, base_model, base_model_folded, mark,
+//               slot_label? }],
 //                                       // "structural" = in the workflow
 //                                       // (a filled chip), "recipe" = a slot
 //                                       // the recipe fills (dashed).
@@ -82,6 +93,15 @@
 //     last_used,                        // ISO, or null when the card has no
 //                                       // kept pictures. The *Recently used*
 //                                       // sort; null sorts below every date.
+//     variant_count,                    // how many recipes the card is made
+//                                       // of. ZERO IS A REAL CARD (#1466): a
+//                                       // stored editor-format workflow file
+//                                       // and nothing else, whose models were
+//                                       // recovered from the file rather than
+//                                       // read off a recipe. See
+//                                       // `modelsUnread` — such a card with
+//                                       // no models has not been read, and
+//                                       // must not be said to have none.
 //   }
 //
 // A card row names the BASE MODEL only (checkpoint, or the unet a Flux or SD3
@@ -113,6 +133,28 @@ export function fitChipCount(widths, available, gap, moreWidth) {
 
 export function isStack(card) {
   return (card.stack_size ?? 0) > 1;
+}
+
+/**
+ * Whether nobody has read this card's models, as against having read none.
+ *
+ * A card with `variant_count: 0` (#1466) is a stored workflow file and nothing
+ * else. It has no recipe, so no cached slot list, and its models are whatever
+ * could be recovered from the file's own widget values — which is the real
+ * names out of a real file and nothing at all out of a template-style export
+ * whose loaders were never filled in. An empty model row on such a card is
+ * therefore "not read", and "no checkpoint" would be a claim nobody made.
+ *
+ * A card that carries no `variant_count` at all is read as having a recipe:
+ * every card the route serves carries one, so the missing case is a caller
+ * that predates the field, and the ordinary answer is the safe one to give it.
+ */
+export function modelsUnread(card) {
+  return (
+    (card.variant_count ?? 1) === 0 &&
+    !(card.models ?? []).length &&
+    !(card.loras ?? []).length
+  );
 }
 
 /**
@@ -242,7 +284,13 @@ export function cardAccessibleName(card, { member = false } = {}) {
     card.name,
     isStack(card) && !member ? `stack of ${card.stack_size} workflows` : null,
     checkpoint ? `${checkpoint.kind} ${modelDisplayName(checkpoint)}` : null,
-    loras.length ? `LoRAs: ${loras.join("; ")}` : "no LoRAs",
+    // "not read" rather than "no LoRAs" where nothing was read at all: such a
+    // card is silent about its models, not certain it has none.
+    loras.length
+      ? `LoRAs: ${loras.join("; ")}`
+      : modelsUnread(card)
+        ? "models not read"
+        : "no LoRAs",
     facts.length
       ? `${isStack(card) ? "differs by" : "facts"}: ${facts.join(", ")}`
       : null,

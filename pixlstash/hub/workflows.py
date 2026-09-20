@@ -308,6 +308,13 @@ def forget_asset_names(hub: HubDatabase, normalized_filename: str) -> int:
     ``document_sha256`` is invalidated** -- the documents refer to the asset by
     an opaque reference, so what is lost is exactly the ability to say which
     model it was, which is what the caller asked for.
+
+    **This reaches what the hub recorded, and nothing on disk.** A card whose
+    whole content is a stored workflow FILE reads its model names out of that
+    file every time it is drawn (#1466), so a name forgotten here is still
+    readable there -- as it is in the file itself, which the owner put in
+    their own folder. Forgetting is about what PixlStash wrote down about
+    other people's pictures, not about deleting the owner's own workflow.
     """
     with hub.transaction() as conn:
         cursor = conn.execute(

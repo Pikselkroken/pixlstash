@@ -511,6 +511,86 @@ def extract_generation_info(workflow: dict) -> dict:
         return {"models": [], "loras": [], "positive_prompt": None, "seed": None}
 
 
+# Which widget each model loader reads its filename from. The same three
+# branches :func:`extract_generation_info` has, with the widget kept rather
+# than folded away - a card drawn out of these has to tell a checkpoint slot
+# from a unet one, and both land in that function's single ``models`` list.
+_LOADER_WIDGETS = (
+    (_CHECKPOINT_CLASSES, "ckpt_name"),
+    (_UNET_CLASSES, "unet_name"),
+    (_LORA_CLASSES, "lora_name"),
+)
+
+
+def loaded_model_widgets(workflow: dict) -> list[tuple[str, str]]:
+    """``[(widget name, filename)]`` for every model loader in *workflow*.
+
+    Both serialisations, like :func:`extract_generation_info`, and the same
+    best effort: a **UI-format** file names its widget values by position, so
+    a name is read off ``widgets_values`` through the node's declared inputs
+    and falls back to slot 0 where the widget is not declared at all. That
+    recovers the real names from a real file and recovers **nothing** from a
+    template-style export, whose loaders carry no value - so an empty answer
+    is "this document did not say", never "this workflow loads no models", and
+    a caller must keep the two apart.
+
+    Muted and bypassed nodes are skipped, because they do not load anything
+    when the workflow runs.
+
+    Order is document order, which is the order a reader sees the loaders in.
+    Duplicates are kept: two LoRA loaders holding one file is two slots.
+    """
+    if not isinstance(workflow, dict):
+        return []
+    if isinstance(workflow.get("nodes"), list) or isinstance(
+        workflow.get("links"), list
+    ):
+        return _loaded_model_widgets_ui(workflow)
+    return _loaded_model_widgets_api(workflow)
+
+
+def _widget_for(class_type: str) -> str | None:
+    for classes, widget in _LOADER_WIDGETS:
+        if class_type in classes:
+            return widget
+    return None
+
+
+def _loaded_model_widgets_ui(workflow: dict) -> list[tuple[str, str]]:
+    found = []
+    for graph in _iter_ui_graphs(workflow):
+        for node in graph.get("nodes") or []:
+            if not isinstance(node, dict):
+                continue
+            # mode 2 = muted/never, mode 4 = bypassed - skip both.
+            if node.get("mode", 0) not in (0, None):
+                continue
+            widget = _widget_for(node.get("type", ""))
+            if widget is None:
+                continue
+            name = _get_widget_value_ui(node, widget)
+            if name is None:  # widget not declared in inputs[]; use slot 0
+                values = node.get("widgets_values") or []
+                name = values[0] if values else None
+            if isinstance(name, str) and name:
+                found.append((widget, name))
+    return found
+
+
+def _loaded_model_widgets_api(workflow: dict) -> list[tuple[str, str]]:
+    found = []
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        widget = _widget_for(node.get("class_type", ""))
+        if widget is None:
+            continue
+        name = (node.get("inputs") or {}).get(widget)
+        if isinstance(name, str) and name:
+            found.append((widget, name))
+    return found
+
+
 def extract_recipe_extras(workflow: dict) -> dict:
     """The negative prompt and the sampler settings of an **API-format** graph.
 
